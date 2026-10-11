@@ -49,7 +49,7 @@ extension SessionSnapshot {
         public var schema: Int
         /// The launch that wrote it.
         public var launchID: UUID
-        /// Rises with every save, across launches.
+        /// Rises with every save, across launches, up to `maxGeneration`.
         public var generation: Int
         /// Only a normal quit writes it clean; the first save of each launch does not, so a crash leaves it unclean.
         public var clean: Bool
@@ -60,9 +60,21 @@ extension SessionSnapshot {
         /// The version an update was installing when it was written.
         public var pendingToVersion: String?
         public var savedAt: Date
+        /// The quit consent, as a one-time id: a quit under "Resume where I left off" that the user let go ahead with the
+        /// resume box checked writes a fresh one (R30). The launch after records it as used before it restores, so it
+        /// lets agents resume once. Its only form on disk; never in a file a crash or another quit left.
+        public var resumeConsent: UUID?
+
+        /// The quit its scrollback files are named for: an update quit's marker, or else the launch that wrote it. The
+        /// restore reads them by the same id (`RestoreDecision.scrollbackQuit`).
+        public var scrollbackQuit: UUID { awaitingMarker ?? launchID }
+
+        /// The highest generation: no save reaches it (one every 2 seconds would take half a billion years), and every JSON
+        /// reader holds it exactly. Only a planted or damaged file holds more, and decoding refuses it.
+        public static let maxGeneration = 9_007_199_254_740_991
 
         public init(schema: Int = SessionSnapshot.schema, launchID: UUID, generation: Int, clean: Bool, bootSession: String? = nil,
-                    awaitingMarker: UUID? = nil, pendingToVersion: String? = nil, savedAt: Date) {
+                    awaitingMarker: UUID? = nil, pendingToVersion: String? = nil, savedAt: Date, resumeConsent: UUID? = nil) {
             self.schema = schema
             self.launchID = launchID
             self.generation = generation
@@ -71,6 +83,7 @@ extension SessionSnapshot {
             self.awaitingMarker = awaitingMarker
             self.pendingToVersion = pendingToVersion
             self.savedAt = savedAt
+            self.resumeConsent = resumeConsent
         }
     }
 
@@ -195,7 +208,8 @@ extension SessionSnapshot {
         public var lastSelected: Date
         /// The agent it ran, and how its session is known.
         public var agent: Evidence?
-        /// The name of its saved scrollback file: a UUID, resolved only inside the sessions folder.
+        /// The name of its saved scrollback file: a UUID, resolved only inside the sessions folder. The quit names it
+        /// before it writes the file, which its time budget can drop: a name with no file reads as no scrollback.
         public var scrollback: UUID?
         /// What the restore does to it. Until that is applied, every save writes this record unchanged.
         public var pending: PendingAction?
@@ -238,7 +252,8 @@ extension SessionSnapshot {
         /// Lines this long or longer are not put back.
         public static let longest = 4096
 
-        /// The line as typed (never its alias-expanded form); nil unless `check` is `.kept`.
+        /// The line as typed (never its alias-expanded form); nil unless `check` is `.kept`. A file keeps an agent's
+        /// program alone (`programOnly`).
         public private(set) var line: String?
         public private(set) var check: LineCheck
         /// Whether the shell integration reported it typed, with its quoting, or it was polled.
@@ -267,6 +282,16 @@ extension SessionSnapshot {
             let line: String? = status.command.isEmpty ? nil : status.command
             let source: LineSource = status.integrated ? .integration : .polled
             self.init(line: line, check: check, source: source, running: status.running, exitCode: status.exitCode)
+        }
+
+        /// The line as a file keeps it for a pane that runs `agent`: its checks and state as they are, and the agent's
+        /// program alone in place of the words typed, which hold its prompt (R8). Nothing reads them back: the put-back
+        /// line and the automatic resume come from the agent's evidence, and the gate asks only that a kept line was
+        /// typed. An agent the matrix does not know keeps no line.
+        public func programOnly(of agent: Agent) -> Command {
+            var kept = self
+            if line != nil { kept.line = agent.program }
+            return kept
         }
 
         /// Why a line could not be put back as it ran: more than one line, too long, or holding control,
@@ -303,11 +328,15 @@ extension SessionSnapshot {
     /// The agent in a pane, and how its session id is known.
     public struct Evidence: Equatable, Sendable {
         public var agent: Agent
-        /// The session id as the agent's resume takes it: ASCII letters, digits and `._:-` only.
+        /// The session id as the agent's resume takes it: ASCII letters, digits and `._:-_` only (opencode's
+        /// start `ses_`). Each agent's own pattern is narrower (RestoreAgent.isSessionID).
         public var sessionID: String?
         public var source: IDSource
         /// The folder the session recorded.
         public var sessionFolder: String?
+        /// For Claude Code, Codex and Qwen Code, the real path of the store their session file was read in
+        /// (CLAUDE_CONFIG_DIR and CODEX_HOME move it): the restore checks it and reads its settings and sessions.
+        public var store: String?
         /// The agent's executable as it ran, an absolute path. For a script agent, `interpreter` and `script`
         /// say what runs: a resume runs the interpreter on the script, never through the script's shebang.
         public var executable: String?
@@ -324,19 +353,35 @@ extension SessionSnapshot {
         public var routingMatchesShell: Bool
         /// No auto-continue variable was set for the agent when captured.
         public var autoContinueOff: Bool
-        /// The typed line ran as typed: its alias-expanded form was the same line. Compared in memory: the
-        /// expanded line is not saved.
+        /// The typed line ran as typed (KTD5): its command's first word was the agent's program, or an alias whose
+        /// expansion is the agent's program and options, with no assignment, wrapper or function in between. Compared in
+        /// memory: the expanded line is not saved.
         public var ranAsTyped: Bool
+        /// The options it ran with, from its argv in order, each with its values as argv gave them (U2). Never a prompt
+        /// word, a form or a one-shot option. A restore reads them again with the running build's table, which says what
+        /// a line keeps, what a resume carries and what is left off (`launch`, KTD20). Nil when not known: no argv, a file
+        /// from before they were kept, or a list that could not be kept whole (`LaunchOption.kept`); then a resume carries
+        /// none, and none run by itself.
+        public var options: [LaunchOption]?
+        /// The word typed to start it, when it passes its arguments on (KTD7): a put-back line replays it.
+        public var launcher: Launcher?
+        /// The permission options the nonce-verified typed line, or its alias expansion, showed (KTD5). Argv alone
+        /// can't confirm one, as a process can rewrite its own argv.
+        public var confirmed: [LaunchOption]
+        /// The agent's version, when the path it was installed at names it (AgentCLI.version(at:)). For notes only.
+        public var version: String?
 
         /// Each fact not known reads as the answer that resumes nothing: nil, or false.
-        public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil,
+        public init(agent: Agent, sessionID: String? = nil, source: IDSource = .guess, sessionFolder: String? = nil, store: String? = nil,
                     executable: String? = nil, interpreter: String? = nil, script: String? = nil, startedAt: Date? = nil,
                     sessionDate: Date? = nil, routingMatchesShell: Bool = false, autoContinueOff: Bool = false,
-                    ranAsTyped: Bool = false) {
+                    ranAsTyped: Bool = false, options: [LaunchOption]? = nil, launcher: Launcher? = nil, confirmed: [LaunchOption] = [],
+                    version: String? = nil) {
             self.agent = agent
             self.sessionID = sessionID
             self.source = source
             self.sessionFolder = sessionFolder
+            self.store = store
             self.executable = executable
             self.interpreter = interpreter
             self.script = script
@@ -345,10 +390,71 @@ extension SessionSnapshot {
             self.routingMatchesShell = routingMatchesShell
             self.autoContinueOff = autoContinueOff
             self.ranAsTyped = ranAsTyped
+            self.options = options
+            self.launcher = launcher
+            self.confirmed = confirmed
+            self.version = version
         }
 
         /// An id from agreeing evidence. Anything less is a guess.
         public var isExact: Bool { sessionID != nil && source.isExact }
+    }
+
+    /// An option an agent ran with, as its argv gave it (U2).
+    public struct LaunchOption: Equatable, Sendable {
+        /// Its words: `--model opus`, `--approval-mode=yolo`, `--allowedTools Edit Bash`.
+        public var words: [String]
+        /// An option the capture's table did not know, followed by a word that may be its value or a prompt's. That word
+        /// is not kept, so a line leaves the option off, and its note names it (KTD7).
+        public var unclear: Bool
+
+        public init(_ words: [String], unclear: Bool = false) {
+            self.words = words
+            self.unclear = unclear
+        }
+
+        /// `--approval-mode` of `--approval-mode=yolo`.
+        public var name: String {
+            guard let first = words.first else { return "" }
+            return String(first.prefix { $0 != "=" })
+        }
+
+        /// `options` when a file may keep them all: at most `Evidence.mostOptions`, each an option a note may name with at
+        /// most that many words (an unclear one alone, with no `=`), together one line of plain text, and no secret. Nil
+        /// otherwise, as a line never carries part of what ran.
+        public static func kept(_ options: [LaunchOption]) -> [LaunchOption]? {
+            let most = Evidence.mostOptions
+            guard options.count <= most, options.allSatisfy({ $0.isKeepable(most: most) }) else { return nil }
+            let line = options.flatMap(\.words).joined(separator: " ")
+            guard SessionSnapshot.Command.problem(with: line) == nil, CommandSecrets.mayKeep(line) else { return nil }
+            return options
+        }
+
+        private func isKeepable(most: Int) -> Bool {
+            guard let first = words.first, first.hasPrefix("-"), words.count <= most, RestoreAgent.isOptionName(name) else { return false }
+            return !unclear || (words.count == 1 && !first.contains("="))
+        }
+    }
+
+    /// The word typed to start an agent, kept when it passes its arguments on: an alias, or a word typed with arguments
+    /// that argv ends with (KTD7). A put-back line is that word, the options typed after it, and the resume form.
+    public struct Launcher: Equatable, Sendable {
+        /// A command's name or an absolute path, typed bare: `claude-auto-danger`, `/Users/x/bin/cad`.
+        public var word: String
+        /// How many of the evidence's `options`, the last ones, were typed after it. The rest are the launcher's own.
+        public var typed: Int
+
+        public init(word: String, typed: Int) {
+            self.word = word
+            self.typed = typed
+        }
+
+        /// One word the shell reads back as typed: ASCII letters, digits and `@%_+:,./-`, no option, and a path only when
+        /// absolute, so a line in another folder runs the same file. No `=`, `~`, quote or space.
+        public static func isWord(_ word: String) -> Bool {
+            guard SnapshotText.token(word, max: 255, extra: "@%_+:,./-") != nil, !word.hasPrefix("-") else { return false }
+            return (!word.contains("/") || word.hasPrefix("/")) && CommandSecrets.mayKeep(word)
+        }
     }
 
     /// What the restore does to a pane, and how far it got. Only a record: each launch plans again.
@@ -463,7 +569,9 @@ extension SessionSnapshot {
     public enum Action: String, CaseIterable, Sendable {
         /// The agent's own resume, once the shell is ready.
         case resume
-        /// An agent's original command on the prompt line, unrun.
+        /// An agent's resume command on the prompt line, unrun: the user's launch (the launcher replayed, or the program and
+        /// argv's options) with the resume form and the session id, never a prompt word, a form or a one-shot option
+        /// (KTD7). Built from the agent's record, never from the line that started it.
         case onTheLine
         /// Any other command on the prompt line, unrun.
         case typeIn
@@ -481,7 +589,15 @@ extension SessionSnapshot {
     }
 
     public enum RestoreKind: String, CaseIterable, Sendable {
-        case update, crash, safeMode, unknown
+        /// After an update quit the user agreed to with the box checked.
+        case update
+        /// After a crash or a force quit: the last periodic save.
+        case crash
+        /// Layout only, after two restores that did not finish.
+        case safeMode
+        /// After a quit under "Resume where I left off".
+        case quit
+        case unknown
     }
 
     public enum NoteReason: String, CaseIterable, Sendable {
@@ -680,7 +796,7 @@ extension SessionSnapshot {
 extension SessionSnapshot.Header {
     func repaired() -> Self {
         var fixed = self
-        fixed.generation = max(0, generation)
+        fixed.generation = min(max(0, generation), Self.maxGeneration)
         fixed.bootSession = SnapshotText.token(bootSession, max: 64, extra: "-")
         fixed.pendingToVersion = SnapshotText.token(pendingToVersion, max: 64, extra: ".+-")
         return fixed
@@ -877,13 +993,26 @@ extension SessionSnapshot.Pane {
 extension SessionSnapshot.Evidence {
     func repaired(limits: SessionSnapshot.Limits) -> Self {
         var fixed = self
-        fixed.sessionID = SnapshotText.token(sessionID, max: 128, extra: "._:-")
+        fixed.sessionID = SnapshotText.token(sessionID, max: 128, extra: "._:_-")
         fixed.sessionFolder = SnapshotText.plainPath(sessionFolder, max: limits.path)
+        fixed.store = SnapshotText.plainPath(store, max: limits.path)
         fixed.executable = SnapshotText.plainPath(executable, max: limits.path)
         fixed.interpreter = SnapshotText.plainPath(interpreter, max: limits.path)
         fixed.script = SnapshotText.plainPath(script, max: limits.path)
+        // An option that breaks its rule drops its whole list: a line or a resume never carries part of what ran.
+        fixed.options = options.flatMap(SessionSnapshot.LaunchOption.kept)
+        fixed.confirmed = SessionSnapshot.LaunchOption.kept(confirmed) ?? []
+        // The launcher replays the last of the options: with none known, or fewer than it names, it replays nothing.
+        if let launcher {
+            let replayed = fixed.options.map { launcher.typed >= 0 && launcher.typed <= $0.count } ?? false
+            if !replayed || !SessionSnapshot.Launcher.isWord(launcher.word) { fixed.launcher = nil }
+        }
+        fixed.version = version.flatMap { AgentCLI.isVersion($0) ? $0 : nil }
         return fixed
     }
+
+    /// The most options a record holds, and the most words each holds.
+    static let mostOptions = 16
 }
 
 /// The string rules: a value that breaks one is dropped, never cut.
@@ -1015,6 +1144,36 @@ extension KeyedDecodingContainer {
         return read
     }
 
+    /// A list of strings read one by one, within the file's budget. Nil when it is not a list, an entry is not a
+    /// string, it holds more than `max`, or the budget runs out.
+    fileprivate func strings(_ key: Key, max: Int, budget: SnapshotBudget?) -> [String]? {
+        guard var list = try? nestedUnkeyedContainer(forKey: key) else { return nil }
+        var read: [String] = []
+        while !list.isAtEnd {
+            guard read.count < max else { return nil }
+            if let budget, !budget.takeEntry() { return nil }
+            guard let text = try? list.decode(String.self) else { return nil }
+            read.append(text)
+        }
+        return read
+    }
+
+    /// A list of a launch's options read entry by entry, at most `Evidence.mostOptions`, within the file's budget. Nil
+    /// when it is not a list, one entry does not read, it holds more, or the budget runs out: a list is taken whole or
+    /// not at all.
+    fileprivate func launchOptions(_ key: Key, budget: SnapshotBudget?) -> [SessionSnapshot.LaunchOption]? {
+        let most = SessionSnapshot.Evidence.mostOptions
+        let read = entries(SessionSnapshot.LaunchOption.self, key, max: most + 1, budget: budget)
+        guard read.count <= most else { return nil }
+        let options = read.compactMap { $0 }
+        return options.count == read.count && read.count == count(of: key) ? options : nil
+    }
+
+    /// How many entries the list at `key` holds; -1 when it is not a list.
+    private func count(of key: Key) -> Int {
+        (try? nestedUnkeyedContainer(forKey: key))?.count ?? -1
+    }
+
     /// A list of numbers read one by one, at most `max` of them, within the file's budget. Nil when it is
     /// not a list, an entry is not a number, or the budget runs out.
     fileprivate func numbers(_ key: Key, max: Int, budget: SnapshotBudget?) -> [Double]? {
@@ -1050,14 +1209,14 @@ extension SessionSnapshot: Codable {
 
 extension SessionSnapshot.Header: Codable {
     private enum Keys: String, CodingKey {
-        case schema, launchID, generation, clean, bootSession, awaitingMarker, pendingToVersion, savedAt
+        case schema, launchID, generation, clean, bootSession, awaitingMarker, pendingToVersion, savedAt, resumeConsent
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         guard let launchID = c.uuid(.launchID) else { throw SessionSnapshot.DecodeError.badHeader }
         let generation = try c.decode(Int.self, forKey: .generation)
-        guard generation >= 0 else { throw SessionSnapshot.DecodeError.badHeader }
+        guard generation >= 0, generation <= Self.maxGeneration else { throw SessionSnapshot.DecodeError.badHeader }
         let schema = try c.decode(Int.self, forKey: .schema)
         let clean = try c.decode(Bool.self, forKey: .clean)
         let savedAt = Millis.date(try c.decode(Int64.self, forKey: .savedAt))
@@ -1065,6 +1224,7 @@ extension SessionSnapshot.Header: Codable {
         bootSession = c.optional(String.self, .bootSession)
         awaitingMarker = c.uuid(.awaitingMarker)
         pendingToVersion = c.optional(String.self, .pendingToVersion)
+        resumeConsent = c.uuid(.resumeConsent)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1077,6 +1237,7 @@ extension SessionSnapshot.Header: Codable {
         try c.encodeIfPresent(awaitingMarker?.lowercased, forKey: .awaitingMarker)
         try c.encodeIfPresent(pendingToVersion, forKey: .pendingToVersion)
         try c.encode(Millis.of(savedAt), forKey: .savedAt)
+        try c.encodeIfPresent(resumeConsent?.lowercased, forKey: .resumeConsent)
     }
 }
 
@@ -1223,7 +1384,11 @@ extension SessionSnapshot.Pane: Codable {
                 try c.encode(remote, forKey: .remote)
             }
         }
-        try c.encodeIfPresent(command, forKey: .command)
+        // An agent's typed line holds its prompt words: the file keeps its program alone (`Command.programOnly`).
+        let written: SessionSnapshot.Command? = agent.flatMap { (evidence: SessionSnapshot.Evidence) -> SessionSnapshot.Command? in
+            command?.programOnly(of: evidence.agent)
+        } ?? command
+        try c.encodeIfPresent(written, forKey: .command)
         try c.encode(stateBefore.rawValue, forKey: .stateBefore)
         try c.encode(interrupted, forKey: .interrupted)
         try c.encode(Millis.of(lastSelected), forKey: .lastSelected)
@@ -1297,8 +1462,9 @@ extension SessionSnapshot.Command: Codable {
 
 extension SessionSnapshot.Evidence: Codable {
     private enum Keys: String, CodingKey {
-        case agent, sessionID, source, sessionFolder, executable, interpreter, script, startedAt, sessionDate, routingMatchesShell
-        case autoContinueOff, ranAsTyped
+        case agent, sessionID, source, sessionFolder, store, executable, interpreter, script, startedAt, sessionDate
+        case routingMatchesShell, autoContinueOff, ranAsTyped
+        case options, launcher, confirmed, version
     }
 
     public init(from decoder: Decoder) throws {
@@ -1306,6 +1472,7 @@ extension SessionSnapshot.Evidence: Codable {
         self.init(agent: c.value(.agent, or: .unknown), source: c.value(.source, or: .unknown))
         sessionID = c.optional(String.self, .sessionID)
         sessionFolder = c.optional(String.self, .sessionFolder)
+        store = c.optional(String.self, .store)
         executable = c.optional(String.self, .executable)
         interpreter = c.optional(String.self, .interpreter)
         script = c.optional(String.self, .script)
@@ -1314,6 +1481,11 @@ extension SessionSnapshot.Evidence: Codable {
         routingMatchesShell = c.flag(.routingMatchesShell)
         autoContinueOff = c.flag(.autoContinueOff)
         ranAsTyped = c.flag(.ranAsTyped)
+        // Added after schema 1 shipped: a file without them reads as having none.
+        if c.contains(.options) { options = c.launchOptions(.options, budget: decoder.snapshotBudget) }
+        confirmed = c.launchOptions(.confirmed, budget: decoder.snapshotBudget) ?? []
+        launcher = c.optional(SessionSnapshot.Launcher.self, .launcher)
+        version = c.optional(String.self, .version)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1322,6 +1494,7 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
         try c.encode(source.rawValue, forKey: .source)
         try c.encodeIfPresent(sessionFolder, forKey: .sessionFolder)
+        try c.encodeIfPresent(store, forKey: .store)
         try c.encodeIfPresent(executable, forKey: .executable)
         try c.encodeIfPresent(interpreter, forKey: .interpreter)
         try c.encodeIfPresent(script, forKey: .script)
@@ -1330,6 +1503,43 @@ extension SessionSnapshot.Evidence: Codable {
         try c.encode(routingMatchesShell, forKey: .routingMatchesShell)
         try c.encode(autoContinueOff, forKey: .autoContinueOff)
         try c.encode(ranAsTyped, forKey: .ranAsTyped)
+        try c.encodeIfPresent(options, forKey: .options)
+        try c.encodeIfPresent(launcher, forKey: .launcher)
+        if !confirmed.isEmpty { try c.encode(confirmed, forKey: .confirmed) }
+        try c.encodeIfPresent(version, forKey: .version)
+    }
+}
+
+extension SessionSnapshot.LaunchOption: Codable {
+    private enum Keys: String, CodingKey { case words, unclear }
+
+    /// Its words read one by one within the file's budget. One that does not read whole is not taken in part.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        let most = SessionSnapshot.Evidence.mostOptions
+        guard let words = c.strings(.words, max: most, budget: decoder.snapshotBudget) else { throw SessionSnapshot.DecodeError.unreadable }
+        self.init(words, unclear: c.contains(.unclear) ? try c.decode(Bool.self, forKey: .unclear) : false)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(words, forKey: .words)
+        if unclear { try c.encode(true, forKey: .unclear) }
+    }
+}
+
+extension SessionSnapshot.Launcher: Codable {
+    private enum Keys: String, CodingKey { case word, typed }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        self.init(word: try c.decode(String.self, forKey: .word), typed: try c.decode(Int.self, forKey: .typed))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(word, forKey: .word)
+        try c.encode(typed, forKey: .typed)
     }
 }
 

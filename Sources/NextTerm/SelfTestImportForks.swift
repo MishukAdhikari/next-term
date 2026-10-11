@@ -49,7 +49,7 @@ extension SelfTest {
         await pause(0.3)
         let preview = importWindowTexts(window)
         let all = preview.joined(separator: "\n")
-        check(preview.contains { $0.hasPrefix("Use JetBrains shortcuts") },
+        check(preview.contains { $0.hasPrefix("Use \(KeymapPreset.jetBrains.name) shortcuts") },
               "its IntelliJ keymap extension offers the JetBrains shortcuts", preview.prefix(6).joined(separator: " | "))
         check(all.contains("IntelliJ IDEA Keybindings extension") && all.contains("Vim keys (Vim extension): Next Term has no Vim mode yet"),
               "the preview says why: the keymap extension, and the Vim keys it can't bring", all)

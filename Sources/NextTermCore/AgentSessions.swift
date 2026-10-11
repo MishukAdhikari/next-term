@@ -137,17 +137,39 @@ public enum AgentSessions {
 
     /// Sessions a live `claude` has open: ~/.claude/sessions/<pid>.json (never the .key files beside them).
     static func claudeRunning(home: String) -> Set<String> {
+        Set(claudeHolders(home: home).keys)
+    }
+
+    /// The live `claude` processes that have each session open, by session id, from the same files.
+    public static func claudeHolders(home: String) -> [String: Set<Int32>] {
         let folder = (home as NSString).appendingPathComponent(".claude/sessions")
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [] }
-        var ids = Set<String>()
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [:] }
+        var holders: [String: Set<Int32>] = [:]
         for file in files where file.hasSuffix(".json") {
-            guard let pid = Int32(file.dropLast(5)), kill(pid, 0) == 0 || errno == EPERM,
+            guard let pid = Int32(file.dropLast(5)), pid > 0, kill(pid, 0) == 0 || errno == EPERM,
                   let data = readHead((folder as NSString).appendingPathComponent(file), bytes: 16384),
                   let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let id = json["sessionId"] as? String else { continue }
-            ids.insert(id)
+            holders[id, default: []].insert(pid)
         }
-        return ids
+        return holders
+    }
+
+    /// What Claude Code records of the `claude` with process `pid`, from the file `claudeRunning` and
+    /// `claudeSessionID` read: the session it has open, its folder, when the process started (`procStart`) and
+    /// whether it is busy. Read whole, and only when it is the store's own file: not a link, not a hard link, not
+    /// another user's. A key it lacks is a problem, not a guess at its value.
+    public static func claudeProcess(pid: Int32, home: String) -> Result<ClaudeProcessRecord, AgentEvidence.Problem> {
+        claudeProcess(pid: pid, store: (home as NSString).appendingPathComponent(".claude"))
+    }
+
+    /// The same in a store of Claude Code's own (CLAUDE_CONFIG_DIR). Only a file whose real path lies in the store's
+    /// real folder is its own: a sessions folder linked out of it leads to none.
+    static func claudeProcess(pid: Int32, store: String) -> Result<ClaudeProcessRecord, AgentEvidence.Problem> {
+        let real = canonicalPath(store)
+        let path = (real as NSString).appendingPathComponent("sessions/\(pid).json")
+        guard pid > 0, let file = StoreFile.read(path, maxSize: 65_536, inside: real) else { return .failure(.unreadable) }
+        return AgentEvidence.claudeRecord(file.data)
     }
 
     static func claudeSession(_ path: String, id: String, running: Bool) -> AgentSession? {

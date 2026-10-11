@@ -63,7 +63,7 @@ extension SelfTest {
         let sources = listed.json["sources"] as? [[String: Any]] ?? []
         let listedEditor = sources.first { $0["id"] as? String == "nt-agent-editor" }
         let targets = (listed.json["targets"] as? [String: Any])?["settings"] as? [[String: Any]] ?? []
-        check(!listed.isError && listedEditor?["version"] as? String == "1.2.3" && listedEditor?["app_installed"] as? Bool == false && !planned,
+        check(!listed.isError && listedEditor?["version"] as? String == "1.2.3" && listedEditor?["app_installed"] as? Bool == true && !planned,
               "import tools: list_import_sources lists the apps found without reading their settings", listed.text)
         check(!listed.text.contains("/nonexistent/nt-agent-editor") && !targets.isEmpty,
               "import tools: the listing never names an app's settings folder, and lists what an import can set", listed.text)
@@ -166,9 +166,10 @@ extension SelfTest {
         check(pending.json["status"] as? String == "pending" && stillOpen && answered.json["status"] as? String == "applied",
               "import tools: with no answer in time the call answers pending, and the request id brings the answer", pending.text + answered.text)
 
-        // AE12: the user's own import window open: busy, and that window is left alone.
+        // AE12: the user's own import window open: busy, and that window is left alone. A request that would change
+        // nothing answers up_to_date first, and the font size and wrap are the plan's by now: the cursor blink still differs.
         window.showChooser(firstRun: false, completion: nil)
-        let busy = await importToolCall("apply_import", ["source": "nt-agent-editor", "items": ["set:fontSize"]])
+        let busy = await importToolCall("apply_import", ["source": "nt-agent-editor", "items": ["set:terminalCursorBlink"]])
         check(busy.json["status"] as? String == "busy" && window.isOpenForUser, "import tools: apply_import answers busy while the user's own import window is open",
               busy.text)
         window.window?.close()
@@ -187,14 +188,16 @@ extension SelfTest {
               && settingsAfter.isError && settingsAfter.text == MCPWriteControl.stoppedText && MCPWriteControl.pending == nil,
               "import tools: after Decline and Stop Asking, apply_import and settings_set are refused without a window", afterStop.text)
         MCPWriteControl.stopped = []
+        // The request declined above had this source and plan: forgotten, or the next one would answer declined at once.
+        MCPImportControl.declined = []
 
         // A grant asks nothing of the other write tools, but an import still asks in its window: nothing changes before a click.
         var granted = MCPServer.CallResult(text: "", isError: false)
-        let wrapNow = app.softWrap
-        MCPControl.call("apply_import", ["source": "nt-agent-editor", "items": ["set:softWrap"]], caller: nil,
+        let blinkNow = Preferences.terminalCursorBlinks
+        MCPControl.call("apply_import", ["source": "nt-agent-editor", "items": ["set:terminalCursorBlink"]], caller: nil,
                         approval: .preApprovedByGrant("g-selftest")) { granted = $0 }
         let grantAsks = await wait(30) { window.agentAsk != nil }
-        let grantUnchanged = app.softWrap == wrapNow && granted.text.isEmpty
+        let grantUnchanged = Preferences.terminalCursorBlinks == blinkNow && granted.text.isEmpty
         window.endAgentRequest()
         _ = await wait(5) { !granted.text.isEmpty }
         check(grantAsks && grantUnchanged && granted.text.contains("declined"),

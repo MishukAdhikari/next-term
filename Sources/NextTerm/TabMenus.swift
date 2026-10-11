@@ -215,13 +215,13 @@ extension TerminalWindowController {
     func closeTabs(_ closing: [PaneGroup]) {
         let panes = closing.flatMap(\.panes)
         guard !panes.isEmpty else { return }
-        let busy = panes.filter { $0.closeWarning != nil }
+        let busy = panes.filter { $0.closeNote != nil }
         let kept = Self.keptList(panes)
         guard !busy.isEmpty || !kept.isEmpty, let window else { return panes.forEach { remove($0) } }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = closing.count == 1 ? "Close “\(closing[0].focused.title)”?" : "Close \(closing.count) tabs?"
-        let stops = busy.isEmpty ? "" : "Closing \(closing.count == 1 ? "it" : "them") stops " + Self.stopList(busy)
+        let stops = busy.isEmpty ? "" : Self.stopText("Closing \(closing.count == 1 ? "it" : "them") stops", busy)
         alert.informativeText = [stops, kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: closing.count == 1 ? "Close Tab" : "Close Tabs")
         alert.addButton(withTitle: "Cancel")

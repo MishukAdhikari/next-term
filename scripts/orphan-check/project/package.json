@@ -1,0 +1,1 @@
+{ "name": "ntmark-app", "private": true, "scripts": { "dev": "node ntmark-nextdev.js" } }

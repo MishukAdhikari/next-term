@@ -66,7 +66,13 @@ extension SelfTest {
             if hand { await pressMenuKey("closeTab:", in: window) }
             if !(await wait(3) { area.isHidden }) {
                 if hand {
-                    note("lines: ⌘W did not close README.md (the keyboard in \(window.firstResponder.map { "\(type(of: $0))" } ?? "nothing")); closed through the app")
+                    let keyboard = window.firstResponder.map { "\(type(of: $0))" } ?? "nothing"
+                    // What ⌘W asked instead (Save changes, for keys from outside the self-test that reached the file while
+                    // the window was in front) is answered Don't Save, as the file closes anyway: left over the window, it
+                    // would fail every check after that needs a sheet of its own or the window key.
+                    let asked = await endSheets(over: window, with: .alertThirdButtonReturn)
+                    note("lines: ⌘W did not close README.md (the keyboard in \(keyboard)"
+                         + (asked.isEmpty ? "" : "; it asked: " + asked.joined(separator: "; ") + ", answered Don’t Save") + "); closed through the app")
                 }
                 area.closeAll()
             }

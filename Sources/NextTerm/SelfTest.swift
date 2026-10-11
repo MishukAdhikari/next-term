@@ -8,9 +8,62 @@ import SQLite3
 /// Run with `NextTerm --self-test <report-path>`; writes PASS/FAIL lines and quits.
 @MainActor
 enum SelfTest {
-    nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
-    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
-    nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// How this process runs: as the app, as the plain self-test (`--self-test <report-path>`), or as a step of the
+    /// relaunch harness, whose arguments only a debug build reads (SelfTestRestore).
+    enum Mode: Equatable, Sendable {
+        case app
+        case plain
+        case relaunchHarness
+    }
+
+    nonisolated static let mode: Mode = {
+        #if DEBUG
+        if SelfTestRestore.harness != nil { return .relaunchHarness }
+        #endif
+        return CommandLine.arguments.contains("--self-test") ? .plain : .app
+    }()
+
+    /// Either self-test: the guards that keep it off the user's machine apply, except those the relaunch harness points
+    /// at its own folder (`keptDefaults`, `supportFolder`, `sessionsParent`, `mcpSocketPath`).
+    nonisolated static var isRequested: Bool { mode != .app }
+
+    /// Where the records one launch leaves the next are kept (the projects open at quit, kept remote tabs, Settings ›
+    /// General): the user's defaults, the relaunch harness's own suite, or none for the plain self-test, which keeps none.
+    nonisolated static var keptDefaults: UserDefaults? {
+        switch mode {
+        case .app: return .standard
+        case .plain: return nil
+        case .relaunchHarness:
+            #if DEBUG
+            return SelfTestRestore.defaults
+            #else
+            return nil
+            #endif
+        }
+    }
+
+    /// Next Term's folder in Application Support, where the zsh integration and the sessions folders go: the user's, or
+    /// the relaunch harness's own, which writes nothing in the user's.
+    nonisolated static var supportFolder: URL? {
+        #if DEBUG
+        if let harness = SelfTestRestore.harness { return harness.stateFolder }
+        #endif
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return support?.appendingPathComponent("Next Term", isDirectory: true)
+    }
+
+    /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
+    /// saves or restores sessions.
+    nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }
+
+    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use: the relaunch
+    /// harness's in its folder, kept across its relaunch, else one for this process.
+    nonisolated static let mcpSocketPath: String = {
+        #if DEBUG
+        if let path = SelfTestRestore.harness?.mcpSocket { return path }
+        #endif
+        return (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    }()
     /// The home agents' sessions are read from in a self-test run: a folder never made, so nothing of yours is read
     /// (your Claude Code records and transcripts) for the sidebar's sessions or the agents in its tabs. The parts
     /// that list sessions point SessionStore at sessions of their own, and back here after.
@@ -102,6 +155,26 @@ enum SelfTest {
     /// puts its handler back, only sets wait_sigint_received, which nothing reads after, so the loop runs on. Both
     /// moments sit just before each redraw. In `wait`, a ^C goes to the trap at any moment.
     static func standInWait(_ seconds: String) -> String { "sleep \(seconds) & wait $!" }
+
+    /// A stand-in agent at `path` that the kernel names by its file: /bin/sleep copied there and signed ad hoc. A copy
+    /// that keeps Apple's signature is a platform binary off the system volume, which launch constraints kill as it
+    /// starts (the shell shows the command start and end at once). True once the stand-in has run and exited by itself.
+    static func sleepStandIn(at path: String) -> Bool {
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: path)
+        guard (try? fm.copyItem(atPath: "/bin/sleep", toPath: path)) != nil else { return false }
+        func ran(_ program: String, _ arguments: [String]) -> Bool {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: program)
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return false }
+            process.waitUntilExit()
+            return process.terminationReason == .exit && process.terminationStatus == 0
+        }
+        return ran("/usr/bin/codesign", ["--force", "--sign", "-", path]) && ran(path, ["0"])
+    }
 
     /// The processes on `tab`'s terminal with their state, for a check whose program didn't stop.
     static func terminalProcesses(_ tab: TerminalTab) -> String {
@@ -510,6 +583,14 @@ enum SelfTest {
         try? Data().write(to: proj.appendingPathComponent("AGENTS.md"))
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
+        #if DEBUG
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys), for its own failures without the
+        // whole run's 25 minutes.
+        if ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] == "gitAndViewKeys" {
+            await gitAndViewKeyChecks(c, proj: proj)
+            return
+        }
+        #endif
 
         // Git: branch in the header, colours and +/− counts on changed files and their folders.
         if gitPath != nil {
@@ -641,6 +722,7 @@ enum SelfTest {
         await databaseChecks(c, proj: proj)
         await dataChecks(c, proj: proj)
         await updateChecks(c)
+        await updateSheetChecks(c)
         await updateSignatureChecks()
         await updateWaitChecks()
         await platformLinkChecks(c)
@@ -654,6 +736,9 @@ enum SelfTest {
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
+        await gitRefreshChecks(c)
+        await tabHangupChecks(c)
+        await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
         await importChecks(c, proj: proj)
@@ -814,6 +899,11 @@ enum SelfTest {
 
         await sessionChecks(proj: proj)
         await moreSessionChecks(proj: proj)
+        await agentEvidenceChecks(proj: proj)
+        terminalTextChecks()
+        await scrollbackChecks(proj: proj)
+        await restoreBuildChecks(proj: proj)
+        await restoreInputChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)
@@ -829,6 +919,7 @@ enum SelfTest {
         await notificationChecks(c)
         await skillsChecks()
         await mcpWriteChecks(c, proj: proj)
+        await restoreMCPChecks(proj: proj)
         await completionChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
@@ -1094,7 +1185,8 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: home)
         }
 
-        app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        let projectController = app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        await openProjectChecks(app, from: projectController)
         app.showWelcome(nil)
         guard let welcome = app.welcomeController, let welcomeWindow = welcome.window else { return check(false, "the Welcome window opens") }
         welcome.select(project: project)
@@ -3014,8 +3106,11 @@ enum SelfTest {
         check(text.contains("Next Term 99.0.0") && text.contains("Next Term 98.1.0") && text.contains("•\tThe update window.")
               && text.contains("◦\tNested, with code and a link.") && !text.contains("Drag it to Applications"),
               "it shows the notes of every version since this one, without the install steps", text)
-        check(prompt.installButton.title == "Install and Relaunch" && prompt.skipButton.title == "Skip This Version"
-              && prompt.laterButton.title == "Remind Me Later", "with Install and Relaunch, Remind Me Later and Skip This Version")
+        let installTip = prompt.installButton.toolTip ?? ""
+        check(prompt.installButton.title == "Install Update…" && prompt.skipButton.title == "Skip This Version"
+              && prompt.laterButton.title == "Remind Me Later", "with Install Update…, Remind Me Later and Skip This Version")
+        check(installTip == "Downloads and checks 99.0.0, then shows what happens to your tabs before relaunching.",
+              "Install Update… says it shows what happens to the tabs before relaunching", installTip)
         let bar = c.topRightBar
         let other = bar === c.tabBar ? c.editorArea.tabBar : c.tabBar
         bar.layoutSubtreeIfNeeded()

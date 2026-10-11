@@ -111,6 +111,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         window.layoutIfNeeded()
         window.center()
         window.orderFront(nil)
+        UpdateHolds.shared.register(self) // an update lists it, waits for or declines it, until it closes
         if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
     }
 

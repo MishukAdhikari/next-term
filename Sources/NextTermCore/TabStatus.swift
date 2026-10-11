@@ -81,6 +81,18 @@ public struct TabStatus {
     public private(set) var startupCommands = 0
     /// Commands run after the shell started.
     public var commandsRun: Int { commandsStarted - startupCommands }
+    /// In a tab whose shell has no integration (every remote tab), how many commands polling caught before it first saw
+    /// the shell in front; nil until it has. What runs in front as such a tab starts was not started at its prompt: the
+    /// program a server's tmux kept running when the tab reattached, herdr, or what the shell's startup runs.
+    public private(set) var startsBeforePrompt: Int?
+    /// Commands started at the shell's prompt. With the integration, those after it first reported in (`commandsRun`);
+    /// without it, those polling caught once it had seen the shell in front, so a program already in front as the tab
+    /// started is none of them.
+    public var commandsAtPrompt: Int {
+        if everIntegrated { return commandsRun }
+        guard let startsBeforePrompt else { return 0 }
+        return commandsStarted - startsBeforePrompt
+    }
 
     private var everIntegrated = false
     private var startedAt: TimeInterval = 0
@@ -179,6 +191,7 @@ public struct TabStatus {
         }
         if process.isShell {
             if running { finish(exitCode: nil, at: now) }
+            if startsBeforePrompt == nil { startsBeforePrompt = commandsStarted }
             polledName = ""
             return
         }

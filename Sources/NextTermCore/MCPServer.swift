@@ -37,7 +37,9 @@ public enum MCPServer {
         on the Mac first, and change nothing when declined or unanswered. To bring the user's settings over \
         from another editor or terminal, use list_import_sources and preview_import, never those apps' files \
         (they sit next to tokens); apply_import and undo_import open Next Term's import window, where only \
-        the user's Apply changes anything.
+        the user's Apply changes anything. A tab Next Term brings back after an \
+        update or a quit keeps its id, with restored details (why, and what the restart did to it) until its \
+        next command, and calls made while it restarts say what happens to their tab.
         """
 
     // MARK: tools

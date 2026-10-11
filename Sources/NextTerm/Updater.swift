@@ -3,11 +3,12 @@ import CryptoKit
 import NextTermCore
 
 /// Updates from GitHub Releases: checks once a day at 11:00 or later, in the Mac's time zone (and on demand). A new version opens the
-/// update window with its release notes (Skip This Version, Remind Me Later, Install and Relaunch), and
+/// update window with its release notes (Skip This Version, Remind Me Later, Install Update…), and
 /// a blue Update button stays at the top right of each window until it is installed or skipped. One
-/// click downloads the new DMG, checks it as the installer (scripts/install.sh) does (the release's
-/// SHA-256 signed with the Next Term release key, and the download matching it), puts the new app in
-/// place of this one when Next Term quits, and starts it again.
+/// click downloads the new DMG and checks it as the installer (scripts/install.sh) does (the release's
+/// SHA-256 signed with the Next Term release key, and the download matching it). The update sheet
+/// (UpdateKeepSessions) then shows what happens to each tab: "Update Now" quits, puts the new app in place
+/// of this one and starts it again; "When I Quit" puts it in place at the next quit, without starting it.
 ///
 /// Only the latest-release endpoint is contacted, with no identifying data beyond the version in the
 /// User-Agent. Downloads are accepted only over https from GitHub.
@@ -87,8 +88,11 @@ final class Updater {
     }
 
     /// Starts the daily check: at 11:00 or the first moment after it, in the Mac's time zone, in the
-    /// background (UpdateSchedule). A development build, with no version, never checks.
+    /// background (UpdateSchedule). A development build, with no version, never checks. First, an install that
+    /// failed at the last quit is told once.
     func start() {
+        // An install that failed at the last quit says so once, after the launch has shown its windows (R18).
+        DispatchQueue.main.async { UpdateKeepSessions.tellInstallResult() }
         guard current != nil, observers.isEmpty else { return }
         // Waking from sleep, a new time zone, the clock being set or a new day all move the next 11:00.
         let workspace = NSWorkspace.shared.notificationCenter
@@ -142,8 +146,16 @@ final class Updater {
         return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
     }
 
-    /// "Check for Updates…": says so either way. The daily check speaks only when there is something new.
-    func check(userInitiated: Bool) {
+    /// After an install that did not finish (R18): one check now, whatever the schedule says, so the Update button
+    /// offers the update again. Nothing is staged after the relaunch, and this check only sets what the button offers: it
+    /// opens no window and downloads nothing.
+    func checkAgainQuietly() {
+        check(userInitiated: false, quietly: true)
+    }
+
+    /// "Check for Updates…": says so either way. The daily check speaks only when there is something new. `quietly`: only
+    /// the Update button changes.
+    func check(userInitiated: Bool, quietly: Bool = false) {
         guard !checking else { return }
         guard let current else {
             if userInitiated { tell("This is a development build", "Updates are for the released app.") }
@@ -162,7 +174,7 @@ final class Updater {
                     self.checking = false
                     // A failed check doesn't count as today's: the schedule tries again an hour later.
                     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: failed ? "lastUpdateFailure" : "lastUpdateCheck")
-                    self.handle(release, current: current, userInitiated: userInitiated, failed: failed)
+                    self.handle(release, current: current, userInitiated: userInitiated, failed: failed, quietly: quietly)
                     if !self.observers.isEmpty { self.scheduleNext() }
                 }
             }
@@ -178,7 +190,7 @@ final class Updater {
         }.resume()
     }
 
-    private func handle(_ release: ReleaseInfo?, current: AppVersion, userInitiated: Bool, failed: Bool) {
+    private func handle(_ release: ReleaseInfo?, current: AppVersion, userInitiated: Bool, failed: Bool, quietly: Bool = false) {
         guard let release, current < release.version else {
             if !failed { available = nil } // withdrawn, or this is the newest
             if userInitiated {
@@ -188,7 +200,13 @@ final class Updater {
             return
         }
         if staged?.version == release.version {
-            if userInitiated { relaunchPrompt(release.version) }
+            if userInitiated { offerInstall(release.version, from: .check) }
+            return
+        }
+        if quietly {
+            if available?.tag != release.tag { availableNotes = [] }
+            offeredTo = current
+            available = release
             return
         }
         if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") {
@@ -226,9 +244,9 @@ final class Updater {
         available = nil
     }
 
-    /// The Update button: the window again (or, with an update ready, the offer to relaunch).
+    /// The Update button: the window again (or, with an update ready, the update sheet).
     func showAvailable() {
-        if let staged { return relaunchPrompt(staged.version) }
+        if let staged { return offerInstall(staged.version, from: .updateButton) }
         guard let available, let current = offeredTo else { return check(userInitiated: true) }
         if availableNotes.isEmpty {
             offer(available, current: current, userInitiated: true)
@@ -335,7 +353,7 @@ final class Updater {
                 staged = (app.url, release.version, app.requirement, app.oldRequirement)
                 installing = false
                 hideProgress()
-                if !quietly { relaunchPrompt(release.version) }
+                if !quietly { offerInstall(release.version, from: .download) }
             } catch {
                 let beforeDownload = quietly && !signed
                 installing = false
@@ -490,13 +508,22 @@ final class Updater {
         guard try Self.runTool("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-quiet", "-mountpoint", mount.path]) else {
             throw UpdateError("The disk image could not be opened.")
         }
-        let source = mount.appendingPathComponent("Next Term.app")
+        let here = Bundle.main.bundleURL
+        return try stageCopy(of: mount.appendingPathComponent("Next Term.app"), version: version) {
+            try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
+        }
+    }
+
+    /// Copies the app at `source` into the folder `makeStaging` makes, and checks it is Next Term at `version` with an intact
+    /// signature that meets the requirement the install script checks it against again (see
+    /// `CodeSignature.updateRequirement`). The folder goes when the copy is refused.
+    private nonisolated static func stageCopy(of source: URL, version: AppVersion,
+                                              in makeStaging: () throws -> URL) throws -> (url: URL, requirement: String, oldRequirement: String) {
         guard let running = CodeSignature.running(), let image = CodeSignature.of(source) else {
             throw UpdateError("The signatures of this app and the new one could not be read.")
         }
         let requirement = CodeSignature.updateRequirement(running: running, staged: image)
-        let here = Bundle.main.bundleURL
-        let staging = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: here, create: true)
+        let staging = try makeStaging()
         do {
             let target = staging.appendingPathComponent("Next Term.app")
             guard try Self.runTool("/usr/bin/ditto", [source.path, target.path]) else { throw UpdateError("The new app could not be copied.") }
@@ -528,50 +555,73 @@ final class Updater {
         return process.terminationStatus == 0
     }
 
-    private func relaunchPrompt(_ version: AppVersion) {
-        // Not under a quit's question (a download can end there): the staged update stays on the Update button.
+    /// The staged update, offered: the update sheet (UpdateKeepSessions), from a manual check with the update staged, the
+    /// Update button or the end of a download. Not under a quit's question (a download can end there), a sheet or a
+    /// modal window: the staged update stays on the Update button. The `updateInstallWithoutAsking` test switch shows no
+    /// sheet and gives no consent: it quits as the user's quit, which installs without relaunching.
+    private func offerInstall(_ version: AppVersion, from entry: UpdateFlow.Entry) {
         if AppDelegate.shared.askingToQuit { return }
-        if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return relaunchNow() }
-        let alert = NSAlert()
-        alert.messageText = "Next Term \(version) is ready"
-        alert.informativeText = "It replaces this version when Next Term quits. Relaunch now? Running commands and agents stop."
-        alert.addButton(withTitle: "Relaunch Now")
-        alert.addButton(withTitle: "When I Quit")
-        if alert.runModal() == .alertFirstButtonReturn { relaunchNow() }
+        if testing, UserDefaults.standard.bool(forKey: "updateInstallWithoutAsking") { return NSApp.terminate(nil) }
+        UpdateKeepSessions.shared.show(version: version, from: entry)
     }
 
-    /// "Relaunch Now" is quitting: the quit asks nothing about reopening (unsaved files and running work are still
-    /// asked about), and the install flags the relaunch. Until the update that keeps sessions.
-    private(set) var relaunching = false
+    /// The update consent (KTD2): set by "Update Now", or "Wait for Them" at its countdown's end, immediately before the
+    /// quit, and cleared when `terminate` returns, which happens only when the quit was cancelled.
+    private(set) var consent: UpdateConsent?
 
-    /// Quits so the update goes in, and the new version reopens the projects open now. "When I Quit" never comes
-    /// here: that quit is the user's own, and the launch after it follows Settings › General.
-    private func relaunchNow() {
-        relaunching = true
-        NSApp.terminate(nil)
-        relaunching = false // the quit was cancelled: only then does `terminate` return
+    /// The consent, while it is valid: only while the update it was given for is still the staged one.
+    var validConsent: UpdateConsent? {
+        guard let consent, let staged, staged.version.description == consent.version else { return nil }
+        return consent
     }
 
-    /// Where the flag "Relaunch Now" leaves is kept in the defaults.
-    nonisolated static let relaunchFlagKey = "updateRelaunchAt"
+    /// The staged update's version, if one is staged.
+    var stagedVersion: AppVersion? { staged?.version }
 
-    /// Marks the next launch as the relaunch after "Relaunch Now", which reopens the projects that were open whatever
-    /// Settings › General says. The next launch takes the flag (`AppDelegate.takeLaunchKind`); one more than 15
-    /// minutes old counts for nothing.
-    nonisolated static func flagRelaunch(in defaults: UserDefaults, now: Date) {
-        defaults.set(now, forKey: relaunchFlagKey)
-    }
-
-    /// Called as Next Term quits: if an update is staged, a small script (see `InstallScript`) waits for
-    /// this process to end, checks the new app's signature again, swaps the apps (putting the old one back
-    /// if anything fails) and starts the new one.
-    func installStagedUpdateOnQuit() {
+    /// The update sheet for the staged update, if one is staged: after a quit cancelled because another version was staged
+    /// while it asked.
+    func offerStaged() {
         guard let staged else { return }
-        if relaunching { Self.flagRelaunch(in: AppDelegate.shared.launchDefaults, now: Date()) }
+        offerInstall(staged.version, from: .updateButton)
+    }
+
+    /// Why the update quit can't go ahead under `consent` now: a sheet, a modal window or a quit's question is up, or the
+    /// staged update is another version. Nil when it can.
+    func quitRefusal(for consent: UpdateConsent) -> UpdateQuitRefusal? {
+        let sheet = NSApp.windows.contains { $0.attachedSheet != nil }
+        return UpdateFlow.quitRefusal(for: consent, staged: staged?.version.description, sheetAttached: sheet,
+                                      modalWindow: NSApp.modalWindow != nil, askingToQuit: AppDelegate.shared.askingToQuit)
+    }
+
+    /// Quits for the update, under `consent`: never over a sheet, a modal window or a quit's question, checked again here,
+    /// just before `terminate`; the refusal is returned for the sheet to say. A quit the user cancels clears the consent,
+    /// so the next quit asks its own questions (AE5).
+    @discardableResult
+    func quitForUpdate(_ consent: UpdateConsent) -> UpdateQuitRefusal? {
+        if let refusal = quitRefusal(for: consent) { return refusal }
+        self.consent = consent
+        NSApp.terminate(nil)
+        self.consent = nil // the quit was cancelled: only then does `terminate` return
+        return nil
+    }
+
+    /// Called as Next Term quits, once the quit's last save is written (SessionRestore.finishAtQuit): if an update is
+    /// staged, a small script (see `InstallScript`) waits for this process to end, checks the new app's signature again,
+    /// swaps the apps (putting the old one back if anything fails) and starts the new one. It leaves its result in the
+    /// sessions folder, naming the marker the saved session waits for (even one whose write failed), and opens an old app
+    /// it could not put back from its backup with the folder's key. The marker replaced plan 005's relaunch flag.
+    /// `relaunch`: only the update quit starts the new version; any other quit ("When I Quit") puts it in place alone.
+    func installStagedUpdateOnQuit(sessions: SessionRestore.Finished, relaunch: Bool) {
+        guard let staged else { return }
         let staging = staged.newApp.deletingLastPathComponent()
-        let script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: Bundle.main.bundleURL.path,
+        let target = installTarget
+        var script = InstallScript(pid: ProcessInfo.processInfo.processIdentifier, app: target.app,
                                    newApp: staged.newApp.path, staging: staging.path, requirement: staged.requirement,
-                                   oldRequirement: staged.oldRequirement, relaunch: true)
+                                   oldRequirement: staged.oldRequirement, relaunch: relaunch)
+        script.open = target.open
+        script.sessions = sessions.folder
+        script.marker = sessions.marker
+        script.folderKey = sessions.folderKey
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script.text]
@@ -580,6 +630,44 @@ final class Updater {
         process.standardError = FileHandle.nullDevice
         try? process.run() // outlives this process
     }
+
+    /// Where the install puts the update, and what opens it after: this app's place and `open`, or the relaunch harness's.
+    var installTarget: (app: String, open: String) {
+        #if DEBUG
+        if let standIn { return (standIn.app.path, standIn.opener.path) }
+        #endif
+        return (Bundle.main.bundleURL.path, "/usr/bin/open")
+    }
+
+    #if DEBUG
+    /// The relaunch harness's install path and stub opener: its install moves only these, in the harness's folder, never
+    /// `Bundle.main.bundleURL`, and opens no app.
+    private var standIn: (app: URL, opener: URL)?
+
+    /// The relaunch harness's staged update (SelfTestRestore), in place of a download. `update` is a copy of this build that
+    /// the harness's driver signed ad hoc at a harness version. It is staged as a disk image's app is (`stageCopy`), in the
+    /// new folder `staging`, with the requirements `CodeSignature` picks for an app signed ad hoc: its own, and the running
+    /// copy's for the old app. The install at quit then puts it in place of `app` and runs `opener` in place of `open`.
+    /// It stands in for a checked download only: nothing quits or installs until the user's press on the update sheet.
+    func stageStandIn(_ update: URL, in staging: URL, replacing app: URL, opener: URL) async throws -> AppVersion {
+        guard SelfTest.mode == .relaunchHarness else { throw UpdateError("Only the relaunch harness stages a stand-in.") }
+        let shortVersion = Bundle(url: update)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        guard let version = shortVersion.flatMap(AppVersion.init) else { throw UpdateError("The stand-in has no version.") }
+        let copy = try await Task.detached {
+            try Self.stageCopy(of: update, version: version) {
+                try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false,
+                                                        attributes: [.posixPermissions: 0o700])
+                return staging
+            }
+        }.value
+        standIn = (app, opener)
+        staged = (copy.url, version, copy.requirement, copy.oldRequirement)
+        return version
+    }
+
+    /// The staged update's app and folder, for the harness's checks.
+    var stagedApp: URL? { staged?.newApp }
+    #endif
 
     private func tell(_ title: String, _ text: String) {
         let alert = NSAlert()

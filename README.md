@@ -136,7 +136,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
   Update button at the top right brings it back. It downloads, is checked against its checksum signed
   with the Next Term release key, and replaces the app when you relaunch.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 20 MB to download, 44 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 21 MB to download, 45 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -279,6 +279,8 @@ To sign and notarize for distribution:
 scripts/test.sh                          # unit tests: status, agents, git, files, editor, nxtrm, shortcuts, updates
 python3 scripts/zsh-integration-test.py  # the shipped zsh hooks, in a real pty, with your zsh config
 scripts/selftest.sh                      # end-to-end: drives the real app (opens a window)
+scripts/orphan-check.sh                  # release check: what keeps running after Quit, closing tabs, Force Quit
+scripts/perf-budget.sh                   # release check: CPU, drawing, git and memory budgets of a release build
 ```
 
 The self-test opens real tabs and shells and checks every status transition, agent detection, jobs,

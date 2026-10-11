@@ -95,7 +95,7 @@ extension AgentKind {
     }
 
     /// The options that name the session to resume (`--resume <id>`, `--resume=<id>`).
-    private var idOptions: [String] {
+    var idOptions: [String] {
         switch self {
         case .claude, .gemini, .qwen, .copilot: return ["--resume", "-r", "--session-id"]
         case .commandCode: return ["--resume", "-r", "--session"]

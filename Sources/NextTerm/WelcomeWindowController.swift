@@ -66,6 +66,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 720, height: 440)
+        // File › Open Project… shows it from a project window in full screen too: it comes over that window, on the
+        // Space you are in, rather than taking you to the desktop.
+        window.collectionBehavior.formUnion([.fullScreenAuxiliary, .moveToActiveSpace])
         super.init(window: window)
         window.delegate = self
         window.keyEquivalentHandler = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
@@ -115,8 +118,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let projectsScroll = Self.scroll(projectsTable)
         let open = openPanelButton
         open.target = NSApp.delegate
-        open.action = #selector(AppDelegate.openProjectPanel(_:))
+        open.action = #selector(AppDelegate.chooseProjectFolder(_:))
         open.bezelStyle = .rounded
+        // Open Project…'s key, which is Open… here (`AppDelegate.openProjectPanel`).
         openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
         let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
         terminal.bezelStyle = .rounded
@@ -416,7 +420,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     @objc func openSelectedProject() {
         guard let project = selectedProject else { return }
-        AppDelegate.shared.openProject(at: URL(fileURLWithPath: project), from: nil)
+        AppDelegate.shared.openProject(at: URL(fileURLWithPath: project), from: AppDelegate.shared.welcomeOrigin)
     }
 
     @objc private func newTerminal() {

@@ -147,8 +147,13 @@ import Testing
         let started = Date()
         #expect(CommitMessageRun().run(.claude, path: slow, prompt: "P", changes: "C", environment: environment, timeout: 0.5) == .timedOut)
         #expect(Date().timeIntervalSince(started) < 10)
+        // The stop comes from a thread of its own: with the whole suite running, GCD's shared threads can all be
+        // busy for longer than the stand-in sleeps, and the stop would arrive after it had ended by itself.
         let run = CommitMessageRun()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { run.stop() }
+        let stopping = Thread { Thread.sleep(forTimeInterval: 0.3); run.stop() }
+        stopping.start()
+        let stoppedAt = Date()
         #expect(run.run(.claude, path: slow, prompt: "P", changes: "C", environment: environment) == .stopped)
+        #expect(Date().timeIntervalSince(stoppedAt) < 10)
     }
 }

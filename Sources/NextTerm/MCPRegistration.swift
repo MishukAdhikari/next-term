@@ -129,17 +129,18 @@ enum LoginShell {
     /// XDG_STATE_HOME (where `npx skills` keeps its lock file when it is set). One probe per launch
     /// serves the agents' registration, remote tabs' ssh and the Skills library.
     /// The command reads the environment with /usr/bin/env, so it is the same text in zsh, bash, fish and
-    /// tcsh (fish and csh reject `${VAR:-}`, and fish's "$PATH" is a list joined by spaces).
-    private static let probed: (path: [String], sshAuthSock: String?, xdgStateHome: String?) = {
+    /// tcsh (fish and csh reject `${VAR:-}`, and fish's "$PATH" is a list joined by spaces). The same listing
+    /// gives the agents' routing variables, kept as digests only, for a restore to compare with (KTD5).
+    private static let probed: (path: [String], sshAuthSock: String?, xdgStateHome: String?, routing: [String: String]?) = {
         defer { isProbed = true }
         // A marker no variable's value can contain: unpredictable, made fresh for this probe.
         let marker = "__NT_" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + "__"
         // XDG_STATE_HOME is read on its own (printenv between markers): a newline inside another
         // variable's value could otherwise fake a line of env's output.
         let command = "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker); /usr/bin/printenv XDG_STATE_HOME; /usr/bin/printf %s \(marker)"
-        guard let output = capture(shell, ["-l", "-i", "-c", command], timeout: 5) else { return ([], nil, nil) }
+        guard let output = capture(shell, ["-l", "-i", "-c", command], timeout: 5) else { return ([], nil, nil, nil) }
         let parts = output.components(separatedBy: marker)
-        guard parts.count >= 3 else { return ([], nil, nil) }
+        guard parts.count >= 3 else { return ([], nil, nil, nil) }
         var path: [String] = []
         var socket: String?
         for line in parts[1].split(separator: "\n") {
@@ -152,7 +153,7 @@ enum LoginShell {
             // Only an absolute path counts (the XDG rules; a relative one is ignored).
             if value.hasPrefix("/"), !value.contains("\n") { state = value }
         }
-        return (path, socket, state)
+        return (path, socket, state, AgentEvidence.routingDigests(environmentListing: parts[1]))
     }()
 
     /// The probe has run (reading `path` or `sshAuthSock` will not wait for it).
@@ -172,6 +173,17 @@ enum LoginShell {
 
     /// XDG_STATE_HOME as the user's shell sets it, or nil.
     static var xdgStateHome: String? { probed.xdgStateHome }
+
+    /// The agents' routing variables (AgentEvidence.routingKeys) as the user's shell sets them, as digests: what a
+    /// restored tab's shell starts with. Nil until the probe has run (asking starts it, off the main thread), or when
+    /// it failed; then no agent's routing matches.
+    static var routing: [String: String]? {
+        guard isProbed else {
+            warmUp()
+            return nil
+        }
+        return probed.routing
+    }
 
     /// PATH from an interactive login shell (5 s at most), plus the usual install folders.
     static let path: [String] = {
@@ -209,7 +221,13 @@ enum LoginShell {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: program)
         process.arguments = arguments
-        process.environment = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
+        var environment = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
+        #if DEBUG
+        // The relaunch harness's tabs read its own zsh config, not the user's (SelfTestRestore.prepareShells): so does the
+        // login shell their agents' routing is compared with.
+        if let own = SelfTestRestore.harness?.zdotdir.path { environment["ZDOTDIR"] = own }
+        #endif
+        process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         // A file, not a pipe: a background job the shell starts can keep a pipe open forever.

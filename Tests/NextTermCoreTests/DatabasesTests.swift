@@ -343,6 +343,45 @@ func visibleText(_ scan: DatabaseScan) -> String {
         #expect(names == ["cache.db", "database.sqlite"])
     }
 
+    /// The sidebar scans again only after a change the scan can see: the project's own folder, `.vercel`, and the
+    /// folders the SQLite search lists. A writer in `.svelte-kit/`, `target/` or four folders down sets off nothing.
+    @Test func whichChangesCanChangeTheScan() {
+        let root = "/Users/me/shop"
+        func may(_ relative: String) -> Bool {
+            Databases.scanMayChange(after: relative.isEmpty ? root + "/" : root + "/" + relative + "/", root: root)
+        }
+        for yes in ["", ".vercel", "prisma", "prisma/schema", "supabase", "database", "src/app", "a/b/c", "storage", "storage/app"] {
+            #expect(may(yes), "\(yes)")
+        }
+        let no = ["a/b/c/d", ".next/cache", ".svelte-kit/generated", ".turbo", ".git/objects", ".vercel/output/static",
+                  "node_modules/react", "vendor/laravel", "target/debug", "src/__pycache__", "coverage", "packages/ui/dist",
+                  "storage/framework", "storage/framework/views"]
+        for folder in no {
+            #expect(!may(folder), "\(folder)")
+        }
+        #expect(Databases.scanMayChange(after: root, root: root))
+        #expect(!Databases.scanMayChange(after: "/Users/me/shop-old/src/", root: root))
+        #expect(!Databases.scanMayChange(after: "/Users/me/", root: root))
+    }
+
+    /// The filter and the search agree: a SQLite file in a folder the filter lets through is found, and one in a
+    /// folder it does not is not.
+    @Test func theChangeFilterMatchesWhatTheScanFinds() {
+        let project = FixtureProject()
+        let header = Data("SQLite format 3\0".utf8) + Data(count: 84)
+        let folders = ["", "data", "src/app", "a/b/c", "a/b/c/d", ".hidden", "node_modules/pkg", "target", "src/__pycache__"]
+        for (i, folder) in folders.enumerated() {
+            project.write((folder.isEmpty ? "" : folder + "/") + "f\(i).db", data: header)
+        }
+        let files = project.scan().databases.compactMap(\.filePath)
+        let found = Set(files.map { ($0 as NSString).deletingLastPathComponent })
+        #expect(found.count == 4)
+        for folder in folders {
+            let path = folder.isEmpty ? project.root : project.root + "/" + folder
+            #expect(found.contains(path) == Databases.scanMayChange(after: path + "/", root: project.root), "\(folder)")
+        }
+    }
+
     // MARK: parsing
 
     @Test func envParsingSurvivesMalformedLines() {

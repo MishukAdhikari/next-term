@@ -2,7 +2,8 @@ import AppKit
 import NextTermCore
 
 /// "Next Term 0.6.0 is available": what changed in every release since this one, with Skip This
-/// Version, Remind Me Later and Install and Relaunch.
+/// Version, Remind Me Later and Install Update…, which downloads and checks it, then shows the update sheet
+/// (UpdateKeepSessions) before anything quits.
 ///
 /// Opened by the automatic check, it sits over the front window without taking the keyboard: someone
 /// typing to an agent keeps typing, and a Return meant for the terminal never installs anything. A
@@ -98,10 +99,10 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
         laterButton = NSButton(title: "Remind Me Later", target: self, action: #selector(later))
         laterButton.keyEquivalent = "\u{1b}"
         laterButton.toolTip = "Ask again tomorrow. The Update button stays at the top right."
-        installButton = NSButton(title: canInstall ? "Install and Relaunch" : "Download", target: self, action: #selector(install))
+        installButton = NSButton(title: canInstall ? "Install Update…" : "Download", target: self, action: #selector(install))
         installButton.keyEquivalent = "\r"
         installButton.toolTip = canInstall
-            ? "Downloads \(release.version), checks it against its published checksum, and swaps it in when Next Term quits."
+            ? "Downloads and checks \(release.version), then shows what happens to your tabs before relaunching."
             : "Opens the release page to download \(release.version)."
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)

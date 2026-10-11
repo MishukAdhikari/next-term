@@ -171,6 +171,22 @@ extension Databases {
                                               "venv", "env", "coverage", "out", "bower_components", "Carthage"]
     static let sqliteExtensions: Set<String> = ["sqlite", "sqlite3", "db", "db3"]
 
+    /// Whether a change FSEvents reports in `folder` can change what `scan(root:)` finds, so the sidebar scans again
+    /// only for those: the project's own folder (env files, ORM configs, artisan), `.vercel` (the project link), and
+    /// the folders the SQLite search lists, three deep at most and never hidden, a dependency or a build folder.
+    /// Laravel's storage/framework, written on every request, is left out too.
+    public static func scanMayChange(after folder: String, root: String) -> Bool {
+        let path = folder.count > 1 && folder.hasSuffix("/") ? String(folder.dropLast()) : folder
+        let root = root.count > 1 && root.hasSuffix("/") ? String(root.dropLast()) : root
+        if path == root { return true }
+        guard path.hasPrefix(root + "/") else { return false }
+        let names = path.dropFirst(root.count + 1).split(separator: "/").map(String.init)
+        if names == [".vercel"] { return true }
+        guard names.count <= 3 else { return false }
+        if zip(names, names.dropFirst()).contains(where: { $0 == "storage" && $1 == "framework" }) { return false }
+        return !names.contains { $0.hasPrefix(".") || skippedFolders.contains($0) }
+    }
+
     /// SQLite files in the project, three folders deep at most, never through a symlink or into a
     /// dependency folder, and only files that start with SQLite's header.
     static func sqliteFiles(_ context: Context) -> [String] {
