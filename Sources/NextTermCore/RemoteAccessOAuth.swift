@@ -40,11 +40,11 @@ public struct RemoteAccessOAuth: Sendable {
     public static let maximumClientsWithoutGrant = 20
     /// A client without a grant is dropped after this long unused.
     public static let clientUnusedLimit: TimeInterval = 24 * 3600
-    /// A client's own name is kept up to this many printable characters.
+    /// A client's own name is kept up to this many Unicode scalars of printable text, in whole characters.
     public static let maximumClientName = 100
-    /// A grant's name, as typed on the Mac, is kept up to this many printable characters.
+    /// A grant's name, as typed on the Mac, is kept up to this many Unicode scalars, in whole characters.
     public static let maximumGrantName = 100
-    /// The longest `state` a client may send; it comes back in the redirect.
+    /// The longest `state` a client may send, in UTF-8 bytes; it comes back in the redirect.
     public static let maximumState = 1024
     /// Wrong codes typed on the Mac before pairing closes.
     public static let wrongCodeLimit = 5
@@ -53,9 +53,12 @@ public struct RemoteAccessOAuth: Sendable {
     /// How long a finished request (approved, declined, closed or expired) is remembered, so its browser still
     /// gets its redirect or its page.
     static let requestMemory: TimeInterval = 60 * 60
-    /// Values a dropped-at-registration event keeps, each cut to `droppedValueLength` characters.
+    /// Values a dropped-at-registration event keeps, each cut to `droppedValueLength` UTF-8 bytes.
     static let droppedValues = 10
     static let droppedValueLength = 200
+    /// Refresh tokens a grant remembers as replaced besides the latest, about a day of refreshes every 15
+    /// minutes. A reuse of any of them ends the grant; an older one is only unknown.
+    static let replacedTokenMemory = 100
 
     // MARK: fixed values
 
@@ -111,13 +114,16 @@ public struct RemoteAccessOAuth: Sendable {
         public var lastUsed: Date
         /// SHA-256 of the current refresh token, in hex. Nil until the code is exchanged.
         public var refreshHash: String?
-        /// SHA-256 of the refresh token it replaced, and when.
+        /// SHA-256 of the refresh token it replaced last, and when: the one the 60-second grace is for.
         public var replacedHash: String?
         public var replacedAt: Date?
+        /// SHA-256 of the refresh tokens replaced before that one, oldest first, at most `replacedTokenMemory`.
+        public var earlierHashes: [String]
 
         public init(id: String, name: String, clientID: String, clientName: String?, redirectHost: String,
                     options: RemoteAccessOptions, host: String, created: Date, lastUsed: Date,
-                    refreshHash: String? = nil, replacedHash: String? = nil, replacedAt: Date? = nil) {
+                    refreshHash: String? = nil, replacedHash: String? = nil, replacedAt: Date? = nil,
+                    earlierHashes: [String] = []) {
             self.id = id
             self.name = name
             self.clientID = clientID
@@ -130,6 +136,7 @@ public struct RemoteAccessOAuth: Sendable {
             self.refreshHash = refreshHash
             self.replacedHash = replacedHash
             self.replacedAt = replacedAt
+            self.earlierHashes = earlierHashes
         }
 
         /// When it ends: 14 days after its last use, or 90 days after it was created, whichever comes first.
@@ -143,11 +150,31 @@ public struct RemoteAccessOAuth: Sendable {
 
         /// The preset its options carry the name of.
         public var preset: RemoteAccessPreset { options.preset }
+
+        /// Whether `key` is the hash of a refresh token it replaced, the last one or an earlier one.
+        func replaced(_ key: String) -> Bool {
+            RemoteAccessOAuth.same(replacedHash, key) || replacedEarlier(key)
+        }
+
+        /// Whether `key` is the hash of a refresh token it replaced before the last one.
+        func replacedEarlier(_ key: String) -> Bool {
+            earlierHashes.contains { RemoteAccessOAuth.same($0, key) }
+        }
+
+        /// Adds a replaced token's hash to the earlier ones, keeping the last `replacedTokenMemory`.
+        mutating func rememberEarlier(_ hash: String?) {
+            guard let hash else { return }
+            earlierHashes.append(hash)
+            let extra = earlierHashes.count - RemoteAccessOAuth.replacedTokenMemory
+            if extra > 0 { earlierHashes.removeFirst(extra) }
+        }
     }
 
-    /// A browser waiting for its code to be typed on the Mac.
-    public struct PairingRequest: Equatable, Sendable {
-        public enum Outcome: Equatable, Sendable {
+    /// A browser waiting for its code to be typed on the Mac. Its description shows neither its id, its code nor
+    /// where it goes back to: the id lets a browser fetch the redirect, and the redirect carries the code.
+    public struct PairingRequest: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
+        CustomReflectable {
+        public enum Outcome: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
             case waiting
             /// Approved or declined: where the browser goes back to.
             case redirect(String)
@@ -155,6 +182,17 @@ public struct RemoteAccessOAuth: Sendable {
             case closed
             /// Its 10 minutes ran out.
             case expired
+
+            public var description: String {
+                switch self {
+                case .waiting: return "waiting"
+                case .redirect: return "redirect"
+                case .closed: return "closed"
+                case .expired: return "expired"
+                }
+            }
+
+            public var debugDescription: String { description }
         }
 
         /// 128 random bits: the browser's key to its own request.
@@ -179,6 +217,15 @@ public struct RemoteAccessOAuth: Sendable {
         public var suggestedName: String { RemoteAccessOAuth.suggestedName(redirectHost: redirectHost) }
 
         var isWaiting: Bool { outcome == .waiting }
+
+        /// A short hash of the id, for the audit log and descriptions.
+        public var logID: String { RemoteAccessOAuth.logID(id) }
+
+        public var description: String { "pairing request \(logID) for \(redirectHost), \(outcome)" }
+        public var debugDescription: String { description }
+        public var customMirror: Mirror {
+            Mirror(self, children: ["request": logID, "clientID": clientID, "outcome": outcome.description])
+        }
     }
 
     /// An authorization code, kept by its hash.
@@ -232,8 +279,10 @@ public struct RemoteAccessOAuth: Sendable {
         public var customMirror: Mirror { Mirror(self, children: ["status": status, "bodySize": body.count]) }
     }
 
-    /// What the door does with `/oauth/authorize` and `/oauth/authorize/wait`.
-    public enum Authorization: Equatable, Sendable {
+    /// What the door does with `/oauth/authorize` and `/oauth/authorize/wait`. Its description shows no request
+    /// id, code or link.
+    public enum Authorization: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
+        CustomReflectable {
         /// The page with the code, which reloads itself to `waitPath(for:)`.
         case waiting(requestID: String, code: String)
         /// 302 to this link: the client's callback with a code, or with an error.
@@ -246,14 +295,40 @@ public struct RemoteAccessOAuth: Sendable {
         case tooMany
         /// The request can't be trusted with a redirect: the page says why.
         case invalid(String)
+
+        public var description: String {
+            switch self {
+            case .waiting(let requestID, _): return "waiting, request \(RemoteAccessOAuth.logID(requestID))"
+            case .redirect(let link): return "redirect to \(RemoteAccessOAuth.host(of: link))"
+            case .closed: return "closed"
+            case .expired: return "expired"
+            case .tooMany: return "too many"
+            case .invalid(let reason): return "invalid: \(reason)"
+            }
+        }
+
+        public var debugDescription: String { description }
+        public var customMirror: Mirror { Mirror(self, children: ["authorization": description]) }
     }
 
     /// What a code typed on the Mac matches.
-    public enum Match: Equatable, Sendable {
+    public enum Match: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
+        CustomReflectable {
         case request(PairingRequest)
         case noMatch
         /// Pairing is closed, or this was the fifth wrong code.
         case closed
+
+        public var description: String {
+            switch self {
+            case .request(let request): return request.description
+            case .noMatch: return "no match"
+            case .closed: return "closed"
+            }
+        }
+
+        public var debugDescription: String { description }
+        public var customMirror: Mirror { Mirror(self, children: ["match": description]) }
     }
 
     public enum ApprovalError: Error, Equatable, Sendable {
@@ -339,17 +414,18 @@ public struct RemoteAccessOAuth: Sendable {
         case wrongCodes = "wrong_codes"
     }
 
-    /// What the audit log records (R39). Tokens, codes and hashes never appear in one.
+    /// What the audit log records (R39). Tokens, codes and hashes never appear in one, and neither does a request
+    /// id: a request appears by its `PairingRequest.logID`.
     public enum Event: Equatable, Sendable {
         case clientRegistered(clientID: String, clientName: String?, redirectHosts: [String])
         /// Values registration dropped or answered otherwise; `clientID` is nil when it was refused.
         case registrationDropped(clientID: String?, field: String, values: [String])
         case pairingOpened(until: Date)
         case pairingClosed(PairingClosed)
-        case pairingAsked(requestID: String, clientID: String, clientName: String?, redirectHost: String)
-        case pairingApproved(requestID: String, grantID: String, name: String, options: RemoteAccessOptions)
-        case pairingDeclined(requestID: String, clientID: String)
-        case pairingExpired(requestID: String, clientID: String)
+        case pairingAsked(request: String, clientID: String, clientName: String?, redirectHost: String)
+        case pairingApproved(request: String, grantID: String, name: String, options: RemoteAccessOptions)
+        case pairingDeclined(request: String, clientID: String)
+        case pairingExpired(request: String, clientID: String)
         case optionsChanged(grantID: String, name: String, old: RemoteAccessOptions, new: RemoteAccessOptions)
         /// The Mac shows `reuseNotice(grantName:)`.
         case refreshReused(grantID: String, name: String)
@@ -417,7 +493,8 @@ public struct RemoteAccessOAuth: Sendable {
     }
 
     /// The authority for a hostname, with the clients and grants the grant store kept. A grant saved under
-    /// another hostname does not come back: a new hostname ends every grant (R17).
+    /// another hostname ends here: a new hostname ends every grant (R17, KTD17). Each one ended emits a
+    /// `revoked` event with `hostChanged`, so the app deletes it from the grant store.
     public init(host: String, clients: [Client] = [], grants: [Grant] = [],
                 random: @escaping @Sendable (Int) -> [UInt8] = RemoteAccessOAuth.systemRandom) {
         let lowered = Self.asciiLowercased(host)
@@ -425,6 +502,9 @@ public struct RemoteAccessOAuth: Sendable {
         self.clients = clients
         self.grants = grants.filter { $0.host == lowered }
         self.random = random
+        for grant in grants where grant.host != lowered {
+            events.append(.revoked(grantID: grant.id, name: grant.name, reason: .hostChanged))
+        }
     }
 
     /// `https://<host>`.
@@ -502,25 +582,37 @@ public struct RemoteAccessOAuth: Sendable {
 
     /// Registers a public client (RFC 7591). Only the two vendor callbacks are kept, and a registration with
     /// neither is refused. Any client authentication it asks for is answered with `none`. What it dropped goes
-    /// to the audit log. 5 an hour while pairing is closed, 10 in one pairing window.
+    /// to the audit log. 5 an hour while pairing is closed, 10 in one pairing window; every attempt counts,
+    /// refused or not, and the limit is checked before the body is read.
     public mutating func register(_ body: Data, now: Date) -> Answer {
         prune(now)
-        let parsed = try? JSONSerialization.jsonObject(with: body)
-        guard let metadata = parsed as? [String: Any] else {
-            return Self.failure(400, "invalid_client_metadata", "The registration is not a JSON object.")
-        }
         guard registrationAllowed(now) else {
             let text = "Too many apps tried to connect. On your Mac, open Next Term › Settings › Remote Access › Connect a Client, then try again."
             return Self.failure(429, "temporarily_unavailable", text)
         }
+        if pairingIsOpen(now: now) {
+            registrationsInWindow += 1
+        } else {
+            registrationsOutside.append(now)
+        }
+        let parsed = try? JSONSerialization.jsonObject(with: body)
+        guard let metadata = parsed as? [String: Any] else {
+            return Self.failure(400, "invalid_client_metadata", "The registration is not a JSON object.")
+        }
         var kept: [String] = []
         var droppedURIs: [String] = []
-        for value in metadata["redirect_uris"] as? [Any] ?? [] {
-            if let uri = value as? String, Self.redirectURIs.contains(uri) {
-                if !kept.contains(uri) { kept.append(uri) }
-            } else {
-                droppedURIs.append(Self.shown(value))
+        let uris = metadata["redirect_uris"]
+        if let list = uris as? [Any] {
+            for value in list {
+                if let uri = value as? String, Self.redirectURIs.contains(uri) {
+                    if !kept.contains(uri) { kept.append(uri) }
+                } else if droppedURIs.count < Self.droppedValues {
+                    droppedURIs.append(Self.shown(value))
+                }
             }
+        } else if let uris {
+            // RFC 7591 asks for a list: one value on its own is dropped.
+            droppedURIs.append(Self.shown(uris))
         }
         var dropped: [(String, [String])] = []
         if !droppedURIs.isEmpty { dropped.append(("redirect_uris", droppedURIs)) }
@@ -540,11 +632,6 @@ public struct RemoteAccessOAuth: Sendable {
         let client = Client(id: newID(), name: name, redirectURIs: kept, registered: now, lastUsed: now)
         makeRoomForClient()
         clients.append(client)
-        if pairingIsOpen(now: now) {
-            registrationsInWindow += 1
-        } else {
-            registrationsOutside.append(now)
-        }
         let hosts = kept.map(Self.host(of:))
         events.append(.clientRegistered(clientID: client.id, clientName: name, redirectHosts: hosts))
         recordDropped(dropped, clientID: client.id)
@@ -578,10 +665,10 @@ public struct RemoteAccessOAuth: Sendable {
         }
     }
 
+    /// The dropped values come as `shown(_:)` gives them, at most `droppedValues` for each field.
     private mutating func recordDropped(_ dropped: [(String, [String])], clientID: String?) {
         for (field, values) in dropped {
-            let shown = values.prefix(Self.droppedValues).map { String($0.prefix(Self.droppedValueLength)) }
-            events.append(.registrationDropped(clientID: clientID, field: field, values: Array(shown)))
+            events.append(.registrationDropped(clientID: clientID, field: field, values: values))
         }
     }
 
@@ -650,7 +737,7 @@ public struct RemoteAccessOAuth: Sendable {
                                                   challenge: request.challenge, issued: now)
         let items = [("code", code), ("state", request.state), ("iss", issuer)]
         requests[index].outcome = .redirect(Self.link(request.redirectURI, items))
-        events.append(.pairingApproved(requestID: request.id, grantID: grant.id, name: grant.name, options: options))
+        events.append(.pairingApproved(request: request.logID, grantID: grant.id, name: grant.name, options: options))
         close(.approved)
         return .success(grant)
     }
@@ -664,7 +751,7 @@ public struct RemoteAccessOAuth: Sendable {
         let request = requests[index]
         let items = [("error", "access_denied"), ("state", request.state), ("iss", issuer)]
         requests[index].outcome = .redirect(Self.link(request.redirectURI, items))
-        events.append(.pairingDeclined(requestID: request.id, clientID: request.clientID))
+        events.append(.pairingDeclined(request: request.logID, clientID: request.clientID))
         return true
     }
 
@@ -707,7 +794,7 @@ public struct RemoteAccessOAuth: Sendable {
         clients[clientIndex].lastUsed = now
 
         var state = parameters["state"]
-        if let given = state, given.isEmpty || given.count > Self.maximumState { state = nil }
+        if let given = state, given.isEmpty || given.utf8.count > Self.maximumState { state = nil }
         guard parameters["response_type"] == "code" else {
             return errorRedirect(redirect, "unsupported_response_type", state: state)
         }
@@ -725,7 +812,7 @@ public struct RemoteAccessOAuth: Sendable {
                                      redirectURI: redirect, created: now, redirectGiven: given != nil,
                                      challenge: challenge, state: state, outcome: .waiting)
         requests.append(request)
-        events.append(.pairingAsked(requestID: request.id, clientID: client.id, clientName: client.name,
+        events.append(.pairingAsked(request: request.logID, clientID: client.id, clientName: client.name,
                                     redirectHost: request.redirectHost))
         return .waiting(requestID: request.id, code: code)
     }
@@ -820,10 +907,14 @@ public struct RemoteAccessOAuth: Sendable {
                 return .answer(Self.invalidGrant)
             }
             var rotated = current
+            rotated.rememberEarlier(current.replacedHash)
             rotated.replacedHash = key
             rotated.replacedAt = now
             rotated.lastUsed = now
             return .issue(issuance(for: rotated, now: now, replaced: key))
+        }
+        if let grant = grants.first(where: { $0.replacedEarlier(key) }) {
+            return reused(grant, now: now)
         }
         guard let grant = grants.first(where: { Self.same($0.replacedHash, key) }) else {
             return .answer(Self.invalidGrant)
@@ -840,11 +931,18 @@ public struct RemoteAccessOAuth: Sendable {
             return .answer(answer)
         }
         if inGrace, recent == nil {
-            // After a relaunch the pair is gone: a new one, which replaces the rotation's.
+            // After a relaunch the pair is gone: a new one, which replaces the rotation's. The rotation's
+            // refresh token is then a replaced one too, so if it comes back the grant ends and the Mac is told.
             var renewed = grant
+            renewed.rememberEarlier(grant.refreshHash)
             renewed.lastUsed = now
             return .issue(issuance(for: renewed, now: now, replaced: key, graceUsed: true))
         }
+        return reused(grant, now: now)
+    }
+
+    /// A replaced refresh token came back: the grant ends and the Mac shows `reuseNotice(grantName:)` (R16).
+    private mutating func reused(_ grant: Grant, now: Date) -> TokenOutcome {
         events.append(.refreshReused(grantID: grant.id, name: grant.name))
         end(grant.id, reason: .refreshReuse, now: now)
         return .answer(Self.invalidGrant)
@@ -880,6 +978,7 @@ public struct RemoteAccessOAuth: Sendable {
         grants[index].refreshHash = issuance.grant.refreshHash
         grants[index].replacedHash = issuance.grant.replacedHash
         grants[index].replacedAt = issuance.grant.replacedAt
+        grants[index].earlierHashes = issuance.grant.earlierHashes
         grants[index].lastUsed = max(grants[index].lastUsed, issuance.grant.lastUsed)
         let access = AccessToken(grantID: id, host: host, expires: issuance.accessExpires)
         accessTokens[Self.hash(issuance.access)] = access
@@ -1012,7 +1111,7 @@ public struct RemoteAccessOAuth: Sendable {
             accessTokens.removeValue(forKey: key)
             return done
         }
-        let found = grants.first { Self.same($0.refreshHash, key) || Self.same($0.replacedHash, key) }
+        let found = grants.first { Self.same($0.refreshHash, key) || $0.replaced(key) }
         guard let grant = found, clientID == nil || clientID == grant.clientID else { return done }
         end(grant.id, reason: .client, now: now)
         return Revocation(answer: done.answer, ended: [grant.id])
@@ -1048,7 +1147,7 @@ public struct RemoteAccessOAuth: Sendable {
         for index in requests.indices where requests[index].isWaiting && now >= requests[index].expires {
             requests[index].outcome = .expired
             let request = requests[index]
-            events.append(.pairingExpired(requestID: request.id, clientID: request.clientID))
+            events.append(.pairingExpired(request: request.logID, clientID: request.clientID))
         }
         requests.removeAll { now.timeIntervalSince($0.created) >= Self.requestMemory }
         codes = codes.filter { now.timeIntervalSince($0.value.issued) < Self.usedCodeMemory }
@@ -1169,7 +1268,7 @@ public struct RemoteAccessOAuth: Sendable {
     }
 
     /// Text with control, format, private-use and unassigned characters and line breaks removed, trimmed and
-    /// cut to `limit` characters; nil when nothing is left.
+    /// cut to `limit` Unicode scalars in whole characters; nil when nothing is left.
     static func printable(_ text: String?, limit: Int) -> String? {
         guard let text else { return nil }
         let hidden: Set<Unicode.GeneralCategory> = [
@@ -1180,24 +1279,64 @@ public struct RemoteAccessOAuth: Sendable {
             scalars.append(scalar)
         }
         let trimmed = String(scalars).trimmingCharacters(in: .whitespaces)
-        let cut = String(trimmed.prefix(limit))
+        let cut = prefix(trimmed, scalars: limit)
         return cut.isEmpty ? nil : cut
     }
 
-    /// A registration value as text, for the audit log.
-    static func shown(_ value: Any) -> String {
-        if let text = value as? String { return text }
-        return String(describing: value)
+    /// The whole characters at the start of `text` that hold at most `limit` Unicode scalars. Each mark stacked
+    /// on a letter counts, so a name that looks short can't be long. The character that holds the scalar past
+    /// the limit goes whole: a boundary depends only on what comes before it and on the scalar after it, so
+    /// every boundary before that character is one in the full text too.
+    static func prefix(_ text: String, scalars limit: Int) -> String {
+        var head = String(text.unicodeScalars.prefix(limit + 1))
+        guard head.unicodeScalars.count > limit else { return text }
+        head.removeLast()
+        return head
     }
 
-    /// The values of a list field that are not in `supported`.
+    /// `text` cut to at most `limit` UTF-8 bytes, between Unicode scalars.
+    static func prefix(_ text: String, bytes limit: Int) -> String {
+        var used = 0
+        var kept = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            used += UTF8.width(scalar)
+            guard used <= limit else { break }
+            kept.append(scalar)
+        }
+        return String(kept)
+    }
+
+    /// A registration value for the audit log: text cut to `droppedValueLength` UTF-8 bytes, and anything else
+    /// only by its JSON kind. A value from the network is never described, so a deeply nested one costs nothing.
+    static func shown(_ value: Any) -> String {
+        if let text = value as? String { return prefix(text, bytes: droppedValueLength) }
+        if value is NSArray { return "(array)" }
+        if value is NSDictionary { return "(object)" }
+        if value is NSNull { return "(null)" }
+        if let number = value as? NSNumber {
+            return CFGetTypeID(number) == CFBooleanGetTypeID() ? "(boolean)" : "(number)"
+        }
+        return "(value)"
+    }
+
+    /// The values of a list field that are not in `supported`, at most `droppedValues`, as `shown(_:)` gives
+    /// them. A value that is not a list is dropped whole.
     static func unsupported(_ value: Any?, _ supported: [String]) -> [String] {
         guard let value else { return [] }
         guard let list = value as? [Any] else { return [shown(value)] }
-        return list.filter { item in
-            guard let text = item as? String else { return true }
-            return !supported.contains(text)
-        }.map(shown)
+        var found: [String] = []
+        for item in list {
+            if let text = item as? String, supported.contains(text) { continue }
+            found.append(shown(item))
+            if found.count == droppedValues { break }
+        }
+        return found
+    }
+
+    /// A short hash of a pairing request's id: enough to follow a request through the audit log, and no help
+    /// in fetching its redirect.
+    static func logID(_ requestID: String) -> String {
+        String(hash("pairing-request:" + requestID).prefix(16))
     }
 
     /// A callback with query items added.
@@ -1247,5 +1386,22 @@ public struct RemoteAccessOAuth: Sendable {
     static func json(_ document: [String: Any]) -> Data {
         let options: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes]
         return (try? JSONSerialization.data(withJSONObject: document, options: options)) ?? Data("{}".utf8)
+    }
+}
+
+extension RemoteAccessOAuth: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    /// Counts only: the authority holds the last pair of tokens in the clear for 60 seconds, and request ids and
+    /// codes while they wait.
+    public var description: String {
+        "OAuth for \(host): \(clients.count) clients, \(grants.count) grants, \(requests.count) requests"
+    }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror {
+        let children: KeyValuePairs<String, Any> = [
+            "host": host, "clients": clients.count, "grants": grants.count, "requests": requests.count,
+        ]
+        return Mirror(self, children: children)
     }
 }

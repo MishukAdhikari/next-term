@@ -442,11 +442,14 @@ import Testing
         #expect(fresh.access != rotated.access)
         #expect(isValid(relaunched, fresh.access, at: late))
 
-        // The rotation's refresh token stops working; the new one works.
-        let old = Self.send(&relaunched, Self.refreshParameters(rotated.refresh, client: paired.client),
+        // The rotation's refresh token is a replaced one now: if it comes back, the grant ends (R16).
+        var stale = relaunched
+        _ = stale.takeEvents()
+        let old = Self.send(&stale, Self.refreshParameters(rotated.refresh, client: paired.client),
                             now: late.addingTimeInterval(1))
         #expect(Self.error(old) == "invalid_grant")
-        #expect(relaunched.grant(paired.grant.id) != nil)
+        #expect(stale.grant(paired.grant.id) == nil)
+        #expect(stale.takeEvents().first == .refreshReused(grantID: paired.grant.id, name: "Claude, phone"))
         // The grace is spent: the replaced token once more revokes.
         var spent = relaunched
         let twice = Self.send(&spent, Self.refreshParameters(first.refresh, client: paired.client),
@@ -456,6 +459,102 @@ import Testing
         let next = Self.send(&relaunched, Self.refreshParameters(fresh.refresh, client: paired.client),
                              now: late.addingTimeInterval(3))
         #expect(Self.tokens(next) != nil)
+    }
+
+    /// R16: a token replaced two rotations back is still a replaced token, and its reuse ends the grant.
+    @Test func aRefreshTokenReplacedTwoRotationsBackEndsTheGrant() throws {
+        var (paired, first) = try Self.exchanged()
+        let refreshed = Self.send(&paired.oauth, Self.refreshParameters(first.refresh, client: paired.client),
+                                  now: Self.minutes(15))
+        let second = try #require(Self.tokens(refreshed))
+        let again = Self.send(&paired.oauth, Self.refreshParameters(second.refresh, client: paired.client),
+                              now: Self.minutes(30))
+        let third = try #require(Self.tokens(again))
+        _ = paired.oauth.takeEvents()
+
+        let stolen = Self.send(&paired.oauth, Self.refreshParameters(first.refresh, client: paired.client),
+                               now: Self.minutes(60))
+        #expect(Self.error(stolen) == "invalid_grant")
+        #expect(paired.oauth.grant(paired.grant.id) == nil)
+        #expect(!isValid(paired.oauth, third.access, at: Self.minutes(60)))
+        #expect(paired.oauth.takeEvents() == [
+            .refreshReused(grantID: paired.grant.id, name: "Claude, phone"),
+            .revoked(grantID: paired.grant.id, name: "Claude, phone", reason: .refreshReuse),
+        ])
+    }
+
+    /// A grant remembers the last 100 tokens it replaced before the latest; one older than that is unknown.
+    @Test func aGrantRemembersItsLastHundredReplacedRefreshTokens() throws {
+        var (paired, first) = try Self.exchanged()
+        var issued = [first.refresh]
+        for rotation in 1...102 {
+            let now = Self.minutes(Double(rotation) * 15)
+            let answer = Self.send(&paired.oauth, Self.refreshParameters(issued.last ?? "", client: paired.client),
+                                   now: now)
+            issued.append(try #require(Self.tokens(answer)).refresh)
+        }
+        let later = Self.days(2)
+        _ = paired.oauth.takeEvents()
+        var forgotten = paired.oauth
+        let oldest = Self.send(&forgotten, Self.refreshParameters(issued[0], client: paired.client), now: later)
+        #expect(Self.error(oldest) == "invalid_grant")
+        #expect(forgotten.grant(paired.grant.id) != nil)
+        #expect(forgotten.takeEvents().isEmpty)
+
+        var remembered = paired.oauth
+        let kept = Self.send(&remembered, Self.refreshParameters(issued[1], client: paired.client), now: later)
+        #expect(Self.error(kept) == "invalid_grant")
+        #expect(remembered.grant(paired.grant.id) == nil)
+        #expect(remembered.takeEvents().first == .refreshReused(grantID: paired.grant.id, name: "Claude, phone"))
+    }
+
+    /// Turn Off forgets the last pair, so a reuse within 60 seconds gets a new one. The token that pair
+    /// replaced is then a replaced token too: when the client that holds it comes back, the grant ends and
+    /// the Mac is told, rather than the client being refused while whoever reused the old token keeps going.
+    @Test func afterTurnOffTheRotationsTokenIsAReplacedTokenToo() throws {
+        var (paired, first) = try Self.exchanged()
+        let tenAM = Self.minutes(10)
+        let refreshed = Self.send(&paired.oauth, Self.refreshParameters(first.refresh, client: paired.client),
+                                  now: tenAM)
+        let rotated = try #require(Self.tokens(refreshed))
+        paired.oauth.dropAccessTokens()
+        _ = paired.oauth.takeEvents()
+
+        let replayed = Self.send(&paired.oauth, Self.refreshParameters(first.refresh, client: paired.client),
+                                 now: tenAM.addingTimeInterval(30))
+        let fresh = try #require(Self.tokens(replayed))
+        #expect(paired.oauth.takeEvents().isEmpty)
+
+        var spent = paired.oauth
+        let twice = Self.send(&spent, Self.refreshParameters(first.refresh, client: paired.client),
+                              now: tenAM.addingTimeInterval(40))
+        #expect(Self.error(twice) == "invalid_grant")
+        #expect(spent.grant(paired.grant.id) == nil)
+
+        let real = Self.send(&paired.oauth, Self.refreshParameters(rotated.refresh, client: paired.client),
+                             now: tenAM.addingTimeInterval(45))
+        #expect(Self.error(real) == "invalid_grant")
+        #expect(paired.oauth.grant(paired.grant.id) == nil)
+        #expect(!isValid(paired.oauth, fresh.access, at: tenAM.addingTimeInterval(45)))
+        #expect(paired.oauth.takeEvents() == [
+            .refreshReused(grantID: paired.grant.id, name: "Claude, phone"),
+            .revoked(grantID: paired.grant.id, name: "Claude, phone", reason: .refreshReuse),
+        ])
+    }
+
+    @Test func anExchangeAppliedAfterItsGrantWasRevokedChangesNothing() throws {
+        var paired = try Self.pair()
+        guard case .issue(let issue) = paired.oauth.token(Self.exchangeParameters(paired), now: Self.start) else {
+            Issue.record("the code was not exchanged")
+            return
+        }
+        let revoked = paired.oauth.revoke(grant: paired.grant.id, now: Self.start.addingTimeInterval(1))
+        #expect(revoked)
+        let applied = paired.oauth.apply(issue)
+        #expect(!applied)
+        let never = try #require(Self.tokens(issue.answer))
+        #expect(paired.oauth.validate(never.access, now: Self.start.addingTimeInterval(2)) == .invalid)
+        #expect(paired.oauth.grants.isEmpty)
     }
 
     @Test func aRotationThatWasNotSavedLeavesTheOldRefreshTokenCurrent() throws {
@@ -576,7 +675,7 @@ import Testing
         let late = Self.minutes(10).addingTimeInterval(1)
         #expect(oauth.match(code: code, now: late) == .noMatch)
         #expect(oauth.poll(id, now: late) == .expired)
-        #expect(oauth.takeEvents() == [.pairingExpired(requestID: id, clientID: client)])
+        #expect(oauth.takeEvents() == [.pairingExpired(request: OAuth.logID(id), clientID: client)])
         #expect(throws: OAuth.ApprovalError.noRequest) {
             try oauth.approve(id, name: "Late", options: .readOnly, now: late).get()
         }
@@ -652,7 +751,7 @@ import Testing
         #expect(items["iss"] == "https://mcp.example.com")
         #expect(items["code"] == nil)
         #expect(oauth.grants.isEmpty)
-        #expect(oauth.takeEvents().contains(.pairingDeclined(requestID: id, clientID: client)))
+        #expect(oauth.takeEvents().contains(.pairingDeclined(request: OAuth.logID(id), clientID: client)))
     }
 
     @Test func fiveWrongCodesClosePairing() throws {
@@ -836,6 +935,138 @@ import Testing
         _ = Self.register(&oauth, extra: ["client_name": long])
         _ = Self.register(&oauth, extra: ["client_name": " \u{7}\n "])
         #expect(oauth.clients.map(\.name) == ["Claude", String(repeating: "a", count: 100), nil])
+    }
+
+    /// A value registration drops is logged as itself only when it is text, cut to 200 UTF-8 bytes. Anything
+    /// else is logged by its JSON kind, so a deeply nested value costs nothing to log. At most 10 per field.
+    @Test func registrationValuesThatAreNotTextAreLoggedByTheirKindOnly() throws {
+        var oauth = Self.authority()
+        let deep: Any = (0..<40).reduce([Array(repeating: 1, count: 2000)] as Any) { inner, _ in [inner] }
+        let others: [Any] = [deep, 5, true, NSNull(), ["a": [1, 2]]]
+        let metadata: [String: Any] = [
+            "redirect_uris": others + [Self.claude],
+            "token_endpoint_auth_method": [[["client_secret_post"]]],
+            "grant_types": ["authorization_code", 7, ["refresh_token"]],
+            "response_types": ["code", ["token": 1]],
+        ]
+        let answer = oauth.register(Self.body(metadata), now: Self.start)
+        #expect(answer.status == 201)
+        let client = try #require(Self.json(answer.body)["client_id"] as? String)
+        let events = oauth.takeEvents()
+        let expected: [OAuth.Event] = [
+            .clientRegistered(clientID: client, clientName: nil, redirectHosts: ["claude.ai"]),
+            .registrationDropped(clientID: client, field: "redirect_uris",
+                                 values: ["(array)", "(number)", "(boolean)", "(null)", "(object)"]),
+            .registrationDropped(clientID: client, field: "token_endpoint_auth_method", values: ["(array)"]),
+            .registrationDropped(clientID: client, field: "grant_types", values: ["(number)", "(array)"]),
+            .registrationDropped(clientID: client, field: "response_types", values: ["(object)"]),
+        ]
+        #expect(events == expected)
+
+        // Text is cut by its bytes, between Unicode scalars, and only the first 10 values are kept.
+        let accented = String(repeating: "\u{E9}", count: 300)
+        let stacked = "A" + String(repeating: "\u{301}", count: 100_000)
+        let many = (0..<50).map { "https://example.com/\($0)" }
+        let refused = oauth.register(Self.body(["redirect_uris": [accented, stacked] + many]), now: Self.start)
+        #expect(refused.status == 400)
+        guard case .registrationDropped(nil, "redirect_uris", let values) = oauth.takeEvents().first else {
+            Issue.record("the dropped values were not logged")
+            return
+        }
+        #expect(values.count == 10)
+        #expect(values[0] == String(repeating: "\u{E9}", count: 100))
+        #expect(values[1] == "A" + String(repeating: "\u{301}", count: 99))
+        #expect(values.allSatisfy { $0.utf8.count <= 200 })
+        #expect(values[2] == "https://example.com/0")
+    }
+
+    /// R10: callbacks sent as one text instead of a list are dropped and logged too.
+    @Test func callbacksThatAreNotAListAreLoggedAsDropped() throws {
+        var oauth = Self.authority()
+        let refused = oauth.register(Self.body(["redirect_uris": "https://example.com/cb"]), now: Self.start)
+        #expect(refused.status == 400)
+        #expect(Self.error(refused) == "invalid_redirect_uri")
+        let dropped = OAuth.Event.registrationDropped(clientID: nil, field: "redirect_uris",
+                                                      values: ["https://example.com/cb"])
+        #expect(oauth.takeEvents() == [dropped])
+        let alone = oauth.register(Self.body(["redirect_uris": Self.claude]), now: Self.start)
+        #expect(alone.status == 400)
+        #expect(oauth.clients.isEmpty)
+    }
+
+    /// Every attempt counts toward the limits, refused or not, so a flood of bad registrations is limited too.
+    @Test func aRefusedRegistrationCountsTowardTheLimit() throws {
+        var oauth = Self.authority()
+        for _ in 0..<5 {
+            let refused = oauth.register(Self.body(["redirect_uris": ["https://example.com/cb"]]), now: Self.start)
+            #expect(refused.status == 400)
+        }
+        #expect(oauth.register(Self.body(["redirect_uris": [Self.claude]]), now: Self.start).status == 429)
+        _ = oauth.takeEvents()
+        #expect(oauth.register(Self.body(["redirect_uris": [1]]), now: Self.minutes(30)).status == 429)
+        #expect(oauth.takeEvents().isEmpty)
+
+        var window = Self.authority()
+        window.openPairing(now: Self.start)
+        for _ in 0..<10 { #expect(window.register(Data("not json".utf8), now: Self.start).status == 400) }
+        #expect(window.register(Self.body(["redirect_uris": [Self.claude]]), now: Self.start).status == 429)
+    }
+
+    /// Names are cut by Unicode scalars, never inside a character, so marks stacked on one letter cannot make
+    /// a short name long.
+    @Test func aNameIsCutByItsUnicodeScalars() throws {
+        var oauth = Self.authority()
+        let stacked = "Claude" + "A" + String(repeating: "\u{301}", count: 200_000)
+        let decomposed = String(repeating: "e\u{301}", count: 150)
+        _ = Self.register(&oauth, extra: ["client_name": stacked])
+        _ = Self.register(&oauth, extra: ["client_name": "A" + String(repeating: "\u{301}", count: 200_000)])
+        _ = Self.register(&oauth, extra: ["client_name": decomposed])
+        let names = oauth.clients.map(\.name)
+        #expect(names == ["Claude", nil, String(repeating: "e\u{301}", count: 50)])
+        #expect(names.allSatisfy { ($0?.utf8.count ?? 0) <= 400 })
+    }
+
+    /// The state comes back in the redirect, so its limit counts bytes.
+    @Test func theStateLimitCountsBytes() throws {
+        var oauth = Self.authority()
+        let client = try #require(Self.register(&oauth))
+        oauth.openPairing(now: Self.start)
+        let heavy = "s" + String(repeating: "\u{301}", count: 5000)
+        guard case .redirect(let link) = oauth.authorize(Self.authorizeParameters(client: client, state: heavy),
+                                                         now: Self.start) else {
+            Issue.record("a state of 10,001 bytes was accepted")
+            return
+        }
+        #expect(Self.items(link)["error"] == "invalid_request")
+        #expect(Self.items(link)["state"] == nil)
+        let longest = String(repeating: "s", count: 1024)
+        guard case .waiting = oauth.authorize(Self.authorizeParameters(client: client, state: longest),
+                                              now: Self.start) else {
+            Issue.record("a state of 1,024 bytes was refused")
+            return
+        }
+    }
+
+    @Test func droppingTheOldestClientSkipsOneABrowserIsWaitingOn() throws {
+        var clients: [OAuth.Client] = []
+        for index in 0..<20 {
+            let registered = Self.start.addingTimeInterval(Double(index) * 60)
+            clients.append(OAuth.Client(id: "c\(index)", name: nil, redirectURIs: [Self.claude],
+                                        registered: registered, lastUsed: registered))
+        }
+        var oauth = Self.authority(clients: clients)
+        let now = Self.minutes(30)
+        oauth.openPairing(now: now)
+        guard case .waiting = oauth.authorize(Self.authorizeParameters(client: "c0"), now: now) else {
+            Issue.record("the oldest client's request did not wait")
+            return
+        }
+        let added = try #require(Self.register(&oauth, now: now))
+        let ids = oauth.clients.map(\.id)
+        #expect(ids.contains("c0"))
+        #expect(!ids.contains("c1"))
+        #expect(ids.contains(added))
+        #expect(oauth.clients.count == 20)
     }
 
     @Test func clientsWithoutAGrantAreCappedAndTheOldestIsDropped() throws {
@@ -1027,6 +1258,20 @@ import Testing
         #expect(reloaded.grants.isEmpty)
     }
 
+    /// KTD17: a new hostname at launch ends the grants saved under the old one, and says so, so the app can
+    /// delete them from the grant store.
+    @Test func aNewHostnameAtLaunchEndsTheOldGrantsAndSaysSo() {
+        let old = OAuth.Grant(id: "g-old", name: "Claude, phone", clientID: "c1", clientName: nil,
+                              redirectHost: "claude.ai", options: .readOnly, host: "old.example.com",
+                              created: Self.start, lastUsed: Self.start)
+        let kept = OAuth.Grant(id: "g-kept", name: "ChatGPT", clientID: "c2", clientName: nil,
+                               redirectHost: "chatgpt.com", options: .readOnly, host: Self.host,
+                               created: Self.start, lastUsed: Self.start)
+        var oauth = Self.authority(grants: [old, kept])
+        #expect(oauth.grants.map(\.id) == ["g-kept"])
+        #expect(oauth.takeEvents() == [.revoked(grantID: "g-old", name: "Claude, phone", reason: .hostChanged)])
+    }
+
     // MARK: revokes
 
     @Test func afterRevokeAllNoTokenValidates() throws {
@@ -1099,6 +1344,26 @@ import Testing
         #expect(missing.answer.status == 400)
     }
 
+    @Test func aClientRevokingAReplacedRefreshTokenEndsTheGrant() throws {
+        var (paired, first) = try Self.exchanged()
+        let refreshed = Self.send(&paired.oauth, Self.refreshParameters(first.refresh, client: paired.client),
+                                  now: Self.minutes(15))
+        let second = try #require(Self.tokens(refreshed))
+        _ = Self.send(&paired.oauth, Self.refreshParameters(second.refresh, client: paired.client),
+                      now: Self.minutes(30))
+        for (token, client) in [(second.refresh, paired.client), (first.refresh, paired.client)] {
+            var oauth = paired.oauth
+            let revoked = oauth.revoke(["token": token, "client_id": client], now: Self.minutes(31))
+            #expect(revoked.answer.status == 200)
+            #expect(revoked.ended == [paired.grant.id])
+            #expect(oauth.grant(paired.grant.id) == nil)
+        }
+        var stranger = paired.oauth
+        let refused = stranger.revoke(["token": first.refresh, "client_id": "other"], now: Self.minutes(31))
+        #expect(refused.ended.isEmpty)
+        #expect(stranger.grant(paired.grant.id) != nil)
+    }
+
     @Test func turningOffDropsAccessTokensAndKeepsGrants() throws {
         var (paired, tokens) = try Self.exchanged()
         paired.oauth.dropAccessTokens()
@@ -1123,11 +1388,14 @@ import Testing
             return
         }
         let grant = try oauth.approve(id, name: "Claude, phone", options: .customStart, now: Self.start).get()
+        let request = OAuth.logID(id)
+        #expect(request.count == 16)
+        #expect(oauth.requests.first?.logID == request)
         let expected: [OAuth.Event] = [
             .clientRegistered(clientID: client, clientName: "Claude", redirectHosts: ["claude.ai"]),
             .pairingOpened(until: Self.minutes(10)),
-            .pairingAsked(requestID: id, clientID: client, clientName: "Claude", redirectHost: "claude.ai"),
-            .pairingApproved(requestID: id, grantID: grant.id, name: "Claude, phone", options: .customStart),
+            .pairingAsked(request: request, clientID: client, clientName: "Claude", redirectHost: "claude.ai"),
+            .pairingApproved(request: request, grantID: grant.id, name: "Claude, phone", options: .customStart),
             .pairingClosed(.approved),
         ]
         #expect(oauth.takeEvents() == expected)
@@ -1146,6 +1414,50 @@ import Testing
         let texts = [String(describing: issue), String(reflecting: issue), String(describing: issue.answer),
                      String(reflecting: issue.answer)]
         for text in texts {
+            #expect(!text.contains("ntat_"))
+            #expect(!text.contains("ntrt_"))
+        }
+    }
+
+    /// The request id is the browser's key to its redirect, which carries the authorization code: no event and
+    /// no description shows it, the 6-digit code or the authorization code.
+    @Test func noDescriptionOrEventShowsAPairingKeyOrCode() throws {
+        var oauth = Self.authority()
+        let client = try #require(Self.register(&oauth))
+        oauth.openPairing(now: Self.start)
+        let waiting = oauth.authorize(Self.authorizeParameters(client: client), now: Self.start)
+        guard case .waiting(let id, let code) = waiting else {
+            Issue.record("no request")
+            return
+        }
+        let match = oauth.match(code: code, now: Self.start)
+        guard case .request(let request) = match else {
+            Issue.record("no match")
+            return
+        }
+        _ = try oauth.approve(id, name: "Claude", options: .readOnly, now: Self.start).get()
+        let redirect = oauth.poll(id, now: Self.start)
+        guard case .redirect(let link) = redirect else {
+            Issue.record("no redirect")
+            return
+        }
+        let authorizationCode = try #require(Self.items(link)["code"])
+        let approved = try #require(oauth.requests.first)
+        let values: [Any] = [waiting, match, request, approved, redirect, oauth] + oauth.takeEvents()
+        for value in values {
+            for text in [String(describing: value), String(reflecting: value)] {
+                #expect(!text.contains(id))
+                #expect(!text.contains(code))
+                #expect(!text.contains(authorizationCode))
+            }
+        }
+    }
+
+    @Test func theAuthorityItselfDescribesNoToken() throws {
+        var (paired, first) = try Self.exchanged()
+        // The last pair stays in memory for 60 seconds, in the clear.
+        _ = Self.send(&paired.oauth, Self.refreshParameters(first.refresh, client: paired.client), now: Self.minutes(1))
+        for text in [String(describing: paired.oauth), String(reflecting: paired.oauth)] {
             #expect(!text.contains("ntat_"))
             #expect(!text.contains("ntrt_"))
         }
