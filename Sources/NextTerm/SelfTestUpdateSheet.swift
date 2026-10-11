@@ -185,6 +185,24 @@ extension SelfTest {
               "the update quit declines each open approval panel and answers each open decision")
         UpdateHolds.shared.close(decision)
         if approval.window?.isVisible == true { approval.close() }
+
+        // An agent's import request in the import window (apply_import): listed as an open decision, and declined at the
+        // update quit. Nothing is applied: the plan is empty and the request ends declined.
+        var importDeclined = false
+        let importAsk = ImportWindowController.AgentAsk(who: "the self-test", reason: nil, ticks: [], notes: []) { outcome in
+            if case .declined = outcome { importDeclined = true }
+        }
+        let source = DetectedApp(kind: .vsCode, name: "VS Code", configPath: NSTemporaryDirectory(), lastUsed: nil)
+        ImportWindowController.shared.showAgentRequest(for: source, plan: ImportPlan(preset: .nextTerm), ask: importAsk)
+        sessions.show(version: version, from: .updateButton)
+        let importLines: [String] = sessions.sheet?.decisionsStack.arrangedSubviews.compactMap { ($0 as? NSTextField)?.stringValue } ?? []
+        check(importLines.contains("• The self-test asks to import settings and shortcuts"),
+              "an agent's import request is listed on the sheet as a decision the restart drops", "\(importLines)")
+        sessions.pressed(.cancel)
+        UpdateHolds.shared.cancelAll()
+        check(importDeclined && ImportWindowController.shared.agentAsk == nil && ImportWindowController.shared.window?.isVisible != true,
+              "the update quit declines an agent's import request and closes the import window")
+        ImportWindowController.shared.endAgentRequest()
         window.makeKeyAndOrderFront(nil)
         if let focus { window.makeFirstResponder(focus) }
     }

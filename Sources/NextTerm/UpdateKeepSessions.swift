@@ -479,8 +479,9 @@ enum UpdatePlanning {
 
 /// What the restart would cut off: operations the update waits for, and decisions only the user can make that the
 /// restart drops. The sheet lists the open decisions, always; the update quit answers each one with a definite no. Agent
-/// diff proposals are read from each editor area as they are, without editing it; the agents' approval panels
-/// (AgentApprovalWindow: a skill to install or remove, an MCP write) register as they open and are let go as they close.
+/// diff proposals are read from each editor area as they are, without editing it, and an agent's import request from the
+/// import window the same way; the agents' approval panels (AgentApprovalWindow: a skill to install or remove, an MCP
+/// write) register as they open and are let go as they close.
 @MainActor
 final class UpdateHolds: NSObject {
     static let shared = UpdateHolds()
@@ -534,8 +535,8 @@ final class UpdateHolds: NSObject {
         return Array(operations.values) + approved
     }
 
-    /// The decisions the restart drops: each agent's diff proposal waiting in an editor, each approval panel waiting for
-    /// an answer, then each registered one.
+    /// The decisions the restart drops: each agent's diff proposal waiting in an editor, an agent's import request in the
+    /// import window, each approval panel waiting for an answer, then each registered one.
     var openDecisions: [String] {
         var lines: [String] = []
         for controller in AppDelegate.shared.controllers {
@@ -544,17 +545,25 @@ final class UpdateHolds: NSObject {
                 lines.append(TerminalText.oneLine("\(proposal.author)’s proposed change to \(pane.path)"))
             }
         }
+        if let ask = Self.importWindow?.agentAsk { lines.append(UpdateFlow.importRequestLine(who: ask.who)) }
         let asking: [String] = panels.all.filter { !Self.committed($0) }.map { Self.title($0) }
         return lines + asking + decisions.map { TerminalText.oneLine($0.title) }
     }
 
     /// At the update quit: every open decision answered "no", so its asker gets a definite answer. An approval panel
     /// closed unanswered declines (AgentApprovalWindow's own rule); one whose approved change is under way was waited for.
+    /// An agent's import request ends as a decline, as the import window ends one with no answer in time.
     func cancelAll() {
         let open = decisions
         decisions = []
         for decision in open { decision.cancel() }
         for panel in panels.all where !Self.committed(panel) { panel.close() }
+        Self.importWindow?.endAgentRequest()
+    }
+
+    /// The import window, once something opened it: looked up rather than created, so reading the decisions never makes it.
+    private static var importWindow: ImportWindowController? {
+        NSApp.windows.lazy.compactMap { $0.windowController as? ImportWindowController }.first
     }
 
     /// Its approved change has started and can't be stopped: the panel holds Decline (`setCommitted`).

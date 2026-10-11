@@ -439,6 +439,15 @@ struct UpdateFixture {
         #expect(panels.all.count == 1 && panels.all.first === second, "a panel let go of is not held")
     }
 
+    @Test func anAgentsImportRequestIsListedAsWhoAsksOnOneLine() {
+        let tab = UpdateFlow.importRequestLine(who: "the agent in the tab “claude” in api")
+        #expect(tab == "The agent in the tab “claude” in api asks to import settings and shortcuts")
+        let outside = UpdateFlow.importRequestLine(who: "an agent outside Next Term's tabs (another terminal or an editor)")
+        #expect(outside == "An agent outside Next Term's tabs (another terminal or an editor) asks to import settings and shortcuts")
+        let named = UpdateFlow.importRequestLine(who: "the agent in the tab “a\nb\u{202E}c”")
+        #expect(named == "The agent in the tab “a b\u{FFFD}c” asks to import settings and shortcuts", "a tab's title stays on one line")
+    }
+
     @Test func itNeverStartsOverASheetAModalWindowOrAQuitsQuestion() {
         #expect(UpdateFlow.mayStart(sheetAttached: false, modalWindow: false, askingToQuit: false))
         #expect(!UpdateFlow.mayStart(sheetAttached: true, modalWindow: false, askingToQuit: false))

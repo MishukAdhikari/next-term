@@ -519,6 +519,13 @@ public struct UpdateFlow: Equatable, Sendable {
             + "\n\nYou can download it from the release page instead."
     }
 
+    /// The sheet's line for an agent's request open in the import window (apply_import): who asks, as that window names
+    /// it ("the agent in the tab “claude” in api"), on one line.
+    public static func importRequestLine(who: String) -> String {
+        let who = TerminalText.oneLine(who)
+        return who.prefix(1).uppercased() + who.dropFirst() + " asks to import settings and shortcuts"
+    }
+
     /// The note, once, when the update did not install and no result said so.
     public static let didNotInstallText = "This version opened again. Next Term checks for the update again now, and the "
         + "Update button offers it once that check finds it."
