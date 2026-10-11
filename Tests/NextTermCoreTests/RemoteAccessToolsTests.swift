@@ -82,8 +82,6 @@ import Testing
             .servers: "Servers: add, remove and open tabs",
             .skills: "Skills",
             .writeTools: "Next Term's write tools",
-            .listSecrets: "List secret names",
-            .useSecrets: "Use secrets",
             .askOnMac: "Ask on this Mac before changes",
             .notify: "Notify on this Mac",
             .rateLimit: "At most 10 control calls a minute",
@@ -91,11 +89,11 @@ import Testing
         #expect(labels.count == ID.allCases.count)
         for (id, label) in labels { #expect(RemoteAccessOption.option(id).label == label, "\(id)") }
         let titles = RemoteAccessOption.Group.allCases.map(\.title)
-        #expect(titles == ["See", "Agents", "Text", "Keys", "Shells", "Tabs", "More tools", "Secrets", "Checks"])
+        #expect(titles == ["See", "Agents", "Text", "Keys", "Shells", "Tabs", "More tools", "Checks"])
     }
 
-    /// Allow by name (R21): only the See options name tools until the control options do (U14). The Secrets
-    /// options are a stub until plan 007's tools are in the base, and nothing names the import tools.
+    /// Allow by name (R21): only the See options name tools until the control options do (U14). Nothing names
+    /// the import tools, and no option names a secret tool: the Secrets group waits for plan 007's tools.
     @Test func onlyTheSeeOptionsNameToolsAndEveryNameIsATool() {
         let known = Set(MCPServer.tools.map(\.name))
         for option in RemoteAccessOption.all {
@@ -104,7 +102,9 @@ import Testing
         }
         let named = Set(RemoteAccessOption.all.flatMap(\.tools))
         for tool in MCPServer.importTools { #expect(!named.contains(tool.name), "\(tool.name)") }
-        #expect(RemoteAccessOption.option(.listSecrets).tools.isEmpty && RemoteAccessOption.option(.useSecrets).tools.isEmpty)
+        for name in ["list_secrets", "run_with_secrets", "request_secret", "store_secret"] {
+            #expect(!named.contains(name), "\(name)")
+        }
         let seeNames = RemoteAccessOption.all.filter { $0.group == .see }.flatMap(\.tools)
         #expect(Set(seeNames) == Set(readOnlyNames + serverReadNames))
     }
@@ -195,6 +195,36 @@ import Testing
         #expect(decoded == options && decoded[.rateLimit] && !decoded[.everyKey])
     }
 
+    /// The Secrets group waits for plan 007's tools (decided 2026-10-11): no option, preset or stored set holds
+    /// it. A grant file that holds U1's old stub keys still reads, and those keys are dropped: they turn nothing
+    /// on and are never written back, so no saved connection gains a secret tool until the user ticks one on the
+    /// Mac. Any other key this release doesn't know goes the same way.
+    @Test func theSecretsKeysAreGoneAndAnOldFileStillReads() throws {
+        let keys = Set(ID.allCases.map(\.rawValue))
+        #expect(!keys.contains { $0.hasPrefix("secrets.") })
+        #expect(!RemoteAccessOption.Group.allCases.map(\.title).contains("Secrets"))
+        for preset in RemoteAccessPreset.allCases {
+            #expect(!preset.options.stored.keys.contains { $0.hasPrefix("secrets.") }, "\(preset)")
+        }
+
+        let old = #"{"see.tabs": true, "keys.every": false, "secrets.list": true, "secrets.use": true, "later.key": true}"#
+        let decoded = try JSONDecoder().decode(RemoteAccessOptions.self, from: Data(old.utf8))
+        #expect(decoded.stored == ["see.tabs": true, "keys.every": false])
+        #expect(decoded == RemoteAccessOptions(stored: ["see.tabs": true, "keys.every": false]))
+        let written = try JSONEncoder().encode(decoded)
+        let object = try #require(try JSONSerialization.jsonObject(with: written) as? [String: Bool])
+        #expect(object == ["see.tabs": true, "keys.every": false])
+
+        // A Control grant saved with the stub keys reads as Control, with the same tools.
+        var stored = RemoteAccessOptions.control.stored
+        stored["secrets.list"] = true
+        stored["secrets.use"] = true
+        let saved = RemoteAccessOptions(stored: stored)
+        #expect(saved.stored == RemoteAccessOptions.control.stored)
+        #expect(saved.preset == .control)
+        #expect(names(saved) == names(.control))
+    }
+
     /// A value that is not true or false spoils the whole set: the grant is invalid (U4), and is never read
     /// with the missing-option defaults instead.
     @Test func aValueThatIsNotTrueOrFalseSpoilsTheSet() {
@@ -247,8 +277,7 @@ import Testing
         #expect(!control.contains("made_up"))
     }
 
-    /// Until the control options name their tools (U14), Control lists what the See options name, and the
-    /// Secrets options admit nothing.
+    /// Until the control options name their tools (U14), Control lists what the See options name.
     @Test func controlListsWhatItsOptionsName() {
         let expected = MCPServer.tools.map(\.name).filter { Set(readOnlyNames + serverReadNames).contains($0) }
         #expect(names(.control) == expected)

@@ -5,9 +5,9 @@ import Foundation
 /// admits. A tool no option names is never offered remotely, whatever its annotations or scope tag say (allow by
 /// name), so a tool a later release adds stays local until an option names it.
 ///
-/// For now only the See options name tools; the others admit none until the control options are built. The
-/// Secrets options are a stub: the secret tools are not in this base yet, so they admit nothing. Nothing names
-/// the import tools (list_import_sources, preview_import, apply_import, undo_import), which stay local.
+/// For now only the See options name tools; the others admit none until the control options are built. Nothing
+/// names the import tools (list_import_sources, preview_import, apply_import, undo_import), which stay local. The
+/// Secrets group joins the table only once plan 007's secret tools are in the base (decided 2026-10-11).
 public struct RemoteAccessOption: Sendable {
     /// The option's stable key, as a grant file stores it. Never renamed: a grant saved with it keeps its value.
     public enum ID: String, CaseIterable, Codable, Sendable {
@@ -33,8 +33,6 @@ public struct RemoteAccessOption: Sendable {
         case servers = "more.servers"
         case skills = "more.skills"
         case writeTools = "more.write_tools"
-        case listSecrets = "secrets.list"
-        case useSecrets = "secrets.use"
         case askOnMac = "checks.ask_on_mac"
         case notify = "checks.notify"
         case rateLimit = "checks.rate_limit"
@@ -42,7 +40,7 @@ public struct RemoteAccessOption: Sendable {
 
     /// The groups, in the order the pairing window and Edit… show them.
     public enum Group: String, CaseIterable, Sendable {
-        case see, agents, text, keys, shells, tabs, moreTools, secrets, checks
+        case see, agents, text, keys, shells, tabs, moreTools, checks
 
         public var title: String {
             switch self {
@@ -53,7 +51,6 @@ public struct RemoteAccessOption: Sendable {
             case .shells: return "Shells"
             case .tabs: return "Tabs"
             case .moreTools: return "More tools"
-            case .secrets: return "Secrets"
             case .checks: return "Checks"
             }
         }
@@ -102,9 +99,6 @@ public struct RemoteAccessOption: Sendable {
         add(.servers, .moreTools, "Servers: add, remove and open tabs", control: true, custom: false)
         add(.skills, .moreTools, "Skills", control: true, custom: false)
         add(.writeTools, .moreTools, "Next Term's write tools", control: true, custom: true)
-        // A stub until the secret tools are in the base: on in Control, but admitting nothing.
-        add(.listSecrets, .secrets, "List secret names", control: true, custom: false)
-        add(.useSecrets, .secrets, "Use secrets", control: true, custom: false)
         add(.askOnMac, .checks, "Ask on this Mac before changes", control: false, custom: true)
         add(.notify, .checks, "Notify on this Mac", control: true, custom: true)
         add(.rateLimit, .checks, "At most 10 control calls a minute", control: false, custom: true)
@@ -125,10 +119,12 @@ public struct RemoteAccessOption: Sendable {
 public struct RemoteAccessOptions: Equatable, Sendable, Codable {
     /// The values by key, as the grant file holds them. A key it does not hold, such as an option a later
     /// release adds, reads as on for a Checks option and as off in every other group, Text and Keys included.
+    /// Only this release's keys are kept: any other, such as U1's old stub keys for the Secrets group, is dropped
+    /// when the set is read, so it turns nothing on and is never written back.
     public private(set) var stored: [String: Bool]
 
     public init(stored: [String: Bool]) {
-        self.stored = stored
+        self.stored = stored.filter { RemoteAccessOption.ID(rawValue: $0.key) != nil }
     }
 
     /// Every option set: the ones in `on` on, the rest off.
@@ -161,7 +157,7 @@ public struct RemoteAccessOptions: Equatable, Sendable, Codable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        stored = try container.decode([String: Bool].self)
+        self.init(stored: try container.decode([String: Bool].self))
     }
 
     public func encode(to encoder: Encoder) throws {

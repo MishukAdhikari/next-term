@@ -838,13 +838,10 @@ import Testing
         var servers = RemoteAccessOptions.readOnly
         servers[.serversRead] = true
         #expect(OAuth.scope(for: servers) == "nt.observe")
-        // Text and Keys options admit no tool by themselves, Checks never do, and the Secrets options are a stub
-        // that admits nothing until the secret tools are in the base.
+        // Text and Keys options admit no tool by themselves, and Checks never do.
         var widened = RemoteAccessOptions.readOnly
         widened[.anySlash] = true
         widened[.everyKey] = true
-        widened[.listSecrets] = true
-        widened[.useSecrets] = true
         widened[.askOnMac] = false
         #expect(OAuth.scope(for: widened) == "nt.observe")
         var typing = RemoteAccessOptions.readOnly

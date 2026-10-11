@@ -53,8 +53,8 @@ public enum RemoteAccessText {
 /// the door calls `decide` before the main thread, and `shape` on whatever thread the result comes back on.
 ///
 /// The control options' own rules (text, keys, commands, the control rate limit) join this policy with the control
-/// options. The Secrets options are a stub until the secret tools are in this base: they name no tool, so the
-/// secret tools get "not available" like any tool no option names. The import tools stay local the same way.
+/// options. The import tools stay local: no option names them, so they get "not available" like any tool no option
+/// names.
 public enum RemoteAccessPolicy {
     public enum Decision {
         /// Run the tool with these arguments: the given ones, clamped to the remote limits.
@@ -383,7 +383,7 @@ public enum RemoteAccessPolicy {
     /// The text with secrets masked, and how many were: the door's own tokens first, so no other pattern can split
     /// one, then with `commands` the shapes secrets take on a command line (`CommandSecrets`: a flag's or a
     /// variable's value, a password after -p, an auth header), then `MCPRedaction`. When a pattern could not read
-    /// the whole text, the text goes as one mask. The audit log masks with it too, without `commands`
+    /// the whole text, the text goes as one mask. The audit log masks with it too, with `commands`
     /// (`RemoteAccessAuditMask.whole`).
     static func mask(_ text: String, commands: Bool = false) -> (text: String, count: Int) {
         var masked = text

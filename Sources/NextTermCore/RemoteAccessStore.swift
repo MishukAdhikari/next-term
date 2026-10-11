@@ -667,11 +667,12 @@ public enum RemoteAccessAuditMask {
     static let remoteToken = try! NSRegularExpression(
         pattern: #"nt(?:at|rt)(?:_|%5f)(?:[a-z0-9_\-]|%[0-9a-f]{2})+"#, options: [.caseInsensitive])
 
-    /// The text with secrets masked as the door masks a result (`RemoteAccessPolicy.mask`). The door's tokens go
-    /// first, so no pattern of `MCPRedaction` can split one and leave part of it. When a pattern could not read the
-    /// whole text, the text goes as one mask.
+    /// The text with secrets masked as the door masks a result's screens and commands (`RemoteAccessPolicy.mask`
+    /// with the command rules), so a password typed against a flag, such as `mysql -pS3cret`, is never logged in
+    /// clear. The door's tokens go first, so no pattern of `MCPRedaction` can split one and leave part of it. When
+    /// a pattern could not read the whole text, the text goes as one mask.
     public static func whole(_ text: String) -> String {
-        RemoteAccessPolicy.mask(text).text
+        RemoteAccessPolicy.mask(text, commands: true).text
     }
 
     /// Masked, cut to `argumentLength`, and on one line (see `visible`).

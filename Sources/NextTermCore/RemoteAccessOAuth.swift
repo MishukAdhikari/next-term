@@ -1013,8 +1013,7 @@ public struct RemoteAccessOAuth: Sendable {
     /// Whether these options admit a control tool: one that only options outside See admit and that is not
     /// marked read-only (R19). The Agents, Shells, Tabs and More tools options name no tool until the control
     /// options are built, and each will admit one, so until then each of them counts while it is on. Text and
-    /// Keys admit no tool by themselves, Checks never do, and the Secrets options count only by the tools they
-    /// name: they are a stub that admits nothing until the secret tools are in the base.
+    /// Keys admit no tool by themselves, and Checks never do.
     static func admitsControlTool(_ options: RemoteAccessOptions, table: [MCPServer.Tool] = MCPServer.tools) -> Bool {
         let seeOptions = RemoteAccessOption.all.filter { $0.group == .see }
         let seeTools = Set(seeOptions.flatMap(\.tools))

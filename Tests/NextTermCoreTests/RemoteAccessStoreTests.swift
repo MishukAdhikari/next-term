@@ -131,6 +131,27 @@ import Testing
         #expect(first["redirect_host"] as? String == "claude.ai")
     }
 
+    /// U1's stub Secrets keys in a saved grant still read, turn nothing on, and are gone once it is saved again.
+    @Test func aGrantSavedWithTheOldSecretsKeysStillLoads() throws {
+        let folder = Folder()
+        var store = RemoteAccessGrantStore(folder: folder.url)
+        try store.save(clients: [Self.client()], grants: [Self.grant(options: .control)], now: Self.start)
+        let saved = try String(contentsOf: store.url, encoding: .utf8)
+        let old = saved.replacingOccurrences(of: #""see.tabs" : true"#,
+                                             with: #""secrets.list" : true, "secrets.use" : true, "see.tabs" : true"#)
+        #expect(old != saved)
+        try Data(old.utf8).write(to: store.url)
+
+        let loaded = store.load(now: Self.start)
+        #expect(loaded.movedAside == nil)
+        let grant = try #require(loaded.grants.first)
+        #expect(grant.options == .control)
+        #expect(grant.preset == .control)
+        #expect(!grant.options.stored.keys.contains { $0.hasPrefix("secrets.") })
+        try store.save(clients: loaded.clients, grants: loaded.grants, now: Self.start)
+        #expect(!(try String(contentsOf: store.url, encoding: .utf8)).contains("secrets."))
+    }
+
     @Test func theFileIs0600InA0700Folder() throws {
         let folder = Folder()
         var store = RemoteAccessGrantStore(folder: folder.url)
@@ -457,6 +478,27 @@ import Testing
         #expect(!text.contains(key))
         #expect(text.contains(MCPRedaction.mask))
         #expect(text.hasSuffix(String(repeating: "z ", count: 500)))
+    }
+
+    /// The audit line masks with the command rules too (U5's review), as a result's commands are: a password
+    /// typed against a flag, such as `mysql -pS3cret`, is never logged in clear, in the typed text, an argument
+    /// or an approved command.
+    @Test func aPasswordOnACommandLineIsMaskedInTheLine() throws {
+        let typed = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                               arguments: ["tab_id": "t1", "text": "mysql -pS3cret shop"], decision: .allowed)
+        #expect(typed.text == "mysql -p" + MCPRedaction.mask + " shop")
+        let opened = Entry.call(time: Self.start, grant: Self.grant(), tool: "new_tab",
+                                arguments: ["command": "sshpass -p hunter2x ssh web-1"], decision: .refused,
+                                reason: "mysql -pS3cret", approved: "mysql -pS3cret -e 'select 1'")
+        #expect(opened.arguments?["command"]?.contains("hunter2x") == false)
+        #expect(opened.arguments?["command"]?.contains(MCPRedaction.mask) == true)
+        #expect(opened.approved?.contains("S3cret") == false)
+        #expect(opened.reason?.contains("S3cret") == false)
+        #expect(RemoteAccessAuditMask.whole("mysql -pS3cret") == "mysql -p" + MCPRedaction.mask)
+        for line in [try typed.line(), try opened.line()] {
+            let text = String(decoding: line, as: UTF8.self)
+            #expect(!text.contains("S3cret") && !text.contains("hunter2x"), "\(text)")
+        }
     }
 
     @Test func sendToTabTextIsCutAtR27sLimitAndSaysHowLongItWas() throws {
