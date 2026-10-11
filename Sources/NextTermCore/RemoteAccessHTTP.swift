@@ -23,7 +23,8 @@ public enum RemoteAccessHTTP {
     /// dropped, what arrived whole still comes out, and then the door answers 413 and closes.
     public static let maximumBuffer = maximumHead + maximumBody + maximumChunkFraming + maximumHead
 
-    /// Seconds a client has to send a request's head once it has begun. Enforced by the door.
+    /// Seconds a client has to send a request's head once it has begun, and a new connection its first one from
+    /// when it opened. Enforced by the door.
     public static let headerDeadline: TimeInterval = 10
     /// Seconds a request's body has to arrive once its head is whole: 1 MB in 30 seconds is about 35 KB a second.
     /// Enforced by the door, so a body that trickles in cannot hold a connection.
@@ -208,9 +209,10 @@ public enum RemoteAccessHTTP {
 
     /// Where a connection stands, for the door's deadlines.
     public enum Phase: Equatable, Sendable {
-        /// No byte of the next request yet: the idle deadline applies.
+        /// Between requests, with no byte of the next one yet: the idle deadline applies.
         case idle
-        /// Its head has begun: the header deadline applies.
+        /// Its head has begun, or the connection is new and its first request has not come whole: the header
+        /// deadline applies (R8).
         case head
         /// Its head was handed out and its body is still arriving: the body deadline applies.
         case body
@@ -247,6 +249,8 @@ public enum RemoteAccessHTTP {
         private var trailerStart = 0
         /// A request was handed out whole, and `next` has not been called since.
         private var answering = false
+        /// A request was handed out whole: the connection is no longer new.
+        private var served = false
         /// Bytes past `maximumBuffer` were dropped.
         private var overflowed = false
 
@@ -255,7 +259,7 @@ public enum RemoteAccessHTTP {
         public var phase: Phase {
             if answering { return .answering }
             switch stage {
-            case .head: return buffer.isEmpty ? .idle : .head
+            case .head: return buffer.isEmpty && served ? .idle : .head
             default: return .body
             }
         }
@@ -283,7 +287,10 @@ public enum RemoteAccessHTTP {
             do {
                 let parsed = try step()
                 if parsed == .needMore, overflowed { throw tooLarge() }
-                if case .request = parsed { answering = true }
+                if case .request = parsed {
+                    answering = true
+                    served = true
+                }
                 return parsed
             } catch let failure as Failure {
                 failed = failure
@@ -652,6 +659,7 @@ public enum RemoteAccessHTTP {
     public static func reason(_ status: Int) -> String {
         switch status {
         case 200: return "OK"
+        case 201: return "Created"
         case 202: return "Accepted"
         case 204: return "No Content"
         case 302: return "Found"

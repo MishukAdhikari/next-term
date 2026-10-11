@@ -302,6 +302,35 @@ import Testing
         #expect(over == nil)
     }
 
+    /// Counts a call without a slot. Outside `#expect`, which can't call a mutating method.
+    func counted(_ limiter: inout RemoteAccessRateLimiter, _ grant: String, _ now: Date) -> Bool {
+        limiter.count(grant: grant, now: now)
+    }
+
+    /// A call the door answers without running it (the options leave its tool off, or its arguments don't fit)
+    /// takes no slot but counts toward its grant's 120 a minute, so a token can't send refused calls without end.
+    @Test func aCallAnsweredWithoutASlotStillCountsTowardTheMinute() throws {
+        var limiter = RemoteAccessRateLimiter()
+        let now = Date(timeIntervalSinceReferenceDate: 15_000)
+        for call in 0..<119 {
+            let counts = counted(&limiter, "a", now)
+            #expect(counts, "call \(call)")
+        }
+        #expect(limiter.runningCount == 0)
+        // The 120th runs; then neither kind is let through until the minute has passed.
+        let last = try #require(take(&limiter, "a", now))
+        limiter.release(last)
+        let over = counted(&limiter, "a", now.addingTimeInterval(59))
+        #expect(!over)
+        let noSlot = take(&limiter, "a", now.addingTimeInterval(59))
+        #expect(noSlot == nil)
+        // Another grant has its own minute, and a minute later the first counts again.
+        let other = counted(&limiter, "b", now)
+        #expect(other)
+        let later = counted(&limiter, "a", now.addingTimeInterval(60))
+        #expect(later)
+    }
+
     @Test func aClockSetBackDoesNotKeepOldCallsCounting() throws {
         var limiter = RemoteAccessRateLimiter()
         let now = Date(timeIntervalSinceReferenceDate: 20_000)

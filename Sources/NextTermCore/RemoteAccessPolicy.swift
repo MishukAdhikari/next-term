@@ -793,7 +793,9 @@ struct ScreenRows {
 
 /// R27's general limits: per grant, 120 calls in any 60 seconds and 3 at a time; all grants together, 6 at a time.
 /// They hold on every connection, whatever its options (R61). Over a limit, the call gets
-/// `RemoteAccessText.tooManyCalls` and takes no slot, so a refused call counts toward nothing.
+/// `RemoteAccessText.tooManyCalls` and takes no slot, so a call refused for the limits counts toward nothing. A call
+/// the door refuses for another reason (its options, its arguments) takes no slot either, but `count` adds it to
+/// its grant's minute.
 ///
 /// A value with the clock passed in, as the OAuth authority is: the door keeps one under its lock. A call takes a
 /// slot when it is admitted and gives it back when its answer goes out, or when its late result comes in after the
@@ -821,14 +823,7 @@ public struct RemoteAccessRateLimiter: Sendable {
     /// A slot for a call from this grant, or nil when a limit is reached. A start more than a minute ago no longer
     /// counts, and neither does one after `now`, as when the clock was set back.
     public mutating func acquire(grant: String, now: Date) -> Slot? {
-        for (other, starts) in started {
-            let recent = starts.filter { start in
-                let age = now.timeIntervalSince(start)
-                return age >= 0 && age < Self.window
-            }
-            started[other] = recent.isEmpty ? nil : recent
-        }
-        let recent = started[grant] ?? []
+        let recent = recentStarts(of: grant, now: now)
         guard recent.count < Self.callsPerMinute else { return nil }
         let mine = running.values.filter { $0 == grant }.count
         guard mine < Self.callsAtOnce, running.count < Self.allCallsAtOnce else { return nil }
@@ -836,6 +831,28 @@ public struct RemoteAccessRateLimiter: Sendable {
         running[lastNumber] = grant
         started[grant] = recent + [now]
         return Slot(number: lastNumber, grant: grant)
+    }
+
+    /// Counts a call that takes no slot toward its grant's calls of the last minute: one the door answers without
+    /// running it, such as a tool the options leave off. So a token that sends only such calls is held to the same
+    /// 120 a minute. False, counting nothing, when the grant has made 120 already.
+    public mutating func count(grant: String, now: Date) -> Bool {
+        let recent = recentStarts(of: grant, now: now)
+        guard recent.count < Self.callsPerMinute else { return false }
+        started[grant] = recent + [now]
+        return true
+    }
+
+    /// The grant's starts of the last minute, after every grant's older ones are forgotten.
+    private mutating func recentStarts(of grant: String, now: Date) -> [Date] {
+        for (other, starts) in started {
+            let recent = starts.filter { start in
+                let age = now.timeIntervalSince(start)
+                return age >= 0 && age < Self.window
+            }
+            started[other] = recent.isEmpty ? nil : recent
+        }
+        return started[grant] ?? []
     }
 
     /// Gives the slot back.

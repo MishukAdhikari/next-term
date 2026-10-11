@@ -739,6 +739,39 @@ import Testing
                           "wrong_host", "headers_too_large", nil, nil])
     }
 
+    /// R39, R27: calls a grant makes past its limits are summed too, one line a minute per grant with the first
+    /// tool, so a leaked token that floods the door can't push the real history out of the log.
+    @Test func callsPastAGrantsLimitsGiveOneLineAMinutePerGrant() {
+        var refusals = RemoteAccessRefusals()
+        var lines: [Entry] = []
+        for index in 0..<5000 {
+            let now = Self.start.addingTimeInterval(Double(index) * 0.01)
+            let tool = index == 0 ? "send_to_tab" : "read_tab"
+            lines += refusals.countOverLimit(grant: Self.grant(), tool: tool, now: now)
+        }
+        lines += refusals.countOverLimit(grant: Self.grant("g2"), tool: "", now: Self.start.addingTimeInterval(10))
+        _ = refusals.count(.noToken, first: "/mcp", now: Self.start.addingTimeInterval(20))
+        #expect(lines.isEmpty)
+        #expect(refusals.nextDue == Self.start.addingTimeInterval(60))
+        lines += refusals.due(now: Self.start.addingTimeInterval(60))
+        #expect(lines.count == 1)
+        let line = lines.first
+        #expect(line?.event == "requests.refused")
+        #expect(line?.kind == "too_many_calls")
+        #expect(line?.grant == "g1")
+        #expect(line?.grantName == "Claude, phone")
+        #expect(line?.count == 5000)
+        #expect(line?.first == "send_to_tab")
+        #expect(line?.since == Self.start)
+        #expect(line?.reason == RemoteAccessText.tooManyCalls)
+        // Each grant's minute is its own; on quit, every count is written at once.
+        let rest = refusals.flush(now: Self.start.addingTimeInterval(61))
+        #expect(rest.map(\.kind) == ["no_token", "too_many_calls"])
+        #expect(rest.last?.grant == "g2")
+        #expect(rest.last?.first == "")
+        #expect(refusals.nextDue == nil)
+    }
+
     // MARK: rotation and retention
 
     @Test func theLogRotatesAtExactly10MB() {

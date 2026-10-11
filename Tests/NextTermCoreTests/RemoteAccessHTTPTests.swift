@@ -134,7 +134,8 @@ import Testing
         var head = whole
         head.body = Data()
         var parser = HTTP.Parser()
-        #expect(parser.phase == .idle)
+        // A new connection's first head is on the header deadline from the start (R8).
+        #expect(parser.phase == .head)
         let data = bytes(text)
         let headEnd = text.utf8.count - 4
         for (index, byte) in data.enumerated() {
@@ -171,6 +172,26 @@ import Testing
         #expect(parser.phase == .answering)
         #expect(parser.next() == .needMore)
         #expect(parser.phase == .head)
+    }
+
+    /// R8: a new connection has 10 seconds for its first request's head, counted from when it opened. The 30 idle
+    /// seconds run only between requests, so a connection that never sends a byte can't hold its place for 30.
+    @Test func aNewConnectionIsOnTheHeaderDeadlineUntilItsFirstRequestIsWhole() {
+        var parser = HTTP.Parser()
+        #expect(parser.phase == .head)
+        #expect(parser.next() == .needMore)
+        #expect(parser.phase == .head)
+        _ = parser.append(bytes("GET /.well-known/oauth-authorization-server HTTP/1.1\r\nHost: mcp.example.com\r\n"))
+        #expect(parser.next() == .needMore)
+        #expect(parser.phase == .head)
+        _ = parser.append(bytes("\r\n"))
+        guard case .request = nextPastHead(&parser) else { Issue.record("no request"); return }
+        #expect(parser.phase == .answering)
+        // Answered: from now on the connection waits between requests.
+        #expect(parser.next() == .needMore)
+        #expect(parser.phase == .idle)
+        #expect(HTTP.headerDeadline == 10)
+        #expect(HTTP.idleDeadline == 30)
     }
 
     // MARK: the head before its body
@@ -736,6 +757,12 @@ import Testing
         #expect(text(HTTP.refusal(status: 400)).hasPrefix("HTTP/1.1 400 Bad Request\r\n"))
         // The door's answer when a head or a body is too slow to arrive (R8).
         #expect(text(HTTP.refusal(status: 408)).hasPrefix("HTTP/1.1 408 Request Timeout\r\n"))
+    }
+
+    /// A registration that succeeds answers 201 with its own reason, not a generic one.
+    @Test func aRegistrationAnswersCreated() {
+        #expect(HTTP.reason(201) == "Created")
+        #expect(text(HTTP.json(status: 201, body: bytes("{}"))).hasPrefix("HTTP/1.1 201 Created\r\n"))
     }
 
     @Test func aCheckedRefusalAnswersItself() {

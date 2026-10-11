@@ -280,6 +280,28 @@ import Testing
         #expect(call.answers.texts == [RemoteAccessText.deadline])
     }
 
+    /// R25: the door gives each call its own deadline timer, on the monotonic clock. `expire(id)` answers that call
+    /// with the deadline text at once, whatever the wall clock says, and leaves every other call alone.
+    @Test func aCallsOwnDeadlineAnswersItWhateverTheWallClockSays() throws {
+        let clock = Clock()
+        let calls = makeCalls(clock)
+        let call = try #require(openCall(calls))
+        let other = try #require(openCall(calls, connection: 2))
+        _ = calls.begin(call.id, grant: Self.grant())
+        // The wall clock is set back an hour while the call runs.
+        clock.advance(-3600)
+        #expect(calls.expire() == 0)
+        #expect(calls.expire(call.id))
+        #expect(call.answers.texts == [RemoteAccessText.deadline])
+        #expect(other.answers.all.isEmpty)
+        // The tool still runs on the Mac: its slot comes back with its late result.
+        #expect(calls.running == 2)
+        #expect(!calls.expire(call.id))
+        #expect(!calls.finish(call.id, Self.screen))
+        #expect(calls.running == 1)
+        #expect(call.answers.all.count == 1)
+    }
+
     // MARK: turning off
 
     /// R37: turning off answers every open call with the revoke text and closes its connection; nothing opens
@@ -300,6 +322,22 @@ import Testing
         #expect(calls.running == 0)
     }
 
+    /// The door shapes a result (masking a long screen takes time) before it hands it to `finish`, so the call is
+    /// still open meanwhile: a turn-off that lands then answers it with the revoke text, and closes its connection,
+    /// and the shaped result is dropped. The client never gets a stream head and then nothing.
+    @Test func aResultBeingShapedIsStillAnOpenCall() throws {
+        let calls = makeCalls(Clock())
+        let call = try #require(openCall(calls, streamed: true))
+        _ = calls.begin(call.id, grant: Self.grant())
+        // The Mac answered, and the door is shaping the result.
+        #expect(calls.openCount == 1)
+        #expect(calls.turnOff() == 1)
+        #expect(!calls.finish(call.id, Self.screen))
+        #expect(call.answers.texts == [RemoteAccessText.turnedOff])
+        #expect(call.answers.all.first?.closesConnection == true)
+        #expect(calls.running == 0)
+    }
+
     // MARK: limits
 
     /// R27: 3 at a time per grant and 6 overall. A refused call takes no slot.
@@ -310,6 +348,84 @@ import Testing
         }
         #expect(calls.open(grant: "g3", connection: 9, streamed: false) { _ in } == .tooMany)
         #expect(calls.running == 6)
+    }
+
+    /// R27, R39: a call the door answers without running it takes no slot, but counts toward its grant's 120 calls
+    /// a minute. So a leaked token that sends only refused calls is held to the same rate as one whose calls run:
+    /// past it, each gets the too-many text and the door sums its audit line with the minute's others.
+    @Test func aRefusedCallCountsTowardItsGrantsMinuteAndTakesNoSlot() throws {
+        let clock = Clock()
+        let calls = makeCalls(clock)
+        let running = try #require(openCall(calls))
+        for index in 0..<119 {
+            #expect(calls.countRefused(grant: "g1") == .counted, "refusal \(index)")
+        }
+        #expect(calls.running == 1)
+        #expect(calls.countRefused(grant: "g1") == .tooMany)
+        #expect(calls.open(grant: "g1", connection: 2, streamed: false) { _ in } == .tooMany)
+        // Another grant has its own minute; a minute later the first counts again.
+        #expect(calls.countRefused(grant: "g2") == .counted)
+        clock.advance(60)
+        #expect(calls.countRefused(grant: "g1") == .counted)
+        #expect(running.answers.all.isEmpty)
+        _ = calls.turnOff()
+        #expect(calls.countRefused(grant: "g1") == .closed)
+    }
+
+    /// R60, R53: the options changed between the door's check and the main thread. The main thread's refusal is
+    /// the call's one answer, carried with it, so the audit line says what the client got: a tool now off gets its
+    /// error result and names the option; an argument that no longer fits gets JSON-RPC error -32602 (AE13).
+    @Test func aRefusalOnTheMainThreadIsTheCallsOneAnswer() throws {
+        let calls = makeCalls(Clock())
+        let call = try #require(openCall(calls))
+        #expect(calls.begin(call.id, grant: Self.grant()) == .run(Self.grant()))
+        let text = RemoteAccessText.cantUse("read_tab", needing: [.tabs])
+        #expect(calls.finish(call.id, refused: .options(text, by: [.tabs])))
+        #expect(calls.running == 0)
+        let ending = try #require(call.answers.all.first)
+        #expect(ending.decision == .refused)
+        #expect(ending.reason == text)
+        #expect(ending.refusedBy == [.tabs])
+        #expect(!ending.closesConnection)
+        #expect(ending.callResult.text == text)
+        #expect(ending.callResult.isError)
+        #expect(Calls.answer(id: 4, ending) == Calls.result(id: 4, ending.callResult))
+        // Answered once: a second answer, or a revoke after it, changes nothing.
+        #expect(!calls.finish(call.id, refused: .invalidParams("x")))
+        #expect(calls.revoke(grants: ["g1"]) == 0)
+        #expect(call.answers.all.count == 1)
+
+        let params = try #require(openCall(calls))
+        _ = calls.begin(params.id, grant: Self.grant())
+        let invalid = RemoteAccessText.notAnArgument("force", of: "close_tab")
+        #expect(calls.finish(params.id, refused: .invalidParams(invalid)))
+        let refusal = try #require(params.answers.all.first)
+        #expect(refusal.decision == .refused)
+        #expect(refusal.reason == invalid)
+        #expect(refusal.refusedBy.isEmpty)
+        let parsed = try JSONSerialization.jsonObject(with: Calls.answer(id: 9, refusal))
+        let message = try #require(parsed as? [String: Any])
+        let error = try #require(message["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32602)
+        #expect(error["message"] as? String == invalid)
+        #expect(message["id"] as? Int == 9)
+        #expect(message["result"] == nil)
+    }
+
+    /// Every ending but invalid params sends the tool-result envelope; the audit line takes its decision and reason.
+    @Test func eachEndingSendsItsAnswerAndItsAuditReason() {
+        let refused = Calls.Ending.refused(.options("No", by: [.tabs]))
+        for ending in [Calls.Ending.result(Self.screen), refused, .turnedOff, .deadline] {
+            #expect(Calls.answer(id: 3, ending) == Calls.result(id: 3, ending.callResult))
+        }
+        #expect(Calls.Ending.result(Self.screen).decision == .allowed)
+        #expect(Calls.Ending.result(Self.screen).reason == nil)
+        #expect(Calls.Ending.turnedOff.reason == RemoteAccessText.turnedOff)
+        #expect(Calls.Ending.deadline.reason == RemoteAccessText.deadline)
+        #expect(Calls.Ending.deadline.decision == .failed)
+        #expect(Calls.Ending.turnedOff.refusedBy.isEmpty)
+        #expect(refused.callResult.text == "No")
+        #expect(refused.callResult.isError)
     }
 
     // MARK: list changed
@@ -375,6 +491,12 @@ import Testing
         #expect(incoming(#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#).status == 202)
         #expect(incoming(#"{"jsonrpc":"2.0","id":3,"result":{}}"#).status == 202)
         #expect(incoming("not json").status == 400)
+        // An authenticated request the door can't read still gets an audit line, which says why.
+        let reasons = [incoming("[]"), incoming("not json"), incoming("{}", version: "1999-01-01")].map(\.reason)
+        #expect(reasons.allSatisfy { $0 != nil })
+        #expect(Set(reasons).count == 3)
+        #expect(incoming(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).reason == nil)
+        #expect(incoming(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).reason == nil)
         #expect(incoming(#""text""#).status == 400)
         #expect(incoming("").status == 400)
         #expect(incoming(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, version: "1999-01-01").status == 400)

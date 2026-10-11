@@ -5,17 +5,22 @@ import NextTermCore
 /// Remote access's door (U7): MCP Streamable HTTP at `/mcp` and Next Term's OAuth routes, on `127.0.0.1` at the
 /// saved port and nowhere else (R2). The tunnel forwards to it; nothing else may reach it.
 ///
-/// Each connection is read by the Core parser (`RemoteAccessHTTP`), one request at a time, answered in order, with a
-/// 10-second deadline for a head, 30 seconds for a body, and 30 seconds idle between requests. Every request passes
-/// the checks in order (Host, Origin, path, method); a refusal goes out with no body and the connection closes. Until
-/// a host is saved, every request gets 421.
+/// Each connection is read by the Core parser (`RemoteAccessHTTP`), one request at a time, answered in order, with
+/// 10 seconds for a head (a new connection's first one counted from when it opened), 30 seconds for a body, and 30
+/// seconds idle between requests. At 64 connections, the oldest one with no request in hand gives way to a new one,
+/// so silent or slow connections can't keep the tunnel out. Every request passes the checks in order (Host, Origin,
+/// path, method); a refusal goes out with no body and the connection closes. Until a host is saved, every request
+/// gets 421.
 ///
 /// A tool call runs through the same engine as `nxtrm mcp` (`MCPControl.call`), as a caller outside Next Term's tabs
 /// (R3). Its life is `RemoteAccessCalls`': it is registered before the hop to the main thread, its grant is read again
 /// there under the authority's lock just before it runs (KTD15), and it is answered exactly once: with its masked and
-/// capped result, with the revoke text at once when its grant ends, or with the deadline text after 100 seconds.
+/// capped result, with the main thread's refusal, with the revoke text at once when its grant ends, or with the
+/// deadline text after 100 seconds. Every call counts toward its grant's 120 a minute, refused ones too, and the
+/// audit lines of calls past the limits are summed (R27, R39).
 ///
-/// Logic is in Core (U1 to U5, `RemoteAccessCalls`); this file holds the sockets and the binding to MCPControl.
+/// Logic is in Core (U1 to U5, `RemoteAccessCalls`, `RemoteAccessDoorState`); this file holds the sockets and the
+/// binding to MCPControl.
 final class RemoteAccessServer: @unchecked Sendable { // connections live on `queue`; the authority under `state`'s lock
     /// The door's timings. Only a debug build under `--self-test` may shorten them (U12), so the release build
     /// always answers with the plan's values.
@@ -56,8 +61,10 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         }
     }
 
-    /// At most this many connections at once; one more is closed at once.
+    /// At most this many connections at once. One more takes the place of the oldest with no request in hand.
     static let maximumConnections = 64
+    /// How late a call's deadline timer may fire, at most.
+    static let deadlineLeeway = DispatchTimeInterval.milliseconds(100)
 
     let port: UInt16
     let state: RemoteAccessDoorState
@@ -71,14 +78,19 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
     private var listener: NWListener?
     private var connections: [UInt64: Connection] = [:]
     private var lastConnection: UInt64 = 0
-    private var summaries: DispatchSourceTimer?
+    private var ticks: DispatchSourceTimer?
+    /// Each open call's own deadline (R25), by its id.
+    private var deadlines: [RemoteAccessCalls.ID: DispatchSourceTimer] = [:]
     private var stopped = false
 
+    /// A door on `state`, made by `RemoteAccessDoorState.forDoor` so its registry has the door's deadline. The
+    /// approval windows of a grant that ends close with it (`RemoteAccessApprovals`).
     init(port: UInt16, state: RemoteAccessDoorState) {
         self.port = port
         self.state = state
         self.timings = Timings.current
         version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        state.onGrantsEnded = { grants in RemoteAccessApprovals.close(grants: Set(grants)) }
     }
 
     // MARK: start and stop
@@ -120,28 +132,38 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         }
         queue.sync {
             self.listener = listener
-            startSummaries()
+            startTicks()
         }
     }
 
     /// Turns the door off within a second (R37): no new connection, every open call answered with the revoke text,
-    /// access tokens dropped (every grant ended too with `revokeAll`), then every connection closed. Call it from
-    /// the main thread. It can be called again; it does nothing then.
+    /// access tokens dropped (every grant ended too with `revokeAll`), the approval windows remote calls opened
+    /// closed, then every connection closed. Call it from the main thread, and never inside `state.update {}`: it
+    /// waits on the door's queue, which may be waiting for the state's lock. It can be called again; it does
+    /// nothing then.
     func stop(revokeAll: Bool = false) {
         let first = queue.sync { () -> Bool in
             guard !stopped else { return false }
             stopped = true
             listener?.cancel()
             listener = nil
-            summaries?.cancel()
-            summaries = nil
+            ticks?.cancel()
+            ticks = nil
             return true
         }
         guard first else { return }
-        // The authority's lock, then the registry: the open calls' answers are queued before the closes below.
+        // The authority's lock, then the registry: every open call's answer is on the door's queue after this.
         state.turnOff(revokeAll: revokeAll)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { RemoteAccessApprovals.close(grants: nil) }
+        } else {
+            DispatchQueue.main.async { RemoteAccessApprovals.close(grants: nil) }
+        }
         queue.async {
-            for connection in self.connections.values { self.finish(connection) }
+            for timer in self.deadlines.values { timer.cancel() }
+            self.deadlines.removeAll()
+            // A connection waiting for its call closes once that answer is out (`deliver`); the others close now.
+            for connection in self.connections.values where !connection.busy { self.finish(connection) }
         }
         queue.asyncAfter(deadline: .now() + 0.8) {
             for connection in self.connections.values { self.close(connection) }
@@ -160,13 +182,14 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         return .failed("\(error)")
     }
 
-    /// Refusals before a valid token go to the audit log as one line a minute per kind (R39).
-    private func startSummaries() {
+    /// Every 15 seconds: the summed refusal lines whose minute has ended go to the audit log (R39), and a grant
+    /// save that failed is tried again.
+    private func startTicks() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 15, repeating: 15)
-        timer.setEventHandler { [weak self] in self?.state.writeDueRefusals() }
+        timer.setEventHandler { [weak self] in self?.state.tick() }
         timer.resume()
-        summaries = timer
+        ticks = timer
     }
 
     // MARK: connections
@@ -194,7 +217,14 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
     }
 
     private func accept(_ link: NWConnection) {
-        guard !stopped, connections.count < Self.maximumConnections else { return link.cancel() }
+        guard !stopped else { return link.cancel() }
+        if connections.count >= Self.maximumConnections {
+            // The oldest connection with no request in hand gives way: one waiting for its head, its body or its
+            // next request. Only a call in progress (six at most, R27) keeps its place.
+            let waiting = connections.values.filter { !$0.busy }
+            guard let oldest = waiting.min(by: { $0.id < $1.id }) else { return link.cancel() }
+            close(oldest)
+        }
         lastConnection += 1
         let connection = Connection(id: lastConnection, link: link)
         connections[connection.id] = connection
@@ -266,8 +296,8 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         pump(connection)
     }
 
-    /// The deadline for where the connection stands (R8): a head within 10 seconds, a body within 30, and 30 idle
-    /// between requests. None while a request waits for its answer.
+    /// The deadline for where the connection stands (R8): a head within 10 seconds (a new connection's first from
+    /// when it opened), a body within 30, and 30 idle between requests. None while a request waits for its answer.
     private func arm(_ connection: Connection) {
         let phase = connection.parser.phase
         guard phase != connection.armed else { return }
@@ -425,27 +455,26 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
             return finish(connection, with: challenge(request, tokenSent: token != nil))
         }
         let incoming = RemoteAccessCalls.read(request.body, protocolVersion: request.header("mcp-protocol-version"))
-        if let status = incoming.status {
-            guard status == 202 else { return finish(connection, with: RemoteAccessHTTP.refusal(status: status)) }
-            return reply(RemoteAccessHTTP.response(status: 202), on: connection)
-        }
         switch incoming {
         case .request(let message):
             reply(answer(message, grant: grant), on: connection)
         case .call(let id, let name, let arguments):
             call(Call(id: id, tool: name, arguments: arguments, grant: grant, request: request, started: state.now),
                  on: connection)
-        default:
-            finish(connection, with: RemoteAccessHTTP.refusal(status: 400))
+        case .notification:
+            reply(RemoteAccessHTTP.response(status: 202), on: connection)
+        case .batch, .invalid, .badVersion:
+            unreadable(incoming, grant: grant, request: request, on: connection)
         }
     }
 
     /// `initialize`, `ping`, `tools/list` and the rest: answered as `nxtrm mcp` answers them, with the tools the
-    /// grant's options admit, the remote instructions for them and `listChanged: true` (R20, R26).
+    /// grant's options admit now, the remote instructions for them and `listChanged: true` (R20, R26).
     private func answer(_ message: [String: Any], grant: RemoteAccessOAuth.Grant) -> Data {
-        let options = grant.options
-        // The client asks for the list, so it has the new one: the mark for a changed list goes (R20).
-        if message["method"] as? String == "tools/list" { calls.clearListChanged(grant.id) }
+        // A tools/list gives the client the new list, so the mark for a changed list goes in the same step as the
+        // options are read (R20).
+        let listed = message["method"] as? String == "tools/list"
+        let options = state.options(of: grant.id, listed: listed) ?? grant.options
         let tools = RemoteAccessTools.tools(for: options)
         let instructions = RemoteAccessTools.instructions(for: options)
         let response = MCPServer.respond(to: message, version: version, tools: tools, instructions: instructions,
@@ -457,6 +486,22 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         return RemoteAccessHTTP.json(status: 200, body: RemoteAccessCalls.encode(response))
     }
 
+    /// An authenticated POST the door can't read: a batch, not JSON-RPC, or a protocol version it doesn't speak.
+    /// It gets 400 and the connection closes. It counts toward its grant's calls a minute and has its audit line
+    /// like a refused call, summed past the limits (R27, R39).
+    private func unreadable(_ incoming: RemoteAccessCalls.Incoming, grant: RemoteAccessOAuth.Grant,
+                            request: RemoteAccessHTTP.Request, on connection: Connection) {
+        if calls.countRefused(grant: grant.id) == .tooMany {
+            state.countOverLimit(grant, tool: "")
+        } else {
+            let entry = RemoteAccessAuditEntry.call(time: state.now, grant: grant, tool: "", arguments: nil,
+                                                    decision: .refused, reason: incoming.reason,
+                                                    forwarded: request.forwarded)
+            state.audit([entry])
+        }
+        finish(connection, with: RemoteAccessHTTP.refusal(status: incoming.status ?? 400))
+    }
+
     /// One tool call, from the request to its answer.
     private final class Call: @unchecked Sendable { // read on the door's queue and once on the main thread
         let id: Any
@@ -466,9 +511,8 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         let forwarded: RemoteAccessHTTP.Forwarded
         let streamed: Bool
         let started: Date
-        /// Refused on the main thread, under options changed since the door's check (R60): the audit line's reason
-        /// and the options it names. Set there before the call is finished, read after.
-        var refused: (reason: String, by: [RemoteAccessOption.ID])?
+        /// Its id in the registry, once it is open. Set and read only on the door's queue.
+        var callID: RemoteAccessCalls.ID?
 
         init(id: Any, tool: String, arguments: [String: Any], grant: RemoteAccessOAuth.Grant,
              request: RemoteAccessHTTP.Request, started: Date) {
@@ -482,20 +526,45 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         }
     }
 
-    /// The policy decides before the main thread (U5); a call it admits takes a slot, starts its stream when the
-    /// client takes one, and goes to the main thread.
+    /// The policy decides before the main thread (U5). A call it admits takes a slot, starts its stream when the
+    /// client takes one, and goes to the main thread; one it refuses is answered here.
     private func call(_ call: Call, on connection: Connection) {
-        switch RemoteAccessPolicy.decide(tool: call.tool, arguments: call.arguments, options: call.grant.options) {
-        case .unknownTool(let text), .invalidParams(let text):
-            audit(call, decision: .refused, reason: text)
-            reply(json(RemoteAccessCalls.error(id: call.id, code: -32602, message: text)), on: connection)
-        case .refuse(let text):
-            let refusedBy = RemoteAccessCalls.refusedBy(call.tool, options: call.grant.options)
-            audit(call, decision: .refused, reason: text, refusedBy: refusedBy)
-            reply(json(RemoteAccessCalls.result(id: call.id, failure(text))), on: connection)
+        let options = call.grant.options
+        switch RemoteAccessPolicy.decide(tool: call.tool, arguments: call.arguments, options: options) {
         case .allow:
             open(call, on: connection)
+        case .unknownTool(let text), .invalidParams(let text):
+            refuse(call, .invalidParams(text), on: connection)
+        case .refuse(let text):
+            refuse(call, .options(text, by: RemoteAccessCalls.refusedBy(call.tool, options: options)), on: connection)
         }
+    }
+
+    /// A call answered without running. It counts toward its grant's 120 calls a minute (R27), so past them it gets
+    /// the too-many text and its audit line is summed (R39).
+    private func refuse(_ call: Call, _ refusal: RemoteAccessCalls.Refusal, on connection: Connection) {
+        switch calls.countRefused(grant: call.grant.id) {
+        case .counted:
+            let ending = RemoteAccessCalls.Ending.refused(refusal)
+            audit(call, ending)
+            reply(json(RemoteAccessCalls.answer(id: call.id, ending)), on: connection)
+        case .tooMany:
+            tooMany(call, on: connection)
+        case .closed:
+            turnedOff(call, on: connection)
+        }
+    }
+
+    /// Past R27's limits: the too-many text, and one summed audit line a minute for the grant (R39).
+    private func tooMany(_ call: Call, on connection: Connection) {
+        state.countOverLimit(call.grant, tool: call.tool)
+        reply(json(RemoteAccessCalls.result(id: call.id, failure(RemoteAccessText.tooManyCalls))), on: connection)
+    }
+
+    /// Remote access turned off after the call's token was checked: the revoke text, and the connection closes.
+    private func turnedOff(_ call: Call, on connection: Connection) {
+        audit(call, .turnedOff)
+        finish(connection, with: json(RemoteAccessCalls.answer(id: call.id, .turnedOff), close: true))
     }
 
     private func open(_ call: Call, on connection: Connection) {
@@ -506,46 +575,49 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         }
         switch opened {
         case .tooMany:
-            audit(call, decision: .refused, reason: RemoteAccessText.tooManyCalls)
-            reply(json(RemoteAccessCalls.result(id: call.id, failure(RemoteAccessText.tooManyCalls))), on: connection)
+            tooMany(call, on: connection)
         case .closed:
-            let message = RemoteAccessCalls.result(id: call.id, failure(RemoteAccessText.turnedOff))
-            finish(connection, with: json(message, close: true))
+            turnedOff(call, on: connection)
         case .call(let callID, let listChanged):
+            call.callID = callID
             if call.streamed {
                 send(RemoteAccessCalls.streamStart(listChanged: listChanged), on: connection)
                 startKeepAlive(connection)
             }
-            queue.asyncAfter(deadline: .now() + calls.deadline) { calls.expire() }
+            startDeadline(callID)
             DispatchQueue.main.async { [weak self] in self?.run(call, callID) }
         }
     }
 
     /// On the main thread: the grant read again under the authority's lock (KTD15) and the options as they are
     /// now (R60), then `MCPControl.call` as a caller outside Next Term's tabs, with the connection's approval
-    /// policy, its name and its grant id (R56). Its reply may come from any thread.
+    /// policy, its name and its grant id (R56). A refusal here is the call's answer, carried through the registry.
+    /// The reply may come from any thread: the result is shaped off the main thread and the door's queue (masking
+    /// a long screen takes time) while the call is still open, so a revoke or a turn-off meanwhile still answers it.
     private func run(_ call: Call, _ callID: RemoteAccessCalls.ID) {
         let calls = self.calls
         guard case .run(let grant) = state.begin(callID, grant: call.grant.id) else { return }
-        let decision = RemoteAccessPolicy.decide(tool: call.tool, arguments: call.arguments, options: grant.options)
+        let tool = call.tool
         let arguments: [String: Any]
-        switch decision {
+        switch RemoteAccessPolicy.decide(tool: tool, arguments: call.arguments, options: grant.options) {
         case .allow(let allowed):
-            arguments = held(allowed, tool: call.tool)
+            arguments = held(allowed, tool: tool)
         case .refuse(let text):
-            call.refused = (text, RemoteAccessCalls.refusedBy(call.tool, options: grant.options))
-            calls.finish(callID, failure(text))
+            let refusedBy = RemoteAccessCalls.refusedBy(tool, options: grant.options)
+            calls.finish(callID, refused: .options(text, by: refusedBy))
             return
         case .invalidParams(let text), .unknownTool(let text):
-            call.refused = (text, [])
-            calls.finish(callID, failure(text))
+            calls.finish(callID, refused: .invalidParams(text))
             return
         }
         // U14 adds here, for a control call: one fresh screen read, the tab checks the options ask for, and Allow
-        // on the Mac while "Ask on this Mac before changes" is on.
-        MCPControl.call(call.tool, arguments, caller: nil, approval: RemoteAccessCalls.approval(for: grant),
+        // on the Mac while "Ask on this Mac before changes" is on. Its window must close with the grant
+        // (RemoteAccessApprovals), and the grant must be read again after Allow.
+        MCPControl.call(tool, arguments, caller: nil, approval: RemoteAccessCalls.approval(for: grant),
                         requester: RemoteAccessCalls.requester(for: grant), connection: grant.id) { result in
-            calls.finish(callID, result)
+            DispatchQueue.global(qos: .userInitiated).async {
+                calls.finish(callID, RemoteAccessPolicy.shape(result, tool: tool))
+            }
         }
     }
 
@@ -558,37 +630,44 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         return held
     }
 
-    /// The call was answered: its result shaped off the main thread and the door's queue (masking a long screen
-    /// takes time), then sent, its stream closed, and its audit line written. The revoke and deadline texts go
-    /// out at once, ahead of any close that turning off queued after them.
-    private func ended(_ call: Call, _ ending: RemoteAccessCalls.Ending, on connection: Connection?) {
-        guard case .result(let raw) = ending else {
-            let message = RemoteAccessCalls.result(id: call.id, ending.callResult)
-            queue.async { self.deliver(message, ending, call, result: ending.callResult, on: connection) }
-            return
+    /// The call's own deadline (R25), on the monotonic clock with a small leeway, so it fires on time whatever the
+    /// wall clock does.
+    private func startDeadline(_ callID: RemoteAccessCalls.ID) {
+        let calls = self.calls
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + calls.deadline, leeway: Self.deadlineLeeway)
+        timer.setEventHandler { [weak self] in
+            calls.expire(callID)
+            self?.stopDeadline(callID)
         }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let shaped = RemoteAccessPolicy.shape(raw, tool: call.tool)
-            let message = RemoteAccessCalls.result(id: call.id, shaped)
-            self.queue.async { self.deliver(message, ending, call, result: shaped, on: connection) }
-        }
+        timer.resume()
+        deadlines[callID] = timer
     }
 
-    private func deliver(_ message: Data, _ ending: RemoteAccessCalls.Ending, _ call: Call,
-                         result: MCPServer.CallResult, on connection: Connection?) {
-        if let refused = call.refused {
-            audit(call, decision: .refused, reason: refused.reason, refusedBy: refused.by)
-        } else {
-            let reason = ending.decision == .allowed ? nil : result.text
-            audit(call, decision: ending.decision, reason: reason, result: result.text)
-            if case .result = ending { state.noteUse(call.grant.id) }
-        }
+    private func stopDeadline(_ callID: RemoteAccessCalls.ID?) {
+        guard let callID, let timer = deadlines.removeValue(forKey: callID) else { return }
+        timer.cancel()
+    }
+
+    /// The call was answered, on whatever thread ended it: its answer goes out on the door's queue. The revoke and
+    /// deadline texts go out at once, ahead of any close that turning off queued after them.
+    private func ended(_ call: Call, _ ending: RemoteAccessCalls.Ending, on connection: Connection?) {
+        queue.async { self.deliver(call, ending, on: connection) }
+    }
+
+    /// Writes the call's audit line, then sends its answer: as the stream's last event, or as JSON. The connection
+    /// closes after a stream, after the revoke text, and once the door is turning off.
+    private func deliver(_ call: Call, _ ending: RemoteAccessCalls.Ending, on connection: Connection?) {
+        stopDeadline(call.callID)
+        audit(call, ending)
+        if case .result = ending { state.noteUse(call.grant.id) }
         guard let connection, !connection.ending else { return }
         stopKeepAlive(connection)
+        let message = RemoteAccessCalls.answer(id: call.id, ending)
         if call.streamed {
             return finish(connection, with: RemoteAccessHTTP.event(message))
         }
-        guard !ending.closesConnection else { return finish(connection, with: json(message, close: true)) }
+        guard !ending.closesConnection, !stopped else { return finish(connection, with: json(message, close: true)) }
         reply(json(message), on: connection)
     }
 
@@ -617,16 +696,52 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         MCPServer.CallResult(text: text, isError: true)
     }
 
-    /// The audit line of an authenticated call, allowed or refused (R39). Tokens and tool output never go in it:
-    /// only the result's size and the start of its hash.
-    private func audit(_ call: Call, decision: RemoteAccessAuditEntry.Decision, reason: String? = nil,
-                       refusedBy: [RemoteAccessOption.ID] = [], result: String? = nil) {
+    /// The audit line of a call as it ended (R39). Tokens and tool output never go in it: only the result's size
+    /// and the start of its hash.
+    private func audit(_ call: Call, _ ending: RemoteAccessCalls.Ending) {
+        var result: String?
+        if case .result(let shaped) = ending { result = shaped.text }
         let now = state.now
         let entry = RemoteAccessAuditEntry.call(time: now, grant: call.grant, tool: call.tool,
-                                                arguments: call.arguments, decision: decision, reason: reason,
-                                                refusedBy: refusedBy, duration: now.timeIntervalSince(call.started),
-                                                result: result, forwarded: call.forwarded)
+                                                arguments: call.arguments, decision: ending.decision,
+                                                reason: ending.reason, refusedBy: ending.refusedBy,
+                                                duration: now.timeIntervalSince(call.started), result: result,
+                                                forwarded: call.forwarded)
         state.audit([entry])
+    }
+}
+
+extension RemoteAccessDoorState {
+    /// The state for a door, its registry with the door's deadline: 100 seconds, shortened only under a debug
+    /// self-test (U12).
+    static func forDoor(folder: URL, host: String?) -> RemoteAccessDoorState {
+        let calls = RemoteAccessCalls(deadline: RemoteAccessServer.Timings.current.deadline)
+        return RemoteAccessDoorState(folder: folder, host: host, calls: calls)
+    }
+}
+
+/// The approval windows a remote connection's calls opened on the Mac, the write tools' and the skill requests',
+/// closed while nobody has answered them when the connection's grant ends or Remote access turns off. Closing one is
+/// a decline, so nothing it asked for happens after access was cut (R37, R38). A call's deadline closes none: the
+/// write tools' window gives up by itself at 50 seconds, inside the door's 100, and a skill request is made to
+/// outlive one call (the client asks again with its request id).
+@MainActor
+enum RemoteAccessApprovals {
+    /// The windows of these grants' calls, or of every remote connection's when nil.
+    static func close(grants: Set<String>?) {
+        func cut(_ asker: String) -> Bool {
+            guard let grants else { return asker.hasPrefix("remote") }
+            let prefix = "remote:"
+            guard asker.hasPrefix(prefix) else { return false }
+            return grants.contains(String(asker.dropFirst(prefix.count)))
+        }
+        if let asking = MCPWriteControl.pending, !asking.answered, cut(asking.asker) {
+            asking.window?.close()
+        }
+        let requests = Array(SkillsMCP.requests.values)
+        for request in requests where request.answer == nil && cut(request.asker) {
+            request.window?.close()
+        }
     }
 }
 
@@ -648,308 +763,6 @@ private final class StartOutcome: @unchecked Sendable { // `error` is written be
         self.error = error
         ready.signal()
         return false
-    }
-}
-
-// MARK: - the door's state
-
-/// What the door decides with, under one lock (KTD15): the OAuth authority, the grant store, the audit log and the
-/// refusal counts. Every revoke path takes this lock and then the open-call registry's: Revoke on the Mac, Revoke All,
-/// the kill switch, refresh reuse, a reused code and `/oauth/revoke`.
-///
-/// Grant changes are saved before their reply goes out: new tokens (U4), a revoke, an approval, new options. A failed
-/// save of new tokens answers `server_error`, the authority keeps the old refresh token current, and the new pair is
-/// never sent. Uses are saved at most once an hour.
-///
-/// Until a host is saved (Confirm Host), there is no authority, and the door answers 421 to everything.
-final class RemoteAccessDoorState: @unchecked Sendable { // everything below lives under `lock`
-    let calls: RemoteAccessCalls
-    /// The authority's events, on the main thread: U9 shows the reuse notice and the other Mac notices.
-    var onEvents: (@MainActor ([RemoteAccessOAuth.Event]) -> Void)?
-
-    private let lock = NSLock()
-    private let clock: @Sendable () -> Date
-    private var authority: RemoteAccessOAuth?
-    private var store: RemoteAccessGrantStore
-    private var log: RemoteAccessAuditLog
-    private var refusals = RemoteAccessRefusals()
-    /// The clients and grants as the file holds them, their last uses aside: a change to them is saved.
-    private var saved: Saved
-    /// What the store held at launch, for when the host is saved.
-    private var loaded: RemoteAccessGrantStore.Loaded
-
-    private struct Saved: Equatable {
-        var clients: [RemoteAccessOAuth.Client]
-        var grants: [RemoteAccessOAuth.Grant]
-
-        init(_ clients: [RemoteAccessOAuth.Client], _ grants: [RemoteAccessOAuth.Grant]) {
-            self.clients = clients.map { client in
-                var kept = client
-                kept.lastUsed = .distantPast
-                return kept
-            }
-            self.grants = grants.map { grant in
-                var kept = grant
-                kept.lastUsed = .distantPast
-                return kept
-            }
-        }
-    }
-
-    /// The state for a door, from the grant store in `folder` (the Remote access folder, or a self-test's temp
-    /// folder, KTD18), with the saved public hostname, if there is one. A door's state serves one start: turning
-    /// off ends its registry for good, so the next start makes a new one.
-    init(folder: URL, host: String?,
-         calls: RemoteAccessCalls = RemoteAccessCalls(deadline: RemoteAccessServer.Timings.current.deadline),
-         clock: @escaping @Sendable () -> Date = { Date() }) {
-        self.calls = calls
-        self.clock = clock
-        store = RemoteAccessGrantStore(folder: folder)
-        log = RemoteAccessAuditLog(folder: folder)
-        let now = clock()
-        loaded = store.load(now: now)
-        saved = Saved(loaded.clients, loaded.grants)
-        if let host { setHost(host) }
-    }
-
-    var now: Date { clock() }
-
-    /// The public hostname, or nil until one is saved.
-    var host: String? { locked { authority?.host } }
-
-    /// Confirm Host, or a new hostname: the issuer and the resource follow it, and a new one ends every grant
-    /// (R17, KTD17).
-    func setHost(_ host: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        let now = clock()
-        if authority == nil {
-            authority = RemoteAccessOAuth(host: host, clients: loaded.clients, grants: loaded.grants)
-        } else {
-            authority?.setHost(host, now: now)
-        }
-        settle(now: now)
-    }
-
-    /// Runs `body` on the authority under the lock, then saves the clients and grants if they changed and handles
-    /// its events: audit lines, and the registry's revokes. For pairing on the Mac (U8): open, match, approve,
-    /// decline, close. Nil without a host.
-    func update<T>(_ body: (inout RemoteAccessOAuth, Date) -> T) -> T? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard authority != nil else { return nil }
-        let now = clock()
-        let value = body(&authority!, now)
-        settle(now: now)
-        return value
-    }
-
-    // MARK: the door's reads
-
-    func validate(_ token: String?) -> RemoteAccessOAuth.Validation {
-        locked { authority?.validate(token, now: clock()) ?? (token == nil ? .missing : .invalid) }
-    }
-
-    func wwwAuthenticate(tokenSent: Bool) -> String? {
-        locked { authority?.wwwAuthenticate(tokenSent: tokenSent) }
-    }
-
-    func protectedResourceMetadata() -> Data? { locked { authority?.protectedResourceMetadata() } }
-
-    func authorizationServerMetadata() -> Data? { locked { authority?.authorizationServerMetadata() } }
-
-    // MARK: OAuth routes
-
-    func register(_ body: Data) -> RemoteAccessOAuth.Answer? {
-        update { authority, now in authority.register(body, now: now) }
-    }
-
-    func authorize(_ query: String?) -> RemoteAccessOAuth.Authorization? {
-        update { authority, now in authority.authorize(RemoteAccessOAuth.parameters(query), now: now) }
-    }
-
-    func poll(_ query: String?) -> RemoteAccessOAuth.Authorization? {
-        update { authority, now in authority.poll(RemoteAccessOAuth.parameters(query)?["request"], now: now) }
-    }
-
-    /// `/oauth/token`: new tokens are saved before they apply and go out. A failed save sends `server_error`, and
-    /// the old refresh token stays current.
-    func token(_ body: Data) -> RemoteAccessOAuth.Answer? {
-        update { authority, now in
-            switch authority.token(RemoteAccessOAuth.parameters(body: body), now: now) {
-            case .answer(let answer):
-                return answer
-            case .issue(let issuance):
-                let grants = RemoteAccessGrantStore.replacing(issuance.grant, in: authority.grants)
-                do {
-                    try store.save(clients: authority.clients, grants: grants, now: now)
-                } catch {
-                    NSLog("Next Term: Remote access could not save new tokens: \(error)")
-                    return RemoteAccessOAuth.serverError
-                }
-                saved = Saved(authority.clients, grants)
-                return authority.apply(issuance) ? issuance.answer : RemoteAccessOAuth.serverError
-            }
-        }
-    }
-
-    /// `/oauth/revoke`: a refresh token ends its grant, which answers its open calls (R38).
-    func revoke(_ body: Data) -> RemoteAccessOAuth.Answer? {
-        update { authority, now in authority.revoke(RemoteAccessOAuth.parameters(body: body), now: now).answer }
-    }
-
-    // MARK: calls
-
-    /// Just before a call runs, on the main thread: the grant as the authority holds it now, active, under this
-    /// lock and then the registry's.
-    func begin(_ id: RemoteAccessCalls.ID, grant grantID: String) -> RemoteAccessCalls.Began {
-        lock.lock()
-        defer { lock.unlock() }
-        let now = clock()
-        let grant = authority?.grant(grantID).flatMap { $0.isActive(at: now) ? $0 : nil }
-        return calls.begin(id, grant: grant)
-    }
-
-    /// A tool call ran: the grant was used (R17). The file gets it at most once an hour.
-    func noteUse(_ grantID: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard var authority else { return }
-        let now = clock()
-        authority.noteUse(grantID, now: now)
-        self.authority = authority
-        do {
-            try store.saveUse(clients: authority.clients, grants: authority.grants, now: now)
-        } catch {
-            NSLog("Next Term: Remote access could not save a use: \(error)")
-        }
-    }
-
-    // MARK: on the Mac
-
-    /// Revoke on the Mac: the grant ends, and its open calls are answered at once (R38).
-    func revoke(grant grantID: String) {
-        _ = update { authority, now in authority.revoke(grant: grantID, now: now) }
-    }
-
-    /// Revoke All.
-    func revokeAll() {
-        _ = update { authority, now in authority.revokeAll(now: now) }
-    }
-
-    /// New options for a grant, after Touch ID or the password (R60). They are saved before they apply; a failed
-    /// save changes nothing. The grant's next streamed call carries the list-changed event.
-    func changeOptions(of grantID: String, to options: RemoteAccessOptions) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard var authority, var grant = authority.grant(grantID) else { return }
-        let now = clock()
-        grant.options = options
-        let grants = RemoteAccessGrantStore.replacing(grant, in: authority.grants)
-        try store.save(clients: authority.clients, grants: grants, now: now)
-        saved = Saved(authority.clients, grants)
-        authority.changeOptions(of: grantID, to: options)
-        self.authority = authority
-        settle(now: now)
-    }
-
-    /// Turn Off, or Turn Off and Revoke All (R37): access tokens dropped (every grant ended too with
-    /// `revokeAll`), the refusal counts written, then every open call answered.
-    func turnOff(revokeAll: Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        let now = clock()
-        if revokeAll { _ = authority?.revokeAll(now: now) }
-        authority?.dropAccessTokens()
-        settle(now: now)
-        var lines = [RemoteAccessAuditEntry.turnedOff(revokeAll: revokeAll, time: now)]
-        lines += refusals.flush(now: now)
-        append(lines, now: now)
-        calls.turnOff()
-    }
-
-    // MARK: the audit log
-
-    func audit(_ entries: [RemoteAccessAuditEntry]) {
-        lock.lock()
-        defer { lock.unlock() }
-        append(entries, now: clock())
-    }
-
-    /// A request refused before a valid token, counted for its kind's line a minute (R39).
-    func countRefusal(status: Int, request: RemoteAccessHTTP.Request?) {
-        guard let kind = RemoteAccessRefusals.Kind(status: status) else { return }
-        countRefusal(kind, request: request)
-    }
-
-    func countRefusal(_ kind: RemoteAccessRefusals.Kind, request: RemoteAccessHTTP.Request?) {
-        let first = kind == .wrongHost ? request?.header("host") : request?.path
-        lock.lock()
-        defer { lock.unlock() }
-        let now = clock()
-        append(refusals.count(kind, first: first ?? "", now: now), now: now)
-    }
-
-    func writeDueRefusals() {
-        lock.lock()
-        defer { lock.unlock() }
-        let now = clock()
-        append(refusals.due(now: now), now: now)
-    }
-
-    // MARK: under the lock
-
-    private func locked<T>(_ body: () -> T) -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return body()
-    }
-
-    /// After the authority changed: saves its clients and grants when they changed (their last uses aside), writes
-    /// its events to the audit log, marks the list changed for each grant whose options changed, answers the open
-    /// calls of each grant that ended, and tells the Mac.
-    private func settle(now: Date) {
-        guard var authority else { return }
-        let current = Saved(authority.clients, authority.grants)
-        if current != saved {
-            do {
-                try store.save(clients: authority.clients, grants: authority.grants, now: now)
-                saved = current
-            } catch {
-                NSLog("Next Term: Remote access could not save its grants: \(error)")
-            }
-        }
-        let events = authority.takeEvents()
-        var ended: [String] = []
-        var changed: [String] = []
-        for event in events {
-            switch event {
-            case .revoked(let grantID, _, _):
-                ended.append(grantID)
-            case .optionsChanged(let grantID, _, _, _):
-                // The registry keeps the mark: the grant's next streamed call carries the event (R20).
-                _ = authority.takeToolListChanged(grantID)
-                changed.append(grantID)
-            default:
-                break
-            }
-        }
-        self.authority = authority
-        guard !events.isEmpty else { return }
-        append(events.map { RemoteAccessAuditEntry.event($0, time: now) }, now: now)
-        for grantID in changed { calls.markListChanged(grantID) }
-        if !ended.isEmpty { calls.revoke(grants: ended) }
-        guard let onEvents else { return }
-        DispatchQueue.main.async { onEvents(events) }
-    }
-
-    private func append(_ entries: [RemoteAccessAuditEntry], now: Date) {
-        guard !entries.isEmpty else { return }
-        do {
-            try log.append(entries, now: now)
-        } catch {
-            NSLog("Next Term: Remote access could not write its audit log: \(error)")
-        }
     }
 }
 

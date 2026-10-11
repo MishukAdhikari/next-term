@@ -2,13 +2,19 @@ import Foundation
 
 /// The Remote access door's open tool calls (U7): each call from when its rate-limit slot is taken until its answer
 /// goes out, so that every call is answered exactly once:
-/// - with its result, shaped by the door, when the Mac answers in time;
+/// - with its result, shaped by the door, when the Mac answers in time. The door shapes it before `finish`, so the
+///   call stays open while a long screen is masked, and a revoke or a turn-off meanwhile still answers it;
+/// - with the refusal the main thread gave it, when its options changed since the door's check (R60);
 /// - with "Access was turned off on the Mac." at once when its grant is revoked or Remote access turns off, and its
 ///   connection then closes (R37, R38);
 /// - with the deadline text 100 seconds after it came, when the Mac has not answered (R25).
 ///
 /// A result that comes after its call was answered is dropped. It still gives its rate-limit slot back, since the
 /// tool ran on the Mac until then; a call answered before it ran gives its slot back at once.
+///
+/// Every authenticated tool call counts toward its grant's 120 calls a minute (R27), refused ones too
+/// (`countRefused`), so a leaked token can't send calls without end. A call past the limits gets the too-many text,
+/// and the door sums its audit line with the minute's others (R39).
 ///
 /// The registry has its own lock. Every revoke path goes through the OAuth authority's lock and then this one
 /// (KTD15): a revoke on the Mac, Revoke All, the kill switch, refresh reuse, a reused code and `/oauth/revoke`.
@@ -33,10 +39,27 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
 
     public typealias ID = UInt64
 
+    /// Why a call was answered without running.
+    public enum Refusal: Equatable, Sendable {
+        /// A tool the options leave off: an error result with this text, and the audit line names the options.
+        case options(String, by: [RemoteAccessOption.ID])
+        /// An argument the connection's schema doesn't take (R53, AE13), or a name Next Term doesn't know:
+        /// JSON-RPC error -32602 with this text.
+        case invalidParams(String)
+
+        public var text: String {
+            switch self {
+            case .options(let text, _), .invalidParams(let text): return text
+            }
+        }
+    }
+
     /// How a call ended.
     public enum Ending: Sendable {
-        /// The Mac answered in time. The door shapes it before it goes out.
+        /// The Mac answered in time, and the door shaped the result.
         case result(MCPServer.CallResult)
+        /// Refused on the main thread, under the options as they were there (R60).
+        case refused(Refusal)
         /// Its grant was revoked, or Remote access turned off: the connection closes after the answer.
         case turnedOff
         /// The Mac did not answer within the deadline.
@@ -46,6 +69,7 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         public var callResult: MCPServer.CallResult {
             switch self {
             case .result(let result): return result
+            case .refused(let refusal): return MCPServer.CallResult(text: refusal.text, isError: true)
             case .turnedOff: return MCPServer.CallResult(text: RemoteAccessText.turnedOff, isError: true)
             case .deadline: return MCPServer.CallResult(text: RemoteAccessText.deadline, isError: true)
             }
@@ -57,10 +81,26 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
             return false
         }
 
-        /// The audit line's decision: allowed when it ran and answered, failed when its time or its grant ran out.
+        /// The audit line's decision: allowed when it ran and answered, refused when its options or arguments
+        /// left it off, failed when its time or its grant ran out.
         public var decision: RemoteAccessAuditEntry.Decision {
-            if case .result = self { return .allowed }
-            return .failed
+            switch self {
+            case .result: return .allowed
+            case .refused: return .refused
+            case .turnedOff, .deadline: return .failed
+            }
+        }
+
+        /// The audit line's reason: the text the client got, for anything but a result.
+        public var reason: String? {
+            if case .result = self { return nil }
+            return callResult.text
+        }
+
+        /// The options the audit line of a refusal names.
+        public var refusedBy: [RemoteAccessOption.ID] {
+            guard case .refused(.options(_, let options)) = self else { return [] }
+            return options
         }
     }
 
@@ -68,7 +108,18 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
     public enum Opened: Equatable, Sendable {
         /// It is registered. `listChanged`: send `notifications/tools/list_changed` first on its stream.
         case call(ID, listChanged: Bool)
-        /// R27's limits: answer with `RemoteAccessText.tooManyCalls`. It took no slot.
+        /// R27's limits: answer with `RemoteAccessText.tooManyCalls`. It took no slot, and the door sums its audit
+        /// line with the grant's others of the minute (R39).
+        case tooMany
+        /// Remote access turned off: answer with `RemoteAccessText.turnedOff` and close.
+        case closed
+    }
+
+    /// What counting a call the door answers without running gives (`countRefused`).
+    public enum Counted: Equatable, Sendable {
+        /// Within its grant's 120 calls a minute: answer it as refused, with its own audit line.
+        case counted
+        /// Past them: answer with `RemoteAccessText.tooManyCalls`, and sum its audit line (R39).
         case tooMany
         /// Remote access turned off: answer with `RemoteAccessText.turnedOff` and close.
         case closed
@@ -132,6 +183,15 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         return .call(lastID, listChanged: changed)
     }
 
+    /// A call the door answers without running it (its options or arguments refuse it, or it is not one message
+    /// the door reads) takes no slot, but counts toward its grant's 120 calls a minute (R27).
+    public func countRefused(grant: String) -> Counted {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !off else { return .closed }
+        return limiter.count(grant: grant, now: clock()) ? .counted : .tooMany
+    }
+
     /// The check just before the call runs, on the main thread, with the grant the door read from the authority
     /// under its lock: nil when it ended, or when Remote access is off. Call it while still holding that lock.
     public func begin(_ id: ID, grant: RemoteAccessOAuth.Grant?) -> Began {
@@ -152,10 +212,20 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         return .run(grant)
     }
 
-    /// The tool's result. It answers the call when it is still open, and gives its slot back either way. False
-    /// when it was dropped: the call was answered already, or is unknown.
+    /// The tool's result, shaped as it goes out. It answers the call when it is still open, and gives its slot
+    /// back either way. False when it was dropped: the call was answered already, or is unknown.
     @discardableResult
     public func finish(_ id: ID, _ result: MCPServer.CallResult) -> Bool {
+        finish(id, .result(result))
+    }
+
+    /// The main thread refused the call it began, under the options as they are now (R60): this is its answer.
+    @discardableResult
+    public func finish(_ id: ID, refused refusal: Refusal) -> Bool {
+        finish(id, .refused(refusal))
+    }
+
+    private func finish(_ id: ID, _ ending: Ending) -> Bool {
         lock.lock()
         guard let call = calls.removeValue(forKey: id) else {
             lock.unlock()
@@ -164,7 +234,7 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         if call.slotHeld { limiter.release(call.slot) }
         lock.unlock()
         guard call.ended == nil, let answer = call.answer else { return false }
-        answer(.result(result))
+        answer(ending)
         return true
     }
 
@@ -198,9 +268,9 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         return answers.count
     }
 
-    /// Answers each call that has waited `deadline` seconds with the deadline text, and gives back the slot of a
-    /// call answered `abandon` seconds ago whose result never came. The door runs it at each call's deadline.
-    /// Returns how many it answered.
+    /// Answers each call that has waited `deadline` seconds by the clock with the deadline text, and gives back the
+    /// slot of a call answered `abandon` seconds ago whose result never came. A sweep: the door's own timer for
+    /// each call runs `expire(_:)`. Returns how many it answered.
     @discardableResult
     public func expire() -> Int {
         lock.lock()
@@ -211,6 +281,19 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         lock.unlock()
         for answer in answers { answer(.deadline) }
         return answers.count
+    }
+
+    /// The call's own deadline, from the door's timer on the monotonic clock: answers it with the deadline text if
+    /// it is still open, whatever the wall clock says, so a clock set back can't hold it past R25's 100 seconds.
+    /// False when it was answered already.
+    @discardableResult
+    public func expire(_ id: ID) -> Bool {
+        lock.lock()
+        prune(clock())
+        let answer = end(id, at: clock())
+        lock.unlock()
+        answer?(.deadline)
+        return answer != nil
     }
 
     /// Gives back the slot of each call answered `abandon` seconds ago whose result never came, and forgets it.
@@ -302,6 +385,16 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
             case .batch, .invalid, .badVersion: return 400
             }
         }
+
+        /// Why the door refused it, for the audit line of an authenticated request (R39); nil when it is read.
+        public var reason: String? {
+            switch self {
+            case .call, .request, .notification: return nil
+            case .batch: return "A JSON-RPC batch: the door reads one message per request."
+            case .invalid: return "Not a JSON-RPC message."
+            case .badVersion: return "An MCP-Protocol-Version the door does not speak."
+            }
+        }
     }
 
     /// Reads a request's body. `protocolVersion` is its `MCP-Protocol-Version` header: when sent, it must be one
@@ -333,6 +426,12 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         message["id"] = id
         message["result"] = body
         return encode(message)
+    }
+
+    /// What a call's ending sends: JSON-RPC error -32602 for invalid params, the result envelope for the rest.
+    public static func answer(id: Any, _ ending: Ending) -> Data {
+        if case .refused(.invalidParams(let text)) = ending { return error(id: id, code: -32602, message: text) }
+        return result(id: id, ending.callResult)
     }
 
     /// A JSON-RPC error, such as -32602 for invalid params.

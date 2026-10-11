@@ -742,6 +742,10 @@ public enum RemoteAccessAuditMask {
 /// cannot push the real history out of the log (R39). The first refusal of a kind starts its minute; the line
 /// holds the kind, the count and the first Host (for a wrong Host) or path. The door calls `due` on a timer
 /// (`nextDue` says when) and `flush` when it closes.
+///
+/// Calls a grant makes past R27's limits are summed the same way, one line a minute per grant (kind
+/// `too_many_calls`, with the grant and the first tool). Each call within the limits, allowed or refused, has its
+/// own line, so a grant writes at most 120 call lines a minute and one more, whatever a leaked token sends.
 public struct RemoteAccessRefusals: Sendable {
     public enum Kind: String, CaseIterable, Sendable {
         /// 421: the Host was not the public hostname.
@@ -780,6 +784,8 @@ public struct RemoteAccessRefusals: Sendable {
     }
 
     public static let interval: TimeInterval = 60
+    /// The kind of a line that sums a grant's calls past its limits.
+    public static let tooManyCalls = "too_many_calls"
 
     struct Window: Sendable {
         var since: Date
@@ -787,9 +793,30 @@ public struct RemoteAccessRefusals: Sendable {
         var first: String
     }
 
+    /// A grant's calls past its limits this minute.
+    struct GrantWindow: Sendable {
+        var name: String
+        var window: Window
+    }
+
     private var windows: [Kind: Window] = [:]
+    private var overLimit: [String: GrantWindow] = [:]
 
     public init() {}
+
+    /// Counts one call from `grant` past its limits (R27), answered with `RemoteAccessText.tooManyCalls` or, for a
+    /// message the door can't read, 400. Returns the lines whose minute has ended, as `count` does.
+    public mutating func countOverLimit(grant: RemoteAccessOAuth.Grant, tool: String,
+                                        now: Date) -> [RemoteAccessAuditEntry] {
+        let lines = due(now: now)
+        if overLimit[grant.id] != nil {
+            overLimit[grant.id]?.window.count += 1
+        } else {
+            let window = Window(since: now, count: 1, first: RemoteAccessAuditMask.cut(tool))
+            overLimit[grant.id] = GrantWindow(name: RemoteAccessAuditMask.cut(grant.name), window: window)
+        }
+        return lines
+    }
 
     /// Counts one refusal. Returns the lines whose minute has ended, this kind's included, before this one
     /// starts a new minute.
@@ -815,7 +842,8 @@ public struct RemoteAccessRefusals: Sendable {
 
     /// When the next line is due; nil while nothing is counted.
     public var nextDue: Date? {
-        windows.values.map { $0.since.addingTimeInterval(Self.interval) }.min()
+        let starts = windows.values.map(\.since) + overLimit.values.map(\.window.since)
+        return starts.map { $0.addingTimeInterval(Self.interval) }.min()
     }
 
     private mutating func take(now: Date, where ended: (Window) -> Bool) -> [RemoteAccessAuditEntry] {
@@ -823,14 +851,27 @@ public struct RemoteAccessRefusals: Sendable {
         for kind in Kind.allCases {
             guard let window = windows[kind], ended(window) else { continue }
             windows[kind] = nil
-            var entry = RemoteAccessAuditEntry(time: now, event: "requests.refused")
-            entry.kind = kind.rawValue
-            entry.count = window.count
-            entry.first = window.first
-            entry.since = window.since
+            lines.append(Self.line(kind.rawValue, window, now: now))
+        }
+        for grant in overLimit.keys.sorted() {
+            guard let counted = overLimit[grant], ended(counted.window) else { continue }
+            overLimit[grant] = nil
+            var entry = Self.line(Self.tooManyCalls, counted.window, now: now)
+            entry.grant = grant
+            entry.grantName = counted.name
+            entry.reason = RemoteAccessText.tooManyCalls
             lines.append(entry)
         }
         return lines
+    }
+
+    private static func line(_ kind: String, _ window: Window, now: Date) -> RemoteAccessAuditEntry {
+        var entry = RemoteAccessAuditEntry(time: now, event: "requests.refused")
+        entry.kind = kind
+        entry.count = window.count
+        entry.first = window.first
+        entry.since = window.since
+        return entry
     }
 }
 
