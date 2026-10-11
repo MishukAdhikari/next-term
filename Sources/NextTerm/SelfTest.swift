@@ -231,6 +231,19 @@ enum SelfTest {
         return item.isEnabled
     }
 
+    /// Importing settings from other apps: the importers, the import window, one click, the agents' tools and Undo.
+    private static func importPartChecks(_ c: TerminalWindowController, proj: URL) async {
+        await importChecks(c, proj: proj)
+        await importUndoGuardChecks()
+        await importForkChecks()
+        await importTerminalSizeChecks(c)
+        await importReachChecks()
+        await importTerminalChecks()
+        await importWindowChecks()
+        await importAgentChecks()
+        await importOneClickChecks()
+    }
+
     private static func runAll() async {
         // The notifications checked along the way (a decision, below) come as they do by default.
         let restoreNotificationSettings = defaultNotificationSettings()
@@ -584,11 +597,11 @@ enum SelfTest {
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys or importOneClick), for its own
-        // failures without the whole run's 25 minutes.
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys or import), for its own failures
+        // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
-        case "importOneClick": return await importOneClickChecks()
+        case "import": return await importPartChecks(c, proj: proj)
         default: break
         }
         #endif
@@ -742,15 +755,7 @@ enum SelfTest {
         await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
-        await importChecks(c, proj: proj)
-        await importUndoGuardChecks()
-        await importForkChecks()
-        await importTerminalSizeChecks(c)
-        await importReachChecks()
-        await importTerminalChecks()
-        await importWindowChecks()
-        await importAgentChecks()
-        await importOneClickChecks()
+        await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)

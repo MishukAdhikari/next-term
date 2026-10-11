@@ -973,7 +973,17 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         ])
         if !scrolls { stack.widthAnchor.constraint(equalToConstant: 560).isActive = true }
         window?.contentView = content
-        if scrolls { window?.setContentSize(NSSize(width: 560, height: 560)) } else { content.layoutSubtreeIfNeeded() }
+        if scrolls { window?.setContentSize(NSSize(width: 560, height: 560)) } else { fitHeight(content) }
+    }
+
+    /// The window as tall as what it shows, its top edge where it was: a short page (the chooser with one app, what one
+    /// click brought over) after a long one keeps no empty space.
+    private func fitHeight(_ content: NSView) {
+        content.layoutSubtreeIfNeeded()
+        guard let window else { return }
+        let fitting = content.fittingSize
+        let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: NSSize(width: max(fitting.width, 560), height: fitting.height)))
+        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - frame.height, width: frame.width, height: frame.height), display: true)
     }
 
     private static func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular) -> NSTextField {

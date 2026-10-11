@@ -62,6 +62,7 @@ extension SelfTest {
         check(buttons.count == 1 && buttons.first?.accessibilityLabel() == "Import from NT One-Click Editor",
               "one-click import: each app on the chooser has an Import button, named for the app", "\(buttons.map { $0.accessibilityLabel() ?? "" })")
         guard let button = buttons.first else { return }
+        if let shown = window.window { await screenshot(shown, suffix: "import-chooser") }
 
         // One click: the ticked setting and the shortcut set change, the unticked one doesn't, and the window says so.
         button.performClick(nil)
@@ -74,6 +75,7 @@ extension SelfTest {
         check(texts.first == "Brought over from NT One-Click Editor" && texts.contains { $0.hasPrefix("VS Code shortcuts, 1 setting") }
               && texts.contains { $0.hasPrefix("1 thing wasn’t brought over") } && window.undoImportedButton?.isHidden == false,
               "one-click import: the window says what came over and what didn't, with Undo Import", texts.joined(separator: " | "))
+        if let shown = window.window { await screenshot(shown, suffix: "import-done") }
 
         // Undo Import there puts it all back and closes the window.
         window.undoImportedButton?.performClick(nil)
