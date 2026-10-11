@@ -20,6 +20,19 @@ final class NextTermView: LocalProcessTerminalView {
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
+    /// Writes into the shell other than the terminal's own answers: every key, paste and drop, and all text anything types
+    /// into the tab (Insert Path, a suggested command, Send to Agent, MCP, the restore itself). A restored action types
+    /// only onto a line nothing else wrote to (`RestoreLayout.LineWatch`), whether or not what wrote said it was the user.
+    private(set) var inputWrites = 0
+    /// The terminal is answering a program's question (where the cursor is, its colours, focus), which is not input.
+    private var answering = false
+    /// The shell has printed something.
+    private var hasOutput = false
+    /// What the shell printed, watched from its first byte while a restore may feed a note into the tab
+    /// (`watchSequences`), the notes waiting for it to be between sequences, and whether the watch ends once they are fed.
+    private var sequences: TerminalText.SequenceWatch?
+    private var waitingNotes: [String] = []
+    private var watchEnds = false
 
     /// A key Clear Buffer shares with a command for everywhere (⌘K, Commit… under the JetBrains set) is Clear
     /// Buffer's here, before the menus, while this terminal has the keyboard (KeyboardShortcuts.terminalKeys).
@@ -34,14 +47,55 @@ final class NextTermView: LocalProcessTerminalView {
     private(set) var outputBytes = 0
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
+        hasOutput = true
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
         outputBytes &+= slice.count
+        if sequences != nil { watched(slice) }
         onOutput?()
+    }
+
+    /// Starts watching what the shell prints, so a note can be fed between sequences (`feedBetweenSequences`). Only
+    /// before the shell has printed anything: a watch started later could not tell where its output stands.
+    func watchSequences() {
+        guard !hasOutput, sequences == nil else { return }
+        sequences = TerminalText.SequenceWatch()
+        watchEnds = false
+    }
+
+    /// No more notes will be fed: the watch stops once those waiting are fed.
+    func endSequenceWatch() {
+        watchEnds = true
+        if waitingNotes.isEmpty { sequences = nil }
+    }
+
+    /// Feeds `text`, ready to feed (no sequence of its own left open), once what the shell printed is between sequences
+    /// (TerminalText.SequenceWatch): now, or after the first read that leaves it there. Text fed inside one would join
+    /// it. Unwatched, now.
+    func feedBetweenSequences(_ text: String) {
+        guard let sequences, !sequences.isBetweenSequences else { return feed(text: text) }
+        waitingNotes.append(text)
+    }
+
+    /// A read the terminal parsed, followed by the watch; the notes waiting are fed once it ends between sequences.
+    private func watched(_ slice: ArraySlice<UInt8>) {
+        sequences?.read(slice)
+        guard sequences?.isBetweenSequences == true, !waitingNotes.isEmpty || watchEnds else { return }
+        let notes = waitingNotes
+        waitingNotes = []
+        for note in notes { feed(text: note) }
+        if watchEnds { sequences = nil }
+    }
+
+    override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        answering = true
+        defer { answering = false }
+        super.send(source: source, data: data)
     }
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
+        if !answering { inputWrites += 1 }
         if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -168,6 +222,7 @@ final class NextTermView: LocalProcessTerminalView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let paths = droppedPaths(sender)
         guard !paths.isEmpty else { return false }
+        onKeyboard?() // a drop is the user's input, as a key or a paste is
         typeIn(paths.map(ShellQuote.quote).joined(separator: " ") + " ")
         window?.makeFirstResponder(self)
         return true
@@ -333,7 +388,8 @@ protocol TerminalTabDelegate: AnyObject {
 /// One tab: a shell in a pty, its terminal view and its status. A remote tab runs ssh in the pty instead,
 /// to a shell, a tmux session or herdr on a server (see RemoteConnection).
 final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
-    let id = UUID()
+    /// What MCP clients know the tab by: a restored tab keeps the one it had (SessionRestore).
+    let id: UUID
     /// Set for a tab on a server.
     let remote: RemoteTab?
     /// The connection to the host dropped; the tab waits to reconnect.
@@ -397,8 +453,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) lazy var completion = CompletionSession(tab: self)
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
-    init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil) {
+    init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil, id: UUID = UUID()) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        self.id = id
         self.remote = remote
         self.directory = remote?.directory ?? (Self.isDirectory(directory) ? directory! : home)
         self.shellPath = remote == nil ? Self.loginShell() : RemoteConnection.sshPath
@@ -415,7 +472,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self?.completion.output()
         }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
-        view.onKeyboard = { [weak self] in if let self { MCPControl.typedByUser(self) } }
+        view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
@@ -454,6 +511,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     func start() {
+        showRestoredScrollback()
+        started = true
         if let remote {
             if controlSlot == nil { controlSlot = RemoteConnection.slot(for: self, host: remote.host) }
             let path = RemoteConnection.controlPath(remote.host, slot: controlSlot ?? 0)
@@ -651,10 +710,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// the active buffer that end at the last line with text. Agents draw inline where the cursor is,
     /// so after a screen clear their UI sits at the top with blank rows below it.
     func screenTail(_ count: Int = AgentScreen.scannedLines) -> [String] {
+        tailRows(count).rows
+    }
+
+    /// `screenTail`, with the scroll-invariant row of its first line.
+    private func tailRows(_ count: Int) -> (first: Int, rows: [String]) {
         let terminal = view.getTerminal()
-        guard let last = lastTextRow() else { return [] }
+        guard let last = lastTextRow() else { return (0, []) }
         let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
-        return (first...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
+        return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
     }
 
     /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
@@ -675,6 +739,85 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             last -= 1
         }
         return last
+    }
+
+    // MARK: scrollback on the update and quit paths (SessionScrollback)
+
+    /// Where each command whose line held a secret showed (`ScrollbackText.holdsSecret`), the latest: the scrollback a
+    /// quit saves has those lines blanked.
+    private(set) var droppedEchoes: [ScrollbackText.Echo] = []
+    /// Where the running command showed: an agent's pane saves only what came before it.
+    private(set) var runningEcho: ScrollbackText.Echo?
+    /// The scrollback saved at the quit restored, read back at the launch after, and the quit it was saved at. The first
+    /// `start()` shows it once, before the shell starts, above a dim divider; set once the tab has started, it is never
+    /// shown.
+    var restoredScrollback: (text: String, savedAt: ScrollbackText.SavedAt)?
+    /// The divider under it, once shown, with its last row and the width it was shown at: what is read as live (agent
+    /// questions, ssh refusing a login) is read only below it (`liveTail`).
+    private(set) var restoreDivider: (text: String, row: Int?, columns: Int)?
+    /// `start()` has run: anything fed now would land among what the shell printed.
+    private var started = false
+    /// The record this tab was restored from, at launch. While its action waits, every save writes it as it was
+    /// (SessionCapture), so a restore that stops part-way loses nothing (KTD3).
+    var restoredRecord: SessionSnapshot.Pane?
+    /// The restore's note for this tab (RestoreNote), shown once, under the restored scrollback, before the shell starts.
+    var restoreNote: String?
+    /// The user put something in this tab (`userInput`): an action the restore has not applied yet is theirs to drop (KTD6).
+    private(set) var touchedByUser = false
+    /// The integration's command marks, a command starting or ending, each as it is read and before the status takes it:
+    /// the screen then holds what came before the mark and nothing after it. The restore's start watch reads them
+    /// (StartWatcher, KTD6). Nothing may be fed into the terminal from here, as its parser is still reading.
+    var onCommandMark: ((ShellIntegration.Event) -> Void)?
+
+    /// The user put something in this tab: a key, a paste or a drop (`NextTermView.onKeyboard`), or text Next Term types
+    /// at their word, such as Insert Path or a suggested command. A restored action not applied yet is dropped, and one
+    /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
+    func userInput() {
+        touchedByUser = true
+        MCPControl.typedByUser(self)
+    }
+
+    /// Nothing has happened in this tab that a caller could lose by reusing it (`nxtrm`, ⌥⌘O, MCP `new_tab`): nothing ran
+    /// in it, and it holds nothing restored, such as a put-back line (KTD10).
+    var isUntouched: Bool { restoredRecord == nil && status.command.isEmpty && !status.running }
+
+    /// The restore brought this tab back, and the user has not put anything in it since: its put-back line, note and
+    /// scrollback may be unseen, so Open Project does not replace it (TerminalWindowController.holdsRestore).
+    var holdsRestore: Bool { restoredRecord != nil && !touchedByUser }
+
+    /// Notes where the command now starting showed, as the integration reports it.
+    private func noteEcho(_ typed: String, expanded: String?) {
+        runningEcho = SessionScrollback.echo(in: self, typed: typed)
+        guard let echo = runningEcho, ScrollbackText.holdsSecret(typed: typed, expanded: expanded) else { return }
+        droppedEchoes.append(echo)
+        if droppedEchoes.count > SessionScrollback.droppedKept {
+            droppedEchoes.removeFirst(droppedEchoes.count - SessionScrollback.droppedKept)
+        }
+    }
+
+    /// Feeds the restored scrollback and its divider, once, before the shell has printed anything: nothing it prints can
+    /// be inside them, and they are sanitized again, as their file was read as untrusted. Notes the divider's last row.
+    /// The restore's note follows, below the divider, just before the prompt.
+    func showRestoredScrollback() {
+        let restored = restoredScrollback
+        let note = restoreNote
+        restoredScrollback = nil
+        restoreNote = nil
+        guard !started else { return }
+        if let restored {
+            view.feed(text: ScrollbackText.preface(restored.text, savedAt: restored.savedAt))
+            restoreDivider = (restored.savedAt.divider, lastTextRow(), view.getTerminal().cols)
+        }
+        if let note { view.feed(text: RestoreLayout.noteLine(note)) }
+    }
+
+    /// The screen's last `count` lines that are live: below a restore's divider, so a question or a refusal replayed above
+    /// it is not read as one now. The divider is known by its row until the width changes (`sizeChanged`), which wraps
+    /// the rows above it again; then by its text.
+    func liveTail(_ count: Int = AgentScreen.scannedLines) -> [String] {
+        let tail = tailRows(count)
+        guard let divider = restoreDivider else { return tail.rows }
+        return ScrollbackText.below(divider: divider.text, row: divider.row, in: tail.rows, first: tail.first)
     }
 
     // MARK: serving
@@ -737,7 +880,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: screenTail()), at: Self.now)
+        status.observe(agentScreen: AgentScreen.activity(screenLines: liveTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
@@ -928,15 +1071,19 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         case .completion(let message):
             return completion.handle(message)
         case .commandStarted(let line, let expanded):
+            onCommandMark?(event)
             completion.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
+            noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
+            onCommandMark?(event)
             programTitle = nil
+            runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
@@ -954,6 +1101,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     // MARK: LocalProcessTerminalViewDelegate
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
+        // Rows wrapped again: the restore divider's row no longer says where it is.
+        if let divider = restoreDivider, newCols != divider.columns { restoreDivider?.row = nil }
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
         completion.viewChanged()
@@ -1060,7 +1209,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // tab's script ran, "Permission denied" on its screen is some program's (a git push), not ssh's.
         let provedLogin = remoteConnected
         if provedLogin { reconnectAttempts = 0 }
-        let refusal = provedLogin ? nil : Self.loginRefusal(screenTail(16))
+        // Read below a restore's divider: a "Permission denied" replayed above it is from before.
+        let refusal = provedLogin ? nil : Self.loginRefusal(liveTail(16))
         loginRefused = refusal != nil
         let stopped = !isKept && status.running ? status.program : nil
         disconnected = true
@@ -1257,9 +1407,10 @@ enum Preferences {
 }
 
 enum AppSupport {
-    /// Where the zsh integration lives; written at launch so it always matches this build.
+    /// Where the zsh integration lives; written at launch so it always matches this build. In Next Term's folder in
+    /// Application Support, which is the relaunch harness's own for it (`SelfTest.supportFolder`).
     static let zshIntegrationDirectory: URL? = {
-        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
-        return try? ShellIntegration.install(in: base.appendingPathComponent("Next Term", isDirectory: true))
+        guard let folder = SelfTest.supportFolder else { return nil }
+        return try? ShellIntegration.install(in: folder)
     }()
 }

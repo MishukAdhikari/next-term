@@ -301,6 +301,24 @@ check({"end", "cwd", "cmd"} <= off_kinds and not off_kinds & {"arm", "tab", "com
       "with Tab completion off, no completion mark and the others as before", str(sorted(off_kinds)))
 off.close()
 
+# 3b. A restored tab types its put-back line only once the shell is ready (plan 003's KTD6): its first `end` mark, then
+# bracketed paste on, which zsh's line editor switches on only after the first precmd. Typed then, the line is inserted
+# as a paste and never run. With the user's config and with the hostile one.
+for label, zdotdir in (("user config", os.environ.get("ZDOTDIR", "")), ("nounset + ksh_arrays", hostile)):
+    ready = Shell(f"ready {label}", zdotdir, completion_on=False)
+    raw = ready.buf
+    end = re.search(rb"\x1b\]6973;" + NONCE.encode() + rb";end;", raw)
+    paste_on = raw.find(b"\x1b[?2004h")
+    check(end is not None and paste_on > end.start(),
+          f"[{label}] bracketed paste switches on only after the first precmd's end mark",
+          f"end at {end.start() if end else None}, paste on at {paste_on}")
+    since = len(ready.buf)
+    ready.send(b"\x1b[200~echo put-back-line\x1b[201~", 1)
+    ran = "put-back-line\r\n" in ready.text(since).replace("echo put-back-line", "")
+    check(not ran and not any(k == "cmd" for _, k, _ in ready.marks(since)),
+          f"[{label}] a line pasted at the ready prompt is inserted, not run")
+    ready.close()
+
 # 4. Next Term's own engine: the hostile config has no compinit.
 tree = tempfile.mkdtemp()
 for d in ("Sources", "Resources", "Tests", "My Fo'lder $x", "café"):

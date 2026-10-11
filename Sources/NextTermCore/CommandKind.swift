@@ -40,7 +40,7 @@ public enum CommandClassifier {
     static let agents: Set<String> = [
         "claude", "claude-code", "claude.exe", "codex", "gemini", "gemini-cli", "aider", "opencode", "amp",
         "cursor-agent", "goose", "crush", "qwen", "qwen-code", "copilot", "droid", "kiro", "kiro-cli", "q",
-        "kimi", "plandex", "cline", "junie", "commandcode", "command-code", "cmd", "auggie",
+        "kimi", "plandex", "cline", "junie", "commandcode", "command-code", "cmd", "auggie", "agy",
     ]
     /// Pieces of an executable or script path that give an agent away when its name does not:
     /// Claude Code's native installer runs as ".../claude/versions/2.1.280", the npm build as node + cli.js.
@@ -62,6 +62,8 @@ public enum CommandClassifier {
         "sudo", "doas", "npx", "bunx", "pnpx", "uvx", "pipx", "exec", "nohup", "time", "env", "command", "builtin",
         "noglob", "nocorrect", "nice", "caffeinate", "arch", "timeout", "gtimeout",
     ]
+    /// A wrapper's options whose value is the next word: `env -u NAME claude` runs claude, as a resume does.
+    static let wrapperValueOptions: [String: Set<String>] = ["env": ["-u", "--unset", "-C", "--chdir"]]
     /// Commands that set things up for the real one: `cd x && make` is about `make`.
     static let setup: Set<String> = ["cd", "pushd", "popd", "export", "source", ".", "set", "unset", "alias", "nvm", "eval", "clear"]
 
@@ -100,17 +102,39 @@ public enum CommandClassifier {
     /// `FOO=1 sudo npx @anthropic-ai/claude-code --resume` -> ("claude-code", ["--resume"])
     public static func parse(_ simpleCommand: String) -> (name: String, args: [String]) {
         let words = simpleCommand.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        for (i, word) in words.enumerated() {
-            if word.hasPrefix("-") || isAssignment(word) { continue }
+        guard let index = programIndex(words) else { return ("", []) }
+        return (baseName(words[index]), Array(words[(index + 1)...]))
+    }
+
+    /// Where the program is among a simple command's words: past options, assignments and wrappers, and the value
+    /// a wrapper's option takes (`env -u NAME`).
+    static func programIndex(_ words: [String]) -> Int? {
+        var wrapper = ""
+        var skipNext = false
+        for (index, word) in words.enumerated() {
+            if skipNext {
+                skipNext = false
+                continue
+            }
+            if word.hasPrefix("-") {
+                skipNext = wrapperValueOptions[wrapper]?.contains(word) == true
+                continue
+            }
+            if isAssignment(word) { continue }
             let base = baseName(word)
-            if base.isEmpty || wrappers.contains(base) { continue }
-            return (base, Array(words[(i + 1)...]))
+            if base.isEmpty { continue }
+            if wrappers.contains(base) {
+                wrapper = base
+                continue
+            }
+            return index
         }
-        return ("", [])
+        return nil
     }
 
     /// The program a command line is about: the agent if there is one, else the first command that is
-    /// not set-up (`cd`, `export`, `nvm use`), else the first.
+    /// not set-up (`cd`, `export`, `nvm use`), else the first. An agent run as a script names the agent
+    /// (`node …/@anthropic-ai/claude-code/cli.js` is claude), judged by `scriptAgentName`.
     public static func programName(_ commandLine: String) -> String {
         programCommand(commandLine)?.name ?? ""
     }
@@ -123,8 +147,57 @@ public enum CommandClassifier {
 
     private static func programCommand(_ commandLine: String) -> (name: String, args: [String])? {
         let parsed = segments(commandLine).map(parse).filter { !$0.name.isEmpty }
-        if let agent = parsed.first(where: { kind(name: $0.name, args: $0.args) == .agent }) { return agent }
+        if let agent = parsed.first(where: { kind(name: $0.name, args: $0.args) == .agent }) {
+            // An agent run as a script names the agent (`scriptAgentName`), and its arguments are the script's.
+            guard !agents.contains(agent.name), let index = agent.args.firstIndex(where: { !$0.hasPrefix("-") }),
+                  let named = scriptAgentName(agent.args[index]) else { return agent }
+            return (named, Array(agent.args[(index + 1)...]))
+        }
         return parsed.first { !setup.contains($0.name) } ?? parsed.first
+    }
+
+    /// The agent a command line runs, judged strictly, as a restore needs: a program known as an agent, or an
+    /// interpreter running an agent's script (`scriptAgentName`). A dev server in a folder named like an agent is none.
+    public static func agentName(_ commandLine: String) -> String? {
+        for (name, args) in segments(commandLine).map(parse) where !name.isEmpty {
+            if agents.contains(name) { return name == "claude.exe" ? "claude" : name }
+            guard interpreters.contains(stem(name)), let script = args.first(where: { !$0.hasPrefix("-") }) else { continue }
+            if let agent = scriptAgentName(script) { return agent }
+        }
+        return nil
+    }
+
+    /// The agent a process runs, judged as strictly: its executable's or argv[0]'s name is an agent's, its executable
+    /// lies in an agent's own install (`strictAgentHint`), or it is an interpreter running an agent's script.
+    public static func agentName(executable: String, arguments: [String]) -> String? {
+        let names = [baseName(executable), arguments.first.map(baseName) ?? ""]
+        if let known = names.first(where: agents.contains) { return known == "claude.exe" ? "claude" : known }
+        if let hinted = strictAgentHint(in: executable) { return hinted }
+        guard names.contains(where: { interpreters.contains(stem($0)) }),
+              let script = arguments.dropFirst().first(where: { !$0.hasPrefix("-") }) else { return nil }
+        return scriptAgentName(script)
+    }
+
+    /// The agent the script an interpreter runs is: by the script's own name (`bin/claude`, `codex.js`, `-m aider`),
+    /// or by `strictAgentHint`.
+    static func scriptAgentName(_ script: String) -> String? {
+        let name = baseName(script)
+        let suffix = [".js", ".mjs", ".cjs", ".ts", ".py"].first { name.hasSuffix($0) }
+        let bare = suffix.map { String(name.dropLast($0.count)) } ?? name
+        if agents.contains(bare) { return bare == "claude.exe" ? "claude" : bare }
+        return strictAgentHint(in: script)
+    }
+
+    /// The agent a path gives away wherever it lies: a package only that agent has (`@openai/codex`), its versions
+    /// folder, or a folder hint (`/codex/`, `/opencode`) inside node_modules. A folder hint elsewhere is a project
+    /// folder named like the agent (`~/Code/codex/server.js`), and names none.
+    static func strictAgentHint(in path: String) -> String? {
+        let packaged = path.range(of: "/node_modules/", options: .caseInsensitive).map { String(path[$0.lowerBound...]) } ?? ""
+        let hint = agentPathHints.first { hint in
+            let anywhere = hint.hasPrefix("@") || hint.hasSuffix("/versions/")
+            return containsHint(anywhere ? path : packaged, hint)
+        }
+        return hint.map(agentName(forHint:))
     }
 
     /// The strongest kind among the line's simple commands: `cd ~/app && claude` is an agent.
@@ -164,11 +237,8 @@ public enum CommandClassifier {
         if isAgent(process) {
             let names = ([process.name] + process.arguments.prefix(1)).map(baseName)
             if let known = names.first(where: { agents.contains($0) }) { return known == "claude.exe" ? "claude" : known }
-            for hint in agentPathHints where containsHint(process.executablePath + " " + process.arguments.prefix(3).joined(separator: " "), hint) {
-                return hint.contains("claude") ? "claude" : hint.contains("codex") ? "codex"
-                    : hint.contains("gemini") ? "gemini" : hint.contains("command-code") ? "commandcode"
-                    : hint.contains("junie") ? "junie"
-                    : baseName(hint.trimmingCharacters(in: CharacterSet(charactersIn: "/@")))
+            if let hinted = hintedAgentName(in: process.executablePath + " " + process.arguments.prefix(3).joined(separator: " ")) {
+                return hinted
             }
         }
         let name = parse(process.commandLine).name
@@ -192,6 +262,21 @@ public enum CommandClassifier {
 
     static func containsAgentHint(_ path: String) -> Bool {
         agentPathHints.contains { containsHint(path, $0) }
+    }
+
+    /// The agent the first path hint in `text` gives away, by its program name.
+    static func hintedAgentName(in text: String) -> String? {
+        agentPathHints.first { containsHint(text, $0) }.map(agentName(forHint:))
+    }
+
+    /// The program name of the agent a path hint gives away.
+    private static func agentName(forHint hint: String) -> String {
+        if hint.contains("claude") { return "claude" }
+        if hint.contains("codex") { return "codex" }
+        if hint.contains("gemini") { return "gemini" }
+        if hint.contains("command-code") { return "commandcode" }
+        if hint.contains("junie") { return "junie" }
+        return baseName(hint.trimmingCharacters(in: CharacterSet(charactersIn: "/@")))
     }
 
     private static func containsHint(_ text: String, _ hint: String) -> Bool {

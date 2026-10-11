@@ -32,7 +32,9 @@ struct GitActions {
         }
     }
 
-    func toast(_ text: String) { GitToast.show(text, in: window) }
+    /// `begun`: GitToast's count as the work began, for a notice that waits for the branches to be read again (an Undo
+    /// that came up meanwhile stays).
+    func toast(_ text: String, begun: Int? = nil) { GitToast.show(text, in: window, begun: begun) }
 
     // MARK: agents
 
@@ -366,12 +368,13 @@ struct GitActions {
     }
 
     func fetch() {
+        let begun = GitToast.count
         run("Fetch", [["fetch", "--all", "--prune"]], activity: .fetching) { result in
             guard result.ok else { return failed("Fetch failed", result, retry: ["fetch", "--all", "--prune"]) }
             fetchedByHand()
             popup.reload {
                 let behind = popup.model?.currentRef?.behind ?? 0
-                toast(behind > 0 ? "Fetched: \(behind) new commit\(behind == 1 ? "" : "s") on the upstream" : "Fetched: up to date")
+                toast(behind > 0 ? "Fetched: \(behind) new commit\(behind == 1 ? "" : "s") on the upstream" : "Fetched: up to date", begun: begun)
             }
         }
     }
@@ -423,12 +426,13 @@ struct GitActions {
             return GitPrompt.ask("“\(current.name)” isn’t tracking a remote branch", info: "Push… publishes it, and then it can be updated.",
                                  buttons: ["OK"], over: window) { _ in }
         }
+        let begun = GitToast.count
         run("Update Project", [["fetch", remote]], activity: .pulling) { fetched in
             guard fetched.ok else { return failed("Could not fetch from \(remote)", fetched, retry: ["fetch", remote]) }
             fetchedByHand(remote: remote)
             popup.reload {
                 guard let fresh = popup.model?.currentRef else { return }
-                guard fresh.behind > 0 else { return toast("Already up to date") }
+                guard fresh.behind > 0 else { return toast("Already up to date", begun: begun) }
                 confirmAgents(.updating) { bringUp(fresh) }
             }
         }
@@ -453,10 +457,11 @@ struct GitActions {
     func checkoutAndUpdate(_ ref: BranchRef) {
         guard !ref.isRemote, !ref.isHead, model?.upstream(of: ref) != nil else { return checkout(ref) }
         let steps = [BranchCommand.checkoutAndUpdate(ref.name)[0]]
+        let begun = GitToast.count
         let update = {
             popup.reload {
                 guard let fresh = popup.model?.currentRef, fresh.name == ref.name else { return }
-                guard fresh.behind > 0 else { return toast("Switched to \(ref.name), already up to date") }
+                guard fresh.behind > 0 else { return toast("Switched to \(ref.name), already up to date", begun: begun) }
                 bringUp(fresh)
             }
         }
@@ -479,16 +484,17 @@ struct GitActions {
         }
         let remote = tracking.remote, tracked = "\(remote)/\(tracking.branch)"
         let args = BranchCommand.fetchInto(local: ref.name, remote: remote, upstream: tracking.branch)
+        let begun = GitToast.count
         run("Update \(ref.name)", [args], activity: .pulling) { result in
             if result.ok { fetchedByHand(remote: remote) }
             popup.reload {
                 let fresh = popup.model?.local(ref.name) ?? ref
-                if result.ok { return toast(fresh.sha == ref.sha ? "\(ref.name) is up to date with \(tracked)" : "Updated \(ref.name) from \(tracked)") }
+                if result.ok { return toast(fresh.sha == ref.sha ? "\(ref.name) is up to date with \(tracked)" : "Updated \(ref.name) from \(tracked)", begun: begun) }
                 let notForward = result.failure == .pushRejected && result.output.contains("non-fast-forward")
                 guard notForward else { return failed("Could not update “\(ref.name)”", result, retry: args) }
                 // Refused as not forward: nothing new there (only yours to push), or both changed.
                 if fresh.behind == 0 {
-                    return toast("\(ref.name) has nothing new from \(tracked)" + (fresh.ahead > 0 ? "; \(fresh.ahead) of its commits aren’t pushed" : ""))
+                    return toast("\(ref.name) has nothing new from \(tracked)" + (fresh.ahead > 0 ? "; \(fresh.ahead) of its commits aren’t pushed" : ""), begun: begun)
                 }
                 let here = "\(fresh.ahead) commit\(fresh.ahead == 1 ? "" : "s") here", there = "\(fresh.behind) on \(tracked)"
                 GitPrompt.ask("“\(ref.name)” and “\(tracked)” have both changed",

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import NextTermCore
 
 /// `nxtrm`: the app binary run as a command line tool (`NextTerm --cli …`, through the `nxtrm` script in
@@ -390,10 +391,42 @@ enum MCPBridge {
         output.unlock()
     }
 
+    /// One tool call through the app's socket. While Next Term restarts (its socket refuses, or a connection ends with no
+    /// answer), a tool that only reads is tried again for about 20 seconds, and one that changes anything fails at once
+    /// (MCPServer.retryDelay, KTD17).
     static func forward(_ tool: String, _ arguments: [String: Any], socket path: String) -> MCPServer.CallResult {
-        let fd = MCPControlServer.connectSocket(path)
-        guard fd >= 0 else {
-            return MCPServer.CallResult(text: "Next Term is not running, or “Let agents control Next Term” is off in its Settings. Open Next Term and try again.", isError: true)
+        // When a try first found Next Term restarting: the retries are counted from then.
+        var restartedAt: Date?
+        while true {
+            let failure: MCPServer.SocketFailure
+            switch attempt(tool, arguments, socket: path) {
+            case .success(let result): return result
+            case .failure(let failed): failure = failed
+            }
+            if failure.meansRestarting && restartedAt == nil { restartedAt = Date() }
+            let elapsed = restartedAt.map { (since: Date) -> TimeInterval in Date().timeIntervalSince(since) } ?? 0
+            let restarting = restartedAt != nil
+            guard let delay = MCPServer.retryDelay(tool, after: failure, restarting: restarting, elapsed: elapsed) else {
+                return MCPServer.failedAnswer(tool, failure, restarting: restarting)
+            }
+            Thread.sleep(forTimeInterval: delay)
+        }
+    }
+
+    /// Connects to the app's socket: the descriptor, or how it failed.
+    private static func connect(_ path: String) -> Result<Int32, MCPServer.SocketFailure> {
+        let fd = MCPSocket.connect(path: path)
+        // Refused and missing by errno; any other failure, a path too long for a socket included, is unreachable.
+        guard fd >= 0 else { return .failure(MCPServer.SocketFailure(connectError: errno)) }
+        return .success(fd)
+    }
+
+    /// One try: the app's answer, or how the socket failed.
+    private static func attempt(_ tool: String, _ arguments: [String: Any], socket path: String) -> Result<MCPServer.CallResult, MCPServer.SocketFailure> {
+        let fd: Int32
+        switch connect(path) {
+        case .success(let connected): fd = connected
+        case .failure(let failure): return .failure(failure)
         }
         defer { close(fd) }
         var noSigPipe: Int32 = 1
@@ -402,7 +435,7 @@ enum MCPBridge {
         var timeout = timeval(tv_sec: Int(min(1900, waitSeconds + 30)), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         guard let request = MCPServer.request(tool: tool, arguments: arguments) else {
-            return MCPServer.CallResult(text: "The arguments are not valid JSON.", isError: true)
+            return .success(MCPServer.CallResult(text: "The arguments are not valid JSON.", isError: true))
         }
         let sent = request.withUnsafeBytes { raw -> Bool in
             var offset = 0
@@ -413,17 +446,20 @@ enum MCPBridge {
             }
             return true
         }
-        guard sent else { return MCPServer.CallResult(text: "Next Term closed the connection.", isError: true) }
+        guard sent else { return .failure(.notSent) }
         var answer = Data()
         var buffer = [UInt8](repeating: 0, count: 65536)
+        var ended = false
         while !answer.contains(0x0A) {
             let count = read(fd, &buffer, buffer.count)
+            // 0: the connection ended; -1 with SO_RCVTIMEO: the wait ran out.
+            if count == 0 { ended = true }
             if count <= 0 { break }
             answer.append(contentsOf: buffer[0..<count])
         }
         guard let end = answer.firstIndex(of: 0x0A), let result = MCPServer.decodeAnswer(answer[..<end]) else {
-            return MCPServer.CallResult(text: "Next Term did not answer in time.", isError: true)
+            return .failure(ended ? .endedWithoutAnswer : .timedOut)
         }
-        return result
+        return .success(result)
     }
 }

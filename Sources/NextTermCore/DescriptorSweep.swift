@@ -30,4 +30,10 @@ public enum DescriptorSweep {
         let flags = fcntl(fd, F_GETFD)
         if flags >= 0 { _ = fcntl(fd, F_SETFD, flags | FD_CLOEXEC) }
     }
+
+    /// Whether `fd` closes as a process this one starts runs its program.
+    public static func isCloseOnExec(_ fd: Int32) -> Bool {
+        let flags = fcntl(fd, F_GETFD)
+        return flags >= 0 && flags & FD_CLOEXEC != 0
+    }
 }
