@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import NextTermCore
 
-/// The orphan suite's twelve tabs (scripts/orphan-check.sh), as one snapshot of the kernel's process list taken
-/// while they all run: each tab has its own terminal and shell. Pids are made up and readable: tab A's shell is
-/// 100 and what runs in it 101..., tab B's shell 200, and so on. The names are the ones the alerts show.
+/// The orphan suite's tabs (scripts/orphan-check.sh) but L, which only records signal dispositions, as one
+/// snapshot of the kernel's process list taken while they all run: each tab has its own terminal and shell. Pids
+/// are made up and readable: tab A's shell is 100 and what runs in it 101..., tab B's shell 200, and so on. The
+/// names are the ones the alerts show.
 enum Suite {
     static let noTTY = ProcessRecord.noTerminal
     static func p(_ pid: Int32, parent: Int32, group: Int32, tty: Int32, _ name: String, ignores: Bool = false,
@@ -63,12 +64,27 @@ enum Suite {
         // K: node with a SIGHUP handler that does nothing (it catches, it does not ignore).
         shell(1100, tty: 13),
         p(1101, parent: 1100, group: 1101, tty: 13, "ntmark-hupnode.js"),
+        // M: GNU screen attached in front. Its server is the client's child in a session of its own with no
+        // terminal (as an agent's tool is), and its window runs login → zsh on a terminal of its own, with a
+        // disowned sleep.
+        shell(1300, tty: 15),
+        p(1301, parent: 1300, group: 1301, tty: 15, "screen"),
+        p(1302, parent: 1301, group: 1302, tty: noTTY, "SCREEN"),
+        p(1303, parent: 1302, group: 1303, tty: 20, "login"),
+        p(1304, parent: 1303, group: 1304, tty: 20, "zsh"),
+        p(1305, parent: 1304, group: 1305, tty: 20, "sleep"),
+        // N: `script` in front, its own shell on a terminal of its own, with a disowned sleep.
+        shell(1400, tty: 16),
+        p(1401, parent: 1400, group: 1401, tty: 16, "script"),
+        p(1402, parent: 1401, group: 1402, tty: 21, "zsh"),
+        p(1403, parent: 1402, group: 1403, tty: 21, "sleep"),
     ]
 
     /// Each tab: its shell and the group in front of its terminal (tcgetpgrp).
     static let tabs: [String: (shell: Int32, front: Int32)] = [
         "A": (100, 101), "B": (200, 201), "C": (300, 300), "D": (400, 400), "E": (500, 500), "F": (600, 600),
         "G": (700, 701), "H": (800, 801), "I": (900, 901), "J": (1000, 1000), "K": (1100, 1101),
+        "M": (1300, 1301), "N": (1400, 1401),
     ]
 
     static func plan(_ tab: String, in snapshot: [ProcessRecord] = snapshot) -> HangupPlan {
@@ -125,6 +141,35 @@ struct TabProcessTreeTests {
         let plan = Suite.plan("K")
         #expect(plan.groups == [1101])
         #expect(plan.stoppable.map(\.pid) == [1101])
+    }
+
+    /// A terminal of its own below the tab (GNU screen's windows, `script`, an editor's :terminal) is that
+    /// terminal's business, as before 0.10.2: the program in front is hung up, its pty closing hangs up what runs
+    /// there, and screen's server, which holds such a terminal from a session of its own, keeps its session.
+    @Test func aTerminalOfItsOwnBelowTheTabIsLeftToItsOwnHangup() {
+        let screen = Suite.plan("M")
+        #expect(screen.groups == [1301])
+        #expect(screen.targets.map(\.pid) == [1301])
+        #expect(screen.startedOutside.isEmpty)
+        let script = Suite.plan("N")
+        #expect(script.groups == [1401])
+        #expect(script.targets.map(\.pid) == [1401])
+    }
+
+    /// The trade-off: a tool command an agent runs on a pty of its own (node-pty) is not walked into, but its
+    /// tool's session is still hung up as a group, the pty's host with it, and the pty's closing ends the rest.
+    @Test func anAgentToolOnAPtyOfItsOwnIsHungUpThroughItsSession() {
+        let snapshot = Suite.snapshot + [
+            Suite.shell(1500, tty: 17),
+            Suite.p(1501, parent: 1500, group: 1501, tty: 17, "claude"),
+            Suite.p(1502, parent: 1501, group: 1502, tty: Suite.noTTY, "bash"),
+            Suite.p(1503, parent: 1502, group: 1502, tty: Suite.noTTY, "script"),
+            Suite.p(1504, parent: 1503, group: 1504, tty: 22, "npm"),
+            Suite.p(1505, parent: 1504, group: 1504, tty: 22, "next-server"),
+        ]
+        let plan = TabProcessTree.plan(snapshot: snapshot, shell: 1500, foregroundGroup: 1501)
+        #expect(plan.groups == [1501, 1502])
+        #expect(plan.targets.map(\.pid) == [1501, 1502, 1503])
     }
 
     @Test func aRemoteTabHasNoTargets() {

@@ -96,13 +96,29 @@ public enum TabProcessTree {
         for record in snapshot where record.pid != record.parent {
             children[record.parent, default: []].append(record)
         }
+        // A terminal of its own below the tab (GNU screen's windows, `script`, an editor's :terminal, dtach,
+        // abduco) is that terminal's business, as it always was: when the program holding it ends, its pty hangs
+        // up what runs there, and screen, dtach and abduco keep their sessions. So the walk never enters a
+        // process on another terminal, nor one with no terminal that holds such a process (screen's server,
+        // which sits in a session of its own as an agent's tool does).
+        let tabTerminal = shellRecord.terminal
+        func onOtherTerminal(_ record: ProcessRecord) -> Bool {
+            record.terminal != ProcessRecord.noTerminal && record.terminal != tabTerminal
+        }
+        let terminalHosts = Set(snapshot.filter(onOtherTerminal).map(\.parent))
+        func ownsATerminal(_ record: ProcessRecord) -> Bool {
+            if onOtherTerminal(record) { return true }
+            return record.terminal == ProcessRecord.noTerminal && terminalHosts.contains(record.pid)
+        }
         // Walk down from the front, breadth first, children in pid order.
         var found: [Int32] = []
         var queue = front.filter { !interactiveShells.contains($0.pid) }
         var seen = Set(front.map(\.pid))
         while !queue.isEmpty {
             let next = queue.removeFirst()
-            for child in (children[next.pid] ?? []).sorted(by: { $0.pid < $1.pid }) where seen.insert(child.pid).inserted {
+            for child in (children[next.pid] ?? []).sorted(by: { $0.pid < $1.pid }) {
+                // Before `seen`: a terminal's host never counts toward a group being theirs.
+                guard !ownsATerminal(child), seen.insert(child.pid).inserted else { continue }
                 queue.append(child)
                 let group = child.group
                 guard group != foregroundGroup, group > 1, group != shellRecord.group, group != shell else { continue }

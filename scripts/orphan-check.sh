@@ -1,9 +1,10 @@
 #!/bin/bash
 # Release check: what keeps running after Next Term quits, closes every tab, or is force quit (SIGKILL).
 # Runs a test copy of a release build with its own settings domain and a temporary home, never the installed app
-# or your settings. Pass: Quit and closing every tab leave exactly the 5 deliberate survivors (nohup'd and
-# SIGHUP-ignoring, disowned and double-forked programs), the app exits within 2 s of the quit request, and SIGKILL
-# leaves no orphaned login shell. Takes about two minutes and opens windows. Needs node, npm, python3 and clang.
+# or your settings. Pass: Quit and closing every tab leave exactly the deliberate survivors (nohup'd and
+# SIGHUP-ignoring, disowned and double-forked programs, a GNU screen session, a job disowned in `script`'s shell), the
+# app exits within 2 s of the quit request, and SIGKILL leaves no orphaned login shell. Takes about two minutes and
+# opens windows. Needs node, npm, python3 and clang.
 # Usage: scripts/orphan-check.sh [release build folder, default .build/release]
 set -euo pipefail
 cd "$(dirname "$0")/.."

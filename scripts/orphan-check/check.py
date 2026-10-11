@@ -2,13 +2,14 @@
 """What keeps running after Next Term quits, closes its tabs, or is force quit (scripts/orphan-check.sh runs this).
 
 A test copy of a release build runs with its own settings domain and a temporary home (its MCP socket, rc files
-and agent folders stay out of yours), with shim.dylib injected. Twelve tabs run the programs in project/ through
+and agent folders stay out of yours), with shim.dylib injected. Fourteen tabs run the programs in project/ through
 the copy's own MCP socket, then the app is ended three ways: Quit (as ⌘Q), closing every tab, and SIGKILL. Each
 time, the test processes still alive 4 s later are listed.
 
-Pass: Quit and closing every tab leave exactly the five deliberate survivors (a python ignoring SIGHUP, a nohup'd
-sleep, a disowned sleep, and the two processes of a double fork), the app exits within 2 s of the quit request, and
-SIGKILL leaves no orphaned login shell.
+Pass: Quit and closing every tab leave exactly the deliberate survivors (a python ignoring SIGHUP, a nohup'd sleep,
+a disowned sleep, the two processes of a double fork, a GNU screen session with its window, and a sleep disowned
+in `script`'s own shell), the app exits within 2 s of the quit request, and SIGKILL leaves no orphaned login shell.
+Without /usr/bin/screen the screen tab is left out.
 Usage: check.py <folder with the release NextTerm binary> <shim.dylib>
 """
 import json, os, pwd, shutil, signal, socket, subprocess, sys, tempfile, time
@@ -30,9 +31,22 @@ TABS = [
     ('K hup-node', 'node ntmark-hupnode.js'),
     ('L dispositions', "perl -e 'print join(\" \", map { \"$_=\" . ($SIG{$_} // \"DEFAULT\") } qw(HUP INT TERM PIPE CHLD)), \"\\\\n\"' > sigs.txt"),
 ]
+# M: GNU screen attached in front: closing the tab detaches it, as in every terminal, and its session keeps running.
+# N: `script`'s own shell, on a terminal of its own, disowned a sleep: it keeps running, as one disowned at the prompt.
+SCREEN_TAB = ('M screen', 'mkdir -m 700 -p scr && SCREENDIR="$PWD/scr" screen -c /dev/null -S ntoc sleep 7776')
+SCRIPT_TAB = ('N script', "script -q /dev/null zsh -fic 'sleep 7777 &!; exec sleep 7778'")
+HAS_SCREEN = os.access('/usr/bin/screen', os.X_OK)
+TABS += ([SCREEN_TAB] if HAS_SCREEN else []) + [SCRIPT_TAB]
 
 # What each test process is, by its command line (first match wins; order matters).
 KINDS = [
+    ('SCREEN -c /dev/null -S ntoc', 'M screen session'),
+    ('screen -c /dev/null -S ntoc', 'M screen client'),
+    ('/bin/sleep 7776', 'M screen window'),  # login -pflq <user> /bin/sleep 7776
+    ('sleep 7776', 'M sleep in screen'),
+    ('script -q /dev/null', 'N script'),
+    ('sleep 7777', 'N sleep disowned in script'),
+    ('sleep 7778', 'N sleep in front in script'),
     ('ntmark-hupign.py', 'B python ignoring SIGHUP'),
     ('next-server (v16.4.0) bgjob', 'C next-server job'),
     ('sleep 7771', 'C sleep job'),
@@ -57,8 +71,9 @@ KINDS = [
     ('ntmark-nextdev.js', 'A next dev'),
     ('next-server (v16.4.0) fg', 'A next-server'),
 ]
-DELIBERATE = {'B python ignoring SIGHUP', 'D nohup sleep', 'E disowned sleep', 'F double-forked sleep', 'F double-forked next-server'}
-EXPECTED_BEFORE = 23
+DELIBERATE = {'B python ignoring SIGHUP', 'D nohup sleep', 'E disowned sleep', 'F double-forked sleep', 'F double-forked next-server',
+              'N sleep disowned in script'} | ({'M screen session', 'M screen window', 'M sleep in screen'} if HAS_SCREEN else set())
+EXPECTED_BEFORE = 23 + 3 + (4 if HAS_SCREEN else 0)
 
 
 def sh(*args):
@@ -209,6 +224,7 @@ class Check:
         for name in os.listdir(self.project):
             if name.endswith('.out') or name in ('signals.log', 'sigs.txt'):
                 os.remove(os.path.join(self.project, name))
+        shutil.rmtree(os.path.join(self.project, 'scr'), ignore_errors=True)  # screen's sockets
 
     # MARK: one run
 
@@ -266,7 +282,7 @@ class Check:
         if how in ('quit', 'close'):
             ok = kinds == DELIBERATE and len(after) == len(DELIBERATE)
             extra, missing = sorted(kinds - DELIBERATE), sorted(DELIBERATE - kinds)
-            report.append(('PASS' if ok else 'FAIL') + f' {how}: exactly the 5 deliberate survivors' +
+            report.append(('PASS' if ok else 'FAIL') + f' {how}: exactly the {len(DELIBERATE)} deliberate survivors' +
                           ('' if ok else f' (also alive: {extra}; ended: {missing})'))
         else:
             report.append(('PASS' if not shells else 'FAIL') + f' kill: no orphaned login shell ({len(shells)})')
