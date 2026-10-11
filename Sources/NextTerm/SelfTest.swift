@@ -231,6 +231,19 @@ enum SelfTest {
         return item.isEnabled
     }
 
+    /// Importing settings from other apps: the importers, the import window, one click, the agents' tools and Undo.
+    private static func importPartChecks(_ c: TerminalWindowController, proj: URL) async {
+        await importChecks(c, proj: proj)
+        await importUndoGuardChecks()
+        await importForkChecks()
+        await importTerminalSizeChecks(c)
+        await importReachChecks()
+        await importTerminalChecks()
+        await importWindowChecks()
+        await importAgentChecks()
+        await importOneClickChecks()
+    }
+
     private static func runAll() async {
         // The notifications checked along the way (a decision, below) come as they do by default.
         let restoreNotificationSettings = defaultNotificationSettings()
@@ -584,11 +597,15 @@ enum SelfTest {
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys), for its own failures without the
-        // whole run's 25 minutes.
-        if ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] == "gitAndViewKeys" {
-            await gitAndViewKeyChecks(c, proj: proj)
-            return
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held or notifications), for its own failures
+        // without the whole run's 25 minutes.
+        switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
+        case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
+        case "import": return await importPartChecks(c, proj: proj)
+        case "rollback": return await rollbackChecks(c)
+        case "held": return await heldWorktreeChecks(c)
+        case "notifications": return notificationsMenuChecks()
+        default: break
         }
         #endif
 
@@ -728,11 +745,13 @@ enum SelfTest {
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
         await gitAndViewKeyChecks(c, proj: proj)
+        await rollbackChecks(c)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
         await placeChecks(c)
         await worktreeChecks(c)
+        await heldWorktreeChecks(c)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
@@ -741,14 +760,7 @@ enum SelfTest {
         await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
-        await importChecks(c, proj: proj)
-        await importUndoGuardChecks()
-        await importForkChecks()
-        await importTerminalSizeChecks(c)
-        await importReachChecks()
-        await importTerminalChecks()
-        await importWindowChecks()
-        await importAgentChecks()
+        await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)
@@ -917,6 +929,7 @@ enum SelfTest {
 
         await linkChecks(c)
         await notificationChecks(c)
+        notificationsMenuChecks()
         await skillsChecks()
         await mcpWriteChecks(c, proj: proj)
         await restoreMCPChecks(proj: proj)
@@ -1860,7 +1873,7 @@ enum SelfTest {
             check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
             // Its menu: each item a command showing its key.
             let menu = sidebarMenuKeyAudit([(sidebarMenu(c.sidebar, row: at), "gone.txt")])
-            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Copy Path", "Copy Relative Path"],
+            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Rollback…", "Copy Path", "Copy Relative Path"],
                   "its menu's items are commands showing their keys", (menu.wrong + menu.titles).joined(separator: "; "))
         }
         if let diffRow = row("diff.txt"), let goneRow = row("gone.txt"), let mainRow = row("main.php") {
@@ -4526,7 +4539,7 @@ enum SelfTest {
         diff.perform(.unstage)
         check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")
 
-        // Revert one change in the file; ⌘Z brings it back.
+        // Roll back one change in the file; ⌘Z brings it back.
         diff.base = .head
         _ = await wait(5) { diff.hunkCount == 2 }
         diff.go(toHunk: 1)
@@ -4534,7 +4547,7 @@ enum SelfTest {
         check(diff.currentHunk == 1, "the stepper's choice holds even when the whole diff fits on screen", "hunk \(diff.currentHunk + 1)")
         diff.perform(.revert)
         let reverted = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Revert Hunk undoes just that change in the file")
+        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Rollback Hunk undoes just that change in the file")
         _ = await wait(5) { diff.hunkCount == 1 }
         c.window?.undoManager?.undo()
         check(((try? String(contentsOf: file, encoding: .utf8)) ?? "") == changed, "⌘Z brings the reverted change back")

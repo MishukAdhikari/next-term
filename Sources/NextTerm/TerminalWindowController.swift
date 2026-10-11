@@ -940,7 +940,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
-        let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
+        let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(showWorktrees(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
         // Off while a sheet is over the window (the commit sheet, a question one of them asked): a key pressed twice, or
         // held, asks nothing twice.
@@ -952,6 +952,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(gitRollback(_:)) { return gitFolder != nil && window?.attachedSheet == nil && !rollbackTargets.isEmpty }
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
@@ -1785,6 +1786,77 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
 
+    /// ⌥⌘Z, Git › Rollback…, by where the keyboard is:
+    /// - in the editor with the caret or a selection on changed lines: those lines back to the last commit, at once
+    ///   (Rollback Lines, ⌘Z undoes it);
+    /// - in a diff of uncommitted changes: its current change, at once, the next one current after it (Rollback Hunk);
+    /// - else the file in front or what is selected in the sidebar (files, folders, deleted files), after asking
+    ///   (GitActions.rollback).
+    @objc func gitRollback(_ sender: Any?) {
+        if isEditorFocused, let editor = editorArea.activeEditor, editor.touchesChanges { return rollbackLines(in: editor) }
+        if let diff = editorArea.activeDiff, diff.canRollBackHunk, let view = window?.firstResponder as? NSView, view.isDescendant(of: diff) {
+            return diff.rollBack(hunk: diff.currentHunk, of: diff.file)
+        }
+        let targets = rollbackTargets
+        guard !targets.isEmpty else { return NSSound.beep() }
+        rollback(targets)
+    }
+
+    /// Rollback Lines in `editor`, then a notice with Undo. A file with no unsaved edits before is saved after, so git
+    /// and the sidebar see what the editor shows; one with unsaved edits stays unsaved, the rollback among them.
+    private func rollbackLines(in editor: CodeEditorView) {
+        let document = editor.document, wasSaved = !document.isDirty
+        editor.rollbackLines { [weak self, weak editor] count in
+            guard let self, let editor else { return }
+            guard count > 0 else { return NSSound.beep() }
+            if wasSaved { self.editorArea.save(document) }
+            let after = document.text
+            let lines = count == 1 ? "1 line" : "\(count) lines"
+            GitToast.show("Rolled back \(lines) in \(document.name)", in: self.window, button: "Undo") { [weak self, weak editor] in
+                // Only while nothing was typed since: then the edit on top of the undo stack is the rollback.
+                guard let self, let editor, document.text == after, editor.textView.undoManager?.canUndo == true else { return NSSound.beep() }
+                editor.textView.undoManager?.undo()
+                if wasSaved { self.editorArea.save(document) }
+            }
+        }
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, rollback urls: [URL]) { rollback(urls) }
+
+    /// What Git › Rollback… acts on: as Show Changes, what is in front while the sidebar doesn't have the keyboard (the
+    /// file being edited, the Git Diff tab's selected file, a file's diff of its uncommitted changes), else the sidebar's
+    /// selection, deleted files included. A diff of a commit or a proposal has nothing to roll back.
+    var rollbackTargets: [URL] {
+        let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
+        if fromEditor, editorArea.activePane != nil {
+            if let gitDiff = editorArea.activeGitDiff { return gitDiff.rollbackTarget.map { [$0] } ?? [] }
+            if let diff = editorArea.activeDiff { return diff.commit == nil && diff.proposal == nil ? [URL(fileURLWithPath: diff.absolutePath)] : [] }
+            if let path = editorArea.activePath { return [URL(fileURLWithPath: path)] }
+        }
+        return sidebar.selection.map(\.url) + sidebar.selectedDeleted.map(\.url)
+    }
+
+    /// Rolls back `urls`, all in the repository of the first: the others are left alone. Paths are read as the kernel
+    /// spells them (`/tmp` is `/private/tmp`), but a file's own name as it is: a link is rolled back, not what it points to.
+    func rollback(_ urls: [URL]) {
+        guard let first = urls.first else { return NSSound.beep() }
+        func spelled(_ url: URL) -> String {
+            let path = url.standardizedFileURL.path
+            if Rollback.diskKind("", root: path) == .directory { return canonicalPath(path) }
+            return (canonicalPath((path as NSString).deletingLastPathComponent) as NSString).appendingPathComponent((path as NSString).lastPathComponent)
+        }
+        // A folder is its own start (the project's own row is the root itself); a file, or a deleted one, its folder's.
+        let start = spelled(first)
+        let isFolder = Rollback.diskKind("", root: start) == .directory
+        let root = canonicalPath(ProjectRoot.find(from: isFolder ? start : (start as NSString).deletingLastPathComponent))
+        let paths = urls.map(spelled).compactMap { path -> String? in
+            if path == root { return "" }
+            return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : nil
+        }
+        guard !paths.isEmpty, FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(".git")) else { return NSSound.beep() }
+        withGit(at: root) { $0.rollback(paths) }
+    }
+
     /// A Databases row's action. Hand-offs read the password from the project's file themselves.
     func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction) {
         guard let root = sidebar.root?.path else { return }
@@ -1923,6 +1995,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func showBranches(_ sender: Any?) {
         guard let anchor = branchPopupAnchor, let folder = gitFolder else { return NSSound.beep() }
         if branchPopup.isVisible { return branchPopup.close() }
+        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+    }
+
+    /// A git command in a terminal tab here failed because the worktree at `path` has `branch` (TerminalTab): a notice
+    /// whose Free It… asks what to do with that worktree, Remove Worktree when it can go (GitActions.held, with no
+    /// switch: the command is the user's to run again).
+    func noticeHeldBranch(_ branch: String, at path: String, from directory: String) {
+        let root = canonicalPath(ProjectRoot.find(from: directory))
+        guard FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(".git")) else { return }
+        let folder = (path as NSString).lastPathComponent
+        GitToast.show("“\(branch)” is checked out in “\(folder)”", in: window, button: "Free It…") { [weak self] in
+            self?.withGit(at: root) { $0.held(branch, at: path) }
+        }
+    }
+
+    /// Git › Worktrees…: the branch popup with the first of the repository's other worktrees chosen, where each is
+    /// opened, unlocked or removed from its row's menu (→).
+    @objc func showWorktrees(_ sender: Any?) {
+        guard let anchor = branchPopupAnchor, let folder = gitFolder else { return NSSound.beep() }
+        branchPopup.focusWorktrees = true
+        if branchPopup.isVisible { return branchPopup.reload() }
         branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
     }
 

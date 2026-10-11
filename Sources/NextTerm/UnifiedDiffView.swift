@@ -633,12 +633,12 @@ final class UnifiedDiffPart: NSObject, NSTextViewDelegate {
                 switch action {
                 case .stage: title = "Stage Hunk"
                 case .unstage: title = "Unstage Hunk"
-                case .revert: title = "Revert Hunk…"
+                case .revert: title = "Rollback Hunk"
                 }
                 menu.addBlock(title) { [weak self, weak pane] in
                     guard let pane else { return }
                     if let self, !self.stale, self.shownFile == shown { pane.pick(hunk: hunk) } // the rows are still these
-                    if action == .revert { pane.confirmRevert(hunk: hunk, of: shown) } else { pane.perform(action, hunk: hunk, of: shown) }
+                    if action == .revert { pane.rollBack(hunk: hunk, of: shown) } else { pane.perform(action, hunk: hunk, of: shown) }
                 }
             }
         }

@@ -157,24 +157,28 @@ extension SelfTest {
               "\(said), staged: " + stepped.joined(separator: ", "))
         column.textView.setSelectedRange(NSRange(location: 0, length: 0))
         diff.base = .head
-        // Revert Hunk… from a row, its folds open: the line put back shows between the changes left, every line
-        // of the file there once, none folded away for good.
+        // Rollback Hunk from a row, its folds open, at once with no question: the line put back shows between the
+        // changes left, every line of the file there once, none folded away for good; the notice's Undo brings it back.
         _ = await wait(5) { diff.hunkCount == 2 && rows().contains { $0.line?.text == "line thirty-five" } && !rows().contains { $0.kind == .fold } }
         if let row = rows().firstIndex(where: { $0.kind == .added && $0.line?.text == "line thirty-five" }), let window = c.window,
-           let menu = rightClick(column, row), let item = menu.items.firstIndex(where: { $0.title == "Revert Hunk…" }) {
+           let menu = rightClick(column, row), let item = menu.items.firstIndex(where: { $0.title == "Rollback Hunk" }) {
             menu.performActionForItem(at: item)
-            let reverted = await pressButton("Revert", inSheetOf: window)
             let numbers = { rows().compactMap { $0.kind == .removed ? nil : $0.number } }
             let whole = await wait(6) {
                 diff.hunkCount == 1 && !rows().contains { $0.line?.text == "line thirty-five" } && numbers() == Array(1...40) && !rows().contains { $0.kind == .fold }
             }
-            check(reverted && whole, "Revert Hunk… in Unified with its folds open: the line put back shows, numbered 1 to 40, nothing folded",
+            check(whole && window.attachedSheet == nil, "Rollback Hunk in Unified, with no question, its folds open: the line put back shows, numbered 1 to 40, nothing folded",
                   "\(diff.hunkCount) hunks, \(numbers().count) lines, folds: " + rows().compactMap { $0.fold?.title }.joined(separator: " | "))
+            check(GitToast.text == "Rolled back a change in app.txt", "Rollback Hunk says so, with Undo", GitToast.text ?? "no notice")
+            GitToast.pressButtonForTest()
+            check(await wait(5) { diff.hunkCount == 2 && rows().contains { $0.line?.text == "line thirty-five" } }, "the notice's Undo brings the hunk back",
+                  "\(diff.hunkCount) hunks")
+            GitToast.dismiss()
             write("src/app.txt", edited.joined(separator: "\n") + "\n")
             diff.reload()
             _ = await wait(5) { diff.hunkCount == 2 }
         } else {
-            check(false, "Unified offers Revert Hunk… on a row of a change", rows().compactMap { $0.fold?.title }.joined(separator: " | "))
+            check(false, "Unified offers Rollback Hunk on a row of a change", rows().compactMap { $0.fold?.title }.joined(separator: " | "))
         }
         // Remembered, for every diff, and in the View menu.
         let menuItem = KeyboardShortcuts.shared.commands.first { $0.id == "toggleUnifiedDiffs:" }?.item
@@ -657,15 +661,6 @@ extension SelfTest {
                                              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                                              eventNumber: 0, clickCount: 1, pressure: 1) else { return }
         text.mouseDown(with: event)
-    }
-
-    /// Clicks the button titled `title` in the sheet over `window`, once it is up.
-    private static func pressButton(_ title: String, inSheetOf window: NSWindow) async -> Bool {
-        func buttons(_ view: NSView) -> [NSButton] { view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons($0) } }
-        guard await wait(5, { window.attachedSheet?.contentView.map(buttons)?.contains { $0.title == title } == true }),
-              let button = window.attachedSheet?.contentView.map(buttons)?.first(where: { $0.title == title }) else { return false }
-        button.performClick(nil)
-        return true
     }
 
     /// The menu a right-click on `row` of a unified column opens.

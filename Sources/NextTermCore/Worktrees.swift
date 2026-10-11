@@ -320,6 +320,8 @@ public enum AgentGuard {
         /// Checkout, Checkout and Update, a tag or revision, New Branch switching to it: to `target` when known.
         case switching(to: String?)
         case updating, merging, rebasing, continuing, skipping, aborting
+        /// Git › Rollback…: the files put back to the last commit are ones the agent may be working on.
+        case rollingBack
     }
 
     public static let openInNewWorktree = "Open in New Worktree…"
@@ -347,6 +349,7 @@ public enum AgentGuard {
         case .continuing: return "Continue Anyway"
         case .skipping: return "Skip Anyway"
         case .aborting: return "Abort Anyway"
+        case .rollingBack: return "Roll Back Anyway"
         }
     }
 
@@ -365,6 +368,7 @@ public enum AgentGuard {
         case .continuing: return "Continuing"
         case .skipping: return "Skipping"
         case .aborting: return "Aborting"
+        case .rollingBack: return "Rolling back"
         }
     }
 
@@ -560,6 +564,34 @@ public enum WorktreeRemoval {
         let keeps = branch.map { "The branch \($0) stays, with its commits." }
             ?? "It is detached at \(String((head ?? "").prefix(7))), which a branch or tag keeps."
         return "Its folder is deleted, with the ignored files in it. " + keeps
+    }
+
+    /// What the question about a branch another worktree holds offers, button by button.
+    public enum HeldAction: Equatable, Sendable { case remove, forget, open, cancel }
+
+    /// The question when `branch` can't be checked out because the worktree `folder` (at `place`, as shown) has it,
+    /// from the verdict on removing that worktree: Remove Worktree when it can go (clean, nothing open in it, not
+    /// locked), Forget Worktree when its folder is gone, else Open Worktree and why it stays. Never a forced remove,
+    /// never two checkouts of one branch. `switching`: asked by a switch, which follows the remove ("… and Switch").
+    /// The first button is the default.
+    public static func heldQuestion(branch: String, folder: String, place: String, verdict: Verdict, switching: Bool)
+        -> (title: String, info: String, buttons: [String], actions: [HeldAction], destructive: Int?) {
+        let title = "“\(branch)” is checked out in “\(folder)”"
+        let then = switching ? " and Switch" : ""
+        switch verdict {
+        case .remove:
+            return (title, "\(place)\n\nIt has no changes and nothing open in it. Remove Worktree\(then) deletes its folder, with the ignored files in it (such as .env and node_modules), and keeps \(branch).",
+                    ["Remove Worktree\(then)", "Open Worktree", "Cancel"], [.remove, .open, .cancel], 0)
+        case let .forget(losing):
+            let lost = losing.map { " Its commit \($0) is on no branch or tag and goes with it." } ?? ""
+            return (title, "\(place)\n\nIts folder is gone, but git still lists it, so \(branch) stays checked out there. Forget Worktree\(then) deletes only git’s record of it." + lost,
+                    ["Forget Worktree\(then)", "Cancel"], [.forget, .cancel], losing == nil ? nil : 0)
+        case let .refuse(reason, _):
+            return (title, "\(place)\n\n\(reason) So it stays: open it to work on \(branch) there.", ["Open Worktree", "Cancel"], [.open, .cancel], nil)
+        case let .unlockFirst(reason):
+            return (title, "\(place)\n\n\(reason) Unlock is in its row’s menu in Branches (⌥⌘B); then it can be removed.",
+                    ["Open Worktree", "Cancel"], [.open, .cancel], nil)
+        }
     }
 
     /// What Forget asks under its title: only git's record of the worktree goes (its HEAD and reflog), and a

@@ -85,6 +85,7 @@ extension ImportVSCode {
             "workbench.action.files.revealActiveFileInWindows": "revealInFinder:",
             "git.commit": "gitCommit:",
             "git.push": "gitPush:",
+            "git.clean": "gitRollback:",                    // Discard Changes
             "git.pull": "gitUpdate:",
             "git.fetch": "gitFetch:",
             "git.checkout": "showBranches:",

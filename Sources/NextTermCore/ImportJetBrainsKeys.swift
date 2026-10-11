@@ -63,6 +63,7 @@ extension ImportJetBrains {
             "RevealIn": "revealInFinder:",
             "CheckinProject": "gitCommit:",
             "Vcs.Push": "gitPush:",
+            "ChangesView.Revert": "gitRollback:",           // Rollback
             "Vcs.UpdateProject": "gitUpdate:",
             "Git.Fetch": "gitFetch:",
             "Git.Branches": "showBranches:",

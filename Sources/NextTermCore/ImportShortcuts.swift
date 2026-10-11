@@ -76,6 +76,7 @@ public enum ImportShortcuts {
             "toggleZoomPane:": "Maximize Pane",
             "gitCommit:": "Commit…",
             "gitPush:": "Push…",
+            "gitRollback:": "Rollback…",
             "gitUpdate:": "Update Project",
             "gitFetch:": "Fetch",
             "showBranches:": "Branches…",

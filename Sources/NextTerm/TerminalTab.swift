@@ -820,6 +820,29 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return ScrollbackText.below(divider: divider.text, row: divider.row, in: tail.rows, first: tail.first)
     }
 
+    // MARK: a branch another worktree holds
+
+    /// The row a git command's output starts on, while one runs in this (local) tab: if it fails because another
+    /// worktree has the branch, the window offers to free it (TerminalWindowController.noticeHeldBranch). Only the
+    /// command's own output is read, once, when it ends; nothing is typed in the shell.
+    private var gitOutputStart: Int?
+
+    private func gitCommandEnded(_ code: Int32) {
+        guard let start = gitOutputStart else { return }
+        gitOutputStart = nil
+        guard code != 0, remote == nil, let last = lastTextRow(), last >= start else { return }
+        let terminal = view.getTerminal()
+        // A line the terminal wrapped is one line again: git's message names a long path.
+        var lines: [String] = []
+        for row in max(start, last - 60)...last {
+            guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
+            let text = line.translateToString(trimRight: true)
+            if line.isWrapped, !lines.isEmpty { lines[lines.count - 1] += text } else { lines.append(text) }
+        }
+        guard let held = GitOutput.heldBranch(lines.joined(separator: "\n")) else { return }
+        AppDelegate.shared.controllers.first { $0.tabs.contains { $0 === self } }?.noticeHeldBranch(held.branch, at: held.path, from: directory)
+    }
+
     // MARK: serving
 
     /// The local address a running server printed (`npm run dev`, `langgraph dev`, `uvicorn`): shown as
@@ -1066,7 +1089,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if let ownStateDescription { lines.append(ownStateDescription) }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
-        if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
+        if let servedURL { lines.append("Serving \(ServedURL.shared(servedURL))") } // its token, if any, stays out of sight
         if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
         lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")
@@ -1084,6 +1107,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
+            gitOutputStart = remote == nil && GitOutput.isGitCommand(expanded ?? line) ? pendingServingStart : nil
             noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
@@ -1093,6 +1117,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
+            gitCommandEnded(code)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
         case .jobs(let count, let summary):

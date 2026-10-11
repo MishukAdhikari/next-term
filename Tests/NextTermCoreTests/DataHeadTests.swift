@@ -227,12 +227,18 @@ import Testing
         let line = Data((row + "\n").utf8)
         for _ in 0..<500 { out.write(line) }
         try out.close()
-        let before = Self.footprint()
-        let page = try DataHead.page(at: path, kind: .delimited)
-        let grew = Int64(Self.footprint()) - Int64(before)
-        #expect(page.records.count == 500 && page.isAtEnd)
+        // The footprint is the whole process's, and the other suites allocate meanwhile: that only ever adds. The page is
+        // read three times, each kept, so each read needs memory of its own, and the least it grew is what a page costs.
+        var pages: [DataPage] = []
+        var grew = Int64.max
+        for _ in 0..<3 {
+            let before = Self.footprint()
+            pages.append(try DataHead.page(at: path, kind: .delimited))
+            grew = min(grew, Int64(Self.footprint()) - Int64(before))
+        }
+        #expect(pages.allSatisfy { $0.records.count == 500 && $0.isAtEnd })
         #expect(grew < 64 << 20, "memory grew by \(grew >> 20) MB")
-        withExtendedLifetime(project) {}
+        withExtendedLifetime((project, pages)) {}
     }
 
     /// Keys and values too long to fit in a String's own bytes each have an allocation of their own,

@@ -19,6 +19,15 @@ public enum ServedURL {
         return URL(string: "\(match.1)://\(host):\(port)\(path)")
     }
 
+    /// The address without its query and fragment, for what leaves the tab (MCP's list_tabs): a dev server prints a
+    /// login token there (Jupyter's `?token=…`). The tab keeps the whole address for your own click.
+    public static func shared(_ url: URL) -> String {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return "" }
+        parts.query = nil
+        parts.fragment = nil
+        return parts.string ?? ""
+    }
+
     /// " · :5173": what a tab's title adds while it serves.
     public static func suffix(_ url: URL) -> String {
         url.port.map { " · :\($0)" } ?? ""

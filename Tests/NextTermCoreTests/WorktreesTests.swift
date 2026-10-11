@@ -8,6 +8,25 @@ import Testing
 @Suite struct WorktreesTests {
     // MARK: the target
 
+    /// A branch another worktree holds: Remove Worktree (and Switch) only when the worktree can go, Forget when its
+    /// folder is gone, else Open Worktree and why it stays.
+    @Test func theQuestionAboutAHeldBranch() {
+        let place = "~/Code/xCloud-wt-dev"
+        let clean = WorktreeRemoval.heldQuestion(branch: "dev", folder: "xCloud-wt-dev", place: place, verdict: .remove, switching: true)
+        #expect(clean.title == "“dev” is checked out in “xCloud-wt-dev”")
+        #expect(clean.buttons == ["Remove Worktree and Switch", "Open Worktree", "Cancel"] && clean.actions == [.remove, .open, .cancel] && clean.destructive == 0)
+        #expect(clean.info.hasPrefix(place + "\n\nIt has no changes and nothing open in it.") && clean.info.hasSuffix("and keeps dev."))
+        #expect(WorktreeRemoval.heldQuestion(branch: "dev", folder: "w", place: place, verdict: .remove, switching: false).buttons.first == "Remove Worktree")
+        let gone = WorktreeRemoval.heldQuestion(branch: "dev", folder: "w", place: place, verdict: .forget(losing: nil), switching: true)
+        #expect(gone.buttons == ["Forget Worktree and Switch", "Cancel"] && gone.actions == [.forget, .cancel] && gone.destructive == nil)
+        #expect(WorktreeRemoval.heldQuestion(branch: "dev", folder: "w", place: place, verdict: .forget(losing: "abc1234"), switching: true).destructive == 0)
+        let dirty = WorktreeRemoval.heldQuestion(branch: "dev", folder: "w", place: place, verdict: .refuse("It has 3 changed files.", goTo: false), switching: true)
+        #expect(dirty.buttons == ["Open Worktree", "Cancel"] && dirty.actions == [.open, .cancel])
+        #expect(dirty.info == place + "\n\nIt has 3 changed files. So it stays: open it to work on dev there.")
+        let locked = WorktreeRemoval.heldQuestion(branch: "dev", folder: "w", place: place, verdict: .unlockFirst("It is locked."), switching: false)
+        #expect(locked.actions == [.open, .cancel] && locked.info.contains("Unlock is in its row’s menu"))
+    }
+
     @Test func addArgumentsPerTarget() {
         let path = "/Users/me/Code/xCloud-wt-7027-sso"
         #expect(WorktreeTarget.branch("fix/7027-sso").addArguments(path: path) == ["worktree", "add", path, "fix/7027-sso"])
@@ -263,10 +282,11 @@ import Testing
         #expect(AgentGuard.info([claude], .continuing) == "In the tab “✳ Slack thread discussion”. Continuing changes the files under it.")
         #expect(AgentGuard.info([claude], .skipping).contains("Skipping changes the files"))
         #expect(AgentGuard.info([claude], .switching(to: nil)).contains("Switching branches changes the files"))
+        #expect(AgentGuard.info([claude], .rollingBack) == "In the tab “✳ Slack thread discussion”. Rolling back changes the files under it.")
         // Each caller's button, and the worktree button only for a switch.
         let anyway: [(AgentGuard.Action, String)] = [(.switching(to: "x"), "Switch Anyway"), (.updating, "Update Anyway"), (.merging, "Merge Anyway"),
                                                       (.rebasing, "Rebase Anyway"), (.continuing, "Continue Anyway"), (.skipping, "Skip Anyway"),
-                                                      (.aborting, "Abort Anyway")]
+                                                      (.aborting, "Abort Anyway"), (.rollingBack, "Roll Back Anyway")]
         for (action, label) in anyway {
             #expect(AgentGuard.anyway(action) == label)
             #expect(AgentGuard.buttons(action, worktree: false) == [label, "Cancel"])

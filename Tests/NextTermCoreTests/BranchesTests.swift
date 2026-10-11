@@ -72,6 +72,16 @@ import Testing
         """
         #expect(GitOutput.classify(overwritten) == .localChanges(files: ["src/a.swift", "README.md"]))
         #expect(GitOutput.classify("fatal: 'feat/x' is already used by worktree at '/r/.claude/worktrees/x'") == .heldByWorktree(path: "/r/.claude/worktrees/x"))
+        // What a terminal tab's failed git command offers to free: the branch and the worktree that has it.
+        let switched = GitOutput.heldBranch("$ git checkout dev\nfatal: 'dev' is already used by worktree at '/Users/m/Code/xCloud-wt-dev'")
+        #expect(switched?.branch == "dev" && switched?.path == "/Users/m/Code/xCloud-wt-dev")
+        let deleting = GitOutput.heldBranch("error: cannot delete branch 'feat/x' used by worktree at '/r/wt'")
+        #expect(deleting?.branch == "feat/x" && deleting?.path == "/r/wt")
+        #expect(GitOutput.heldBranch("fatal: refusing to fetch into branch 'refs/heads/dev' checked out at '/r/wt'") == nil)
+        #expect(GitOutput.heldBranch("error: pathspec 'dev' did not match") == nil)
+        #expect(GitOutput.isGitCommand("git checkout dev") && GitOutput.isGitCommand("GIT_TRACE=1 git switch dev")
+                && GitOutput.isGitCommand("command git branch -d x") && GitOutput.isGitCommand("/opt/homebrew/bin/git switch x"))
+        #expect(!GitOutput.isGitCommand("gitk") && !GitOutput.isGitCommand("echo git") && !GitOutput.isGitCommand(""))
         #expect(GitOutput.classify("error: the branch 'x' is not fully merged.") == .notFullyMerged)
         #expect(GitOutput.classify("To github.com:o/r.git\n!\trefs/heads/x:refs/heads/x\t[rejected] (fetch first)\nDone") == .pushRejected)
         #expect(GitOutput.classify("!\trefs/heads/x:refs/heads/x\t[rejected] (stale info)") == .leaseFailed)

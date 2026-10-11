@@ -3,8 +3,9 @@ import NextTermCore
 
 /// What the branch popup and the Git menu do. Each is a few git commands with fixed flags (run by
 /// GitWriter, so each is in Git Commands as it would be typed), with the rules from the design: never
-/// change files under a working agent without asking, never discard (a stash is kept, by its id), say
-/// what an error means and offer a terminal when a person is needed.
+/// change files under a working agent without asking, never discard without a way back (a stash is kept, by
+/// its id; a rollback keeps every file and its index entry for Undo), say what an error means and offer a
+/// terminal when a person is needed.
 struct GitActions {
     let popup: BranchPopupController
     init(_ popup: BranchPopupController) { self.popup = popup }
@@ -19,12 +20,15 @@ struct GitActions {
     /// outgoing commits): where such a press would ask, it asks nothing while a sheet is up, so no second question waits.
     var sheetIsUp: Bool { window?.attachedSheet != nil }
 
-    func run(_ title: String, _ steps: [[String]], activity: GitWriter.Activity? = nil, then: @escaping (GitWriter.Result) -> Void) {
+    /// `place`: the worktree and repository to run in, when they must be those of an earlier step (a rollback's Undo),
+    /// not what the window shows now.
+    func run(_ title: String, _ steps: [[String]], in place: (root: String, repository: String)? = nil, activity: GitWriter.Activity? = nil,
+             then: @escaping (GitWriter.Result) -> Void) {
         let popup = self.popup
         let controller = self.controller
-        let root = self.root
+        let root = place?.root ?? self.root
         AgentPlaces.shared.noteOwnGit(steps, in: root) // a switch it makes is yours, not an agent's
-        GitWriter.shared.run(title, in: root, repository: model?.commonDir ?? root, steps: steps, activity: activity) { result in
+        GitWriter.shared.run(title, in: root, repository: place?.repository ?? model?.commonDir ?? root, steps: steps, activity: activity) { result in
             AgentPlaces.shared.noteOwnGit(steps, in: root)
             controller?.sidebar.git.refresh()
             popup.reload()
@@ -85,29 +89,58 @@ struct GitActions {
     func checkout(_ ref: BranchRef) {
         // A remote's name may hold a "/" ("my/fork"): split by the remotes, not at the first "/".
         let target = ref.isRemote ? (model?.remoteAndBranch(of: ref.name)?.branch ?? ref.shortName) : ref.name
-        // Checked out in another worktree: git can't switch to it here, so nothing would touch an agent. Open it there.
-        let local = ref.isRemote ? model?.local(target) : ref
-        if let local, let elsewhere = model?.otherWorktree(of: local) { return held(target, at: elsewhere) }
         let steps: [[String]]
         if ref.isRemote {
             steps = model?.local(target) != nil ? [["switch", target]] : [["switch", "-c", target, "--track", ref.name]]
         } else {
             steps = [["switch", target]]
         }
+        // Checked out in another worktree: git can't switch to it here. Ask what to do with that worktree; the switch
+        // follows a remove without reading the branches again (they'd still show the worktree holding it).
+        let local = ref.isRemote ? model?.local(target) : ref
+        if let local, let elsewhere = model?.otherWorktree(of: local) {
+            return held(target, at: elsewhere) { switchNow(target, steps: steps, worktree: nil) }
+        }
         let worktree = worktreeTarget(ref)
-        confirmAgents(.switching(to: target), worktree: worktree) {
-            run("Checkout \(target)", steps) { result in
-                if result.ok { return toast("Switched to \(target)") }
-                switchFailed(result, to: target, steps: steps, worktree: worktree)
-            }
+        confirmAgents(.switching(to: target), worktree: worktree) { switchNow(target, steps: steps, worktree: worktree) }
+    }
+
+    /// The switch itself, once the agents here were asked about.
+    private func switchNow(_ target: String, steps: [[String]], worktree: WorktreeTarget?) {
+        run("Checkout \(target)", steps) { result in
+            if result.ok { return toast("Switched to \(target)") }
+            switchFailed(result, to: target, steps: steps, worktree: worktree)
         }
     }
 
-    /// "“x” is checked out in another worktree", with Open Worktree.
-    private func held(_ target: String, at path: String?) {
-        GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
-                      buttons: ["Open Worktree", "Cancel"], over: window) { choice in
-            if choice == 0, let path { openWorktree(path) }
+    /// "“dev” is checked out in “app-wt-dev”": what can be done with that worktree, decided from the same facts as
+    /// its row's Remove Worktree… (WorktreeRemoval.heldQuestion): Remove Worktree and Switch when it can go, Forget
+    /// Worktree and Switch when its folder is gone, else Open Worktree and why it stays. `switchHere`: the switch, run
+    /// once the worktree is gone, the agents here asked about first unless `agentsAsked`; nil: the worktree only.
+    func held(_ target: String, at path: String?, agentsAsked: Bool = false, switchHere: (() -> Void)? = nil) {
+        guard let path, let model, let row = BranchPopupController.worktreeRow(at: path, in: model) else {
+            return GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
+                                 buttons: ["Open Worktree", "Cancel"], over: window) { choice in
+                if choice == 0, let path { openWorktree(path) }
+            }
+        }
+        removalVerdict(row) { verdict, _ in
+            let asked = WorktreeRemoval.heldQuestion(branch: target, folder: row.folder, place: RecentProjects.abbreviate(path), verdict: verdict,
+                                                     switching: switchHere != nil)
+            GitPrompt.ask(asked.title, info: asked.info, buttons: asked.buttons, destructive: asked.destructive, over: window) { choice in
+                switch asked.actions[safe: choice] {
+                case .remove?, .forget?:
+                    let done = (asked.actions[choice] == .remove ? "Removed " : "Forgot ") + "\(row.folder): \(target) is free"
+                    let remove = { runRemoval(row.worktree, folder: row.folder, done: done, then: switchHere) }
+                    if switchHere == nil || agentsAsked { return remove() }
+                    // Before the remove: backing out here must leave that worktree as it is.
+                    confirmAgents(.switching(to: target)) { remove() }
+                case .open?:
+                    openWorktree(path)
+                default:
+                    break
+                }
+            }
         }
     }
 
@@ -170,7 +203,13 @@ struct GitActions {
                 if choice == 0 { stashSwitch(to: target, steps: steps, then: then) }
             }
         case let .heldByWorktree(path)?:
-            held(target, at: path)
+            // The agents here were asked about before this switch.
+            held(target, at: path, agentsAsked: true) {
+                run("Checkout \(target)", steps) { result in
+                    guard result.ok else { return switchFailed(result, to: target, steps: steps, worktree: worktree, update: update, then: then) }
+                    if let then { then() } else { toast("Switched to \(target)") }
+                }
+            }
         default:
             failed("Could not switch to “\(target)”", result, retry: steps.last)
         }
@@ -345,6 +384,117 @@ struct GitActions {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: rollback
+
+    /// Git › Rollback…: `paths` (relative to the root, "" for all of it; a folder takes every change under it) back to
+    /// the last commit, after asking, and after the agents working here are asked about. The plan is git's status and
+    /// the disk read now (Rollback.plan): changes and deletions come back from HEAD, a file HEAD doesn't have leaves the
+    /// index and goes to the Trash, and anything a checkout would overwrite is refused. Every file and its index entry
+    /// are kept first (RollbackBackup), so Undo puts them back exactly, what was staged staged again. Also refused: a
+    /// file with unsaved edits in the editor (save or close it first).
+    func rollback(_ paths: [String]) {
+        let root = self.root, repository = model?.commonDir ?? root
+        guard let git = GitWriter.git, !paths.isEmpty, !root.isEmpty, !sheetIsUp else { return NSSound.beep() }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let snapshot = GitRunner.snapshot(for: root, git: git)
+            let planned = snapshot.map { status in Rollback.plan(paths, in: status) { Rollback.diskKind($0, root: root) } }
+            DispatchQueue.main.async {
+                guard let planned else { return toast("Could not read the changes to roll back") }
+                switch planned {
+                case .failure(.unchanged):
+                    toast("Nothing to roll back: no uncommitted changes there")
+                case let .failure(refusal):
+                    let said = Rollback.refusal(refusal)
+                    GitPrompt.ask(said.title, info: said.info, buttons: ["OK"], over: window) { _ in }
+                case let .success(plan):
+                    if let unsaved = unsavedEdits(in: Rollback.touched(plan.steps), root: root) {
+                        return GitPrompt.ask("“\((unsaved as NSString).lastPathComponent)” has unsaved edits", info: "Save or close it before rolling it back.",
+                                             buttons: ["OK"], over: window) { _ in }
+                    }
+                    let asked = Rollback.question(plan, named: paths, root: root)
+                    GitPrompt.ask(asked.title, info: asked.info, buttons: ["Roll Back", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
+                        guard choice == 0 else { return }
+                        confirmAgents(.rollingBack) {
+                            performRollback(plan, named: paths, in: (root, repository), git: git)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The first open file with unsaved edits at one of `paths` (relative to `root`) or under one (a folder).
+    private func unsavedEdits(in paths: [String], root: String) -> String? {
+        let places = paths.map { canonicalPath(root + "/" + $0) }
+        return (controller?.editorArea.dirtyDocuments ?? []).map { canonicalPath($0.path) }.first { path in
+            places.contains { path == $0 || path.hasPrefix($0 + "/") }
+        }
+    }
+
+    /// The rollback itself, once asked: the plan read again (what the question named must still be what is there), the
+    /// copies kept, the new files to the Trash (a file the Trash refuses stops it all, before git changes anything), then
+    /// git, then the notice with Undo. The copying and the Trash run off the main thread.
+    private func performRollback(_ plan: Rollback.Plan, named paths: [String], in place: (root: String, repository: String), git: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let now = GitRunner.snapshot(for: place.root, git: git)
+            let again = now.map { status in Rollback.plan(paths, in: status) { Rollback.diskKind($0, root: place.root) } }
+            guard again == .success(plan), let now else {
+                return DispatchQueue.main.async { toast("The changes moved on while you were asked, so nothing was rolled back") }
+            }
+            let backup = RollbackBackup(plan: plan, root: place.root, repository: place.repository, git: git, snapshot: now)
+            let refused = backup?.trash()
+            DispatchQueue.main.async {
+                guard let backup else { return toast("Could not keep a copy of the files, so nothing was rolled back") }
+                if let refused {
+                    backup.discard()
+                    return GitPrompt.ask("“\((refused as NSString).lastPathComponent)” couldn’t go to the Trash", info: "Nothing was rolled back.",
+                                         buttons: ["OK"], over: window) { _ in }
+                }
+                let commands = Rollback.commands(plan.steps)
+                run("Rollback", commands.unstage, in: place) { unstaged in
+                    guard unstaged.ok else {
+                        failed("Could not roll back", unstaged, retry: nil)
+                        return undoRollback(backup, quietly: true)
+                    }
+                    run("Rollback", commands.restore, in: place) { restored in
+                        controller?.editorArea.checkDisk()
+                        guard restored.ok else {
+                            failed("Could not roll back", restored, retry: nil)
+                            return undoRollback(backup, quietly: true)
+                        }
+                        backup.noteAfter()
+                        GitToast.show(Rollback.done(plan.files), in: window, button: "Undo") { undoRollback(backup, quietly: false) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The files back as they were before the rollback, then the index, in the repository rolled back; refused when one
+    /// changed since. `quietly`: a rollback that failed part way, put back with nothing said unless that fails too.
+    private func undoRollback(_ backup: RollbackBackup, quietly: Bool) {
+        if !quietly, let changed = backup.changedSince() {
+            return GitPrompt.ask("“\((changed as NSString).lastPathComponent)” changed since the rollback", info: "Undo would overwrite that change, so nothing was undone.",
+                                 buttons: ["OK"], over: window) { _ in }
+        }
+        let missed = backup.restoreFiles()
+        let commands = Rollback.undoIndexCommands(backup.touched, before: backup.entries, intentToAdd: backup.intentToAdd)
+        run("Undo Rollback", commands, in: (backup.root, backup.repository)) { result in
+            controller?.editorArea.checkDisk()
+            if !result.ok { return failed("Could not undo the rollback", result, retry: nil) }
+            guard missed.isEmpty else {
+                let names = missed.prefix(10).joined(separator: "\n") + (missed.count > 10 ? "\nand \(missed.count - 10) more" : "")
+                let info = names + "\n\nSomething is in their place now, or they left the Trash. The copies of the changed files are kept for a week."
+                return GitPrompt.ask(missed.count == 1 ? "“\((missed[0] as NSString).lastPathComponent)” couldn’t come back" : "\(missed.count) files couldn’t come back",
+                                     info: info, buttons: ["Show Copies", "OK"], over: window) { choice in
+                    if choice == 0 { NSWorkspace.shared.activateFileViewerSelecting([backup.folder]) }
+                }
+            }
+            backup.discard()
+            if !quietly { toast("Undone: the changes are back") }
         }
     }
 

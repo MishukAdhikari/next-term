@@ -131,6 +131,10 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     private(set) var isReading = false
     /// Counts the popup's openings: only the read the latest one started ends `isReading`.
     private var openings = 0
+    /// Git › Worktrees…: the first worktree's row is selected as the rows are drawn, until the latest read of the
+    /// branches is in (one started earlier may not have the worktrees yet).
+    var focusWorktrees = false
+    private var reads = 0
     /// The last read came back with nothing: not a repository any more, or git failed.
     private var readFailed = false
     /// Tag names, newest first, read on the first search of an opening (nil until then).
@@ -233,6 +237,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     func reload(then done: (() -> Void)? = nil) {
         guard let git = GitWriter.git else { return }
         let directory = self.directory
+        reads += 1
+        let read = reads
         Self.readQueue.async { [weak self] in
             let fresh = BranchModel.read(at: directory, git: git)
             DispatchQueue.main.async {
@@ -243,7 +249,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                 self.model = fresh
                 self.readFailed = fresh == nil
                 if self.panel.isVisible { self.rebuild() }
-                done?()
+                done?() // as the popup opens, this draws the rows read (`isReading` is still on above)
+                if read == self.reads { self.focusWorktrees = false } // the latest read: there are worktrees to go to, or none
             }
         }
     }
@@ -254,9 +261,13 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let previous = selectedItemKey
         items = field.stringValue.trimmingCharacters(in: .whitespaces).isEmpty ? browseItems() : searchItems(field.stringValue)
         table.reloadData()
-        let index = items.firstIndex { key(of: $0) == previous && previous != nil } ?? items.firstIndex { $0.isSelectable }
+        // Git › Worktrees…: the first worktree, from the rows drawn before the read too (cleared once read: `reload`).
+        let worktree = focusWorktrees ? items.firstIndex { if case .worktree = $0 { return true } else { return false } } : nil
+        let index = worktree ?? items.firstIndex { key(of: $0) == previous && previous != nil } ?? items.firstIndex { $0.isSelectable }
         if let index {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            // The Worktrees header with its first row.
+            if worktree != nil, index > 0 { table.scrollRowToVisible(index - 1) }
             table.scrollRowToVisible(index)
         }
         rowToolTips?.update()
@@ -435,11 +446,25 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             let agent = WorktreeRow.Agent(name: AgentName.of(program: tab.status.program), state: tab.status.state, tab: tab.title)
             agentsByPath[canonicalPath(worktree.path), default: []].append(agent)
         }
-        return worktrees.map { worktree in
-            let agents = agentsByPath[canonicalPath(worktree.path)] ?? []
-            let holder = worktree.lockReason.flatMap(LockHolder.parse)
-            return .worktree(WorktreeRow(worktree: worktree, agents: agents, holder: holder, holderAlive: holder?.isAlive() ?? false))
-        }
+        return worktrees.map { worktree in .worktree(Self.row(of: worktree, agents: agentsByPath[canonicalPath(worktree.path)] ?? [])) }
+    }
+
+    /// A worktree's row: its agents, and whether the process its lock names still runs.
+    private static func row(of worktree: Worktree, agents: [WorktreeRow.Agent]) -> WorktreeRow {
+        let holder = worktree.lockReason.flatMap(LockHolder.parse)
+        return WorktreeRow(worktree: worktree, agents: agents, holder: holder, holderAlive: holder?.isAlive() ?? false)
+    }
+
+    /// The row of the worktree at `path`, as the popup would show it, for the prompt about a branch it holds
+    /// (GitActions.held): one set of facts for both.
+    static func worktreeRow(at path: String, in model: BranchModel) -> WorktreeRow? {
+        let place = canonicalPath(path)
+        guard let worktree = model.worktrees.first(where: { canonicalPath($0.path) == place }) else { return nil }
+        let agents = AppDelegate.shared.controllers.flatMap(\.tabs).filter { tab in
+            tab.remote == nil && tab.status.running && tab.status.kind == .agent
+                && model.worktree(containing: AgentPlaces.shared.agentFolder(of: tab)).map { canonicalPath($0.path) == place } == true
+        }.map { WorktreeRow.Agent(name: AgentName.of(program: $0.status.program), state: $0.status.state, tab: $0.title) }
+        return row(of: worktree, agents: agents)
     }
 
     /// A tab's state in words, for tooltips and the self-test.
@@ -561,7 +586,7 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     }
 
     func activate(row: Int) {
-        guard let item = items[safe: row], item.isSelectable, let model else { return NSSound.beep() }
+        guard let item = items[safe: row], item.isSelectable, model != nil else { return NSSound.beep() }
         switch item {
         case let .action(action, _, _): perform(action)
         case let .folder(id, _, _, _):
@@ -570,11 +595,13 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         case let .branch(ref, _, _, _):
             if ref.isHead { return showMenu(row: row) }
             close()
-            if !ref.isRemote, let elsewhere = model.otherWorktree(of: ref) { return GitActions(self).openWorktree(elsewhere) }
+            // Held by another worktree: checkout asks what to do, Open Worktree first unless it can go.
             GitActions(self).checkout(ref)
-        case let .worktree(row):
+        case let .worktree(worktreeRow):
+            // Its folder is gone: nothing to open, so its menu (Forget).
+            if worktreeRow.worktree.isPrunable { return showMenu(row: row) }
             close()
-            GitActions(self).openWorktree(row.worktree.path)
+            GitActions(self).openWorktree(worktreeRow.worktree.path)
         case let .tag(name, _):
             close()
             GitActions(self).checkoutTag(name)
@@ -651,6 +678,9 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
             let elsewhere = model.otherWorktree(of: ref)
             let tracking = model.upstream(of: ref)
             if let elsewhere {
+                add("Checkout…", tip: "It is checked out in another worktree: asks whether to remove that worktree (when it can go) or open it.") {
+                    actions.checkout(ref)
+                }
                 add("Open Worktree") { actions.openWorktree(elsewhere) }
             } else {
                 add("Checkout") { actions.checkout(ref) }

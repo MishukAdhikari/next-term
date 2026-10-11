@@ -47,6 +47,9 @@ public struct GitSnapshot: Sendable {
     public var renamedFrom: [String: String] = [:]
     /// Untracked or ignored folders git reports as a whole ("node_modules/").
     public var wholeFolders: [String: GitChange] = [:]
+    /// Changed entries that are submodules (status's `sub` field starts with S): their changes live in their own
+    /// repository.
+    public var submodules: Set<String> = []
     /// Strongest change below each folder (ignored entries do not count).
     public var folderChanges: [String: GitChange] = [:]
     public var folderStats: [String: LineStats] = [:]
@@ -126,6 +129,7 @@ public struct GitSnapshot: Sendable {
                 guard f.count == 9 else { continue }
                 snapshot.files[String(f[8])] = ordinaryChange(String(f[1]))
                 snapshot.codes[String(f[8])] = String(f[1])
+                if f[2].hasPrefix("S") { snapshot.submodules.insert(String(f[8])) }
             case "2":
                 // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
                 let f = record.split(separator: " ", maxSplits: 9, omittingEmptySubsequences: false)
@@ -133,6 +137,7 @@ public struct GitSnapshot: Sendable {
                 let xy = String(f[1])
                 snapshot.files[String(f[9])] = xy.contains("C") ? .added : .renamed
                 snapshot.codes[String(f[9])] = xy
+                if f[2].hasPrefix("S") { snapshot.submodules.insert(String(f[9])) }
                 if i < records.count { snapshot.renamedFrom[String(f[9])] = records[i] }
                 i += 1 // the original path
             case "u":
