@@ -734,6 +734,8 @@ import Testing
         #expect(text(HTTP.refusal(status: 413)).hasPrefix("HTTP/1.1 413 Content Too Large\r\n"))
         #expect(text(HTTP.refusal(status: 403)).hasPrefix("HTTP/1.1 403 Forbidden\r\n"))
         #expect(text(HTTP.refusal(status: 400)).hasPrefix("HTTP/1.1 400 Bad Request\r\n"))
+        // The door's answer when a head or a body is too slow to arrive (R8).
+        #expect(text(HTTP.refusal(status: 408)).hasPrefix("HTTP/1.1 408 Request Timeout\r\n"))
     }
 
     @Test func aCheckedRefusalAnswersItself() {
