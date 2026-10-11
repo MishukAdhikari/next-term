@@ -8,10 +8,10 @@ import Foundation
 /// thread, `begin` reads its grant under this lock and hands it to the registry, still under it.
 ///
 /// Grant changes are saved before their reply goes out. A failed save of new tokens answers `server_error`: the
-/// authority keeps the old refresh token current, and the new pair is never sent. A failed save of new options
-/// changes nothing. Every other change applies at once, since a revoke can't wait for a disk: a revoke whose save
-/// fails says so, and its save is tried again at each `tick` and at quit, so the grant doesn't come back after a
-/// relaunch. Uses are saved at most once an hour.
+/// authority keeps the old refresh token current, and the new pair is never sent. A failed save of a new grant
+/// (Allow) or of new options changes nothing. Every other change applies at once, since a revoke can't wait for a
+/// disk: a revoke whose save fails says so, and its save is tried again at each `tick` and at quit, so the grant
+/// doesn't come back after a relaunch. Uses are saved at most once an hour.
 ///
 /// Audit lines are queued in order and written on their own queue, never under this lock, so a slow disk, a
 /// rotation or the hourly 30-day prune can't hold up the door's queue or the main thread's `begin`. `flushAudit`
@@ -101,7 +101,8 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     }
 
     /// Runs `body` on the authority under the lock, then handles its events and saves the clients and grants if
-    /// they changed. For pairing on the Mac (U8): open, match, approve, decline, close. Nil without a host.
+    /// they changed. For pairing on the Mac (U8): open, match, decline, close; Allow is `approve`. Nil without a
+    /// host.
     public func update<T>(_ body: (inout RemoteAccessOAuth, Date) -> T) -> T? {
         lock.lock()
         defer { lock.unlock() }
@@ -204,6 +205,32 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     }
 
     // MARK: on the Mac
+
+    /// Allow's outcome: the new grant, or why the request could not be allowed.
+    public typealias Approval = Result<RemoteAccessOAuth.Grant, RemoteAccessOAuth.ApprovalError>
+
+    /// Allow in the pairing window (U8), after Touch ID or the password. The new grant is saved before the
+    /// browser can get its code; a failed save throws and changes nothing, so the request still waits and Allow
+    /// can be clicked again. Nil without a host.
+    public func approve(_ requestID: String, name: String, options: RemoteAccessOptions) throws -> Approval? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var authority else { return nil }
+        let now = clock()
+        let result = authority.approve(requestID, name: name, options: options, now: now)
+        if case .success = result {
+            do {
+                try store.save(clients: authority.clients, grants: authority.grants, now: now)
+            } catch {
+                report("Next Term: Remote access could not save a new connection: \(error)")
+                throw error
+            }
+            saved = Saved(authority.clients, authority.grants)
+        }
+        self.authority = authority
+        settle(now: now)
+        return result
+    }
 
     /// Revoke on the Mac: the grant ends, and its open calls are answered at once (R38). It throws when the file
     /// could not be saved; the grant has ended all the same, and the save is tried again at each tick and at quit.

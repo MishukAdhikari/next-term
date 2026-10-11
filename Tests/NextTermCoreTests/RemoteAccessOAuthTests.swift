@@ -772,6 +772,58 @@ import Testing
         #expect(oauth.takeEvents().contains(.pairingClosed(.wrongCodes)))
     }
 
+    /// The name Touch ID's reason names is the name the grant keeps: hidden characters out, at most 100 Unicode
+    /// scalars, and the suggested name when nothing is left.
+    @Test func theNameConfirmedIsTheNameKept() throws {
+        let long = String(repeating: "a", count: 150)
+        let hidden = " Claude\u{200B}, phone\u{202E}\n "
+        #expect(OAuth.grantName(hidden, suggested: "Claude") == "Claude, phone")
+        #expect(OAuth.grantName(long, suggested: "Claude") == String(repeating: "a", count: 100))
+        #expect(OAuth.grantName(" \u{200B}\t", suggested: "ChatGPT") == "ChatGPT")
+        #expect(OAuth.grantName("", suggested: "ChatGPT") == "ChatGPT")
+        for typed in [hidden, long, " \u{200B}\t"] {
+            var oauth = Self.authority()
+            let client = try #require(Self.register(&oauth))
+            oauth.openPairing(now: Self.start)
+            guard case .waiting(let id, let code) = oauth.authorize(Self.authorizeParameters(client: client),
+                                                                   now: Self.start),
+                  case .request(let request) = oauth.match(code: code, now: Self.start) else {
+                Issue.record("no request")
+                return
+            }
+            let grant = try oauth.approve(id, name: typed, options: .readOnly, now: Self.start).get()
+            #expect(grant.name == OAuth.grantName(typed, suggested: request.suggestedName))
+        }
+    }
+
+    /// R17: a new hostname closes pairing too. The window shows the old one's address, so nothing it shows can be
+    /// allowed, and a code typed after it finds pairing closed. The same hostname again changes nothing.
+    @Test func aNewHostnameClosesPairing() throws {
+        var oauth = Self.authority()
+        let client = try #require(Self.register(&oauth))
+        oauth.openPairing(now: Self.start)
+        guard case .waiting(let id, let code) = oauth.authorize(Self.authorizeParameters(client: client),
+                                                               now: Self.start) else {
+            Issue.record("no request")
+            return
+        }
+        _ = oauth.takeEvents()
+        oauth.setHost("other.example.com", now: Self.minutes(1))
+        #expect(!oauth.pairingIsOpen(now: Self.minutes(1)))
+        #expect(oauth.pairingEnds == nil)
+        #expect(oauth.takeEvents() == [.pairingClosed(.hostChanged)])
+        #expect(oauth.match(code: code, now: Self.minutes(1)) == .closed)
+        guard case .failure(.pairingClosed) = oauth.approve(id, name: "", options: .readOnly,
+                                                            now: Self.minutes(1)) else {
+            Issue.record("a request from before the new hostname must not be allowed")
+            return
+        }
+
+        oauth.openPairing(now: Self.minutes(2))
+        oauth.setHost("OTHER.example.com", now: Self.minutes(2))
+        #expect(oauth.pairingIsOpen(now: Self.minutes(2)))
+    }
+
     // MARK: resource and scope
 
     @Test func theResourceIsComparedWithoutCaseAPortOrATrailingSlash() throws {

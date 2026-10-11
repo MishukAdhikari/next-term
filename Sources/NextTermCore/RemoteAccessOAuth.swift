@@ -412,6 +412,8 @@ public struct RemoteAccessOAuth: Sendable {
         case onMac = "on_mac"
         case timedOut = "timed_out"
         case wrongCodes = "wrong_codes"
+        /// A new public hostname: the window showed the old one's address.
+        case hostChanged = "host_changed"
     }
 
     /// What the audit log records (R39). Tokens, codes and hashes never appear in one, and neither does a request
@@ -525,8 +527,8 @@ public struct RemoteAccessOAuth: Sendable {
         return events
     }
 
-    /// A new public hostname ends every grant and drops every token and request (R17, KTD17). Returns the
-    /// grants it ended.
+    /// A new public hostname ends every grant, closes pairing and drops every token and request (R17, KTD17).
+    /// Returns the grants it ended.
     @discardableResult
     public mutating func setHost(_ newHost: String, now: Date) -> [String] {
         let lowered = Self.asciiLowercased(newHost)
@@ -534,6 +536,7 @@ public struct RemoteAccessOAuth: Sendable {
         host = lowered
         let ended = grants.map(\.id)
         for id in ended { end(id, reason: .hostChanged, now: now) }
+        if pairingIsOpen(now: now) { close(.hostChanged) }
         accessTokens.removeAll()
         recentPairs.removeAll()
         codes.removeAll()
@@ -725,8 +728,8 @@ public struct RemoteAccessOAuth: Sendable {
         guard let index = requests.firstIndex(where: { $0.id == requestID && $0.isWaiting }),
               clients.contains(where: { $0.id == requests[index].clientID }) else { return .failure(.noRequest) }
         let request = requests[index]
-        let typed = Self.printable(name, limit: Self.maximumGrantName)
-        let grant = Grant(id: newID(), name: typed ?? request.suggestedName, clientID: request.clientID,
+        let kept = Self.grantName(name, suggested: request.suggestedName)
+        let grant = Grant(id: newID(), name: kept, clientID: request.clientID,
                           clientName: request.clientName, redirectHost: request.redirectHost, options: options,
                           host: host, created: now, lastUsed: now)
         grants.append(grant)
@@ -740,6 +743,13 @@ public struct RemoteAccessOAuth: Sendable {
         events.append(.pairingApproved(request: request.logID, grantID: grant.id, name: grant.name, options: options))
         close(.approved)
         return .success(grant)
+    }
+
+    /// The name a grant keeps for the name typed on the Mac: hidden characters out, at most
+    /// `maximumGrantName` Unicode scalars, and `suggested` when nothing is left. Touch ID's reason names it too,
+    /// so the name confirmed is the name kept.
+    public static func grantName(_ typed: String, suggested: String) -> String {
+        printable(typed, limit: maximumGrantName) ?? suggested
     }
 
     /// Decline on the Mac, or the window closed after a code matched: the browser goes back with

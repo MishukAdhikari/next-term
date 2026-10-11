@@ -15,7 +15,7 @@ import NextTermCore
 /// nothing in this window until their code is typed, so a stranger's request stays unseen (R14). Allow is enabled only
 /// for a matching code, a second after its request shows. Closing the window before a code matched ends pairing and
 /// declines nothing, and waiting browsers get the closed page; after a match, Decline or closing declines that request.
-/// Five wrong codes close pairing.
+/// Five wrong codes close pairing, and so does a new public hostname. Connect a Client again then opens a new window.
 @MainActor
 final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     /// The window while it is open: one at a time.
@@ -26,10 +26,11 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
     static let width: CGFloat = 520
 
     /// Opens pairing for 10 minutes and shows the window at once, ready for the code. A window already open comes
-    /// to the front, its pairing as it was. Nil while no public hostname is saved: no browser can pair then.
+    /// to the front, its pairing as it was; one whose pairing ended closes, and a new one opens with pairing open
+    /// again. Nil while no public hostname is saved: no browser can pair then.
     @discardableResult
     static func open(state: RemoteAccessDoorState) -> RemoteAccessPairingWindow? {
-        if let current, current.state === state {
+        if let current, current.state === state, !current.closedPairing {
             current.window?.makeKeyAndOrderFront(nil)
             return current
         }
@@ -51,6 +52,8 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
     }
 
     let state: RemoteAccessDoorState
+    /// The public hostname the window shows. A new one closes pairing (R17).
+    let host: String
     /// When pairing closes by itself.
     let ends: Date
     /// The request whose code was typed.
@@ -74,11 +77,13 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
     private var timer: Timer?
     private var allowTimer: Timer?
     private var answered = false
-    private var confirming = false
+    /// Touch ID or the password is being asked; cancelling it takes the system's dialog away.
+    private var confirming: RemoteAccessConfirmation.Asking?
     private var closedPairing = false
 
     private init(state: RemoteAccessDoorState, host: String, ends: Date) {
         self.state = state
+        self.host = host
         self.ends = ends
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 240),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -219,7 +224,8 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
         self.timer = timer
     }
 
-    /// The window's height follows what shows; its top edge stays where it is.
+    /// The window's height follows what shows; its top edge stays where it is, unless the window would then reach
+    /// below the screen's bottom: it moves up then, as far as the top of the screen, so Allow stays in sight.
     private func fit() {
         guard let window else { return }
         window.contentView?.layoutSubtreeIfNeeded()
@@ -228,6 +234,10 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
         var placed = window.frame
         placed.origin.y = placed.maxY - frame.height
         placed.size = frame.size
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
+            placed.origin.y = max(placed.origin.y, visible.minY)
+            placed.origin.y = min(placed.origin.y, visible.maxY - placed.height)
+        }
         window.setFrame(placed, display: true)
     }
 
@@ -242,8 +252,12 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
 
     private func tick() {
         updateCountdown()
-        guard !closedPairing, state.now >= ends else { return }
-        pairingEnded("Pairing closed after 10 minutes. Click Connect a Client to start again.")
+        guard !closedPairing else { return }
+        if state.host != host {
+            pairingEnded(Self.hostChanged)
+        } else if state.now >= ends {
+            pairingEnded(Self.timedOut)
+        }
     }
 
     private func updateCountdown() {
@@ -255,6 +269,7 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
     /// Pairing is over (time ran out, five wrong codes, or the request went): nothing here can allow any more.
     private func pairingEnded(_ text: String) {
         closedPairing = true
+        cancelConfirming()
         timer?.invalidate()
         timer = nil
         allowTimer?.invalidate()
@@ -290,9 +305,11 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
             setStatus("No browser is waiting with that code. Check the code on its page and type it again.", problem: true)
             codeField.currentEditor()?.selectAll(nil)
         case .closed:
-            let timedOut = state.now >= ends
-            pairingEnded(timedOut ? "Pairing closed after 10 minutes. Click Connect a Client to start again."
-                : "Pairing closed after five wrong codes. Click Connect a Client to start again.")
+            if state.host != host {
+                pairingEnded(Self.hostChanged)
+            } else {
+                pairingEnded(state.now >= ends ? Self.timedOut : Self.wrongCodes)
+            }
         }
     }
 
@@ -323,7 +340,7 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
 
     private func enableAllow() {
         allowTimer = nil
-        guard matched != nil, !closedPairing, !answered, !confirming else { return }
+        guard matched != nil, !closedPairing, !answered, confirming == nil else { return }
         allowButton.isEnabled = true
     }
 
@@ -335,15 +352,14 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
 
     /// Allow: Touch ID or the Mac password, then the connection exists with the name and the options shown.
     @objc private func allow() {
-        guard let request = matched, allowButton.isEnabled, !answered, !confirming, !closedPairing else { return }
+        guard let request = matched, allowButton.isEnabled, !answered, confirming == nil, !closedPairing else { return }
         let options = optionsView.options
         let name = Self.name(nameField.stringValue, request: request)
-        confirming = true
         allowButton.isEnabled = false
         setStatus("Confirm on this Mac…")
-        RemoteAccessConfirmation.ask(Self.reason(name: name, options: options)) { [weak self] confirmed in
+        confirming = RemoteAccessConfirmation.ask(Self.reason(name: name, options: options)) { [weak self] confirmed in
             guard let self else { return }
-            self.confirming = false
+            self.confirming = nil
             guard !self.answered, !self.closedPairing else { return }
             guard confirmed else {
                 self.allowButton.isEnabled = true
@@ -358,9 +374,16 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
         }
     }
 
+    /// The grant is saved before the browser can get its code: a save that fails allows nothing, and the request
+    /// still waits for Allow.
     private func approve(_ request: RemoteAccessOAuth.PairingRequest, name: String, options: RemoteAccessOptions) {
-        let result = state.update { authority, now in
-            authority.approve(request.id, name: name, options: options, now: now)
+        let result: RemoteAccessDoorState.Approval?
+        do {
+            result = try state.approve(request.id, name: name, options: options)
+        } catch {
+            allowButton.isEnabled = true
+            return setStatus("Next Term could not save this connection, so nothing changed. Click Allow to try again.",
+                             problem: true)
         }
         switch result {
         case .success(let grant):
@@ -368,7 +391,7 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
             answered = true
             close()
         case .failure(.pairingClosed), nil:
-            pairingEnded("Pairing closed before you allowed it. Click Connect a Client to start again.")
+            pairingEnded(state.host == host ? Self.closedFirst : Self.hostChanged)
         case .failure(.noRequest):
             pairingEnded("That browser stopped waiting. Add the connector again, then click Connect a Client.")
         }
@@ -381,6 +404,7 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
 
     /// Closing is a decline once a code matched, and ends pairing either way.
     func windowWillClose(_ notification: Notification) {
+        cancelConfirming()
         timer?.invalidate()
         timer = nil
         allowTimer?.invalidate()
@@ -396,13 +420,26 @@ final class RemoteAccessPairingWindow: NSWindowController, NSWindowDelegate, NST
         if Self.current === self { Self.current = nil }
     }
 
+    /// Takes the Touch ID or password dialog away when nothing here can be allowed any more. Its answer then
+    /// changes nothing.
+    private func cancelConfirming() {
+        confirming?.cancel()
+        confirming = nil
+    }
+
     // MARK: words
 
-    /// The name typed, or the suggested one when it is empty.
+    /// The name the grant will keep, as Touch ID's reason names it: the name typed without hidden characters, cut
+    /// as the grant cuts it, or the suggested one when nothing is left.
     static func name(_ typed: String, request: RemoteAccessOAuth.PairingRequest) -> String {
-        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? request.suggestedName : trimmed
+        RemoteAccessOAuth.grantName(typed, suggested: request.suggestedName)
     }
+
+    static let timedOut = "Pairing closed after 10 minutes. Click Connect a Client to start again."
+    static let wrongCodes = "Pairing closed after five wrong codes. Click Connect a Client to start again."
+    static let closedFirst = "Pairing closed before you allowed it. Click Connect a Client to start again."
+    static let hostChanged = "Pairing closed because the public hostname changed. "
+        + "Click Connect a Client to start again."
 
     /// Touch ID's reason, which macOS shows as "Next Term is trying to …": it names what the preset allows.
     static func reason(name: String, options: RemoteAccessOptions) -> String {
@@ -437,21 +474,35 @@ enum RemoteAccessConfirmation {
     private(set) static var lastReason: String?
     #endif
 
+    /// One question being asked. `cancel` takes the system's dialog away, and `done` then gets false.
+    final class Asking {
+        fileprivate var context: LAContext?
+
+        fileprivate init(_ context: LAContext?) {
+            self.context = context
+        }
+
+        func cancel() {
+            context?.invalidate()
+            context = nil
+        }
+    }
+
     /// Asks, and tells `done` on the main thread whether the user confirmed. A Mac that can't ask counts as no.
-    static func ask(_ reason: String, done: @escaping @MainActor (Bool) -> Void) {
+    static func ask(_ reason: String, done: @escaping @MainActor (Bool) -> Void) -> Asking {
         #if DEBUG
         if SelfTest.isRequested, let standIn {
             lastReason = reason
             let answer = standIn(reason)
             DispatchQueue.main.async { done(answer) }
-            return
+            return Asking(nil)
         }
         #endif
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
             DispatchQueue.main.async { done(false) }
-            return
+            return Asking(nil)
         }
         // Kept until it answers, so the system's dialog has its context the whole time.
         let key = ObjectIdentifier(context)
@@ -462,6 +513,7 @@ enum RemoteAccessConfirmation {
                 done(success)
             }
         }
+        return Asking(context)
     }
 
     /// The contexts whose dialogs are open.

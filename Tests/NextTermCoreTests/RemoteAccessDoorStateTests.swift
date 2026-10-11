@@ -72,9 +72,7 @@ import Testing
         guard case .request? = state.update({ authority, now in authority.match(code: code, now: now) }) else {
             throw Flow.Failure("no match")
         }
-        let approved = state.update { authority, now in
-            authority.approve(request, name: "Claude, phone", options: options, now: now)
-        }
+        let approved = try state.approve(request, name: "Claude, phone", options: options)
         let grant = try #require(try approved?.get())
         guard case .redirect(let link)? = state.poll("request=" + OAuth.encode(request)) else {
             throw Flow.Failure("no redirect")
@@ -163,6 +161,47 @@ import Testing
         let tokens = try #require(Flow.tokens(retried))
         #expect(door.saved().first?.refreshHash == OAuth.hash(tokens.refresh))
         #expect(door.state.validate(tokens.access) != .invalid)
+    }
+
+    /// Allow saves the new grant before the browser can get its code. A failed save throws and changes nothing:
+    /// no grant, the browser still waits, and Allow works again once the file can be written.
+    @Test func aNewGrantIsSavedBeforeTheBrowserGetsItsCodeAndAFailedSaveChangesNothing() throws {
+        let door = Door()
+        let state = door.state
+        let registration = try #require(state.register(Flow.body(["redirect_uris": [Flow.claude]])))
+        let client = try #require(Flow.json(registration.body)["client_id"] as? String)
+        _ = state.update { authority, now in authority.openPairing(now: now) }
+        let query = Self.form(Flow.authorizeParameters(client: client))
+        guard case .waiting(let request, let code)? = state.authorize(query),
+              case .request? = state.update({ authority, now in authority.match(code: code, now: now) }) else {
+            Issue.record("no request")
+            return
+        }
+        let poll = "request=" + OAuth.encode(request)
+
+        Files.lock(door.folder.url)
+        #expect(throws: RemoteAccessStoreError.self) {
+            try state.approve(request, name: "Claude, phone", options: .readOnly)
+        }
+        Files.unlock(door.folder.url)
+        #expect(door.saved().isEmpty)
+        #expect(state.update { authority, _ in authority.grants.isEmpty } == true)
+        #expect(state.poll(poll) == .waiting(requestID: request, code: code))
+        #expect(!door.lines().map(\.event).contains("pairing.approved"))
+
+        let grant = try #require(try state.approve(request, name: "Claude, phone", options: .readOnly)?.get())
+        #expect(door.saved().map(\.id) == [grant.id])
+        guard case .redirect(let link)? = state.poll(poll) else {
+            Issue.record("no redirect after the save")
+            return
+        }
+        #expect(Flow.items(link)["code"] != nil)
+        // A request that is gone is refused as before, and nothing is saved for it.
+        guard case .failure(.pairingClosed)? = try state.approve(request, name: "Again", options: .readOnly) else {
+            Issue.record("pairing closed after one success")
+            return
+        }
+        #expect(door.saved().map(\.id) == [grant.id])
     }
 
     /// R60: new options are saved before they apply. A failed save throws and changes nothing: the grant keeps
