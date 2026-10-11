@@ -468,15 +468,15 @@ import Testing
 
     @Test func safeModeRunsOnlyToolsThatRead() {
         for tool in ["list_tabs", "read_tab", "wait_for_tab", "read_file", "get_diff", "list_projects"] {
-            #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, safeMode: true, waitingFor: nil) == nil, "\(tool)")
+            #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: false, safeMode: true, waitingFor: nil) == nil, "\(tool)")
         }
         for tool in ["send_to_tab", "new_tab", "open_project", "close_tab", "answer_agent", "write_file", "settings_set"] {
-            let refusal = MCPRestoreGate.refusal(tool: tool, tabID: "x", safeMode: true, waitingFor: nil)
+            let refusal = MCPRestoreGate.refusal(tool: tool, tabID: "x", followUp: false, safeMode: true, waitingFor: nil)
             #expect(refusal?.contains("safe mode") == true && refusal?.contains("Try Again") == true, "\(tool)")
         }
-        #expect(MCPRestoreGate.refusal(tool: "send_to_tab", tabID: "x", safeMode: false, waitingFor: nil) == nil)
+        #expect(MCPRestoreGate.refusal(tool: "send_to_tab", tabID: "x", followUp: false, safeMode: false, waitingFor: nil) == nil)
         // A tool it does not know is left to the tools' own answer.
-        #expect(MCPRestoreGate.refusal(tool: "no_such_tool", tabID: nil, safeMode: true, waitingFor: nil) == nil)
+        #expect(MCPRestoreGate.refusal(tool: "no_such_tool", tabID: nil, followUp: false, safeMode: true, waitingFor: nil) == nil)
     }
 
     /// KTD16: while an update waits for busy tabs, input into a waited tab works, and new work elsewhere is refused with
@@ -484,24 +484,55 @@ import Testing
     @Test func whileAnUpdateWaitsNewWorkElsewhereIsUpdatePending() {
         let waited: Set<String> = ["a"]
         for tool in ["send_to_tab", "press_keys", "answer_agent"] {
-            #expect(MCPRestoreGate.refusal(tool: tool, tabID: "A", safeMode: false, waitingFor: waited) == nil, "\(tool)")
-            let elsewhere = MCPRestoreGate.refusal(tool: tool, tabID: "b", safeMode: false, waitingFor: waited)
+            #expect(MCPRestoreGate.refusal(tool: tool, tabID: "A", followUp: false, safeMode: false, waitingFor: waited) == nil, "\(tool)")
+            let elsewhere = MCPRestoreGate.refusal(tool: tool, tabID: "b", followUp: false, safeMode: false, waitingFor: waited)
             #expect(elsewhere?.hasPrefix("update_pending") == true, "\(tool)")
         }
         for tool in ["new_tab", "open_project", "new_remote_tab", "split_pane", "write_file"] {
-            #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, safeMode: false, waitingFor: waited)?.hasPrefix("update_pending") == true, "\(tool)")
+            #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: false, safeMode: false, waitingFor: waited)?.hasPrefix("update_pending") == true, "\(tool)")
         }
         // Closing a waited tab or splitting it is new work too.
-        #expect(MCPRestoreGate.refusal(tool: "close_tab", tabID: "a", safeMode: false, waitingFor: waited) != nil)
-        #expect(MCPRestoreGate.refusal(tool: "split_pane", tabID: "a", safeMode: false, waitingFor: waited) != nil)
+        #expect(MCPRestoreGate.refusal(tool: "close_tab", tabID: "a", followUp: false, safeMode: false, waitingFor: waited) != nil)
+        #expect(MCPRestoreGate.refusal(tool: "split_pane", tabID: "a", followUp: false, safeMode: false, waitingFor: waited) != nil)
         // Reading always works.
-        #expect(MCPRestoreGate.refusal(tool: "list_tabs", tabID: nil, safeMode: false, waitingFor: waited) == nil)
-        #expect(MCPRestoreGate.refusal(tool: "wait_for_tab", tabID: "b", safeMode: false, waitingFor: waited) == nil)
+        #expect(MCPRestoreGate.refusal(tool: "list_tabs", tabID: nil, followUp: false, safeMode: false, waitingFor: waited) == nil)
+        #expect(MCPRestoreGate.refusal(tool: "wait_for_tab", tabID: "b", followUp: false, safeMode: false, waitingFor: waited) == nil)
         // The wait over: nothing refused.
-        #expect(MCPRestoreGate.refusal(tool: "new_tab", tabID: nil, safeMode: false, waitingFor: nil) == nil)
+        #expect(MCPRestoreGate.refusal(tool: "new_tab", tabID: nil, followUp: false, safeMode: false, waitingFor: nil) == nil)
         // The refusal says where to look, and promises ids only for the tabs the update brings back.
-        let refusal = MCPRestoreGate.refusal(tool: "new_tab", tabID: nil, safeMode: false, waitingFor: waited) ?? ""
+        let refusal = MCPRestoreGate.refusal(tool: "new_tab", tabID: nil, followUp: false, safeMode: false, waitingFor: waited) ?? ""
         #expect(refusal.contains("update_wait") && !refusal.contains("Tab ids stay the same"))
+    }
+
+    /// KTD16: a call that only asks again for the answer to a request already open (propose_edit with proposal_id;
+    /// install_skill, remove_skill, apply_import or undo_import with request_id) starts nothing, so the wait lets it through.
+    /// Every other call that changes something is still new work.
+    @Test func whileAnUpdateWaitsAFollowUpOnAnOpenRequestStillWorks() {
+        let waited: Set<String> = ["a"]
+        for tool in ["propose_edit", "install_skill", "remove_skill", "apply_import", "undo_import"] {
+            #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: true, safeMode: false, waitingFor: waited) == nil, "\(tool)")
+            let asked = MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: false, safeMode: false, waitingFor: waited)
+            #expect(asked?.hasPrefix("update_pending") == true, "\(tool)")
+        }
+        #expect(MCPRestoreGate.refusal(tool: "write_file", tabID: nil, followUp: false, safeMode: false, waitingFor: waited)?.hasPrefix("update_pending") == true)
+        // Safe mode runs only the tools that read, follow-ups included.
+        #expect(MCPRestoreGate.refusal(tool: "propose_edit", tabID: nil, followUp: true, safeMode: true, waitingFor: nil) != nil)
+
+        // A follow-up is told as the handlers tell it: a non-empty id, whatever else the call gives.
+        #expect(MCPRestoreGate.isFollowUp("propose_edit", ["proposal_id": "P1"]))
+        #expect(MCPRestoreGate.isFollowUp("propose_edit", ["proposal_id": "p1", "path": "a.txt", "content": "x"]))
+        #expect(!MCPRestoreGate.isFollowUp("propose_edit", ["proposal_id": "", "path": "a.txt", "content": "x"]))
+        #expect(!MCPRestoreGate.isFollowUp("propose_edit", ["request_id": "r1"]))
+        for tool in ["install_skill", "remove_skill", "apply_import", "undo_import"] {
+            #expect(MCPRestoreGate.isFollowUp(tool, ["request_id": "r1"]), "\(tool)")
+            #expect(MCPRestoreGate.isFollowUp(tool, ["request_id": "r1", "source": "x"]), "\(tool)")
+            #expect(!MCPRestoreGate.isFollowUp(tool, ["source": "x"]), "\(tool)")
+            #expect(!MCPRestoreGate.isFollowUp(tool, ["request_id": " "]), "\(tool)")
+            #expect(!MCPRestoreGate.isFollowUp(tool, ["proposal_id": "p1"]), "\(tool)")
+        }
+        // An id on any other tool is new work.
+        #expect(!MCPRestoreGate.isFollowUp("write_file", ["request_id": "r1"]))
+        #expect(!MCPRestoreGate.isFollowUp("new_tab", ["proposal_id": "p1"]))
     }
 
     /// KTD16: list_tabs reports the wait. Each tab says whether the update waits for it, where input still works, or holds

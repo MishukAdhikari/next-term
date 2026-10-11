@@ -78,10 +78,12 @@ enum MCPRestoredTabs {
     }
 
     /// Why MCPControl refuses `tool` before it runs, or nil: safe mode runs only the tools that read, and an update's wait
-    /// refuses new work outside the tabs it waits for with `update_pending` (MCPRestoreGate).
+    /// refuses new work outside the tabs it waits for with `update_pending`, but not a call asking again for the answer to
+    /// a request already open (MCPRestoreGate).
     static func refusal(_ tool: String, _ arguments: [String: Any]) -> String? {
         let safeMode = MainActor.assumeIsolated { SessionRestore.shared.phase == .safeMode }
-        return MCPRestoreGate.refusal(tool: tool, tabID: arguments["tab_id"] as? String, safeMode: safeMode, waitingFor: waited())
+        return MCPRestoreGate.refusal(tool: tool, tabID: arguments["tab_id"] as? String,
+                                      followUp: MCPRestoreGate.isFollowUp(tool, arguments), safeMode: safeMode, waitingFor: waited())
     }
 
     /// The tabs an update waits for, by their ids as MCP gives them; nil while no update waits.

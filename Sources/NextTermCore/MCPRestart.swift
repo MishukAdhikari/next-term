@@ -355,19 +355,35 @@ public enum MCPRestoreGate {
     static let waitedInput: Set<String> = ["send_to_tab", "press_keys", "answer_agent"]
 
     /// Why `tool` is refused now, or nil. In safe mode only the tools that only read run, until the user chooses Keep As Is
-    /// or Try Again. While an update waits for busy tabs (`waitingFor`, their ids as MCP gives them), reading and input into
-    /// a waited tab still work, and new work elsewhere is refused with `update_pending` until the wait ends.
-    public static func refusal(tool: String, tabID: String?, safeMode: Bool, waitingFor waited: Set<String>?) -> String? {
+    /// or Try Again. While an update waits for busy tabs (`waitingFor`, their ids as MCP gives them), reading, input into a
+    /// waited tab and a `followUp` (isFollowUp) still work, and new work elsewhere is refused with `update_pending` until
+    /// the wait ends.
+    public static func refusal(tool: String, tabID: String?, followUp: Bool, safeMode: Bool, waitingFor waited: Set<String>?) -> String? {
         guard let entry = MCPServer.tool(named: tool), !entry.readOnly else { return nil }
         if safeMode {
             return "Next Term restored its windows in safe mode, after two restores that did not finish: nothing runs until the user "
                 + "chooses Keep As Is or Try Again. Until then only the tools that read work."
         }
         guard let waited else { return nil }
+        if followUp { return nil }
         if waitedInput.contains(tool), let id = tabID?.lowercased(), waited.contains(id) { return nil }
-        return "update_pending: Next Term waits for busy tabs to finish before it updates, so it takes no new work now. Reading, and "
-            + "input into the tabs it waits for, still work (list_tabs marks them update_wait: waits_for_this_tab), and this works "
-            + "again once the wait ends. The tabs the update brings back keep their ids."
+        return "update_pending: Next Term waits for busy tabs to finish before it updates, so it takes no new work now. Reading, "
+            + "input into the tabs it waits for (list_tabs marks them update_wait: waits_for_this_tab), and asking again with the "
+            + "proposal_id or request_id of a request already open still work, and this works again once the wait ends. The tabs "
+            + "the update brings back keep their ids."
+    }
+
+    /// Tools where a call with an id asks again for the answer to a request already open, and that id's argument.
+    static let followUpID: [String: String] = [
+        "propose_edit": "proposal_id", "install_skill": "request_id", "remove_skill": "request_id",
+        "apply_import": "request_id", "undo_import": "request_id",
+    ]
+
+    /// Whether the call asks again for the answer to a request already open (its proposal_id or request_id), which starts
+    /// nothing new. Told as the tools' handlers tell it: a non-empty id, whatever else the call gives.
+    public static func isFollowUp(_ tool: String, _ arguments: [String: Any]) -> Bool {
+        guard let key = followUpID[tool], let id = arguments[key] as? String else { return false }
+        return !id.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// What a tab says while an update waits for busy tabs (KTD16): `waits_for_this_tab` on a tab it waits for, where input
