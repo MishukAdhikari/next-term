@@ -16,7 +16,8 @@ import UserNotifications
 /// and a start that needs one goes back off and says why; "Advanced: I expose the port myself" works as it is.
 ///
 /// Under `--self-test` (KTD18) it keeps its settings in memory, its files in a temp folder of its own and the token
-/// in memory, so a test run never touches the user's setup; it starts off.
+/// in memory, so a test run never touches the user's setup; it starts off. The relaunch harness keeps the settings
+/// and files in its own suite and folder instead, so a relaunch with Remote access saved on can be checked (R43).
 @MainActor
 final class RemoteAccess {
     static let shared = RemoteAccess()
@@ -82,7 +83,8 @@ final class RemoteAccess {
     private var handling = false
     /// Each start's number, so a Keychain answer that comes after another start is dropped.
     private var run = 0
-    private var quitting = false
+    /// When quit began, while it runs: the tunnel's end is counted from it, so quit waits at most 3 seconds (R42).
+    private var quitBegan: DispatchTime?
     private var activity: NSObjectProtocol?
     private var awake: RemoteAccessAwake?
     private var powerSource: CFRunLoopSource?
@@ -90,11 +92,11 @@ final class RemoteAccess {
 
     private init() {
         if SelfTest.isRequested {
-            let name = "nextterm-remote-access-\(getpid())"
-            folder = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
-            defaults = nil
+            // The plain self-test keeps none (nil); the relaunch harness its own suite.
+            defaults = SelfTest.keptDefaults
+            folder = Self.selfTestFolder()
             tokens = RemoteAccessMemoryTokens()
-            settings = Settings()
+            settings = SelfTest.keptDefaults.map(Settings.init(defaults:)) ?? Settings()
         } else {
             folder = RemoteAccessStore.defaultFolder()
             defaults = .standard
@@ -110,13 +112,23 @@ final class RemoteAccess {
         }
     }
 
+    /// The self-test's Remote access folder: the relaunch harness's, kept across its relaunch, else a temp one for
+    /// this process.
+    private static func selfTestFolder() -> URL {
+        if SelfTest.mode == .relaunchHarness, let support = SelfTest.supportFolder {
+            return support.appendingPathComponent("remote-access", isDirectory: true)
+        }
+        let name = "nextterm-remote-access-\(getpid())"
+        return FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+    }
+
     /// The switch is on: from the start until Off, PortBusy or Stopped. The update sheet's note follows it.
     var isOn: Bool { status.isOn }
 
     // MARK: the app's hooks (AppDelegate)
 
     /// After launch: a tunnel a crash left behind is ended (R42), then Remote access starts again if it was saved
-    /// on, and the Mac is told once it is on (R43).
+    /// on, and the Mac is told once it is on, or that it waits for the Keychain or didn't start (R43, R44).
     func launched() {
         endLeftoverTunnel()
         guard settings.on else { return }
@@ -132,11 +144,12 @@ final class RemoteAccess {
     /// Quit, as `applicationWillTerminate`'s first call, so the public door closes before anything else. Timers
     /// never fire after it, so everything happens in place: the door closes, open calls are answered, access tokens
     /// are dropped, the grants file and the audit log are written, and the tunnel is ended (SIGTERM, again after 1
-    /// second, SIGKILL after 3), its pid record deleted once it is gone (R42). The setting stays as saved, so a
-    /// relaunch starts it again. The self-test calls this directly.
+    /// second, SIGKILL after 3), its pid record deleted once it is gone (R42). All of it is counted from here, so
+    /// quit waits at most 3 seconds. The setting stays as saved, so a relaunch starts it again. The self-test calls
+    /// this directly.
     func stopForQuit() {
-        quitting = true
-        defer { quitting = false }
+        quitBegan = .now()
+        defer { quitBegan = nil }
         send(.quit)
     }
 
@@ -240,13 +253,13 @@ final class RemoteAccess {
         case .closeDoor:
             door?.stop(revokeAll: batch.contains(.dropTokens(revokeAll: true)))
             // At quit, the answers the stop queued reach their connections before the process ends.
-            if quitting { door?.drain() }
+            if quitBegan != nil { door?.drain() }
         case .dropTokens(let revokeAll):
             doorClosed(revokeAll: revokeAll)
         case .stopTunnel:
             tunnel.stop()
         case .stopTunnelNow:
-            tunnel.stopNow()
+            tunnel.stopNow(from: quitBegan ?? .now())
         case .audit(let state, let detail):
             guard let doorState else { return }
             doorState.audit([RemoteAccessAuditEntry.tunnel(state, detail: detail, time: doorState.now)])
@@ -257,13 +270,14 @@ final class RemoteAccess {
 
     // MARK: the token (R30, R44)
 
-    /// Silently at once; with the prompt allowed off the main thread, since the read waits for the user.
+    /// Off the main thread, silent or not: a read can wait for a prompt (the interactive one, or a silent one whose
+    /// options don't reach a legacy item's prompt, H6), and a launch must never hang on it (R44). An answer that
+    /// comes after another start is dropped.
     private func readToken(interactive: Bool) {
-        guard interactive else { return tokenRead(tokens.read(interactive: false)) }
         let run = self.run
         let tokens = self.tokens
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = tokens.read(interactive: true)
+            let result = tokens.read(interactive: interactive)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard self.run == run else { return }
@@ -317,7 +331,7 @@ final class RemoteAccess {
             } catch {
                 NSLog("Next Term: Remote access could not save its grants: %@", "\(error)")
             }
-            if quitting { doorState.flushAudit(within: 0.5) }
+            if quitBegan != nil { doorState.flushAudit(within: 0.5) }
         } else if revokeAll {
             revokeSavedGrants()
         }
@@ -326,11 +340,13 @@ final class RemoteAccess {
         token = nil
     }
 
+    /// Turn Off and Revoke All with the door closed: every grant the file holds ends, with no host saved too (the
+    /// last host's grants would work again if it were typed back in), and the log gets the kill switch's line (R39).
     private func revokeSavedGrants() {
-        guard let host = settings.host else { return }
-        let state = RemoteAccessDoorState(folder: folder, host: host)
+        let state = RemoteAccessDoorState(folder: folder, host: settings.host)
+        state.turnOff(revokeAll: true)
         do {
-            try state.revokeAll()
+            try state.saveOnQuit()
         } catch {
             NSLog("Next Term: Remote access could not save its grants: %@", "\(error)")
         }
@@ -375,8 +391,9 @@ final class RemoteAccess {
 
     /// A tunnel child a crash left running, its watchdog gone too (R42, AE10): ended only when its pid, start time
     /// and path match the record and the Next Term that started it no longer runs. The record goes once that
-    /// process is gone, or at once when it is another process or gone already.
-    private func endLeftoverTunnel() {
+    /// process is gone, or at once when it is another process or gone already. At launch, and from the self-test
+    /// after it wrote a record of its own (U12).
+    func endLeftoverTunnel() {
         guard let record = RemoteAccessPidRecord.read(in: folder) else { return }
         let ownerRunning = RemoteAccessProcesses.start(of: record.owner) == record.ownerStart
         let seen = RemoteAccessProcesses.seen(record.pid)
@@ -438,10 +455,11 @@ final class RemoteAccess {
                 MainActor.assumeIsolated { RemoteAccess.shared.keepAwake() }
             }, nil)
             guard let source = made?.takeRetainedValue() else { return }
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+            // Every common mode, so a change during menu tracking or a modal panel is seen at once.
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             powerSource = source
         } else if !on, let source = powerSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             powerSource = nil
         }
     }
@@ -511,8 +529,9 @@ protocol RemoteAccessTunnelRunner: AnyObject {
                token: RemoteAccessTunnelConfig.Token?)
     /// SIGTERM now, the rest on timers: gone within 3 seconds (R37). Nothing when no child runs.
     func stop()
-    /// For quit: ended in place within about 3 seconds, the pid record deleted once it is gone (R42).
-    func stopNow()
+    /// For quit: ended in place with `RemoteAccessProcesses.endNow`, its signals counted from `began` (when quit
+    /// began), so quit waits at most 3 seconds in all; the pid record deleted once it is gone (R42).
+    func stopNow(from began: DispatchTime)
     /// A health and routing check at once, after a wake.
     func checkNow()
 }
@@ -527,7 +546,7 @@ final class RemoteAccessNoTunnel: RemoteAccessTunnelRunner {
     }
 
     func stop() {}
-    func stopNow() {}
+    func stopNow(from began: DispatchTime) {}
     func checkNow() {}
 }
 
@@ -541,8 +560,10 @@ enum RemoteAccessProcesses {
     /// SIGTERM, again after 1 second, SIGKILL after 3 (R37, R42).
     static let secondTerm: TimeInterval = 1
     static let killAfter: TimeInterval = 3
-    /// How long the end is waited for after SIGKILL.
+    /// How long the end is waited for after SIGKILL while the app runs.
     static let afterKill: TimeInterval = 0.5
+    /// At quit, SIGKILL goes this much before `killAfter`, so its end is seen within quit's 3 seconds (R42).
+    static let quitKillWait: TimeInterval = 0.1
 
     /// When `pid` started (`KERN_PROC_PID`, `p_starttime`), or nil when no process has it or it has exited and
     /// waits to be reaped.
@@ -580,16 +601,18 @@ enum RemoteAccessProcesses {
         kill(pid, signal)
     }
 
-    /// Ends it in place, for quit: SIGTERM, again after 1 second, SIGKILL after 3. True once it is gone.
+    /// Ends it in place, for quit, counted from `began`, when quit began: SIGTERM now, again 1 second after
+    /// `began`, and SIGKILL in time for its end to be seen 3 seconds after it. So quit waits at most 3 seconds in
+    /// all, the door's last answers and the audit lines before it included (R42). True once it is gone; otherwise
+    /// its record stays for the next launch, which matches it by pid, start time and path.
     @discardableResult
-    static func endNow(_ pid: pid_t, start: Start) -> Bool {
-        let began = DispatchTime.now()
+    static func endNow(_ pid: pid_t, start: Start, from began: DispatchTime) -> Bool {
         post(SIGTERM, to: pid, start: start)
         if waitGone(pid, start: start, until: secondTerm, from: began) { return true }
         post(SIGTERM, to: pid, start: start)
-        if waitGone(pid, start: start, until: killAfter, from: began) { return true }
+        if waitGone(pid, start: start, until: killAfter - quitKillWait, from: began) { return true }
         post(SIGKILL, to: pid, start: start)
-        return waitGone(pid, start: start, until: killAfter + afterKill, from: began)
+        return waitGone(pid, start: start, until: killAfter, from: began)
     }
 
     /// The same on main-thread timers while the app runs: `done` gets true once it is gone, false if it outlived

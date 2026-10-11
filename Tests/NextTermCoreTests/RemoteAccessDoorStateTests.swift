@@ -328,6 +328,38 @@ import Testing
         #expect(other.saved().isEmpty)
     }
 
+    /// Turn Off and Revoke All with no host saved (the door closed and the hostname cleared, or Confirm Host) still
+    /// ends every grant the file holds, so typing that host back in brings none back. The log has each revoke and
+    /// the kill switch's line (R37, R39). A save that failed is tried again at quit.
+    @Test func revokeAllWithNoHostSavedEndsTheGrantsTheFileHolds() throws {
+        let door = Door()
+        let paired = try Self.pair(door)
+        let clock = door.clock
+        let closed = RemoteAccessDoorState(folder: door.folder.url, host: nil, clock: { clock.now },
+                                           report: { _ in })
+        closed.turnOff(revokeAll: true)
+        #expect(door.saved().isEmpty)
+        closed.setHost(Self.host)
+        #expect(closed.update { authority, _ in authority.grants.isEmpty } == true)
+        closed.flushAudit()
+        let lines = door.lines()
+        #expect(lines.contains { $0.event == "grant.revoked" && $0.grant == paired.grant.id && $0.reason == "revoke_all" })
+        #expect(lines.contains { $0.event == "remote.turned_off" && $0.reason == "revoke_all" })
+        let again = RemoteAccessDoorState(folder: door.folder.url, host: Self.host, report: { _ in })
+        #expect(again.update { authority, _ in authority.grants.isEmpty } == true)
+
+        let locked = Door()
+        _ = try Self.pair(locked)
+        let failing = RemoteAccessDoorState(folder: locked.folder.url, host: nil, clock: { clock.now },
+                                            report: { _ in })
+        Files.lock(locked.folder.url)
+        failing.turnOff(revokeAll: true)
+        Files.unlock(locked.folder.url)
+        #expect(locked.saved().count == 1)
+        try failing.saveOnQuit()
+        #expect(locked.saved().isEmpty)
+    }
+
     // MARK: the list
 
     /// R20: a `tools/list` reads the options and clears the mark in one step, so an options change either shows

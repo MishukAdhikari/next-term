@@ -39,8 +39,8 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     private var refusals = RemoteAccessRefusals()
     /// The clients and grants as the file holds them, their last uses aside: a change to them is saved.
     private var saved: Saved
-    /// What the store held at launch, for when the host is saved.
-    private let loaded: RemoteAccessGrantStore.Loaded
+    /// What the store held at launch, for when the host is saved. Revoke All with no host ends its grants here.
+    private var loaded: RemoteAccessGrantStore.Loaded
     private let auditQueue = DispatchQueue(label: "nextterm.remote-access.audit")
     private var log: RemoteAccessAuditLog
 
@@ -238,16 +238,20 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         try ending { authority, now in _ = authority.revoke(grant: grantID, now: now) }
     }
 
-    /// Revoke All, which throws as `revoke(grant:)` does.
+    /// Revoke All, which throws as `revoke(grant:)` does. With no host saved yet, it ends the grants the file holds.
     public func revokeAll() throws {
-        try ending { authority, now in _ = authority.revokeAll(now: now) }
+        try ending(orStored: true) { authority, now in _ = authority.revokeAll(now: now) }
     }
 
-    private func ending(_ body: (inout RemoteAccessOAuth, Date) -> Void) throws {
+    /// `body` on the authority; with no host yet, nothing, or with `orStored` the grants the file holds end.
+    private func ending(orStored: Bool = false, _ body: (inout RemoteAccessOAuth, Date) -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
-        guard authority != nil else { return }
         let now = clock()
+        guard authority != nil else {
+            if orStored, let failure = endStored(now: now) { throw failure }
+            return
+        }
         body(&authority!, now)
         if let failure = settle(now: now) { throw failure }
     }
@@ -269,11 +273,12 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     }
 
     /// Turn Off, or Turn Off and Revoke All (R37): access tokens dropped (every grant ended too with
-    /// `revokeAll`), the refusal counts written, then every open call answered.
+    /// `revokeAll`, the file's own with no host saved), the refusal counts written, then every open call answered.
     public func turnOff(revokeAll: Bool) {
         lock.lock()
         defer { lock.unlock() }
         let now = clock()
+        if revokeAll, authority == nil { endStored(now: now) }
         if revokeAll { _ = authority?.revokeAll(now: now) }
         authority?.dropAccessTokens()
         settle(now: now)
@@ -297,8 +302,15 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     public func saveOnQuit() throws {
         lock.lock()
         defer { lock.unlock() }
-        guard let authority else { return }
         let now = clock()
+        guard let authority else {
+            // No host: only a Revoke All whose save failed can have changed the grants.
+            let current = Saved(loaded.clients, loaded.grants)
+            guard current != saved else { return }
+            try store.save(clients: loaded.clients, grants: loaded.grants, now: now)
+            saved = current
+            return
+        }
         if let failure = saveIfChanged(authority, now: now) { throw failure }
         try store.saveOnQuit(clients: authority.clients, grants: authority.grants, now: now)
     }
@@ -392,6 +404,35 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         do {
             try store.save(clients: authority.clients, grants: authority.grants, now: now)
             saved = current
+            return nil
+        } catch {
+            report("Next Term: Remote access could not save its grants: \(error)")
+            return error
+        }
+    }
+
+    /// Revoke All with no host saved, so no authority: the file may still hold grants (the last host's, until the
+    /// hostname was cleared), and they end all the same, so typing that host back in brings none back. Their
+    /// clients stay a day, as after any revoke; each end goes in the audit log. On a failed save they are ended
+    /// here all the same, and `saveOnQuit` (or the save when a host is set) tries again. The save's error.
+    @discardableResult
+    private func endStored(now: Date) -> Error? {
+        let ended = loaded.grants
+        guard !ended.isEmpty else { return nil }
+        var clients = loaded.clients
+        for grant in ended {
+            guard let index = clients.firstIndex(where: { $0.id == grant.clientID }) else { continue }
+            clients[index].lastUsed = max(clients[index].lastUsed, now)
+        }
+        loaded.clients = clients
+        loaded.grants = []
+        let events = ended.map { grant in
+            RemoteAccessOAuth.Event.revoked(grantID: grant.id, name: grant.name, reason: .revokeAll)
+        }
+        append(events.map { RemoteAccessAuditEntry.event($0, time: now) }, now: now)
+        do {
+            try store.save(clients: clients, grants: [], now: now)
+            saved = Saved(clients, [])
             return nil
         } catch {
             report("Next Term: Remote access could not save its grants: \(error)")

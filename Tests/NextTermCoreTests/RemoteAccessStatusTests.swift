@@ -42,6 +42,11 @@ import Testing
 
     static let closing: [Effect] = [.closeDoor, .dropTokens(revokeAll: false), .stopTunnel]
 
+    /// The Mac notifications among `effects`.
+    static func notices(_ effects: [Effect]) -> [Effect] {
+        effects.filter { if case .notify = $0 { return true } else { return false } }
+    }
+
     // MARK: happy
 
     @Test func switchOnBoundStartedReadyGivesOn() {
@@ -137,6 +142,16 @@ import Testing
         #expect(!effects.contains(.startTunnel))
         #expect(!status.isOn)
         #expect(!status.doorOpen)
+    }
+
+    /// R2: a busy port leaves it off, so it is saved off at once, not when the message is dismissed: a quit before
+    /// that never brings it back by itself at the next launch.
+    @Test func aBusyPortIsSavedOffAtOnce() {
+        let (_, effects) = Self.run([.turnOn(Self.start(.funnel)), .bindFailed(portInUse: true, reason: "busy")])
+        #expect(effects == [.saveOn, .bindDoor(Self.port), .saveOff])
+        let launched = Self.run([.turnOn(Self.start(.funnel, launch: true)),
+                                 .bindFailed(portInUse: true, reason: "busy")])
+        #expect(launched.1.suffix(2) == [.saveOff, .notify(.didNotStart("Port 41234 is in use"))])
     }
 
     @Test func portBusyIsDismissedToOff() {
@@ -294,6 +309,23 @@ import Testing
         #expect(busy.1.last == .notify(.didNotStart("Port 41234 is in use")))
     }
 
+    /// A tunnel that can't run any more once it was on stops it as a route change does: Stopped, saved off, and the
+    /// Mac told whoever turned it on (R33). U10 reports a child that only exited as not ready, and restarts it.
+    @Test func aTunnelThatFailsWhileOnStopsAndTellsTheMac() {
+        let reason = "cloudflared is no longer installed."
+        for from in [Self.on(), Self.run([.notReady], from: Self.on()).0] {
+            var status = from
+            let effects = status.handle(.tunnelFailed(reason))
+            #expect(status.phase == .stopped(reason))
+            #expect(!status.isOn)
+            let expected: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + Self.closing
+                + [.saveOff, .notify(.stopped(reason))]
+            #expect(effects == expected)
+            #expect(status.handle(.dismiss) == [.saveOff])
+            #expect(status.phase == .off)
+        }
+    }
+
     // MARK: Confirm Host
 
     @Test func cloudflareReadyWithNoSavedHostAsksToConfirmIt() {
@@ -327,9 +359,34 @@ import Testing
     }
 
     @Test func aSavedHostNeedsNoConfirming() {
-        let status = Self.run([.turnOn(Self.start()), .token(.found), .bound, .ready(host: "other.example.com")]).0
+        let status = Self.run([.turnOn(Self.start()), .token(.found), .bound, .ready(host: "MCP.Example.com")]).0
         #expect(status.phase == .on)
         #expect(status.host == Self.host)
+        let untold = Self.run([.turnOn(Self.start()), .token(.found), .bound, .ready(host: nil)]).0
+        #expect(untold.phase == .on)
+    }
+
+    /// The tunnel serving another hostname than the saved one stops everything, as a route change does, and keeps
+    /// the new name for U11's "Use <new host>". The saved host stays until the user picks the new one.
+    @Test func anotherHostnameThanTheSavedOneStopsIt() {
+        let other = "other.example.com"
+        let reason = Status.hostChanged(to: other, from: Self.host)
+        #expect(reason.contains(other))
+        #expect(reason.contains(Self.host))
+        let connecting = Self.run([.turnOn(Self.start()), .token(.found), .bound]).0
+        for from in [connecting, Self.on(), Self.run([.notReady], from: Self.on()).0] {
+            var status = from
+            let effects = status.handle(.ready(host: other))
+            #expect(status.phase == .stopped(reason))
+            #expect(status.otherHost == other)
+            #expect(status.host == Self.host)
+            let expected: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + Self.closing
+                + [.saveOff, .notify(.stopped(reason))]
+            #expect(effects == expected)
+            _ = status.handle(.dismiss)
+            #expect(status.phase == .off)
+            #expect(status.otherHost == nil)
+        }
     }
 
     // MARK: the Keychain
@@ -349,6 +406,41 @@ import Testing
         #expect(status.phase == .waitingForKeychain)
         #expect(status.handle(.token(.found)) == [.bindDoor(Self.port)])
         #expect(status.phase == .starting)
+    }
+
+    /// R43, R44: a launch whose silent read would have asked tells the Mac it waits, once; once the user allows it
+    /// and it is on, the launch's "on" notice follows. A switch turned on at the Mac tells nobody.
+    @Test func aLaunchWaitingForTheKeychainTellsTheMacOnce() {
+        let (status, effects) = Self.run([.turnOn(Self.start(launch: true)), .token(.needsPermission)])
+        #expect(status.phase == .waitingForKeychain)
+        #expect(effects == [.saveOn, .readToken(interactive: false), .notify(.waitingForKeychain)])
+        let notice = Status.Notice.waitingForKeychain
+        #expect(notice.title == "Remote access is waiting for the Keychain")
+        #expect(notice.body.contains("Allow Keychain access"))
+        let (later, more) = Self.run([.allowKeychainAccess, .token(.canceled), .allowKeychainAccess, .token(.found),
+                                      .bound, .ready(host: Self.host)], from: status)
+        #expect(later.phase == .on)
+        #expect(Self.notices(more) == [.notify(.on(host: Self.host))])
+        let (_, switched) = Self.run([.turnOn(Self.start()), .token(.needsPermission)])
+        #expect(Self.notices(switched).isEmpty)
+    }
+
+    /// Two clicks on "Allow Keychain access" start one read, so one system prompt at most; the next click after
+    /// it answered asks again.
+    @Test func allowKeychainAccessAsksOnceUntilTheReadAnswers() {
+        var status = Self.run([.turnOn(Self.start()), .token(.needsPermission)]).0
+        #expect(!status.askingKeychain)
+        #expect(status.handle(.allowKeychainAccess) == [.readToken(interactive: true)])
+        #expect(status.askingKeychain)
+        #expect(status.handle(.allowKeychainAccess) == [])
+        #expect(status.handle(.token(.canceled)) == [])
+        #expect(!status.askingKeychain)
+        #expect(status.handle(.allowKeychainAccess) == [.readToken(interactive: true)])
+        _ = status.handle(.turnOff(revokeAll: false))
+        #expect(!status.askingKeychain)
+        _ = status.handle(.turnOn(Self.start()))
+        _ = status.handle(.token(.needsPermission))
+        #expect(status.handle(.allowKeychainAccess) == [.readToken(interactive: true)])
     }
 
     @Test func aCanceledPromptKeepsWaiting() {

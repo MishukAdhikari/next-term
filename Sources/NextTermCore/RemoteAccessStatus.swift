@@ -7,13 +7,16 @@ import Foundation
 /// ```
 /// Off → Starting (switch on) → [WaitingForKeychain →] Starting → Connecting (door bound, tunnel started)
 ///     → [ConfirmHost (Cloudflare, no saved host) →] On ⇄ Reconnecting
-/// Starting → PortBusy (bind failed); On, Reconnecting → Stopped (route changed); each dismissed to Off
+/// Starting → PortBusy (bind failed); On, Reconnecting → Stopped (route changed, another hostname, the tunnel can't
+///     run any more); each dismissed to Off
 /// ```
 ///
 /// Rules it keeps:
 /// - The tunnel never starts before the door holds its port (R31). A busy port starts no tunnel (AE9).
-/// - Every way to Off saves it off, so the switch and the saved setting agree and Remote access never comes back
-///   by itself on the next launch. Quit is the one exception: a relaunch starts it again (R43).
+/// - Every way to Off, PortBusy or Stopped saves it off, so the switch and the saved setting agree and Remote access
+///   never comes back by itself on the next launch. Quit is the one exception: a relaunch starts it again (R43).
+/// - Whatever stops it after it was on tells the Mac (R33); a launch tells the Mac how it went, waiting for the
+///   Keychain included (R43, R44).
 /// - Off from an open door closes the door, drops the access tokens and stops the tunnel, in that order (R37).
 /// - Quit waits for the tunnel in place, since timers never fire after it (R42); it does so even while off, in case
 ///   a stop on timers is still under way.
@@ -24,7 +27,7 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case starting
         /// The silent Keychain read would have asked (R44). "Allow Keychain access" reads again with the prompt.
         case waitingForKeychain
-        /// The saved port is taken (R2). Nothing started; dismissed to Off.
+        /// The saved port is taken (R2). Nothing started, and saved off; dismissed to Off.
         case portBusy(UInt16)
         /// The door is bound and the tunnel started, not ready yet.
         case connecting
@@ -33,7 +36,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case on
         /// Was on; the tunnel is not ready or exited, and restarts (U10).
         case reconnecting
-        /// The route changed or the door failed (R33). Everything is stopped; dismissed to Off.
+        /// After it was on: the route changed, the tunnel serves another hostname or can't run any more, or the door
+        /// failed (R33). Everything is stopped and saved off, and the Mac told; dismissed to Off.
         case stopped(String)
     }
 
@@ -135,12 +139,15 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case stopped(String)
         /// A launch with it saved on could not start it.
         case didNotStart(String)
+        /// A launch with it saved on waits for "Allow Keychain access" (R44).
+        case waitingForKeychain
 
         public var title: String {
             switch self {
             case .on: return "Remote access is on"
             case .stopped: return "Remote access stopped"
             case .didNotStart: return "Remote access didn't start"
+            case .waitingForKeychain: return "Remote access is waiting for the Keychain"
             }
         }
 
@@ -151,6 +158,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
                 return "Connections you allowed can reach Next Term\(place). Turn it off in Settings › Remote Access."
             case .stopped(let reason), .didNotStart(let reason):
                 return reason
+            case .waitingForKeychain:
+                return "Click Allow Keychain access in Settings › Remote Access to turn it on."
             }
         }
     }
@@ -167,6 +176,11 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     public static let tokenNeeded = "Paste your Cloudflare tunnel token in Settings › Remote Access first."
     public static let noFreePort = "No port from 40000 to 48999 is free."
 
+    /// Stopped's reason when the tunnel serves another hostname than the saved one.
+    public static func hostChanged(to reported: String, from saved: String) -> String {
+        "The tunnel serves \(reported) now, not \(saved)."
+    }
+
     // MARK: state
 
     public private(set) var phase: Phase = .off
@@ -175,6 +189,11 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     public private(set) var tunnel: RemoteAccessTunnelConfig.Kind?
     public private(set) var host: String?
     public private(set) var port: UInt16?
+    /// The hostname the tunnel served when it stopped for serving another than the saved one: U11 offers
+    /// "Use <host> (ends every connection)". Cleared at Off.
+    public private(set) var otherHost: String?
+    /// "Allow Keychain access" is reading: it asks once until the read answers, so one system prompt at most.
+    public private(set) var askingKeychain = false
     /// This run began at launch, and the Mac has not been told how it went yet.
     private var launch = false
 
@@ -225,7 +244,9 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case .turnOn(let start): return turnOn(start)
         case .token(let read): return token(read)
         case .allowKeychainAccess:
-            return phase == .waitingForKeychain ? [.readToken(interactive: true)] : []
+            guard phase == .waitingForKeychain, !askingKeychain else { return [] }
+            askingKeychain = true
+            return [.readToken(interactive: true)]
         case .bound: return bound()
         case .bindFailed(let portInUse, let reason): return bindFailed(portInUse: portInUse, reason: reason)
         case .tunnelFailed(let reason): return tunnelFailed(reason)
@@ -256,6 +277,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     private mutating func turnOn(_ start: Start) -> [Effect] {
         guard !isOn else { return [] }
         problem = nil
+        otherHost = nil
+        askingKeychain = false
         launch = start.launch
         if let refusal = Self.refusal(start) { return refuse(refusal) }
         guard let tunnel = start.tunnel, let choice = start.port else { return refuse(Self.tunnelNeeded) }
@@ -282,13 +305,16 @@ public struct RemoteAccessStatus: Equatable, Sendable {
 
     private mutating func token(_ read: TokenRead) -> [Effect] {
         guard phase == .starting || phase == .waitingForKeychain, let port else { return [] }
+        askingKeychain = false
         switch read {
         case .found:
             phase = .starting
             return [.bindDoor(port)]
         case .needsPermission, .canceled:
+            // A launch tells the Mac it waits, once: the next answers come from the user's own clicks.
+            let first = phase == .starting
             phase = .waitingForKeychain
-            return []
+            return first && launch ? [.notify(.waitingForKeychain)] : []
         case .missing:
             return refuse(Self.tokenNeeded)
         case .failed(let reason):
@@ -310,12 +336,15 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     private mutating func bindFailed(portInUse: Bool, reason: String) -> [Effect] {
         guard phase == .starting, let port else { return [] }
         guard portInUse else { return refuse(reason) }
+        let effects: [Effect] = [.saveOff] + didNotStart("Port \(port) is in use")
         phase = .portBusy(port)
-        return didNotStart("Port \(port) is in use")
+        return effects
     }
 
     private mutating func tunnelFailed(_ reason: String) -> [Effect] {
         if phase == .starting || phase == .waitingForKeychain { return refuse(reason) }
+        // It was on: stopped, as a route change is, and the Mac told (R33).
+        if phase == .on || phase == .reconnecting { return stop(reason) }
         guard doorOpen else { return [] }
         let telling = launch
         var effects: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + off(revokeAll: false)
@@ -325,6 +354,13 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     }
 
     private mutating func ready(_ reported: String?) -> [Effect] {
+        if let host, let reported, reported.lowercased() != host.lowercased(), doorOpen {
+            // Another hostname than the saved one, at any check: its grants don't hold there, so all stops, and U11
+            // offers "Use <host>" (U10).
+            let effects = stop(Self.hostChanged(to: reported, from: host))
+            otherHost = reported
+            return effects
+        }
         switch phase {
         case .connecting:
             var effects: [Effect] = []
@@ -355,7 +391,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         return [.saveHost(confirmed), .audit(tunnel: "ready", detail: nil)] + told()
     }
 
-    /// Route changed, or the door failed: all stopped and saved off, and the Mac told (R33).
+    /// Route changed, another hostname, a tunnel that can't run any more, or the door failed: all stopped and saved
+    /// off, and the Mac told (R33).
     private mutating func stop(_ reason: String) -> [Effect] {
         guard doorOpen else { return [] }
         var effects: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + off(revokeAll: false)
@@ -367,6 +404,7 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     private mutating func quit() -> [Effect] {
         let open = doorOpen
         phase = .off
+        askingKeychain = false
         launch = false
         guard open else { return [.stopTunnelNow] }
         return [.closeDoor, .dropTokens(revokeAll: false), .stopTunnelNow]
@@ -377,6 +415,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         let open = doorOpen
         phase = .off
         problem = nil
+        otherHost = nil
+        askingKeychain = false
         launch = false
         if open { return [.closeDoor, .dropTokens(revokeAll: revokeAll), .stopTunnel, .saveOff] }
         return revokeAll ? [.saveOff, .dropTokens(revokeAll: true)] : [.saveOff]

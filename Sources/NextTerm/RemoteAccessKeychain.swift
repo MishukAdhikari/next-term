@@ -6,10 +6,10 @@ import Security
 /// Where Remote access keeps the Cloudflare tunnel token (R30, R44, KTD9). The token never goes anywhere else on disk:
 /// not in preferences, a file or a log.
 protocol RemoteAccessTokenStore: AnyObject, Sendable {
-    /// The saved token. Silently, the read never shows a prompt: when macOS would ask (an update changed the app's
-    /// signature, so the item's access list no longer names it), it fails with `needsPermission`, so a relaunch while
-    /// the user is away never waits on a password dialog. Interactive, macOS may ask; it can block until the user
-    /// answers, so it runs off the main thread.
+    /// The saved token. Silently, the read is meant never to show a prompt: when macOS would ask (an update changed
+    /// the app's signature, so the item's access list no longer names it), it fails with `needsPermission`, so a
+    /// relaunch while the user is away never waits on a password dialog (H6 checks it for a legacy-keychain item).
+    /// Interactive, macOS may ask. Either can block until someone answers, so both run off the main thread.
     func read(interactive: Bool) -> Result<RemoteAccessTunnelConfig.Token, RemoteAccessTokenFailure>
     /// On paste, after the shape check. Replaces any saved token.
     func save(_ token: RemoteAccessTunnelConfig.Token) throws
@@ -64,7 +64,7 @@ final class RemoteAccessKeychain: RemoteAccessTokenStore {
         var query = item
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        if !interactive { query[kSecUseAuthenticationContext as String] = Self.silent() }
+        if !interactive { Self.silence(&query) }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
@@ -76,7 +76,7 @@ final class RemoteAccessKeychain: RemoteAccessTokenStore {
             return .success(token)
         case errSecItemNotFound:
             return .failure(.missing)
-        case errSecInteractionNotAllowed:
+        case errSecInteractionNotAllowed, errSecInteractionRequired:
             return .failure(.needsPermission)
         case errSecUserCanceled, errSecAuthFailed:
             return .failure(interactive ? .canceled : .needsPermission)
@@ -113,19 +113,23 @@ final class RemoteAccessKeychain: RemoteAccessTokenStore {
         var query = item
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        query[kSecUseAuthenticationContext as String] = Self.silent()
+        Self.silence(&query)
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let attributes = result as? [String: Any] else { return nil }
         return attributes[kSecAttrComment as String] as? String
     }
 
-    /// A context that never shows UI: a read that would ask fails with `errSecInteractionNotAllowed` (R44; hand
-    /// check H6 confirms it for a legacy-keychain item).
-    private static func silent() -> LAContext {
+    /// The options that keep a read from showing UI: a read that would ask fails with `errSecInteractionNotAllowed`
+    /// (R44). A context that allows no interaction covers the data-protection keychain's own prompts. The older
+    /// `kSecUseAuthenticationUI` set to fail is passed too, as its raw value ("u_AuthUIF", the deprecated
+    /// `kSecUseAuthenticationUIFail`), since a legacy-keychain item's access prompt is not LocalAuthentication's.
+    /// Hand check H6 shows whether they keep that prompt away after an update; Q4 is the way out if not.
+    private static func silence(_ query: inout [String: Any]) {
         let context = LAContext()
         context.interactionNotAllowed = true
-        return context
+        query[kSecUseAuthenticationContext as String] = context
+        query[kSecUseAuthenticationUI as String] = "u_AuthUIF"
     }
 
     static func message(_ status: OSStatus) -> String {
