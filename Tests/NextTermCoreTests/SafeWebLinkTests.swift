@@ -32,7 +32,9 @@ import Testing
                        "https://x.example.com:0", "https://x.example.com:70000", "https://x .example.com",
                        "https://x%2eexample.com", "http://example.com", "https://x\u{7}y.example.com",
                        "https://\u{043F}\u{0440}\u{0438}\u{043C}\u{0435}\u{0440}.com", "https://xn--e1afmkfd.com",
-                       "https://user@x.example.com", "https://:pw@x.example.com", "https://0.0.0.0:3000"]
+                       "https://user@x.example.com", "https://:pw@x.example.com", "https://0.0.0.0:3000",
+                       "http://127.0.0.1.nip.io", "http://10.0.0.5", "http://169.254.169.254", "http://192.168.1.5:8080",
+                       "https://x_y.example.com"]
         for text in refused {
             if let link = URL(string: text) { #expect(!SafeWebLink.isAllowed(link), "\(text)") }
         }
@@ -84,6 +86,23 @@ import Testing
         }
     }
 
+    /// `https://` is added only to a bare host: a value with another scheme (`file:`, `news:`) or a single word
+    /// (MLflow's `databricks`, a folder name, `true`) names no server, and is never turned into one.
+    @Test func onlyABareHostIsGivenHTTPS() throws {
+        for text in ["file:/Users/someone/mlruns", "file:", "file:///Users/someone/mlruns", "https:/x.example.com",
+                     "databricks", "databricks://profile", "mlruns", "./mlruns", "true", "news:123", "news:", "qdrant",
+                     "qdrant:6333", "vector_db:6333", "http:localhost:5000", "localhost:", "x.example.com:abc"] {
+            #expect(SafeWebLink.address(of: text) == nil, "\(text)")
+            #expect(SafeWebLink.origin(of: text) == nil, "\(text)")
+        }
+        let bare = ["abc.weaviate.cloud": "https://abc.weaviate.cloud", "abc.weaviate.cloud:8443/v1": "https://abc.weaviate.cloud:8443",
+                    "localhost:6333": "https://localhost:6333", "127.0.0.1:2024": "https://127.0.0.1:2024",
+                    "[::1]:8000": "https://[::1]:8000", "Abc.Weaviate.Cloud?x=1": "https://abc.weaviate.cloud"]
+        for (text, origin) in bare {
+            #expect(try #require(SafeWebLink.origin(of: text), "\(text)").string == origin)
+        }
+    }
+
     @Test func hostsAreLowerCasedAndPlainHTTPStaysOnThisMac() throws {
         #expect(SafeWebLink.origin(of: "HTTPS://ABC.Cloud.Qdrant.IO:6333")?.host == "abc.cloud.qdrant.io")
         #expect(SafeWebLink.origin(of: "http://shop.test.") == nil)
@@ -113,6 +132,24 @@ import Testing
         #expect(SafeWebLink.address(of: "file:///srv/qdrant") == nil)
     }
 
+    /// Compose allows `_` in a service's name, so an address may hold one; a link's host never does. The name is
+    /// lower-cased, as every host is.
+    @Test func anAddressMayNameAComposeServiceWithAnUnderscore() throws {
+        let vector = try #require(SafeWebLink.address(of: "http://Vector_DB:6333"))
+        #expect(vector.host == "vector_db")
+        #expect(vector.port == 6333)
+        #expect(!vector.mayOpen)
+        #expect(vector.link() == nil)
+        #expect(SafeWebLink.origin(of: "http://vector_db:6333") == nil)
+        #expect(SafeWebLink.origin(of: "https://vector_db:6333") == nil)
+        #expect(SafeWebLink.make(scheme: "http", host: "vector_db", port: 6333) == nil)
+        #expect(SafeWebLink.make(scheme: "http", host: "x_y.localhost") == nil)
+        #expect(SafeWebLink.make(scheme: "https", host: "x_y.example.com") == nil)
+        for text in ["http://x_y.localhost:3000", "https://x_y.example.com"] {
+            #expect(!SafeWebLink.isAllowed(try #require(URL(string: text))), "\(text)")
+        }
+    }
+
     @Test func placeholdersMatchTheirPattern() {
         #expect(SafeWebLink.Placeholder.supabaseRef.accepts("abcdefghijklmnopqrst"))
         #expect(!SafeWebLink.Placeholder.supabaseRef.accepts("abcdefghijklmnopqrs"))
@@ -135,6 +172,10 @@ import Testing
         #expect(SafeWebLink.Placeholder.name.accepts("My App"))
         #expect(SafeWebLink.Placeholder.digits.accepts("42"))
         #expect(!SafeWebLink.Placeholder.digits.accepts("\u{0664}\u{0662}"))
+        #expect(SafeWebLink.Placeholder.replicateName.accepts("acme-labs"))
+        #expect(SafeWebLink.Placeholder.replicateName.accepts("Llama_3.1-8B"))
+        #expect(!SafeWebLink.Placeholder.replicateName.accepts("my model"))
+        #expect(!SafeWebLink.Placeholder.replicateName.accepts("a:b"))
         for placeholder in SafeWebLink.Placeholder.allCases {
             for value in ["a/b", "a?b", "a#b", "a%2Fb", "a\nb", "", ".", "..", "a\u{301}"] {
                 #expect(!placeholder.accepts(value), "\(placeholder) took \(value)")
@@ -176,11 +217,38 @@ import Testing
         for link in [studio, rds, mlflow, named].compactMap({ $0 }) { #expect(SafeWebLink.isAllowed(link), "\(link)") }
     }
 
+    /// An origin handed to a hosted page must be one a link may open: `https` anywhere, plain `http` only on this Mac.
+    @Test func anOriginPartIsOneThatMayOpen() throws {
+        func studio(_ origin: SafeWebLink.Origin) -> URL? {
+            SafeWebLink.make(scheme: "https", host: "smith.langchain.com", path: [.fixed("/studio/")],
+                             query: [.init("baseUrl", .origin(origin))])
+        }
+        let remote = try #require(SafeWebLink.address(of: "http://evil.example.com:2024"))
+        #expect(studio(remote) == nil)
+        let made = try #require(SafeWebLink.Origin(scheme: "http", host: "attacker.example.com", port: 80))
+        #expect(studio(made) == nil)
+        let compose = try #require(SafeWebLink.address(of: "http://langgraph-api:8000"))
+        #expect(studio(compose) == nil)
+        let inPath = SafeWebLink.make(scheme: "https", host: "x.example.com", path: [.fixed("/a/"), .origin(made)])
+        #expect(inPath == nil)
+        let inFragment = SafeWebLink.make(scheme: "https", host: "x.example.com", fragment: [.origin(made)])
+        #expect(inFragment == nil)
+        let deployed = try #require(SafeWebLink.origin(of: "https://agent.example.com"))
+        #expect(studio(deployed)?.absoluteString == "https://smith.langchain.com/studio/?baseUrl=https://agent.example.com")
+    }
+
     @Test func aFinishedLinkNeverLeavesItsPath() throws {
         for text in ["https://x.example.com/a/../b", "https://x.example.com/a/%2e%2e/b", "https://x.example.com/./a",
-                     "https://x.example.com/a/%2E"] {
+                     "https://x.example.com/a/%2E", "http://localhost:3000/a%2f..%2fb", "http://localhost:3000/a%5C..%5Cb",
+                     "http://localhost:3000/%2E%2E%2Fb", "http://localhost:3000/%00", "http://localhost:3000/a%0Ab",
+                     "http://localhost:3000/a%7F"] {
             #expect(!SafeWebLink.isAllowed(try #require(URL(string: text))), "\(text)")
         }
+        // An encoded slash in the template's own text is kept when it steps nowhere.
+        let team = SafeWebLink.make(scheme: "https", host: "x.example.com", path: [.fixed("/new/%2F%5Bteam%5D")])
+        #expect(team?.absoluteString == "https://x.example.com/new/%2F%5Bteam%5D")
+        #expect(SafeWebLink.make(scheme: "https", host: "x.example.com", path: [.fixed("/a%2F..%2Fb")]) == nil)
+        #expect(SafeWebLink.make(scheme: "https", host: "x.example.com", path: [.fixed("/a%00")]) == nil)
     }
 
     @Test func valuesThatNameOtherValues() {
@@ -201,6 +269,16 @@ import Testing
                       "SESSION_COOKIE", "JWT_PRIVATE", "SIGNING_URL", "x-api-key", "app.secret", "BLOB_READ_WRITE_TOKEN",
                       "CONVEX_DEPLOY_KEY", "NEXT_PUBLIC_EDGE_CONFIG", "openai_apikey", "sessionCookie", "dbPass", "DBPass"]
         for name in secret { #expect(SecretName.isSecret(name), "\(name)") }
+    }
+
+    /// A secret word with a number or a plural `S` after it is still that word; so are the header's own names.
+    @Test func secretWordsWithANumberOrPlural() {
+        let secret = ["DB_PASS2", "APP_KEY2", "MY_KEY2", "SMTP_PWD2", "SENTRY_DSN2", "COOKIE1", "STRIPE_KEYS", "COOKIES",
+                      "AUTHORIZATION", "X_AUTHORIZATION_HEADER", "apiKey2", "sessionCookies", "API_BEARER", "BEARER",
+                      "OTEL_EXPORTER_OTLP_HEADERS2", "SECRETS", "AUTH2_URL"]
+        for name in secret { #expect(SecretName.isSecret(name), "\(name)") }
+        let plain = ["ADDRESS", "PROCESS_PORT", "KEYSTONE_URL", "S3_BUCKET", "S_PORT", "PORT2", "HOSTS", "API_URLS", "AUTHOR2"]
+        for name in plain { #expect(!SecretName.isSecret(name), "\(name)") }
     }
 
     @Test func namesThatMayHaveTheirValueRead() {

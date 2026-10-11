@@ -12,7 +12,8 @@ public enum SafeWebLink {
         case fixed(String)
         /// A value from the project's files: refused unless it matches its pattern, then percent-encoded.
         case value(String, Placeholder)
-        /// A checked origin as text: a local server's address handed to a hosted page (`?baseUrl=`).
+        /// A checked origin as text: a local server's address handed to a hosted page (`?baseUrl=`). Refused unless
+        /// a link there may open, as `Origin.mayOpen` says.
         case origin(Origin)
     }
 
@@ -48,6 +49,8 @@ public enum SafeWebLink {
         case name
         /// Digits only: an MLflow experiment id.
         case digits
+        /// A Replicate owner or model: letters, digits, `_`, `.` and `-`, up to 100, with no space.
+        case replicateName
 
         public func accepts(_ value: String) -> Bool {
             let ascii = value.unicodeScalars.allSatisfy { (scalar: Unicode.Scalar) -> Bool in scalar.isASCII }
@@ -67,6 +70,7 @@ public enum SafeWebLink {
             case .slug: return Self.slugPattern
             case .name: return Self.namePattern
             case .digits: return Self.digitsPattern
+            case .replicateName: return Self.replicateNamePattern
             }
         }
 
@@ -80,6 +84,7 @@ public enum SafeWebLink {
         private static let slugPattern = #/[a-z0-9-]{1,100}/#
         private static let namePattern = #/[A-Za-z0-9._ -]{1,100}/#
         private static let digitsPattern = #/[0-9]{1,19}/#
+        private static let replicateNamePattern = #/[A-Za-z0-9_.-]{1,100}/#
     }
 }
 
@@ -93,11 +98,11 @@ extension SafeWebLink {
         public let host: String
         public let port: Int?
 
-        /// Checked as a link's scheme, host and port are, but plain `http` may name any host here (a Compose
-        /// service's name); `link` and `mayOpen` apply that rule.
+        /// Checked as a link's scheme, host and port are, but the host may be any host here, `_` included (a Compose
+        /// service's name, such as `vector_db`); `link` and `mayOpen` apply a link's rules.
         public init?(scheme: String, host: String, port: Int?) {
             let lowered = scheme.lowercased()
-            guard SafeWebLink.schemes.contains(lowered), let checked = SafeWebLink.checkedHost(host),
+            guard SafeWebLink.schemes.contains(lowered), let checked = SafeWebLink.checkedHost(host, underscore: true),
                   SafeWebLink.isPort(port) else { return nil }
             self.scheme = lowered
             self.host = checked
@@ -112,7 +117,7 @@ extension SafeWebLink {
 
         public var description: String { string }
 
-        /// Whether a link here may open: `https` anywhere, plain `http` only on this Mac.
+        /// Whether a link here may open: `https` anywhere, plain `http` only on this Mac, and never a host with `_`.
         public var mayOpen: Bool { SafeWebLink.mayOpen(scheme: scheme, host: host) }
 
         /// A link on this origin, built and checked as `make` does.
@@ -129,20 +134,50 @@ extension SafeWebLink {
         return origin
     }
 
-    /// A server's address from a project value: trimmed, given `https://` when it is a bare host (Weaviate's values may
-    /// lack a scheme), then read by URLComponents. A value with a user or password, one that names another value, or
-    /// one whose scheme, host or port a link would refuse, gives nil; its path, query and fragment are dropped. Plain
-    /// `http` to a host off this Mac is kept, so that a Compose service's name (`http://qdrant:6333`) can be mapped to
-    /// its published port: only `origin(of:)` or a link built on it may open.
+    /// A server's address from a project value: trimmed, then read by URLComponents. A value that writes a scheme
+    /// must write `scheme://`; one that writes none is a bare host and is given `https://` (Weaviate's values may lack
+    /// a scheme), but only a host with a dot, `localhost` or `[::1]`. So `file:/x`, `news:123` and a single word
+    /// (MLflow's `databricks`, a folder's name, `true`) name no server. A value with a user or password, one that names
+    /// another value, or one whose scheme, host or port a link would refuse, gives nil; its path, query and fragment
+    /// are dropped. Plain `http` to a host off this Mac is kept, so that a Compose service's name (`http://qdrant:6333`,
+    /// `http://vector_db:6333`) can be mapped to its published port: only `origin(of:)` or a link built on it may open.
+    /// The host is lower-cased, a service's name too.
     public static func address(of value: String) -> Origin? {
         let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, isPrintable(text), !text.contains("\\"), isLiteral(text) else { return nil }
-        let written = text.contains("://") ? text : "https://" + text
+        let scheme = schemeWritten(in: text)
+        if let scheme {
+            guard text.dropFirst(scheme.count + 1).hasPrefix("//") else { return nil }
+        }
+        let written = scheme == nil ? "https://" + text : text
         guard let parts = URLComponents(string: written), parts.percentEncodedUser == nil,
-              parts.percentEncodedPassword == nil, let scheme = parts.scheme,
-              let host = parts.percentEncodedHost else { return nil }
-        return Origin(scheme: scheme, host: host, port: parts.port)
+              parts.percentEncodedPassword == nil, let partsScheme = parts.scheme,
+              let host = parts.percentEncodedHost,
+              let origin = Origin(scheme: partsScheme, host: host, port: parts.port) else { return nil }
+        let named: Bool = origin.host.contains(".") || origin.host == "localhost" || origin.host == "[::1]"
+        guard scheme != nil || named else { return nil }
+        return origin
     }
+
+    /// The scheme a value starts with: `https` in `https://x`, `file` in `file:/x` and `file:`. A name before a colon
+    /// that is followed by digits alone, up to the end, `/`, `?` or `#`, is a host and its port (`localhost:6333`), not
+    /// a scheme; so is a value whose text before its first colon could not be a scheme (`[::1]:8000`).
+    static func schemeWritten(in text: String) -> Substring? {
+        guard let colon = text.firstIndex(of: ":") else { return nil }
+        let name = text[..<colon]
+        guard let first = name.unicodeScalars.first, asciiLetters.contains(first),
+              name.unicodeScalars.allSatisfy({ (scalar: Unicode.Scalar) -> Bool in schemeCharacters.contains(scalar) })
+        else { return nil }
+        let rest = text[text.index(after: colon)...]
+        let digits = rest.prefix { (character: Character) -> Bool in asciiDigits.contains(character) }
+        let after = rest.dropFirst(digits.count).first
+        let endsThePort: Bool = after == nil || after == "/" || after == "?" || after == "#"
+        return !digits.isEmpty && endsThePort ? nil : name
+    }
+
+    private static let asciiDigits: ClosedRange<Character> = "0"..."9"
+    private static let asciiLetters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    private static let schemeCharacters = asciiLetters.union(CharacterSet(charactersIn: "0123456789+.-"))
 
     private static let lowerLetters: ClosedRange<Unicode.Scalar> = "a"..."z"
     private static let upperLetters: ClosedRange<Unicode.Scalar> = "A"..."Z"
@@ -177,7 +212,7 @@ extension SafeWebLink {
                             query: [QueryItem] = [], fragment: [Part] = []) -> URL? {
         guard let origin = Origin(scheme: scheme, host: host, port: port), origin.mayOpen,
               let pathText = text(of: path, encoding: pathValues, fixedMayNotHold: "?#"),
-              pathText.isEmpty || pathText.hasPrefix("/"), !leavesItsPath(pathText),
+              pathText.isEmpty || pathText.hasPrefix("/"), !isUnsafe(path: pathText),
               let queryText = text(of: query),
               let fragmentText = text(of: fragment, encoding: fragmentValues, fixedMayNotHold: "#") else { return nil }
         var written = origin.string + pathText
@@ -202,19 +237,21 @@ extension SafeWebLink {
               parts.percentEncodedUser == nil, parts.percentEncodedPassword == nil,
               let scheme = parts.scheme, let host = parts.percentEncodedHost, host != "0.0.0.0",
               let origin = Origin(scheme: scheme, host: host, port: parts.port) else { return false }
-        return origin.mayOpen && !leavesItsPath(parts.percentEncodedPath)
+        return origin.mayOpen && !isUnsafe(path: parts.percentEncodedPath)
     }
 
     /// The host a link may name, lower-cased: labels of 1 to 63 of `[a-z0-9-]` joined by dots, with no trailing dot
     /// and no `xn--` label (a name in another script, written for DNS); or `[::1]`. `0.0.0.0`, every address of this
-    /// Mac, becomes `localhost`, which a browser opens.
-    static func checkedHost(_ raw: String) -> String? {
+    /// Mac, becomes `localhost`, which a browser opens. With `underscore`, a label may also hold `_`, as a Compose
+    /// service's name may: an address, never a link's host.
+    static func checkedHost(_ raw: String, underscore: Bool = false) -> String? {
         guard raw.unicodeScalars.allSatisfy({ (scalar: Unicode.Scalar) -> Bool in scalar.isASCII }) else { return nil }
         let host = raw.lowercased()
         if host == "[::1]" || host == "::1" { return "[::1]" }
         if host == "0.0.0.0" { return "localhost" }
         let labels = host.split(separator: ".", omittingEmptySubsequences: false)
-        let plain = host.unicodeScalars.allSatisfy { (scalar: Unicode.Scalar) -> Bool in hostCharacters.contains(scalar) }
+        let allowed = underscore ? addressHostCharacters : hostCharacters
+        let plain = host.unicodeScalars.allSatisfy { (scalar: Unicode.Scalar) -> Bool in allowed.contains(scalar) }
         let filled = labels.allSatisfy { (label: Substring) -> Bool in !label.isEmpty && label.count <= 63 }
         let encoded = labels.contains { (label: Substring) -> Bool in label.hasPrefix("xn--") }
         guard !host.isEmpty, host.count <= 253, plain, filled, !encoded else { return nil }
@@ -227,7 +264,9 @@ extension SafeWebLink {
     }
 
     /// `https` anywhere; plain `http` only where `DatabaseEnvironment` says local: loopback, `*.localhost`, `*.test`.
+    /// Never a host with `_`, which only an address (a Compose service's name) may hold.
     static func mayOpen(scheme: String, host: String) -> Bool {
+        guard !host.contains("_") else { return false }
         if scheme == "https" { return true }
         return scheme == "http" && DatabaseEnvironment.classify(host: host) == .local
     }
@@ -237,11 +276,22 @@ extension SafeWebLink {
         text.unicodeScalars.allSatisfy { (scalar: Unicode.Scalar) -> Bool in scalar.value > 0x20 && scalar.value < 0x7F }
     }
 
-    /// A path segment `.` or `..`, written or percent-encoded, would leave the page the template names.
-    static func leavesItsPath(_ path: String) -> Bool {
+    /// A path segment `.` or `..`, written or percent-encoded, would leave the page the template names; so would one
+    /// between encoded slashes (`a%2F..%2Fb`, `a%5C..%5Cb`), which some servers decode. A control character once
+    /// decoded (`%00`, `%0A`) is refused too. An encoded slash that steps nowhere (`%2F%5Bteam%5D`) is kept.
+    static func isUnsafe(path: String) -> Bool {
         path.split(separator: "/", omittingEmptySubsequences: false).contains { (segment: Substring) -> Bool in
             guard let decoded = segment.removingPercentEncoding else { return true }
-            return decoded == "." || decoded == ".."
+            let control = decoded.unicodeScalars.contains { (scalar: Unicode.Scalar) -> Bool in
+                scalar.value < 0x20 || scalar.value == 0x7F
+            }
+            let steps = decoded.unicodeScalars.split(omittingEmptySubsequences: false) { (scalar: Unicode.Scalar) -> Bool in
+                scalar == "/" || scalar == "\\"
+            }
+            let stepsOut = steps.contains { (step: Substring.UnicodeScalarView) -> Bool in
+                step.elementsEqual(".".unicodeScalars) || step.elementsEqual("..".unicodeScalars)
+            }
+            return control || stepsOut
         }
     }
 
@@ -259,7 +309,8 @@ extension SafeWebLink {
                       let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
                 text += encoded
             case .origin(let origin):
-                guard let encoded = origin.string.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+                guard origin.mayOpen,
+                      let encoded = origin.string.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
                 text += encoded
             }
         }
@@ -278,6 +329,7 @@ extension SafeWebLink {
     }
 
     private static let hostCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.-")
+    private static let addressHostCharacters = hostCharacters.union(CharacterSet(charactersIn: "_"))
     private static let queryNameCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
     private static let pathValues = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
     private static let queryValues = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+"))
@@ -288,13 +340,14 @@ extension SafeWebLink {
 
 /// Whether a key's name marks a secret, whose value is never read, shown, logged or put in a link; the name alone may
 /// still say which service a project uses (`OPENAI_API_KEY`). A name is cut into segments at `_`, `-`, `.` and a
-/// change of case (`DB_PASS`, `apiKey`), and is secret when a segment is a secret word, when it ends in a name on the
-/// fixed list, or when it holds a word MCP's redaction looks for anywhere in a name (`MYSECRETVALUE`), so the two
-/// never disagree. A word counts as a whole segment, not inside one: `KEYCLOAK_URL` and `MONKEY_PORT` are not secret.
+/// change of case (`DB_PASS`, `apiKey`), and is secret when a segment is a secret word, also with its trailing digits
+/// and then a plural `S` dropped (`DB_PASS2`, `STRIPE_KEYS`), when it ends in a name on the fixed list, or when it
+/// holds a word MCP's redaction looks for anywhere in a name (`MYSECRETVALUE`), so the two never disagree. A word
+/// counts as a whole segment, not inside one: `KEYCLOAK_URL` and `MONKEY_PORT` are not secret.
 public enum SecretName {
     static let words: Set<String> = ["KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "PASSPHRASE",
                                      "PWD", "CREDENTIAL", "CREDENTIALS", "AUTH", "HEADERS", "COOKIE", "PRIVATE",
-                                     "SIGNING", "DSN"]
+                                     "SIGNING", "DSN", "AUTHORIZATION", "BEARER"]
 
     /// Secrets whose name has no secret word: Vercel's Edge Config string carries its token.
     static let names: [String] = ["EDGE_CONFIG", "MILVUS_TOKEN", "BLOB_READ_WRITE_TOKEN", "CONVEX_DEPLOY_KEY",
@@ -302,12 +355,23 @@ public enum SecretName {
 
     public static func isSecret(_ name: String) -> Bool {
         let upper = name.uppercased()
-        let word = segments(of: name).contains { (segment: String) -> Bool in words.contains(segment) }
+        let word = segments(of: name).contains { (segment: String) -> Bool in isSecretWord(segment) }
         let listed = names.contains { (listed: String) -> Bool in upper == listed || upper.hasSuffix("_" + listed) }
         let range = NSRange(name.startIndex..., in: name)
         let masked = MCPRedaction.secretWord.firstMatch(in: name, range: range) != nil
         return word || listed || masked
     }
+
+    /// An upper-cased segment that is a secret word as it is, without its trailing digits (`PASS2`, `COOKIE1`), or
+    /// then without a plural `S` (`KEYS`, `COOKIES`).
+    static func isSecretWord(_ segment: String) -> Bool {
+        var stem = Substring(segment)
+        while let last = stem.last, digits.contains(last) { stem = stem.dropLast() }
+        let single = stem.count > 1 && stem.hasSuffix("S") ? stem.dropLast() : stem
+        return words.contains(segment) || words.contains(String(stem)) || words.contains(String(single))
+    }
+
+    private static let digits: ClosedRange<Character> = "0"..."9"
 
     /// The upper-cased segments of a name: `NEXT_PUBLIC_SUPABASE_URL` gives NEXT, PUBLIC, SUPABASE, URL; `apiPort`
     /// gives API, PORT; `DBPass` gives DB, PASS.
