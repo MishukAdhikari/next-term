@@ -67,10 +67,12 @@ extension SelfTest {
         check(commandK.flatMap(shortcuts.terminalItem(for:)) === clear && clear != nil, "a terminal with the keyboard clears on ⌘K")
         check(shortcuts.sharing("gitCommit:") == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else",
               "Settings says where ⌘K is which", shortcuts.sharing("gitCommit:") ?? "nil")
+        // Commit… is back on its own key in Next Term's set (⇧⌘C), off ⌘K.
         shortcuts.preset = .nextTerm
-        check(item("clearBuffer:")?.keyEquivalent == "k" && item("gitCommit:")?.keyEquivalent == ""
+        let commitKey = item("gitCommit:").flatMap(KeyboardShortcuts.chord(of:))
+        check(item("clearBuffer:")?.keyEquivalent == "k" && commitKey == shortcuts.baseChord(for: "gitCommit:")
               && commandK.flatMap(shortcuts.terminalItem(for:)) == nil,
-              "with Next Term's keys, ⌘K is Clear Buffer's everywhere again")
+              "with Next Term's keys, ⌘K is Clear Buffer's everywhere again", "Commit… \(commitKey?.display ?? "none")")
     }
 
     /// An IDE unused for 180 days is listed, last, under "Not used lately".
