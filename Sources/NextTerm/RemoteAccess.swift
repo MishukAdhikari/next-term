@@ -12,8 +12,8 @@ import UserNotifications
 /// open calls and dropping access tokens, then stops the tunnel (R37). Quit does the same and waits for the tunnel
 /// in place (R42). While the door is open the Mac stays awake on power (R41).
 ///
-/// The tunnel itself is U10's: it takes `tunnel`'s place (`RemoteAccessTunnelRunner`). Until then no tunnel runs,
-/// and a start that needs one goes back off and says why; "Advanced: I expose the port myself" works as it is.
+/// The tunnel is U10's supervisor (`RemoteAccessTunnel`, through `RemoteAccessTunnelRunner`): the child, its checks,
+/// restarts and watchdog. "Advanced: I expose the port myself" runs none.
 ///
 /// Under `--self-test` (KTD18) it keeps its settings in memory, its files in a temp folder of its own and the token
 /// in memory, so a test run never touches the user's setup; it starts off. The relaunch harness keeps the settings
@@ -71,7 +71,7 @@ final class RemoteAccess {
     /// The Remote access folder: the grants, the audit log and the tunnel's pid record.
     let folder: URL
     let tokens: RemoteAccessTokenStore
-    /// What runs the tunnel. U10 puts its supervisor here; a debug self-test its stand-in.
+    /// What runs the tunnel: U10's supervisor.
     var tunnel: RemoteAccessTunnelRunner {
         didSet { connect(tunnel) }
     }
@@ -103,7 +103,7 @@ final class RemoteAccess {
             tokens = RemoteAccessKeychain()
             settings = Settings(defaults: .standard)
         }
-        tunnel = RemoteAccessNoTunnel()
+        tunnel = RemoteAccessTunnel(folder: folder)
         connect(tunnel)
         let center = NSWorkspace.shared.notificationCenter
         let woke = NSWorkspace.didWakeNotification
@@ -519,8 +519,8 @@ extension RemoteAccess {
 
 // MARK: - the tunnel's seam (U10)
 
-/// What runs the tunnel for the controller. U10's supervisor (RemoteAccessTunnel.swift) takes this place. It reports
-/// on the main thread through `report`: `.ready(host:)`, `.notReady`, `.routeChanged(_:)` and `.tunnelFailed(_:)`.
+/// What runs the tunnel for the controller: U10's supervisor (RemoteAccessTunnel.swift). It reports on the main thread
+/// through `report`: `.ready(host:)`, `.notReady`, `.tunnelDown`, `.routeChanged(_:)` and `.tunnelFailed(_:)`.
 @MainActor
 protocol RemoteAccessTunnelRunner: AnyObject {
     var report: ((RemoteAccessStatus.Event) -> Void)? { get set }
@@ -536,24 +536,11 @@ protocol RemoteAccessTunnelRunner: AnyObject {
     func checkNow()
 }
 
-/// Until U10: no tunnel runs, so a start that needs one goes back off and says why.
-final class RemoteAccessNoTunnel: RemoteAccessTunnelRunner {
-    var report: ((RemoteAccessStatus.Event) -> Void)?
-
-    func start(_ kind: RemoteAccessTunnelConfig.Kind, port: UInt16, host: String?,
-               token: RemoteAccessTunnelConfig.Token?) {
-        report?(.tunnelFailed("This build of Next Term can't run \(kind.label) yet."))
-    }
-
-    func stop() {}
-    func stopNow(from began: DispatchTime) {}
-    func checkNow() {}
-}
-
 // MARK: - tunnel processes (R42)
 
-/// Tunnel children by pid: what a pid record holds, and ending one. U10 ends its children with these, and a launch a
-/// leftover one. A signal goes only to the process the record names: its pid, with the same start time.
+/// Tunnel children by pid: what a pid record holds, and ending one. U10's supervisor and its watchdog end children
+/// with these, and a launch a leftover one. A signal goes only to the process the record names: its pid, with the same
+/// start time.
 enum RemoteAccessProcesses {
     typealias Start = RemoteAccessPidRecord.Start
 

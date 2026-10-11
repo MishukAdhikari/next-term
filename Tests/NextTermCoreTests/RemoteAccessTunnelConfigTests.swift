@@ -392,37 +392,55 @@ import Testing
 
     // MARK: the cloudflared child
 
+    static let configFile = "/Users/u/Library/Application Support/Next Term/remote-access/cloudflared.yml"
+
     @Test func cloudflaredRunsWithThePlansArguments() {
-        let arguments = Config.cloudflaredArguments(metricsPort: 45001)
-        #expect(arguments == ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:45001", "--grace-period", "1s",
-                              "run"])
+        let arguments = Config.cloudflaredArguments(metricsPort: 45001, configFile: Self.configFile)
+        let tunnel = ["tunnel", "--config", Self.configFile, "--no-autoupdate", "--metrics", "127.0.0.1:45001",
+                      "--grace-period", "1s"]
+        #expect(arguments == tunnel + ["run", "--token-file", "/dev/stdin"])
         #expect(Config.metricsURL(port: 45001, path: .ready).absoluteString == "http://127.0.0.1:45001/ready")
         #expect(Config.metricsURL(port: 45001, path: .config).absoluteString == "http://127.0.0.1:45001/config")
     }
 
-    @Test func theTokenGoesOnlyInTheEnvironmentOnce() throws {
+    /// The token-file flag belongs to `run`, so it comes after it; the tunnel's own flags come before it.
+    @Test func theTokenIsReadFromStandardInputByRun() throws {
+        let arguments = Config.cloudflaredArguments(metricsPort: 45001, configFile: Self.configFile)
+        let run = try #require(arguments.firstIndex(of: "run"))
+        let file = try #require(arguments.firstIndex(of: "--token-file"))
+        #expect(file > run)
+        #expect(arguments[file + 1] == "/dev/stdin")
+        let config = try #require(arguments.firstIndex(of: "--config"))
+        #expect(config < run)
+        #expect(arguments[config + 1] == Self.configFile)
+    }
+
+    /// R30 (2026-10-11): the token reaches cloudflared only through a pipe on its standard input. Neither its
+    /// arguments nor its environment hold it, in any of its four base64 forms.
+    @Test func theTokenGoesInNeitherTheArgumentsNorTheEnvironment() throws {
         var random = SplitMix(seed: 7)
         let base = ["HOME": "/Users/u", "PATH": "/usr/bin", "CLAUDECODE": "1", "TUNNEL_ORIGIN_CERT": "/tmp/cert.pem",
-                    "TUNNEL_TOKEN": "inherited", "LANG": "en_US.UTF-8"]
+                    "TUNNEL_TOKEN": "inherited", "TUNNEL_TOKEN_FILE": "/tmp/token", "LANG": "en_US.UTF-8"]
         for _ in 0..<40 {
             let bytes = (0..<32).map { _ in UInt8.random(in: 0...255, using: &random) }
             let pasted = token(secret: Data(bytes).base64EncodedString())
             let parsed = try #require(self.parsed(pasted))
-            let arguments = Config.cloudflaredArguments(metricsPort: 45001)
-            #expect(!arguments.contains { $0.contains(parsed.value) })
-            #expect(!arguments.contains { $0.contains("token") })
+            let forms = Config.tokenForms(parsed)
+            let arguments = Config.cloudflaredArguments(metricsPort: 45001, configFile: Self.configFile)
             let environment = Config.cloudflaredEnvironment(token: parsed, loginPath: ["/opt/homebrew/bin", "/usr/bin"],
                                                             base: base)
-            let holding = environment.filter { $0.value.contains(parsed.value) }
-            #expect(holding.count == 1)
-            #expect(holding.first?.key == "TUNNEL_TOKEN")
-            #expect(environment["TUNNEL_TOKEN"] == parsed.value)
+            for form in forms {
+                #expect(!arguments.contains { $0.contains(form) })
+                #expect(!environment.contains { $0.key.contains(form) || $0.value.contains(form) })
+            }
+            #expect(environment.keys.filter { $0.hasPrefix("TUNNEL_TOKEN") }.isEmpty)
             #expect(environment["TUNNEL_MANAGEMENT_DIAGNOSTICS"] == "false")
             #expect(environment["PATH"] == "/opt/homebrew/bin:/usr/bin")
             #expect(environment["HOME"] == "/Users/u")
             #expect(environment["LANG"] == "en_US.UTF-8")
             #expect(environment["CLAUDECODE"] == nil, "the clean environment, as LoginShell runs tools")
             #expect(environment["TUNNEL_ORIGIN_CERT"] == nil, "no inherited cloudflared setting")
+            #expect(Config.cloudflaredInput(parsed) == Data(parsed.value.utf8), "written once on standard input")
         }
     }
 
@@ -430,8 +448,9 @@ import Testing
         let parsed = try #require(self.parsed(token()))
         let base = ["COPIED": "x" + parsed.value, "HOME": "/Users/u"]
         let environment = Config.cloudflaredEnvironment(token: parsed, loginPath: ["/usr/bin"], base: base)
-        #expect(environment.filter { $0.value.contains(parsed.value) }.count == 1)
+        #expect(!environment.contains { $0.value.contains(parsed.value) })
         #expect(environment["COPIED"] == nil)
+        #expect(environment["HOME"] == "/Users/u")
     }
 
     @Test func noInheritedValueRepeatsTheTokenInAnyForm() throws {
@@ -447,9 +466,80 @@ import Testing
                         "URLSAFE_PADDED": urlSafe(standard) + "==", "HOME": "/Users/u"]
             let environment = Config.cloudflaredEnvironment(token: parsed, loginPath: ["/usr/bin"], base: base)
             let holding = environment.filter { $0.value.contains(unpadded) || $0.value.contains(pasted) }
-            #expect(Array(holding.keys) == ["TUNNEL_TOKEN"], "the pasted form is a copy too")
+            #expect(holding.isEmpty, "the pasted form is a copy too")
             #expect(environment["HOME"] == "/Users/u")
         }
+    }
+
+    /// The four forms a token can be found in: standard or URL-safe base64, with or without padding.
+    @Test func aTokenHasFourForms() throws {
+        let standard = token(extra: #""e":"~~~???xx""#)
+        #expect(standard.hasSuffix("="))
+        let parsed = try #require(self.parsed(standard))
+        let unpadded = standard.replacingOccurrences(of: "=", with: "")
+        let safe = urlSafe(standard)
+        let safePadded = standard.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        #expect(Set(Config.tokenForms(parsed)) == Set([standard, unpadded, safe, safePadded]))
+        #expect(Config.tokenForms(parsed).first == standard)
+    }
+
+    // MARK: the cloudflared version and its settings file
+
+    /// `--token-file` came in 2025.4.0: an older cloudflared, or one whose version can't be read, starts nothing.
+    @Test func onlyACloudflaredFrom2025Point4ReadsTheTokenFromStandardInput() throws {
+        func reads(_ text: String) -> Bool {
+            Config.cloudflaredVersion("cloudflared version \(text)")?.readsTokenFile ?? false
+        }
+        #expect(reads("2025.4.0"))
+        #expect(reads("2025.4.2"))
+        #expect(reads("2025.10.0"))
+        #expect(reads("2026.10.0"))
+        #expect(!reads("2025.3.9"))
+        #expect(!reads("2024.12.1"))
+        #expect(Config.tokenFileVersion == Config.CloudflaredVersion(year: 2025, month: 4, patch: 0))
+        #expect(Config.updateCloudflared == "Update cloudflared to 2025.4.0 or later.")
+        let older = try #require(Config.cloudflaredVersion("cloudflared version 2025.3.9"))
+        let newer = try #require(Config.cloudflaredVersion("cloudflared version 2025.4.0"))
+        #expect(older < newer)
+        #expect(Config.cloudflaredStartProblem(versionOutput: "cloudflared version 2025.3.9") == Config.updateCloudflared)
+        #expect(Config.cloudflaredStartProblem(versionOutput: "cloudflared version DEV") == Config.updateCloudflared)
+        #expect(Config.cloudflaredStartProblem(versionOutput: nil) == Config.updateCloudflared)
+        #expect(Config.cloudflaredStartProblem(versionOutput: "cloudflared version 2026.10.0 (built x)") == nil)
+    }
+
+    /// cloudflared's own settings file: without it cloudflared reads ~/.cloudflared/config.yml, where a leftover
+    /// debug level and log file would write every request's headers to disk.
+    @Test func cloudflaredGetsItsOwnSettingsFileOwnerOnly() throws {
+        #expect(Config.cloudflaredSettings == "no-autoupdate: true\nloglevel: info\n")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ra-cf-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("remote-access")
+        let url = try Config.writeCloudflaredSettings(in: folder)
+        #expect(url == folder.appendingPathComponent("cloudflared.yml"))
+        #expect(try String(contentsOf: url, encoding: .utf8) == Config.cloudflaredSettings)
+        let file = try FileManager.default.attributesOfItem(atPath: url.path)
+        #expect((file[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        let made = try FileManager.default.attributesOfItem(atPath: folder.path)
+        #expect((made[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+        try Data("loglevel: debug\nlogfile: /tmp/x.log\n".utf8).write(to: url)
+        _ = try Config.writeCloudflaredSettings(in: folder)
+        #expect(try String(contentsOf: url, encoding: .utf8) == Config.cloudflaredSettings, "written fresh each start")
+    }
+
+    @Test func aMissingToolSaysHowToGetItAndAnOldOneHowToUpdate() throws {
+        #expect(Config.Tool.cloudflared.missing == "cloudflared is not installed. Install it in Terminal with brew "
+            + "install cloudflared.")
+        #expect(Config.Tool.tailscale.missing.hasPrefix("Tailscale is not installed."))
+        #expect(Config.Tool.tailscale.missing.contains(Config.Tool.tailscale.installHint))
+        let old = try #require(Config.cloudflaredVersion("cloudflared version 2025.4.1"))
+        #expect(Config.outdatedWarning(old) == "cloudflared 2025.4.1 is more than a year old. Update it with brew "
+            + "upgrade cloudflared.")
+    }
+
+    @Test func aTunnelWithNoRoutesAfterTwoMinutesSaysWhereToMakeOne() {
+        #expect(Config.routingWaitLimit == 120)
+        #expect(Config.noRoutes.hasPrefix("This tunnel gets no routes from Cloudflare."))
+        #expect(Config.noRoutes.contains("Networking › Tunnels"))
     }
 
     // MARK: /ready

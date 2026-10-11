@@ -133,6 +133,23 @@ import Testing
         #expect(status.phase == .on)
     }
 
+    /// Ten minutes down tells the Mac, once per outage as U10 sends it, and it keeps reconnecting (R32).
+    @Test func aTunnelDownTenMinutesTellsTheMacAndKeepsTrying() {
+        var reconnecting = Self.run([.notReady], from: Self.on()).0
+        let told: [Effect] = [.audit(tunnel: "down", detail: nil), .notify(.down)]
+        #expect(reconnecting.handle(.tunnelDown) == told)
+        #expect(reconnecting.phase == .reconnecting)
+        var connecting = Self.run([.turnOn(Self.start()), .token(.found), .bound]).0
+        #expect(connecting.handle(.tunnelDown) == told)
+        #expect(connecting.phase == .connecting)
+        var on = Self.on()
+        #expect(on.handle(.tunnelDown) == [])
+        var off = Status()
+        #expect(off.handle(.tunnelDown) == [])
+        #expect(Status.Notice.down.title == "Remote access is down")
+        #expect(Status.Notice.down.body.contains("10 minutes"))
+    }
+
     // MARK: edge
 
     @Test func aBindFailureGivesPortBusyAndStartsNoTunnel() {
@@ -284,13 +301,13 @@ import Testing
         var status = Status()
         for event: Event in [.bound, .ready(host: Self.host), .notReady, .token(.found), .allowKeychainAccess,
                              .confirmHost, .declineHost, .routeChanged("x"), .doorFailed("x"), .dismiss,
-                             .tunnelFailed("x"), .bindFailed(portInUse: true, reason: "")] {
+                             .tunnelFailed("x"), .bindFailed(portInUse: true, reason: ""), .tunnelDown] {
             #expect(status.handle(event) == [])
             #expect(status.phase == .off)
         }
         var on = Self.on()
         for event: Event in [.bound, .token(.found), .allowKeychainAccess, .confirmHost, .declineHost, .dismiss,
-                             .bindFailed(portInUse: true, reason: "")] {
+                             .bindFailed(portInUse: true, reason: ""), .tunnelDown] {
             #expect(on.handle(event) == [])
             #expect(on.phase == .on)
         }

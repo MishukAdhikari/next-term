@@ -7,8 +7,9 @@ import Foundation
 ///
 /// Rules this file keeps:
 /// - Arguments are arrays, never shell text (as in Remote.swift).
-/// - The tunnel token never goes in an argument, a description or an error. It reaches `cloudflared` only through
-///   the environment, built in one place (R30).
+/// - The tunnel token never goes in an argument, the environment, a description or an error. It reaches
+///   `cloudflared` only through a pipe on its standard input, which it reads once with its token-file flag set to
+///   `/dev/stdin` (R30, decided 2026-10-11).
 /// - A routing check answers ok, warn, stop or waiting, and its messages name only the saved hostname and the
 ///   door's port: never a value read from the tunnel, which whoever holds the tunnel's account can set.
 public enum RemoteAccessTunnelConfig {
@@ -163,6 +164,14 @@ public enum RemoteAccessTunnelConfig {
             case .tailscale: return "Install Tailscale from tailscale.com/download or the Mac App Store."
             }
         }
+
+        /// Why a start that needs the tool can't go on, with how to get it.
+        public var missing: String {
+            switch self {
+            case .cloudflared: return "cloudflared is not installed. Install it in Terminal with \(installHint)."
+            case .tailscale: return "Tailscale is not installed. \(installHint)"
+            }
+        }
     }
 
     /// Where a tool may be, in order: the login PATH's folders (absolute ones only, since a relative folder would
@@ -204,7 +213,7 @@ public enum RemoteAccessTunnelConfig {
     // MARK: versions (R29)
 
     /// A `cloudflared` release: Cloudflare numbers them by year and month.
-    public struct CloudflaredVersion: Equatable, Sendable {
+    public struct CloudflaredVersion: Equatable, Comparable, Sendable {
         public var year: Int
         public var month: Int
         public var patch: Int
@@ -216,6 +225,13 @@ public enum RemoteAccessTunnelConfig {
         }
 
         public var text: String { "\(year).\(month).\(patch)" }
+
+        public static func < (lhs: Self, rhs: Self) -> Bool {
+            (lhs.year, lhs.month, lhs.patch) < (rhs.year, rhs.month, rhs.patch)
+        }
+
+        /// Whether it reads the token from a file, here its standard input (R30): 2025.4.0 and later.
+        public var readsTokenFile: Bool { self >= RemoteAccessTunnelConfig.tokenFileVersion }
 
         /// More than 12 months older than today's month, when Cloudflare no longer supports it.
         public func isOutdated(now: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> Bool {
@@ -239,6 +255,25 @@ public enum RemoteAccessTunnelConfig {
         guard let year = Int(parts[0]), let month = Int(parts[1]), let patch = Int(parts[2]) else { return nil }
         guard (2000...9999).contains(year), (1...12).contains(month) else { return nil }
         return CloudflaredVersion(year: year, month: month, patch: patch)
+    }
+
+    /// The first `cloudflared` with its token-file flag.
+    public static let tokenFileVersion = CloudflaredVersion(year: 2025, month: 4, patch: 0)
+
+    public static let updateCloudflared = "Update cloudflared to 2025.4.0 or later."
+
+    /// Settings' warning for a `cloudflared` more than 12 months old (R29).
+    public static func outdatedWarning(_ version: CloudflaredVersion) -> String {
+        "cloudflared \(version.text) is more than a year old. Update it with brew upgrade cloudflared."
+    }
+
+    /// Why `cloudflared` can't start, from what its version flag printed (nil when it didn't answer): one older
+    /// than 2025.4.0, or whose version can't be read, would not take the token from its standard input.
+    public static func cloudflaredStartProblem(versionOutput: String?) -> String? {
+        guard let output = versionOutput, let version = cloudflaredVersion(output), version.readsTokenFile else {
+            return updateCloudflared
+        }
+        return nil
     }
 
     /// From `tailscale version`: its first line, such as "1.104.1", for display only.
@@ -337,20 +372,21 @@ public enum RemoteAccessTunnelConfig {
 
     // MARK: the cloudflared child (R31)
 
-    /// `cloudflared`'s arguments. The token is not among them. The short grace period lets the first SIGTERM end
-    /// it in most cases.
-    public static func cloudflaredArguments(metricsPort: Int) -> [String] {
+    /// `cloudflared`'s arguments: its own settings file (`cloudflaredSettings`), no updates, metrics on loopback and
+    /// a short grace period, so the first SIGTERM ends it in most cases. Then `run`, whose token-file flag reads the
+    /// token from standard input (R30). The token is not among them.
+    public static func cloudflaredArguments(metricsPort: Int, configFile: String) -> [String] {
         let metrics = "127.0.0.1:\(metricsPort)"
-        return ["tunnel", "--no-autoupdate", "--metrics", metrics, "--grace-period", "1s", "run"]
+        let tunnel = ["tunnel", "--config", configFile, "--no-autoupdate", "--metrics", metrics, "--grace-period", "1s"]
+        return tunnel + ["run", tokenFileFlag, "/dev/stdin"]
     }
 
+    /// `run`'s flag for a file that holds the token, here its standard input (cloudflared 2025.4.0 and later).
+    static let tokenFileFlag = "--token-file"
+
     /// `cloudflared`'s environment: the clean environment (as LoginShell runs tools) without any inherited
-    /// cloudflared setting or copy of the token, the login PATH, management diagnostics off, and the token. The
-    /// only place the token's variable is named (the Verification Contract's argv gate).
-    ///
-    /// `cloudflared` 2026.10.0 can also read the token from a file (its token-file flag or variable, since
-    /// 2025.4.0). The token stays in the environment (R30) until the user decides on a 0600 token file. An
-    /// inherited token-file variable goes with the other `TUNNEL_` settings.
+    /// cloudflared setting, the token's variables included, or any copy of the token, then the login PATH and
+    /// management diagnostics off. The token is not in it (R30): it goes on standard input (`cloudflaredInput`).
     public static func cloudflaredEnvironment(token: Token, loginPath: [String],
                                               base: [String: String]) -> [String: String] {
         let clean = TerminalEnvironment.clean(base)
@@ -360,8 +396,26 @@ public enum RemoteAccessTunnelConfig {
         }
         environment["PATH"] = loginPath.joined(separator: ":")
         environment["TUNNEL_MANAGEMENT_DIAGNOSTICS"] = "false"
-        environment["TUNNEL_TOKEN"] = token.value
         return environment
+    }
+
+    /// What Next Term writes on `cloudflared`'s standard input, once, before it closes it: the token as
+    /// `cloudflared` reads it (standard base64, padded). `cloudflared` trims it and reads nothing else there.
+    public static func cloudflaredInput(_ token: Token) -> Data {
+        Data(token.value.utf8)
+    }
+
+    /// The four forms the token can be found in, standard first: standard or URL-safe base64, each with and
+    /// without padding. Output is masked with them, and the self-test looks for them in a child's arguments and
+    /// environment.
+    public static func tokenForms(_ token: Token) -> [String] {
+        let padded = token.value
+        let unpadded = padded.replacingOccurrences(of: "=", with: "")
+        let safePadded = padded.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        let safe = safePadded.replacingOccurrences(of: "=", with: "")
+        var forms: [String] = []
+        for form in [padded, unpadded, safePadded, safe] where !forms.contains(form) { forms.append(form) }
+        return forms
     }
 
     /// The token as it may have been pasted or copied: standard or URL-safe base64, without padding. Each is a
@@ -371,6 +425,31 @@ public enum RemoteAccessTunnelConfig {
         let urlSafe = unpadded.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
         return [unpadded, urlSafe]
     }
+
+    // MARK: cloudflared's own settings file (2026-10-11)
+
+    /// The settings `cloudflared` gets in place of `~/.cloudflared/config.yml` (or the copies in `/etc/cloudflared`
+    /// and `/usr/local/etc/cloudflared`), where a leftover `loglevel: debug` with a `logfile:` would write every
+    /// request's headers, bearer tokens included, to disk.
+    public static let cloudflaredSettings = "no-autoupdate: true\nloglevel: info\n"
+
+    public static let cloudflaredSettingsName = "cloudflared.yml"
+
+    /// Writes `cloudflaredSettings` `0600` in the Remote access folder (made `0700`), fresh at each start, and
+    /// returns where.
+    public static func writeCloudflaredSettings(in folder: URL) throws -> URL {
+        try RemoteAccessStore.prepare(folder)
+        let url = folder.appendingPathComponent(cloudflaredSettingsName)
+        try RemoteAccessStore.replace(url, with: Data(cloudflaredSettings.utf8))
+        return url
+    }
+
+    /// A tunnel connected to Cloudflare whose routing has not come after this long gets no routes from Cloudflare:
+    /// it is managed from a local config file (2026-10-11).
+    public static let routingWaitLimit: TimeInterval = 120
+
+    public static let noRoutes = "This tunnel gets no routes from Cloudflare. Use a tunnel created in the Cloudflare "
+        + "dashboard (Networking › Tunnels) and paste its token."
 
     public enum MetricsPath: String, Sendable {
         case ready

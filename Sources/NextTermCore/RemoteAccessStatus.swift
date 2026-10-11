@@ -93,6 +93,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case ready(host: String?)
         /// Not ready at a check, or the child exited (U10 restarts it).
         case notReady
+        /// Down for 10 minutes, still restarting (R32): sent once per outage (U10).
+        case tunnelDown
         /// The tunnel's routing no longer sends the saved host to the door alone (R33).
         case routeChanged(String)
         /// The door's listener failed after it started.
@@ -141,6 +143,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case didNotStart(String)
         /// A launch with it saved on waits for "Allow Keychain access" (R44).
         case waitingForKeychain
+        /// The tunnel has been down for 10 minutes and still restarts (R32).
+        case down
 
         public var title: String {
             switch self {
@@ -148,6 +152,7 @@ public struct RemoteAccessStatus: Equatable, Sendable {
             case .stopped: return "Remote access stopped"
             case .didNotStart: return "Remote access didn't start"
             case .waitingForKeychain: return "Remote access is waiting for the Keychain"
+            case .down: return "Remote access is down"
             }
         }
 
@@ -160,6 +165,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
                 return reason
             case .waitingForKeychain:
                 return "Click Allow Keychain access in Settings › Remote Access to turn it on."
+            case .down:
+                return "The tunnel has been down for 10 minutes. Next Term keeps trying to reconnect."
             }
         }
     }
@@ -255,6 +262,9 @@ public struct RemoteAccessStatus: Equatable, Sendable {
             guard phase == .on else { return [] }
             phase = .reconnecting
             return [.audit(tunnel: "reconnecting", detail: nil)]
+        case .tunnelDown:
+            guard phase == .connecting || phase == .reconnecting else { return [] }
+            return [.audit(tunnel: "down", detail: nil), .notify(.down)]
         case .routeChanged(let reason), .doorFailed(let reason): return stop(reason)
         case .confirmHost: return confirmHost()
         case .declineHost:
