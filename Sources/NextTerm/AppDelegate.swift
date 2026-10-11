@@ -829,21 +829,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// For the self-test.
     var welcomeController: WelcomeWindowController? { welcome }
 
-    /// ⌘O: choose a folder to open as a project.
+    /// File › Open Project… (⌘O): the Welcome window, as at the first launch: your projects with a search, their agents'
+    /// sessions and your servers, and Open… for a folder not listed. A project chosen there opens as if from the window
+    /// you asked in (`welcomeOrigin`). Asked again with the Welcome window in front, it is that Open….
     @objc func openProjectPanel(_ sender: Any?) {
+        if let window = welcome?.window, window.isVisible {
+            if let sheet = window.attachedSheet { return sheet.makeKeyAndOrderFront(nil) } // the panel is up already
+            if window.isKeyWindow { return chooseProjectFolder(sender) }
+        }
+        showWelcome(sender)
+    }
+
+    /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
+    /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
+    @objc func chooseProjectFolder(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let from = NSApp.keyWindow?.windowController as? TerminalWindowController
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
+
+    /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen
+    /// on the Welcome window opens (`openProject`'s “this window”). Nil when it was shown with none in front.
+    var welcomeOrigin: TerminalWindowController? {
+        guard let origin = welcomeOriginController, controllers.contains(where: { $0 === origin }), origin.window?.isVisible == true else { return nil }
+        return origin
+    }
+    private weak var welcomeOriginController: TerminalWindowController?
 
     @objc func openRecentProject(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
@@ -939,6 +960,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func showWelcome(_ sender: Any?) {
+        // Asked again from the Welcome window itself, it keeps the window it came from.
+        if !(welcome?.window?.isKeyWindow ?? false) { welcomeOriginController = NSApp.keyWindow?.windowController as? TerminalWindowController }
         if welcome == nil { welcome = WelcomeWindowController() }
         welcome?.showWindow(nil)
         welcome?.window?.makeKeyAndOrderFront(nil)

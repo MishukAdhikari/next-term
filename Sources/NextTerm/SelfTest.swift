@@ -1097,7 +1097,8 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: home)
         }
 
-        app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        let projectController = app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        await openProjectChecks(app, from: projectController)
         app.showWelcome(nil)
         guard let welcome = app.welcomeController, let welcomeWindow = welcome.window else { return check(false, "the Welcome window opens") }
         welcome.select(project: project)

@@ -126,6 +126,30 @@ extension SelfTest {
         return typing() && welcome.selectedSessionTitle == fix
     }
 
+    /// File › Open Project… (⌘O) in `controller`'s project window shows the Welcome window, not the folder panel, and a
+    /// project chosen there opens as from that window; ⌘O again on the Welcome window is Open…, the panel, over it. The
+    /// keys need the app in front: without it the menu's action runs as the key would, and the second half skips.
+    static func openProjectChecks(_ app: AppDelegate, from controller: TerminalWindowController) async {
+        guard let projectWindow = controller.window else { return check(false, "open project: the project window is there") }
+        app.welcomeController?.close()
+        let front = await bringToFront(projectWindow)
+        if front { pressAppKey(projectWindow, "o", code: 31, flags: .command) } else { app.openProjectPanel(nil) }
+        guard let window = app.welcomeController?.window else { return check(false, "⌘O in a project window opens the Welcome window") }
+        check(await wait(2) { window.isVisible } && window.attachedSheet == nil && projectWindow.attachedSheet == nil,
+              "⌘O in a project window shows the Welcome window, with no folder panel",
+              "visible \(window.isVisible), sheets \(window.attachedSheet != nil) \(projectWindow.attachedSheet != nil)")
+        check(app.welcomeOrigin === controller, "and a project chosen there opens as from the window ⌘O was pressed in")
+        guard front, await wait(2, { window.isKeyWindow }) else {
+            return note("open project: ⌘O on the Welcome window skipped, \(notFrontmost(window))")
+        }
+        pressAppKey(window, "o", code: 31, flags: .command)
+        check(await wait(2) { window.attachedSheet is NSOpenPanel }, "⌘O again on the Welcome window is Open…: the folder panel, over it",
+              String(describing: window.attachedSheet))
+        check(app.welcomeOrigin === controller, "and the Welcome window keeps the window it was asked from")
+        (window.attachedSheet as? NSOpenPanel)?.cancel(nil)
+        check(await wait(2) { window.attachedSheet == nil } && window.isVisible, "Cancel closes the panel and leaves the Welcome window up")
+    }
+
     /// The titles of the buttons in `window` that Return presses: one at most.
     private static func returnKeyButtons(_ window: NSWindow?) -> [String] {
         guard let content = window?.contentView else { return [] }
