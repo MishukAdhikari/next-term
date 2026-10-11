@@ -77,11 +77,68 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.value("LANGFUSE_HOST")?.origin?.string == "https://cloud.langfuse.com")
         // A value that names no web server keeps only its scheme.
         #expect(facts.value("LANCEDB_URI")?.value == .scheme("db"))
-        #expect(facts.value("CHROMA_HOST")?.origin?.host == "localhost")
+        #expect(facts.value("CHROMA_HOST")?.origin?.string == "http://localhost")
         let text = printed(facts)
         for secret in ["NOT-A-KEY", "NOT-A-PASSWORD", "api_key", "shop-vectors", "project/x"] {
             #expect(!text.contains(secret), "\(secret)")
         }
+    }
+
+    @Test func aValueWithUserInfoKeepsNothingAtAll() {
+        let project = FixtureProject()
+        project.write(".env", """
+        QDRANT_URL=admin:NOT-A-PASSWORD@qdrant.example.com:6333
+        LANCEDB_URI=sk-live-NOTAKEY123:xyz
+        MLFLOW_TRACKING_URI=postgresql://mlflow:NOT-A-PASSWORD@db.example.com/mlflow
+        LANGFUSE_HOST=admin@localhost:3000
+        CHROMA_HOST=admin:NOT-A-PASSWORD@chroma
+        """)
+        let facts = read(project)
+        #expect(facts.envValues.isEmpty)
+        let text = printed(facts).lowercased()
+        for secret in ["admin", "not-a-password", "notakey", "sk-live", "mlflow:", "postgresql"] {
+            #expect(!text.contains(secret), "\(secret)")
+        }
+    }
+
+    @Test func aSchemeIsKeptOnlyWhenItIsOne() {
+        // Text before a colon is a scheme only when nothing, or a `/`, follows the colon.
+        #expect(ProjectFacts.urlValue("file:") == .scheme("file"))
+        #expect(ProjectFacts.urlValue("file:/srv/mlruns") == .scheme("file"))
+        #expect(ProjectFacts.urlValue("sqlite:///mlflow.db") == .scheme("sqlite"))
+        #expect(ProjectFacts.urlValue("DB://shop-vectors") == .scheme("db"))
+        // A user and password, a token, or a word before a colon is not one.
+        for value in ["admin:NOT-A-PASSWORD@qdrant.example.com:6333", "sk-live-NOTAKEY123:xyz", "mailto:a@example.com",
+                      "db:admin@shop", "db://admin@shop/x", "postgresql://u:NOT-A-PASSWORD@db/x", "user@db.example.com",
+                      "git@example.com:team/repo", "javascript:alert(1)", "databricks", "s3:bucket"] {
+            #expect(ProjectFacts.urlValue(value) == nil, "\(value)")
+        }
+    }
+
+    @Test func aHostWithNoSchemeIsPlainHTTPOnlyOnThisMac() throws {
+        func origin(_ value: String) -> String? { ProjectFacts.hostValue(value).flatMap(originText) }
+        #expect(origin("localhost") == "http://localhost")
+        #expect(origin("127.0.0.1") == "http://127.0.0.1")
+        #expect(origin("0.0.0.0:8000") == "http://localhost:8000")
+        #expect(origin("[::1]:8000") == "http://[::1]:8000")
+        #expect(origin("chroma") == "http://chroma")
+        #expect(origin("vector_db:8000") == "http://vector_db:8000")
+        #expect(origin("api.trychroma.com") == "https://api.trychroma.com")
+        // A scheme written is kept as written.
+        #expect(origin("https://api.trychroma.com") == "https://api.trychroma.com")
+        #expect(origin("http://localhost:8001") == "http://localhost:8001")
+        for value in ["admin:NOT-A-PASSWORD@chroma", "admin:secret", "ftp://chroma", "chroma/x", "chroma host"] {
+            #expect(ProjectFacts.hostValue(value) == nil, "\(value)")
+        }
+        let project = FixtureProject()
+        project.write(".env", "CHROMA_HOST=localhost\n")
+        let link = read(project).value("CHROMA_HOST")?.origin?.link(path: [.fixed("/api/v2/heartbeat")])
+        #expect(link?.absoluteString == "http://localhost/api/v2/heartbeat")
+    }
+
+    func originText(_ value: ServiceFact.Value) -> String? {
+        if case .origin(let origin) = value { return origin.string }
+        return nil
     }
 
     @Test func aValueThatNamesAnotherIsRefused() {
@@ -122,7 +179,7 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.value("RAILWAY_PROJECT_ID")?.value == .text("12345678-aaaa-bbbb-cccc-1234567890ab"))
         #expect(facts.value("LANGSMITH_PROJECT") == nil)
         // A host by itself, such as a Compose service's name.
-        #expect(facts.value("CHROMA_HOST")?.origin?.host == "chroma")
+        #expect(facts.value("CHROMA_HOST")?.origin?.string == "http://chroma")
         let text = printed(facts)
         for value in ["someone", "mlruns", "My App", "eu-west-1", "12345678"] { #expect(!text.contains(value), "\(value)") }
     }
@@ -138,6 +195,8 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.value("QDRANT_URL")?.origin?.host == "abc.cloud.qdrant.io")
         // With a live env file, .env.example says nothing.
         #expect(!facts.hasEnvName("PINECONE_API_KEY"))
+        let text = printed(facts)
+        for value in ["abc.cloud.qdrant.io", "qdrant:6333", "http://"] { #expect(!text.contains(value), "\(value)") }
     }
 
     @Test func aFreshCloneNamesKeysFromTheExampleButReadsNoValue() {
@@ -147,6 +206,52 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.envNames == [EnvNames(file: ".env.example", names: ["OPENAI_API_KEY", "QDRANT_URL"])])
         #expect(facts.envValues.isEmpty)
         #expect(!printed(facts).contains("NOT-A-KEY"))
+    }
+
+    @Test func theExampleCountsOnlyWhenNoEnvFileExists() throws {
+        // An env file that exists but is not read (too large, a link out of the project) is not a fresh clone.
+        let large = FixtureProject()
+        large.write(".env", "QDRANT_URL=http://localhost:6333\n" + String(repeating: "# made-up padding line\n", count: 25_000))
+        large.write(".env.example", "OPENAI_API_KEY=\n")
+        let facts = read(large)
+        #expect(facts.envNames.isEmpty)
+        #expect(!facts.hasEnvName("OPENAI_API_KEY"))
+        #expect(facts.read.isEmpty)
+        let outside = FixtureProject()
+        outside.write("secrets.env", "QDRANT_URL=https://abc.cloud.qdrant.io\n")
+        let linked = FixtureProject()
+        linked.write(".env.example", "OPENAI_API_KEY=\n")
+        try FileManager.default.createSymbolicLink(atPath: linked.root + "/.flaskenv", withDestinationPath: outside.root + "/secrets.env")
+        #expect(read(linked).envNames.isEmpty)
+        // A folder by an env file's name is not one.
+        let folder = FixtureProject()
+        folder.write(".env/readme.txt", "made up\n")
+        folder.write(".env.example", "OPENAI_API_KEY=\n")
+        #expect(read(folder).envNames == [EnvNames(file: ".env.example", names: ["OPENAI_API_KEY"])])
+    }
+
+    @Test func anICloudPlaceholderOrAPipeIsNeverOpened() throws {
+        var info = stat()
+        info.st_mode = S_IFREG | 0o644
+        info.st_size = 64
+        #expect(FactReader.mayRead(info))
+        info.st_flags = FactReader.dataless
+        #expect(!FactReader.mayRead(info))
+        info.st_flags = 0
+        info.st_size = off_t(FactReader.maxSize + 1)
+        #expect(!FactReader.mayRead(info))
+        info.st_size = 64
+        info.st_mode = S_IFIFO | 0o644
+        #expect(!FactReader.mayRead(info))
+        // A named pipe by an env file's name (some secret managers serve .env so): reading it would wait for a writer,
+        // or ask the manager for every secret. It is never opened, and it still counts as the project's env file.
+        let project = FixtureProject()
+        #expect(mkfifo(project.root + "/.env", 0o600) == 0)
+        project.write(".env.example", "OPENAI_API_KEY=\n")
+        project.write("package.json", #"{"dependencies": {"next": "15.5.0"}}"#)
+        let facts = read(project)
+        #expect(facts.envNames.isEmpty)
+        #expect(facts.read == ["package.json"])
     }
 
     @Test func aSymlinkOutOfTheProjectIsNotFollowed() throws {
@@ -161,11 +266,15 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.envNames.isEmpty)
         #expect(facts.envValues.isEmpty)
         #expect(facts.dependencies.isEmpty)
+        #expect(facts.read.isEmpty)
         // A link that stays inside is followed.
         project.write("config/app.env", "QDRANT_URL=http://localhost:6333\n")
         try FileManager.default.removeItem(atPath: project.root + "/.env")
         try FileManager.default.createSymbolicLink(atPath: project.root + "/.env", withDestinationPath: "config/app.env")
-        #expect(read(project).value("QDRANT_URL")?.origin?.port == 6333)
+        let inside = read(project)
+        #expect(inside.value("QDRANT_URL")?.origin?.port == 6333)
+        let text = printed(facts) + printed(inside)
+        for value in ["abc.cloud.qdrant.io", "localhost", "6333", "15.5.0"] { #expect(!text.contains(value), "\(value)") }
     }
 
     @Test func eachFileIsReadOnce() {
@@ -178,6 +287,10 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.read.count == Set(facts.read).count)
         #expect(Set(facts.read) == [".env", "compose.yaml", "package.json", "pyproject.toml"])
         #expect(facts.compose?.services.first?.ports.map(\.published) == [7100])
+        let text = printed(facts)
+        for value in ["7100", "6334", "3100", "qdrant:6333", "15.5.0", "uvicorn", "next dev"] {
+            #expect(!text.contains(value), "\(value)")
+        }
     }
 
     // MARK: manifests
@@ -250,6 +363,26 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(commands.contains(StartCommand(file: "pyproject.toml", script: "both", word: "uvicorn", port: 8200)))
         #expect(commands.contains(StartCommand(file: "pyproject.toml", script: "web", word: "manage.py runserver", port: 8001)))
         #expect(!printed(facts).contains("NOT-A-KEY"))
+    }
+
+    @Test func aTableKeyThatIsNoPackageNameIsSkipped() {
+        let project = FixtureProject()
+        project.write("Pipfile", "[packages]\n\"Foo Bar/../x\" = \"*\"\nStreamlit = \"*\"\n\"-e\" = \"*\"\n")
+        project.write("pyproject.toml", "[tool.poetry.dependencies]\npython = \"^3.12\"\n\"a b\" = \"1\"\nqdrant-client = \"^1.15\"\n")
+        let facts = read(project)
+        #expect(facts.dependencies.map(\.names) == [["qdrant-client"], ["streamlit"]])
+    }
+
+    @Test func aFlatYAMLValueLosesItsComment() {
+        let project = FixtureProject()
+        project.write("herd.yml", "name: shop # the site\nsecured: true # https\n")
+        project.write(".ddev/config.yaml", "# made up\nname: \"shop\" # quoted\nproject_tld: \"ddev # site\"\n")
+        let facts = read(project)
+        #expect(facts.named(.herdName) == "shop")
+        #expect(facts.named(.herdSecured) == "true")
+        #expect(facts.named(.ddevName) == "shop")
+        // A `#` inside quotes is the value's; such a value is no plain name, so it is not kept.
+        #expect(facts.named(.ddevTLD) == nil)
     }
 
     @Test func aPyprojectTheReaderRefusesGivesNothing() {
@@ -339,6 +472,31 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(!printed(facts).contains("NOT-A-TOKEN"))
     }
 
+    func recipePorts(_ text: String, file: String = "Makefile") -> [Int?] {
+        ProjectFacts.recipes(text, file: file, words: Self.startWords).map(\.port)
+    }
+
+    @Test func recipeLinesWithMakesPrefixesAndContinuations() {
+        // `@` (quiet), `-` (ignore errors) and `+` (always run) go before the command, alone or together.
+        #expect(recipePorts("dev:\n\t@uvicorn app:app --port 8100\n") == [8100])
+        #expect(recipePorts("dev:\n\t-uvicorn app:app --port 8101\n") == [8101])
+        #expect(recipePorts("dev:\n\t@-+ uvicorn app:app --port 8102\n") == [8102])
+        let named = ProjectFacts.recipes("web:\n\t@PORT=4100 next dev\n", file: "Makefile", words: Self.startWords)
+        #expect(named == [StartCommand(file: "Makefile", script: "web", word: "next dev", port: 4100)])
+        // A line that ends in `\` goes on with the next, however that one is indented.
+        #expect(recipePorts("dev:\n\tuvicorn app:app \\\n\t\t--port 8103\n") == [8103])
+        #expect(recipePorts("dev:\n\t@uvicorn app:app \\\n--reload \\\n  --port 8104\n\nother:\n\techo\n") == [8104])
+        #expect(recipePorts("dev:\n\tuvicorn app:app \\\n") == [nil])
+        // A justfile's recipes take `@` and `-` too.
+        #expect(recipePorts("serve:\n    @uvicorn app:app --port 8105\n", file: "justfile") == [8105])
+        // A continued variable is not a recipe line.
+        #expect(recipePorts("FLAGS = --port 9000 \\\n\t--reload\nrun:\n\tuvicorn app:app\n") == [nil])
+        let secret = ProjectFacts.recipes("ml:\n\t@OPENAI_API_KEY=NOT-A-KEY \\\n\tmlflow server --port 5001\n",
+                                          file: "Makefile", words: Self.startWords)
+        #expect(secret.map(\.port) == [5001])
+        #expect(!String(describing: secret).contains("NOT-A-KEY"))
+    }
+
     // MARK: Compose
 
     @Test func composeFromTheFirstFileThatExists() {
@@ -350,6 +508,8 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.compose?.services.map(\.name) == ["qdrant"])
         #expect(facts.compose?.services(withImage: "qdrant/qdrant").first?.port(forTarget: 6333) == 6334)
         #expect(facts.compose?.service(named: "qdrant")?.image == "qdrant/qdrant")
+        let text = printed(facts)
+        for value in ["qdrant", "6334", "v1.15.0", "example/old"] { #expect(!text.contains(value), "\(value)") }
     }
 
     @Test func aComposePortNeverTakesASecretsValue() {
@@ -444,8 +604,13 @@ func printed(_ facts: ProjectFacts) -> String {
         binding = "FILES"
         bucket_name = "shop-files"
         """)
-        #expect(read(toml).all(.d1Database).first?.label == "shop-db")
-        #expect(read(toml).named(.wranglerAccountID) == "0123456789abcdef0123456789abcdef")
+        let fromTOML = read(toml)
+        #expect(fromTOML.all(.d1Database).first?.label == "shop-db")
+        #expect(fromTOML.named(.wranglerAccountID) == "0123456789abcdef0123456789abcdef")
+        let text = printed(facts) + printed(fromTOML)
+        for value in ["0123456789abcdef", "12345678-aaaa", "shop-db", "shop-files", "shop-worker"] {
+            #expect(!text.contains(value), "\(value)")
+        }
     }
 
     @Test func portLiteralsInConfigCode() {
@@ -461,6 +626,8 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(facts.port(.astroPort) == 4400)
         #expect(facts.port(.nuxtPort) == 3300)
         #expect(facts.port(.mastraPort) == 4200)
+        let text = printed(facts)
+        for value in ["5174", "24678", "4400", "3300", "4200", "30000"] { #expect(!text.contains(value), "\(value)") }
     }
 
     @Test func anExpressionGivesNoPort() {
@@ -485,5 +652,7 @@ func printed(_ facts: ProjectFacts) -> String {
         let markers = ["langgraph.json", "manage.py", ".ddev/config.yaml", "mlruns/", "convex.json", "*.ipynb", "../outside", "/etc/hosts"]
         let facts = read(project, markers: markers)
         #expect(facts.files == ["langgraph.json", "manage.py", ".ddev/config.yaml", "mlruns/", "*.ipynb"])
+        let text = printed(facts)
+        for value in ["shop", "explore", "analysis", "langgraph.json"] { #expect(!text.contains(value), "\(value)") }
     }
 }

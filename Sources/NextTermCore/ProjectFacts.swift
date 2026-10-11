@@ -13,7 +13,8 @@ public struct ServiceFact: Sendable, Equatable, CustomStringConvertible, CustomD
     public enum Value: Sendable, Equatable {
         /// A server's scheme, host and port. Its path, query, fragment, user and password were never kept.
         case origin(SafeWebLink.Origin)
-        /// A URL that names no web server (`db://…`, `file:…`): its scheme alone, lower-cased.
+        /// A URL that names no web server (`db://…`, `file:…`): its scheme alone, lower-cased. Kept only when the colon
+        /// ends the value or a `/` follows it, and never from a value with a user or password.
         case scheme(String)
         case port(Int)
         /// Up to 100 of ASCII letters, digits, `.`, `_`, `-`, `:` and spaces.
@@ -265,8 +266,9 @@ extension ProjectFacts {
         return facts
     }
 
-    /// Names from every env file, and the values `valueKeys` allows; `.env.example`'s names when no other exists.
-    /// Values are read as written, never interpolated. Returns the root `.env`'s entries, for Compose's variables.
+    /// Names from every env file, and the values `valueKeys` allows; `.env.example`'s names when no env file exists
+    /// (a fresh clone), not merely when none could be read. Values are read as written, never interpolated. Returns
+    /// the root `.env`'s entries, for Compose's variables.
     mutating func readEnv(_ reader: inout FactReader, valueKeys: [String: KeyRole]) -> [EnvEntry] {
         var rootEnv: [EnvEntry] = []
         for file in Self.envFiles {
@@ -276,7 +278,8 @@ extension ProjectFacts {
             envValues += Self.facts(entries, file: file, valueKeys: valueKeys)
             if file == ".env" { rootEnv = entries }
         }
-        if envNames.isEmpty, let example = Databases.exampleFiles.first, let text = reader.text(example) {
+        let fresh: Bool = !Self.envFiles.contains { (file: String) -> Bool in reader.exists(file) }
+        if fresh, let example = Databases.exampleFiles.first, let text = reader.text(example) {
             envNames.append(EnvNames(file: example, names: Self.uniqueKeys(EnvFile.parse(text, interpolating: false))))
         }
         return rootEnv
@@ -340,25 +343,51 @@ extension ProjectFacts {
     }
 
     /// A URL as its server's origin. One that names no web server keeps its scheme alone (`db://shop` gives `db`, and
-    /// `file:` a store, not a server); an `http` or `https` value with a user or password is dropped whole.
+    /// `file:` a store, not a server), and only when the colon ends the value or a `/` follows it: text before a colon
+    /// is otherwise a user name or a token (`admin:…@host`, `sk-…:…`), never a scheme. A value with a user or
+    /// password is dropped whole, whatever its scheme.
     static func urlValue(_ text: String) -> ServiceFact.Value? {
+        guard !hasUserInfo(text) else { return nil }
         if let origin = SafeWebLink.address(of: text) { return .origin(origin) }
         guard let scheme = SafeWebLink.schemeWritten(in: text) else { return nil }
+        let rest = text.dropFirst(scheme.count + 1)
+        let isScheme: Bool = rest.isEmpty || rest.hasPrefix("/")
         let lowered = scheme.lowercased()
-        guard !SafeWebLink.schemes.contains(lowered), lowered.count <= 32 else { return nil }
+        guard isScheme, !SafeWebLink.schemes.contains(lowered), lowered.count <= 32 else { return nil }
         return .scheme(lowered)
     }
 
     /// A host, as a URL's origin, or a single name with an optional port (`chroma`, `chroma:8000`), such as a
-    /// Compose service's. A single name is kept on plain `http`, which opens only on this Mac.
+    /// Compose service's. A scheme written is kept. With none, a host on this Mac or a single name is plain `http`,
+    /// as a local server answers, and any other host `https`. A value with a user or password gives nothing.
     static func hostValue(_ text: String) -> ServiceFact.Value? {
-        if let origin = SafeWebLink.address(of: text) { return .origin(origin) }
+        guard !hasUserInfo(text) else { return nil }
+        let written: Bool = SafeWebLink.schemeWritten(in: text) != nil
+        guard let found = SafeWebLink.address(of: text) ?? singleName(text) else { return nil }
+        if written { return .origin(found) }
+        let local: Bool = !found.host.contains(".") || SafeWebLink.mayOpen(scheme: "http", host: found.host)
+        let origin = SafeWebLink.Origin(scheme: local ? "http" : "https", host: found.host, port: found.port)
+        return origin.map { (origin: SafeWebLink.Origin) -> ServiceFact.Value in .origin(origin) }
+    }
+
+    /// A single name with an optional port, and no scheme, path, query or fragment, on plain `http`.
+    static func singleName(_ text: String) -> SafeWebLink.Origin? {
         let plain: Bool = SafeWebLink.isPrintable(text) && !text.contains("/") && !text.contains("@")
         guard plain, SafeWebLink.schemeWritten(in: text) == nil,
               let parts = URLComponents(string: "http://" + text), let host = parts.percentEncodedHost,
-              parts.percentEncodedPath.isEmpty, parts.percentEncodedQuery == nil, parts.percentEncodedFragment == nil,
-              let origin = SafeWebLink.Origin(scheme: "http", host: host, port: parts.port) else { return nil }
-        return .origin(origin)
+              parts.percentEncodedPath.isEmpty, parts.percentEncodedQuery == nil, parts.percentEncodedFragment == nil
+        else { return nil }
+        return SafeWebLink.Origin(scheme: "http", host: host, port: parts.port)
+    }
+
+    /// Whether a value holds a user or password: an `@` in the part that names the server, after `scheme://`, or
+    /// before the first `/`, `?` or `#` of a value with no `//`.
+    static func hasUserInfo(_ text: String) -> Bool {
+        var rest = Substring(text)
+        if let scheme = SafeWebLink.schemeWritten(in: text) { rest = rest.dropFirst(scheme.count + 1) }
+        if rest.hasPrefix("//") { rest = rest.dropFirst(2) }
+        let server = rest.prefix { (c: Character) -> Bool in c != "/" && c != "?" && c != "#" }
+        return server.contains("@")
     }
 
     /// A name, id or region: 1 to 100 of ASCII letters, digits, `.`, `_`, `-`, `:` and spaces, with no space at either
@@ -391,14 +420,35 @@ struct FactReader {
         self.root = root
     }
 
-    /// The real path of a project file, if it exists and stays inside the project.
-    func inside(_ relative: String) -> String? {
+    /// A path relative to the project with no empty, `.` or `..` part.
+    static func isPlain(_ relative: String) -> Bool {
         let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
         let plain = parts.allSatisfy { (part: Substring) -> Bool in !part.isEmpty && part != "." && part != ".." }
-        guard plain, !relative.hasPrefix("/"), let resolved = realpath(root + "/" + relative, nil) else { return nil }
+        return plain && !relative.hasPrefix("/")
+    }
+
+    /// The real path of a project file, if it exists and stays inside the project.
+    func inside(_ relative: String) -> String? {
+        guard Self.isPlain(relative), let resolved = realpath(root + "/" + relative, nil) else { return nil }
         defer { free(resolved) }
         let path = String(cString: resolved)
         return path.hasPrefix(root + "/") ? path : nil
+    }
+
+    /// Whether the project's top folder has an entry by this name that is not a folder, taken as it is: a link is
+    /// not followed, so one that leads out of the project or nowhere still counts, and nothing outside is looked at.
+    /// A pipe counts too (some secret managers serve `.env` so), though it is never read.
+    func exists(_ name: String) -> Bool {
+        guard Self.isPlain(name), !name.contains("/") else { return false }
+        var info = stat()
+        return lstat(root + "/" + name, &info) == 0 && (info.st_mode & S_IFMT) != S_IFDIR
+    }
+
+    /// Whether a file, by its `stat`, may be read: a regular file of at most 512 KB whose content is on this Mac.
+    static func mayRead(_ info: stat) -> Bool {
+        let regular: Bool = (info.st_mode & S_IFMT) == S_IFREG
+        let small: Bool = info.st_size <= off_t(maxSize)
+        return regular && small && info.st_flags & dataless == 0
     }
 
     func isFile(_ relative: String) -> Bool {
@@ -438,13 +488,28 @@ struct FactReader {
         return isFile(marker)
     }
 
+    /// A file's text, checked by its path first, so that a placeholder or a pipe is never opened at all.
     mutating func text(_ relative: String) -> String? {
         guard let path = inside(relative) else { return nil }
         var info = stat()
-        guard stat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size <= Self.maxSize,
-              info.st_flags & Self.dataless == 0,
-              let data = FileManager.default.contents(atPath: path), data.count <= Self.maxSize else { return nil }
+        guard stat(path, &info) == 0, Self.mayRead(info), let data = Self.contents(of: path) else { return nil }
         opened.append(relative)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// A file's bytes, opened so that nothing swapped in since its check can hold the scan: never through a link,
+    /// never waiting on a pipe, and checked again once open. At most 512 KB.
+    static func contents(of path: String) -> Data? {
+        let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, mayRead(info) else { return nil }
+        do {
+            let data: Data = try handle.read(upToCount: maxSize + 1) ?? Data()
+            return data.count <= maxSize ? data : nil
+        } catch {
+            return nil
+        }
     }
 }

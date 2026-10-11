@@ -180,6 +180,42 @@ import Testing
         #expect(ComposeFile.parse("\u{0}\u{1}not yaml").isEmpty)
     }
 
+    @Test func aFlowListOverSeveralLines() throws {
+        let closedAtTheKey = "services:\n  web:\n    image: example/web\n    ports: [\n      \"8081:80\"\n    ]\n"
+        let web = try #require(ComposeFile.parse(closedAtTheKey).first)
+        #expect(web.name == "web")
+        #expect(web.image == "example/web")
+        #expect(web.ports.map(\.published) == [8081])
+        let several = """
+        services:
+          api:
+            ports: [
+              "8082:80",   # the site
+              {target: 81, published: 8083},
+            ]
+            command: [
+              "uvicorn", "app:app"
+            ]
+            image: example/api
+          next:
+            image: example/next
+        """
+        let services = ComposeFile.parse(several)
+        #expect(services.map(\.name) == ["api", "next"])
+        #expect(services.first?.image == "example/api")
+        #expect(services.first?.ports == [ComposePort(published: 8082, target: 80), ComposePort(published: 8083, target: 81)])
+        // One that never closes is not trusted; the services before it still are.
+        let open = "services:\n  db:\n    image: example/db\n  web:\n    image: example/web\n    ports: [\n      \"8084:80\"\n"
+        #expect(ComposeFile.parse(open).map(\.name) == ["db"])
+    }
+
+    @Test func aBlockListAtItsKeysOwnIndent() {
+        let text = "services:\n  web:\n    image: example/web\n    ports:\n    - \"8085:80\"\n    - 8086:81\n    expose:\n    - \"9000\"\n"
+        let services = ComposeFile.parse(text)
+        #expect(services.first?.image == "example/web")
+        #expect(services.first?.ports.map(\.published) == [8085, 8086])
+    }
+
     @Test func aPortFromTheProjectEnv() {
         let text = "services:\n  qdrant:\n    image: qdrant/qdrant\n    ports:\n      - \"${QDRANT_PORT:-6334}:6333\"\n"
         #expect(ComposeFile.parse(text).first?.ports.map(\.published) == [6334])

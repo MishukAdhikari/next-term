@@ -101,15 +101,15 @@ extension ProjectFacts {
 
 extension ProjectFacts {
     mutating func readYAMLConfigs(_ reader: inout FactReader) {
-        if let yaml = reader.text(".pscale.yml").map(CopilotSessions.flatYAML) {
+        if let yaml = reader.text(".pscale.yml").map(Self.flatYAML) {
             addNamed(.pscaleOrg, yaml["org"], file: ".pscale.yml")
             addNamed(.pscaleDatabase, yaml["database"], file: ".pscale.yml")
         }
-        if let yaml = reader.text("herd.yml").map(CopilotSessions.flatYAML) {
+        if let yaml = reader.text("herd.yml").map(Self.flatYAML) {
             addNamed(.herdName, yaml["name"], file: "herd.yml")
             addNamed(.herdSecured, yaml["secured"].flatMap(Self.yamlFlag), file: "herd.yml")
         }
-        if let yaml = reader.text(".ddev/config.yaml").map(CopilotSessions.flatYAML) {
+        if let yaml = reader.text(".ddev/config.yaml").map(Self.flatYAML) {
             let file = ".ddev/config.yaml"
             addNamed(.ddevName, yaml["name"], file: file)
             addNamed(.ddevTLD, yaml["project_tld"], file: file)
@@ -117,12 +117,21 @@ extension ProjectFacts {
             addNamed(.ddevMailpitHTTPSPort, yaml["mailpit_https_port"], file: file)
         }
         for file in ["inngest.yaml", "inngest.yml"] where named(.inngestPort) == nil {
-            guard let yaml = reader.text(file).map(CopilotSessions.flatYAML) else { continue }
+            guard let yaml = reader.text(file).map(Self.flatYAML) else { continue }
             addNamed(.inngestPort, yaml["port"], file: file)
         }
-        if let image = reader.text("cog.yaml").map(CopilotSessions.flatYAML)?["image"] {
+        if let image = reader.text("cog.yaml").map(Self.flatYAML)?["image"] {
             readReplicateImage(image)
         }
+    }
+
+    /// `CopilotSessions.flatYAML`, with each line's comment cut first (`name: shop # the site`); a `#` inside
+    /// quotes stays the value's.
+    static func flatYAML(_ text: String) -> [String: String] {
+        let lines = text.components(separatedBy: .newlines).map { (line: String) -> String in
+            String(ComposeFile.withoutComment(Substring(line)))
+        }
+        return CopilotSessions.flatYAML(lines.joined(separator: "\n"))
     }
 
     /// YAML's true and false, in the spellings Herd's file uses.

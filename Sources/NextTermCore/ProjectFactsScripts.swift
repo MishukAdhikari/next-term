@@ -27,19 +27,39 @@ extension ProjectFacts {
     }
 
     /// A Makefile's targets or a justfile's recipes: a name at the start of a line, then `:` (not `:=`), and the
-    /// indented lines under it.
+    /// indented lines under it. A line that ends in `\` goes on with the next, however that one is indented, as the
+    /// shell reads it. The joined line is dropped as each one is.
     static func recipes(_ text: String, file: String, words: [String]) -> [StartCommand] {
         var found: [StartCommand] = []
         var current: String?
+        var continued: String?
         for line in lines(text) {
-            if line.first == "\t" || line.first == " " {
-                guard let current else { continue }
-                found += startCommands(in: String(line), file: file, script: current, words: words)
+            let indented: Bool = line.first == "\t" || line.first == " "
+            if continued == nil, !indented {
+                current = recipeName(line)
                 continue
             }
-            current = recipeName(line)
+            guard let script = current else { continue }
+            let piece: String = continued == nil ? recipeCommand(line) : String(line)
+            let command: String = (continued ?? "") + " " + piece
+            if command.hasSuffix("\\") {
+                continued = String(command.dropLast())
+                continue
+            }
+            continued = nil
+            found += startCommands(in: command, file: file, script: script, words: words)
+        }
+        if let command = continued, let script = current {
+            found += startCommands(in: command, file: file, script: script, words: words)
         }
         return found
+    }
+
+    /// A recipe's command without its indent and the prefixes Make and just read before it, in any order: `@`
+    /// (quiet), `-` (ignore errors) and `+` (always run). A comment, which the shell skips, is no command.
+    static func recipeCommand(_ line: Substring) -> String {
+        let command = line.drop { (c: Character) -> Bool in c == " " || c == "\t" || c == "@" || c == "-" || c == "+" }
+        return command.hasPrefix("#") ? "" : String(command)
     }
 
     /// `run:`, `run: deps`, `serve port='8001':`, `@test:`; not `X := 1`, `X = 1`, a comment or `export TOKEN=…`.

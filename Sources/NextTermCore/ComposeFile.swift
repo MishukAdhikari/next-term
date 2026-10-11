@@ -163,7 +163,13 @@ extension ComposeFile {
             defer { index = blockEnd }
             guard lines[index].indent == propertyIndent else { continue }
             guard let property = keyValue(lines[index].text) else { return nil }
-            let value = property.value
+            var value = property.value
+            if opensFlow(value) {
+                // `ports: [`, its items, then `]`, which may sit at the key's own indent.
+                guard let flow = flowValue(lines, after: index, opening: value) else { return nil }
+                value = flow.text
+                blockEnd = max(blockEnd, flow.end)
+            }
             let shared: Bool = property.key == "<<" || value.hasPrefix("&") || value.hasPrefix("*")
             guard !shared else { return nil }
             if property.key == "image" { image = imageName(String(value)) }
@@ -243,6 +249,45 @@ extension ComposeFile {
             return key.isEmpty ? nil : (key, value)
         }
         return nil
+    }
+
+    /// Whether a value starts a flow collection that its own line does not close.
+    static func opensFlow(_ value: Substring) -> Bool {
+        (value.first == "[" || value.first == "{") && flowDepth(value) > 0
+    }
+
+    /// A flow collection that a key's line opens and later lines close, however those are indented: its text as one
+    /// line, and the index of the line after its last. Nil when it never closes.
+    static func flowValue(_ lines: [Line], after index: Int, opening value: Substring) -> (text: Substring, end: Int)? {
+        var text = String(value)
+        var depth = flowDepth(value)
+        var next = index + 1
+        while depth > 0 {
+            guard next < lines.count else { return nil }
+            text += " " + lines[next].text
+            depth += flowDepth(lines[next].text)
+            next += 1
+        }
+        return (Substring(text), next)
+    }
+
+    /// How many more brackets a line opens than it closes, outside quotes.
+    static func flowDepth(_ text: Substring) -> Int {
+        var depth = 0
+        var quote: Character?
+        for c in text {
+            if let open = quote {
+                if c == open { quote = nil }
+                continue
+            }
+            switch c {
+            case "\"", "'": quote = c
+            case "[", "{": depth += 1
+            case "]", "}": depth -= 1
+            default: break
+            }
+        }
+        return depth
     }
 
     /// The items of a flow collection, `[a, b]` or `{a: 1, b: 2}`, split at commas outside quotes and inner

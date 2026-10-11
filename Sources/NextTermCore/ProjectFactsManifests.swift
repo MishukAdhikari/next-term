@@ -11,7 +11,7 @@ extension ProjectFacts {
         if let text = reader.text("Pipfile"), case .success(let root) = TOMLReader.parse(text) {
             let tables = ["packages", "dev-packages"].compactMap { (name: String) -> [String: TOMLValue]? in root[name]?.table }
             let names = tables.flatMap { (table: [String: TOMLValue]) -> [String] in table.keys.sorted() }
-            addDependencies(names.map(Self.normalisedPyPI), file: "Pipfile", ecosystem: .pypi)
+            addDependencies(names.compactMap(Self.packageKey), file: "Pipfile", ecosystem: .pypi)
         }
         readPackageJSON(&reader, startWords: startWords)
         if let text = reader.text("Gemfile") {
@@ -72,6 +72,16 @@ extension ProjectFacts {
         return normalisedPyPI(String(name))
     }
 
+    /// A package's name as a table's key gives it (Pipfile's, Poetry's), normalised: 1 to 100 of ASCII letters,
+    /// digits, `.`, `_` and `-`, from a letter or digit. Nil for any other key.
+    static func packageKey(_ key: String) -> String? {
+        let plain = key.allSatisfy { (c: Character) -> Bool in
+            c.isASCII && (c.isLetter || c.isNumber || "._-".contains(c))
+        }
+        guard plain, let first = key.first, first.isLetter || first.isNumber, key.count <= 100 else { return nil }
+        return normalisedPyPI(key)
+    }
+
     /// As PyPI compares names: lower case, with each run of `-`, `_` and `.` made one `-`.
     static func normalisedPyPI(_ name: String) -> String {
         var result = ""
@@ -108,7 +118,7 @@ extension ProjectFacts {
         for table in poetryTables {
             let keys: [String] = (table?.table ?? [:]).keys.sorted()
             let packages = keys.filter { (name: String) -> Bool in name.lowercased() != "python" }
-            names += packages.map { (name: String) -> String in Self.normalisedPyPI(name) }
+            names += packages.compactMap { (name: String) -> String? in Self.packageKey(name) }
         }
         addDependencies(names, file: "pyproject.toml", ecosystem: .pypi)
         pyprojectTools = Set((root["tool"]?.table ?? [:]).keys)
