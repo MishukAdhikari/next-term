@@ -42,7 +42,9 @@ func visibleText(_ scan: DatabaseScan) -> String {
         parts.append(String(reflecting: db))
         parts.append(db.tools.joined(separator: " "))
     }
+    parts.append(linkText(scan))
     parts.append(String(describing: scan))
+    parts.append(String(reflecting: scan))
     return parts.joined(separator: "\n")
 }
 
@@ -267,7 +269,7 @@ func visibleText(_ scan: DatabaseScan) -> String {
         let project = FixtureProject()
         project.write(".env", "DB_CONNECTION=mysql\nDB_HOST=mysql-prod.c9akciq32.eu-west-1.rds.amazonaws.com\nDB_DATABASE=shop\nDB_USERNAME=admin\nDB_PASSWORD=Rds!2024\n")
         let db = try #require(project.scan().databases.first)
-        #expect(db.environment == .remote && db.providers.isEmpty && db.name == "shop")
+        #expect(db.environment == .remote && db.providers == [.aws] && db.name == "shop")
     }
 
     // MARK: examples, ORMs, other engines

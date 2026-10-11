@@ -25,11 +25,15 @@ struct Candidate {
         self.keys = keys
         self.file = file
         let host = url.host?.lowercased() ?? ""
+        let isLocal = DatabaseEnvironment.classify(host: url.host, socket: url.socket) == .local
         if let provider = DatabaseProvider.from(host: url.host, user: url.user) { providers.append(provider) }
-        if url.scheme == "prisma+postgres", !providers.contains(.prismaPostgres) { providers.append(.prismaPostgres) }
+        // Vercel's Blob, KV and legacy Postgres hosts; the Postgres ones are Neon's too.
+        if host.hasSuffix(".vercel-storage.com") { providers.append(.vercel) }
+        if context.hasFlyConfig, providers.isEmpty, DatabaseProvider.isFlyPrivate(host) { providers.append(.fly) }
+        // `prisma dev` serves this scheme on this Mac: a local database, not Prisma's cloud.
+        if url.scheme == "prisma+postgres", !isLocal, !providers.contains(.prismaPostgres) { providers.append(.prismaPostgres) }
         pooled = host.contains("-pooler.") || host.contains(".pooler.") || host.hasPrefix("pooler.")
             || url.parameters.contains { $0.key.lowercased() == "pgbouncer" && $0.value == "true" }
-        let isLocal = DatabaseEnvironment.classify(host: url.host, socket: url.socket) == .local
         if context.herdInstalled, isLocal, [.mysql, .mariadb, .postgres].contains(engine),
            (url.socket ?? "").contains("/Herd/") || context.appURLHost?.lowercased().hasSuffix(".test") == true {
             providers.append(.herd)
@@ -82,7 +86,8 @@ struct Candidate {
     }
 
     /// Same database, whichever key or file named it: engine, host, port, database and user. Neon's
-    /// pooler host and Supabase's pooler user name the same database as their direct forms.
+    /// pooler host (on Vercel's legacy Postgres hosts too) and Supabase's pooler user name the same database as their
+    /// direct forms.
     var mergeKey: String {
         if !isConnection { return "shape|\(engine.rawValue)|\(file)|\(keys.first ?? "")" }
         if engine == .sqlite { return "sqlite|\(filePath ?? "")" }
@@ -97,7 +102,8 @@ struct Candidate {
             host = "supabase:" + user[user.index(after: dot)...]
             user = String(user[..<dot])
             port = ""
-        } else if host.hasSuffix(".neon.tech"), let first = host.split(separator: ".").first, first.hasSuffix("-pooler") {
+        } else if host.hasSuffix(".neon.tech") || host.hasSuffix(".postgres.vercel-storage.com"),
+                  let first = host.split(separator: ".").first, first.hasSuffix("-pooler") {
             host = String(first.dropLast(7)) + host.dropFirst(first.count)
         }
         let engineName = engine == .mariadb ? "mysql" : engine.rawValue

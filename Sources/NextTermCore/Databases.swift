@@ -74,6 +74,8 @@ public enum DatabaseEngine: String, Sendable, CaseIterable {
 public enum DatabaseProvider: String, Sendable, CaseIterable {
     case vercel = "Vercel", neon = "Neon", supabase = "Supabase", herd = "Herd", planetScale = "PlanetScale"
     case prismaPostgres = "Prisma Postgres", turso = "Turso", mongoAtlas = "MongoDB Atlas"
+    case railway = "Railway", render = "Render", fly = "Fly.io", aws = "AWS", cockroach = "CockroachDB"
+    case digitalOcean = "DigitalOcean", azure = "Azure"
 
     /// The Vercel Marketplace slug, for `vercel integration open <slug>`.
     public var vercelSlug: String? {
@@ -85,16 +87,71 @@ public enum DatabaseProvider: String, Sendable, CaseIterable {
         }
     }
 
-    /// Named from the host only.
+    /// The service it is, as the services list names it, so a service a database row shows is not listed twice.
+    public var serviceID: String {
+        switch self {
+        case .vercel: return "vercel"
+        case .neon: return "neon"
+        case .supabase: return "supabase"
+        case .herd: return "herd"
+        case .planetScale: return "planetscale"
+        case .prismaPostgres: return "prisma-postgres"
+        case .turso: return "turso"
+        case .mongoAtlas: return "mongodb-atlas"
+        case .railway: return "railway"
+        case .render: return "render"
+        case .fly: return "fly"
+        case .aws: return "aws"
+        case .cockroach: return "cockroachdb"
+        case .digitalOcean: return "digitalocean"
+        case .azure: return "azure"
+        }
+    }
+
+    /// Host suffixes that name a provider. Vercel's legacy Postgres hosts are Neon's; `vercel-storage.com` adds
+    /// Vercel too (`Candidate`). A `.internal` host is Fly.io's only beside a `fly.toml` (`isFlyPrivate`).
+    static let suffixes: [(suffix: String, provider: DatabaseProvider)] = [
+        (".neon.tech", .neon), (".postgres.vercel-storage.com", .neon),
+        (".supabase.co", .supabase), (".supabase.com", .supabase),
+        (".psdb.cloud", .planetScale),
+        (".db.prisma.io", .prismaPostgres), (".prisma-data.net", .prismaPostgres),
+        (".turso.io", .turso),
+        (".mongodb.net", .mongoAtlas),
+        (".proxy.rlwy.net", .railway), (".railway.internal", .railway),
+        (".flycast", .fly), (".flympg.net", .fly),
+        (".rds.amazonaws.com", .aws),
+        (".cockroachlabs.cloud", .cockroach),
+        (".db.ondigitalocean.com", .digitalOcean),
+        (".postgres.database.azure.com", .azure), (".mysql.database.azure.com", .azure), (".database.windows.net", .azure),
+    ]
+
+    /// Named from the host only, never from the user name (a Supabase pooler's holds the project's ref).
     static func from(host: String?, user: String?) -> DatabaseProvider? {
         guard let host = host?.lowercased() else { return nil }
-        if host.hasSuffix(".neon.tech") { return .neon }
-        if host.hasSuffix(".supabase.co") || host.hasSuffix(".supabase.com") { return .supabase }
-        if host.hasSuffix(".psdb.cloud") { return .planetScale }
-        if host == "db.prisma.io" || host.hasSuffix(".prisma-data.net") { return .prismaPostgres }
-        if host.hasSuffix(".turso.io") { return .turso }
-        if host.hasSuffix(".mongodb.net") { return .mongoAtlas }
-        return nil
+        if host == "db.prisma.io" { return .prismaPostgres }
+        if isRenderPostgres(host) { return .render }
+        let match = suffixes.first { (entry: (suffix: String, provider: DatabaseProvider)) -> Bool in
+            host.hasSuffix(entry.suffix)
+        }
+        return match?.provider
+    }
+
+    /// Render's Postgres: `dpg-` and 20 letters or digits then `-a`, alone inside Render or under
+    /// `<region>-postgres.render.com` outside it.
+    static func isRenderPostgres(_ host: String) -> Bool {
+        let label = host.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        guard label.wholeMatch(of: renderID) != nil else { return false }
+        return host == label || host.hasSuffix("-postgres.render.com")
+    }
+
+    static let renderID = #/dpg-[a-z0-9]{20}-a/#
+
+    /// Fly.io's private network (`<app>.internal`), which only a project with a `fly.toml` is taken to use: Docker's
+    /// and Railway's own `.internal` names are never Fly.io's.
+    static func isFlyPrivate(_ host: String) -> Bool {
+        let lowered = host.lowercased()
+        let others: Bool = lowered.hasSuffix(".docker.internal") || lowered.hasSuffix(".railway.internal")
+        return lowered.hasSuffix(".internal") && !others
     }
 }
 
@@ -176,6 +233,10 @@ public struct DetectedDatabase: Sendable, Equatable, Identifiable {
     /// Frameworks and ORMs that read it: Laravel, Prisma, Drizzle.
     public let tools: [String]
 
+    /// The page each provider badge opens, one per provider in the same order: a provider with no page has none.
+    /// Built from the host and the project's facts, never from the user, the password or a query value.
+    public internal(set) var links: [ServiceLink] = []
+
     /// The file it was read from first, relative to the project.
     public var sourceFile: String? { sources.first?.file }
     public var hasPooledAndDirect: Bool { sources.contains { $0.pooled } && sources.contains { !$0.pooled } }
@@ -198,11 +259,15 @@ public struct DatabaseScan: Sendable, Equatable {
     public var databases: [DetectedDatabase] = []
     /// `.vercel/project.json` links the folder to a Vercel project.
     public var vercelProject: String?
+    /// What the project's files say, read once with the databases and handed on, so no file is read twice. It holds
+    /// key names and the values links may use, cut to their form, and prints names and counts only.
+    public var facts = ProjectFacts()
     public var isVercelLinked: Bool { vercelProject != nil }
     public var isEmpty: Bool { databases.isEmpty }
 
-    public init(databases: [DetectedDatabase] = [], vercelProject: String? = nil) {
+    public init(databases: [DetectedDatabase] = [], vercelProject: String? = nil, facts: ProjectFacts = ProjectFacts()) {
         self.databases = databases
         self.vercelProject = vercelProject
+        self.facts = facts
     }
 }
