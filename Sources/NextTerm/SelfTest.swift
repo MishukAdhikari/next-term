@@ -584,11 +584,12 @@ enum SelfTest {
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys), for its own failures without the
-        // whole run's 25 minutes.
-        if ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] == "gitAndViewKeys" {
-            await gitAndViewKeyChecks(c, proj: proj)
-            return
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys or importOneClick), for its own
+        // failures without the whole run's 25 minutes.
+        switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
+        case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
+        case "importOneClick": return await importOneClickChecks()
+        default: break
         }
         #endif
 
@@ -749,6 +750,7 @@ enum SelfTest {
         await importTerminalChecks()
         await importWindowChecks()
         await importAgentChecks()
+        await importOneClickChecks()
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)

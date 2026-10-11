@@ -345,6 +345,8 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     private var recentsBox: NSButton?
     private var applyButton: NSButton?
     private var radios: [NSButton] = []
+    /// After one click: Undo Import on the window that says what came over.
+    private var importedUndoButton: NSButton?
 
     /// An agent's request (apply_import): this window is its ask, with the agent's rows ticked and a banner naming it.
     struct AgentAsk {
@@ -395,7 +397,8 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         self.completion = completion
         apps = ImportSources.detect()
         let title = Self.label(firstRun ? "Coming from another app?" : "Bring over your settings and shortcuts", size: 20, weight: .semibold)
-        let intro = Self.wrapping("Next Term can use the shortcuts and settings you already have. You’ll see every change first, and one click undoes it.")
+        let intro = Self.wrapping("Next Term can use the shortcuts and settings you already have. Import brings an app’s over in one click; "
+            + "Preview… shows every change first. Undo Import puts it all back.")
         var rows: [NSView] = [title, intro]
         radios = []
         let keep = NSButton(radioButtonWithTitle: "Keep Next Term’s shortcuts", target: self, action: #selector(radioChanged(_:)))
@@ -409,7 +412,8 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             let detail = Self.detail(found)
             radio.setAccessibilityHelp(detail)
             radios.append(radio)
-            appRows.append([radio, Self.wrapping(detail, secondary: true, size: 11, indent: true)])
+            appRows.append([Self.appLine(radio, importing: importButton(for: index, name: found.name)),
+                            Self.wrapping(detail, secondary: true, size: 11, indent: true)])
         }
         // First run defaults to keeping everything; from the menu, to the app used last.
         let selected = firstRun || apps.isEmpty ? keep : radios[1]
@@ -496,6 +500,100 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     private func updatePreviewButton() {
         let chosen = radios.first { $0.state == .on }?.tag ?? -1
         previewButton?.isEnabled = chosen >= 0
+    }
+
+    /// An app's Import, at the end of its row: one click brings over what its preview ticks at first.
+    private func importButton(for index: Int, name: String) -> NSButton {
+        let button = NSButton(title: "Import", target: self, action: #selector(importApp(_:)))
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.tag = index
+        button.setAccessibilityLabel("Import from \(name)")
+        button.toolTip = "Brings over what Preview… ticks at first, in one click. Undo Import puts it all back."
+        return button
+    }
+
+    /// The app's radio button, and its Import at the row's end.
+    private static func appLine(_ radio: NSButton, importing button: NSButton) -> NSView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let line = NSStackView(views: [radio, spacer, button])
+        line.orientation = .horizontal
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.widthAnchor.constraint(equalToConstant: 512).isActive = true
+        return line
+    }
+
+    @objc private func importApp(_ sender: NSButton) {
+        guard apps.indices.contains(sender.tag) else { return }
+        importRecommended(from: apps[sender.tag])
+    }
+
+    /// What the preview ticks at first, for `source` settled as the preview settles it: the rows MCPImport.defaultTicks
+    /// names (the shortcut set when it differs from the one in use, each row the importer ticks, the recent projects not
+    /// listed yet). An agent's preview starts from the same rows.
+    static func recommended(_ source: ImportPlan) -> (plan: ImportPlan, choice: ImportChoice) {
+        let current = KeyboardShortcuts.shared.preset
+        let plan = settle(source, under: source.preset)
+        let projects = plan.recentProjects.filter { !AppDelegate.shared.recentProjects.contains($0) }
+        let ticks = MCPImport.defaultTicks(plan, currentPreset: current, newRecents: projects)
+        let ids = MCPImport.rowIDs(plan)
+        let settings = plan.settings.indices.filter { ticks.contains(ids.settings[$0]) }.map { plan.settings[$0] }
+        let shortcuts = plan.shortcuts.indices.filter { ticks.contains(ids.shortcuts[$0]) && plan.shortcuts[$0].allowed }
+            .map { plan.shortcuts[$0] }
+        let choice = ImportChoice(usePreset: ticks.contains(MCPImport.presetID), settings: settings, shortcuts: shortcuts,
+                                  recentProjects: ticks.contains(MCPImport.recentsID) ? projects : [])
+        return (plan, choice)
+    }
+
+    /// One click (an app's Import, here or in Settings › Import): the recommended rows applied, then the window says what
+    /// came over, with Undo Import. Not while an agent's request is open here: that comes to the front instead.
+    func importRecommended(from found: DetectedApp) {
+        guard agentAsk == nil else {
+            window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let source = ImportSources.plan(for: found)
+        let (plan, choice) = Self.recommended(source)
+        app = found
+        self.source = source
+        self.plan = plan
+        let snapshot = ImportCoordinator.count(choice, plan: plan) > 0
+            ? ImportCoordinator.shared.apply(choice, plan: plan, from: found.name) : nil
+        showImported(from: found, snapshot: snapshot, skipped: plan.skipped.count)
+    }
+
+    /// After one click: what came over (or that nothing would change), and Undo Import; Done closes the window.
+    private func showImported(from found: DetectedApp, snapshot: ImportSnapshot?, skipped: Int) {
+        var rows: [NSView] = []
+        if let snapshot {
+            rows.append(Self.label("Brought over from \(found.name)", size: 20, weight: .semibold))
+            rows.append(Self.wrapping(snapshot.summary.prefix(1).uppercased() + snapshot.summary.dropFirst() + "."))
+            rows.append(Self.wrapping("Undo Import puts all of it back, here or in Settings › Import.", secondary: true, size: 12))
+        } else {
+            rows.append(Self.label("Nothing to bring over from \(found.name)", size: 20, weight: .semibold))
+            rows.append(Self.wrapping("Next Term already has what \(found.name) would bring."))
+        }
+        if skipped > 0 {
+            rows.append(Self.wrapping("\(skipped) thing\(skipped == 1 ? " wasn’t" : "s weren’t") brought over: Preview… in Settings › Import "
+                                      + "lists each one and why.", secondary: true, size: 12))
+        }
+        let undo = NSButton(title: "Undo Import", target: self, action: #selector(undoImported))
+        undo.isHidden = snapshot == nil
+        let done = NSButton(title: "Done", target: self, action: #selector(doneImporting))
+        done.keyEquivalent = "\r"
+        importedUndoButton = undo
+        layout(rows, buttons: [undo, done])
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func doneImporting() { finish(with: plan) }
+
+    /// Undo straight after the import: nothing has changed since, so nothing needs naming first.
+    @objc private func undoImported() {
+        ImportCoordinator.shared.undo()
+        finish(with: nil)
     }
 
     @objc private func previewChosen() {
@@ -806,6 +904,14 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     var chosenTitle: String? { radios.first { $0.state == .on }?.title }
     var staleListIsOpen: Bool { staleList?.isHidden == false }
     func applyForTest() { applyChosen() }
+    /// For the self-test: the Import buttons on the chooser's rows, and the one-click result's Undo Import.
+    var importButtons: [NSButton] {
+        func find(_ view: NSView) -> [NSButton] {
+            ((view as? NSButton).map { $0.action == #selector(importApp(_:)) ? [$0] : [] } ?? []) + view.subviews.flatMap(find)
+        }
+        return window?.contentView.map(find) ?? []
+    }
+    var undoImportedButton: NSButton? { importedUndoButton }
     /// For the self-test: a shortcut row's note and tick, and ticking it as a click does.
     func shortcutRow(for command: String) -> (note: String?, ticked: Bool)? {
         shortcutBoxes.first { $0.1.command == command }.map { ($0.1.note, $0.0.state == .on) }
@@ -1107,7 +1213,13 @@ final class ImportSettingsView: NSView {
             if app.appRemoved { tags.append("app removed") }
             if app.notUsedLately { tags.append("not used lately") }
             let name = NSTextField(labelWithString: ([app.name] + tags).joined(separator: "  ·  "))
-            let row = NSStackView(views: [name, button])
+            let importing = NSButton(title: "Import", target: self, action: #selector(importApp(_:)))
+            importing.bezelStyle = .rounded
+            importing.controlSize = .small
+            importing.tag = index
+            importing.setAccessibilityLabel("Import from \(app.name)")
+            importing.toolTip = "Brings over what Preview… ticks at first, in one click. Undo Import puts it all back."
+            let row = NSStackView(views: [name, button, importing])
             appsStack.addArrangedSubview(row)
         }
         if let last = ImportCoordinator.shared.last {
@@ -1130,6 +1242,13 @@ final class ImportSettingsView: NSView {
         let apps = ImportSources.detect()
         guard apps.indices.contains(sender.tag) else { return }
         ImportWindowController.shared.showPreview(for: apps[sender.tag])
+    }
+
+    /// One click, as on the import window's rows.
+    @objc private func importApp(_ sender: NSButton) {
+        let apps = ImportSources.detect()
+        guard apps.indices.contains(sender.tag) else { return }
+        ImportWindowController.shared.importRecommended(from: apps[sender.tag])
     }
 
     @objc private func undo() {
