@@ -59,7 +59,7 @@ extension SelfTest {
         check(taken == ["none", "⇧⌘C", "none", "toggleSoftWrap:"], "a key you gave a command before it was Commit…'s default stays yours",
               taken.joined(separator: " "))
         shortcuts.reset("toggleSoftWrap:")
-        check(shown("gitCommit:") == "⇧⌘C" && shown("toggleSoftWrap:") == "none", "and Commit… has ⇧⌘C again once yours moves",
+        check(shown("gitCommit:") == "⇧⌘C" && shown("toggleSoftWrap:") == "⌥⌘W", "and Commit… has ⇧⌘C again once yours moves",
               "\(shown("gitCommit:")) \(shown("toggleSoftWrap:"))")
 
         guard let window = c.window else { return }
@@ -70,30 +70,64 @@ extension SelfTest {
         await gitKeyPresses(c, window: window, proj: proj)
     }
 
-    /// A key down as the keyboard sends it, to the window that has the keyboard (a sheet over the window, while one is).
-    private static func pressKey(_ window: NSWindow, _ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags) {
-        pressAppKey(NSApp.keyWindow ?? window, characters, code: code, flags: flags)
+    /// Where a pressed key went, for a failed check's detail: the window with the keyboard, what in it has the keyboard,
+    /// and whether the command's menu item is on, with its key.
+    private static func keyRoute(_ id: String) -> String {
+        let item = KeyboardShortcuts.shared.commands.first { $0.id == id }?.item
+        item?.menu?.update()
+        var window = "none"
+        if let key = NSApp.keyWindow {
+            window = "\(type(of: key)) “\(key.title)”"
+            if let controller = key.windowController { window += " of \(type(of: controller))" }
+            if !key.isVisible { window += " (hidden)" }
+            if let parent = key.sheetParent { window += " over “\(parent.title)”" }
+        }
+        let responder = NSApp.keyWindow?.firstResponder.map { "\(type(of: $0))" } ?? "nothing"
+        let shown = NSApp.windows.filter(\.isVisible).map { "“\($0.title)” \(type(of: $0))" }.joined(separator: ", ")
+        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "none"
+        return "key window \(window), keyboard in \(responder), \(item?.title ?? id) \(item?.isEnabled == true ? "on" : "off") on "
+            + (item.flatMap(KeyboardShortcuts.chord(of:))?.display ?? "no key") + ", app active \(NSApp.isActive), in front \(front), shown: " + shown
     }
 
-    /// ⌃⌘U, ⌃⇧⌘A and ⌃⇧⌘L turn View › Unified Diffs, Annotate with Git Blame and Current Line Blame over, and back.
+    /// A key down as the keyboard sends it: made from a CGEvent, so AppKit reads its characters off the keyboard layout as
+    /// it does a real key's (an NSEvent given its characters can match an item's key with ⇧ for the same key without it: ⌘R
+    /// then opens Replace in Files, ⇧⌘R). Like a real key, it goes to the window that has the keyboard (a sheet over `window`,
+    /// while one is).
+    private static func pressKey(_ window: NSWindow, code: UInt16, _ flags: NSEvent.ModifierFlags) {
+        let masks: [(NSEvent.ModifierFlags, CGEventFlags)] = [(.command, .maskCommand), (.shift, .maskShift), (.option, .maskAlternate),
+                                                              (.control, .maskControl)]
+        guard let key = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: code, keyDown: true) else { return }
+        key.flags = CGEventFlags(masks.filter { flags.contains($0.0) }.map(\.1))
+        guard let event = NSEvent(cgEvent: key) else { return }
+        NSApp.sendEvent(event)
+    }
+
+    /// ⌃⌘U, ⌃⇧⌘A, ⌃⇧⌘L and ⌥⌘W turn View › Unified Diffs, Annotate with Git Blame, Current Line Blame and Soft Wrap over,
+    /// and back.
     private static func viewKeyPresses(_ window: NSWindow) async {
         let app = AppDelegate.shared!
-        let layout = DiffLayout.current, annotations = app.blameAnnotations, lineBlame = app.currentLineBlame
-        func turned() -> [Bool] { [DiffLayout.current != layout, app.blameAnnotations != annotations, app.currentLineBlame != lineBlame] }
+        let layout = DiffLayout.current, annotations = app.blameAnnotations, lineBlame = app.currentLineBlame, wrap = app.softWrap
+        func turned() -> [Bool] {
+            [DiffLayout.current != layout, app.blameAnnotations != annotations, app.currentLineBlame != lineBlame, app.softWrap != wrap]
+        }
         func pressAll() {
-            pressKey(window, "u", code: 32, [.command, .control])
-            pressKey(window, "A", code: 0, [.command, .shift, .control])
-            pressKey(window, "L", code: 37, [.command, .shift, .control])
+            pressKey(window, code: 32, [.command, .control])
+            pressKey(window, code: 0, [.command, .shift, .control])
+            pressKey(window, code: 37, [.command, .shift, .control])
+            pressKey(window, code: 13, [.command, .option])
         }
         pressAll()
-        let over = await wait(3) { turned() == [true, true, true] }
-        check(over, "view keys: ⌃⌘U, ⌃⇧⌘A and ⌃⇧⌘L turn Unified Diffs, Annotate with Git Blame and Current Line Blame over", "\(turned())")
+        let over = await wait(3) { turned() == [true, true, true, true] }
+        check(over, "view keys: ⌃⌘U, ⌃⇧⌘A, ⌃⇧⌘L and ⌥⌘W turn Unified Diffs, Annotate with Git Blame, Current Line Blame and Soft Wrap over",
+              "\(turned()); " + ["toggleUnifiedDiffs:", "toggleBlameAnnotations:", "toggleCurrentLineBlame:", "toggleSoftWrap:"].map(keyRoute)
+                .joined(separator: "; "))
         pressAll()
-        let back = await wait(3) { turned() == [false, false, false] }
+        let back = await wait(3) { turned() == [false, false, false, false] }
         check(back, "view keys: and pressed again, each goes back", "\(turned())")
         if DiffLayout.current != layout { DiffLayout.current = layout }
         if app.blameAnnotations != annotations { app.toggleBlameAnnotations(nil) }
         if app.currentLineBlame != lineBlame { app.toggleCurrentLineBlame(nil) }
+        if app.softWrap != wrap { app.toggleSoftWrap(nil) }
     }
 
     /// In the project's repository, given a remote of its own: ⌘R fetches, ⌥⌘U updates (up to date, so nothing changes),
@@ -132,30 +166,31 @@ extension SelfTest {
         // ⌘R: Git › Fetch, of every remote: a branch only the remote has comes in.
         run(bare, "branch", "keys-fetch", start)
         GitToast.dismiss()
-        pressKey(window, "r", code: 15, .command)
+        let beforeFetch = keyRoute("gitFetch:")
+        pressKey(window, code: 15, .command)
         let fetched = await wait(15) {
             GitToast.text?.hasPrefix("Fetched") == true && !run(repo, "rev-parse", "--verify", "-q", "refs/remotes/keys/keys-fetch").isEmpty
         }
-        check(fetched, "git keys: ⌘R fetches, as Git › Fetch", GitToast.text ?? "no notice")
+        check(fetched, "git keys: ⌘R fetches, as Git › Fetch", (GitToast.text ?? "no notice") + "; before: " + beforeFetch + "; after: " + keyRoute("gitFetch:"))
 
         // ⌥⌘U: Update Project, already up to date.
         GitToast.dismiss()
         let head = run(repo, "rev-parse", "HEAD")
-        pressKey(window, "u", code: 32, [.command, .option])
+        pressKey(window, code: 32, [.command, .option])
         let updated = await wait(15) { GitToast.text == "Already up to date" }
-        check(updated && run(repo, "rev-parse", "HEAD") == head, "git keys: ⌥⌘U updates the project", GitToast.text ?? "no notice")
+        check(updated && run(repo, "rev-parse", "HEAD") == head, "git keys: ⌥⌘U updates the project", (GitToast.text ?? "no notice") + "; " + keyRoute("gitUpdate:"))
         GitToast.dismiss()
 
         // ⇧⌘C: the commit sheet, listing what there is to commit. While it is up, ⌥⌘P asks nothing, then or after.
         try? "keys\n".write(to: file, atomically: true, encoding: .utf8)
         c.sidebar.git.refresh()
         _ = await wait(5) { c.sidebar.git.snapshot?.files["keys.txt"] != nil }
-        pressKey(window, "C", code: 8, [.command, .shift])
+        pressKey(window, code: 8, [.command, .shift])
         let opened = await wait(10) { CommitSheet.current != nil }
         check(opened && CommitSheet.current?.fileListText.contains("keys.txt") == true, "git keys: ⇧⌘C opens the commit sheet",
-              CommitSheet.current?.fileListText ?? "no sheet")
+              (CommitSheet.current?.fileListText ?? "no sheet") + "; " + keyRoute("gitCommit:"))
         if let sheet = CommitSheet.current {
-            pressKey(window, "p", code: 35, [.command, .option])
+            pressKey(window, code: 35, [.command, .option])
             await pause(0.5)
             sheet.pressCancel()
             let queued = await wait(3) { window.attachedSheet != nil }
@@ -168,10 +203,10 @@ extension SelfTest {
         // ⌥⌘P: Push… asks first; Cancel sends nothing. Pressed twice before its question is up (both presses pass the
         // menu's check, as no sheet is up yet), it asks once.
         _ = await wait(5) { window.attachedSheet == nil }
-        pressKey(window, "p", code: 35, [.command, .option])
-        pressKey(window, "p", code: 35, [.command, .option])
+        pressKey(window, code: 35, [.command, .option])
+        pressKey(window, code: 35, [.command, .option])
         let asked = await wait(10) { sheetText().contains("Push “\(start)” to keys/\(start)?") }
-        check(asked, "git keys: ⌥⌘P asks before it pushes", sheetText())
+        check(asked, "git keys: ⌥⌘P asks before it pushes", sheetText() + "; " + keyRoute("gitPush:"))
         if asked { _ = await press("Cancel") }
         let askedTwice = await wait(2) { window.attachedSheet != nil }
         check(!askedTwice, "git keys: ⌥⌘P pressed twice, quickly, asks once", sheetText())
@@ -179,10 +214,10 @@ extension SelfTest {
 
         // ⇧⌘B: New Branch… asks for the name, once for two quick presses; Cancel leaves the branch as it was.
         _ = await wait(5) { window.attachedSheet == nil }
-        pressKey(window, "B", code: 11, [.command, .shift])
-        pressKey(window, "B", code: 11, [.command, .shift])
+        pressKey(window, code: 11, [.command, .shift])
+        pressKey(window, code: 11, [.command, .shift])
         let named = await wait(10) { sheetText().contains("Next Term switches to it.") }
-        check(named, "git keys: ⇧⌘B asks for the new branch's name", sheetText())
+        check(named, "git keys: ⇧⌘B asks for the new branch's name", sheetText() + "; " + keyRoute("gitNewBranch:"))
         if named { _ = await press("Cancel") }
         let namedTwice = await wait(2) { window.attachedSheet != nil }
         check(!namedTwice, "git keys: ⇧⌘B pressed twice, quickly, asks once", sheetText())

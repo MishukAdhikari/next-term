@@ -583,6 +583,14 @@ enum SelfTest {
         try? Data().write(to: proj.appendingPathComponent("AGENTS.md"))
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
+        #if DEBUG
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys), for its own failures without the
+        // whole run's 25 minutes.
+        if ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] == "gitAndViewKeys" {
+            await gitAndViewKeyChecks(c, proj: proj)
+            return
+        }
+        #endif
 
         // Git: branch in the header, colours and +/− counts on changed files and their folders.
         if gitPath != nil {
