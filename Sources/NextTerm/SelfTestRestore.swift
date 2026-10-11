@@ -425,6 +425,10 @@ enum SelfTestRestore {
         let after = SessionWriter.load(from: files)?.header.generation
         check(generation != nil && after == generation, "a status-dot change alone writes nothing",
               "generation \(generation ?? -1), then \(after ?? -1)")
+        // Cleared as a look at the tab clears it: a hidden tab's mark outlasts the command it runs next, and the update's
+        // save would report this tab's state before as attention, where the MCP check expects running.
+        tab.status.setVisible(true)
+        controller.refreshVisibility()
         check(SessionRestore.shared.lastSave?.succeeded == true && SessionRestore.shared.lastSave?.panesLeftOut.isEmpty == true,
               "the last save was written and leaves no pane out")
         return (pane, other)

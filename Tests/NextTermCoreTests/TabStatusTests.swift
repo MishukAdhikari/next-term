@@ -193,6 +193,18 @@ import Testing
         #expect(s.state == .idle)
     }
 
+    /// Next Term's own call to a hidden tab outlasts the next command: starting one clears only done and failed, so the
+    /// tab reads attention (as list_tabs and the update's save report it) until someone looks at it.
+    @Test func attentionSurvivesANewCommand() {
+        var s = TabStatus()
+        s.needsAttention()
+        s.commandStarted("sleep 600", at: 0)
+        #expect(s.running && s.state == .attention)
+        s.setVisible(true)
+        s.setVisible(false)
+        #expect(s.state == .idle && s.running && s.command == "sleep 600")
+    }
+
     @Test func fallbackPollingWithoutIntegration() {
         var s = TabStatus()
         s.observe(ForegroundProcess(isShell: true, name: "bash"), at: 0)
