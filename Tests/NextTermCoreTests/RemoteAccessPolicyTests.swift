@@ -339,6 +339,46 @@ import Testing
         #expect(try object(result.text)["redacted"] as? Int == 1)
     }
 
+    /// Commands and screens are terminal text: the shapes secrets take on a command line are masked there too
+    /// (CommandSecrets), not only the key shapes, so a short password after a flag doesn't go out in clear.
+    @Test func commandLineSecretsInCommandsAndScreensAreMasked() throws {
+        let cases: [(String, String)] = [
+            ("deploy --token=hunter2hunter2 --prod", "deploy --token=••• --prod"),
+            ("mysql -u root -pS3cretPass1 app", "mysql -u root -p••• app"),
+            ("curl -H 'Authorization: Bearer abc123def456ghi' https://api.example.com",
+             "curl -H 'Authorization: •••' https://api.example.com"),
+            ("psql --password=CorrectHorseBattery", "psql --password=•••"),
+        ]
+        for (command, wanted) in cases {
+            let tab: [String: Any] = ["id": "t1", "title": "zsh", "command": command]
+            let result = shaped(["windows": [["tabs": [tab]]]], tool: "list_tabs")
+            let json = try object(result.text)
+            let windows = try #require(json["windows"] as? [[String: Any]])
+            let tabs = try #require(windows.first?["tabs"] as? [[String: Any]])
+            #expect(tabs.first?["command"] as? String == wanted, "\(command)")
+            #expect(json["redacted"] as? Int == 1, "\(command)")
+        }
+        // A secret typed after a prompt: the name is not at the start of its line, so only the command rules see it.
+        let screen = "user@mac app % export DB_PASSWORD=correcthorse42\nuser@mac app % ls\nREADME.md"
+        let json = try object(shaped(["id": "t1", "screen": screen], tool: "read_tab").text)
+        let masked = "user@mac app % export DB_PASSWORD=•••\nuser@mac app % ls\nREADME.md"
+        #expect(json["screen"] as? String == masked)
+        #expect(json["redacted"] as? Int == 1)
+    }
+
+    /// A file's text is code, where `password=` is often an argument name: it keeps MCPRedaction's masking alone,
+    /// as it has locally, while the same line on a screen is a command.
+    @Test func aFileKeepsCodeThatOnlyLooksLikeACommand() throws {
+        let code = "session.login(user=name, password=user_password)"
+        for tool in ["read_file", "get_editor_selection"] {
+            let json = try object(shaped(["text": code], tool: tool).text)
+            #expect(json["text"] as? String == code, "\(tool)")
+            #expect(json["redacted"] == nil, "\(tool)")
+        }
+        let screen = try object(shaped(["screen": code], tool: "read_tab").text)
+        #expect(screen["screen"] as? String != code)
+    }
+
     @Test func theDoorsOwnTokensAreMasked() throws {
         let screen = "Bearer \(Self.access)\nrefresh \(Self.lowerRefresh) and \(Self.lowerRefresh.uppercased())"
         let result = shaped(["screen": screen], tool: "read_tab")
@@ -368,6 +408,73 @@ import Testing
         #expect(key["redacted"] as? Int == 1)
     }
 
+    // MARK: wrapped rows
+
+    func screen(_ text: String) throws -> (screen: String, redacted: Int?) {
+        let json = try object(shaped(["id": "t1", "screen": text], tool: "read_tab").text)
+        return (try #require(json["screen"] as? String), json["redacted"] as? Int)
+    }
+
+    /// A narrow pane wraps a token onto the next row, and each half is too short for its pattern alone.
+    @Test func aTokenWrappedOntoTheNextRowIsMaskedWhole() throws {
+        // The name is masked on its row by the command rules; the rest of the token on the next row goes too, and
+        // it is still one secret.
+        let wrapped = try screen("$ export GITHUB_TOKEN=ghp_Ab3dEf6hIj\n9kLm2nOp5qRs8tUv1wXy4zAb7c\n$ ")
+        #expect(wrapped.screen == "$ export GITHUB_TOKEN=•••\n•••\n$ ")
+        #expect(wrapped.redacted == 1)
+        // Neither half is masked alone: joined, they are one token, so both halves go.
+        let bare = try screen("seen ghp_Ab3dEf6hIj9kLm\n2nOp5qRs8tUv1wXy4zAb7c\n$ ")
+        #expect(bare.screen == "seen •••\n•••\n$ ")
+        #expect(bare.redacted == 1)
+        // A random key over two rows, 20 characters on each.
+        let key = try screen("key: " + "Zx9Yw8Vu7Ts6Rq5Po4Nm" + "\n" + "3Lk2Ji1Hg0FeDcBa9Zy8\nok")
+        #expect(key.screen == "key: •••\n•••\nok")
+        #expect(key.redacted == 1)
+    }
+
+    @Test func aTokenWrappedOverManyRowsOfANarrowPaneIsMasked() throws {
+        // 11 columns: no two rows together hold enough of the token to show its shape.
+        let rows = "ghp_Ab3dEf6\nhIj9kLm2nOp\n5qRs8tUv1wX\ny4zAb7c\n$ "
+        let narrow = try screen(rows)
+        #expect(narrow.screen == "•••\n•••\n•••\n•••\n$ ")
+        #expect(narrow.redacted == 1)
+    }
+
+    /// A row that ends with a whole secret, and a next row that starts with text, don't make one secret: the
+    /// prompt after `export` keeps its name.
+    @Test func aWholeSecretAtTheEndOfARowLeavesTheNextRowAlone() throws {
+        let typed = "user@mac app % export GITHUB_TOKEN=\(Self.github)\nuser@mac app % "
+        let shown = try screen(typed)
+        #expect(shown.screen == "user@mac app % export GITHUB_TOKEN=•••\nuser@mac app % ")
+        #expect(shown.redacted == 1)
+        // A short secret after a name, then the prompt: joined, the name's value would take in the prompt's first
+        // word, so names join rows only where the screen shows rows that wide wrap.
+        let password = "user@mac app % export DB_PASSWORD=correcthorse42\nuser@mac app % "
+        let prompt = try screen(password)
+        #expect(prompt.screen == "user@mac app % export DB_PASSWORD=•••\nuser@mac app % ")
+        #expect(prompt.redacted == 1)
+        // A row shorter than the widest can't have wrapped: a row starting with text after it is a new line.
+        let short = "$ echo done, and a longer line\nZx9Yw8Vu7Ts6Rq5Po4Nm\n3Lk2Ji1Hg0FeDcBa9Zy8\n$ "
+        let kept = try screen(short)
+        #expect(kept.screen == short)
+        #expect(kept.redacted == nil)
+    }
+
+    /// A password after a flag, wrapped in a pane whose other rows show it is 40 columns wide.
+    @Test func aPasswordWrappedAfterItsFlagIsMaskedWhereRowsThatWideWrap() throws {
+        let log = "warning: NetworkingKit was built for new"
+        let command = "$ deploy --region eu-west-1 --password=CorrectHorseBattery --verbose"
+        #expect(scalars(log) == 40)
+        let first = String(command.prefix(40)), rest = String(command.dropFirst(40))
+        #expect(first.hasSuffix("--password=C"))
+        let rows = ["$ cat build.log", log, "er macOS", first, rest, "$ "]
+        let shown = try screen(rows.joined(separator: "\n"))
+        let masked = ["$ deploy --region eu-west-1 --password=•••", "••• --verbose"]
+        let wanted = ["$ cat build.log", log, "er macOS"] + masked + ["$ "]
+        #expect(shown.screen == wanted.joined(separator: "\n"))
+        #expect(shown.redacted == 1)
+    }
+
     @Test func errorsAndTextThatIsNotJSONAreMaskedToo() {
         let failed = Policy.shape(MCPServer.CallResult(text: "git said: bad key \(Self.openAI)", isError: true), tool: "commit")
         #expect(failed.isError)
@@ -387,10 +494,36 @@ import Testing
     }
 
     @Test func aResultWithNothingToChangeKeepsItsText() {
-        let text = "{\n  \"b\" : 1,\n  \"a\" : \"plain words\"\n}"
+        // Every tool writes its result with MCPServer.json, so a result that needs nothing comes back as it went.
+        let text = MCPServer.json(["b": 1, "a": "plain words", "list": ["x", "y"]] as [String: Any])
         #expect(Policy.shape(MCPServer.CallResult(text: text), tool: "list_projects").text == text)
         let words = "Nothing here to hide."
         #expect(Policy.shape(MCPServer.CallResult(text: words), tool: "read_tab").text == words)
+    }
+
+    /// The parse may not read every part of a text written another way: of a key given twice, JSONSerialization
+    /// keeps one, and many clients keep the other. What goes out is always what was read and masked.
+    @Test func aResultIsSentAsItWasReadNotAsItCame() throws {
+        let twice = "{\"a\":\"b\", \"a\":\"\(Self.github)\"}"
+        let result = Policy.shape(MCPServer.CallResult(text: twice), tool: "read_file")
+        #expect(!result.text.contains(Self.github) && !result.text.contains("Ab3dEf"))
+        let json = try object(result.text)
+        #expect(json.count <= 2)
+        // Written another way, but whole: it goes out as MCPServer.json writes it.
+        let other = "{\"b\":1,\"a\":\"plain words\"}"
+        let written = Policy.shape(MCPServer.CallResult(text: other), tool: "list_projects").text
+        #expect(written == MCPServer.json(["a": "plain words", "b": 1] as [String: Any]))
+    }
+
+    /// Two keys that both mask to ••• keep both their values.
+    @Test func keysThatMaskAlikeKeepEveryValue() throws {
+        let value: [String: Any] = [Self.github: "first", Self.aws: "second", "plain": "third"]
+        let json = try object(shaped(value, tool: "read_file").text)
+        let values = Set(json.values.compactMap { $0 as? String })
+        #expect(values == ["first", "second", "third"])
+        #expect(json["•••"] != nil && json["••• (2)"] != nil)
+        #expect(json["redacted"] as? Int == 2)
+        #expect(!json.keys.contains { $0.contains("ghp_") || $0.contains("AKIA") })
     }
 
     // MARK: cuts
@@ -484,6 +617,52 @@ import Testing
         #expect(json["truncated"] as? Bool == true)
     }
 
+    /// A random-looking base64 line of `length` characters, which masking takes as one long run.
+    func blob(_ length: Int) -> String {
+        let chunk = "Qm9vdHN0cmFwM2FsbFRoZVRoaW5nczEyMzQ1Njc4OTBhYmNkZWZnaGlqa2xtbm9w"
+        let whole = String(repeating: chunk, count: length / chunk.count + 1)
+        return String(whole.prefix(length))
+    }
+
+    /// Text is read only 68,000 characters in before it is masked. Masking can shrink what was read far below the
+    /// cap, so the line the read stopped in is left out: a secret there is never sent in part.
+    @Test func aSecretAtTheReadAheadEdgeIsNotShownInPart() throws {
+        // The selection's start: a long blob, then a token whose first 23 characters are inside the read.
+        let selection = blob(67_976) + "\n" + Self.github + "\nmore"
+        let start = try object(shaped(["text": selection], tool: "get_editor_selection").text)
+        let text = try #require(start["text"] as? String)
+        #expect(!text.contains("ghp_") && !text.contains("Ab3dEf"))
+        #expect(start["truncated"] as? Bool == true)
+        // A screen's end: the read starts 31 characters before the end of the token's row.
+        let rows = (0..<300).map { _ in blob(249) }.joined(separator: "\n")
+        let tail = String(rows.suffix(67_968))
+        let screen = "$ cat creds\n" + Self.github + "\n" + tail
+        let end = try object(shaped(["id": "t1", "screen": screen], tool: "read_tab").text)
+        let shown = try #require(end["screen"] as? String)
+        #expect(!shown.contains("4zAb7c") && !shown.contains("f6hIj"))
+        #expect(end["truncated"] as? Bool == true)
+        #expect(try #require(end["truncated_note"] as? String).contains("fewer lines"))
+        // Text that is not JSON says it was cut, however short masking made it.
+        let plain = Policy.shape(MCPServer.CallResult(text: blob(80_000)), tool: "host_sessions")
+        #expect(plain.text.hasSuffix("… (truncated: cut to fit 64,000 characters)"))
+    }
+
+    /// A row the read cut away may have wrapped into the first row kept, so that row's first word goes too.
+    @Test func aRowAfterTheReadAheadEdgeIsMaskedWhereItCouldContinueASecret() throws {
+        // The token's first row ends in its first 14 characters; the read starts in the last 10 of them. The rows
+        // after are random lines, which masking shrinks, so the first rows read are inside the cap.
+        let head = "$ cat creds\n" + String(repeating: "x", count: 234) + " ghp_Ab3dEf6hIj"
+        let continued = "9kLm2nOp5qRs8tUv1wXy4zAb7c\n"
+        let rows = (0..<300).map { _ in blob(249) }.joined(separator: "\n")
+        let tail = continued + String(rows.suffix(68_000 - 11 - scalars(continued)))
+        let screen = head + "\n" + tail
+        let json = try object(shaped(["id": "t1", "screen": screen], tool: "read_tab").text)
+        let shown = try #require(json["screen"] as? String)
+        #expect(!shown.contains("9kLm2nOp5qRs8tUv1wXy4zAb7c") && !shown.contains("Ab3dEf"))
+        #expect(shown.hasPrefix("•••\n"))
+        #expect(json["truncated"] as? Bool == true)
+    }
+
     @Test func aResultWhoseStringsCantShrinkEnoughSaysItIsTooLong() throws {
         // 9,000 numbers: no string to cut, so the result says what to do instead of going out too long.
         let numbers = Array(1...9000).map { $0 * 1_000_003 }
@@ -539,6 +718,12 @@ import Testing
         let tab: [String: Any] = ["command": "x --token=\(Self.longSecret)"]
         let window: [String: Any] = ["tabs": [tab]]
         results.append(("list_tabs", ["windows": [window]]))
+        results.append(("list_tabs", ["windows": [["tabs": [["command": "mysql -u root -pS3cretPass1 app"]]]]]))
+        let wrapped = "$ export GITHUB_TOKEN=ghp_Ab3dEf6hIj\n9kLm2nOp5qRs8tUv1wXy4zAb7c\n$ "
+        results.append(("read_tab", ["screen": wrapped]))
+        results.append(("read_tab", ["screen": "ghp_Ab3dEf6\nhIj9kLm2nOp\n5qRs8tUv1wX\ny4zAb7c\n$ "]))
+        results.append(("read_file", [Self.github: "first", Self.aws: "second"]))
+        results.append(("get_editor_selection", ["text": blob(67_976) + "\n" + Self.github + "\nmore"]))
         for (tool, value) in results {
             let once = shaped(value, tool: tool)
             let twice = Policy.shape(once, tool: tool)

@@ -191,27 +191,31 @@ public enum RemoteAccessPolicy {
 
     /// The result as a remote client gets it (R23, KTD14).
     ///
-    /// - JSON is masked string by string, keys included: the door's own tokens, then `MCPRedaction`. What was
-    ///   masked is added to `"redacted"`, or to the count a tool gave already. Text that comes back from
-    ///   `MCPRedaction` as it went in counts nothing, and neither does a mask made before (`stale`), so a tool's own
-    ///   masks are not counted twice.
+    /// - JSON is masked string by string, keys included: the door's own tokens, then, in terminal text, the shapes
+    ///   secrets take on a command line (`CommandSecrets`), then `MCPRedaction`. A file's text keeps
+    ///   `MCPRedaction` alone, as it has locally (`readsCode`). A screen is also masked across the rows the
+    ///   terminal wrapped (`unwrapped`). What was masked is added to `"redacted"`, or to the count a tool gave
+    ///   already. Text that comes back from `MCPRedaction` as it went in counts nothing, and neither does a mask
+    ///   made before (`stale`), so a tool's own masks are not counted twice. Two keys that mask alike both stay.
     /// - get_editor_selection's `text` is cut to 16,000 characters.
     /// - Then the whole result is held to 64,000 characters by cutting its longest strings at a line break, with
     ///   `"truncated": true` and a note on how to read the rest. A screen keeps its last lines; anything else
-    ///   keeps its start.
+    ///   keeps its start. A string too long to read whole says so too, however short masking made it.
     /// - Text that is not JSON, error results included, is masked and cut as text.
     ///
-    /// Characters are Unicode scalars, as JSON Schema counts them. A result that needs nothing keeps its text as it
-    /// came, and a shaped result shaped again stays the same. An error that says a tab id is unknown gets the
-    /// remote text, which says why that may be.
+    /// Characters are Unicode scalars, as JSON Schema counts them. JSON goes out as it was read and masked,
+    /// written by `MCPServer.json`, never as it came: a key given twice is read once, and many clients would read
+    /// the other. Every tool writes its result with `MCPServer.json`, so one that needs nothing keeps its text, and
+    /// a shaped result shaped again stays the same. An error that says a tab id is unknown gets the remote text,
+    /// which says why that may be.
     public static func shape(_ result: MCPServer.CallResult, tool: String) -> MCPServer.CallResult {
         var text = result.text
         if result.isError, text.hasPrefix(tabGone) { text = RemoteAccessText.oldTab }
         let shaped: String
         if let value = parsedJSON(text) {
-            shaped = shapeJSON(value, text: text, tool: tool)
+            shaped = shapeJSON(value, tool: tool)
         } else {
-            shaped = shapeText(text)
+            shaped = shapeText(text, tool: tool)
         }
         return MCPServer.CallResult(text: shaped, isError: result.isError)
     }
@@ -226,10 +230,41 @@ public enum RemoteAccessPolicy {
         tool == "read_tab" || tool == "wait_for_tab"
     }
 
-    static func shapeJSON(_ value: Any, text original: String, tool: String) -> String {
-        let keepEnd = keepsEnd(tool)
+    /// Tools whose strings are files' text: code, where `password=` is as often an argument's name as a secret.
+    /// They keep `MCPRedaction`'s masking alone, as they have locally. Any other tool's text is terminal text, such
+    /// as screens, commands and titles, and the command-line rules mask it too.
+    static let codeTools: Set<String> = [
+        "read_file", "find_in_files", "get_diff", "host_changes", "get_editor_selection",
+    ]
+
+    static func readsCode(_ tool: String) -> Bool {
+        codeTools.contains(tool)
+    }
+
+    /// How a tool's strings are read.
+    struct Reading {
+        /// Cut, a string keeps its end (`keepsEnd`).
+        let keepEnd: Bool
+        /// Terminal text: the command-line rules mask it too (`readsCode`).
+        let commands: Bool
+
+        init(tool: String) {
+            keepEnd = RemoteAccessPolicy.keepsEnd(tool)
+            commands = !RemoteAccessPolicy.readsCode(tool)
+        }
+    }
+
+    /// What masking a result's strings found.
+    struct Tally {
+        /// How many secrets were masked.
         var count = 0
-        var shaped = masked(value, keepEnd: keepEnd, count: &count)
+        /// A string was too long to read whole (`ahead`).
+        var cut = false
+    }
+
+    static func shapeJSON(_ value: Any, tool: String) -> String {
+        var tally = Tally()
+        var shaped = masked(value, key: nil, reading: Reading(tool: tool), tally: &tally)
         var notes: [String] = []
         if tool == "get_editor_selection", var object = shaped as? [String: Any],
            let selected = object["text"] as? String {
@@ -240,61 +275,135 @@ public enum RemoteAccessPolicy {
                 notes.append("The selection is cut to its first 16,000 characters remotely.")
             }
         }
-        // Nothing masked or cut, and short enough: the text goes as it came.
-        let cap = RemoteAccessLimits.resultChars
-        if count == 0, notes.isEmpty, original.unicodeScalars.count <= cap { return original }
-        if count > 0 { shaped = counted(shaped, count) }
+        // A string read only in part says so, however short masking made it. A cut selection says so already.
+        if tally.cut, notes.isEmpty { notes.append(capNote(tool)) }
+        if tally.count > 0 { shaped = counted(shaped, tally.count) }
         return capped(shaped, notes: notes, tool: tool)
     }
 
-    /// Every string masked, keys included, with how many were.
-    static func masked(_ value: Any, keepEnd: Bool, count: inout Int) -> Any {
+    /// Every string masked, keys included, with how many were. `key` is the original name the value is under: a
+    /// screen is masked across its wrapped rows too.
+    static func masked(_ value: Any, key: String?, reading: Reading, tally: inout Tally) -> Any {
         switch value {
         case let text as String:
-            let found = mask(ahead(text, keepEnd: keepEnd))
-            count += found.count
+            let read = ahead(text, keepEnd: reading.keepEnd)
+            var found = mask(read.text, commands: reading.commands)
+            if key == screenKey {
+                let rows = unwrapped(read, masked: found.text, commands: reading.commands, keepEnd: reading.keepEnd)
+                found = (rows.text, found.count + rows.count)
+            }
+            tally.count += found.count
+            tally.cut = tally.cut || read.cut
             return found.text
         case let object as [String: Any]:
             var result: [String: Any] = [:]
-            for (key, item) in object {
-                let name = mask(key)
-                count += name.count
-                result[name.text] = masked(item, keepEnd: keepEnd, count: &count)
+            // In order, so which of two keys that mask alike gets the plain mask is the same each time.
+            for name in object.keys.sorted() {
+                guard let item = object[name] else { continue }
+                let shown = mask(name, commands: reading.commands)
+                tally.count += shown.count
+                result[unused(shown.text, in: result)] = masked(item, key: name, reading: reading, tally: &tally)
             }
             return result
         case let array as [Any]:
-            return array.map { masked($0, keepEnd: keepEnd, count: &count) }
+            return array.map { masked($0, key: key, reading: reading, tally: &tally) }
         default:
             return value
         }
     }
 
-    /// Text past the cap is never sent, so a long string is read only this far past it before it is masked: the
-    /// cut it gets later always falls inside what was masked, so a secret at the cut is masked whole, not shown
-    /// in part.
-    static func ahead(_ text: String, keepEnd: Bool) -> String {
-        let limit = RemoteAccessLimits.resultChars + RemoteAccessAuditMask.readLength
-        guard text.utf8.count > limit else { return text }
-        return keepEnd ? suffix(text, scalars: limit) : RemoteAccessOAuth.prefix(text, scalars: limit)
+    /// `name`, or `name (2)`, `name (3)` and so on when the object has it already, so two keys that mask alike
+    /// both keep their values.
+    static func unused(_ name: String, in object: [String: Any]) -> String {
+        guard object[name] != nil else { return name }
+        var number = 2
+        while object["\(name) (\(number))"] != nil { number += 1 }
+        return "\(name) (\(number))"
     }
 
-    /// The text with secrets masked, and how many were: the door's own tokens first, so no pattern of
-    /// `MCPRedaction` can split one, then `MCPRedaction`. When a pattern could not read the whole text, the text
-    /// goes as one mask. The audit log masks with it too (`RemoteAccessAuditMask.whole`).
-    static func mask(_ text: String) -> (text: String, count: Int) {
+    /// A string as far as it is read: `cut` when part of it was left unread, and `joins` when the row left out next
+    /// to what was read ends (or, for a start, starts) in text, so it may have wrapped into the row kept.
+    struct Read {
+        var text: String
+        var cut = false
+        var joins = false
+    }
+
+    /// Text past the cap is never sent, so a long string is read only this far past it before it is masked: the
+    /// cut it gets later falls inside what was masked, so a secret at that cut is masked whole, not shown in part.
+    /// The line the read stops in is left out (`edged`): masking can shrink what was read far below the cap, and
+    /// then a secret the read stopped in would be inside it.
+    static func ahead(_ text: String, keepEnd: Bool) -> Read {
+        let limit = RemoteAccessLimits.resultChars + RemoteAccessAuditMask.readLength
+        guard text.utf8.count > limit else { return Read(text: text) }
+        let window = keepEnd ? suffix(text, scalars: limit) : RemoteAccessOAuth.prefix(text, scalars: limit)
+        guard window.utf8.count < text.utf8.count else { return Read(text: text) }
+        return edged(window, keepEnd: keepEnd)
+    }
+
+    /// What was read, without the part the read stopped in: up to the nearest line break, when one is within
+    /// `readLength` of where the read stopped, as a secret is never cut by one. Without one, up to the nearest
+    /// character no key is made of (`isKeyScalar`). When every one of them is, the read stopped in a run longer
+    /// than any key, which masking takes whole if it looks random (MCPRedaction's long runs).
+    static func edged(_ window: String, keepEnd: Bool) -> Read {
+        let scalars = window.unicodeScalars
+        let reach = RemoteAccessAuditMask.readLength
+        if keepEnd {
+            let region = scalars.prefix(reach)
+            if let lineBreak = region.firstIndex(of: "\n") {
+                let left = scalars[..<lineBreak]
+                let joins = left.last.map { !$0.properties.isWhitespace } ?? true
+                return Read(text: String(scalars[scalars.index(after: lineBreak)...]), cut: true, joins: joins)
+            }
+            if let other = region.firstIndex(where: { !isKeyScalar($0) }) {
+                return Read(text: String(scalars[other...]), cut: true)
+            }
+            return Read(text: window, cut: true)
+        }
+        let region = scalars.suffix(reach)
+        if let lineBreak = region.lastIndex(of: "\n") {
+            let left = scalars[scalars.index(after: lineBreak)...]
+            let joins = left.first.map { !$0.properties.isWhitespace } ?? true
+            return Read(text: String(scalars[..<lineBreak]), cut: true, joins: joins)
+        }
+        if let other = region.lastIndex(where: { !isKeyScalar($0) }) {
+            return Read(text: String(scalars[...other]), cut: true)
+        }
+        return Read(text: window, cut: true)
+    }
+
+    /// A character of MCPRedaction's long runs, which keys and tokens are made of.
+    static func isKeyScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar {
+        case "A"..."Z", "a"..."z", "0"..."9", "+", "/", "_", "-": return true
+        default: return false
+        }
+    }
+
+    /// The text with secrets masked, and how many were: the door's own tokens first, so no other pattern can split
+    /// one, then with `commands` the shapes secrets take on a command line (`CommandSecrets`: a flag's or a
+    /// variable's value, a password after -p, an auth header), then `MCPRedaction`. When a pattern could not read
+    /// the whole text, the text goes as one mask. The audit log masks with it too, without `commands`
+    /// (`RemoteAccessAuditMask.whole`).
+    static func mask(_ text: String, commands: Bool = false) -> (text: String, count: Int) {
         var masked = text
         var complete = true
-        let tokens = MCPRedaction.replace(RemoteAccessAuditMask.remoteToken, in: &masked, complete: &complete) { _, _ in
+        var found = MCPRedaction.replace(RemoteAccessAuditMask.remoteToken, in: &masked, complete: &complete) { _, _ in
             MCPRedaction.mask
+        }
+        if commands {
+            for rule in CommandSecrets.rules {
+                found += CommandSecrets.apply(rule, to: &masked, complete: &complete)
+            }
         }
         let redacted = MCPRedaction.redact(masked, maskingRun: { (run: String) -> String? in
             MCPRedaction.looksRandom(run) ? MCPRedaction.mask : nil
         })
         guard complete, redacted.complete else { return (MCPRedaction.mask, 1) }
-        guard redacted.text != masked else { return (masked, tokens) }
-        // The text changed, so something new was masked: at least one, so a masked result is never sent as it came.
-        let found = max(1, redacted.count - stale(in: masked))
-        return (redacted.text, tokens + found)
+        guard redacted.text != masked else { return (masked, found) }
+        // The text changed, so something new was masked: at least one.
+        let more = max(1, redacted.count - stale(in: masked))
+        return (redacted.text, found + more)
     }
 
     /// The masks made before that `MCPRedaction` finds and counts again, leaving them as they are: a URL whose
@@ -355,7 +464,8 @@ public enum RemoteAccessPolicy {
         var value = notes.isEmpty ? value : noted(value, notes)
         var text = MCPServer.json(value)
         guard text.unicodeScalars.count > cap else { return text }
-        value = noted(value, notes + [capNote(tool)])
+        let cutNote = capNote(tool)
+        value = noted(value, notes.contains(cutNote) ? notes : notes + [cutNote])
         let keepEnd = keepsEnd(tool)
         // A second round only when the first cut every string to nothing, and then only to find that out.
         for _ in 0..<3 {
@@ -417,11 +527,13 @@ public enum RemoteAccessPolicy {
         }
     }
 
-    /// Text that is not JSON, masked and held to 64,000 characters with a note at its end.
-    static func shapeText(_ text: String) -> String {
-        let found = mask(ahead(text, keepEnd: false))
+    /// Text that is not JSON, masked and held to 64,000 characters with a note at its end. Text too long to read
+    /// whole gets the note too, however short masking made it.
+    static func shapeText(_ text: String, tool: String) -> String {
+        let read = ahead(text, keepEnd: false)
+        let found = mask(read.text, commands: !readsCode(tool))
         let cap = RemoteAccessLimits.resultChars
-        guard found.text.unicodeScalars.count > cap else { return found.text }
+        guard read.cut || found.text.unicodeScalars.count > cap else { return found.text }
         let note = "\n… (truncated: cut to fit 64,000 characters)"
         let room = cap - note.unicodeScalars.count
         return cut(found.text, keeping: room, fromEnd: false) + note
@@ -457,6 +569,225 @@ public enum RemoteAccessPolicy {
             start = before
         }
         return String(text[start...])
+    }
+}
+
+// MARK: wrapped rows
+
+extension RemoteAccessPolicy {
+    /// The key a screen is under in read_tab's and wait_for_tab's results.
+    static let screenKey = "screen"
+    /// A masked end of a row that hides this many characters ends a whole secret: a long run is masked from 32.
+    static let hiddenWhole = 32
+
+    /// A screen with what the terminal wrapped masked too. A line longer than the terminal goes on at the start of
+    /// the next row, and the screen has a line break there, so a token can come in halves each too short for its
+    /// pattern. Rows that may go on (`ScreenRows.goesOn`) are joined into the line they would be and masked again,
+    /// and where that hides what the rows alone don't, the words at the breaks are masked (`ScreenRows.join`).
+    /// Joined, they are masked for the secrets with a shape of their own (`maskShapes`); for what a name or a flag
+    /// makes a secret too only when the screen shows rows that wide wrap (`ScreenRows.wrapsSeen`), since joined,
+    /// `PASSWORD=` would take in the next row's first word, a prompt's as well. A row the read cut away may have
+    /// gone on into the first row kept (`Read.joins`), so its first word is masked too, and the same for a start's
+    /// last row. Counts one for each line in which it found a secret no row showed.
+    static func unwrapped(_ read: Read, masked: String, commands: Bool, keepEnd: Bool) -> (text: String, count: Int) {
+        var rows = ScreenRows(raw: read.text, masked: masked, commands: commands)
+        // Masking keeps each line break; when it gave up and masked the whole text, nothing is left to find.
+        guard rows.raw.count == rows.shown.count else { return (masked, 0) }
+        rows.joinWrappedLines()
+        if read.joins { rows.maskEdge(atEnd: !keepEnd) }
+        return (rows.shown.joined(separator: "\n"), rows.count)
+    }
+
+    /// The text with only the secrets that have a shape of their own masked: the door's tokens, MCPRedaction's key
+    /// formats and its long random runs.
+    static func maskShapes(_ text: String) -> String {
+        var masked = text
+        var complete = true
+        let mask = { (_: NSTextCheckingResult, _: NSString) -> String? in MCPRedaction.mask }
+        _ = MCPRedaction.replace(RemoteAccessAuditMask.remoteToken, in: &masked, complete: &complete, mask)
+        for token in MCPRedaction.tokens {
+            _ = MCPRedaction.replace(token, in: &masked, complete: &complete, mask)
+        }
+        _ = MCPRedaction.replace(MCPRedaction.longRun, in: &masked, complete: &complete) { match, ns in
+            MCPRedaction.looksRandom(ns.substring(with: match.range)) ? MCPRedaction.mask : nil
+        }
+        return complete ? masked : MCPRedaction.mask
+    }
+
+    /// How many cells a row takes in the terminal: two for a wide character, none for a combining mark.
+    static func cells(_ row: String) -> Int {
+        row.unicodeScalars.reduce(0) { total, scalar in total + cells(of: scalar) }
+    }
+
+    static func cells(of scalar: Unicode.Scalar) -> Int {
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .enclosingMark, .format: return 0
+        default: break
+        }
+        if scalar.properties.isEmojiPresentation { return 2 }
+        switch scalar.value {
+        case 0x1100...0x115F, 0x2E80...0xA4CF, 0xAC00...0xD7A3, 0xF900...0xFAFF, 0xFE30...0xFE4F,
+             0xFF00...0xFF60, 0xFFE0...0xFFE6, 0x20000...0x3FFFD:
+            return 2
+        default:
+            return 1
+        }
+    }
+}
+
+/// A screen's rows as read, and as masked, for `RemoteAccessPolicy.unwrapped`.
+struct ScreenRows {
+    let raw: [String]
+    /// As the whole screen was masked: what each decision goes by.
+    let masked: [String]
+    /// As they go out, with the words at the breaks masked.
+    var shown: [String]
+    let commands: Bool
+    let widths: [Int]
+    let widest: Int
+    /// Two rows or more are as wide as the widest: the terminal is that wide, and rows that wide wrapped.
+    let wrapsSeen: Bool
+    /// Lines in which a secret no row showed was found.
+    var count = 0
+
+    init(raw text: String, masked whole: String, commands: Bool) {
+        raw = text.components(separatedBy: "\n")
+        masked = whole.components(separatedBy: "\n")
+        shown = masked
+        self.commands = commands
+        widths = raw.map(RemoteAccessPolicy.cells)
+        let widest = widths.max() ?? 0
+        self.widest = widest
+        wrapsSeen = widths.filter { $0 + 1 >= widest }.count >= 2
+    }
+
+    /// Whether the row may go on at the start of the next: it is as wide as the widest row (one cell short when a
+    /// wide character went on to the next row), it ends in text, and the next row starts in text. A shorter row
+    /// ended where its line did.
+    func goesOn(_ row: Int) -> Bool {
+        guard row + 1 < raw.count, widths[row] + 1 >= widest else { return false }
+        return Self.endsInText(raw[row]) && Self.startsInText(raw[row + 1])
+    }
+
+    /// Joins each run of rows that go on into one line (`join`).
+    mutating func joinWrappedLines() {
+        var first = 0
+        while first + 1 < raw.count {
+            guard goesOn(first) else {
+                first += 1
+                continue
+            }
+            var last = first + 1
+            while goesOn(last) { last += 1 }
+            var found = join(first...last, masking: RemoteAccessPolicy.maskShapes)
+            if wrapsSeen {
+                let commands = commands
+                let all = { (text: String) -> String in RemoteAccessPolicy.mask(text, commands: commands).text }
+                found = join(first...last, masking: all) || found
+            }
+            if found { count += 1 }
+            first = last
+        }
+    }
+
+    /// The rows as one line. When masked together they hide what masked one by one they don't, the breaks where
+    /// two rows together already do get their words masked, or every break when it takes three rows or more.
+    /// True when it masked a secret no row showed masked at a break.
+    mutating func join(_ lines: ClosedRange<Int>, masking mask: (String) -> String) -> Bool {
+        let breaks = Array(lines.dropLast())
+        guard breaks.contains(where: { mayMask(at: $0) }) else { return false }
+        let alone = lines.map { mask(raw[$0]) }
+        let together = mask(lines.map { raw[$0] }.joined())
+        guard together != alone.joined() else { return false }
+        let paired = breaks.filter { row in
+            let first = row - lines.lowerBound
+            return mask(raw[row] + raw[row + 1]) != alone[first] + alone[first + 1]
+        }
+        var found = false
+        for row in paired.isEmpty ? breaks : paired {
+            found = maskBreak(at: row) || found
+        }
+        return found
+    }
+
+    /// The word at one side of a break: the end of the row before it, or the start of the row after it.
+    struct Side {
+        /// The masked word ends (or starts) with a mask.
+        let masked: Bool
+        /// That mask hides a whole secret (`hiddenWhole`): the other side is a new line, not the rest of it.
+        let hidesWhole: Bool
+
+        init(raw: Substring, masked shown: Substring, atEnd: Bool) {
+            let mask = MCPRedaction.mask
+            masked = atEnd ? shown.hasSuffix(mask) : shown.hasPrefix(mask)
+            let hidden = raw.unicodeScalars.count - shown.unicodeScalars.count + mask.unicodeScalars.count
+            hidesWhole = masked && hidden >= RemoteAccessPolicy.hiddenWhole
+        }
+    }
+
+    func sides(at row: Int) -> (end: Side, start: Side) {
+        let end = Side(raw: Self.lastWord(raw[row]), masked: Self.lastWord(masked[row]), atEnd: true)
+        let start = Side(raw: Self.firstWord(raw[row + 1]), masked: Self.firstWord(masked[row + 1]), atEnd: false)
+        return (end, start)
+    }
+
+    /// Whether masking the break could change anything.
+    func mayMask(at row: Int) -> Bool {
+        let (end, start) = sides(at: row)
+        return (!end.hidesWhole && !start.masked) || (!start.hidesWhole && !end.masked)
+    }
+
+    /// Masks the next row's first word, unless the row's masked end hides a whole secret, and the row's last word,
+    /// unless the next row's masked start does; a word masked at the break already stays. True when it masked a
+    /// secret neither row showed masked there.
+    mutating func maskBreak(at row: Int) -> Bool {
+        let (end, start) = sides(at: row)
+        var changed = false
+        if !end.hidesWhole, !start.masked {
+            shown[row + 1] = Self.masking(firstWordOf: shown[row + 1])
+            changed = true
+        }
+        if !start.hidesWhole, !end.masked {
+            shown[row] = Self.masking(lastWordOf: shown[row])
+            changed = true
+        }
+        return changed && !end.masked && !start.masked
+    }
+
+    /// The row the read stopped next to may have gone on into this edge's row: its word at that edge is masked.
+    mutating func maskEdge(atEnd: Bool) {
+        guard let row = atEnd ? raw.indices.last : raw.indices.first else { return }
+        let mask = MCPRedaction.mask
+        if atEnd, Self.endsInText(raw[row]), !masked[row].hasSuffix(mask) {
+            shown[row] = Self.masking(lastWordOf: shown[row])
+        } else if !atEnd, Self.startsInText(raw[row]), !masked[row].hasPrefix(mask) {
+            shown[row] = Self.masking(firstWordOf: shown[row])
+        }
+    }
+
+    static func endsInText(_ row: String) -> Bool {
+        row.last.map { !$0.isWhitespace } ?? false
+    }
+
+    static func startsInText(_ row: String) -> Bool {
+        row.first.map { !$0.isWhitespace } ?? false
+    }
+
+    static func firstWord(_ row: String) -> Substring {
+        row.prefix { !$0.isWhitespace }
+    }
+
+    static func lastWord(_ row: String) -> Substring {
+        let start = row.lastIndex(where: \.isWhitespace).map { row.index(after: $0) } ?? row.startIndex
+        return row[start...]
+    }
+
+    static func masking(firstWordOf row: String) -> String {
+        MCPRedaction.mask + row.dropFirst(firstWord(row).count)
+    }
+
+    static func masking(lastWordOf row: String) -> String {
+        row.dropLast(lastWord(row).count) + MCPRedaction.mask
     }
 }
 
