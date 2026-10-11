@@ -2,22 +2,46 @@ import Foundation
 import Testing
 @testable import NextTermCore
 
-/// Drives a RefreshGate the way GitMonitor does, on a fake clock: one timer, fired in order.
+/// Drives a RefreshGate the way GatedRefresh does, on a fake clock: one timer, and a refresh that takes `runTime`
+/// (none by default), events in time order.
 struct GateClock {
     var gate = RefreshGate()
+    var runTime: TimeInterval = 0
     var timer: TimeInterval?
+    var runEnd: TimeInterval?
     var runs: [TimeInterval] = []
+    /// When the timer went off while a refresh ran.
+    var firedWhileRunning: [TimeInterval] = []
 
-    /// Fires the timer if it falls due by `time`; a refresh it starts takes no time here.
+    init(runTime: TimeInterval = 0) { self.runTime = runTime }
+
+    /// Ends the running refresh and fires the timer, in time order, up to `time`.
     mutating func advance(to time: TimeInterval) {
-        while let due = timer, due <= time {
+        while true {
+            if let end = runEnd, end <= time, timer.map({ end <= $0 }) ?? true {
+                runEnd = nil
+                if let due = gate.finished(at: end) { timer = due }
+                continue
+            }
+            guard let due = timer, due <= time else { return }
             timer = nil
             if gate.fire(at: due) {
-                gate.started(at: due)
-                runs.append(due)
+                start(at: due)
+            } else if gate.isRunning {
+                firedWhileRunning.append(due) // the run's end reschedules
             } else {
                 timer = gate.due
             }
+        }
+    }
+
+    mutating func start(at time: TimeInterval) {
+        gate.started(at: time)
+        runs.append(time)
+        if runTime > 0 {
+            runEnd = time + runTime
+        } else if let due = gate.finished(at: time) {
+            timer = due
         }
     }
 
@@ -38,8 +62,7 @@ struct GateClock {
     /// A refresh asked for directly (a commit made here, a fetch): it runs now, whatever the gate says.
     mutating func refreshNow(at time: TimeInterval) {
         advance(to: time)
-        gate.started(at: time)
-        runs.append(time)
+        start(at: time)
         timer = gate.due
     }
 }
@@ -175,10 +198,74 @@ func same(_ a: [TimeInterval], _ b: [TimeInterval]) -> Bool {
         let stale = gate.fire(at: 0.5)
         #expect(!stale, "a stale timer starts nothing")
         gate.started(at: 0.4)
-        let next = gate.changed(at: 1)
-        #expect(same([next ?? 0], [2.9]))
+        let firedWhileRunning = gate.fire(at: 3)
+        #expect(gate.isRunning && !firedWhileRunning)
+        let whileRunning = gate.changed(at: 0.5)
+        #expect(whileRunning == nil && gate.due != nil, "due, but its timer waits for the end")
+        let afterRun = gate.finished(at: 0.6)
+        #expect(same([afterRun ?? 0], [2.9]))
+        let fired = gate.fire(at: 2.9)
+        #expect(fired)
+        gate.started(at: 2.9)
+        _ = gate.finished(at: 2.9)
+        let next = gate.changed(at: 3)
+        #expect(same([next ?? 0], [5.4]))
         gate.cancel()
-        let cancelled = gate.fire(at: 2.9)
+        let cancelled = gate.fire(at: 5.4)
         #expect(gate.due == nil && !cancelled)
+    }
+
+    /// A refresh that takes 0.3 s (a 20,000-file repository) keeps the 2.5 s pace under a writer twice a second:
+    /// 8 in 20 s, as measured.
+    @Test func aQuickRefreshKeepsTheInterval() {
+        var clock = GateClock(runTime: 0.3)
+        var t = 0.0
+        while t < 20 {
+            clock.change(at: t)
+            t += 0.5
+        }
+        clock.advance(to: 30)
+        #expect(clock.runs.filter { $0 < 20 }.count == 8)
+        for (a, b) in zip(clock.runs, clock.runs.dropFirst()) { #expect(abs(b - a - 2.5) < 1e-6) }
+        #expect(clock.firedWhileRunning.isEmpty)
+    }
+
+    /// A refresh that takes 3 s (a huge monorepo) under a steady writer: never one on top of another, a rest of
+    /// three times its length after each, so git is busy a quarter of the time at most, and one after the last
+    /// change still comes.
+    @Test func aSlowRefreshKeepsGitBusyAQuarterOfTheTimeAtMost() {
+        var clock = GateClock(runTime: 3)
+        var t = 0.0
+        while t < 120 {
+            clock.change(at: t)
+            t += 0.1
+        }
+        let lastChange = t - 0.1
+        clock.advance(to: 300)
+        for (a, b) in zip(clock.runs, clock.runs.dropFirst()) { #expect(b - (a + 3) >= 9 - 1e-6, "rest after the run at \(a)") }
+        let busy = Double(clock.runs.filter { $0 < 120 }.count) * 3
+        #expect(busy / 120 <= 0.25 + 3 / 120.0)
+        #expect((clock.runs.last ?? 0) > lastChange)
+        #expect(clock.firedWhileRunning.isEmpty, "no timer goes off while a run goes on")
+    }
+
+    /// A change while a refresh runs: the refresh may not have seen it, so one comes after it, once it has rested.
+    @Test func aChangeDuringARunGetsARefreshAfterIt() {
+        var clock = GateClock(runTime: 1)
+        clock.change(at: 0) // runs 0.4 to 1.4
+        clock.change(at: 1) // during it: due at 2.9, but the run's rest lasts to 1.4 + 3
+        clock.advance(to: 20)
+        #expect(same(clock.runs, [0.4, 4.4]))
+        // Hidden while it runs: the change is owed, and showing again after the rest brings it.
+        var hidden = GateClock(runTime: 1)
+        hidden.change(at: 0)
+        hidden.advance(to: 0.5)
+        hidden.change(at: 1)
+        hidden.show(false, at: 1.2)
+        hidden.advance(to: 10)
+        #expect(same(hidden.runs, [0.4]))
+        hidden.show(true, at: 10)
+        hidden.advance(to: 20)
+        #expect(same(hidden.runs, [0.4, 10]))
     }
 }

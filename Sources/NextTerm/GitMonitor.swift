@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 /// Keeps a `GitSnapshot` fresh for one folder. At most one git run at a time. Refreshes set off by file
-/// changes go through a `RefreshGate`: a burst (an agent writing fifty files) is one refresh, a steady writer
-/// gets one every 2.5 s at most, and a window nobody can see gets none until it shows again.
+/// changes go through a `GatedRefresh`: a burst (an agent writing fifty files) is one refresh, a steady writer
+/// gets one every 2.5 s at most (less often where a refresh is slow), and a window nobody can see gets none
+/// until it shows again.
 final class GitMonitor {
     private(set) var snapshot: GitSnapshot?
     /// Called on the main thread after every refresh, with nil when the folder is not in a repository.
@@ -14,49 +15,23 @@ final class GitMonitor {
     private var pending = false
     /// Bumped when the folder changes, so a slow git run for the old folder is ignored.
     private var generation = 0
-    private var gate = RefreshGate()
-    private var timer: DispatchWorkItem?
+    private let gated = GatedRefresh(interval: 2.5, settle: 0.4)
     private let queue = DispatchQueue(label: "nextterm.git", qos: .utility)
     private static let git = GitRunner.locateGit()
 
     static var isAvailable: Bool { git != nil }
 
-    /// Seconds on a steady clock, for the gate.
-    private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
-
     /// Refreshes started so far, for the self-test.
     private(set) var refreshCount = 0
 
     /// The window whose visibility gates refreshes set off by file changes; nil counts as visible.
-    weak var window: NSWindow? {
-        didSet {
-            guard window !== oldValue else { return }
-            observers.forEach(NotificationCenter.default.removeObserver)
-            observers = []
-            if let window {
-                observers = NSWindow.visibilityNotifications.map { name, ofApp in
-                    NotificationCenter.default.addObserver(forName: name, object: ofApp ? NSApp : window, queue: .main) { [weak self] _ in
-                        self?.windowVisibilityChanged()
-                    }
-                }
-            }
-            windowVisibilityChanged()
-        }
-    }
-    private var observers: [NSObjectProtocol] = []
-
-    deinit {
-        timer?.cancel()
-        observers.forEach(NotificationCenter.default.removeObserver)
+    var window: NSWindow? {
+        get { gated.window }
+        set { gated.window = newValue }
     }
 
-    /// Whether anyone can see the window (NSWindow.canBeSeen); no window counts as seen.
-    static func canBeSeen(_ window: NSWindow?) -> Bool {
-        window?.canBeSeen ?? true
-    }
-
-    private func windowVisibilityChanged() {
-        schedule(gate.setVisible(Self.canBeSeen(window), at: Self.now))
+    init() {
+        gated.run = { [weak self] in self?.refresh() }
     }
 
     func watch(_ folder: String) {
@@ -64,7 +39,7 @@ final class GitMonitor {
         directory = folder
         generation += 1
         snapshot = nil
-        cancelTimer()
+        gated.cancel()
         onChange?(nil)
         refresh()
     }
@@ -72,35 +47,12 @@ final class GitMonitor {
     func stop() {
         directory = nil
         generation += 1
-        cancelTimer()
+        gated.cancel()
     }
 
     /// Something changed in the folder: refresh when the gate says.
     func refreshSoon() {
-        schedule(gate.changed(at: Self.now))
-    }
-
-    private func cancelTimer() {
-        timer?.cancel()
-        timer = nil
-        gate.cancel()
-    }
-
-    private func schedule(_ due: TimeInterval?) {
-        guard let due else { return }
-        timer?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.fire() }
-        timer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - Self.now), execute: work)
-    }
-
-    private func fire() {
-        timer = nil
-        if gate.fire(at: Self.now) {
-            refresh()
-        } else {
-            schedule(gate.due) // early: wait for the rest
-        }
+        gated.changed()
     }
 
     /// Refresh now: after a git command run here, a fetch, or when asked to show the latest.
@@ -112,15 +64,14 @@ final class GitMonitor {
         }
         running = true
         refreshCount += 1
-        gate.started(at: Self.now)
-        timer?.cancel()
-        timer = nil
+        gated.started()
         let current = generation
         queue.async {
             let result = GitRunner.snapshot(for: folder, git: git)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.running = false
+                self.gated.finished()
                 if current == self.generation {
                     self.snapshot = result
                     self.onChange?(result)
