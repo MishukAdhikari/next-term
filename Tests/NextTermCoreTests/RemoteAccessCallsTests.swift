@@ -55,6 +55,14 @@ import Testing
                     options: options, host: "mcp.example.com", created: start, lastUsed: start)
     }
 
+    /// Two JSON messages say the same thing. The door writes its keys in no set order, as `nxtrm mcp` does, so
+    /// the same message can come out with its keys in another order.
+    static func sameJSON(_ one: Data, _ other: Data) -> Bool {
+        guard let first = (try? JSONSerialization.jsonObject(with: one)) as? NSDictionary,
+              let second = (try? JSONSerialization.jsonObject(with: other)) as? NSDictionary else { return false }
+        return first == second
+    }
+
     func makeCalls(_ clock: Clock, deadline: TimeInterval = Calls.deadline) -> Calls {
         Calls(deadline: deadline, clock: { clock.now })
     }
@@ -389,7 +397,7 @@ import Testing
         #expect(!ending.closesConnection)
         #expect(ending.callResult.text == text)
         #expect(ending.callResult.isError)
-        #expect(Calls.answer(id: 4, ending) == Calls.result(id: 4, ending.callResult))
+        #expect(Self.sameJSON(Calls.answer(id: 4, ending), Calls.result(id: 4, ending.callResult)))
         // Answered once: a second answer, or a revoke after it, changes nothing.
         #expect(!calls.finish(call.id, refused: .invalidParams("x")))
         #expect(calls.revoke(grants: ["g1"]) == 0)
@@ -416,8 +424,10 @@ import Testing
     @Test func eachEndingSendsItsAnswerAndItsAuditReason() {
         let refused = Calls.Ending.refused(.options("No", by: [.tabs]))
         for ending in [Calls.Ending.result(Self.screen), refused, .turnedOff, .deadline] {
-            #expect(Calls.answer(id: 3, ending) == Calls.result(id: 3, ending.callResult))
+            #expect(Self.sameJSON(Calls.answer(id: 3, ending), Calls.result(id: 3, ending.callResult)))
         }
+        let invalid = Calls.Ending.refused(.invalidParams("No"))
+        #expect(!Self.sameJSON(Calls.answer(id: 3, invalid), Calls.result(id: 3, invalid.callResult)))
         #expect(Calls.Ending.result(Self.screen).decision == .allowed)
         #expect(Calls.Ending.result(Self.screen).reason == nil)
         #expect(Calls.Ending.turnedOff.reason == RemoteAccessText.turnedOff)
