@@ -154,12 +154,24 @@ public enum TabProcessTree {
 
     static let shellNames: Set<String> = ["zsh", "bash", "fish", "sh", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "xonsh", "elvish", "pwsh"]
 
+    /// Options whose value is the next argument: `nix develop` and `nix-shell` start `bash --rcfile <file>`.
+    /// fish's `-C` runs a command and stays at the prompt; elsewhere `-C` is noclobber, with no value.
+    static let optionsWithValue: Set<String> = ["--rcfile", "--init-file", "-o", "+o", "-O", "+O"]
+    static let fishOptionsWithValue: Set<String> = ["-C", "--init-command"]
+
     /// A shell waiting at its own prompt, not one running a script or a `-c` command: no `-c`, and no argument
-    /// that isn't an option.
+    /// that isn't an option or an option's value.
     public static func isInteractiveShell(name: String, arguments: [String]) -> Bool {
         let base = name.hasPrefix("-") ? String(name.dropFirst()) : name
         guard shellNames.contains(base), !arguments.isEmpty else { return false }
-        for argument in arguments.dropFirst() {
+        let withValue = base == "fish" ? fishOptionsWithValue : optionsWithValue
+        var rest = arguments.dropFirst()
+        while let argument = rest.popFirst() {
+            if withValue.contains(argument) {
+                _ = rest.popFirst()
+                continue
+            }
+            if argument.hasPrefix("+") { continue } // +o, +O and the like turn an option off
             if !argument.hasPrefix("-") { return false } // a script
             if !argument.hasPrefix("--"), argument.dropFirst().contains("c") { return false } // -c, -lc
         }

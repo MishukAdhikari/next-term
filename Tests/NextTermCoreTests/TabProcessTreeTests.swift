@@ -253,5 +253,16 @@ struct TabProcessTreeTests {
         #expect(!TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "deploy.sh"]))
         #expect(!TabProcessTree.isInteractiveShell(name: "node", arguments: ["node"]))
         #expect(!TabProcessTree.isInteractiveShell(name: "bash", arguments: []))
+        // nix develop and nix-shell: an option's value is not a script.
+        #expect(TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "--rcfile", "/tmp/nix-shell.Ab12/rc"]))
+        #expect(TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "--init-file", "/tmp/x"]))
+        #expect(TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "-o", "vi"]))
+        #expect(TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "+O", "extglob"]))
+        #expect(TabProcessTree.isInteractiveShell(name: "zsh", arguments: ["zsh", "+o", "nomatch", "-l"]))
+        #expect(TabProcessTree.isInteractiveShell(name: "fish", arguments: ["fish", "-C", "set -x A 1"]))
+        #expect(!TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "--rcfile", "f", "-c", "make"]))
+        #expect(!TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "--rcfile", "f", "deploy.sh"]))
+        #expect(!TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "-o", "vi", "deploy.sh"]))
+        #expect(!TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash", "-C", "deploy.sh"])) // noclobber
     }
 }
