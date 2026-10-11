@@ -14,9 +14,10 @@ comparable across P and E cores and on a busy machine, the CPU time of the git r
   M30  footprint 30 s after a 10 MB burst of output         MB                   at most 300
        (1 MB a second for 10 s)
 
-S7w needs the project window in view (no git refresh runs for a window nobody can see): with --front the copy takes
-the front (leave the Mac alone meanwhile). Without it, the copy's windows open behind yours or on another Space, and
-S7w is skipped unless one is still partly in view. The report says how many windows were in view.
+S7w and M30 need a window in view the whole time (no git refresh runs, and no terminal draws, for a window nobody
+can see): with --front the copy takes the front (leave the Mac alone meanwhile). Without it, the copy's windows open
+behind yours or on another Space, and each is skipped unless a window stays in view; a skipped M30 still reports
+what it measured. The report says how many windows were in view, and M30 how many draws the burst made.
 Usage: run.py <release folder> <shim.dylib> <ru> [--front] [--only S2,S4h,...] [--warn-only] [--relieve-after-burst]
 """
 import argparse, json, os, pwd, shutil, signal, socket, subprocess, sys, tempfile, time
@@ -137,11 +138,18 @@ class Copy:
         return dict(zip(keys, map(int, parts[1:])))
 
     def status(self):
-        """(draws, visible windows, windows, active, hidden) as the shim last wrote them."""
-        try:
-            return tuple(int(x) for x in open(self.status_file).read().split())
-        except (OSError, ValueError):
-            return (0, 0, 0, 0, 0)
+        """(draws, visible windows, windows, active, hidden) as the shim last wrote them. The shim rewrites the file
+        every second: a read that catches it empty or half written is tried again, then the last whole one is used."""
+        for _ in range(5):
+            try:
+                values = tuple(int(x) for x in open(self.status_file).read().split())
+            except (OSError, ValueError):
+                values = ()
+            if len(values) == 5:
+                self.last_status = values
+                return values
+            time.sleep(0.02)
+        return getattr(self, 'last_status', (0, 0, 0, 0, 0))
 
     def measure(self, seconds):
         a, s0, t0 = self.counters(), self.status(), time.time()
@@ -268,11 +276,15 @@ class Check:
             if 'M30' in only:
                 base = copy.counters()['footprint'] / 1e6
                 done = os.path.join(self.work, 'burst.done')
+                s0 = copy.status()
+                in_view = s0[1]  # the fewest windows in view while the burst ran
                 copy.call('send_to_tab', tab_id=tab, text=f'python3 flood.py {done} --mb 10 --rate {BURST_RATE} --kind {BURST_KIND}')
                 peak, start = base, time.time()
                 while not os.path.exists(done) and time.time() - start < 180:
                     peak = max(peak, copy.counters()['footprint'] / 1e6)
+                    in_view = min(in_view, copy.status()[1])
                     time.sleep(0.5)
+                s1 = copy.status()
                 if not os.path.exists(done):
                     self.record('M30', None, 'the 10 MB burst did not finish within 3 minutes')
                 else:
@@ -287,10 +299,16 @@ class Check:
                         peak = max(peak, samples[at])
                     detail = (f"before {base:.0f} MB, peak {peak:.0f}, after 2 s {samples[2]:.0f}, 5 s {samples[5]:.0f}, "
                               f"10 s {samples[10]:.0f}")
+                    detail += f"; {s1[0] - s0[0]} draws in the burst, {s1[1]}/{s1[2]} windows in view"
                     if self.relieve_after_burst:
                         passes, returned = copy.reliefs()
                         detail += f"; asked to give memory back {passes} time(s), it returned {returned:.1f} MB"
-                    self.record('M30', samples[30], detail)
+                    if in_view:
+                        self.record('M30', samples[30], detail)
+                    else:
+                        # Nobody saw the burst, so nothing drew it: not the case the budget is for.
+                        self.record('M30', None, f"SKIP: no window in view during the burst (run with --front); "
+                                                 f"measured anyway: after 30 s {samples[30]:.0f} MB, {detail}")
             if 'S5n' in only:
                 # Hidden, so the count is the parsing and the scans of what it prints, whether or not the windows
                 # happen to be in view (drawing is S4's).
@@ -341,10 +359,16 @@ class Check:
                 self.record('S7w', None, 'SKIP: no window in view (run with --front)')
                 return
             a, t0 = copy.counters(), time.time()
+            in_view = copy.status()[1]
             for i in range(60):
                 with open(trace, 'a') as fh: fh.write(f'{{"ts":{i}}}\n')
                 time.sleep(0.5)
+                in_view = min(in_view, copy.status()[1])
             b, took = copy.counters(), time.time() - t0
+            if not in_view:
+                # A window nobody can see runs no git refresh at all: 0% would say nothing.
+                self.record('S7w', None, 'SKIP: the window left view while the writer ran (run with --front)')
+                return
             git_cpu = (b['child_user'] + b['child_system'] - a['child_user'] - a['child_system']) / took / 1e7
             self.record('S7w', git_cpu, f"{copy.status()[1]}/{copy.status()[2]} windows in view")
         finally:
