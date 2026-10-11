@@ -169,8 +169,9 @@ final class RemoteAccess {
         send(.allowKeychainAccess)
     }
 
-    func confirmHost() {
-        send(.confirmHost)
+    /// Confirm Host's button, with the hostname it showed: one the tunnel has replaced since does nothing.
+    func confirmHost(_ shown: String) {
+        send(.confirmHost(shown))
     }
 
     func declineHost() {
@@ -243,6 +244,7 @@ final class RemoteAccess {
             settings.host = host
             save()
             doorState?.setHost(host)
+            tunnel.use(host: host)
         case .readToken(let interactive):
             readToken(interactive: interactive)
         case .bindDoor(let port):
@@ -391,8 +393,9 @@ final class RemoteAccess {
 
     /// A tunnel child a crash left running, its watchdog gone too (R42, AE10): ended only when its pid, start time
     /// and path match the record and the Next Term that started it no longer runs. The record goes once that
-    /// process is gone, or at once when it is another process or gone already. At launch, and from the self-test
-    /// after it wrote a record of its own (U12).
+    /// process is gone, or at once when it is another process or gone already. Its process group ends with it; what
+    /// is left of a group whose leader is gone is left alone, since nothing then shows it is the tunnel's. At launch,
+    /// and from the self-test after it wrote a record of its own (U12).
     func endLeftoverTunnel() {
         guard let record = RemoteAccessPidRecord.read(in: folder) else { return }
         let ownerRunning = RemoteAccessProcesses.start(of: record.owner) == record.ownerStart
@@ -401,13 +404,13 @@ final class RemoteAccess {
         case .keep:
             return
         case .forget:
-            RemoteAccessPidRecord.delete(in: folder)
+            RemoteAccessProcesses.forget(record.pid, start: record.start, in: folder)
         case .end:
             // A start meanwhile may have written its own child's record: only this one goes.
             let folder = self.folder
             RemoteAccessProcesses.end(record.pid, start: record.start) { gone in
-                guard gone, RemoteAccessPidRecord.read(in: folder) == record else { return }
-                RemoteAccessPidRecord.delete(in: folder)
+                guard gone else { return }
+                RemoteAccessProcesses.forget(record.pid, start: record.start, in: folder)
             }
         }
     }
@@ -527,6 +530,8 @@ protocol RemoteAccessTunnelRunner: AnyObject {
     /// Starts the chosen tunnel's child once the door holds `port`, with Cloudflare's token read at this start.
     func start(_ kind: RemoteAccessTunnelConfig.Kind, port: UInt16, host: String?,
                token: RemoteAccessTunnelConfig.Token?)
+    /// The hostname the reducer saved while it runs (Confirm Host, or Funnel's first): checks name it from then on.
+    func use(host: String)
     /// SIGTERM now, the rest on timers: gone within 3 seconds (R37). Nothing when no child runs.
     func stop()
     /// For quit: ended in place with `RemoteAccessProcesses.endNow`, its signals counted from `began` (when quit
@@ -539,18 +544,26 @@ protocol RemoteAccessTunnelRunner: AnyObject {
 // MARK: - tunnel processes (R42)
 
 /// Tunnel children by pid: what a pid record holds, and ending one. U10's supervisor and its watchdog end children
-/// with these, and a launch a leftover one. A signal goes only to the process the record names: its pid, with the same
-/// start time.
+/// with these, and a launch a leftover one. A signal goes only to the process the record names, its pid with the same
+/// start time, and to the process group it leads: `Process` starts each child in a group of its own, so a tool that a
+/// wrapper script runs without `exec` (the Tailscale app's `tailscale`) ends with it. Once that process is gone, what
+/// is left of its group still gets the signals, never a group whose leader's pid another process has now.
 enum RemoteAccessProcesses {
     typealias Start = RemoteAccessPidRecord.Start
+
+    /// A child to end: its pid and start time.
+    struct Target: Equatable {
+        let pid: pid_t
+        let start: Start
+    }
 
     /// SIGTERM, again after 1 second, SIGKILL after 3 (R37, R42).
     static let secondTerm: TimeInterval = 1
     static let killAfter: TimeInterval = 3
     /// How long the end is waited for after SIGKILL while the app runs.
     static let afterKill: TimeInterval = 0.5
-    /// At quit, SIGKILL goes this much before `killAfter`, so its end is seen within quit's 3 seconds (R42).
-    static let quitKillWait: TimeInterval = 0.1
+    /// SIGKILL goes this much before `killAfter`, so its end is seen within 3 seconds, on Turn Off and at quit.
+    static let killEarly: TimeInterval = 0.1
 
     /// When `pid` started (`KERN_PROC_PID`, `p_starttime`), or nil when no process has it or it has exited and
     /// waits to be reaped.
@@ -577,15 +590,29 @@ enum RemoteAccessProcesses {
         return RemoteAccessPidRecord(pid: pid, start: seen.start, path: path, owner: getpid(), ownerStart: ownerStart)
     }
 
-    /// No process has the pid, it exited, or the pid is another process's now.
+    /// No process has the pid, it exited, or the pid is another process's now. The process itself only: its
+    /// group may live on.
     static func isGone(_ pid: pid_t, start: Start) -> Bool {
         self.start(of: pid) != start
     }
 
-    /// Sends `signal` while the pid is still that process.
+    /// The child and its whole process group are gone: the pid is another process's now, or the child exited and
+    /// no live process is left in its group (only a zombie leader, EPERM, or no group at all, ESRCH).
+    static func hasEnded(_ pid: pid_t, start: Start) -> Bool {
+        if let now = self.start(of: pid) { return now != start }
+        return kill(-pid, 0) != 0
+    }
+
+    /// Sends `signal` to the child's group while it leads one, else to the child alone; once the child is gone, to
+    /// what is left of its group. Nothing when the pid is another process's now.
     static func post(_ signal: Int32, to pid: pid_t, start: Start) {
-        guard !isGone(pid, start: start) else { return }
-        kill(pid, signal)
+        guard pid > 0 else { return }
+        if let now = self.start(of: pid) {
+            guard now == start else { return }
+            kill(getpgid(pid) == pid ? -pid : pid, signal)
+        } else {
+            kill(-pid, signal)
+        }
     }
 
     /// Ends it in place, for quit, counted from `began`, when quit began: SIGTERM now, again 1 second after
@@ -594,12 +621,22 @@ enum RemoteAccessProcesses {
     /// its record stays for the next launch, which matches it by pid, start time and path.
     @discardableResult
     static func endNow(_ pid: pid_t, start: Start, from began: DispatchTime) -> Bool {
-        post(SIGTERM, to: pid, start: start)
-        if waitGone(pid, start: start, until: secondTerm, from: began) { return true }
-        post(SIGTERM, to: pid, start: start)
-        if waitGone(pid, start: start, until: killAfter - quitKillWait, from: began) { return true }
-        post(SIGKILL, to: pid, start: start)
-        return waitGone(pid, start: start, until: killAfter, from: began)
+        endNow([Target(pid: pid, start: start)], from: began).first ?? true
+    }
+
+    /// The same for several at once, each signal to all that are left, so each gets the whole 3 seconds: true for
+    /// each that is gone, in order.
+    static func endNow(_ targets: [Target], from began: DispatchTime) -> [Bool] {
+        let steps: [(signal: Int32, until: TimeInterval)] = [
+            (SIGTERM, secondTerm), (SIGTERM, killAfter - killEarly), (SIGKILL, killAfter),
+        ]
+        for step in steps {
+            for target in targets where !hasEnded(target.pid, start: target.start) {
+                post(step.signal, to: target.pid, start: target.start)
+            }
+            if waitEnded(targets, until: step.until, from: began) { break }
+        }
+        return targets.map { hasEnded($0.pid, start: $0.start) }
     }
 
     /// The same on main-thread timers while the app runs: `done` gets true once it is gone, false if it outlived
@@ -610,9 +647,8 @@ enum RemoteAccessProcesses {
         Ending(pid: pid, start: start, done: done).begin()
     }
 
-    private static func waitGone(_ pid: pid_t, start: Start, until seconds: TimeInterval,
-                                 from began: DispatchTime) -> Bool {
-        while !isGone(pid, start: start) {
+    private static func waitEnded(_ targets: [Target], until seconds: TimeInterval, from began: DispatchTime) -> Bool {
+        while !targets.allSatisfy({ hasEnded($0.pid, start: $0.start) }) {
             if elapsed(since: began) >= seconds { return false }
             usleep(10_000)
         }
@@ -623,7 +659,40 @@ enum RemoteAccessProcesses {
         TimeInterval(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000_000
     }
 
-    /// One end on timers: checked every 50 milliseconds. It holds itself through its timer until it is done.
+    // MARK: the pid record
+
+    /// The pid record's writes and deletes, in order, off the main thread: a write flushes to the disk itself
+    /// (`F_FULLFSYNC`), the file and then its folder.
+    private static let records = DispatchQueue(label: "Next Term remote access pid record", qos: .utility)
+
+    /// Writes `record` after the writes and deletes before it.
+    static func save(_ record: RemoteAccessPidRecord, in folder: URL) {
+        records.async {
+            do {
+                try record.write(in: folder)
+            } catch {
+                NSLog("Next Term: Remote access could not write the tunnel's pid record: %@", "\(error)")
+            }
+        }
+    }
+
+    /// Deletes the record once its child is gone, only while it still names that child: a later start may have
+    /// written its own. `now` waits for it, for quit.
+    static func forget(_ pid: pid_t, start: Start, in folder: URL, now: Bool = false) {
+        let delete: @Sendable () -> Void = {
+            guard let record = RemoteAccessPidRecord.read(in: folder) else { return }
+            guard record.pid == pid, record.start == start else { return }
+            RemoteAccessPidRecord.delete(in: folder)
+        }
+        if now {
+            records.sync(execute: delete)
+        } else {
+            records.async(execute: delete)
+        }
+    }
+
+    /// One end on timers: checked every 50 milliseconds, SIGKILL 2.9 seconds in, so it is gone within 3 (R37). It
+    /// holds itself through its timer until it is done.
     @MainActor
     private final class Ending {
         let pid: pid_t
@@ -649,11 +718,11 @@ enum RemoteAccessProcesses {
 
         private func tick() {
             let elapsed = RemoteAccessProcesses.elapsed(since: began)
-            if RemoteAccessProcesses.isGone(pid, start: start) { return finish(true) }
+            if RemoteAccessProcesses.hasEnded(pid, start: start) { return finish(true) }
             if signalled == 1, elapsed >= RemoteAccessProcesses.secondTerm {
                 signalled = 2
                 RemoteAccessProcesses.post(SIGTERM, to: pid, start: start)
-            } else if signalled == 2, elapsed >= RemoteAccessProcesses.killAfter {
+            } else if signalled == 2, elapsed >= RemoteAccessProcesses.killAfter - RemoteAccessProcesses.killEarly {
                 signalled = 3
                 RemoteAccessProcesses.post(SIGKILL, to: pid, start: start)
             } else if signalled == 3, elapsed >= RemoteAccessProcesses.killAfter + RemoteAccessProcesses.afterKill {

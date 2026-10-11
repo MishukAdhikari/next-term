@@ -633,7 +633,8 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         return entry
     }
 
-    /// The tunnel changed: started, ready, reconnecting, stopped, or its route changed.
+    /// The tunnel changed: started, ready, reconnecting, down, or stopped with its cause
+    /// (`RemoteAccessStatus.StopCause`).
     public static func tunnel(_ state: String, detail: String? = nil, time: Date) -> RemoteAccessAuditEntry {
         var entry = RemoteAccessAuditEntry(time: time, event: "tunnel.changed")
         entry.reason = RemoteAccessAuditMask.cut(state)

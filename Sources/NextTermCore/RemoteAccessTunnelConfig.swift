@@ -701,7 +701,8 @@ public enum RemoteAccessTunnelConfig {
         ["funnel", doorAddress(port: port)]
     }
 
-    public static let tailscaleStatusArguments = ["status", "--json"]
+    /// This Mac's status only: with every peer, a large tailnet's would pass the 4 MB a read keeps, every 10 seconds.
+    public static let tailscaleStatusArguments = ["status", "--json", "--peers=false"]
     public static let funnelStatusArguments = ["funnel", "status", "--json"]
 
     /// Why Tailscale can't carry the door.
@@ -732,6 +733,30 @@ public enum RemoteAccessTunnelConfig {
         }
 
         public var description: String { message }
+    }
+
+    /// What a Funnel start does with Tailscale's status.
+    public enum FunnelStart: Equatable, Sendable {
+        case go
+        /// Funnel or HTTPS is not enabled for the tailnet: `tailscale funnel` prints its own message, with the link
+        /// that enables it, and waits there. The start goes on, Settings warns with this, and the child's lines show
+        /// that message (U10).
+        case waitForEnabling(warning: String)
+        /// It can't start: the reason.
+        case refuse(String)
+    }
+
+    public static func funnelStart(_ status: Result<String, TailscaleProblem>) -> FunnelStart {
+        switch status {
+        case .success:
+            return .go
+        case .failure(let problem) where problem == .funnelOff || problem == .noHTTPS:
+            let next = "Tailscale's own message in the tunnel's output has the link that turns it on. Remote access "
+                + "connects once it is on."
+            return .waitForEnabling(warning: "\(problem.message) \(next)")
+        case .failure(let problem):
+            return .refuse(problem.message)
+        }
     }
 
     /// From `tailscale status --json`: the Mac's name (its DNS name, lowercased, without the final dot) when

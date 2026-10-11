@@ -16,7 +16,11 @@ import NextTermCore
 ///   the share ends with the child, and `tailscale funnel status --json` at each check.
 /// - Every child gets a watchdog (`nxtrm tunnel-guard`, RemoteAccessTunnelGuard) that ends it within 5 seconds if
 ///   Next Term exits any other way, and a `0600` pid record that names it and this Next Term, deleted once it is gone.
-/// - Its output is kept in memory only: the last 20 lines, the token and anything `MCPRedaction` finds masked.
+///   The record is written off the main thread, since each write flushes to the disk itself.
+/// - Each child runs in a process group of its own (`Process` does that), and every end signals the group, so a tool
+///   that a wrapper script runs without `exec`, such as the Tailscale app's `tailscale`, ends with it.
+/// - Its output is kept in memory only: the last 20 lines, the token and anything `MCPRedaction` finds masked. The
+///   token itself is dropped at Turn Off and at quit; the masked lines stay for Settings.
 ///
 /// The decisions are Core's (`RemoteAccessTunnelWatch`, `RemoteAccessTunnelConfig`); this holds the processes, the
 /// timers and the reads. Under a debug `--self-test`, U12 may shorten the timings and put stand-ins in place of the
@@ -117,42 +121,62 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         }
         let run = Run(kind: kind, port: Int(port), token: token, watch: watch, timings: timings)
         self.run = run
+        let folder = self.folder
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let prepared = Self.prepare(kind)
+            let prepared = Self.prepare(kind, folder: folder)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.prepared(prepared, for: run) }
             }
         }
     }
 
-    /// Turn Off: SIGTERM now, again after 1 second, SIGKILL after 3, on timers; the pid record goes once it is gone.
+    /// Turn Off: SIGTERM now, again after 1 second, SIGKILL 2.9 seconds in, on timers, to the child's process group;
+    /// the pid record goes once it is gone. The token goes from memory at once.
     func stop() {
+        output.forgetToken()
         guard let run else { return }
         self.run = nil
         run.cancelTimers()
+        run.token = nil
         guard let child = run.child else { return }
         run.child = nil
-        ending[child.pid] = child
-        RemoteAccessProcesses.end(child.pid, start: child.start) { [weak self] gone in
-            guard let self else { return }
-            if self.ending[child.pid]?.start == child.start { self.ending[child.pid] = nil }
-            if gone { self.forgetRecord(of: child) }
-        }
+        retire(child)
     }
 
-    /// Quit: every child, this run's and any still ending on timers, ended in place, counted from when quit began.
+    /// Quit: every child, this run's and any still ending on timers, ended in place together, counted from when quit
+    /// began, so each gets the whole 3 seconds.
     func stopNow(from began: DispatchTime) {
+        output.forgetToken()
         if let run {
             self.run = nil
             run.cancelTimers()
+            run.token = nil
             if let child = run.child { ending[child.pid] = child }
             run.child = nil
         }
         let children = Array(ending.values)
         ending.removeAll()
-        for child in children where RemoteAccessProcesses.endNow(child.pid, start: child.start, from: began) {
-            forgetRecord(of: child)
+        let targets = children.map { RemoteAccessProcesses.Target(pid: $0.pid, start: $0.start) }
+        let ended = RemoteAccessProcesses.endNow(targets, from: began)
+        for (child, gone) in zip(children, ended) where gone {
+            RemoteAccessProcesses.forget(child.pid, start: child.start, in: folder, now: true)
         }
+    }
+
+    /// Ends a child that no longer serves this run, and what is left of its process group, on timers; its record goes
+    /// once all of it is gone. Quit ends it in place if it is still ending then.
+    private func retire(_ child: Child) {
+        ending[child.pid] = child
+        let folder = self.folder
+        RemoteAccessProcesses.end(child.pid, start: child.start) { [weak self] gone in
+            if let self, self.ending[child.pid]?.start == child.start { self.ending[child.pid] = nil }
+            if gone { RemoteAccessProcesses.forget(child.pid, start: child.start, in: folder) }
+        }
+    }
+
+    /// Confirm Host, or Funnel's first hostname, saved: the checks name it from now on.
+    func use(host: String) {
+        run?.watch.use(host: host)
     }
 
     /// After a wake: a check at once.
@@ -163,39 +187,52 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
 
     // MARK: starting
 
-    /// What a start found off the main thread: the program, the login PATH, and Settings' warnings.
+    /// What a start found off the main thread: the program, the login PATH, Settings' warnings, and `cloudflared`'s
+    /// settings file.
     struct Prepared: Sendable {
         var program: String
         var loginPath: [String]
         var warnings: [String]
+        var settings: URL?
     }
 
-    /// Finds the tool and checks it can run: `cloudflared` 2025.4.0 or later (R30), or Tailscale logged in with
-    /// Funnel allowed. Reads `LoginShell.path`, whose first read can take 5 seconds, so never on the main thread.
-    nonisolated static func prepare(_ kind: Config.Kind) -> Result<Prepared, Problem> {
+    /// Finds the tool and checks it can run: `cloudflared` 2025.4.0 or later (R30), with its settings file written
+    /// here, or Tailscale logged in. With Funnel or HTTPS not enabled for the tailnet, `tailscale funnel` starts
+    /// anyway: it prints its own message with the link that enables it, and waits. Reads `LoginShell.path`, whose
+    /// first read can take 5 seconds, and flushes the settings file to the disk, so never on the main thread.
+    nonisolated static func prepare(_ kind: Config.Kind, folder: URL) -> Result<Prepared, Problem> {
         let loginPath = LoginShell.path
         let tool: Config.Tool = kind == .funnel ? .tailscale : .cloudflared
         guard let program = locate(tool, loginPath: loginPath) else { return .failure(Problem(tool.missing)) }
         let environment = toolEnvironment(loginPath: loginPath)
-        var warnings: [String] = []
+        var prepared = Prepared(program: program, loginPath: loginPath, warnings: [])
         if kind == .cloudflare {
             let output = versionOutput(of: program, environment: environment)
             if let problem = Config.cloudflaredStartProblem(versionOutput: output) { return .failure(Problem(problem)) }
             if let version = output.flatMap(Config.cloudflaredVersion), version.isOutdated(now: Date()) {
-                warnings.append(Config.outdatedWarning(version))
+                prepared.warnings.append(Config.outdatedWarning(version))
             }
             let services = Config.cloudflaredServices(home: NSHomeDirectory())
             if services.contains(where: FileManager.default.fileExists(atPath:)) {
-                warnings.append(Config.cloudflaredServiceWarning)
+                prepared.warnings.append(Config.cloudflaredServiceWarning)
+            }
+            do {
+                prepared.settings = try Config.writeCloudflaredSettings(in: folder)
+            } catch {
+                return .failure(Problem("Next Term could not write cloudflared's settings: \(error)"))
             }
         } else {
             let status = tailscaleStatus(program, environment: environment)
             guard let status else { return .failure(Problem(Config.TailscaleProblem.unreadable.message)) }
-            if case .failure(let problem) = Config.tailscaleStatus(status) { return .failure(Problem(problem.message)) }
+            switch Config.funnelStart(Config.tailscaleStatus(status)) {
+            case .go: break
+            case .waitForEnabling(let warning): prepared.warnings.append(warning)
+            case .refuse(let reason): return .failure(Problem(reason))
+            }
             let share = funnelStatus(program, environment: environment)
-            if let share, Config.funnelShareExists(share) { warnings.append(Config.funnelShareWarning) }
+            if let share, Config.funnelShareExists(share) { prepared.warnings.append(Config.funnelShareWarning) }
         }
-        return .success(Prepared(program: program, loginPath: loginPath, warnings: warnings))
+        return .success(prepared)
     }
 
     /// Why a start can't go on, as the status shows it.
@@ -228,12 +265,7 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         switch run.kind {
         case .cloudflare:
             guard let token = run.token else { return fail(RemoteAccessStatus.tokenNeeded) }
-            let settings: URL
-            do {
-                settings = try Config.writeCloudflaredSettings(in: folder)
-            } catch {
-                return fail("Next Term could not write cloudflared's settings: \(error)")
-            }
+            guard let settings = cloudflaredSettings(prepared) else { return }
             guard let port = Self.metricsPort() else {
                 return fail("No loopback port is free for cloudflared's metrics.")
             }
@@ -280,28 +312,35 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
             perform(run.watch.exited(at: Date()), in: run)
             return
         }
-        if let record = RemoteAccessProcesses.record(for: pid) {
-            do {
-                try record.write(in: folder)
-            } catch {
-                NSLog("Next Term: Remote access could not write the tunnel's pid record: %@", "\(error)")
-            }
-        }
+        if let record = RemoteAccessProcesses.record(for: pid) { RemoteAccessProcesses.save(record, in: folder) }
         let watchdog = RemoteAccessTunnelGuard.launch(child: pid, start: start)
         run.child = Child(process: process, pid: pid, start: start, metricsPort: metricsPort, watchdog: watchdog)
         perform(run.watch.started(at: Date()), in: run)
+    }
+
+    /// The settings file `prepare` wrote, or written again here when something deleted it since (rare, so its flush
+    /// on the main thread is too). Nil when it can't be, and the run fails.
+    private func cloudflaredSettings(_ prepared: Prepared) -> URL? {
+        if let settings = prepared.settings, FileManager.default.fileExists(atPath: settings.path) { return settings }
+        do {
+            return try Config.writeCloudflaredSettings(in: folder)
+        } catch {
+            fail("Next Term could not write cloudflared's settings: \(error)")
+            return nil
+        }
     }
 
     private func fail(_ reason: String) {
         report?(.tunnelFailed(reason))
     }
 
-    /// The child exited by itself: its record goes, and the watch says when it restarts.
+    /// The child exited by itself: what is left of its process group is ended and then its record goes, and the
+    /// watch says when it restarts.
     private func exited(_ pid: pid_t, in run: Run) {
         guard self.run === run, let child = run.child, child.pid == pid else { return }
         run.child = nil
         run.checking = false
-        forgetRecord(of: child)
+        retire(child)
         perform(run.watch.exited(at: Date()), in: run)
     }
 
@@ -438,16 +477,6 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         NotificationCenter.default.post(name: RemoteAccess.didChange, object: nil)
     }
 
-    // MARK: the pid record
-
-    /// Deletes the record once its child is gone, only when it still names that child: a later start may have
-    /// written its own.
-    private func forgetRecord(of child: Child) {
-        guard let record = RemoteAccessPidRecord.read(in: folder) else { return }
-        guard record.pid == child.pid, record.start == child.start else { return }
-        RemoteAccessPidRecord.delete(in: folder)
-    }
-
     // MARK: the tools
 
     /// The clean environment with the login PATH, as LoginShell runs tools; for `cloudflared` U6's builds its own.
@@ -488,7 +517,7 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
     }
 
     /// A tool's standard output, at most 4 MB, or nil when it can't run, prints nothing, or takes longer than
-    /// `timeout` (then it is ended).
+    /// `timeout` (then it is ended with its process group, so a tool a wrapper script runs ends too).
     nonisolated static func capture(_ program: String, _ arguments: [String], environment: [String: String],
                                     timeout: TimeInterval = 5) -> Data? {
         let process = Process()
@@ -506,10 +535,11 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         } catch {
             return nil
         }
+        let pid = process.processIdentifier
+        let start = RemoteAccessProcesses.start(of: pid)
         let reader = Reader(pipe.fileHandleForReading, limit: 4 * 1024 * 1024)
         if finished.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            if finished.wait(timeout: .now() + 1) == .timedOut { kill(process.processIdentifier, SIGKILL) }
+            if let start { RemoteAccessProcesses.endNow(pid, start: start, from: .now()) }
             return nil
         }
         guard let data = reader.wait(timeout: 1), !data.isEmpty else { return nil }
@@ -587,7 +617,8 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
     private final class Run: @unchecked Sendable { // read and changed on the main thread only
         let kind: Config.Kind
         let port: Int
-        let token: Config.Token?
+        /// Read at each launch; dropped when the run ends, though a closure of its child may still hold the run.
+        var token: Config.Token?
         var watch: RemoteAccessTunnelWatch
         let timings: Timings
         var prepared: Prepared?

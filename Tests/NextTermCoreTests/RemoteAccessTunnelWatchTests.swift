@@ -121,6 +121,25 @@ import Testing
         ])
     }
 
+    /// Once the user confirms the hostname (or Funnel's is saved), the watch names it: a second hostname then says
+    /// to keep only it, and a stop names it, as with a host saved before the start.
+    @Test func theConfirmedHostIsNamedFromThenOn() {
+        var watch = watch(host: nil)
+        #expect(watch.checked(cloudflare(ready: up, config: config([rule()])), at: at(10)) == [
+            .report(.ready(host: Self.host)),
+        ])
+        watch.use(host: Self.host)
+        #expect(watch.host == Self.host)
+        let two = config([rule(), rule("other.example.com")])
+        let message = Config.RouteStop.otherRule.message(host: Self.host, port: Self.port)
+        #expect(watch.checked(cloudflare(ready: up, config: two), at: at(20)) == [.report(.routeChanged(message))])
+        var moved = self.watch(host: nil)
+        moved.use(host: Self.host)
+        let port22 = config([rule(Self.host, "http://127.0.0.1:22")])
+        let wrong = Config.RouteStop.wrongService.message(host: Self.host, port: Self.port)
+        #expect(moved.checked(cloudflare(ready: up, config: port22), at: at(10)) == [.report(.routeChanged(wrong))])
+    }
+
     @Test func noRouteAtAllNamesTheSavedHost() {
         var watch = watch()
         let message = Config.RouteStop.noRule.message(host: Self.host, port: Self.port)
@@ -295,6 +314,42 @@ import Testing
         }
         #expect(output.lines.prefix(4).allSatisfy { $0 == "INF token is \(MCPRedaction.mask) here" })
         #expect(!(output.lines.last ?? "").contains("hunter2"))
+    }
+
+    /// Turn Off: the lines stay for Settings, but the token's forms and a line not ended yet, which may hold it,
+    /// are dropped, so nothing of the token stays in memory once the switch is off.
+    @Test func forgettingTheTokenKeepsOnlyTheMaskedLines() {
+        let json = #"{"a":"0f1e2d3c","s":"c2VjcmV0","t":"C2A9E5D4-1B3F-4E6A-9C8D-7F0E1A2B3C4D"}"#
+        guard case .success(let token) = Config.token(Data(json.utf8).base64EncodedString()) else {
+            Issue.record("a token")
+            return
+        }
+        var output = RemoteAccessTunnelOutput(token: token)
+        #expect(output.mayHoldToken)
+        output.append(Data("INF connected\n".utf8))
+        output.append(Data("INF half a line".utf8))
+        output.forgetToken()
+        #expect(!output.mayHoldToken)
+        #expect(output.lines == ["INF connected"])
+        #expect(!RemoteAccessTunnelOutput().mayHoldToken)
+        var partial = RemoteAccessTunnelOutput()
+        partial.append(Data("no newline yet".utf8))
+        #expect(partial.mayHoldToken, "a line not ended yet is held unmasked")
+    }
+
+    /// Funnel not enabled for the tailnet: `tailscale funnel` prints its own message with the link that enables it,
+    /// and Settings shows those lines as they came (U10), while the watch waits with no limit.
+    @Test func tailscalesOwnEnableMessageShowsWhole() {
+        let link = "https://login.tailscale.com/f/funnel?node=nAbCdEf1CNTRL"
+        var output = RemoteAccessTunnelOutput()
+        output.append(Data("Funnel is not enabled on your tailnet.\nTo enable, visit:\n\n         \(link)\n\n".utf8))
+        #expect(output.lines.contains("Funnel is not enabled on your tailnet."))
+        #expect(output.lines.contains { $0.contains(link) })
+        var watch = watch(.funnel, host: nil)
+        let off = Watch.Check.funnel(name: .failure(.funnelOff), share: nil)
+        #expect(watch.checked(off, at: at(10)) == [.report(.notReady)])
+        #expect(watch.checked(off, at: at(300)) == [.report(.notReady)])
+        #expect(!watch.finished)
     }
 
     @Test func aLongLineIsCut() {

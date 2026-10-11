@@ -55,8 +55,8 @@ public struct RemoteAccessTunnelWatch: Sendable {
     }
 
     public let kind: Config.Kind
-    /// The saved public hostname, nil before the first run.
-    public let host: String?
+    /// The saved public hostname: nil before the first run, until the user confirms one or Funnel's is saved.
+    public private(set) var host: String?
     public let port: Int
     public let limits: Limits
 
@@ -80,6 +80,12 @@ public struct RemoteAccessTunnelWatch: Sendable {
         self.host = host
         self.port = port
         self.limits = limits
+    }
+
+    /// The hostname the reducer saved during this run: the one the user confirmed, or Funnel's first. Later checks
+    /// and stop messages name it.
+    public mutating func use(host saved: String) {
+        host = saved
     }
 
     /// The child started (first, or again after an exit).
@@ -217,13 +223,23 @@ public struct RemoteAccessTunnelOutput: Sendable {
 
     public private(set) var lines: [String] = []
     /// The token's forms, longest first.
-    private let forms: [String]
+    private var forms: [String]
     private var part = Data()
     private var skipping = false
+
+    /// It still holds what the token may be in: its forms, or a line not ended yet, which is not masked.
+    public var mayHoldToken: Bool { !forms.isEmpty || !part.isEmpty }
 
     public init(token: RemoteAccessTunnelConfig.Token? = nil) {
         let forms = token.map(RemoteAccessTunnelConfig.tokenForms) ?? []
         self.forms = forms.sorted { $0.count > $1.count }
+    }
+
+    /// Turn Off: the masked lines stay for Settings; the token's forms and a line not ended yet go.
+    public mutating func forgetToken() {
+        forms = []
+        part = Data()
+        skipping = false
     }
 
     public mutating func append(_ data: Data) {

@@ -727,7 +727,8 @@ import Testing
         let arguments = Config.funnelArguments(port: port)
         #expect(arguments == ["funnel", "http://127.0.0.1:41234"])
         #expect(!arguments.contains { $0.hasPrefix("--bg") })
-        #expect(Config.tailscaleStatusArguments == ["status", "--json"])
+        // This Mac only: every peer of a large tailnet would pass the 4 MB a read keeps, every 10 seconds.
+        #expect(Config.tailscaleStatusArguments == ["status", "--json", "--peers=false"])
         #expect(Config.funnelStatusArguments == ["funnel", "status", "--json"])
     }
 
@@ -763,6 +764,26 @@ import Testing
                                                    .noName, .noHTTPS, .funnelOff, .port443Off]
         for problem in problems {
             #expect(!problem.message.isEmpty)
+        }
+    }
+
+    /// Funnel or HTTPS not enabled for the tailnet: `tailscale funnel` prints its own message, with the link that
+    /// enables it, and waits there. So the start goes on, with a warning that points at that message. Anything else
+    /// Tailscale says stops the start with its reason.
+    @Test func funnelNotEnabledStartsSoTailscaleShowsItsOwnMessage() {
+        #expect(Config.funnelStart(.success(tailnetHost)) == .go)
+        for problem: Config.TailscaleProblem in [.funnelOff, .noHTTPS] {
+            guard case .waitForEnabling(let warning) = Config.funnelStart(.failure(problem)) else {
+                Issue.record("\(problem) starts and waits")
+                continue
+            }
+            #expect(warning.hasPrefix(problem.message))
+            #expect(warning.contains("link"))
+        }
+        let refused: [Config.TailscaleProblem] = [.unreadable, .notLoggedIn, .needsApproval, .stopped, .notRunning,
+                                                  .noName, .port443Off]
+        for problem in refused {
+            #expect(Config.funnelStart(.failure(problem)) == .refuse(problem.message))
         }
     }
 

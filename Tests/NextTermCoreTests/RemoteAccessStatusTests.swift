@@ -195,7 +195,7 @@ import Testing
         #expect(status.phase == .stopped(reason))
         #expect(status.text == reason)
         #expect(!status.isOn)
-        let expected: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + Self.closing
+        let expected: [Effect] = [.audit(tunnel: "stopped: route changed", detail: reason)] + Self.closing
             + [.saveOff, .notify(.stopped(reason))]
         #expect(effects == expected)
         #expect(status.handle(.dismiss) == [.saveOff])
@@ -215,6 +215,21 @@ import Testing
         #expect(effects.contains(.closeDoor))
         #expect(effects.contains(.stopTunnel))
         #expect(effects.contains(.saveOff))
+        #expect(effects.first == .audit(tunnel: "stopped: door failed", detail: "The door stopped."))
+    }
+
+    /// AE8: each way it stops by itself has its own line in the audit log, so a route change reads "stopped: route
+    /// changed" and not as a door or tunnel failure.
+    @Test func eachStopSaysItsCauseInTheAuditLog() {
+        func first(_ event: Event) -> Effect? { Self.run([event], from: Self.on()).1.first }
+        #expect(first(.routeChanged("r")) == .audit(tunnel: "stopped: route changed", detail: "r"))
+        #expect(first(.doorFailed("d")) == .audit(tunnel: "stopped: door failed", detail: "d"))
+        #expect(first(.tunnelFailed("t")) == .audit(tunnel: "stopped: tunnel failed", detail: "t"))
+        let reason = Status.hostChanged(to: "other.example.com", from: Self.host)
+        #expect(first(.ready(host: "other.example.com")) == .audit(tunnel: "stopped: host changed", detail: reason))
+        let causes = Set(Status.StopCause.allCases.map(\.rawValue))
+        #expect(causes.count == 4)
+        #expect(causes.allSatisfy { $0.hasPrefix("stopped: ") })
     }
 
     @Test func agentControlOffFromAnyStateGivesOffAndSavesOff() {
@@ -300,14 +315,14 @@ import Testing
     @Test func eventsOutOfTurnChangeNothing() {
         var status = Status()
         for event: Event in [.bound, .ready(host: Self.host), .notReady, .token(.found), .allowKeychainAccess,
-                             .confirmHost, .declineHost, .routeChanged("x"), .doorFailed("x"), .dismiss,
+                             .confirmHost(Self.host), .declineHost, .routeChanged("x"), .doorFailed("x"), .dismiss,
                              .tunnelFailed("x"), .bindFailed(portInUse: true, reason: ""), .tunnelDown] {
             #expect(status.handle(event) == [])
             #expect(status.phase == .off)
         }
         var on = Self.on()
-        for event: Event in [.bound, .token(.found), .allowKeychainAccess, .confirmHost, .declineHost, .dismiss,
-                             .bindFailed(portInUse: true, reason: ""), .tunnelDown] {
+        for event: Event in [.bound, .token(.found), .allowKeychainAccess, .confirmHost(Self.host), .declineHost,
+                             .dismiss, .bindFailed(portInUse: true, reason: ""), .tunnelDown] {
             #expect(on.handle(event) == [])
             #expect(on.phase == .on)
         }
@@ -319,7 +334,7 @@ import Testing
         let effects = status.handle(.tunnelFailed(reason))
         #expect(status.phase == .off)
         #expect(status.problem == reason)
-        #expect(effects == [.audit(tunnel: "stopped", detail: reason)] + Self.closing + [.saveOff])
+        #expect(effects == [.audit(tunnel: "stopped: tunnel failed", detail: reason)] + Self.closing + [.saveOff])
         let launched = Self.run([.turnOn(Self.start(launch: true)), .token(.found), .bound, .tunnelFailed(reason)])
         #expect(launched.1.last == .notify(.didNotStart(reason)))
         let busy = Self.run([.turnOn(Self.start(.funnel, launch: true)), .bindFailed(portInUse: true, reason: "")])
@@ -335,7 +350,7 @@ import Testing
             let effects = status.handle(.tunnelFailed(reason))
             #expect(status.phase == .stopped(reason))
             #expect(!status.isOn)
-            let expected: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + Self.closing
+            let expected: [Effect] = [.audit(tunnel: "stopped: tunnel failed", detail: reason)] + Self.closing
                 + [.saveOff, .notify(.stopped(reason))]
             #expect(effects == expected)
             #expect(status.handle(.dismiss) == [.saveOff])
@@ -351,9 +366,30 @@ import Testing
         #expect(status.phase == .confirmHost(Self.host))
         #expect(status.doorOpen)
         #expect(status.isOn)
-        #expect(status.handle(.confirmHost) == [.saveHost(Self.host), .audit(tunnel: "ready", detail: nil)])
+        #expect(status.handle(.confirmHost(Self.host)) == [.saveHost(Self.host), .audit(tunnel: "ready", detail: nil)])
         #expect(status.phase == .on)
         #expect(status.host == Self.host)
+    }
+
+    /// The tunnel serves another hostname while the first waits to be confirmed: the new one is shown in its place,
+    /// and a Confirm for the one shown before does nothing, so the user never confirms a name they didn't see.
+    @Test func anotherHostnameDuringConfirmHostIsShownInstead() {
+        let other = "other.example.com"
+        var status = Self.run([.turnOn(Self.start(host: nil)), .token(.found), .bound, .ready(host: Self.host)]).0
+        #expect(status.handle(.ready(host: "MCP.Example.com")) == [])
+        #expect(status.phase == .confirmHost(Self.host))
+        #expect(status.handle(.ready(host: nil)) == [])
+        #expect(status.phase == .confirmHost(Self.host))
+        #expect(status.handle(.ready(host: other)) == [])
+        #expect(status.phase == .confirmHost(other))
+        #expect(status.isOn)
+        #expect(status.host == nil)
+        #expect(status.handle(.confirmHost(Self.host)) == [])
+        #expect(status.phase == .confirmHost(other))
+        let confirmed: [Effect] = [.saveHost(other), .audit(tunnel: "ready", detail: nil)]
+        #expect(status.handle(.confirmHost("Other.Example.com")) == confirmed)
+        #expect(status.phase == .on)
+        #expect(status.host == other)
     }
 
     @Test func cloudflareReadyWithNoHostYetKeepsConnecting() {
@@ -397,7 +433,7 @@ import Testing
             #expect(status.phase == .stopped(reason))
             #expect(status.otherHost == other)
             #expect(status.host == Self.host)
-            let expected: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + Self.closing
+            let expected: [Effect] = [.audit(tunnel: "stopped: host changed", detail: reason)] + Self.closing
                 + [.saveOff, .notify(.stopped(reason))]
             #expect(effects == expected)
             _ = status.handle(.dismiss)

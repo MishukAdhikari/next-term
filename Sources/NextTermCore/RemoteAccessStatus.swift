@@ -99,7 +99,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case routeChanged(String)
         /// The door's listener failed after it started.
         case doorFailed(String)
-        case confirmHost
+        /// The user confirmed the hostname shown: one shown before the tunnel reported another does nothing.
+        case confirmHost(String)
         case declineHost
         /// Turn Off, or Turn Off and Revoke All (R37).
         case turnOff(revokeAll: Bool)
@@ -188,6 +189,14 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         "The tunnel serves \(reported) now, not \(saved)."
     }
 
+    /// Why it stopped by itself, as the audit line's state, with the message as its detail (AE8).
+    public enum StopCause: String, CaseIterable, Sendable {
+        case routeChanged = "stopped: route changed"
+        case hostChanged = "stopped: host changed"
+        case tunnelFailed = "stopped: tunnel failed"
+        case doorFailed = "stopped: door failed"
+    }
+
     // MARK: state
 
     public private(set) var phase: Phase = .off
@@ -265,8 +274,9 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         case .tunnelDown:
             guard phase == .connecting || phase == .reconnecting else { return [] }
             return [.audit(tunnel: "down", detail: nil), .notify(.down)]
-        case .routeChanged(let reason), .doorFailed(let reason): return stop(reason)
-        case .confirmHost: return confirmHost()
+        case .routeChanged(let reason): return stop(reason, .routeChanged)
+        case .doorFailed(let reason): return stop(reason, .doorFailed)
+        case .confirmHost(let shown): return confirmHost(shown)
         case .declineHost:
             guard case .confirmHost = phase else { return [] }
             return off(revokeAll: false)
@@ -354,10 +364,11 @@ public struct RemoteAccessStatus: Equatable, Sendable {
     private mutating func tunnelFailed(_ reason: String) -> [Effect] {
         if phase == .starting || phase == .waitingForKeychain { return refuse(reason) }
         // It was on: stopped, as a route change is, and the Mac told (R33).
-        if phase == .on || phase == .reconnecting { return stop(reason) }
+        if phase == .on || phase == .reconnecting { return stop(reason, .tunnelFailed) }
         guard doorOpen else { return [] }
         let telling = launch
-        var effects: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + off(revokeAll: false)
+        let audit = Effect.audit(tunnel: StopCause.tunnelFailed.rawValue, detail: reason)
+        var effects: [Effect] = [audit] + off(revokeAll: false)
         problem = reason
         if telling { effects.append(.notify(.didNotStart(reason))) }
         return effects
@@ -367,11 +378,15 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         if let host, let reported, reported.lowercased() != host.lowercased(), doorOpen {
             // Another hostname than the saved one, at any check: its grants don't hold there, so all stops, and U11
             // offers "Use <host>" (U10).
-            let effects = stop(Self.hostChanged(to: reported, from: host))
+            let effects = stop(Self.hostChanged(to: reported, from: host), .hostChanged)
             otherHost = reported
             return effects
         }
         switch phase {
+        case .confirmHost(let shown):
+            // Not confirmed yet: the name the tunnel serves now is shown in its place.
+            if let reported, reported.lowercased() != shown.lowercased() { phase = .confirmHost(reported) }
+            return []
         case .connecting:
             var effects: [Effect] = []
             if host == nil {
@@ -394,8 +409,8 @@ public struct RemoteAccessStatus: Equatable, Sendable {
         }
     }
 
-    private mutating func confirmHost() -> [Effect] {
-        guard case .confirmHost(let confirmed) = phase else { return [] }
+    private mutating func confirmHost(_ seen: String) -> [Effect] {
+        guard case .confirmHost(let confirmed) = phase, confirmed.lowercased() == seen.lowercased() else { return [] }
         host = confirmed
         phase = .on
         return [.saveHost(confirmed), .audit(tunnel: "ready", detail: nil)] + told()
@@ -403,9 +418,9 @@ public struct RemoteAccessStatus: Equatable, Sendable {
 
     /// Route changed, another hostname, a tunnel that can't run any more, or the door failed: all stopped and saved
     /// off, and the Mac told (R33).
-    private mutating func stop(_ reason: String) -> [Effect] {
+    private mutating func stop(_ reason: String, _ cause: StopCause) -> [Effect] {
         guard doorOpen else { return [] }
-        var effects: [Effect] = [.audit(tunnel: "stopped", detail: reason)] + off(revokeAll: false)
+        var effects: [Effect] = [.audit(tunnel: cause.rawValue, detail: reason)] + off(revokeAll: false)
         phase = .stopped(reason)
         effects.append(.notify(.stopped(reason)))
         return effects
