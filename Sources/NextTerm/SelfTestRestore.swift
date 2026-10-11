@@ -150,6 +150,9 @@ enum SelfTestRestore {
         try? FileManager.default.createDirectory(at: harness.zdotdir, withIntermediateDirectories: true)
         func quote(_ path: String) -> String { "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         var zshrc = "# The relaunch harness's own zsh config: its history stays in its folder.\nHISTFILE=\(quote(harness.history.path))\n"
+        // A short prompt, as the build check's shells have: macOS's default names the user and the Mac, and a check's detail
+        // quotes the line it ends.
+        zshrc += "PROMPT='%1~ %# '\n"
         if let bin = harness.standIn?.deletingLastPathComponent() {
             zshrc += "# Its stand-in Claude Code comes first.\npath=(\(quote(bin.path)) $path)\n"
         }
@@ -560,9 +563,14 @@ enum SelfTestRestore {
         guard let first = group?.panes.first, let second = group?.panes.dropFirst().first else {
             return check(false, "the project window's split tab comes back with both panes")
         }
+        // Applied once the line is written to the pty; zsh echoes it a few turns later, and in the narrow pane it wraps.
         let applied = await SelfTest.wait(20) { first.restoredRecord?.pending?.state == .applied }
-        let line = first.liveTail(6).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
-        check(applied && line.contains("sleep 600") && !first.status.running,
+        var line = ""
+        let echoed = await SelfTest.wait(3) {
+            line = SelfTest.lastLine(first)
+            return line.hasSuffix("sleep 600")
+        }
+        check(applied && echoed && !first.status.running,
               "sleep 600, running at the quit, waits on the prompt line and does not run", "applied \(applied), line “\(line)”")
         let shown = shownWhole(first)
         check(first.restoreDivider != nil && shown.contains(whole(ScrollbackText.SavedAt.update.divider)),
