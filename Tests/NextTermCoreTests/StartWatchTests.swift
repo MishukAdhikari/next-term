@@ -113,8 +113,8 @@ import Testing
     // MARK: the fallback and its notes
 
     /// Claude's record after `claude --permission-mode bypassPermissions` with exact id S from its session file.
-    func claude(_ options: [[String]], launcher: SessionSnapshot.Launcher? = nil) -> SessionSnapshot.Evidence {
-        SessionSnapshot.Evidence(agent: .claude, sessionID: s, source: .sessionFile, sessionFolder: "/Users/x/app",
+    func claude(_ options: [[String]], launcher: SessionSnapshot.Launcher? = nil, ranAsTyped: Bool = false) -> SessionSnapshot.Evidence {
+        SessionSnapshot.Evidence(agent: .claude, sessionID: s, source: .sessionFile, sessionFolder: "/Users/x/app", ranAsTyped: ranAsTyped,
                                  options: options.map { SessionSnapshot.LaunchOption($0) }, launcher: launcher)
     }
 
@@ -185,12 +185,14 @@ import Testing
     }
 
     /// AE31 with a launcher typed bare (KTD6): `claude-auto-danger --resume S` is the launcher's resume form alone, so
-    /// the launcher's plain form is the line that failed. The fallback is the program's plain form, once, and the note
-    /// names the alias's own options as left off, from the record, or says "the options in" the alias when the record
-    /// shows none. If the program's form fails too, the note alone.
+    /// the launcher's plain form is the line that failed. When the record ran as typed (the alias is the program and its
+    /// options, nothing else), the fallback is the program's plain form, once, and the note names the alias's own options
+    /// as left off, from the record, or says "the options in" the alias when the record shows none. If the program's form
+    /// fails too, the note alone. A launcher that did not run as typed may set the store or run something first, so
+    /// the program's form would not find the session: the note alone.
     @Test func ae31AFailedBareLauncherLineFallsBackToTheProgramsPlainFormOnce() {
         let bare = SessionSnapshot.Launcher(word: "claude-auto-danger", typed: 0)
-        let alias = claude([["--dangerously-skip-permissions"], ["--model", "opus"]], launcher: bare)
+        let alias = claude([["--dangerously-skip-permissions"], ["--model", "opus"]], launcher: bare, ranAsTyped: true)
         let line = "claude-auto-danger --resume \(s)"
         #expect(alias.putBack(id: s, folder: alias.sessionFolder)?.line == line)
         let start = StartWatch.Start(evidence: alias, session: s, line: line)
@@ -211,7 +213,7 @@ import Testing
         // A record that does not show the alias's own options, unknown or none: the note says "the options in" it.
         for options in [nil, [SessionSnapshot.LaunchOption]()] {
             let unshown = SessionSnapshot.Evidence(agent: .claude, sessionID: s, source: .sessionFile, sessionFolder: "/Users/x/app",
-                                                   options: options, launcher: bare)
+                                                   ranAsTyped: true, options: options, launcher: bare)
             let replayed = StartWatch.Start(evidence: unshown, session: s, line: line)
             #expect(replayed.plain == "claude --resume \(s)" && replayed.dropped.isEmpty, "\(String(describing: options))")
             #expect(StartWatch.step(.failedAtStart(status: 1), start: replayed, fallbackUsed: false, error: nil)
@@ -220,7 +222,7 @@ import Testing
         }
         // An alias named for the program: its plain form is the line that failed, which would expand it again, so the
         // note alone.
-        let named = claude([["--dangerously-skip-permissions"]], launcher: SessionSnapshot.Launcher(word: "claude", typed: 0))
+        let named = claude([["--dangerously-skip-permissions"]], launcher: SessionSnapshot.Launcher(word: "claude", typed: 0), ranAsTyped: true)
         let same = StartWatch.Start(evidence: named, session: s, line: "claude --resume \(s)")
         #expect(same.plain == "claude --resume \(s)")
         #expect(StartWatch.step(.failedAtStart(status: 1), start: same, fallbackUsed: false, error: nil)
@@ -230,6 +232,22 @@ import Testing
                            launcher: SessionSnapshot.Launcher(word: "claude-auto-danger", typed: 1))
         let typedStart = StartWatch.Start(evidence: typed, session: s, line: "claude-auto-danger --model opus --resume \(s)")
         #expect(typedStart.plain == line && typedStart.dropped == ["--model"] && typedStart.bypassedLauncher == nil)
+        // A launcher typed bare that did not run as typed: `cw`, an alias that sets CLAUDE_CONFIG_DIR or moves to a folder
+        // first, whose session `claude --resume S` would not find, or a script on the path typed with only a prompt. The
+        // note alone, as the same record that ran as typed gets the program's form.
+        let stores = [(SessionSnapshot.Launcher(word: "cw", typed: 0), [[String]]()),
+                      (SessionSnapshot.Launcher(word: "/Users/x/bin/cad", typed: 0), [["--dangerously-skip-permissions"]])]
+        for (launcher, options) in stores {
+            let held = claude(options, launcher: launcher)
+            let heldLine = "\(launcher.word) --resume \(s)"
+            #expect(held.putBack(id: s, folder: held.sessionFolder)?.line == heldLine)
+            let heldStart = StartWatch.Start(evidence: held, session: s, line: heldLine)
+            #expect(heldStart.plain == heldLine && heldStart.dropped.isEmpty && heldStart.bypassedLauncher == nil, "\(launcher.word)")
+            #expect(StartWatch.step(.failedAtStart(status: 127), start: heldStart, fallbackUsed: false, error: nil)
+                == .note("claude exited at once (status 127)."), "\(launcher.word)")
+            let ran = StartWatch.Start(evidence: claude(options, launcher: launcher, ranAsTyped: true), session: s, line: heldLine)
+            #expect(ran.plain == "claude --resume \(s)" && ran.bypassedLauncher == launcher.word, "\(launcher.word)")
+        }
     }
 
     /// The plain form is what failed, or no session is named: there is nothing to fall back to, so the note alone.

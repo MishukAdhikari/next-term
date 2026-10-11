@@ -11,9 +11,11 @@ import Foundation
 //   agent's plain resume form goes back on the line, unrun, once per tab, and the note quotes the agent's error and names
 //   every option the plain form dropped. After a line that replayed the user's launcher, the plain form is that launcher
 //   with the resume form alone (`cw --resume S`), so a launcher that sets the agent's store still finds the session.
-//   When that is the line that failed (a launcher typed bare, `claude-auto-danger --resume S`), it is the program's
-//   (`claude --resume S`), and the note names the launcher's own options as left off. A second failure, or a plain form
-//   that is what failed, gives the note alone;
+//   When that is the line that failed (a launcher typed bare, `claude-auto-danger --resume S`) and the record ran as
+//   typed, the alias being the program and its options alone, it is the program's (`claude --resume S`), and the note
+//   names the launcher's own options as left off. A launcher that did not run as typed may set the store or run
+//   something first, so the program's form would not find the session. A second failure, or a plain form that is what
+//   failed, gives the note alone;
 // - the session file names another id at 5 s: the agent started a new session, and the note says so;
 // - Ctrl-C, status 0, or a key pressed first: the tab stays as it is.
 
@@ -144,8 +146,9 @@ public enum StartWatch {
         /// The session it resumes.
         public var session: String?
         /// The plain resume form, with the session and no option: after a line that replayed the user's launcher, that
-        /// launcher and the resume form (`SessionSnapshot.Evidence.launcherResume`), unless that is the line that failed;
-        /// otherwise the agent's program and resume form (`RestoreAgent.putBackLine`). Nil with no session named.
+        /// launcher and the resume form (`SessionSnapshot.Evidence.launcherResume`), unless that is the line that failed and
+        /// the record ran as typed; otherwise the agent's program and resume form (`RestoreAgent.putBackLine`). Nil with no
+        /// session named.
         public var plain: String?
         /// The options the run carried that the plain form drops, by name, in order.
         public var dropped: [String]
@@ -159,8 +162,10 @@ public enum StartWatch {
         /// user ran. The options dropped are those the line, or the resume, carried: each of the record's options a line
         /// keeps, or after a launcher, each of those typed after it, as the launcher brings its own back. One left off,
         /// whose value Next Term could not tell from a prompt's, never was on it. When the line that ran is a launcher's
-        /// resume form alone, the plain form is the program's, which drops each of the launcher's own options. An
-        /// automatic resume runs the recorded program, never the launcher, so its plain form is the program's.
+        /// resume form alone and the record ran as typed (`ranAsTyped`: an alias that is the program and its options, with
+        /// no assignment, wrapper or command before it), the plain form is the program's, which drops each of the
+        /// launcher's own options. An automatic resume runs the recorded program, never the launcher, so its plain form is
+        /// the program's.
         public init(evidence: SessionSnapshot.Evidence, session: String?, line: String?) {
             agent = evidence.agent
             self.session = session
@@ -177,7 +182,7 @@ public enum StartWatch {
             var names: [String] = []
             if let launcher {
                 let resume = id.flatMap { (id: String) -> String? in evidence.launcherResume(id: id, folder: folder) }
-                if resume == line {
+                if resume == line, evidence.ranAsTyped {
                     // The launcher's own options are the record's, all but those typed after it.
                     bypassedLauncher = launcher.word
                     for option in options.dropLast(launcher.typed) where !names.contains(option.name) { names.append(option.name) }
