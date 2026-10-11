@@ -159,7 +159,11 @@ import Testing
             #expect(cli.checked.version.map { !$0.isEmpty } ?? true, "\(agent)")
             #expect(cli.hidden.isSubset(of: Set(cli.options.keys)), "\(agent)")
         }
-        #expect(RestoreAgent.codex.cli.hidden.isSuperset(of: ["--yolo", "-P", "--permission-profile"]))
+        #expect(RestoreAgent.codex.cli.hidden == ["--yolo"])
+        // Codex 0.146.0 and later reject these, so the table does not list them and the release check is not told to skip them.
+        for removed in ["--full-auto", "-P", "--permission-profile"] {
+            #expect(RestoreAgent.codex.cli.options[removed] == nil, "\(removed)")
+        }
         #expect(RestoreAgent.opencode.cli.hidden == ["--yolo", "--dangerously-skip-permissions"])
         #expect(RestoreAgent.cursor.cli.hidden == ["--yolo"])
     }

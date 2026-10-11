@@ -436,11 +436,11 @@ extension AgentCLI {
             .form("-C", "--cd", values: .one),
             .oneShot("exec", "e", "review"),
             .plain("-m", "--model", value: .model),
-            .permission("--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto"),
-            .permission("-a", "--ask-for-approval", "-s", "--sandbox", "-P", "--permission-profile", value: .mode),
+            .permission("--dangerously-bypass-approvals-and-sandbox", "--yolo"),
+            .permission("-a", "--ask-for-approval", "-s", "--sandbox", value: .mode),
             .codeLoading("-c", "--config", "-p", "--profile", "--add-dir", "--enable", "--disable"),
         ],
-        hidden: ["--yolo", "--full-auto", "-P", "--permission-profile"],
+        hidden: ["--yolo"],
         checked: Checked(version: "0.154.0", date: "2026-10-11"))
 
     static let qwen = AgentCLI(
