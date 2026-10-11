@@ -46,6 +46,11 @@ public struct UpdatePane: Equatable, Sendable {
     /// Only its background or suspended jobs make it busy ("Quitting stops…" names them too): taken out of the wait, they
     /// stop, and what runs in front comes back as planned.
     public var jobs = false
+    /// What the program in front started outside the terminal, which the update stops as the quit alert names it
+    /// ("“next-server” (started by “claude”)"): it makes the tab busy, as jobs do. Nil: nothing.
+    public var started: String?
+    /// It has background or suspended jobs of the shell's own, said beside `started`.
+    public var shellJobs = false
     /// A tab on a server.
     public var remote: Bool
     /// Its running command serves a URL, so it never ends by itself.
@@ -267,14 +272,18 @@ public struct UpdateFlow: Equatable, Sendable {
                 return pane.serving ? "waited for, though it never ends by itself" : "waited for"
             }
             if pane.jobs {
-                return "its jobs stop at the update" + (keeps ? "; " + pane.listLine : ", and it closes")
+                let stops = pane.started.map { "the update stops " + (pane.shellJobs ? "its jobs and " : "") + $0 }
+                    ?? "its jobs stop at the update"
+                return stops + (keeps ? "; " + pane.listLine : ", and it closes")
             }
             if pane.agent {
-                return "its current turn stops at the update, " + (keeps ? "then " + pane.listLine : "and closes")
+                let turn = pane.started.map { "its current turn and " + $0 + " stop" } ?? "its current turn stops"
+                return turn + " at the update, " + (keeps ? "then " + pane.listLine : "and closes")
             }
-            guard keeps else { return "stops at the update, and closes" }
-            return pane.outcome == .commandOnTheLine ? "stops at the update, then goes back on the line"
-                : "stops at the update, then gets a note"
+            let with = pane.started.map { ", with " + $0 } ?? ""
+            guard keeps else { return "stops at the update" + with + ", and closes" }
+            return pane.outcome == .commandOnTheLine ? "stops at the update" + with + ", then goes back on the line"
+                : "stops at the update" + with + ", then gets a note"
         }
         if keeps { return pane.listLine }
         switch pane.outcome {

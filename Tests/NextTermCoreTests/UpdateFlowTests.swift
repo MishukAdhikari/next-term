@@ -17,7 +17,7 @@ struct UpdateFixture {
     var plan: UpdatePlan { planned() }
 
     func planned(busy: Set<UUID> = [], outcomes: [UUID: RestoreOutcome] = [:], leftOut: Set<UUID> = [],
-                 serving: Set<UUID> = [], jobs: Set<UUID> = []) -> UpdatePlan {
+                 serving: Set<UUID> = [], jobs: Set<UUID> = [], started: [UUID: String] = [:], shellJobs: Set<UUID> = []) -> UpdatePlan {
         func pane(_ id: UUID, _ name: String, _ outcome: RestoreOutcome, _ listLine: String, split: Bool = false,
                   agent: Bool = false, remote: Bool = false) -> UpdatePane {
             let planned = outcomes[id] ?? outcome
@@ -25,6 +25,8 @@ struct UpdateFixture {
                                   listLine: planned == outcome ? listLine : "\(planned)", busy: busy.contains(id), agent: agent,
                                   remote: remote, serving: serving.contains(id), leftOut: leftOut.contains(id))
             pane.jobs = jobs.contains(id)
+            pane.started = started[id]
+            pane.shellJobs = shellJobs.contains(id)
             return pane
         }
         let panes: [UpdatePane] = [
@@ -270,6 +272,34 @@ struct UpdateFixture {
         let expected: [QuitQuestion] = [.busy(resumeCheckbox: true)]
         #expect(asked == expected, "\(asked)")
         #expect(QuitIntent.ordinary(reason: reason, settings: LaunchSettings(), consent: false)?.relaunches == false)
+    }
+
+    @Test func whatTheProgramInFrontStartedIsNamedAsTheUpdateStopsIt() {
+        // An idle claude whose `next dev` runs on in a group of its own: busy as jobs are, and named as ⌘Q's alert names it.
+        let server = "“next-server” (started by “claude”)"
+        var idle = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.agent], jobs: [saw.agent], started: [saw.agent: server]),
+                              remembered: nil)
+        #expect(idle.state == .busy && idle.waitSet == [saw.agent])
+        idle.setWaited(saw.agent, false)
+        #expect(line(idle, saw.agent) == "the update stops “next-server” (started by “claude”); Claude Code resumes")
+        idle.setKeep(false)
+        #expect(line(idle, saw.agent) == "the update stops “next-server” (started by “claude”), and it closes")
+        // With the shell's own jobs too.
+        var both = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.agent], jobs: [saw.agent], started: [saw.agent: server],
+                                                                       shellJobs: [saw.agent]), remembered: nil)
+        both.setWaited(saw.agent, false)
+        #expect(line(both, saw.agent) == "the update stops its jobs and “next-server” (started by “claude”); Claude Code resumes")
+        // Working: it stops with the turn.
+        var working = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.agent], started: [saw.agent: server]), remembered: nil)
+        working.setWaited(saw.agent, false)
+        #expect(line(working, saw.agent) == "its current turn and “next-server” (started by “claude”) stop at the update, then Claude Code resumes")
+        // A command in front: said beside it.
+        let vite = "“vite” (started by “npm”)"
+        var command = UpdateFlow(version: saw.version, plan: saw.planned(busy: [saw.command], started: [saw.command: vite]), remembered: nil)
+        command.setWaited(saw.command, false)
+        #expect(line(command, saw.command) == "stops at the update, with “vite” (started by “npm”), then goes back on the line")
+        command.setKeep(false)
+        #expect(line(command, saw.command) == "stops at the update, with “vite” (started by “npm”), and closes")
     }
 
     @Test func aTabBusyOnlyWithItsJobsIsWaitedForAndSaysItsJobsStop() {

@@ -69,6 +69,10 @@ extension SelfTest {
               String(describing: ignorerNote))
         let text = TerminalWindowController.stopText("Closing it stops", tabs)
         check(text.contains("“next-server” (started by") && text.contains("keeps running: it ignores hangups."), "the window's alert says both", text)
+        // The update sheet names it too: the update quit hangs it up as a close does.
+        let pane = UpdatePlanning.plan().panes.first { $0.id == agent.id }
+        check(pane?.isBusy == true && pane?.started?.hasPrefix("“next-server” (started by") == true,
+              "the update sheet counts the agent's tab busy and names the server it started", String(describing: pane?.started))
 
         // Close all three (as closing their window does): the agent's tree is gone within 1.5 s; the catcher gets
         // SIGTERM after a second; the disowned and nohup'd jobs and the SIGHUP-ignorer keep running.

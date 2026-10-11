@@ -884,6 +884,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
+    /// What the program in front started outside the terminal that its hangup stops, as the close alerts name it
+    /// ("“next-server” (started by “claude”)"), or nil: the update sheet's word for it. `snapshot`: one for every tab.
+    func startedStops(_ snapshot: [ProcessRecord]?) -> String? {
+        guard remote == nil, !exited, status.running else { return nil }
+        let stops = TabProcessTree.startedNote(hangupPlan(snapshot).named(Self.displayName)).stops
+        return stops.isEmpty ? nil : stops.joined(separator: ", ")
+    }
+
     /// What closing this tab would stop, and what it would leave running, or nil: nothing to say. The program in
     /// front and what it started outside the terminal (an agent's dev server), from the same TabProcessTree plan
     /// the hangup follows; jobs left in the background or suspended with Ctrl-Z (a stopped vim with unsaved changes).

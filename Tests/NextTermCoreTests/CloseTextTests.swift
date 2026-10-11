@@ -26,6 +26,13 @@ struct CloseTextTests {
         #expect(note.keeps.isEmpty)
     }
 
+    @Test func whatTheProgramStartedIsItsOwnNoteForTheUpdateSheet() {
+        // The update sheet names only what runs outside the terminal: the agent in front comes back on its own.
+        #expect(TabProcessTree.startedNote(Suite.plan("H")).stops == ["“next-server” (started by “claude”)"])
+        #expect(TabProcessTree.startedNote(Suite.plan("A")).isEmpty)
+        #expect(TabProcessTree.startedNote(.none).isEmpty)
+    }
+
     @Test func aProgramIgnoringSIGHUPIsSaidToKeepRunning() {
         let note = Self.note("B", "“python3 ntmark-hupign.py”")
         #expect(note.stops.isEmpty)

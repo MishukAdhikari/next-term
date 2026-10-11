@@ -13,8 +13,17 @@ extension TabProcessTree {
         } else {
             note.stops.append(program.map { $0 + " (running)" } ?? "a running process")
         }
-        // What the program started outside its group, by group: the processes nothing else in the group runs
-        // under (next-server, not the npm and next above it), shells left out.
+        let started = startedNote(plan)
+        note.stops += started.stops
+        note.keeps += started.keeps
+        return note
+    }
+
+    /// What the program in front started outside its group, which the hangup stops or leaves running, by group: the
+    /// processes nothing else in the group runs under (next-server, not the npm and next above it), shells left out.
+    /// The close alerts and the update sheet both say it ("“next-server” (started by “claude”)").
+    public static func startedNote(_ plan: HangupPlan) -> CloseNote {
+        var note = CloseNote()
         var stopping: [String] = [], keeping: [String] = []
         var starter: String?
         let byPid = Dictionary(plan.targets.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })

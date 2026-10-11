@@ -370,6 +370,7 @@ enum UpdatePlanning {
         var plans: [UUID: PanePlan] = [:]
         for plan in planned.plans where plans[plan.pane] == nil { plans[plan.pane] = plan }
         let leftOut = Set(SessionRestore.shared.lastSave?.panesLeftOut ?? [])
+        let processes = ProcessSnapshot.take()
         let windows: [UpdateWindow] = controllers.map { (controller: TerminalWindowController) -> UpdateWindow in
             var panes: [UpdatePane] = []
             for group in controller.groups {
@@ -378,8 +379,7 @@ enum UpdatePlanning {
                     let outcome: RestoreOutcome = plan?.outcome ?? (tab.remote == nil ? .idle : .freshConnection)
                     var pane = UpdatePane(id: tab.id, name: name(of: tab), split: index > 0, outcome: outcome,
                                           listLine: plan?.listLine ?? "opens in its folder")
-                    pane.busy = isBusy(tab)
-                    pane.jobs = pane.busy && !frontBusy(tab)
+                    read(tab, into: &pane, processes)
                     pane.agent = tab.status.running && tab.status.kind == .agent
                     pane.remote = tab.remote != nil
                     pane.serving = tab.servedURL != nil
@@ -412,13 +412,13 @@ enum UpdatePlanning {
     static func refreshed(_ plan: UpdatePlan) -> UpdatePlan {
         var tabs: [UUID: TerminalTab] = [:]
         for tab in AppDelegate.shared.controllers.flatMap(\.tabs) { tabs[tab.id] = tab }
+        let processes = ProcessSnapshot.take()
         var plan = plan
         for index in plan.windows.indices {
             plan.windows[index].panes = plan.windows[index].panes.compactMap { (pane: UpdatePane) -> UpdatePane? in
                 guard let tab = tabs[pane.id] else { return nil }
                 var pane = pane
-                pane.busy = isBusy(tab)
-                pane.jobs = pane.busy && !frontBusy(tab)
+                read(tab, into: &pane, processes)
                 return pane
             }
         }
@@ -426,9 +426,19 @@ enum UpdatePlanning {
         return plan
     }
 
+    /// A pane's busy state, read from its tab now: `processes` is one snapshot for every tab.
+    private static func read(_ tab: TerminalTab, into pane: inout UpdatePane, _ processes: [ProcessRecord]?) {
+        let local = tab.remote == nil && !tab.exited
+        pane.started = local ? tab.startedStops(processes) : nil
+        pane.shellJobs = local && holdsJobs(tab)
+        pane.busy = isBusy(tab) || pane.started != nil
+        pane.jobs = pane.busy && !frontBusy(tab)
+    }
+
     /// Busy (R15, KTD16): a local tab with an agent working or waiting on the user, a running command, or a background or
-    /// suspended job, which the update stops as ⌘Q's "Quitting stops…" says. A remote tab never is: what tmux or herdr
-    /// keeps runs on, and a plain ssh tab only loses its connection.
+    /// suspended job, which the update stops as ⌘Q's "Quitting stops…" says; the plan also counts what the program in
+    /// front started outside the terminal (`read`). A remote tab never is: what tmux or herdr keeps runs on, and a plain
+    /// ssh tab only loses its connection.
     static func isBusy(_ tab: TerminalTab) -> Bool {
         guard tab.remote == nil, !tab.exited else { return false }
         return frontBusy(tab) || holdsJobs(tab)
