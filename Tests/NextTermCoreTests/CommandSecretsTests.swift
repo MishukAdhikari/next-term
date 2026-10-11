@@ -286,6 +286,7 @@ import Testing
             "a-token-", " --token-", "token_", "eyJ", "password", "a.", "a-", "mysql ", "curl -u ", "\"a: ",
             "\"Authorization: ", "echo a ", "x://a:", "token=", "htpasswd -b ", "vault login -x ", "-----BEGIN A",
             "a\n", " \n", "\\\n", "\"", "sudo -S <<a\n", "--password-stdin <<E\\\n", "--with-token <<",
+            "--password-stdin <<", "sudo -S <<",
         ]
         let clock = ContinuousClock()
         for piece in pieces {
@@ -293,5 +294,18 @@ import Testing
             let elapsed = clock.measure { _ = CommandSecrets.mask(row) }
             #expect(elapsed < .seconds(1), "\(piece): \(elapsed)")
         }
+        // One reader and many delimiters after it, with no line break to end the line.
+        let row = "--with-token " + String(repeating: "<<x ", count: 10_000)
+        let elapsed = clock.measure { _ = CommandSecrets.mask(row) }
+        #expect(elapsed < .seconds(1), "one reader, many delimiters: \(elapsed)")
+    }
+
+    /// A here-document's command line is read at most 512 characters past its delimiter, so a longer one
+    /// is not masked; one that ends within it is.
+    @Test func aHereDocumentIsReadUpTo512CharactersPastItsDelimiter() {
+        let within = "docker login --password-stdin <<EOF" + String(repeating: " x", count: 256) + "\ns3cret\nEOF"
+        #expect(CommandSecrets.mask(within).contains("\n•••\nEOF"))
+        let past = "docker login --password-stdin <<EOF" + String(repeating: " x", count: 257) + "\ns3cret\nEOF"
+        #expect(CommandSecrets.mask(past) == past)
     }
 }
