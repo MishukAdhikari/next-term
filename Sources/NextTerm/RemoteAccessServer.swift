@@ -179,6 +179,10 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
 
     var isRunning: Bool { queue.sync { listener != nil && !stopped } }
 
+    /// Waits until what the door's queue holds now has run: at quit, so the answers `stop` queued are handed to
+    /// their connections before the process ends (U9). Never inside `state.update {}`, as for `stop`.
+    func drain() { queue.sync {} }
+
     private func listenerFailed() {
         guard !stopped else { return }
         DispatchQueue.main.async { [weak self] in self?.onFailure?() }
