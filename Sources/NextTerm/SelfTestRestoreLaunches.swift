@@ -529,18 +529,29 @@ extension SelfTestRestore {
     }
 
     /// The stand-in now running in `tab`, named as Claude Code names itself: sessions/<pid>.json in the harness's store,
-    /// for its pid and start time, so capture reads session `id` from it exactly.
+    /// for its pid and start time, so capture reads session `id` from it exactly. True once capture, read at once as a
+    /// save reads it, names session `id` from that file.
     private static func nameClaudeSession(_ harness: Harness, in tab: TerminalTab, id: String) async -> Bool {
-        let running = await SelfTest.wait(10) { tab.status.running && tab.status.kind == .agent }
-        let leader = tcgetpgrp(tab.view.process.childfd)
-        guard running, leader > 0, let start = ProcessInspector.startTime(of: leader), let store = harness.claudeStore else { return false }
+        // zsh marks the command started before it forks and hands the terminal over, so until the stand-in runs the tab's
+        // foreground group is zsh's own: a file named for that pid names no process capture reads.
+        let standIn = harness.standIn.map { canonicalPath($0.path) }
+        var leader: pid_t = -1
+        let running = await SelfTest.wait(10) {
+            leader = tcgetpgrp(tab.view.process.childfd)
+            guard tab.status.running, tab.status.kind == .agent, leader > 0, leader != tab.view.process.shellPid else { return false }
+            return standIn != nil && ProcessInspector.executablePath(of: leader).map(canonicalPath) == standIn
+        }
+        guard running, let start = ProcessInspector.startTime(of: leader), let store = harness.claudeStore else { return false }
         let sessions = store.appendingPathComponent("sessions", isDirectory: true)
         try? FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let record: [String: Any] = ["pid": Int(leader), "sessionId": id, "cwd": harness.project.path,
                                      "procStart": AgentEvidence.procStartText(start), "status": "idle"]
         guard let data = try? JSONSerialization.data(withJSONObject: record) else { return false }
         let path = sessions.appendingPathComponent("\(leader).json").path
-        return FileManager.default.createFile(atPath: path, contents: data, attributes: [.posixPermissions: 0o600])
+        guard FileManager.default.createFile(atPath: path, contents: data, attributes: [.posixPermissions: 0o600]) else { return false }
+        let read = ProcessInspector.agentEvidence(ptyFileDescriptor: tab.view.process.childfd, shellPid: tab.view.process.shellPid,
+                                                  status: tab.status, home: RestorePlanning.agentHome)
+        return read?.source == .sessionFile && read?.sessionID == id
     }
 
     /// The stand-in's evidence once a periodic save holds it for `tab`: session `id`, read from its own file.
