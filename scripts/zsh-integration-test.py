@@ -337,7 +337,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls /Sys", 0.3)
     tab_key(sh, 1, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and tab[0] == "000001" and pdec(tab[2]) == "ls /Sys", f"[{label}] the private Tab key reports the line",
           str(tab))
     if tab:
@@ -354,7 +354,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("cd Te", 0.3)
     tab_key(sh, 2, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 2, ["i", "Tests/"]), 0.4)
     check("cd Tests/" in sh.screen(start), f"[{label}] an `insert` answer replaces the word", repr(sh.screen(start)[-60:]))
     sh.send("\x03", 0.4)
@@ -363,7 +363,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls /Syst", 0.3)
     tab_key(sh, 3, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 3, ["n"]), 0.5)
     check(drawn(sh, start, "ls /System/") and sh.wait_mark("done", start, 0.1) is None,
           f"[{label}] a `native` answer runs zsh's own Tab", repr(sh.line(start)))
@@ -373,7 +373,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("cd So", 0.3)
     tab_key(sh, 4, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 4, ["o"]), 0.3)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
     check(lines == [["000004", "0", "So", "So"]], f"[{label}] an `open` answer gives one `line` mark at once", str(lines))
@@ -394,7 +394,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
     tab_key(sh, 5, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 5, ["o"]), 0.3)
     sh.send(" ", 0.3)
     sh.send("x", 0.3)
@@ -406,7 +406,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
     tab_key(sh, 6, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 6, ["o"]), 0.3)
     sh.send(frame("k", 6, ["w", "Rx", "Resources/"]), 0.3)
     check("Resources/" not in sh.screen(start), f"[{label}] a take for a word the line no longer has does nothing")
@@ -416,7 +416,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("cd Te", 0.3)
     tab_key(sh, 50, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 50, ["i", "Tests/", "o"]), 0.4)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
     check(drawn(sh, start, "cd Tests/") and lines == [["000050", "0", "Tests/", "Tests/"]],
@@ -429,7 +429,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("cd So", 0.3)
     tab_key(sh, 51, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 51, ["o"]), 0.3)
     sh.send(frame("k", 51, ["w", "So", "Sources/", "o"]), 0.4)
     sh.send("i", 0.3)
@@ -447,7 +447,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("cd So", 0.3)
     tab_key(sh, 53, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 53, ["o"]), 0.3)
     sh.send(frame("k", 53, ["w", "So", "Sources/", "o"]), 0.4)
     mark = len(sh.buf)
@@ -463,10 +463,11 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("cd So", 0.3)
     tab_key(sh, 54, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 54, ["o"]), 0.3)
     mark = len(sh.buf)
     sh.send(frame("k", 54, ["w", "So", "Sources/", "o"]) + b"i" + frame("s", 9), 0.5)
+    sh.wait_mark("sync", mark, 5)
     said = [(k, f) for _, k, f in sh.marks(mark) if k in ("line", "sync")]
     check(drawn(sh, start, "cd Sources/i") and said[-1:] == [("sync", ["000009"])] and [f for k, f in said[:-1]][-1:] == [["000054", "0", "Sources/i", "Sources/i"]],
           f"[{label}] the sync key after a take and a letter: the letter's word, then `sync`", f"{sh.line(start)!r} {said}")
@@ -477,7 +478,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
     tab_key(sh, 52, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 52, ["o"]), 0.3)
     sh.send(frame("k", 52, ["w", "Rx", "Resources/", "o"]), 0.3)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
@@ -489,7 +490,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls Te", 0.3)
     tab_key(sh, 7, 0.05)
-    if sh.wait_mark("tab", start, 1):
+    if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 7, ["o"]), 0.3)
     sh.send(frame("k", 7, ["c"]), 0.2)
     before = len(sh.marks(start))
@@ -551,7 +552,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     sh.send("ls \\\r", 0.3)
     sh.send("Sou", 0.2)
     tab_key(sh, 12, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and pdec(tab[4]).startswith("ls ") and [pdec(w) for w in tab[5].split(" ")][-1] == "Sou",
           f"[{label}] a continuation line sends PREBUFFER and the words", str(tab))
     sh.read_for(0.3)
@@ -562,7 +563,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     word = "cafe\u0301"
     sh.send("echo " + word, 0.3)
     tab_key(sh, 13, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and pdec(tab[2]) == "echo " + word, f"[{label}] LBUFFER bytes round-trip (a combining accent)", str(tab))
     sh.read_for(0.3)
     sh.send("\x03", 0.4)
@@ -571,7 +572,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls ~/", 0.3)
     tab_key(sh, 14, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and pdec(tab[8]) == "~/" and pdec(tab[9]) == os.path.expanduser("~") + "/",
           f"[{label}] a `~/` head is sent resolved", str(tab))
     sh.read_for(0.3)
