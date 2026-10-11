@@ -30,6 +30,7 @@ final class MCPControlServer: @unchecked Sendable {
         unlinkIfSocket(self.path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return }
+        DescriptorSweep.closeOnExec(fd) // a tab's shell must not hold the listening socket (it outlives a crash)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(self.path.utf8)
@@ -81,6 +82,7 @@ final class MCPControlServer: @unchecked Sendable {
     static func connectSocket(_ path: String) -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return -1 }
+        DescriptorSweep.closeOnExec(fd)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
@@ -100,6 +102,7 @@ final class MCPControlServer: @unchecked Sendable {
         while true {
             let client = accept(listenSocket, nil, nil)
             guard client >= 0 else { return }
+            DescriptorSweep.closeOnExec(client) // a new_tab request's own connection, open while its shell starts
             var uid: uid_t = 0, gid: gid_t = 0
             guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); continue }
             var pid: pid_t = 0

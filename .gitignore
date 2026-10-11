@@ -10,3 +10,4 @@ DerivedData/
 /site/
 claudedocs/
 .playwright-mcp/
+__pycache__/

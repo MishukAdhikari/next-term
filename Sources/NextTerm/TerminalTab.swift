@@ -30,8 +30,12 @@ final class NextTermView: LocalProcessTerminalView {
         return true
     }
 
+    /// Bytes of output parsed so far: what is new since a poll last looked (the served-URL scan).
+    private(set) var outputBytes = 0
+
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice) // parse first: OSC marks in this chunk update the status
+        outputBytes &+= slice.count
         onOutput?()
     }
 
@@ -72,6 +76,61 @@ final class NextTermView: LocalProcessTerminalView {
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+    }
+
+    // MARK: drawing only what can be seen
+
+    /// SwiftTerm marks what its output changed through setNeedsDisplay(_:) (its own override of it is `#if false`).
+    /// While nobody can see the window (NSWindow.canBeSeen), or before the view is in one, the gate drops those marks
+    /// and remembers them; the whole terminal is drawn once when it can be seen again. The output is still parsed
+    /// meanwhile: only the drawing waits. Not `needsDisplay`, which SwiftTerm sets only on a resize, a selection or a
+    /// font change: overriding it cost an idle window with 10 tabs 4 M instructions a second (30% more), and those
+    /// rare marks would draw once while hidden at most.
+    private var drawGate = DrawGate(visible: false)
+    private var visibilityObservers: [NSObjectProtocol] = []
+
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        guard mayDraw() else { return }
+        super.setNeedsDisplay(invalidRect)
+    }
+
+    /// Asked at each mark, so a window seen again draws its next change even before its notification comes.
+    private func mayDraw() -> Bool {
+        drawIfSeenAgain()
+        return drawGate.invalidate()
+    }
+
+    /// Draws all of the terminal if it can be seen again after changes it did not draw. On every visibility
+    /// notification, and from the window's ticker in case one never comes (a self-test run's window ordered in).
+    func drawIfSeenAgain() {
+        let seen = window?.canBeSeen ?? false
+        guard seen != drawGate.visible else { return }
+        if drawGate.setVisible(seen) { needsDisplay = true }
+    }
+
+    /// Changes dropped while the terminal could not be seen, for the self-test.
+    var undrawnChanges: Int { drawGate.dropped }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        visibilityObservers.forEach(NotificationCenter.default.removeObserver)
+        visibilityObservers = []
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window {
+            visibilityObservers = NSWindow.visibilityNotifications.map { name, ofApp in
+                NotificationCenter.default.addObserver(forName: name, object: ofApp ? NSApp : window, queue: .main) { [weak self] _ in
+                    self?.drawIfSeenAgain()
+                }
+            }
+        }
+        drawIfSeenAgain()
+    }
+
+    deinit {
+        visibilityObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     override func bell(source: Terminal) {
@@ -423,10 +482,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             connectionToken = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased()
             view.interceptInput = nil
             view.acceptsInput = true
+            DescriptorSweep.markCloseOnExec() // ssh inherits nothing of ours (see below)
             view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken),
                               environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
             return
         }
+        // SwiftTerm's forkpty and execve close nothing: without this the shell would hold every earlier tab's pty
+        // master (and the MCP socket), and after a crash or Force Quit the kernel could hang none of those tabs up.
+        DescriptorSweep.markCloseOnExec()
         view.startProcess(
             executable: shellPath,
             args: [],
@@ -450,26 +513,77 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         execWatcher = watcher
     }
 
-    /// Ends the shell and everything it started.
-    func terminate() {
+    /// Ends the shell and what runs in front of it: the program and what it started outside its group or the
+    /// terminal (an agent's dev server), as TabProcessTree decides from `snapshot` (taken here if nil). Those
+    /// that outlive the hangup get SIGTERM after a second: here off the main thread, or, with `finishLater`
+    /// false, by the caller, who gets them back (Quit waits once for all its tabs).
+    @discardableResult
+    func terminate(snapshot: [ProcessRecord]? = nil, finishLater: Bool = true) -> [ProcessRecord] {
         execWatcher?.cancel()
         execWatcher = nil
         reconnectWork?.cancel()
         reconnectWork = nil
         MCPControl.forget(self)
-        guard !exited else { return }
-        exited = true
-        RemoteConnection.doneConnecting(self)
+        guard !exited else { return [] }
         // A disconnected remote tab's ssh has exited and was reaped: its pid may be another process's now,
         // so neither SwiftTerm (SIGTERM) nor we (SIGHUP) signal it, as for a shell that already exited.
         let gone = disconnected || waitingForConnection
         let pid = gone ? 0 : view.process.shellPid
+        // Before any signal: closing the pty hangs the shell up, and then its terminal is gone.
+        let plan = gone ? HangupPlan.none : hangupPlan(snapshot)
+        exited = true
+        RemoteConnection.doneConnecting(self)
         if !gone { view.terminate() }
         // Interactive shells ignore SIGTERM; SIGHUP makes them exit and hang up their jobs.
         if pid > 0 {
             kill(pid, SIGHUP)
             Self.reap(pid)
         }
+        TabHangup.send(plan)
+        guard finishLater else { return plan.stoppable }
+        TabHangup.finishLater(plan.stoppable)
+        return []
+    }
+
+    /// Closes these tabs (a window's, or every tab at Quit) from one snapshot of the processes, taken before any
+    /// signal and only if a program runs in front of one of them. Returns what is left to wait for.
+    static func terminate(_ tabs: [TerminalTab], finishLater: Bool) -> [ProcessRecord] {
+        let snapshot = tabs.contains(where: \.hasProgramInFront) ? ProcessSnapshot.take() : nil
+        return tabs.flatMap { $0.terminate(snapshot: snapshot, finishLater: finishLater) }
+    }
+
+    /// The pty's foreground process group (tcgetpgrp), 0 if unknown.
+    private var foregroundGroup: pid_t {
+        let fd = view.process.childfd
+        guard fd >= 0 else { return 0 }
+        return max(0, tcgetpgrp(fd))
+    }
+
+    /// A program, not the shell, is in front of this tab on this Mac.
+    private var hasProgramInFront: Bool {
+        guard remote == nil, !exited else { return false }
+        let group = foregroundGroup
+        return group > 0 && group != view.process.shellPid
+    }
+
+    /// What closing this tab hangs up besides the shell (none for a tab on a server, or at the prompt).
+    func hangupPlan(_ snapshot: [ProcessRecord]? = nil) -> HangupPlan {
+        guard hasProgramInFront, let snapshot = snapshot ?? ProcessSnapshot.take() else { return .none }
+        let group = foregroundGroup
+        // An interactive shell in front (`bash`, `nix develop`) is at its own prompt: its jobs are its business.
+        let shells = snapshot.filter { record in
+            guard record.group == group, ProcessInspector.shells.contains(record.name) else { return false }
+            let arguments = ProcessInspector.commandLine(of: record.pid)?.arguments ?? []
+            return TabProcessTree.isInteractiveShell(name: record.name, arguments: arguments)
+        }
+        return TabProcessTree.plan(snapshot: snapshot, shell: view.process.shellPid, foregroundGroup: group,
+                                   remote: remote != nil, interactiveShells: Set(shells.map(\.pid)))
+    }
+
+    /// A process as the close alerts name it: from its command line ("next-server", "claude"), not the kernel's
+    /// short name ("node").
+    static func displayName(_ record: ProcessRecord) -> String {
+        TabProcessTree.displayName(command: record.name, arguments: ProcessInspector.commandLine(of: record.pid)?.arguments ?? [])
     }
 
     /// SwiftTerm stops watching the shell once we terminate it, so collect its exit status here;
@@ -573,6 +687,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var servingStart: Int?
     private var servingScanned: Int?
     private var servingCommand = -1
+    /// The tab's output count (NextTermView.outputBytes) at the last scan: no new output, nothing new to scan.
+    private var servingOutput = -1
 
     /// Twice a second: look at what the running command printed since it started for a loopback URL.
     /// Not for agents, editors or ssh (an address there is the agent's business, or the other host's).
@@ -593,8 +709,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             // itself is skipped below).
             servingStart = pendingServingStart ?? max(0, (lastTextRow() ?? 0) - 50)
             pendingServingStart = nil
+            servingOutput = -1
         }
-        guard servedURL == nil, let start = servingStart, let last = lastTextRow() else { return }
+        // A tab with nothing new printed since the last look has nothing new to scan (the last line, which may
+        // have been mid-write then, is as it was).
+        guard servedURL == nil, view.outputBytes != servingOutput else { return }
+        servingOutput = view.outputBytes
+        guard let start = servingStart, let last = lastTextRow() else { return }
         let first = max(start, (servingScanned ?? start - 1) + 1, last - 400)
         guard first <= last else { return }
         let terminal = view.getTerminal()
@@ -620,9 +741,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
-    /// Why closing this tab would lose something, or nil. Running programs, and jobs left in the
-    /// background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
-    var closeWarning: String? {
+    /// What closing this tab would stop, and what it would leave running, or nil: nothing to say. The program in
+    /// front and what it started outside the terminal (an agent's dev server), from the same TabProcessTree plan
+    /// the hangup follows; jobs left in the background or suspended with Ctrl-Z (a stopped vim with unsaved changes).
+    var closeNote: CloseNote? {
         guard !exited else { return nil }
         if let remote {
             // tmux and herdr keep the session on the host: closing the tab only detaches (keptNote says so).
@@ -633,25 +755,36 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                 if line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) { return "“\(line[..<open.lowerBound])”" + line[open.lowerBound...] }
                 return "“\(line)”"
             }
-            return items.isEmpty ? nil : items.joined(separator: ", ") + " on \(remote.host.name)"
+            return items.isEmpty ? nil : CloseNote(stops: [items.joined(separator: ", ") + " on \(remote.host.name)"])
         }
-        var items: [String] = []
-        if status.running { items.append(status.program.isEmpty ? "a running process" : "“\(runningName)” (running)") }
+        var note = CloseNote()
+        if status.running {
+            let program = status.program.isEmpty ? nil : "“\(runningName)”"
+            note = TabProcessTree.closeNote(hangupPlan().named(Self.displayName), running: true, program: program)
+        }
         if status.integrated {
             if status.jobs > 0 {
                 // "vim notes.md (suspended)" -> “vim notes.md” (suspended): the state is not part of the command.
-                items += status.jobSummary.split(separator: "\n").map { line -> String in
+                let jobs = status.jobSummary.split(separator: "\n").map { line -> String in
                     if line.hasSuffix(")"), let open = line.range(of: " (", options: .backwards) {
                         return "“\(line[..<open.lowerBound])”" + line[open.lowerBound...]
                     }
                     return "“\(line)”"
                 }
-                if items.isEmpty { items.append("\(status.jobs) background job\(status.jobs == 1 ? "" : "s")") }
+                note.stops += jobs
+                if note.isEmpty { note.stops.append("\(status.jobs) background job\(status.jobs == 1 ? "" : "s")") }
             }
         } else if !status.running {
-            items += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
+            note.stops += ProcessInspector.childProcessNames(of: view.process.shellPid).map { "“\($0)”" }
         }
-        return items.isEmpty ? nil : items.joined(separator: ", ")
+        return note.isEmpty ? nil : note
+    }
+
+    /// What closing this tab stops, as a phrase ("“claude” (running), “next-server” (started by “claude”)"), or
+    /// nil if it stops nothing.
+    var closeWarning: String? {
+        guard let stops = closeNote?.stops, !stops.isEmpty else { return nil }
+        return stops.joined(separator: ", ")
     }
 
     /// What runs in front, as the close alerts name it: the program with its arguments as they were typed ("npm run

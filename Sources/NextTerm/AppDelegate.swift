@@ -699,7 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Quit Next Term?"
-        alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
+        alert.informativeText = TerminalWindowController.stopText("Quitting stops", busy)
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
         return alert
@@ -713,8 +713,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)
-        for controller in controllers { for tab in controller.tabs { tab.terminate() } }
+        // Every tab from one snapshot taken before any signal; what outlives the hangup gets SIGTERM after one
+        // shared second at most (no wait at all when nothing does), tabs closed just before included.
+        let waiting = TerminalTab.terminate(controllers.flatMap(\.tabs), finishLater: false)
         RemoteConnection.shutdown() // the master connections; sessions kept by tmux or herdr stay on their hosts
+        TabHangup.finishAtQuit(waiting)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -910,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = target.project == nil ? "Replace the tabs in this window?" : "Replace the project in this window?"
-            alert.informativeText = "This stops " + TerminalWindowController.stopList(busy)
+            alert.informativeText = TerminalWindowController.stopText("This stops", busy)
             alert.addButton(withTitle: "Replace")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }

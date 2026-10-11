@@ -109,6 +109,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Watches the repository's .git when the tree shows a folder inside it (commits, checkouts).
     private var gitDirWatcher: DirectoryWatcher?
     let git = GitMonitor()
+    /// Which file changes can change git's status, from the last refresh; nil before one, or outside a repository.
+    private var gitEvents: GitEventFilter?
+    /// Folders known to be (or not be) nested repositories, until the next refresh.
+    private var nestedRepositories: [String: Bool] = [:]
+    /// The window closed: nothing is watched any more.
+    private var closed = false
     /// HEAD moved (a commit, a checkout): open files compare against the new commit.
     var onHeadChange: (() -> Void)?
     private var lastHead: String?
@@ -130,7 +136,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private var databaseItems: [String: DatabaseItem] = [:]
     /// Bumped by every scan, so one that finishes after a newer one started is dropped.
     private(set) var databaseScanToken = 0
-    private var databaseScanQueued = false
+    /// Scans set off by file changes: a second after the first change, then one every 5 s at most, and none while
+    /// nobody can see the window (one when it shows again, if something changed meanwhile).
+    private let databaseScans = GatedRefresh(interval: 5, settle: 1)
     #if DEBUG
     /// For the self-test, when the Databases group is late: how this tree's scans went.
     private(set) var databaseScanStats = DatabaseScanStats()
@@ -205,11 +213,30 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                                object: scrollView.contentView)
 
         git.onChange = { [weak self] snapshot in self?.gitChanged(snapshot) }
+        databaseScans.run = { [weak self] in self?.scanDatabases() }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window {
+            git.window = window
+            databaseScans.window = window
+        }
+    }
+
+    /// Its window closed: stop watching files and git now, not when the sidebar is freed, so an app left running
+    /// with no windows (or a sidebar something still holds) never refreshes git again.
+    func stopWatching() {
+        closed = true
+        watcher = nil
+        gitDirWatcher = nil
+        git.stop()
+        databaseScans.cancel()
+    }
 
     override func layout() {
         super.layout()
@@ -249,7 +276,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background.
     func setRoot(_ path: String) {
         let canonical = canonicalPath(path)
-        guard canonical != root?.path else { return }
+        guard canonical != root?.path, !closed else { return }
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
@@ -274,8 +301,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         watcher = DirectoryWatcher(path: canonical) { [weak self] paths in self?.filesChanged(paths) }
         gitDirWatcher = nil
+        gitEvents = nil
         git.watch(canonical)
         showDatabases(DatabaseScan())
+        databaseScans.cancel() // the old folder's
         scanDatabases()
         showSessions([], tabs: SessionTabs())
         loadSessions()
@@ -291,11 +320,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let token = databaseScanToken
         let queued = Date()
         noteDatabaseScan(.started(queued))
+        databaseScans.started()
         DispatchQueue.global(qos: .utility).async {
             let began = Date()
             let scan = Databases.scan(root: path)
             let read = DatabaseScanStats.Event.read(waited: began.timeIntervalSince(queued), took: Date().timeIntervalSince(began))
             DispatchQueue.main.async { [weak self] in
+                self?.databaseScans.finished()
                 self?.noteDatabaseScan(read)
                 guard let self, token == self.databaseScanToken, self.root?.path == path else {
                     self?.noteDatabaseScan(.dropped)
@@ -356,23 +387,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         #endif
     }
 
-    /// Something changed near the top of the project (an env file, a config, a SQLite file): scan again
-    /// soon. Changes in dependency and build folders are ignored.
+    /// Something changed where the scan looks (an env file, a config, a folder that can hold a SQLite file):
+    /// scan again when the gate says. Hidden, dependency and build folders, and anything deeper than the search
+    /// goes, set off nothing (Databases.scanMayChange).
     private func scheduleDatabaseScan(for paths: [String]) {
-        guard let root, !databaseScanQueued else { return }
-        let ignored = ["/node_modules/", "/vendor/", "/.git/", "/.next/", "/build/", "/dist/", "/.build/", "/storage/framework/"]
-        let relevant = paths.contains { raw in
-            let path = raw.hasSuffix("/") ? raw : raw + "/"
-            guard path == root.path + "/" || path.hasPrefix(root.path + "/") else { return false }
-            let rest = path.dropFirst(root.path.count)
-            return !ignored.contains { rest.contains($0) } && rest.split(separator: "/").count <= 3
-        }
-        guard relevant else { return }
-        databaseScanQueued = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.databaseScanQueued = false
-            self?.scanDatabases()
-        }
+        guard let root, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
+        databaseScans.changed()
     }
 
     private func showDatabases(_ scan: DatabaseScan) {
@@ -627,15 +647,33 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         hiddenRows[ObjectIdentifier(node)] = node.hiddenCount > 0 ? HiddenEntries(count: node.hiddenCount) : nil
     }
 
-    /// FSEvents reports changed folders: re-read the ones the tree has loaded, and refresh git.
+    /// FSEvents reports changed folders: re-read the ones the tree has loaded (ignored ones too), and refresh
+    /// git if any of them can change what it says.
     private func filesChanged(_ paths: [String]) {
         guard let root else { return }
         for raw in Set(paths) {
             let path = raw.count > 1 && raw.hasSuffix("/") ? String(raw.dropLast()) : raw
             if let node = root.node(at: path), node.isLoaded { refresh(node) }
         }
-        git.refreshSoon()
+        gitFilesChanged(paths)
         scheduleDatabaseScan(for: paths)
+    }
+
+    /// Changes in the work tree or its .git: a refresh soon, unless none can change git's status (a writer in
+    /// `.next/` or `node_modules/`, git's own objects, a nested worktree).
+    private func gitFilesChanged(_ paths: [String]) {
+        if let filter = gitEvents {
+            let matters = paths.contains { filter.matters($0, isRepository: isNestedRepository) }
+            guard matters else { return }
+        }
+        git.refreshSoon()
+    }
+
+    private func isNestedRepository(_ folder: String) -> Bool {
+        if let known = nestedRepositories[folder] { return known }
+        let found = GitEventFilter.isNestedRepository(folder)
+        nestedRepositories[folder] = found
+        return found
     }
 
     func reloadAll() {
@@ -660,6 +698,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     private func gitChanged(_ snapshot: GitSnapshot?) {
+        gitEvents = snapshot.map { GitEventFilter(snapshot: $0, workTree: canonicalPath($0.root)) }
+        nestedRepositories.removeAll()
         header.show(snapshot)
         gitActivityChanged()
         if let head = snapshot?.head, head != lastHead {
@@ -670,7 +710,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let snapshot, let root, canonicalPath(snapshot.root) != root.path {
             let dotGit = canonicalPath(snapshot.root) + "/.git"
             if gitDirWatcher == nil, FileManager.default.fileExists(atPath: dotGit) {
-                gitDirWatcher = DirectoryWatcher(path: dotGit) { [weak self] _ in self?.git.refreshSoon() }
+                gitDirWatcher = DirectoryWatcher(path: dotGit) { [weak self] paths in self?.gitFilesChanged(paths) }
             }
         } else {
             gitDirWatcher = nil
