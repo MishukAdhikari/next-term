@@ -42,7 +42,9 @@ TABS += ([SCREEN_TAB] if HAS_SCREEN else []) + [SCRIPT_TAB]
 KINDS = [
     ('SCREEN -c /dev/null -S ntoc', 'M screen session'),
     ('screen -c /dev/null -S ntoc', 'M screen client'),
-    ('/bin/sleep 7776', 'M screen window'),  # login -pflq <user> /bin/sleep 7776
+    # screen's window runs `login -pflq <user> /bin/sleep 7776`: login is setuid root, so its working folder can't be
+    # read and it is never counted (nor killed); it ends with the sleep it runs.
+    ('/bin/sleep 7776', 'M screen window'),
     ('sleep 7776', 'M sleep in screen'),
     ('script -q /dev/null', 'N script'),
     ('sleep 7777', 'N sleep disowned in script'),
@@ -72,8 +74,8 @@ KINDS = [
     ('next-server (v16.4.0) fg', 'A next-server'),
 ]
 DELIBERATE = {'B python ignoring SIGHUP', 'D nohup sleep', 'E disowned sleep', 'F double-forked sleep', 'F double-forked next-server',
-              'N sleep disowned in script'} | ({'M screen session', 'M screen window', 'M sleep in screen'} if HAS_SCREEN else set())
-EXPECTED_BEFORE = 23 + 3 + (4 if HAS_SCREEN else 0)
+              'N sleep disowned in script'} | ({'M screen session', 'M sleep in screen'} if HAS_SCREEN else set())
+EXPECTED_BEFORE = 23 + 3 + (3 if HAS_SCREEN else 0)
 
 
 def sh(*args):
@@ -250,6 +252,10 @@ class Check:
         stopped = [r for r in before if r[6] == 'J stopped sleep' and 'T' in r[4]]
         report = [f'=== end by {how} (app {pid}); before: {len(before)} test processes (expected {EXPECTED_BEFORE})',
                   self.shell_fds(pid), f"J's sleep is {'stopped' if stopped else 'NOT stopped'} (^Z)"]
+        if len(before) != EXPECTED_BEFORE:
+            counts = {}
+            for r in before: counts[r[6]] = counts.get(r[6], 0) + 1
+            report.append('running before: ' + ', '.join(f'{k} x{n}' if n > 1 else k for k, n in sorted(counts.items())))
         mark = len(open(self.log).read().splitlines())
         if how == 'quit':
             report.append(self.quit(process))
