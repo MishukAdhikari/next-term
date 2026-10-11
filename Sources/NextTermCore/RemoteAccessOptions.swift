@@ -184,6 +184,23 @@ public struct RemoteAccessOptions: Equatable, Sendable, Codable {
         let on = RemoteAccessOption.all.filter(\.customStart)
         return RemoteAccessOptions(on: Set(on.map(\.id)))
     }()
+
+    /// R22's sentence for Control, above Allow at pairing and above Save in Edit…, whenever the options carry
+    /// Control's name ("Notify on this Mac" off included).
+    public static let controlSentence = "Anything sent can run commands on this Mac with your permissions, without asking."
+
+    /// R22's sentence while "Next Term's write tools" is on: in Control, and in Custom from its starting values.
+    public static let writeToolsSentence = "Next Term's write tools can make code run on this Mac: a commit runs the "
+        + "repository's hooks, and an agent's settings file in a project runs what it lists."
+
+    /// The sentences these options show above Allow or Save, in order: Control's, then the write tools'. Read only
+    /// shows neither.
+    public var sentences: [String] {
+        var sentences: [String] = []
+        if preset == .control { sentences.append(Self.controlSentence) }
+        if self[.writeTools] { sentences.append(Self.writeToolsSentence) }
+        return sentences
+    }
 }
 
 /// The three presets pairing offers.

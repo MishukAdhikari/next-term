@@ -156,6 +156,40 @@ import Testing
         }
     }
 
+    /// R22's sentences above Allow at pairing and above Save in Edit… (U8): Control's whenever the options carry
+    /// Control's name, and the write tools' while "Next Term's write tools" is on. Read only shows neither.
+    @Test func theSentencesFollowTheOptionsShown() {
+        let control = "Anything sent can run commands on this Mac with your permissions, without asking."
+        let writeTools = "Next Term's write tools can make code run on this Mac: a commit runs the repository's hooks, "
+            + "and an agent's settings file in a project runs what it lists."
+        #expect(RemoteAccessOptions.controlSentence == control)
+        #expect(RemoteAccessOptions.writeToolsSentence == writeTools)
+        #expect(RemoteAccessOptions.readOnly.sentences.isEmpty)
+        #expect(RemoteAccessOptions.control.sentences == [control, writeTools])
+        #expect(RemoteAccessOptions.customStart.sentences == [writeTools])
+        var custom = RemoteAccessOptions.customStart
+        custom[.writeTools] = false
+        #expect(custom.sentences.isEmpty)
+        // Control with notifications off, or with the control rate limit, is still Control.
+        var options = RemoteAccessOptions.control
+        options[.notify] = false
+        #expect(options.sentences == [control, writeTools])
+        options = RemoteAccessOptions.control
+        options[.rateLimit] = true
+        #expect(options.sentences == [control, writeTools])
+        // Asking on the Mac, or one option outside Checks off, makes it Custom: Control's sentence goes.
+        options = RemoteAccessOptions.control
+        options[.askOnMac] = true
+        #expect(options.sentences == [writeTools])
+        options = RemoteAccessOptions.control
+        options[.writeTools] = false
+        #expect(options.sentences.isEmpty)
+        // Read only with the write tools ticked on is Custom, and says so.
+        options = RemoteAccessOptions.readOnly
+        options[.writeTools] = true
+        #expect(options.sentences == [writeTools])
+    }
+
     @Test func presetValuesFollowTheTable() {
         let textAndKeys = RemoteAccessOption.all.filter { $0.group == .text || $0.group == .keys }
         #expect(textAndKeys.count == 5)

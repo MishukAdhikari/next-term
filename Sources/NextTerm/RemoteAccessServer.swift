@@ -138,7 +138,7 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
 
     /// Turns the door off within a second (R37): no new connection, every open call answered with the revoke text,
     /// access tokens dropped (every grant ended too with `revokeAll`), the approval windows remote calls opened
-    /// closed, then every connection closed. Call it from the main thread, and never inside `state.update {}`: it
+    /// and the pairing window closed, then every connection closed. Call it from the main thread, and never inside `state.update {}`: it
     /// waits on the door's queue, which may be waiting for the state's lock. It can be called again; it does
     /// nothing then.
     func stop(revokeAll: Bool = false) {
@@ -154,10 +154,17 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         guard first else { return }
         // The authority's lock, then the registry: every open call's answer is on the door's queue after this.
         state.turnOff(revokeAll: revokeAll)
+        let state = self.state
         if Thread.isMainThread {
-            MainActor.assumeIsolated { RemoteAccessApprovals.close(grants: nil) }
+            MainActor.assumeIsolated {
+                RemoteAccessApprovals.close(grants: nil)
+                RemoteAccessPairingWindow.close(for: state)
+            }
         } else {
-            DispatchQueue.main.async { RemoteAccessApprovals.close(grants: nil) }
+            DispatchQueue.main.async {
+                RemoteAccessApprovals.close(grants: nil)
+                RemoteAccessPairingWindow.close(for: state)
+            }
         }
         queue.async {
             for timer in self.deadlines.values { timer.cancel() }
@@ -439,12 +446,12 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
         reply(RemoteAccessHTTP.json(status: answer.status, body: answer.body, headers: headers), on: connection)
     }
 
-    /// `/oauth/authorize` and its wait: a 302 back to the client, or a page (U8's, a placeholder until then).
+    /// `/oauth/authorize` and its wait: a 302 back to the client, or one of the pairing pages (U8).
     private func page(_ authorization: RemoteAccessOAuth.Authorization?, request: RemoteAccessHTTP.Request,
                       on connection: Connection) {
         guard let authorization else { return finish(connection, with: RemoteAccessHTTP.refusal(status: 421)) }
         if case .invalid = authorization { state.countRefusal(.badOAuth, request: request) }
-        reply(RemoteAccessDoorPages.answer(authorization), on: connection)
+        reply(RemoteAccessPages.response(authorization), on: connection)
     }
 
     // MARK: /mcp
@@ -763,60 +770,5 @@ private final class StartOutcome: @unchecked Sendable { // `error` is written be
         self.error = error
         ready.signal()
         return false
-    }
-}
-
-// MARK: - pages (placeholder)
-
-/// The pages `/oauth/authorize` and its wait show. A minimal placeholder: U8 replaces it with
-/// `RemoteAccessPages` in Core, with its tests. It already keeps U8's rules: no script, no form, no external
-/// resource, text from the request escaped, and headers that keep the page out of frames, referrers and caches.
-enum RemoteAccessDoorPages {
-    static func answer(_ authorization: RemoteAccessOAuth.Authorization) -> Data {
-        switch authorization {
-        case .redirect(let link):
-            let headers = [("Location", link), ("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer")]
-            return RemoteAccessHTTP.response(status: 302, headers: headers)
-        case .waiting(let requestID, let code):
-            let wait = escaped(RemoteAccessOAuth.waitPath(for: requestID))
-            let refresh = "<meta http-equiv=\"refresh\" content=\"2;url=\(wait)\">"
-            return page(200, "<p>\(escaped(code))</p><p>Type this code in Next Term on your Mac.</p>", head: refresh)
-        case .closed:
-            let text = "Pairing is closed. On your Mac, open Next Term › Settings › Remote Access › Connect a Client."
-            return page(200, "<p>\(escaped(text))</p>")
-        case .expired:
-            return page(200, "<p>Not approved in time. Start again from your Mac.</p>")
-        case .tooMany:
-            return page(429, "<p>Too many requests are waiting. Try again in a few minutes.</p>")
-        case .invalid(let reason):
-            return page(400, "<p>\(escaped(reason))</p>")
-        }
-    }
-
-    private static func page(_ status: Int, _ body: String, head: String = "") -> Data {
-        var html = "<!doctype html><html><head><meta charset=\"utf-8\">"
-        html += "<title>Next Term</title>\(head)</head><body>\(body)</body></html>"
-        var headers: [(String, String)] = []
-        headers.append(("Content-Type", "text/html; charset=utf-8"))
-        headers.append(("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"))
-        headers.append(("X-Frame-Options", "DENY"))
-        headers.append(("Referrer-Policy", "no-referrer"))
-        headers.append(("Cache-Control", "no-store"))
-        return RemoteAccessHTTP.response(status: status, headers: headers, body: Data(html.utf8))
-    }
-
-    private static func escaped(_ text: String) -> String {
-        var out = ""
-        for character in text {
-            switch character {
-            case "&": out += "&amp;"
-            case "<": out += "&lt;"
-            case ">": out += "&gt;"
-            case "\"": out += "&quot;"
-            case "'": out += "&#39;"
-            default: out.append(character)
-            }
-        }
-        return out
     }
 }
