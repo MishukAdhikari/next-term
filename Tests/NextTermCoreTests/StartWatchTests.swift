@@ -156,7 +156,8 @@ import Testing
     /// AE31 with a launcher (KTD6, KTD7): a put-back line that replays the user's launcher falls back to that launcher
     /// with the resume form alone, so an alias that sets a store (`cw`, with CLAUDE_CONFIG_DIR in it) still finds the
     /// session. The options typed after it are dropped and named; the launcher's own come back with it. An automatic
-    /// resume runs the recorded program, so its fallback is the program's plain form.
+    /// resume runs the recorded program, so its fallback is the program's plain form. A launcher typed bare is the next
+    /// test's.
     @Test func ae31AFailedLauncherLineFallsBackToTheLauncherWithTheResumeFormAlone() {
         let cw = claude([["--permission-mode", "bypassPermissions"]], launcher: SessionSnapshot.Launcher(word: "cw", typed: 1))
         let line = "cw --permission-mode bypassPermissions --resume \(s)"
@@ -175,18 +176,60 @@ import Testing
         #expect(held.putBack(id: s, folder: held.sessionFolder)?.line == heldLine)
         let typed = StartWatch.Start(evidence: held, session: s, line: heldLine)
         #expect(typed.plain == "/Users/x/bin/cad --resume \(s)" && typed.dropped == ["--model"])
-        // A launcher typed bare: its resume form alone is the line that failed, so the note alone.
-        let alias = claude([["--dangerously-skip-permissions"]], launcher: SessionSnapshot.Launcher(word: "claude-auto-danger", typed: 0))
-        let replayed = StartWatch.Start(evidence: alias, session: s, line: "claude-auto-danger --resume \(s)")
-        #expect(replayed.plain == "claude-auto-danger --resume \(s)" && replayed.dropped.isEmpty)
-        #expect(StartWatch.step(.failedAtStart(status: 1), start: replayed, fallbackUsed: false, error: nil)
-            == .note("claude exited at once (status 1)."))
         // An automatic resume of the same record: the program's plain form, every option it carried named.
         let automatic = StartWatch.Start(evidence: cw, session: s, line: nil)
         #expect(automatic.plain == "claude --resume \(s)" && automatic.dropped == ["--permission-mode"])
         // A line that starts with the program, not the launcher, did not replay it: the program's plain form.
         let rebuilt = StartWatch.Start(evidence: cw, session: s, line: "claude --permission-mode bypassPermissions --resume \(s)")
         #expect(rebuilt.plain == "claude --resume \(s)")
+    }
+
+    /// AE31 with a launcher typed bare (KTD6): `claude-auto-danger --resume S` is the launcher's resume form alone, so
+    /// the launcher's plain form is the line that failed. The fallback is the program's plain form, once, and the note
+    /// names the alias's own options as left off, from the record, or says "the options in" the alias when the record
+    /// shows none. If the program's form fails too, the note alone.
+    @Test func ae31AFailedBareLauncherLineFallsBackToTheProgramsPlainFormOnce() {
+        let bare = SessionSnapshot.Launcher(word: "claude-auto-danger", typed: 0)
+        let alias = claude([["--dangerously-skip-permissions"], ["--model", "opus"]], launcher: bare)
+        let line = "claude-auto-danger --resume \(s)"
+        #expect(alias.putBack(id: s, folder: alias.sessionFolder)?.line == line)
+        let start = StartWatch.Start(evidence: alias, session: s, line: line)
+        #expect(start.plain == "claude --resume \(s)" && start.dropped == ["--dangerously-skip-permissions", "--model"])
+        #expect(start.bypassedLauncher == "claude-auto-danger")
+        let first = StartWatch.step(.failedAtStart(status: 1), start: start, fallbackUsed: false, error: rejected)
+        #expect(first == .putBack(line: "claude --resume \(s)", note: "claude exited at once (status 1): “\(rejected)”. "
+            + "The plain resume is back on the line. Left off: --dangerously-skip-permissions, --model (from claude-auto-danger)."))
+        // Each tab gets one fallback: a tab that had it gets the note alone.
+        #expect(StartWatch.step(.failedAtStart(status: 1), start: start, fallbackUsed: true, error: rejected)
+            == .note("claude exited at once (status 1): “\(rejected)”."))
+        // The program's plain form, run in turn, fails too: it replays no launcher, and the tab had its fallback, so the
+        // note alone.
+        let after = StartWatch.Start(evidence: alias, session: s, line: "claude --resume \(s)")
+        #expect(after.plain == "claude --resume \(s)" && after.bypassedLauncher == nil)
+        #expect(StartWatch.step(.failedAtStart(status: 1), start: after, fallbackUsed: true, error: "No conversation found")
+            == .note("claude exited at once (status 1): “No conversation found”."))
+        // A record that does not show the alias's own options, unknown or none: the note says "the options in" it.
+        for options in [nil, [SessionSnapshot.LaunchOption]()] {
+            let unshown = SessionSnapshot.Evidence(agent: .claude, sessionID: s, source: .sessionFile, sessionFolder: "/Users/x/app",
+                                                   options: options, launcher: bare)
+            let replayed = StartWatch.Start(evidence: unshown, session: s, line: line)
+            #expect(replayed.plain == "claude --resume \(s)" && replayed.dropped.isEmpty, "\(String(describing: options))")
+            #expect(StartWatch.step(.failedAtStart(status: 1), start: replayed, fallbackUsed: false, error: nil)
+                == .putBack(line: "claude --resume \(s)", note: "claude exited at once (status 1). The plain resume is back on the line. "
+                    + "Left off: the options in claude-auto-danger."), "\(String(describing: options))")
+        }
+        // An alias named for the program: its plain form is the line that failed, which would expand it again, so the
+        // note alone.
+        let named = claude([["--dangerously-skip-permissions"]], launcher: SessionSnapshot.Launcher(word: "claude", typed: 0))
+        let same = StartWatch.Start(evidence: named, session: s, line: "claude --resume \(s)")
+        #expect(same.plain == "claude --resume \(s)")
+        #expect(StartWatch.step(.failedAtStart(status: 1), start: same, fallbackUsed: false, error: nil)
+            == .note("claude exited at once (status 1)."))
+        // A launcher with options typed after it still falls back to itself, its own options kept.
+        let typed = claude([["--dangerously-skip-permissions"], ["--model", "opus"]],
+                           launcher: SessionSnapshot.Launcher(word: "claude-auto-danger", typed: 1))
+        let typedStart = StartWatch.Start(evidence: typed, session: s, line: "claude-auto-danger --model opus --resume \(s)")
+        #expect(typedStart.plain == line && typedStart.dropped == ["--model"] && typedStart.bypassedLauncher == nil)
     }
 
     /// The plain form is what failed, or no session is named: there is nothing to fall back to, so the note alone.

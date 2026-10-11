@@ -10,8 +10,10 @@ import Foundation
 // - a nonzero end within 5 s, with no key pressed first and a status other than 130 (Ctrl-C): failed at start. The
 //   agent's plain resume form goes back on the line, unrun, once per tab, and the note quotes the agent's error and names
 //   every option the plain form dropped. After a line that replayed the user's launcher, the plain form is that launcher
-//   with the resume form alone (`cw --resume S`), so a launcher that sets the agent's store still finds the session. A
-//   second failure, or a plain form that is what failed, gives the note alone;
+//   with the resume form alone (`cw --resume S`), so a launcher that sets the agent's store still finds the session.
+//   When that is the line that failed (a launcher typed bare, `claude-auto-danger --resume S`), it is the program's
+//   (`claude --resume S`), and the note names the launcher's own options as left off. A second failure, or a plain form
+//   that is what failed, gives the note alone;
 // - the session file names another id at 5 s: the agent started a new session, and the note says so;
 // - Ctrl-C, status 0, or a key pressed first: the tab stays as it is.
 
@@ -142,19 +144,23 @@ public enum StartWatch {
         /// The session it resumes.
         public var session: String?
         /// The plain resume form, with the session and no option: after a line that replayed the user's launcher, that
-        /// launcher and the resume form (`SessionSnapshot.Evidence.launcherResume`); otherwise the agent's program and
-        /// resume form (`RestoreAgent.putBackLine`). Nil with no session named.
+        /// launcher and the resume form (`SessionSnapshot.Evidence.launcherResume`), unless that is the line that failed;
+        /// otherwise the agent's program and resume form (`RestoreAgent.putBackLine`). Nil with no session named.
         public var plain: String?
         /// The options the run carried that the plain form drops, by name, in order.
         public var dropped: [String]
+        /// The launcher the plain form leaves out: its resume form alone was the line that ran, so the plain form is the
+        /// program's, and `dropped` names the launcher's own options, those the record shows.
+        public var bypassedLauncher: String?
         /// What ran when it was a line the restore put back, as typed; nil for an automatic resume's command.
         public var line: String?
 
         /// `evidence` is the agent's record, `session` the one its line or resume names, and `line` the put-back line the
         /// user ran. The options dropped are those the line, or the resume, carried: each of the record's options a line
         /// keeps, or after a launcher, each of those typed after it, as the launcher brings its own back. One left off,
-        /// whose value Next Term could not tell from a prompt's, never was on it. An automatic resume runs the recorded
-        /// program, never the launcher, so its plain form is the program's.
+        /// whose value Next Term could not tell from a prompt's, never was on it. When the line that ran is a launcher's
+        /// resume form alone, the plain form is the program's, which drops each of the launcher's own options. An
+        /// automatic resume runs the recorded program, never the launcher, so its plain form is the program's.
         public init(evidence: SessionSnapshot.Evidence, session: String?, line: String?) {
             agent = evidence.agent
             self.session = session
@@ -164,16 +170,25 @@ public enum StartWatch {
                       typed.split(separator: " ").first.map(String.init) == ShellQuote.quote(launcher.word) else { return nil }
                 return launcher
             }
-            plain = session.flatMap { (id: String) -> String? in
-                guard evidence.agent.isSessionID(id) else { return nil }
-                guard launcher == nil else { return evidence.launcherResume(id: id, folder: evidence.sessionFolder) }
-                return evidence.agent.putBackLine(id: id, folder: evidence.sessionFolder)
-            }
+            let id = session.flatMap { (id: String) -> String? in evidence.agent.isSessionID(id) ? id : nil }
+            let folder = evidence.sessionFolder
             let options = evidence.options ?? []
+            plain = id.flatMap { (id: String) -> String? in evidence.agent.putBackLine(id: id, folder: folder) }
+            var names: [String] = []
+            if let launcher {
+                let resume = id.flatMap { (id: String) -> String? in evidence.launcherResume(id: id, folder: folder) }
+                if resume == line {
+                    // The launcher's own options are the record's, all but those typed after it.
+                    bypassedLauncher = launcher.word
+                    for option in options.dropLast(launcher.typed) where !names.contains(option.name) { names.append(option.name) }
+                    dropped = names
+                    return
+                }
+                plain = resume
+            }
             let carried = launcher.map { (launcher: SessionSnapshot.Launcher) -> [SessionSnapshot.LaunchOption] in
                 Array(options.suffix(launcher.typed))
             }
-            var names: [String] = []
             for option in carried ?? options {
                 let kept = evidence.agent.reading([option], confirmed: []).line
                 if !kept.isEmpty, !names.contains(option.name) { names.append(option.name) }
@@ -193,8 +208,9 @@ public enum StartWatch {
 
     /// What the tab gets after `verdict`. A failed start puts the plain resume form back on the line once: not when the
     /// tab had its fallback already (`fallbackUsed`), nor when no session is named or the plain form is the line that
-    /// failed. Its note quotes the agent's `error`, and names every option the plain form dropped. A new session gets a
-    /// note. Anything else, nothing.
+    /// failed. Its note quotes the agent's `error`, and names every option the plain form dropped: a launcher's own, when
+    /// the plain form left it out, as from that launcher, or as "the options in" it when the record shows none. A new
+    /// session gets a note. Anything else, nothing.
     public static func step(_ verdict: Verdict, start: Start, fallbackUsed: Bool, error: String?) -> Step {
         switch verdict {
         case .failedAtStart(let status):
@@ -203,7 +219,12 @@ public enum StartWatch {
             said += error.map { (quoted: String) -> String in ": “\(quoted)”." } ?? "."
             guard !fallbackUsed, let plain = start.plain, plain != start.line else { return .note(TerminalText.oneLine(said)) }
             said += " The plain resume is back on the line."
-            if !start.dropped.isEmpty { said += " Left off: " + start.dropped.joined(separator: ", ") + "." }
+            let named = start.dropped.joined(separator: ", ")
+            if let launcher = start.bypassedLauncher {
+                said += named.isEmpty ? " Left off: the options in \(launcher)." : " Left off: \(named) (from \(launcher))."
+            } else if !named.isEmpty {
+                said += " Left off: \(named)."
+            }
             return .putBack(line: plain, note: TerminalText.oneLine(said))
         case .newSession:
             guard let session = start.session else { return .nothing }
