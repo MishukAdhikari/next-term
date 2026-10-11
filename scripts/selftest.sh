@@ -11,11 +11,11 @@ cd "$(dirname "$0")/.."
 # installed copy and an update at the next version. The installed copy stages the update, quits through the update
 # sheet's "Update Now" and the real install script swaps the two (its `open` is a stub that records the call). Then the swapped app is
 # launched once for each later step in turn (SelfTestRestore, SelfTestRestoreLaunches): quits with and without the resume
-# box, a logout, a launch that names a folder as `nxtrm` does, crashes (each a SIGKILL the step sends itself), restores
-# that do not finish, safe mode and a snapshot set aside. Each launch checks what the one before left. A stand-in Claude
-# Code, built here, and its own Claude store live in a second private folder, outside the temporary folders, which the
-# resume gate keeps an agent's code and store out of. Everything is in those two folders, except the throwaway copy's own
-# defaults domain, removed after.
+# box, an automatic resume that fails at start, a logout, a launch that names a folder as `nxtrm` does, crashes (each a
+# SIGKILL the step sends itself), restores that do not finish, safe mode and a snapshot set aside. Each launch checks what
+# the one before left. A stand-in Claude Code, built here, and its own Claude store live in a second private folder,
+# outside the temporary folders, which the resume gate keeps an agent's code and store out of. Everything is in those two
+# folders, except the throwaway copy's own defaults domain, removed after.
 relaunch() {
   swift build
   local bin=.build/debug/NextTerm id=me.mishuk.nextterm.relaunch-harness folder agent
@@ -63,12 +63,22 @@ STUB
   chmod 755 "$folder/bin/open"
   # The stand-in Claude Code: a program named claude, so the kernel and capture see Claude Code, which notes each run's
   # arguments on a line of its own and waits for a signal. Its session and the store it is read from are the harness's.
+  # A resume that carries --permission-mode fails at once, as a later Claude Code that no longer takes it would (AE31),
+  # and while the harness leaves a file named fail-plain in its folder, so does every other resume.
   mkdir -p "$agent/bin" "$agent/home/.claude"
   chmod 700 "$agent/home" "$agent/home/.claude"
   cat > "$agent/claude.c" <<'C'
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
+
+static int given(int argc, char **argv, const char *word) {
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], word) == 0) return 1;
+  }
+  return 0;
+}
 
 int main(int argc, char **argv) {
   FILE *runs = fopen(RUNS, "a");
@@ -80,11 +90,22 @@ int main(int argc, char **argv) {
     fputc('\n', runs);
     fclose(runs);
   }
+  if (given(argc, argv, "--resume")) {
+    if (given(argc, argv, "--permission-mode")) {
+      fputs("error: unknown option '--permission-mode'\n", stderr);
+      return 1;
+    }
+    if (access(FAIL_PLAIN, F_OK) == 0) {
+      fputs("error: No conversation found\n", stderr);
+      return 1;
+    }
+  }
   for (;;) pause();
 }
 C
   local built
-  if ! built="$(${CC:-cc} -O -o "$agent/bin/claude" -DRUNS="\"$agent/runs\"" "$agent/claude.c" 2>&1)"; then
+  if ! built="$(${CC:-cc} -O -o "$agent/bin/claude" -DRUNS="\"$agent/runs\"" -DFAIL_PLAIN="\"$agent/fail-plain\"" \
+    "$agent/claude.c" 2>&1)"; then
     echo "error: the stand-in Claude Code could not be built: $built" >&2
     keep
     exit 1

@@ -31,9 +31,11 @@ enum SelfTestRestore {
             case updateQuit = "update-quit"
             /// The swapped app, launched again: checks what the quit and the install left, then quits under Welcome.
             case afterUpdate = "after-update"
-            /// AE19's launch after that quit, then AE17's quit: the stand-in Claude Code runs, and the resume box is checked.
+            /// AE19's launch after that quit, then AE17's quit: the stand-in Claude Code runs, once more with an option it
+            /// rejects on a resume, and the resume box is checked.
             case afterWelcomeQuit = "after-welcome-quit"
-            /// AE17's quit restore, whose consent resumes the stand-in, then AE18's quit with "Ask" off.
+            /// AE17's quit restore, whose consent resumes the stand-in, and AE31's resume that fails at start, then AE18's
+            /// quit with "Ask" off.
             case afterQuitChecked = "after-quit-checked"
             /// AE18's quit restore, which puts the stand-in's resume command on the line, then a logout.
             case afterQuitUnasked = "after-quit-unasked"
@@ -106,9 +108,12 @@ enum SelfTestRestore {
         }
         /// The folder the request launch names (AE21).
         var api: URL { folder.appendingPathComponent("api", isDirectory: true) }
-        /// The stand-in Claude Code: a program named claude that notes each run's arguments in `agentRuns`, then waits.
+        /// The stand-in Claude Code: a program named claude that notes each run's arguments in `agentRuns`, then waits. A
+        /// resume that carries `--permission-mode` exits at once with status 1, and so does any resume while `failPlain`
+        /// is there (scripts/selftest.sh).
         var standIn: URL? { agent?.appendingPathComponent("bin/claude") }
         var agentRuns: URL? { agent?.appendingPathComponent("runs") }
+        var failPlain: URL? { agent?.appendingPathComponent("fail-plain") }
         /// The home capture and the restore read agent stores in (`RestorePlanning.agentHome`), and its Claude store.
         var agentHome: URL? { agent?.appendingPathComponent("home", isDirectory: true) }
         var claudeStore: URL? { agentHome?.appendingPathComponent(".claude", isDirectory: true) }

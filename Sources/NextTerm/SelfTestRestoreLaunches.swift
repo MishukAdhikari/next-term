@@ -8,9 +8,12 @@ import NextTermCore
 ///
 /// - `after-welcome-quit` (AE19): the quit before it unchecked the box, so the launch shows the Welcome window and brings
 ///   back no tab. Then a project window with three tabs, one split at 0.3 with a line in its scrollback, and the
-///   stand-in Claude Code running in the first, named in its own session file; the quit checks the box and presses Quit.
+///   stand-in Claude Code running in the first, and in the third with `--permission-mode bypassPermissions`, each named in
+///   its own session file; the quit checks the box and presses Quit.
 /// - `after-quit-checked` (AE17): the quit restore with the consent brings the layout and scrollback back with no Welcome
-///   window, and the stand-in resumes its session once. Then a quit with "Ask whether to resume when quitting" off.
+///   window, and the stand-in resumes its session once. The third tab's resume carries `--permission-mode`, which the
+///   stand-in rejects (AE31): the start watch's note quotes its error, `claude --resume S` waits on the line, unrun, and
+///   run, fails again for the note alone. Then a quit with "Ask whether to resume when quitting" off.
 /// - `after-quit-unasked` (AE18): the quit restore without it puts `claude --resume S` on the line, unrun. Then the
 ///   stand-in runs again, and a logout quits.
 /// - `open-request` (AE21, and AE18 after a logout): launched as `nxtrm` launches it, naming another folder, the restore
@@ -60,8 +63,8 @@ extension SelfTestRestore {
             return finish()
         }
         let splitTab = controller.addTab(directory: harness.project.path, select: false)
-        let idleTab = controller.addTab(directory: harness.project.path, select: false)
-        let started = await SelfTest.wait(20) { [claudeTab, splitTab, idleTab].allSatisfy(\.status.integrated) }
+        let rejectingTab = controller.addTab(directory: harness.project.path, select: false)
+        let started = await SelfTest.wait(20) { [claudeTab, splitTab, rejectingTab].allSatisfy(\.status.integrated) }
         _ = controller.split(vertical: true, from: splitTab, focus: false)
         if let group = controller.group(of: splitTab), case .split(let split) = group.root {
             split.dividers = [0.3]
@@ -88,6 +91,19 @@ extension SelfTestRestore {
                   "failed: \(failed.map(\.rawValue)), login shell read \(probed); “routing” fails when the login shell (the harness's "
                       + "zsh config, as its tabs read) was not read in time, or sets a provider variable the tabs do not")
         }
+
+        // AE31's given: the stand-in in the third tab too, in a session of its own, started with a permission option that
+        // the typed line shows as argv does, so its automatic resume carries it. The stand-in rejects it on a resume.
+        let rejecting = rejectingSession(harness)
+        let written = writeTranscript(harness, id: rejecting)
+        rejectingTab.view.send(txt: "claude --permission-mode bypassPermissions\r")
+        let namedRejecting = await nameClaudeSession(harness, in: rejectingTab, id: rejecting)
+        let savedRejecting = await savedClaude(files, tab: rejectingTab, id: rejecting)
+        let carried: [String] = savedRejecting?.launch.carried ?? []
+        let rejectingFailed: [String] = savedRejecting.map { gateFailures(harness, evidence: $0).map(\.rawValue) } ?? ["none read"]
+        check(written && namedRejecting && carried == ["--permission-mode", "bypassPermissions"] && rejectingFailed.isEmpty,
+              "AE31: the stand-in runs in the third tab with --permission-mode, which its automatic resume carries",
+              "named \(namedRejecting), carried \(carried), failed: \(rejectingFailed)")
 
         // ⌘Q: Claude Code runs, so "Quitting stops…" asks, with the resume box unchecked under Welcome. Checked, then Quit.
         record("STEP after-welcome-quit: quitting with the resume box checked")
@@ -135,15 +151,19 @@ extension SelfTestRestore {
             check(false, "AE17: the stand-in's tab comes back")
             return finish()
         }
-        let resumed = await SelfTest.wait(20) { standInRuns(harness).count > before.count }
+        // The third tab's runs are AE31's, checked below.
+        let rejecting = rejectingSession(harness)
+        let own = { () -> [String] in Array(standInRuns(harness).dropFirst(before.count)).filter { !$0.contains(rejecting) } }
+        let resumed = await SelfTest.wait(20) { !own().isEmpty }
         await SelfTest.pause(2)
-        let new = Array(standInRuns(harness).dropFirst(before.count))
+        let new = own()
         check(resumed && new == ["--resume \(id)"] && tab.status.running,
               "AE17: the stand-in Claude Code resumes its session once its shell is ready, and once", "runs since the launch \(new)")
         // MCP reads "pending" until the start watch settles the resume, and "resume" once the stand-in still runs at its end.
         _ = await SelfTest.wait(StartWatch.window + 3) { MCPRestoredTabs.details(tab)?.fields["outcome"] as? String == "resume" }
         let outcome = MCPRestoredTabs.details(tab)?.fields["outcome"] as? String
         check(outcome == "resume", "AE17: MCP says the tab resumed once its start watch settled", outcome ?? "no details")
+        await rejectedResumeChecks(harness, runs: before)
 
         // AE18's given: the same Claude tab, under Resume, with "Ask whether to resume when quitting" off. The resumed
         // stand-in names its session in its own file, as Claude Code does. One the gate kept from resuming waits on the
@@ -179,6 +199,68 @@ extension SelfTestRestore {
               "box \(String(describing: quitQuestion?.box)), Resume \(resume), clean \(header?.clean ?? false), "
                   + "consent \(header?.resumeConsent != nil)")
         recordStepEnd()
+    }
+
+    // MARK: AE31: an automatic resume that fails at start
+
+    /// AE31 through the app's start watch (KTD6, U14): the third tab's automatic resume carries `--permission-mode`, which
+    /// the stand-in rejects at once. Its note quotes the stand-in's error and names the option left off, `claude --resume
+    /// S` waits on the line, unrun, and MCP reads the agent's resume command on the line, held. Run, the plain form fails
+    /// too (the stand-in finds `failPlain`), and the tab gets the note alone: its one fallback is used, so nothing is
+    /// typed again.
+    private static func rejectedResumeChecks(_ harness: Harness, runs before: [String]) async {
+        let id = rejectingSession(harness)
+        let tabs: [TerminalTab] = AppDelegate.shared.controllers.flatMap(\.tabs)
+        guard let tab = tabs.first(where: { (tab: TerminalTab) -> Bool in tab.restoredRecord?.agent?.sessionID == id }) else {
+            return check(false, "AE31: the tab the stand-in ran in with --permission-mode comes back")
+        }
+        let plain = "claude --resume \(id)"
+        let note = "claude exited at once (status 1): “error: unknown option '--permission-mode'”. The plain resume is back on "
+            + "the line. Left off: --permission-mode."
+        // MCP reads "pending" while the watch runs, and the agent's resume command on the line once the line is back.
+        let settled = await SelfTest.wait(StartWatch.window + 10) {
+            MCPRestoredTabs.details(tab)?.fields["outcome"] as? String == "agent_on_the_line"
+        }
+        // The note goes first, then the line, which zsh echoes a few turns later.
+        var line = ""
+        let shown = await SelfTest.wait(5) {
+            line = bottomLine(tab)
+            return line.contains(plain) && shownWhole(tab).contains(whole(note))
+        }
+        let runs: [String] = Array(standInRuns(harness).dropFirst(before.count)).filter { $0.contains(id) }
+        let once = line.components(separatedBy: plain).count == 2
+        check(settled && shown && once && !tab.status.running && runs == ["--resume \(id) --permission-mode bypassPermissions"],
+              "AE31: the automatic resume carries --permission-mode, which the stand-in rejects: the note quotes its error and "
+                  + "names the option left off, and claude --resume S waits on the line, unrun, once",
+              "settled \(settled), note shown \(shown), line “\(line)”, runs \(runs)")
+        let fields = MCPRestoredTabs.details(tab)?.fields
+        let outcome = fields?["outcome"] as? String
+        let held = fields?["line_held"] as? Bool == true
+        let said = fields?["note"] as? String
+        check(outcome == "agent_on_the_line" && held && said == note,
+              "AE31: MCP reads the agent's resume command on the line, held, with the start watch's note",
+              "outcome \(outcome ?? "no details"), held \(held), note \(said ?? "none")")
+
+        // The plain form fails too. The marker goes once the stand-in has read it, so later steps' resumes run.
+        guard settled, shown, let marker = harness.failPlain, FileManager.default.createFile(atPath: marker.path, contents: nil) else {
+            return check(false, "AE31: the plain resume put back runs, with the stand-in set to fail it")
+        }
+        let count = standInRuns(harness).count
+        tab.view.send(txt: "\r")
+        let writes = tab.view.inputWrites
+        let second = "claude exited at once (status 1): “error: No conversation found”."
+        let noted = await SelfTest.wait(StartWatch.window + 10) { shownWhole(tab).contains(whole(second)) }
+        try? FileManager.default.removeItem(at: marker)
+        // A line typed after the note would be echoed by now.
+        await SelfTest.pause(2)
+        let ran = Array(standInRuns(harness).dropFirst(count))
+        let screen = shownWhole(tab)
+        let after = screen.range(of: whole(second), options: .backwards).map { String(screen[$0.upperBound...]) } ?? ""
+        let alone = !after.contains(whole(plain)) && !after.contains(whole("The plain resume is back on the line."))
+        let typed = tab.view.inputWrites - writes
+        check(noted && alone && typed == 0 && ran == ["--resume \(id)"] && !tab.status.running,
+              "AE31: run, claude --resume S fails too, and the tab gets the note alone, with nothing typed again",
+              "noted \(noted), runs \(ran), writes since \(typed), after the note “\(after.suffix(80))”")
     }
 
     // MARK: AE18's launch, then a logout
@@ -494,8 +576,13 @@ extension SelfTestRestore {
     // MARK: the stand-in Claude Code
 
     /// The session id the stand-in names, made once for the run and kept in the harness's folder.
-    static func claudeSession(_ harness: Harness) -> String {
-        let file = harness.folder.appendingPathComponent("claude-session")
+    static func claudeSession(_ harness: Harness) -> String { keptSession(harness, file: "claude-session") }
+
+    /// The session the stand-in started with `--permission-mode` names (AE31), made once for the run in the same way.
+    static func rejectingSession(_ harness: Harness) -> String { keptSession(harness, file: "claude-session-rejecting") }
+
+    private static func keptSession(_ harness: Harness, file name: String) -> String {
+        let file = harness.folder.appendingPathComponent(name)
         if let kept = try? String(contentsOf: file, encoding: .utf8), RestoreAgent.claude.isSessionID(kept) { return kept }
         let id = UUID().uuidString.lowercased()
         try? Data(id.utf8).write(to: file)
@@ -577,9 +664,12 @@ extension SelfTestRestore {
         }
     }
 
-    /// The tab a restore brought the stand-in back in: the one whose record names Claude Code.
+    /// The tab a restore brought the stand-in back in: the one whose record names Claude Code, and not AE31's session.
     private static func claudeTab() -> TerminalTab? {
-        AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.restoredRecord?.agent?.agent == .claude }
+        let rejecting = harness.map(rejectingSession)
+        return AppDelegate.shared.controllers.flatMap(\.tabs).first { (tab: TerminalTab) -> Bool in
+            tab.restoredRecord?.agent?.agent == .claude && tab.restoredRecord?.agent?.sessionID != rejecting
+        }
     }
 
     // MARK: checks
