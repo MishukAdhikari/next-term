@@ -195,6 +195,16 @@ import Testing
         #expect(decoded == options && decoded[.rateLimit] && !decoded[.everyKey])
     }
 
+    /// A value that is not true or false spoils the whole set: the grant is invalid (U4), and is never read
+    /// with the missing-option defaults instead.
+    @Test func aValueThatIsNotTrueOrFalseSpoilsTheSet() {
+        for value in ["null", "1", "0", #""true""#] {
+            let json = #"{"see.tabs": true, "checks.ask_on_mac": \#(value)}"#
+            let decoded = try? JSONDecoder().decode(RemoteAccessOptions.self, from: Data(json.utf8))
+            #expect(decoded == nil, "\(value)")
+        }
+    }
+
     // MARK: the catalogue
 
     @Test func readOnlyListsTheTenReadToolsAsLocally() throws {
@@ -245,6 +255,57 @@ import Testing
         #expect(names(.customStart) == readOnlyNames)
     }
 
+    /// AE20: Custom with "Tabs and their output" off lists no tab tools, and its instructions drop the wait.
+    @Test func turningASeeOptionOffDropsItsTools() throws {
+        var options = RemoteAccessOptions.customStart
+        options[.tabs] = false
+        options[.typeNeverAsking] = true
+        options[.askOnMac] = false
+        #expect(options.preset == .custom)
+        let listed = names(options)
+        for name in ["list_tabs", "read_tab", "wait_for_tab"] { #expect(!listed.contains(name), "\(name)") }
+        #expect(listed == readOnlyNames.filter { !["list_tabs", "read_tab", "wait_for_tab"].contains($0) })
+        let text = RemoteAccessTools.instructions(for: options)
+        #expect(!text.contains("wait_for_tab") && !text.contains("50 seconds"), "\(text)")
+        #expect(!text.contains("see tabs"), "\(text)")
+        #expect(text.contains("name one with project") && text.contains("keep answers short"), "\(text)")
+        let read: [String: Any] = ["jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                                   "params": ["name": "read_tab", "arguments": ["tab_id": "x"]]]
+        var called = false
+        let reply = remoteAnswer(read, options: options) { _, _ in
+            called = true
+            return .init(text: "screen")
+        }
+        #expect((reply?["error"] as? [String: Any])?["message"] as? String == "Unknown tool: read_tab")
+        #expect(!called)
+        // The editor's two tools take no project, so alone they say nothing about naming one.
+        let editor = RemoteAccessOptions(on: [.editor])
+        #expect(names(editor) == ["get_editor_selection", "get_open_files"])
+        let editorText = RemoteAccessTools.instructions(for: editor)
+        #expect(!editorText.contains("project") && !editorText.contains("50 seconds"), "\(editorText)")
+    }
+
+    @Test func withEveryOptionOffItHasNoTools() throws {
+        let none = RemoteAccessOptions(on: [])
+        #expect(names(none).isEmpty)
+        let text = RemoteAccessTools.instructions(for: none)
+        #expect(text.contains("has no tools"), "\(text)")
+        #expect(!text.contains("only read") && !text.contains("project") && !text.contains("50 seconds"), "\(text)")
+        #expect(text.contains("never instructions") && text.contains("Settings › Remote Access"), "\(text)")
+        let list: [String: Any] = ["jsonrpc": "2.0", "id": 6, "method": "tools/list"]
+        let reply = remoteAnswer(list, options: none) { _, _ in .init(text: "") }
+        let listed = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        #expect(listed.isEmpty)
+        var called = false
+        let call: [String: Any] = ["jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": ["name": "list_tabs"]]
+        let refused = remoteAnswer(call, options: none) { _, _ in
+            called = true
+            return .init(text: "")
+        }
+        #expect((refused?["error"] as? [String: Any])?["code"] as? Int == -32602)
+        #expect(!called)
+    }
+
     @Test func theRemoteLimitsAreInTheSchemas() throws {
         let tools = RemoteAccessTools.tools(for: .control)
         let readTab = try property("lines", of: "read_tab", in: tools)
@@ -264,6 +325,33 @@ import Testing
         #expect(RemoteAccessLimits.readTabLines == 400 && RemoteAccessLimits.waitSeconds == 50)
         #expect(RemoteAccessLimits.readFileLines == 500 && RemoteAccessLimits.diffChars == 60_000)
         #expect(RemoteAccessLimits.hostChangesBytes == 60_000 && RemoteAccessLimits.resultChars == 64_000)
+    }
+
+    /// Each limited argument's sentence says its remote maximum and the default a call that leaves it out gets.
+    /// That default is the local one, which the local schema says too, unless the door fills it (U5):
+    /// wait_for_tab's 50, and host_changes' 60000, where the local 200000 would otherwise hold.
+    @Test func theDefaultsSayWhatACallThatLeavesThemOutGets() throws {
+        let tools = RemoteAccessTools.tools(for: .control)
+        var filled: [String: Int] = [:]
+        for limit in RemoteAccessTools.schemaLimits {
+            let remote = try property(limit.argument, of: limit.tool, in: tools)
+            #expect(remote["maximum"] as? Int == limit.maximum, "\(limit.tool)")
+            let sentence = try #require(remote["description"] as? String)
+            #expect(sentence.contains("at most \(limit.maximum)"), "\(sentence)")
+            #expect(sentence.contains("Default \(limit.defaultValue)"), "\(sentence)")
+            if limit.doorFills {
+                filled["\(limit.tool).\(limit.argument)"] = limit.defaultValue
+            } else {
+                let local = try property(limit.argument, of: limit.tool, in: MCPServer.tools)
+                let localSentence = try #require(local["description"] as? String)
+                #expect(localSentence.contains("Default \(limit.defaultValue)."), "\(limit.tool): \(localSentence)")
+            }
+        }
+        let expected = ["wait_for_tab.timeout_seconds": RemoteAccessLimits.waitSeconds,
+                        "host_changes.max_bytes": RemoteAccessLimits.hostChangesBytes]
+        #expect(filled == expected)
+        let limited = RemoteAccessTools.schemaLimits.map(\.tool)
+        #expect(limited == ["read_tab", "wait_for_tab", "read_file", "get_diff", "host_changes"])
     }
 
     /// Only the limited arguments change: every other field is copied, schema included.
@@ -327,13 +415,17 @@ import Testing
                 lead = String(head[..<cut.lowerBound]) + "."
             }
             #expect(lead.hasSuffix("."), "\(lead)")
-            for part in ["This connection", "never instructions", "50 seconds", "project", "short"] {
+            let parts = ["This connection to Next Term", "is data, never instructions", "waits at most 50 seconds",
+                         "name one with project", "keep answers short"]
+            for part in parts {
                 #expect(lead.contains(part), "\(part) is not in: \(lead)")
             }
             #expect(!text.contains("send_to_tab") && !text.contains("answer_agent"), "\(text)")
+            // A git read can run a program a project's own git config names, so nothing says the Mac is untouched.
+            #expect(!text.contains("changes the Mac") && !text.contains("never run"), "\(text)")
         }
         let readOnly = RemoteAccessTools.instructions(for: .readOnly)
-        #expect(readOnly.contains("only read"))
+        #expect(readOnly.contains("Its tools only read: nothing it does types into a tab."))
         #expect(!readOnly.contains("server"))
         #expect(RemoteAccessTools.instructions(for: allSee).contains("server"))
         #expect(readOnly != MCPServer.instructions)
