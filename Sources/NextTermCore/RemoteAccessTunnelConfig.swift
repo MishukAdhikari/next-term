@@ -9,8 +9,8 @@ import Foundation
 /// - Arguments are arrays, never shell text (as in Remote.swift).
 /// - The tunnel token never goes in an argument, a description or an error. It reaches `cloudflared` only through
 ///   the environment, built in one place (R30).
-/// - A routing check answers ok, warn, stop (or, for Funnel, waiting), and its messages name only the saved hostname
-///   and the door's port: never a value read from the tunnel, which whoever holds the tunnel's account can set.
+/// - A routing check answers ok, warn, stop or waiting, and its messages name only the saved hostname and the
+///   door's port: never a value read from the tunnel, which whoever holds the tunnel's account can set.
 public enum RemoteAccessTunnelConfig {
     // MARK: the four choices (R28)
 
@@ -347,16 +347,29 @@ public enum RemoteAccessTunnelConfig {
     /// `cloudflared`'s environment: the clean environment (as LoginShell runs tools) without any inherited
     /// cloudflared setting or copy of the token, the login PATH, management diagnostics off, and the token. The
     /// only place the token's variable is named (the Verification Contract's argv gate).
+    ///
+    /// `cloudflared` 2026.10.0 can also read the token from a file (its token-file flag or variable, since
+    /// 2025.4.0). The token stays in the environment (R30) until the user decides on a 0600 token file. An
+    /// inherited token-file variable goes with the other `TUNNEL_` settings.
     public static func cloudflaredEnvironment(token: Token, loginPath: [String],
                                               base: [String: String]) -> [String: String] {
         let clean = TerminalEnvironment.clean(base)
+        let copies = pastedForms(token)
         var environment = clean.filter { key, value in
-            !key.hasPrefix("TUNNEL_") && !value.contains(token.value)
+            !key.hasPrefix("TUNNEL_") && !copies.contains(where: { value.contains($0) })
         }
         environment["PATH"] = loginPath.joined(separator: ":")
         environment["TUNNEL_MANAGEMENT_DIAGNOSTICS"] = "false"
         environment["TUNNEL_TOKEN"] = token.value
         return environment
+    }
+
+    /// The token as it may have been pasted or copied: standard or URL-safe base64, without padding. Each is a
+    /// prefix of its padded form, so the two find all four forms.
+    private static func pastedForms(_ token: Token) -> [String] {
+        let unpadded = token.value.replacingOccurrences(of: "=", with: "")
+        let urlSafe = unpadded.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        return [unpadded, urlSafe]
     }
 
     public enum MetricsPath: String, Sendable {
@@ -386,7 +399,8 @@ public enum RemoteAccessTunnelConfig {
         case warn([RouteWarning])
         /// Stops the tunnel, turns Remote access off and tells the Mac.
         case stop(RouteStop)
-        /// Funnel only: no share for the hostname yet, so not ready, and not a stop.
+        /// Not ready, and not a stop: Funnel has no share for the hostname yet, or `cloudflared` has not had the
+        /// tunnel's routing from Cloudflare yet.
         case waiting
     }
 
@@ -483,7 +497,8 @@ public enum RemoteAccessTunnelConfig {
     /// `http://127.0.0.1:<port>`, then the 404 catch-all, and no Host override (R33).
     public static func cloudflareRoute(_ data: Data, host: String, port: Int) -> Route {
         guard let parsed = ingress(data) else { return .stop(.unreadable) }
-        let (rules, defaults) = parsed
+        let (rules, defaults) = (parsed.rules, parsed.defaults)
+        guard !awaitsRouting(version: parsed.version, rules: rules) else { return .waiting }
         let settings = [defaults] + rules.map(\.settings)
         guard !settings.contains(where: { isSet($0["httpHostHeader"]) }) else { return .stop(.hostHeader) }
         guard let last = rules.last else { return .stop(.noRule) }
@@ -492,7 +507,8 @@ public enum RemoteAccessTunnelConfig {
         let wanted = host.lowercased()
         guard let door = others.first(where: { normalized($0.hostname) == wanted }) else { return .stop(.noRule) }
         guard others.count == 1 else { return .stop(.otherRule) }
-        guard !isSet(door.settings["bastionMode"]) else { return .stop(.otherService) }
+        let bastion = [defaults, door.settings].contains { isSet($0["bastionMode"]) }
+        guard !bastion else { return .stop(.otherService) }
         if let stop = serviceStop(door.service, port: port) { return .stop(stop) }
         var warnings: [RouteWarning] = []
         if !door.path.isEmpty { warnings.append(.path) }
@@ -510,8 +526,15 @@ public enum RemoteAccessTunnelConfig {
         return name
     }
 
-    /// The rules and the default `originRequest` of `/config`, or nil when it is not that shape.
-    private static func ingress(_ data: Data) -> (rules: [Rule], defaults: [String: Any])? {
+    /// Whether `/config` is still `cloudflared`'s own rule from before the tunnel's routing arrives: version -1 and
+    /// one 503 for everything. Rules from a local config file at version -1 carry requests, so they are checked.
+    private static func awaitsRouting(version: Int?, rules: [Rule]) -> Bool {
+        guard let version, version < 0, rules.count == 1, let only = rules.first else { return false }
+        return only.hostname.isEmpty && only.path.isEmpty && only.service == "http_status:503"
+    }
+
+    /// The version, the rules and the default `originRequest` of `/config`, or nil when it is not that shape.
+    private static func ingress(_ data: Data) -> (version: Int?, rules: [Rule], defaults: [String: Any])? {
         guard let root = object(data), let config = root["config"] as? [String: Any] else { return nil }
         guard let list = config["ingress"] as? [Any] else { return nil }
         var rules: [Rule] = []
@@ -520,7 +543,8 @@ public enum RemoteAccessTunnelConfig {
             rules.append(rule)
         }
         let defaults = config["originRequest"] as? [String: Any] ?? [:]
-        return (rules, defaults)
+        let version = (root["version"] as? NSNumber)?.intValue
+        return (version, rules, defaults)
     }
 
     private static func parsedRule(_ item: Any) -> Rule? {
@@ -680,6 +704,10 @@ public enum RemoteAccessTunnelConfig {
         return low <= 443 && 443 <= high
     }
 
+    /// The fields a handler that only proxies may set. Tailscale serves `Text`, `Redirect` and `Path` ahead of
+    /// `Proxy`, so a handler with any other field set does not reach the door.
+    static let proxyHandlerFields: Set<String> = ["Proxy", "AcceptAppCaps"]
+
     /// One handler of a serve config, on the hostname's port 443.
     private struct Handler {
         var mount: String
@@ -699,7 +727,7 @@ public enum RemoteAccessTunnelConfig {
     }
 
     /// `tailscale funnel status --json` against the Mac's name and the door's port: port 443 on the name allows
-    /// Funnel and has one handler, at "/", that proxies to `http://127.0.0.1:<port>` (R33). No share yet is
+    /// Funnel and has one handler, at "/", that only proxies to `http://127.0.0.1:<port>` (R33). No share yet is
     /// waiting, not a stop.
     public static func funnelRoute(_ data: Data, host: String, port: Int) -> Route {
         guard let root = object(data) else { return .stop(.unreadable) }
@@ -726,6 +754,8 @@ public enum RemoteAccessTunnelConfig {
         guard handler.mount == "/", let proxy = handler.fields["Proxy"] as? String else {
             return .stop(.wrongService)
         }
+        let more = handler.fields.contains { !proxyHandlerFields.contains($0.key) && isSet($0.value) }
+        guard !more else { return .stop(.wrongService) }
         if let stop = serviceStop(proxy, port: port) {
             return .stop(stop == .otherService ? .wrongService : stop)
         }

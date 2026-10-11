@@ -93,15 +93,18 @@ import Testing
     var doorRule: [String: Any] { rule(host, "http://127.0.0.1:\(port)") }
 
     /// `/config` as cloudflared serves it: the version, then the rules and the defaults.
-    func config(_ rules: [[String: Any]], defaults: [String: Any]? = nil) -> Data {
+    func config(_ rules: [[String: Any]], defaults: [String: Any]? = nil, version: Int = 3) -> Data {
         var inner: [String: Any] = ["ingress": rules]
         inner["originRequest"] = defaults ?? resolvedDefaults
-        return json(["version": 3, "config": inner] as [String: Any])
+        return json(["version": version, "config": inner] as [String: Any])
     }
 
-    func route(_ rules: [[String: Any]], defaults: [String: Any]? = nil) -> Config.Route {
-        Config.cloudflareRoute(config(rules, defaults: defaults), host: host, port: port)
+    func route(_ rules: [[String: Any]], defaults: [String: Any]? = nil, version: Int = 3) -> Config.Route {
+        Config.cloudflareRoute(config(rules, defaults: defaults, version: version), host: host, port: port)
     }
+
+    /// cloudflared's own rule while it has no routing: everything gets 503.
+    var noRoutingYet: [String: Any] { ["service": "http_status:503", "hostname": "", "path": NSNull()] }
 
     /// One serve config: these handlers on the hostname's port 443, Funnel on or off.
     func share(_ handlers: [String: Any], host: String? = nil, funnel: Bool = true,
@@ -431,6 +434,24 @@ import Testing
         #expect(environment["COPIED"] == nil)
     }
 
+    @Test func noInheritedValueRepeatsTheTokenInAnyForm() throws {
+        for index in 0..<6 {
+            // "~" and "?" put a "+" and a "/" in the token, so its URL-safe form differs from the standard one.
+            let endpoint = "~~~???" + String(repeating: "x", count: index % 3)
+            let standard = token(extra: #""e":"\#(endpoint)""#)
+            let pasted = urlSafe(standard)
+            #expect(pasted != standard)
+            let parsed = try #require(self.parsed(pasted))
+            let unpadded = standard.replacingOccurrences(of: "=", with: "")
+            let base = ["CF_TUNNEL": pasted, "QUOTED": "'\(pasted)'", "PADLESS": "t=" + unpadded,
+                        "URLSAFE_PADDED": urlSafe(standard) + "==", "HOME": "/Users/u"]
+            let environment = Config.cloudflaredEnvironment(token: parsed, loginPath: ["/usr/bin"], base: base)
+            let holding = environment.filter { $0.value.contains(unpadded) || $0.value.contains(pasted) }
+            #expect(Array(holding.keys) == ["TUNNEL_TOKEN"], "the pasted form is a copy too")
+            #expect(environment["HOME"] == "/Users/u")
+        }
+    }
+
     // MARK: /ready
 
     @Test func readyNeedsA200AndAConnection() {
@@ -506,6 +527,16 @@ import Testing
         #expect(route([bastion, catchAll]) == .stop(.otherService))
     }
 
+    @Test func bastionModeInTheDefaultsStops() {
+        let rules: [[String: Any]] = [["hostname": host, "service": "http://127.0.0.1:\(port)"],
+                                      ["service": "http_status:404"]]
+        let bare = json(["config": ["ingress": rules, "originRequest": ["bastionMode": true]]])
+        #expect(Config.cloudflareRoute(bare, host: host, port: port) == .stop(.otherService))
+        var defaults = resolvedDefaults
+        defaults["bastionMode"] = true
+        #expect(route([doorRule, catchAll], defaults: defaults) == .stop(.otherService))
+    }
+
     @Test func aHostHeaderOverrideStops() {
         let override = rule(host, "http://127.0.0.1:\(port)", ["httpHostHeader": "mcp.example.com"])
         #expect(route([override, catchAll]) == .stop(.hostHeader))
@@ -538,6 +569,26 @@ import Testing
         var pathed = catchAll
         pathed["path"] = "^/x"
         #expect(route([doorRule, pathed]) == .stop(.noCatchAll))
+    }
+
+    @Test func cloudflaredsOwnRuleBeforeTheTunnelsRoutingArrivesIsWaiting() {
+        let inner: [String: Any] = ["ingress": [noRoutingYet], "originRequest": [String: Any]()]
+        let cloudflaredDefault = json(["version": -1, "config": inner] as [String: Any])
+        #expect(Config.cloudflareRoute(cloudflaredDefault, host: host, port: port) == .waiting)
+        #expect(route([noRoutingYet], version: -1) == .waiting)
+    }
+
+    @Test func rulesFromALocalConfigFileBeforeTheTunnelsRoutingArrivesAreChecked() {
+        #expect(route([rule(host, "ssh://127.0.0.1:22"), catchAll], version: -1) == .stop(.otherService))
+        #expect(route([rule("evil.example.net", "http://127.0.0.1:22"), noRoutingYet], version: -1)
+                == .stop(.noCatchAll))
+        #expect(route([doorRule, catchAll], version: -1) == .ok)
+    }
+
+    @Test func onlyA503FromTheTunnelsOwnRoutingStops() {
+        #expect(route([noRoutingYet], version: 0) == .stop(.noCatchAll), "Cloudflare sent it, so it is the routing")
+        let bare = json(["config": ["ingress": [noRoutingYet]]])
+        #expect(Config.cloudflareRoute(bare, host: host, port: port) == .stop(.noCatchAll))
     }
 
     @Test func anUnreadableConfigStops() {
@@ -647,6 +698,20 @@ import Testing
         #expect(funnel(foreground(mounted)) == .stop(.wrongService))
         let local = share(["/": ["Proxy": "http://localhost:\(port)"]])
         #expect(funnel(foreground(local)) == .stop(.localhost))
+    }
+
+    @Test func aDoorHandlerThatAlsoServesSomethingElseStops() {
+        // Tailscale serves Text, then Redirect, then Path, and only then Proxy, so any of them wins over the door.
+        let others: [String: Any] = ["Path": "/Users/u", "Text": "x",
+                                     "Redirect": "308:https://evil.example${REQUEST_URI}", "SomeNewField": true]
+        for (field, value) in others {
+            let handler: [String: Any] = ["Proxy": "http://127.0.0.1:\(port)", field: value]
+            #expect(funnel(foreground(share(["/": handler]))) == .stop(.wrongService), "\(field)")
+        }
+        let caps: [String: Any] = ["Proxy": "http://127.0.0.1:\(port)", "AcceptAppCaps": ["example.com/cap/mon"]]
+        #expect(funnel(foreground(share(["/": caps]))) == .ok)
+        let empty: [String: Any] = ["Proxy": "http://127.0.0.1:\(port)", "Path": "", "Text": ""]
+        #expect(funnel(foreground(share(["/": empty]))) == .ok, "an empty field is unset, as Tailscale omits it")
     }
 
     @Test func aSecondHandlerOrARawForwardStops() {
