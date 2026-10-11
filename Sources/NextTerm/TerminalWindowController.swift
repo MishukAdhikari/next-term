@@ -1796,20 +1796,33 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func sidebar(_ sidebar: ProjectSidebarView, rollback urls: [URL]) { rollback(urls) }
 
-    /// What Git › Rollback… acts on: as Show Changes, the editor's file while the sidebar doesn't have the keyboard,
-    /// else the sidebar's selection, deleted files included.
+    /// What Git › Rollback… acts on: as Show Changes, what is in front while the sidebar doesn't have the keyboard (the
+    /// file being edited, the Git Diff tab's selected file, a file's diff of its uncommitted changes), else the sidebar's
+    /// selection, deleted files included. A diff of a commit or a proposal has nothing to roll back.
     var rollbackTargets: [URL] {
         let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
-        if fromEditor, editorArea.activeDiff == nil, let path = editorArea.activePath { return [URL(fileURLWithPath: path)] }
+        if fromEditor, editorArea.activePane != nil {
+            if let gitDiff = editorArea.activeGitDiff { return gitDiff.rollbackTarget.map { [$0] } ?? [] }
+            if let diff = editorArea.activeDiff { return diff.commit == nil && diff.proposal == nil ? [URL(fileURLWithPath: diff.absolutePath)] : [] }
+            if let path = editorArea.activePath { return [URL(fileURLWithPath: path)] }
+        }
         return sidebar.selection.map(\.url) + sidebar.selectedDeleted.map(\.url)
     }
 
-    /// Rolls back `urls`, all in the repository of the first: the others are left alone.
+    /// Rolls back `urls`, all in the repository of the first: the others are left alone. Paths are read as the kernel
+    /// spells them (`/tmp` is `/private/tmp`), but a file's own name as it is: a link is rolled back, not what it points to.
     func rollback(_ urls: [URL]) {
         guard let first = urls.first else { return NSSound.beep() }
-        let start = canonicalPath(first.path)
-        let root = canonicalPath(ProjectRoot.find(from: (start as NSString).deletingLastPathComponent))
-        let paths = urls.map { canonicalPath($0.path) }.compactMap { path -> String? in
+        func spelled(_ url: URL) -> String {
+            let path = url.standardizedFileURL.path
+            if Rollback.diskKind("", root: path) == .directory { return canonicalPath(path) }
+            return (canonicalPath((path as NSString).deletingLastPathComponent) as NSString).appendingPathComponent((path as NSString).lastPathComponent)
+        }
+        // A folder is its own start (the project's own row is the root itself); a file, or a deleted one, its folder's.
+        let start = spelled(first)
+        let isFolder = Rollback.diskKind("", root: start) == .directory
+        let root = canonicalPath(ProjectRoot.find(from: isFolder ? start : (start as NSString).deletingLastPathComponent))
+        let paths = urls.map(spelled).compactMap { path -> String? in
             if path == root { return "" }
             return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : nil
         }

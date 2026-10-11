@@ -1140,14 +1140,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         delegate?.sidebar(self, rollback: menuNodes.map(\.url))
     }
 
-    /// A file with an uncommitted change (not one git ignores), or a folder with one under it.
+    /// A file with an uncommitted change (not one git ignores), or a folder with one under it, new folders and the
+    /// files in them included. A link is read by its own name, not what it points to.
     private func hasChanges(_ node: FileNode) -> Bool {
         guard let snapshot = git.snapshot else { return false }
-        let root = canonicalPath(snapshot.root), path = canonicalPath(node.url.path)
+        let own = node.url.standardizedFileURL.path
+        let root = canonicalPath(snapshot.root)
+        let path = node.isDirectory ? canonicalPath(own)
+            : (canonicalPath((own as NSString).deletingLastPathComponent) as NSString).appendingPathComponent((own as NSString).lastPathComponent)
         guard path == root || path.hasPrefix(root + "/") else { return false }
         let relative = path == root ? "" : String(path.dropFirst(root.count + 1))
-        if !node.isDirectory { return snapshot.files[relative].map { $0 != .ignored } ?? false }
-        return snapshot.files.contains { $0.value != .ignored && (relative.isEmpty || $0.key.hasPrefix(relative + "/")) }
+        return snapshot.change(at: relative, isDirectory: node.isDirectory).map { $0 != .ignored } ?? false
     }
 
     @objc private func showChangesFromMenu() {

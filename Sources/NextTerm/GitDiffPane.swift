@@ -143,6 +143,18 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         onTitleChange?()
     }
 
+    /// A file of the list has uncommitted changes to roll back. In a commit, or All changes since the base, a file may
+    /// differ by commits only.
+    func canRollback(_ path: String) -> Bool {
+        effectiveScope == .uncommitted || monitor.snapshot?.files[path].map { $0 != .ignored } == true
+    }
+
+    /// What Git › Rollback… acts on while this tab is in front: the file selected, when it has uncommitted changes.
+    var rollbackTarget: URL? {
+        guard let path = selectedPath, canRollback(path) else { return nil }
+        return URL(fileURLWithPath: root).appendingPathComponent(path)
+    }
+
     /// What to compare: All changes, Uncommitted, or a commit.
     func select(scope: ChangeScope) {
         guard scope != self.scope else { return }
@@ -642,10 +654,7 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         list.onNeedMoreCommits = { [weak self] in self?.loadMoreCommits() }
         list.onOpenFile = { [weak self] file in self?.openFile(file) }
         // Only uncommitted changes roll back: in a commit, or All changes since the base, a file may differ by commits.
-        list.canRollback = { [weak self] file in
-            guard let self else { return false }
-            return self.effectiveScope == .uncommitted || self.monitor.snapshot?.files[file.path].map { $0 != .ignored } == true
-        }
+        list.canRollback = { [weak self] file in self?.canRollback(file.path) == true }
         list.onRollback = { [weak self] file in
             guard let self, let controller = self.window?.windowController as? TerminalWindowController else { return }
             controller.rollback([URL(fileURLWithPath: self.root).appendingPathComponent(file.path)])

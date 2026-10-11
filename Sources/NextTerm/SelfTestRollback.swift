@@ -5,7 +5,7 @@ import NextTermCore
 /// last commit once the sheet's Roll Back is pressed, and Undo puts both changes back, the staged one staged; a new file
 /// goes to the Trash, and Undo takes it back out; a file with nothing uncommitted says so and changes nothing. (A deleted
 /// file's sidebar menu offers Rollback… with its key: the deleted-rows checks.) The clicks are the buttons' own, so these
-/// run whether or not the app is in front.
+/// run whether or not the app is in front. A file in the way of what has to come back is refused with nothing changed.
 extension SelfTest {
     static func rollbackChecks(_ c: TerminalWindowController) async {
         guard let git = GitRunner.locateGit(), let window = c.window else { return note("rollback: skipped, no git or window") }
@@ -48,7 +48,7 @@ extension SelfTest {
         // A file changed in the index and after: the sheet names it, Roll Back puts it back to the last commit.
         c.rollback([repo.appendingPathComponent("a.txt")])
         let asked = await wait(10) { sheetText().contains("Roll back “a.txt”?") }
-        check(asked && sheetText().contains("Undo puts everything back"), "rollback: it asks first, naming the file and Undo", sheetText())
+        check(asked && sheetText().contains("Undo, on the notice after, puts everything back"), "rollback: it asks first, naming the file and Undo", sheetText())
         if asked { _ = await press("Roll Back") }
         let back = await wait(10) { read("a.txt") == "one\n" && run("status", "--porcelain").contains("a.txt") == false }
         check(back && GitToast.text == "Rolled back a.txt", "rollback: Roll Back puts the file and the index back to the last commit, and says so",
@@ -63,7 +63,7 @@ extension SelfTest {
 
         // A new file goes to the Trash, and Undo takes it back out.
         c.rollback([repo.appendingPathComponent("new.txt")])
-        let askedNew = await wait(10) { sheetText().contains("A new file goes to the Trash") }
+        let askedNew = await wait(10) { sheetText().contains("so it goes to the Trash") }
         check(askedNew, "rollback: a new file's question says it goes to the Trash", sheetText())
         if askedNew { _ = await press("Roll Back") }
         let trashed = await wait(10) { !fm.fileExists(atPath: repo.appendingPathComponent("new.txt").path) }
@@ -71,6 +71,23 @@ extension SelfTest {
         GitToast.pressButtonForTest()
         check(await wait(10) { read("new.txt") == "new\n" }, "rollback: Undo takes the new file back out of the Trash")
         GitToast.dismiss()
+
+        // A file where a deleted folder was: the folder's file can't come back through it, so it's refused, and the
+        // file stays as it is.
+        try? fm.createDirectory(at: repo.appendingPathComponent("dir"), withIntermediateDirectories: true)
+        write("one\n", "dir/c.txt")
+        run("add", "-A")
+        run("commit", "-q", "-m", "dir")
+        try? fm.removeItem(at: repo.appendingPathComponent("dir"))
+        write("precious\n", "dir")
+        c.rollback([repo.appendingPathComponent("dir/c.txt")])
+        let refused = await wait(10) { sheetText().contains("can’t come back") }
+        check(refused && read("dir") == "precious\n", "rollback: a file in the way of what has to come back is refused, and kept",
+              "\(sheetText()) \(read("dir")?.debugDescription ?? "none")")
+        if refused { _ = await press("OK") }
+        _ = await wait(5) { window.attachedSheet == nil }
+        try? fm.removeItem(at: repo.appendingPathComponent("dir"))
+        run("checkout", "HEAD", "--", "dir")
 
         // Nothing uncommitted: it says so, and asks nothing.
         c.rollback([repo.appendingPathComponent("b.txt")])

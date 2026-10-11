@@ -466,6 +466,11 @@ final class GitDiffOutlineView: NSOutlineView, NSMenuDelegate {
             menu.addItem(item)
         }
     }
+
+    /// Its keys only while it is open, as the sidebar's menu (ProjectSidebarView.menuDidClose): Git › Rollback… keeps ⌥⌘Z.
+    func menuDidClose(_ menu: NSMenu) {
+        for item in menu.items { KeyboardShortcuts.set(nil, on: item) }
+    }
 }
 
 /// A row of the changed files: All files with the total, a folder, or a file with its icon, name, mark and
