@@ -1089,7 +1089,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if let ownStateDescription { lines.append(ownStateDescription) }
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
-        if let servedURL { lines.append("Serving \(servedURL.absoluteString)") }
+        if let servedURL { lines.append("Serving \(ServedURL.shared(servedURL))") } // its token, if any, stays out of sight
         if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
         lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")

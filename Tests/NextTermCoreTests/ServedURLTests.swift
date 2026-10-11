@@ -45,4 +45,11 @@ import Testing
     @Test func theTitleSuffixIsThePort() {
         #expect(ServedURL.suffix(URL(string: "http://localhost:5173/")!) == " · :5173")
     }
+
+    @Test func whatLeavesTheTabHasNoQuery() throws {
+        let jupyter = try #require(ServedURL.find(in: "    http://localhost:8888/tree?token=abc123def#top"))
+        #expect(jupyter.query == "token=abc123def") // the tab keeps it, for your own click
+        #expect(ServedURL.shared(jupyter) == "http://localhost:8888/tree")
+        #expect(ServedURL.shared(try #require(URL(string: "http://127.0.0.1:5173/"))) == "http://127.0.0.1:5173/")
+    }
 }

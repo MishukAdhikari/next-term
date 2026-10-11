@@ -315,7 +315,8 @@ enum MCPControl {
         info.merge(MCPRestoredTabs.fields(tab)) { $1 } // what a restart did to it (U13)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
-        if let url = tab.servedURL { info["served_url"] = url.absoluteString } // a dev server's local address
+        // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
+        if let url = tab.servedURL { info["served_url"] = ServedURL.shared(url) }
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
