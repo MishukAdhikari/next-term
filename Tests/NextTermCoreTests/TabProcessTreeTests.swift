@@ -243,6 +243,29 @@ struct TabProcessTreeTests {
         #expect(TabProcessTree.outlived(Suite.plan("B").stoppable, now: { _ in Suite.snapshot[4] }).isEmpty)
     }
 
+    /// A tab closed just before Quit still waits for its SIGTERMs off the main thread: Quit takes those waits
+    /// over, and one that finished is no longer listed.
+    @Test func quitTakesOverTheWaitsOfTabsClosedJustBefore() {
+        let pending = PendingHangups()
+        let first = [Suite.p(11, parent: 1, group: 11, tty: 3, "next-server", started: 6)]
+        let second = [Suite.p(12, parent: 1, group: 12, tty: 4, "ntmark-hupnode.js", started: 7),
+                      Suite.p(13, parent: 12, group: 12, tty: 4, "node", started: 8)]
+        pending.add(first)
+        pending.add(second)
+        pending.remove(first)
+        // A reused pid (another start time) is another process: its wait stays.
+        pending.remove([Suite.p(12, parent: 1, group: 12, tty: 4, "another", started: 70)])
+        #expect(pending.takeAll().map(\.pid) == [12, 13])
+        #expect(pending.takeAll().isEmpty)
+        // From many threads at once.
+        DispatchQueue.concurrentPerform(iterations: 200) { i in
+            let record = [Suite.p(Int32(1000 + i), parent: 1, group: 1, tty: 3, "x", started: 1)]
+            pending.add(record)
+            if i % 2 == 0 { pending.remove(record) }
+        }
+        #expect(pending.takeAll().count == 100)
+    }
+
     @Test func interactiveShells() {
         #expect(TabProcessTree.isInteractiveShell(name: "bash", arguments: ["bash"]))
         #expect(TabProcessTree.isInteractiveShell(name: "zsh", arguments: ["-zsh"]))

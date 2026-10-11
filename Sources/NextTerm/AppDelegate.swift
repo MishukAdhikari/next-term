@@ -691,10 +691,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)
         // Every tab from one snapshot taken before any signal; what outlives the hangup gets SIGTERM after one
-        // shared second at most (no wait at all when nothing does).
+        // shared second at most (no wait at all when nothing does), tabs closed just before included.
         let waiting = TerminalTab.terminate(controllers.flatMap(\.tabs), finishLater: false)
         RemoteConnection.shutdown() // the master connections; sessions kept by tmux or herdr stay on their hosts
-        TabHangup.finish(waiting)
+        TabHangup.finishAtQuit(waiting)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

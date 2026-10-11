@@ -7,6 +7,9 @@ import NextTermCore
 enum TabHangup {
     static let grace: TimeInterval = 1
 
+    /// What closed tabs still wait for off the main thread; Quit takes it over (`finishAtQuit`).
+    static let pending = PendingHangups()
+
     static func send(_ plan: HangupPlan) {
         for group in plan.groups { killpg(group, SIGHUP) }
         for group in plan.stoppedGroups { killpg(group, SIGCONT) } // a stopped process gets the hangup once continued
@@ -31,6 +34,16 @@ enum TabHangup {
     /// The same, off the main thread: closing a tab or a window doesn't wait for it.
     static func finishLater(_ waiting: [ProcessRecord]) {
         guard !waiting.isEmpty else { return }
-        DispatchQueue.global(qos: .utility).async { finish(waiting) }
+        pending.add(waiting)
+        DispatchQueue.global(qos: .utility).async {
+            finish(waiting)
+            pending.remove(waiting)
+        }
+    }
+
+    /// At Quit: `waiting` (the open tabs') and what tabs closed within the last second still wait for, under one
+    /// deadline. The app exits right after, which would end a wait still running off the main thread.
+    static func finishAtQuit(_ waiting: [ProcessRecord]) {
+        finish(waiting + pending.takeAll())
     }
 }
