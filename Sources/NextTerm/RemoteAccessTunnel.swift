@@ -883,6 +883,9 @@ extension RemoteAccessTunnel {
 
         var cloudflared: Found?
         var tailscale: Found?
+        /// `tailscale status --json`: the Mac's name when it is logged in with Funnel allowed, or why not. Settings'
+        /// guided mode recommends Funnel from it (R49).
+        var tailscaleStatus: Result<String, Config.TailscaleProblem>?
         var warnings: [String] = []
     }
 
@@ -917,6 +920,8 @@ extension RemoteAccessTunnel {
         if let program = locate(.tailscale, loginPath: loginPath) {
             let printed = tailscaleVersion(of: program, environment: environment)
             detection.tailscale = Detection.Found(path: program, version: printed.flatMap(Config.tailscaleVersion))
+            let status = tailscaleStatus(program, environment: environment)
+            detection.tailscaleStatus = status.map(Config.tailscaleStatus) ?? .failure(.unreadable)
             if let share = funnelStatus(program, environment: environment), Config.funnelShareExists(share) {
                 detection.warnings.append(Config.funnelShareWarning)
             }

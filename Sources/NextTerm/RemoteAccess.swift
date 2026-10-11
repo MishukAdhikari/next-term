@@ -147,6 +147,7 @@ final class RemoteAccess {
     /// After launch: a tunnel a crash left behind is ended (R42), then Remote access starts again if it was saved
     /// on, and the Mac is told once it is on, or that it waits for the Keychain or didn't start (R43, R44).
     func launched() {
+        RemoteAccessStatusItem.shared.follow() // the menu bar icon, shown while it is on (U11)
         endLeftoverTunnel()
         guard settings.on else { return }
         start(launch: true)

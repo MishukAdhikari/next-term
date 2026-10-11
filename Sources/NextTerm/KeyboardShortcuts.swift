@@ -685,6 +685,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         skillsTab.label = "Skills"
         skillsTab.view = SkillsSettingsView()
         tabs.addTabViewItem(skillsTab)
+        let remoteAccessTab = NSTabViewItem(identifier: RemoteAccessSettingsView.tabID)
+        remoteAccessTab.label = "Remote Access"
+        remoteAccessTab.view = RemoteAccessSettingsView()
+        tabs.addTabViewItem(remoteAccessTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         window.contentView = tabs

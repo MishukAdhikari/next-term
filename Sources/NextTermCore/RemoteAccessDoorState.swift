@@ -37,6 +37,8 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     private var authority: RemoteAccessOAuth?
     private var store: RemoteAccessGrantStore
     private var refusals = RemoteAccessRefusals()
+    /// The tool calls of the last hour, for the status item (U11).
+    private var callCount = RemoteAccessCallCount()
     /// The clients and grants as the file holds them, their last uses aside: a change to them is saved.
     private var saved: Saved
     /// What the store held at launch, for when the host is saved. Revoke All with no host ends its grants here.
@@ -130,6 +132,19 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     /// A grant's options as they are now, for `initialize` and `tools/list`; nil when it is gone. With `listed`
     /// (a `tools/list`), the grant's list-changed mark goes in the same step, so an options change either shows in
     /// this list or marks the next stream (R20).
+    /// The grants as they are now, still active, for Settings and the status item (U11).
+    public var grants: [RemoteAccessOAuth.Grant] {
+        locked {
+            let now = clock()
+            return authority?.grants.filter { $0.isActive(at: now) } ?? []
+        }
+    }
+
+    /// The tool calls the audit log got in the last hour, allowed or refused, to the minute (R37).
+    public var callsInLastHour: Int {
+        locked { callCount.count(at: clock()) }
+    }
+
     public func options(of grantID: String, listed: Bool) -> RemoteAccessOptions? {
         lock.lock()
         defer { lock.unlock() }
@@ -320,7 +335,29 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     public func audit(_ entries: [RemoteAccessAuditEntry]) {
         lock.lock()
         defer { lock.unlock() }
+        for entry in entries where entry.event == RemoteAccessAuditEntry.callEvent { callCount.note(at: entry.time) }
         append(entries, now: clock())
+    }
+
+    /// The activity view's read (U11): the last `count` entries, after every line queued so far, on the audit
+    /// queue; `done` gets them there.
+    public func readAudit(_ count: Int = RemoteAccessAuditLog.tailCount,
+                          done: @escaping @Sendable ([RemoteAccessAuditEntry]) -> Void) {
+        let now = clock()
+        auditQueue.async { [self] in done(log.tail(count, now: now)) }
+    }
+
+    /// Clear Log while the door runs (U11): every audit file goes, after the lines queued so far, on the audit
+    /// queue; `done` gets the error there, or nil.
+    public func clearAudit(done: @escaping @Sendable (Error?) -> Void) {
+        auditQueue.async { [self] in
+            do {
+                try log.clear()
+                done(nil)
+            } catch {
+                done(error)
+            }
+        }
     }
 
     /// A request refused before a valid token, counted for its kind's line a minute (R39).
