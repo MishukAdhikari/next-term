@@ -12,6 +12,7 @@ import NextTermCore
 /// window, and Open Project from the restored window, with "Open Projects In" at This Window, opens a window of its own.
 extension SelfTest {
     static func restoreInputChecks(proj: URL) async {
+        #if DEBUG
         guard let app = AppDelegate.shared else { return }
         // The windows the checks before closed leave app.controllers a main-queue turn later (AppDelegate.windowClosed):
         // the window count below starts once they have gone.
@@ -224,6 +225,9 @@ extension SelfTest {
                   "a resume whose session a process took since puts its resume command on the line, unrun, and says why",
                   "why \(why), line “\(bottom)”")
         }
+        #else
+        note("Restore input: skipped in a release build (its tabs need the debug build's own zsh config)")
+        #endif
     }
 }
 

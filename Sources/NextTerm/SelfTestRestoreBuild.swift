@@ -10,6 +10,7 @@ import SwiftTerm
 /// Again, then puts the line back once. The relaunch harness checks the rest across a real quit (SelfTestRestore).
 extension SelfTest {
     static func restoreBuildChecks(proj: URL) async {
+        #if DEBUG
         guard let app = AppDelegate.shared else { return }
         let fm = FileManager.default
         let home = canonicalPath(NSTemporaryDirectory()) + "/nt-restore-build-\(getpid())"
@@ -156,6 +157,9 @@ extension SelfTest {
         let back = line.contains("npm test") && !line.contains("was running")
         check(applied && !safe.isWaiting && back && tab.status.command.isEmpty,
               "Try Again puts what the tab held back on the line, once, and runs nothing", "line “\(line)”")
+        #else
+        note("Restore build: skipped in a release build (its tabs need the debug build's own zsh config)")
+        #endif
     }
 
     /// A tab's last line with text, its wrapped rows joined: a line put back at the prompt of a narrow pane reads whole,
