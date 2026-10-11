@@ -550,7 +550,9 @@ extension AgentEvidence {
     /// command, with no prefix or wrapper before it, that is an alias whose expansion's last command runs the agent with
     /// argv's own arguments, or a word typed with arguments that argv ends with. A function typed alone shows neither.
     /// The words typed after it must read alone as they do at the end of argv: an alias ending in an option that takes a
-    /// value (`claude --model`) leaves that value to the typed words, which a replay would split. Its own words hold no
+    /// value (`claude --model`) leaves that value to the typed words, which a replay would split. One ending in an option
+    /// the table does not know, with a word typed after it (`alias ca='claude --agent'`, `ca reviewer`), may do the same,
+    /// so it is not kept either: the line is rebuilt, and leaves that option off by name. Its own words hold no
     /// form or one-shot option (`alias cc='claude --continue'`), which a replay would bring back beside the resume form,
     /// and no prompt word or `--` (`alias crd='claude "review my changes"'`, `rv(){ claude "review this" "$@"; }`,
     /// `alias c='claude --'`), with which a replay would send that prompt again, unseen on the line, or read the resume
@@ -570,6 +572,7 @@ extension AgentEvidence {
         let cli = agent.cli
         let ownWords = Array(argv.dropLast(rest.count))
         let own = cli.read(ownWords).pieces
+        if case .unknown(_, nil)? = own.last, case .word? = cli.read(rest).pieces.first { return nil }
         let replays = !ownWords.contains("--") && own.allSatisfy { (piece: AgentCLI.Piece) -> Bool in
             switch piece {
             case .known(_, _, let option): return option.kind != .form && option.kind != .oneShot

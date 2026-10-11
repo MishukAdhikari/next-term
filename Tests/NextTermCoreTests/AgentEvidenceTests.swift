@@ -684,6 +684,10 @@ import Testing
         // Argv that does not end with what was typed, or an alias that splits an option from its value.
         #expect(try launcher(danger, typed: "cad --model opus") == nil)
         #expect(try launcher(["claude", "--model", "opus"], typed: "cm opus", expanded: "claude --model opus") == nil)
+        // The same with an option the table does not know: its value may be the word typed after it. An alias, or a
+        // function (`ca(){ claude --agent "$@"; }`), for which the shell sends no expansion.
+        #expect(try launcher(["claude", "--agent", "reviewer"], typed: "ca reviewer", expanded: "claude --agent reviewer") == nil)
+        #expect(try launcher(["claude", "--agent", "reviewer"], typed: "ca reviewer") == nil)
         // A prefix, a wrapper, a word typed with quotes or a home folder's tilde, or a line that runs on after it.
         #expect(try launcher(["claude", "--model", "opus"], typed: "CLAUDE_CONFIG_DIR=/Users/x/w claude --model opus") == nil)
         #expect(try launcher(["claude", "--model", "opus"], typed: "nice claude --model opus") == nil)
@@ -699,6 +703,24 @@ import Testing
                                            home: home))
         #expect(words(unclear.options) == [["--model", "opus"], ["--token"]])
         #expect(unclear.launcher == Launcher(word: "cad", typed: 1))
+    }
+
+    /// KTD7, AE30: a launcher whose own words end in an option the table does not know, with a word typed after it, is
+    /// not replayed: the agent may read that word as the option's value, and on a replay it would read the resume form
+    /// so. The line is rebuilt from argv, as for the same launch typed out, and names the option it leaves off.
+    @Test func aLauncherThatSplitsAnUnknownOptionFromItsWordIsNotReplayed() throws {
+        let home = try makeHome().home
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let argv = ["claude", "--agent", "reviewer"]
+        let left = PutBack(line: "claude --resume \(uuid)", namesSession: true, leftOff: ["--agent"])
+        // alias ca='claude --agent', ca(){ claude --agent "$@"; } with no expansion, and the launch typed out.
+        let lines: [(typed: String, expanded: String?)] = [("ca reviewer", "claude --agent reviewer"), ("ca reviewer", nil),
+                                                           ("claude --agent reviewer", nil)]
+        for (typed, expanded) in lines {
+            let evidence = try #require(capture(try process(argv), typed: typed, expanded: expanded, home: home))
+            #expect(evidence.putBack(id: uuid) == left, "\(typed)")
+            #expect(evidence.launcher?.word != "ca", "\(typed)")
+        }
     }
 
     /// R8, KTD7: a launcher whose own words hold a prompt word, or end the options with `--`, is not replayed: Return on

@@ -629,10 +629,14 @@ extension SessionSnapshot.Evidence {
         return PutBack(line: program, namesSession: false, leftOff: [])
     }
 
-    /// The launcher a put-back line replays (KTD7): the record's, unless the agent's options belong to a subcommand or
-    /// the count typed after it is not one the options hold. Nil when the line is rebuilt from the program.
+    /// The launcher a put-back line replays (KTD7): the record's, unless the agent's options belong to a subcommand, the
+    /// count typed after it is not one the options hold, or one of its own options is unclear: its word was typed after
+    /// the launcher, and a replay would split the two (an earlier build kept such a launcher). Nil when the line is
+    /// rebuilt from the program.
     public var replayedLauncher: SessionSnapshot.Launcher? {
-        guard let launcher, agent.cli.subcommand.isEmpty, (0...(options ?? []).count).contains(launcher.typed) else { return nil }
+        let options = self.options ?? []
+        guard let launcher, agent.cli.subcommand.isEmpty, (0...options.count).contains(launcher.typed),
+              !options.dropLast(launcher.typed).contains(where: \.unclear) else { return nil }
         return launcher
     }
 

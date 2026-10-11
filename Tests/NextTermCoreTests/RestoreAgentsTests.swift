@@ -270,8 +270,16 @@ import Testing
         #expect(alone.putBack(id: uuid)?.line == "claude --newflag --verbose --other --resume \(uuid)")
         // A launcher brings its own back: only an unclear option typed after it is left off, and each is named once.
         let typedAfter = launch(.claude, [["--newflag"], ["--other"], ["--other"]], launcher: Launcher(word: "cad", typed: 2),
-                                unclear: [0, 1, 2])
+                                unclear: [1, 2])
         #expect(typedAfter.putBack(id: uuid) == PutBack(line: "cad --resume \(uuid)", namesSession: true, leftOff: ["--other"]))
+        // One of its own options unclear had its word typed after the launcher, which a replay would split from it (an
+        // earlier build kept such a launcher): the line is rebuilt, and names each option it leaves off.
+        let split = launch(.claude, [["--newflag"], ["--other"], ["--other"]], launcher: Launcher(word: "cad", typed: 2),
+                           unclear: [0, 1, 2])
+        #expect(split.putBack(id: uuid) == PutBack(line: "claude --resume \(uuid)", namesSession: true, leftOff: ["--newflag", "--other"]))
+        let agent = launch(.claude, [["--agent"]], launcher: Launcher(word: "ca", typed: 0), unclear: [0])
+        #expect(agent.putBack(id: uuid) == PutBack(line: "claude --resume \(uuid)", namesSession: true, leftOff: ["--agent"]))
+        #expect(agent.replayedLauncher == nil && agent.launcherResume(id: uuid) == nil)
         // The table of the build that restores reads the record again: an option it knows to take no value is plain.
         let known = launch(.claude, [["--verbose"]], unclear: [0])
         #expect(known.putBack(id: uuid) == PutBack(line: "claude --verbose --resume \(uuid)", namesSession: true, leftOff: []))
