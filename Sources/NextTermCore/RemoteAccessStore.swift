@@ -47,7 +47,8 @@ public enum RemoteAccessStore {
     }
 
     /// Writes `data` to a new `0600` file beside `url`, flushes it to disk and renames it over `url`, so a reader
-    /// finds the old file or the new one, never part of one. The temp file goes when anything fails.
+    /// finds the old file or the new one, never part of one. The temp file goes when anything fails. The file and
+    /// then the folder are flushed past the drive's cache, so the new file survives a power loss or a panic too.
     static func replace(_ url: URL, with data: Data) throws {
         let name = ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
         let temporary = url.deletingLastPathComponent().appendingPathComponent(name).path
@@ -57,7 +58,7 @@ public enum RemoteAccessStore {
         do {
             guard fchmod(descriptor, fileMode) == 0 else { throw RemoteAccessStoreError.last(temporary) }
             try writeAll(descriptor, data, path: temporary)
-            guard fsync(descriptor) == 0 else { throw RemoteAccessStoreError.last(temporary) }
+            guard flush(descriptor) else { throw RemoteAccessStoreError.last(temporary) }
         } catch {
             close(descriptor)
             unlink(temporary)
@@ -69,6 +70,23 @@ public enum RemoteAccessStore {
             unlink(temporary)
             throw failure
         }
+        flushFolder(of: url)
+    }
+
+    /// Flushes a file to the disk itself, past the drive's own cache (`F_FULLFSYNC`); `fsync` on a file system
+    /// that has no full flush.
+    static func flush(_ descriptor: Int32) -> Bool {
+        fcntl(descriptor, F_FULLFSYNC) == 0 || fsync(descriptor) == 0
+    }
+
+    /// Flushes the folder that holds `url`, so a rename in it is on the disk. The rename has happened and readers
+    /// find the new file, so a failure here throws nothing: the save must not count as one that failed.
+    static func flushFolder(of url: URL) {
+        let flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC
+        let descriptor = open(url.deletingLastPathComponent().path, flags)
+        guard descriptor >= 0 else { return }
+        _ = flush(descriptor)
+        close(descriptor)
     }
 
     /// Writes every byte, again after an interruption.
@@ -397,8 +415,9 @@ public struct RemoteAccessGrantStore: Sendable {
 /// One line of the audit log (R39), as JSON with sorted keys and no line break inside. Every authenticated call,
 /// allowed or refused, carries its grant id. Text that came from a client or a screen is masked first:
 /// arguments are cut at 200 characters each, while remote `send_to_tab` text and what a remote `answer_agent`
-/// approved are kept whole. Tokens, the `Authorization` header, tool output and the tunnel token never appear:
-/// a result shows only its size and the start of its SHA-256.
+/// approved are kept whole up to a cap (R27's 8,000 for the text), so no line comes near the reader's limit.
+/// Controls and bidi marks are written as `\u{…}`, so a line shows as it is. Tokens, the `Authorization` header,
+/// tool output and the tunnel token never appear: a result shows only its size and the start of its SHA-256.
 public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
     /// What happened to a call.
     public enum Decision: String, Codable, Sendable {
@@ -433,13 +452,16 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
     public var ray: String?
     public var connectingIP: String?
     public var forwardedFor: String?
-    /// Each argument as text, masked and cut at 200 characters.
+    /// Each argument as text, masked and cut at 200 characters. Two names that cut or mask alike each keep
+    /// their value: the second is named with ` (2)` after it, and so on.
     public var arguments: [String: String]?
     /// Arguments past the first 50, by name, that the line leaves out.
     public var argumentsLeftOut: Int?
-    /// Remote `send_to_tab` text, whole and masked.
+    /// Remote `send_to_tab` text, masked, and whole up to R27's 8,000 Unicode scalars. A longer one, which the
+    /// door refuses, is cut to that, and `cut` says how long it was.
     public var text: String?
-    /// The command or action a remote `answer_agent` approved on a permission prompt, whole and masked.
+    /// The command or action a remote `answer_agent` approved on a permission prompt, masked, and whole up to
+    /// `RemoteAccessAuditMask.approvedLength`.
     public var approved: String?
     /// A summary of refusals before a valid token: the kind, how many, the first Host or path, and since when.
     public var kind: String?
@@ -453,10 +475,12 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
     public var values: [String]?
     /// Anything else an event says, such as its pairing request or preset names.
     public var detail: [String: String]?
+    /// The fields a cap cut short (`text`, `approved` or `reason`), each with how many Unicode scalars it held.
+    public var cut: [String: Int]?
 
     enum CodingKeys: String, CodingKey {
         case time, event, grant, client, tool, decision, reason, text, approved, kind, count, first, since, values,
-             detail, arguments
+             detail, arguments, cut
         case grantName = "grant_name"
         case clientName = "client_name"
         case refusedBy = "refused_by"
@@ -501,13 +525,20 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
                             approved: String? = nil) -> RemoteAccessAuditEntry {
         typealias Mask = RemoteAccessAuditMask
         var entry = RemoteAccessAuditEntry(time: time, event: "tool.call")
+        var cut: [String: Int] = [:]
+        /// Masked and capped, with the length noted when the cap cut it.
+        func capped(_ value: String, _ field: String, limit: Int, lines: Bool) -> String {
+            let shown = Mask.capped(value, limit: limit, lines: lines)
+            if let length = shown.length { cut[field] = length }
+            return shown.text
+        }
         entry.grant = grant.id
-        entry.grantName = Mask.whole(grant.name)
+        entry.grantName = Mask.cut(grant.name)
         entry.client = grant.clientID
-        entry.clientName = grant.clientName.map(Mask.whole)
+        entry.clientName = grant.clientName.map(Mask.cut)
         entry.tool = Mask.cut(tool)
         entry.decision = decision
-        entry.reason = reason.map(Mask.whole)
+        entry.reason = reason.map { capped($0, "reason", limit: Mask.reasonLength, lines: false) }
         entry.refusedBy = refusedBy.isEmpty ? nil : refusedBy.map(\.rawValue)
         entry.durationMs = duration.map { Int(($0 * 1000).rounded()) }
         if let result {
@@ -521,20 +552,28 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         entry.forwardedFor = forwarded.forwardedFor.map(Mask.cut)
         if var given = arguments {
             if tool == "send_to_tab", let text = given["text"] as? String {
-                entry.text = Mask.whole(text)
+                entry.text = capped(text, "text", limit: Mask.textLength, lines: true)
                 given["text"] = nil
             }
             let names = given.keys.sorted()
             var shown: [String: String] = [:]
             for name in names.prefix(maximumArguments) {
                 guard let value = given[name] else { continue }
-                shown[Mask.cut(name)] = Mask.argument(value)
+                let cutName = Mask.cut(name)
+                var key = cutName
+                var copy = 1
+                while shown[key] != nil {
+                    copy += 1
+                    key = "\(cutName) (\(copy))"
+                }
+                shown[key] = Mask.argument(value)
             }
             entry.arguments = shown
             let left = names.count - maximumArguments
             entry.argumentsLeftOut = left > 0 ? left : nil
         }
-        entry.approved = approved.map(Mask.whole)
+        entry.approved = approved.map { capped($0, "approved", limit: Mask.approvedLength, lines: true) }
+        entry.cut = cut.isEmpty ? nil : cut
         return entry
     }
 
@@ -546,7 +585,7 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         switch event {
         case .clientRegistered(let clientID, let clientName, let redirectHosts):
             entry.client = clientID
-            entry.clientName = clientName.map(Mask.whole)
+            entry.clientName = clientName.map(Mask.cut)
             entry.values = redirectHosts.map(Mask.cut)
         case .registrationDropped(let clientID, let field, let values):
             entry.client = clientID
@@ -558,11 +597,11 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
             entry.reason = reason.rawValue
         case .pairingAsked(let request, let clientID, let clientName, let redirectHost):
             entry.client = clientID
-            entry.clientName = clientName.map(Mask.whole)
+            entry.clientName = clientName.map(Mask.cut)
             entry.detail = ["request": request, "redirect_host": Mask.cut(redirectHost)]
         case .pairingApproved(let request, let grantID, let name, let options):
             entry.grant = grantID
-            entry.grantName = Mask.whole(name)
+            entry.grantName = Mask.cut(name)
             entry.newOptions = keys(options)
             entry.detail = ["request": request, "preset": options.preset.rawValue]
         case .pairingDeclined(let request, let clientID), .pairingExpired(let request, let clientID):
@@ -570,16 +609,16 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
             entry.detail = ["request": request]
         case .optionsChanged(let grantID, let name, let old, let new):
             entry.grant = grantID
-            entry.grantName = Mask.whole(name)
+            entry.grantName = Mask.cut(name)
             entry.oldOptions = keys(old)
             entry.newOptions = keys(new)
             entry.detail = ["old_preset": old.preset.rawValue, "new_preset": new.preset.rawValue]
         case .refreshReused(let grantID, let name), .codeReused(let grantID, let name):
             entry.grant = grantID
-            entry.grantName = Mask.whole(name)
+            entry.grantName = Mask.cut(name)
         case .revoked(let grantID, let name, let reason):
             entry.grant = grantID
-            entry.grantName = Mask.whole(name)
+            entry.grantName = Mask.cut(name)
             entry.reason = reason.rawValue
         case .accessTokensDropped:
             break
@@ -609,16 +648,24 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
 }
 
 /// How text is masked before it goes in a line. `MCPRedaction` is unchanged, so local results stay the same; the
-/// door's own tokens are masked by a rule of the log's own, `nt(at|rt)_[A-Za-z0-9_-]+` in any case.
+/// door's own tokens are masked by a rule of the log's own, `nt(at|rt)_[A-Za-z0-9_-]+` in any case, and the same
+/// with any of its characters percent-encoded after the prefix, as in `ntat%5F…`.
 public enum RemoteAccessAuditMask {
     /// An argument is cut to this many Unicode scalars, in whole characters.
     public static let argumentLength = 200
-    /// An argument is read this far before it is masked and cut, so a 1 MB `write_file` costs no more than a
-    /// short one. A secret that starts past it is never shown, since the cut comes long before.
+    /// Remote `send_to_tab` text is kept whole up to R27's limit; a longer one, which the door refuses, is cut.
+    public static let textLength = RemoteAccessLimits.sendText
+    /// What a remote `answer_agent` approved is kept whole up to this many Unicode scalars, about the text of a
+    /// whole 200-by-80 screen, which a prompt's box doesn't pass.
+    public static let approvedLength = 16_000
+    /// A reason is cut to this many: the door's own refusal texts are far shorter.
+    public static let reasonLength = 1_000
+    /// Text is read this far past its cap before it is masked and cut, so a 1 MB `write_file` costs no more than
+    /// a short one. A secret that starts before the cut is read whole, so it is masked, not shown in part.
     static let readLength = 4000
 
-    static let remoteToken = try! NSRegularExpression(pattern: "nt(at|rt)_[A-Za-z0-9_-]+",
-                                                      options: [.caseInsensitive])
+    static let remoteToken = try! NSRegularExpression(
+        pattern: #"nt(?:at|rt)(?:_|%5f)(?:[a-z0-9_\-]|%[0-9a-f]{2})+"#, options: [.caseInsensitive])
 
     /// The text with secrets masked. The door's tokens go first, so no pattern of `MCPRedaction` can split one
     /// and leave part of it. When a pattern could not read the whole text, the text goes whole.
@@ -633,10 +680,48 @@ public enum RemoteAccessAuditMask {
         return redacted.text
     }
 
-    /// Masked, then cut to `argumentLength`.
+    /// Masked, cut to `argumentLength`, and on one line (see `visible`).
     public static func cut(_ text: String) -> String {
         let head = RemoteAccessOAuth.prefix(text, scalars: readLength)
-        return RemoteAccessOAuth.prefix(whole(head), scalars: argumentLength)
+        let masked = RemoteAccessOAuth.prefix(whole(head), scalars: argumentLength)
+        return visible(masked, lines: false)
+    }
+
+    /// Masked, and whole when it holds at most `limit` Unicode scalars, however much masking lengthens it. A
+    /// longer text is read only to `readLength` past the limit, masked, and cut to `limit`; `length` then says
+    /// how many it held. With `lines`, its line breaks and tabs stay (see `visible`).
+    static func capped(_ text: String, limit: Int, lines: Bool) -> (text: String, length: Int?) {
+        let head = RemoteAccessOAuth.prefix(text, scalars: limit + readLength)
+        guard head.unicodeScalars.count > limit else { return (visible(whole(head), lines: lines), nil) }
+        let masked = RemoteAccessOAuth.prefix(whole(head), scalars: limit)
+        return (visible(masked, lines: lines), text.unicodeScalars.count)
+    }
+
+    /// The text with each scalar that changes how the text around it shows written as `\u{…}` in hex: controls,
+    /// format characters such as the bidi overrides and zero-width spaces, and line and paragraph separators.
+    /// With `lines`, line feeds and tabs stay, as a typed text or a command has them. The zero-width joiner stays
+    /// too, since emoji are made with it.
+    static func visible(_ text: String, lines: Bool) -> String {
+        guard text.unicodeScalars.contains(where: { hides($0, lines: lines) }) else { return text }
+        var shown = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            guard hides(scalar, lines: lines) else {
+                shown.append(scalar)
+                continue
+            }
+            let code = String(scalar.value, radix: 16, uppercase: true)
+            shown.append(contentsOf: "\\u{\(code)}".unicodeScalars)
+        }
+        return String(shown)
+    }
+
+    static func hides(_ scalar: Unicode.Scalar, lines: Bool) -> Bool {
+        if lines, scalar == "\n" || scalar == "\t" { return false }
+        if scalar == "\u{200D}" { return false }
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator: return true
+        default: return false
+        }
     }
 
     /// An argument as text: a string as it is, a number or a boolean as JSON writes it, a list or an object as
@@ -823,15 +908,18 @@ public enum RemoteAccessAuditRetention {
 }
 
 /// The audit log's files: appends lines, rotates and drops old entries as `RemoteAccessAuditRetention` plans,
-/// and reads the last entries back for the activity view. Ages are checked on the first append and then at
-/// most once an hour; the size on every append.
+/// and reads the last entries back for the activity view. Ages are checked by `prune`, which the app calls at
+/// launch, and by `append` and `tail` when an hour has passed since the last check; the size on every append.
 public struct RemoteAccessAuditLog: Sendable {
     /// Entries the activity view shows.
     public static let tailCount = 500
     static let pruneInterval: TimeInterval = 3600
     /// Files are read in blocks of this size, from the start for a first entry and from the end for the rest.
     static let block = 64 * 1024
-    /// A line longer than this is skipped when read back: no line the log writes comes near it.
+    /// How far into a file its first entry is looked for: past one line too long to read, and a little more.
+    static let firstReach = 2 * 1024 * 1024 + 64 * 1024
+    /// A line longer than this, in bytes, is skipped when read back and dropped by a trim. The caps on what a
+    /// line holds keep every line the log writes well under it.
     static let maximumLine = 1024 * 1024
 
     public let folder: URL
@@ -859,26 +947,44 @@ public struct RemoteAccessAuditLog: Sendable {
         try RemoteAccessStore.prepare(folder)
         let current = url(0)
         let size = Self.size(current)
-        let pruneDue = lastPrune.map { now.timeIntervalSince($0) >= Self.pruneInterval } ?? true
+        let pruneDue = isPruneDue(now)
         let rotates = size > 0 && size + data.count > maximumFileSize
         if pruneDue || rotates {
-            let files = describe(withTimes: pruneDue)
-            let steps = RemoteAccessAuditRetention.plan(files, appending: data.count, now: now,
-                                                         maximumFileSize: maximumFileSize)
-            try carryOut(steps)
-            if pruneDue { lastPrune = now }
+            try retain(appending: data.count, withTimes: pruneDue, now: now)
         }
         try Self.appendBytes(data, to: current)
     }
 
-    /// The last `count` entries, oldest first, from `audit.jsonl` and then the older files. Lines that can't be
-    /// read, such as one a crash cut short, are skipped.
-    public func tail(_ count: Int = RemoteAccessAuditLog.tailCount) -> [RemoteAccessAuditEntry] {
+    /// Drops the entries older than 30 days, and any file past the fifth, now. The app calls it at launch, so old
+    /// entries go while Remote access stays off. With no folder it makes none.
+    public mutating func prune(now: Date) throws {
+        try retain(appending: 0, withTimes: true, now: now)
+    }
+
+    /// The last `count` entries of the last 30 days, oldest first, from `audit.jsonl` and then the older files.
+    /// When an hour has passed since the last check, older entries are dropped first; between checks they are
+    /// left out. Lines that can't be read, such as one a crash cut short, are skipped.
+    public mutating func tail(_ count: Int = RemoteAccessAuditLog.tailCount, now: Date) -> [RemoteAccessAuditEntry] {
+        if isPruneDue(now) { try? prune(now: now) }
+        let cutoff = now.addingTimeInterval(-RemoteAccessAuditRetention.maximumAge)
         var found: [RemoteAccessAuditEntry] = []
         for index in 0..<RemoteAccessAuditRetention.filesKept where found.count < count {
             found += Self.lastEntries(of: url(index), count: count - found.count)
         }
-        return found.reversed()
+        return found.filter { $0.time >= cutoff }.reversed()
+    }
+
+    private func isPruneDue(_ now: Date) -> Bool {
+        lastPrune.map { now.timeIntervalSince($0) >= Self.pruneInterval } ?? true
+    }
+
+    /// Carries out what retention plans before `bytes` are appended; with `withTimes`, the ages too.
+    private mutating func retain(appending bytes: Int, withTimes: Bool, now: Date) throws {
+        let files = describe(withTimes: withTimes)
+        let steps = RemoteAccessAuditRetention.plan(files, appending: bytes, now: now,
+                                                     maximumFileSize: maximumFileSize)
+        try carryOut(steps)
+        if withTimes { lastPrune = now }
     }
 
     /// Clear Log: every audit file goes.
@@ -930,17 +1036,22 @@ public struct RemoteAccessAuditLog: Sendable {
             case .trim(let index, let before):
                 try trim(url(index), before: before)
             case .move(let index, let next):
+                // A trim that left nothing has deleted the file already.
                 let from = url(index).path
-                guard rename(from, url(next).path) == 0 else { throw RemoteAccessStoreError.last(from) }
+                guard rename(from, url(next).path) == 0 || errno == ENOENT else {
+                    throw RemoteAccessStoreError.last(from)
+                }
             }
         }
     }
 
-    /// Rewrites a file with only its entries from `before` on, through a temp file; a file left empty goes.
+    /// Rewrites a file with only its entries from `before` on, through a temp file; a file left empty goes. Lines
+    /// that can't be read, or that are longer than `maximumLine`, go too.
     private func trim(_ file: URL, before: Date) throws {
         guard let data = try? Data(contentsOf: file) else { return }
         var kept = Data()
         for line in data.split(separator: 0x0A) {
+            guard line.count <= Self.maximumLine else { continue }
             guard let stamp = Self.stamp(Data(line)), stamp >= before else { continue }
             kept.append(contentsOf: line)
             kept.append(0x0A)
@@ -990,13 +1101,37 @@ public struct RemoteAccessAuditLog: Sendable {
         (try? RemoteAccessStore.decoder().decode(Stamp.self, from: line))?.time
     }
 
-    /// The time of the file's first entry, when its first line is whole within the first block.
+    /// The time of the file's first entry: the first line that can be read, read forwards a block at a time. A
+    /// line before it that can't be read, such as one a crash cut short, or that is longer than `maximumLine`, is
+    /// passed over, so a trim still finds the file and drops that line. It reads no further than `firstReach`.
     static func firstTime(of file: URL) -> Date? {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
-        guard let head = try? handle.read(upToCount: block),
-              let end = head.firstIndex(of: 0x0A) else { return nil }
-        return stamp(Data(head[head.startIndex..<end]))
+        var line = Data()
+        // True while the line being read has passed `maximumLine`: the rest of it is passed over.
+        var overlong = false
+        var reached = 0
+        while reached < firstReach {
+            guard let read = try? handle.read(upToCount: block), !read.isEmpty else { return nil }
+            reached += read.count
+            var start = read.startIndex
+            while let end = read[start...].firstIndex(of: 0x0A) {
+                if !overlong {
+                    line.append(read[start..<end])
+                    if line.count <= maximumLine, let time = stamp(line) { return time }
+                }
+                line = Data()
+                overlong = false
+                start = read.index(after: end)
+            }
+            guard !overlong else { continue }
+            line.append(read[start...])
+            if line.count > maximumLine {
+                line = Data()
+                overlong = true
+            }
+        }
+        return nil
     }
 
     /// The last `count` entries that can be read, newest first, read backwards a block at a time. A line
@@ -1025,7 +1160,8 @@ public struct RemoteAccessAuditLog: Sendable {
             }
             if offset > 0 { carry = Data(pieces.removeFirst()) }
             for piece in pieces.reversed() where !piece.isEmpty {
-                let entry = try? RemoteAccessAuditEntry(line: Data(piece))
+                var entry: RemoteAccessAuditEntry?
+                if piece.count <= maximumLine { entry = try? RemoteAccessAuditEntry(line: Data(piece)) }
                 if let entry { entries.append(entry) }
                 if !skipping { return entries }
                 if entries.count == count { return entries }

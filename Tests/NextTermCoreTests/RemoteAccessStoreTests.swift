@@ -76,6 +76,21 @@ import Testing
 
     static func days(_ count: Double) -> Date { start.addingTimeInterval(count * 24 * 3600) }
 
+    /// Makes a file or folder immutable, so a write to it fails, until `unlock`.
+    static func lock(_ url: URL) {
+        #expect(chflags(url.path, UInt32(UF_IMMUTABLE)) == 0)
+    }
+
+    static func unlock(_ url: URL) {
+        chflags(url.path, 0)
+    }
+
+    /// The time of every line in an audit file, as it is on disk; nil for a line that can't be read.
+    static func times(_ url: URL) -> [Date?] {
+        let data = (try? Data(contentsOf: url)) ?? Data()
+        return data.split(separator: 0x0A).map { (try? Entry(line: Data($0)))?.time }
+    }
+
     /// A token of the door's own form: the prefix and the base64url text of 32 bytes.
     static func token(_ prefix: String, fill: UInt8) -> String {
         let bytes = (0..<32).map { fill &+ UInt8($0) &* 7 }
@@ -200,6 +215,63 @@ import Testing
             try store.save(clients: [], grants: [Self.grant()], now: Self.start)
         }
         #expect(folder.names() == [RemoteAccessGrantStore.fileName])
+    }
+
+    @Test func aFailedSaveLeavesTheOldFileAndItsRefreshHash() throws {
+        let folder = Folder()
+        var store = RemoteAccessGrantStore(folder: folder.url)
+        try store.save(clients: [Self.client()], grants: [Self.grant()], now: Self.start)
+        let before = try Data(contentsOf: store.url)
+
+        // A rotation that can't be saved: the folder takes no new file.
+        var rotated = Self.grant()
+        rotated.refreshHash = Self.hex("e")
+        rotated.replacedHash = Self.hex("a")
+        Self.lock(folder.url)
+        defer { Self.unlock(folder.url) }
+        #expect(throws: RemoteAccessStoreError.self) {
+            try store.save(clients: [Self.client()], grants: [rotated], now: Self.start.addingTimeInterval(60))
+        }
+        #expect(try Data(contentsOf: store.url) == before)
+        #expect(folder.names() == [RemoteAccessGrantStore.fileName])
+
+        Self.unlock(folder.url)
+        var reader = RemoteAccessGrantStore(folder: folder.url)
+        let loaded = reader.load(now: Self.start.addingTimeInterval(120))
+        #expect(loaded.grants.first?.refreshHash == Self.hex("a"))
+        #expect(loaded.movedAside == nil)
+    }
+
+    @Test func aFailedUseSaveWaitsAnHourAndIsWrittenOnQuit() throws {
+        let folder = Folder()
+        var store = RemoteAccessGrantStore(folder: folder.url)
+        var grant = Self.grant()
+        try store.save(clients: [], grants: [grant], now: Self.start)
+
+        Self.lock(folder.url)
+        defer { Self.unlock(folder.url) }
+        let failed = Self.start.addingTimeInterval(61 * 60)
+        grant.lastUsed = failed
+        #expect(throws: RemoteAccessStoreError.self) {
+            try store.saveUse(clients: [], grants: [grant], now: failed)
+        }
+        #expect(store.unsavedUse)
+        #expect(store.lastWrite == failed)
+
+        // Within the hour after the failure, no write is tried.
+        let next = failed.addingTimeInterval(40 * 60)
+        grant.lastUsed = next
+        let wrote = try store.saveUse(clients: [], grants: [grant], now: next)
+        #expect(!wrote)
+        #expect(store.unsavedUse)
+
+        // On quit the use the file does not hold is written.
+        Self.unlock(folder.url)
+        let quit = next.addingTimeInterval(60)
+        #expect(try store.saveOnQuit(clients: [], grants: [grant], now: quit))
+        #expect(!store.unsavedUse)
+        var reader = RemoteAccessGrantStore(folder: folder.url)
+        #expect(reader.load(now: quit).grants.first?.lastUsed == next)
     }
 
     @Test func theFileNeverHoldsATokenInTheClear() throws {
@@ -387,6 +459,151 @@ import Testing
         #expect(text.hasSuffix(String(repeating: "z ", count: 500)))
     }
 
+    @Test func sendToTabTextIsCutAtR27sLimitAndSaysHowLongItWas() throws {
+        let limit = RemoteAccessLimits.sendText
+        let exact = String(repeating: "y", count: limit)
+        let kept = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                              arguments: ["tab_id": "t1", "text": exact], decision: .allowed)
+        #expect(kept.text == exact)
+        #expect(kept.cut == nil)
+
+        // A refused call with a million characters, a key across the cut: the first 8,000, masked.
+        let key = "sk-AbCdEf0123456789GhIjKlMn"
+        let lead = String(repeating: "z ", count: (limit - 10) / 2)
+        let huge = lead + key + " " + String(repeating: "w", count: 1_000_000)
+        let refused = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                                 arguments: ["tab_id": "t1", "text": huge], decision: .refused,
+                                 refusedBy: [.typeAsking])
+        let text = refused.text ?? ""
+        #expect(text.unicodeScalars.count <= limit)
+        #expect(text.hasPrefix(lead))
+        #expect(!text.contains("sk-"))
+        #expect(refused.cut == ["text": huge.unicodeScalars.count])
+        let line = try refused.line()
+        #expect(line.count < 40_000)
+        #expect(try Entry(line: line) == refused)
+
+        // Refused calls that size can't push the history out of the log.
+        let folder = Folder()
+        var log = RemoteAccessAuditLog(folder: folder.url)
+        try log.append(Entry.tunnel("first", time: Self.start), now: Self.start)
+        for _ in 0..<49 { try log.append(refused, now: Self.start) }
+        #expect(folder.names() == ["audit.jsonl"])
+        #expect(log.tail(now: Self.start).first?.reason == "first")
+    }
+
+    @Test func approvedAndReasonHaveCapsToo() {
+        let approved = String(repeating: "a", count: 2_000_000)
+        let reason = String(repeating: "r", count: 500_000)
+        let entry = Entry.call(time: Self.start, grant: Self.grant(), tool: "answer_agent",
+                               arguments: ["tab_id": "t1"], decision: .failed, reason: reason,
+                               approved: approved)
+        let approvedLength = RemoteAccessAuditMask.approvedLength
+        let reasonLength = RemoteAccessAuditMask.reasonLength
+        #expect(entry.approved == String(repeating: "a", count: approvedLength))
+        #expect(entry.reason == String(repeating: "r", count: reasonLength))
+        #expect(entry.cut == ["approved": 2_000_000, "reason": 500_000])
+
+        // Within its cap, an approved command is whole.
+        let command = String(repeating: "c", count: approvedLength)
+        let whole = Entry.call(time: Self.start, grant: Self.grant(), tool: "answer_agent", arguments: nil,
+                               decision: .allowed, approved: command)
+        #expect(whole.approved == command)
+        #expect(whole.cut == nil)
+    }
+
+    @Test func textThatGrowsWhenMaskedStaysBounded() throws {
+        // Each password masked makes the text longer.
+        let growing = String(repeating: " a://b:c@", count: 1_000_000 / 9)
+        let start = Date()
+        let entry = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                               arguments: ["text": growing], decision: .refused,
+                               reason: growing, approved: growing)
+        #expect(Date().timeIntervalSince(start) < 2)
+        let line = try entry.line()
+        #expect(line.count < 200_000)
+        #expect(entry.text?.hasPrefix(" a://b:" + MCPRedaction.mask + "@") == true)
+
+        // A text within the limit that grows is still whole.
+        let short = String(repeating: " a://b:c@", count: 800) + " end"
+        #expect(short.count < RemoteAccessLimits.sendText)
+        let typed = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                               arguments: ["text": short], decision: .allowed)
+        #expect(typed.cut == nil)
+        #expect(typed.text?.hasSuffix(" end") == true)
+        #expect((typed.text?.count ?? 0) > RemoteAccessLimits.sendText)
+    }
+
+    @Test func theLongestLineACallCanWriteReadsBack() throws {
+        // Characters each written as the longest escape, in every field a client or a screen fills.
+        let tag = "\u{E0001}"
+        func filled(_ count: Int) -> String { String(repeating: tag, count: count) }
+        var arguments: [String: Any] = ["text": filled(RemoteAccessLimits.sendText)]
+        for index in 0..<RemoteAccessAuditEntry.maximumArguments {
+            arguments["\(index)" + filled(400)] = filled(400)
+        }
+        let forwarded = RemoteAccessHTTP.Forwarded(forwardedFor: filled(200), connectingIP: filled(200),
+                                                   ray: filled(200))
+        let entry = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                               arguments: arguments, decision: .refused, reason: filled(5000),
+                               forwarded: forwarded, approved: filled(50_000))
+        let line = try entry.line()
+        #expect(line.count < RemoteAccessAuditLog.maximumLine)
+        #expect(try Entry(line: line) == entry)
+    }
+
+    @Test func argumentNamesThatCutAlikeKeepBothValues() {
+        let stem = String(repeating: "n", count: 300)
+        let access = Self.token("ntat_", fill: 3)
+        let refresh = Self.token("ntrt_", fill: 11)
+        let given: [String: Any] = [stem + "A": "first", stem + "B": "second", access: "one", refresh: "two"]
+        let entry = Entry.call(time: Self.start, grant: Self.grant(), tool: "read_file", arguments: given,
+                               decision: .refused)
+        let shown = entry.arguments ?? [:]
+        #expect(shown.count == 4)
+        #expect(Set(shown.values) == ["first", "second", "one", "two"])
+        #expect(shown[String(repeating: "n", count: 200)] == "first")
+        #expect(shown[MCPRedaction.mask] != nil)
+    }
+
+    @Test func controlAndBidiCharactersAreWrittenSoTheyShow() throws {
+        let path = "a\n2027-01-01 allowed fake\u{202E}gpj.exe"
+        let entry = Entry.call(time: Self.start, grant: Self.grant(), tool: "read_file",
+                               arguments: ["path": path], decision: .refused, reason: "no\u{0}\u{85}pe",
+                               approved: "rm -rf x\u{202E}y\n\techo done\u{200B}\r")
+        #expect(entry.arguments?["path"] == #"a\u{A}2027-01-01 allowed fake\u{202E}gpj.exe"#)
+        #expect(entry.reason == #"no\u{0}\u{85}pe"#)
+        // A command or a typed text keeps its line breaks and tabs.
+        #expect(entry.approved == "rm -rf x\\u{202E}y\n\techo done\\u{200B}\\u{D}")
+        let typed = Entry.call(time: Self.start, grant: Self.grant(), tool: "send_to_tab",
+                               arguments: ["text": "one\ntwo\u{1B}[31m\u{2028}👨‍👩‍👧"], decision: .allowed)
+        #expect(typed.text == "one\ntwo\\u{1B}[31m\\u{2028}👨‍👩‍👧")
+
+        var refusals = RemoteAccessRefusals()
+        _ = refusals.count(.notFound, first: "/mcp\u{202E}x", now: Self.start)
+        #expect(refusals.flush(now: Self.start).first?.first == #"/mcp\u{202E}x"#)
+        #expect(!String(decoding: try entry.line(), as: UTF8.self).contains("\u{202E}"))
+    }
+
+    @Test func aPercentEncodedTokenIsMaskedToo() throws {
+        for fill in stride(from: UInt8(0), to: 250, by: 5) {
+            let token = Self.token("ntat_", fill: fill)
+            let encoded = token.replacingOccurrences(of: "_", with: "%5F")
+                .replacingOccurrences(of: "-", with: "%2D")
+            for form in [encoded, encoded.lowercased(), "ntrt%5f" + encoded.dropFirst(7)] {
+                var refusals = RemoteAccessRefusals()
+                _ = refusals.count(.noToken, first: "/mcp?access_token=" + form, now: Self.start)
+                let lines = try refusals.flush(now: Self.start).map { try $0.line() }
+                let text = lines.map { String(decoding: $0, as: UTF8.self) }.joined()
+                #expect(text.contains("access_token=" + MCPRedaction.mask))
+                let pieces = form.dropFirst(7).components(separatedBy: "%")
+                for piece in pieces where piece.count > 6 {
+                    #expect(!text.contains(piece.dropFirst(2)))
+                }
+            }
+        }
+    }
+
     @Test func anApprovedCommandIsKeptWholeWithItsTokenMasked() {
         let token = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7c"
         let path = String(repeating: "p", count: 920)
@@ -528,7 +745,7 @@ import Testing
         #expect(lines.count == 1)
         #expect(Self.mode(folder.file("audit.jsonl")) == 0o600)
         #expect(Self.mode(folder.url) == 0o700)
-        #expect(log.tail().map(\.event) == ["remote.turned_off"])
+        #expect(log.tail(now: Self.start).map(\.event) == ["remote.turned_off"])
     }
 
     @Test func rotationKeepsFiveFiles() throws {
@@ -555,12 +772,133 @@ import Testing
         try ancient.write(to: folder.file("audit.1.jsonl"))
 
         try log.append(Entry.tunnel("stopped", time: Self.start), now: Self.start)
-        #expect(log.tail().map(\.time) == [Self.days(-1), Self.start])
+        #expect(log.tail(now: Self.start).map(\.time) == [Self.days(-1), Self.start])
         #expect(folder.names() == ["audit.jsonl"])
         #expect(Self.mode(folder.file("audit.jsonl")) == 0o600)
     }
 
+    @Test func oldEntriesGoWithoutAnAppend() throws {
+        let folder = Folder()
+        try folder.make()
+        let ancient = try Entry.tunnel("ancient", time: Self.days(-90)).line()
+        let recent = try Entry.tunnel("recent", time: Self.days(-1)).line()
+        try (ancient + recent).write(to: folder.file("audit.jsonl"))
+        try Entry.tunnel("older", time: Self.days(-60)).line().write(to: folder.file("audit.1.jsonl"))
+
+        // Reading the log drops them first.
+        var log = RemoteAccessAuditLog(folder: folder.url)
+        #expect(log.tail(now: Self.start).map(\.reason) == ["recent"])
+        #expect(folder.names() == ["audit.jsonl"])
+        #expect(Self.times(folder.file("audit.jsonl")) == [Self.days(-1)])
+
+        // At launch, with nothing read or written.
+        try ancient.write(to: folder.file("audit.2.jsonl"))
+        var launched = RemoteAccessAuditLog(folder: folder.url)
+        try launched.prune(now: Self.start)
+        #expect(folder.names() == ["audit.jsonl"])
+
+        // Between checks, an entry just past 30 days old stays on disk for up to an hour but is never shown.
+        let edge = Self.start.addingTimeInterval(-RemoteAccessAuditRetention.maximumAge + 60)
+        try launched.append(Entry.tunnel("edge", time: edge), now: Self.start)
+        let later = Self.start.addingTimeInterval(120)
+        #expect(launched.tail(now: later).map(\.reason) == ["recent"])
+
+        // With no folder, a prune makes none.
+        let none = Folder()
+        var empty = RemoteAccessAuditLog(folder: none.url)
+        try empty.prune(now: Self.start)
+        #expect(empty.tail(now: Self.start).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: none.url.path))
+    }
+
+    @Test func aFileWhoseFirstLineIsLongOrBrokenIsStillTrimmed() throws {
+        let folder = Folder()
+        var log = RemoteAccessAuditLog(folder: folder.url)
+        var long = Entry.tunnel("long", time: Self.days(-45))
+        long.detail = ["detail": String(repeating: "l", count: 70_000)]
+        try log.append(long, now: Self.days(-45))
+        for day in -44...0 {
+            let time = Self.days(Double(day))
+            try log.append(Entry.tunnel("day \(day)", time: time), now: time)
+        }
+        let cutoff = Self.start.addingTimeInterval(-RemoteAccessAuditRetention.maximumAge)
+        let kept = Self.times(folder.file("audit.jsonl"))
+        #expect(kept.count == 31)
+        #expect(kept.allSatisfy { ($0 ?? .distantPast) >= cutoff })
+
+        // A first line a crash cut short: the file is trimmed, and the broken line goes with the old entries.
+        let broken = Folder()
+        try broken.make()
+        var lines = Data(#"{"event":"tunnel.changed","time":"2026-12"#.utf8)
+        lines.append(0x0A)
+        for day in -40...(-1) {
+            lines.append(try Entry.tunnel("day \(day)", time: Self.days(Double(day))).line())
+        }
+        try lines.write(to: broken.file("audit.jsonl"))
+        var reader = RemoteAccessAuditLog(folder: broken.url)
+        try reader.prune(now: Self.start)
+        let left = Self.times(broken.file("audit.jsonl"))
+        #expect(left.count == 30)
+        #expect(left.allSatisfy { ($0 ?? .distantPast) >= cutoff })
+    }
+
+    @Test func aFailedAppendThrowsAndLeavesTheLogAsItWas() throws {
+        let folder = Folder()
+        var log = RemoteAccessAuditLog(folder: folder.url)
+        try log.append(Entry.tunnel("ready", time: Self.start), now: Self.start)
+        let file = folder.file("audit.jsonl")
+        let before = Self.text(file)
+
+        Self.lock(file)
+        defer { Self.unlock(file) }
+        let next = Self.start.addingTimeInterval(1)
+        #expect(throws: RemoteAccessStoreError.self) {
+            try log.append(Entry.tunnel("stopped", time: next), now: next)
+        }
+        #expect(Self.text(file) == before)
+
+        // A new file in a folder that takes none fails the same way.
+        Self.unlock(file)
+        try FileManager.default.removeItem(at: file)
+        Self.lock(folder.url)
+        defer { Self.unlock(folder.url) }
+        #expect(throws: RemoteAccessStoreError.self) {
+            try log.append(Entry.tunnel("stopped", time: next), now: next)
+        }
+        #expect(folder.names().isEmpty)
+
+        Self.unlock(folder.url)
+        try log.append(Entry.tunnel("stopped", time: next), now: next)
+        #expect(log.tail(now: next).map(\.reason) == ["stopped"])
+    }
+
     // MARK: the tail and Clear Log
+
+    @Test func aLineOverTheLimitIsSkippedExactly() throws {
+        let folder = Folder()
+        try folder.make()
+        let limit = RemoteAccessAuditLog.maximumLine
+        /// An entry whose line, without its line break, is `length` bytes.
+        func sized(_ event: String, _ length: Int) throws -> Data {
+            var entry = Entry(time: Self.start, event: event)
+            entry.reason = ""
+            let base = try entry.line().count - 1
+            entry.reason = String(repeating: "r", count: length - base)
+            let line = try entry.line()
+            #expect(line.count - 1 == length)
+            return line
+        }
+        var data = try Entry(time: Self.start, event: "before").line()
+        data.append(try sized("exact", limit))
+        data.append(try sized("over", limit + 1))
+        data.append(try sized("far_over", limit + 30_000))
+        data.append(try Entry(time: Self.start, event: "after").line())
+        try data.write(to: folder.file("audit.jsonl"))
+
+        let file = folder.file("audit.jsonl")
+        let read = RemoteAccessAuditLog.lastEntries(of: file, count: 10)
+        #expect(read.map(\.event) == ["after", "exact", "before"])
+    }
 
     @Test func theTailIsTheLast500EntriesAcrossFiles() throws {
         let folder = Folder()
@@ -570,22 +908,23 @@ import Testing
             try log.append(Entry.tunnel("n\(index)", time: time), now: time)
         }
         #expect(folder.names().contains("audit.1.jsonl"))
-        let tail = log.tail()
+        let now = Self.start.addingTimeInterval(520)
+        let tail = log.tail(now: now)
         #expect(tail.count == 500)
         #expect(tail.first?.reason == "n20")
         #expect(tail.last?.reason == "n519")
-        #expect(log.tail(3).map(\.reason) == ["n517", "n518", "n519"])
+        #expect(log.tail(3, now: now).map(\.reason) == ["n517", "n518", "n519"])
 
         // A broken line, as a crash mid-write leaves, is skipped.
         let handle = try FileHandle(forWritingTo: folder.file("audit.jsonl"))
         try handle.seekToEnd()
         try handle.write(contentsOf: Data(#"{"time": "2027-01-15T0"#.utf8))
         try handle.close()
-        #expect(log.tail(2).map(\.reason) == ["n518", "n519"])
+        #expect(log.tail(2, now: now).map(\.reason) == ["n518", "n519"])
 
         try log.clear()
         #expect(folder.names().isEmpty)
-        #expect(log.tail().isEmpty)
+        #expect(log.tail(now: now).isEmpty)
     }
 
     // MARK: with the OAuth authority
@@ -664,5 +1003,49 @@ import Testing
         let lateAfter = kind(after.token(current, now: late))
         #expect(lateBefore == "invalid_grant")
         #expect(lateAfter == "invalid_grant")
+    }
+
+    @Test func aGraceReuseAfterARelaunchFromTheFileGetsANewPair() throws {
+        let folder = Folder()
+        var (paired, first) = try Flow.exchanged()
+        let client = paired.client
+        let id = paired.grant.id
+        let tenAM = Flow.minutes(10)
+        let refreshed = Flow.send(&paired.oauth, Flow.refreshParameters(first.refresh, client: client), now: tenAM)
+        let rotated = try #require(Flow.tokens(refreshed))
+        var store = RemoteAccessGrantStore(folder: folder.url)
+        try store.save(clients: paired.oauth.clients, grants: paired.oauth.grants, now: tenAM)
+
+        // The reply was lost and Next Term relaunched: only the file comes back.
+        var launch = RemoteAccessGrantStore(folder: folder.url)
+        let late = tenAM.addingTimeInterval(40)
+        let loaded = launch.load(now: late)
+        var relaunched = OAuth(host: Flow.host, clients: loaded.clients, grants: loaded.grants)
+        let reuse = relaunched.token(Flow.refreshParameters(first.refresh, client: client), now: late)
+        guard case .issue(let issue) = reuse else {
+            Issue.record("a reuse within 60 seconds after a relaunch gets a new pair")
+            return
+        }
+        // Saved before it applies, as the door does.
+        let saved = RemoteAccessGrantStore.replacing(issue.grant, in: relaunched.grants)
+        try launch.save(clients: relaunched.clients, grants: saved, now: late)
+        let applied = relaunched.apply(issue)
+        #expect(applied)
+        let fresh = try #require(Flow.tokens(issue.answer))
+        #expect(fresh.refresh != rotated.refresh)
+
+        // After another relaunch the new refresh token works, and the rotation's ends the grant.
+        var again = RemoteAccessGrantStore(folder: folder.url)
+        let reloaded = again.load(now: late.addingTimeInterval(5))
+        let base = OAuth(host: Flow.host, clients: reloaded.clients, grants: reloaded.grants)
+        var current = base
+        let next = Flow.send(&current, Flow.refreshParameters(fresh.refresh, client: client),
+                             now: late.addingTimeInterval(6))
+        #expect(Flow.tokens(next) != nil)
+        var stale = base
+        let old = Flow.send(&stale, Flow.refreshParameters(rotated.refresh, client: client),
+                            now: late.addingTimeInterval(6))
+        #expect(Flow.error(old) == "invalid_grant")
+        #expect(stale.grant(id) == nil)
     }
 }
