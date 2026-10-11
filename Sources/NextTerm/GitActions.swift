@@ -89,29 +89,58 @@ struct GitActions {
     func checkout(_ ref: BranchRef) {
         // A remote's name may hold a "/" ("my/fork"): split by the remotes, not at the first "/".
         let target = ref.isRemote ? (model?.remoteAndBranch(of: ref.name)?.branch ?? ref.shortName) : ref.name
-        // Checked out in another worktree: git can't switch to it here, so nothing would touch an agent. Open it there.
-        let local = ref.isRemote ? model?.local(target) : ref
-        if let local, let elsewhere = model?.otherWorktree(of: local) { return held(target, at: elsewhere) }
         let steps: [[String]]
         if ref.isRemote {
             steps = model?.local(target) != nil ? [["switch", target]] : [["switch", "-c", target, "--track", ref.name]]
         } else {
             steps = [["switch", target]]
         }
+        // Checked out in another worktree: git can't switch to it here. Ask what to do with that worktree; the switch
+        // follows a remove without reading the branches again (they'd still show the worktree holding it).
+        let local = ref.isRemote ? model?.local(target) : ref
+        if let local, let elsewhere = model?.otherWorktree(of: local) {
+            return held(target, at: elsewhere) { switchNow(target, steps: steps, worktree: nil) }
+        }
         let worktree = worktreeTarget(ref)
-        confirmAgents(.switching(to: target), worktree: worktree) {
-            run("Checkout \(target)", steps) { result in
-                if result.ok { return toast("Switched to \(target)") }
-                switchFailed(result, to: target, steps: steps, worktree: worktree)
-            }
+        confirmAgents(.switching(to: target), worktree: worktree) { switchNow(target, steps: steps, worktree: worktree) }
+    }
+
+    /// The switch itself, once the agents here were asked about.
+    private func switchNow(_ target: String, steps: [[String]], worktree: WorktreeTarget?) {
+        run("Checkout \(target)", steps) { result in
+            if result.ok { return toast("Switched to \(target)") }
+            switchFailed(result, to: target, steps: steps, worktree: worktree)
         }
     }
 
-    /// "“x” is checked out in another worktree", with Open Worktree.
-    private func held(_ target: String, at path: String?) {
-        GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
-                      buttons: ["Open Worktree", "Cancel"], over: window) { choice in
-            if choice == 0, let path { openWorktree(path) }
+    /// "“dev” is checked out in “app-wt-dev”": what can be done with that worktree, decided from the same facts as
+    /// its row's Remove Worktree… (WorktreeRemoval.heldQuestion): Remove Worktree and Switch when it can go, Forget
+    /// Worktree and Switch when its folder is gone, else Open Worktree and why it stays. `switchHere`: the switch, run
+    /// once the worktree is gone, the agents here asked about first unless `agentsAsked`; nil: the worktree only.
+    func held(_ target: String, at path: String?, agentsAsked: Bool = false, switchHere: (() -> Void)? = nil) {
+        guard let path, let model, let row = BranchPopupController.worktreeRow(at: path, in: model) else {
+            return GitPrompt.ask("“\(target)” is checked out in another worktree", info: path.map { RecentProjects.abbreviate($0) } ?? "",
+                                 buttons: ["Open Worktree", "Cancel"], over: window) { choice in
+                if choice == 0, let path { openWorktree(path) }
+            }
+        }
+        removalVerdict(row) { verdict, _ in
+            let asked = WorktreeRemoval.heldQuestion(branch: target, folder: row.folder, place: RecentProjects.abbreviate(path), verdict: verdict,
+                                                     switching: switchHere != nil)
+            GitPrompt.ask(asked.title, info: asked.info, buttons: asked.buttons, destructive: asked.destructive, over: window) { choice in
+                switch asked.actions[safe: choice] {
+                case .remove?, .forget?:
+                    let done = (asked.actions[choice] == .remove ? "Removed " : "Forgot ") + "\(row.folder): \(target) is free"
+                    let remove = { runRemoval(row.worktree, folder: row.folder, done: done, then: switchHere) }
+                    if switchHere == nil || agentsAsked { return remove() }
+                    // Before the remove: backing out here must leave that worktree as it is.
+                    confirmAgents(.switching(to: target)) { remove() }
+                case .open?:
+                    openWorktree(path)
+                default:
+                    break
+                }
+            }
         }
     }
 
@@ -174,7 +203,13 @@ struct GitActions {
                 if choice == 0 { stashSwitch(to: target, steps: steps, then: then) }
             }
         case let .heldByWorktree(path)?:
-            held(target, at: path)
+            // The agents here were asked about before this switch.
+            held(target, at: path, agentsAsked: true) {
+                run("Checkout \(target)", steps) { result in
+                    guard result.ok else { return switchFailed(result, to: target, steps: steps, worktree: worktree, update: update, then: then) }
+                    if let then { then() } else { toast("Switched to \(target)") }
+                }
+            }
         default:
             failed("Could not switch to “\(target)”", result, retry: steps.last)
         }

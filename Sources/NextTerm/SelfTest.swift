@@ -597,12 +597,13 @@ enum SelfTest {
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import or rollback), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback or held), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
+        case "held": return await heldWorktreeChecks(c)
         default: break
         }
         #endif
@@ -749,6 +750,7 @@ enum SelfTest {
         await gitLeftoverChecks(c)
         await placeChecks(c)
         await worktreeChecks(c)
+        await heldWorktreeChecks(c)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
@@ -4535,7 +4537,7 @@ enum SelfTest {
         diff.perform(.unstage)
         check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")
 
-        // Revert one change in the file; ⌘Z brings it back.
+        // Roll back one change in the file; ⌘Z brings it back.
         diff.base = .head
         _ = await wait(5) { diff.hunkCount == 2 }
         diff.go(toHunk: 1)
@@ -4543,7 +4545,7 @@ enum SelfTest {
         check(diff.currentHunk == 1, "the stepper's choice holds even when the whole diff fits on screen", "hunk \(diff.currentHunk + 1)")
         diff.perform(.revert)
         let reverted = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Revert Hunk undoes just that change in the file")
+        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Rollback Hunk undoes just that change in the file")
         _ = await wait(5) { diff.hunkCount == 1 }
         c.window?.undoManager?.undo()
         check(((try? String(contentsOf: file, encoding: .utf8)) ?? "") == changed, "⌘Z brings the reverted change back")

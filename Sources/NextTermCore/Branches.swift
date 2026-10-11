@@ -448,6 +448,25 @@ public enum GitFailure: Equatable, Sendable {
 }
 
 public enum GitOutput {
+    /// The branch a refusal because another worktree has it names, and that worktree's path: "fatal: 'dev' is already
+    /// used by worktree at '…'" (switch, checkout), "cannot delete branch 'dev' used by worktree at '…'" (branch -d).
+    public static func heldBranch(_ output: String) -> (branch: String, path: String)? {
+        guard case let .heldByWorktree(path?)? = classify(output), !path.isEmpty,
+              let match = output.range(of: #"'[^']+' (is already used by worktree|is already checked out|used by worktree)"#, options: .regularExpression)
+        else { return nil }
+        let quoted = output[match].components(separatedBy: "'")
+        return quoted.count > 1 && !quoted[1].isEmpty ? (quoted[1], path) : nil
+    }
+
+    /// Whether a command line (as the shell ran it, aliases expanded) is git's: `git …`, or `git` behind
+    /// `command` or an environment assignment.
+    public static func isGitCommand(_ line: String) -> Bool {
+        var words = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)[...]
+        while let first = words.first, first == "command" || first.contains("=") && !first.hasPrefix("=") { words = words.dropFirst() }
+        guard let program = words.first else { return false }
+        return program == "git" || program.hasSuffix("/git")
+    }
+
     /// The first matching class, most specific first; nil when the output says nothing known.
     public static func classify(_ output: String) -> GitFailure? {
         func has(_ text: String) -> Bool { output.localizedCaseInsensitiveContains(text) }

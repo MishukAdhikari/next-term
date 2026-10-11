@@ -247,8 +247,10 @@ extension SelfTest {
             actions.checkout(remote)
             _ = await wait(8) { window.attachedSheet != nil }
             let text = sheetText(window), offered = sheetButtons(window).map(\.title)
-            check(text.contains("is checked out in another worktree") && offered.contains("Open Worktree") && !offered.contains("Switch Anyway"),
-                  "worktrees: a branch held elsewhere gets Open Worktree, not the agent alert (AE5)", "\(text) | \(offered)")
+            check(text.contains("“mishuk/assistant-mcp-runner” is checked out in “xcloud-wt-aichat”") && offered.contains("Open Worktree")
+                  && offered.first == "Remove Worktree and Switch" && !offered.contains("Switch Anyway"),
+                  "worktrees: a branch held by a clean worktree gets Remove Worktree and Switch and Open Worktree, not the agent alert (AE5)",
+                  "\(text) | \(offered)")
             check(actions.worktreeTarget(remote) == nil, "worktrees: and isn't offered in a new worktree (git checks a branch out once)")
             _ = await press("Cancel")
         }

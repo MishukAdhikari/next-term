@@ -820,6 +820,24 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return ScrollbackText.below(divider: divider.text, row: divider.row, in: tail.rows, first: tail.first)
     }
 
+    // MARK: a branch another worktree holds
+
+    /// The row a git command's output starts on, while one runs in this (local) tab: if it fails because another
+    /// worktree has the branch, the window offers to free it (TerminalWindowController.noticeHeldBranch). Only the
+    /// command's own output is read, once, when it ends; nothing is typed in the shell.
+    private var gitOutputStart: Int?
+
+    private func gitCommandEnded(_ code: Int32) {
+        guard let start = gitOutputStart else { return }
+        gitOutputStart = nil
+        guard code != 0, remote == nil, let last = lastTextRow(), last >= start else { return }
+        let terminal = view.getTerminal()
+        let text = (max(start, last - 60)...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
+            .joined(separator: "\n")
+        guard let held = GitOutput.heldBranch(text) else { return }
+        AppDelegate.shared.controllers.first { $0.tabs.contains { $0 === self } }?.noticeHeldBranch(held.branch, at: held.path, from: directory)
+    }
+
     // MARK: serving
 
     /// The local address a running server printed (`npm run dev`, `langgraph dev`, `uvicorn`): shown as
@@ -1084,6 +1102,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
+            gitOutputStart = remote == nil && GitOutput.isGitCommand(expanded ?? line) ? pendingServingStart : nil
             noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
@@ -1093,6 +1112,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
+            gitCommandEnded(code)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
         case .jobs(let count, let summary):

@@ -127,6 +127,12 @@ extension GitActions {
     /// Remove Worktree… on a worktree's row: refused while an agent, a window or a tab is in it, while a lock
     /// holds it, or while it has changes; a folder deleted by hand is forgotten, after asking.
     func removeWorktree(_ row: BranchPopupController.WorktreeRow) {
+        removalVerdict(row) { decided, goTo in removal(decided, of: row, goTo: goTo) }
+    }
+
+    /// Whether the worktree of `row` can be removed now, and why not (WorktreeRemoval.verdict), from what is open in it
+    /// here and what git says of it, read off the main thread; `goTo` brings forward what is open in it.
+    func removalVerdict(_ row: BranchPopupController.WorktreeRow, done: @escaping (WorktreeRemoval.Verdict, _ goTo: @escaping () -> Void) -> Void) {
         guard let model, let git = GitWriter.git else { return NSSound.beep() }
         let w = row.worktree
         var known = WorktreeRemoval.Facts(isMain: model.isMainCheckout(w), isMissing: w.isPrunable,
@@ -158,7 +164,7 @@ extension GitActions {
             // Detached: git's gc deletes a commit no branch or tag has once the worktree's reflog goes with it.
             if w.isDetached, let head = w.head { counted.headOnNoBranch = WorktreeRemoval.isOnNoBranch(head, in: root, git: git) }
             let decided = WorktreeRemoval.verdict(counted)
-            DispatchQueue.main.async { removal(decided, of: row, goTo: goTo) }
+            DispatchQueue.main.async { done(decided, goTo) }
         }
     }
 
@@ -195,10 +201,15 @@ extension GitActions {
         }
     }
 
-    private func runRemoval(_ w: Worktree, folder: String, done: String) {
+    /// `then`: what follows once it is gone (a switch to the branch it held), in place of the notice. Its folder leaves
+    /// Recent Projects too.
+    func runRemoval(_ w: Worktree, folder: String, done: String, then: (() -> Void)? = nil) {
         let args = WorktreeRemoval.arguments(path: w.path)
+        let places = [w.path, canonicalPath(w.path)] // as the kernel spells it, while the folder is still there to ask
         run("Remove worktree \(folder)", [args]) { result in
-            result.ok ? toast(done) : failed("Could not remove “\(folder)”", result, retry: args)
+            guard result.ok else { return failed("Could not remove “\(folder)”", result, retry: args) }
+            AppDelegate.shared.forgetRecentProjects(under: places)
+            if let then { then() } else { toast(done) }
         }
     }
 }

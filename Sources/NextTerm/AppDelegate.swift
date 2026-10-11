@@ -945,6 +945,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         recent = RecentProjects(paths)
     }
 
+    /// A worktree removed or forgotten (GitActions.runRemoval): it leaves the list, with any project inside it, as its
+    /// folder is gone. `places` spells the folder each way it may have been kept (as git and as the kernel spell it).
+    func forgetRecentProjects(under places: [String]) {
+        var list = recent
+        for project in list.paths where places.contains(where: { project == $0 || project.hasPrefix($0 + "/") }) { list.remove(project) }
+        if list.paths != recent.paths { recent = list }
+    }
+
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
     typealias ProjectTarget = ProjectOpening.Setting
 
@@ -1573,6 +1581,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
+        // The branch popup at its Worktrees: where each is listed, opened, unlocked and removed.
+        item(git, "Worktrees…", #selector(TerminalWindowController.showWorktrees(_:)), "")
         git.addItem(.separator())
         // Fetch is ⌘R, as in the branch popup (the same fetch of every remote). Update Project can change files without
         // asking (it fast-forwards), so it takes three keys, U for Update. Commit… is Tower's and Sourcetree's ⇧⌘C, New Branch… Fork's
