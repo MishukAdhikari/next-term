@@ -877,4 +877,433 @@ import Testing
         #expect(Config.notifies(downSince: down, now: down.addingTimeInterval(600)))
         #expect(!Config.notifies(downSince: down, now: down.addingTimeInterval(-5)))
     }
+
+    // MARK: your own server over ssh (U15)
+
+    let web1 = RemoteHost(id: "a1b2c3d4e5f6", name: "web-1", destination: "deploy@203.0.113.5", port: 2222)
+    let serverPort = 24567
+
+    func server(_ host: RemoteHost? = nil, port: Int? = nil) -> Config.OwnServer {
+        Config.OwnServer(host: host ?? web1, port: port ?? serverPort)
+    }
+
+    /// The value after each `-o`.
+    func options(_ arguments: [String]) -> [String] {
+        zip(arguments, arguments.dropFirst()).filter { $0.0 == "-o" }.map(\.1)
+    }
+
+    @Test func sshForwardsOnlyTheDoorFromTheServersLoopback() {
+        let arguments = Config.sshArguments(server(), doorPort: port, configFile: nil)
+        let forwards = zip(arguments, arguments.dropFirst()).filter { $0.0 == "-R" }.map(\.1)
+        #expect(forwards == ["127.0.0.1:24567:127.0.0.1:41234"])
+        #expect(!arguments.contains("-L") && !arguments.contains("-D") && !arguments.contains("-W"))
+        #expect(arguments.first == "-N", "no session: no command, no shell, no agent or X11 forwarding")
+    }
+
+    @Test func sshNeverPromptsNeverTakesAHostKeyAndEndsWhenTheForwardFails() {
+        let set = options(Config.sshArguments(server(), doorPort: port, configFile: nil))
+        for option in ["BatchMode=yes", "StrictHostKeyChecking=yes", "ExitOnForwardFailure=yes",
+                       "ServerAliveInterval=15", "ServerAliveCountMax=3", "UpdateHostKeys=no"] {
+            #expect(set.contains(option), "\(option)")
+        }
+        // Its own connection: never a master for other sessions, never one of theirs.
+        #expect(set.contains("ControlMaster=no"))
+        #expect(set.contains("ControlPath=none"))
+        // The forward's success shows only in ssh's debug lines.
+        #expect(set.contains("LogLevel=DEBUG1"))
+        // A config's "yes" would clear the door's forward too; "no" here wins over it.
+        #expect(set.contains("ClearAllForwardings=no"))
+        #expect(!set.contains("ClearAllForwardings=yes"))
+    }
+
+    /// What the user's ssh config may set for every ssh they run, and the child must not do: go to the background
+    /// out of the process group Turn Off and quit end, run a command there or here, or forward anything else.
+    @Test func sshKeepsTheUsersConfigFromChangingWhatTheChildDoes() {
+        let set = options(Config.sshArguments(server(), doorPort: port, configFile: "/tmp/nt-ssh/ssh_config"))
+        for option in ["ForkAfterAuthentication=no", "RemoteCommand=none", "PermitLocalCommand=no", "Tunnel=no",
+                       "ForwardAgent=no", "ForwardX11=no"] {
+            #expect(set.contains(option), "\(option)")
+        }
+    }
+
+    @Test func sshChecksItsSettingsWithTheSameArguments() {
+        let arguments = Config.sshArguments(server(), doorPort: port, configFile: "/tmp/nt-ssh/ssh_config")
+        let check = Config.sshCheckArguments(server(), doorPort: port, configFile: "/tmp/nt-ssh/ssh_config")
+        // ssh -G prints the settings it would connect with, and connects to nothing.
+        #expect(check == ["-G"] + arguments)
+    }
+
+    /// `ssh -G` as OpenSSH 10.2 prints it, with the door's forward and `extra` lines.
+    func printedSettings(_ extra: [String] = [], door: Bool = true) -> String {
+        var lines = ["host web-1", "hostname 203.0.113.5", "port 2222", "clearallforwardings no",
+                     "exitonforwardfailure yes", "gatewayports no", "sessiontype none", "forkafterauthentication no"]
+        if door { lines.append("remoteforward [127.0.0.1]:24567 [127.0.0.1]:41234") }
+        return (lines + extra).joined(separator: "\n") + "\n"
+    }
+
+    @Test func sshsSettingsWithOnlyTheDoorsForwardAreFine() {
+        #expect(Config.sshSettingsProblem(printedSettings(), server: server(), doorPort: port) == nil)
+        let plain = printedSettings().replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+        #expect(Config.sshSettingsProblem(plain, server: server(), doorPort: port) == nil, "older ssh, no brackets")
+        let windows = printedSettings().replacingOccurrences(of: "\n", with: "\r\n")
+        #expect(Config.sshSettingsProblem(windows, server: server(), doorPort: port) == nil)
+    }
+
+    /// A forward the user's config sets for the server would ride along on the child: refused before it starts,
+    /// naming the config and the forwards.
+    @Test func forwardsFromTheUsersSSHConfigAreRefused() throws {
+        let extra = ["localforward 5432 [127.0.0.1]:5432", "dynamicforward 1080",
+                     "remoteforward [127.0.0.1]:2222 [127.0.0.1]:22"]
+        let problem = try #require(Config.sshSettingsProblem(printedSettings(extra), server: server(), doorPort: port))
+        #expect(problem.contains("web-1"))
+        #expect(problem.contains("~/.ssh/config"))
+        #expect(problem.contains("LocalForward 5432 127.0.0.1:5432"))
+        #expect(problem.contains("DynamicForward 1080"))
+        #expect(problem.contains("RemoteForward 127.0.0.1:2222 127.0.0.1:22"))
+        #expect(!problem.contains("24567 127.0.0.1:41234"), "the door's own forward is not one of them")
+        for one in extra {
+            let printed = printedSettings([one])
+            #expect(Config.sshSettingsProblem(printed, server: server(), doorPort: port) != nil, "\(one)")
+        }
+        // The same server port to another port on this Mac is not the door's.
+        let elsewhere = ["remoteforward [127.0.0.1]:24567 [127.0.0.1]:22"]
+        #expect(Config.sshSettingsProblem(printedSettings(elsewhere), server: server(), doorPort: port) != nil)
+        let socket = ["remoteforward /tmp/agent.sock [127.0.0.1]:22"]
+        #expect(Config.sshSettingsProblem(printedSettings(socket), server: server(), doorPort: port) != nil)
+    }
+
+    @Test func sshsSettingsThatDropTheDoorsForwardOrForkAreRefused() throws {
+        let cleared = try #require(Config.sshSettingsProblem(printedSettings(door: false), server: server(),
+                                                             doorPort: port))
+        #expect(cleared.contains("web-1"))
+        let forks = printedSettings().replacingOccurrences(of: "forkafterauthentication no",
+                                                           with: "forkafterauthentication yes")
+        #expect(Config.sshSettingsProblem(forks, server: server(), doorPort: port) != nil)
+        let unread = try #require(Config.sshSettingsProblem(nil, server: server(), doorPort: port))
+        #expect(unread.contains("web-1") && unread.contains("ssh -G"))
+        #expect(Config.sshSettingsProblem("", server: server(), doorPort: port) == unread)
+    }
+
+    @Test func sshEndsWithTheSavedPortAndDestination() {
+        let arguments = Config.sshArguments(server(), doorPort: port, configFile: "/tmp/nt-ssh/ssh_config")
+        #expect(Array(arguments.suffix(4)) == ["-p", "2222", "--", "deploy@203.0.113.5"])
+        #expect(Array(arguments.prefix(2)) == ["-F", "/tmp/nt-ssh/ssh_config"])
+        let plain = RemoteHost(name: "box", destination: "box")
+        let noPort = Config.sshArguments(server(plain), doorPort: port, configFile: nil)
+        #expect(Array(noPort.suffix(2)) == ["--", "box"])
+        #expect(!noPort.contains("-p"))
+    }
+
+    @Test func aDestinationWithSpacesOrQuotesStaysOneArgument() {
+        for destination in ["we ird host", "o'brien@host", "\"quoted\" host", "-oProxyCommand=evil"] {
+            let odd = RemoteHost(name: "odd", destination: destination)
+            let arguments = Config.sshArguments(server(odd), doorPort: port, configFile: nil)
+            #expect(arguments.last == destination)
+            #expect(arguments.dropLast().last == "--", "never read as an option")
+            #expect(arguments.filter { $0.contains(destination) }.count == 1)
+        }
+    }
+
+    @Test func sshNeverCarriesTheMCPSocketOrAnIDEPort() {
+        let arguments = Config.sshArguments(server(), doorPort: port, configFile: nil)
+        let text = arguments.joined(separator: " ")
+        #expect(!text.contains("mcp.sock"))
+        #expect(!text.contains(MCPServer.socketVariable))
+        #expect(!text.contains(MCPServer.socketPath(home: "/Users/someone")))
+        // Only the door's port, the server port and ssh's own port: nothing else on this Mac is reachable.
+        let ports = arguments.flatMap { $0.split(separator: ":") }.compactMap { Int($0) }
+        #expect(Set(ports) == [serverPort, port, 2222])
+    }
+
+    /// Below Linux's ephemeral ports (32768 to 60999), so a reconnect's listen never meets an outgoing connection's
+    /// port.
+    @Test func theServerPortIsPickedOnceBelowLinuxsEphemeralPorts() {
+        #expect(Config.serverPorts == 20000...32767)
+        #expect(Config.serverPort(saved: 24567, random: { _ in 0 }) == 24567, "the saved one, never another")
+        #expect(Config.serverPort(saved: nil, random: { _ in 0 }) == 20000)
+        #expect(Config.serverPort(saved: nil, random: { $0 - 1 }) == 32767)
+        #expect(Config.serverPort(saved: nil, random: { _ in 12345 }) == 32345)
+        // Out of the range, or nonsense from the random source, is never used.
+        #expect(Config.serverPort(saved: 22, random: { _ in 7 }) == 20007)
+        #expect(Config.serverPort(saved: 34567, random: { _ in 7 }) == 20007, "an ephemeral port")
+        #expect(Config.serverPort(saved: 70000, random: { _ in 7 }) == 20007)
+        #expect(Config.serverPort(saved: nil, random: { _ in -1 }) == 32767)
+        #expect(Config.serverPort(saved: nil, random: { _ in 12768 }) == 20000)
+        for _ in 0..<200 { #expect(Config.serverPorts.contains(Config.serverPort(saved: nil))) }
+    }
+
+    /// "New Server Port": another one from the range, never the one it replaces.
+    @Test func aNewServerPortIsNeverTheOldOne() {
+        #expect(Config.newServerPort(replacing: 20000, random: { _ in 0 }) == 20001)
+        #expect(Config.newServerPort(replacing: 24567, random: { _ in 0 }) == 20000)
+        #expect(Config.newServerPort(replacing: 32767, random: { $0 - 1 }) == 32766)
+        #expect(Config.newServerPort(replacing: 20005, random: { _ in 5 }) == 20006)
+        #expect(Config.newServerPort(replacing: 40000, random: { _ in 5 }) == 20005, "one out of range is no rule")
+        for old in [20000, 26000, 32767] {
+            for _ in 0..<100 {
+                let new = Config.newServerPort(replacing: old)
+                #expect(new != old && Config.serverPorts.contains(new))
+            }
+        }
+    }
+
+    @Test func sshsLinesSayWhereTheForwardStands() {
+        func line(_ text: String) -> Config.SSHLine? { Config.sshLine(text, serverPort: serverPort) }
+        #expect(line("Authenticated to 203.0.113.5 ([203.0.113.5]:2222) using \"publickey\".") == .loggedIn)
+        let success = "debug1: remote forward success for: listen 127.0.0.1:24567, connect 127.0.0.1:41234"
+        #expect(line(success) == .forwardHolds)
+        #expect(line("debug1: remote forward success for: listen 127.0.0.1:245670, connect 127.0.0.1:1") == nil)
+        #expect(line("debug1: remote forward success for: listen 127.0.0.1:2456, connect 127.0.0.1:1") == nil)
+        #expect(line("Error: remote port forwarding failed for listen port 24567") == .serverPortBusy)
+        #expect(line("Error: remote port forwarding failed for listen port 245678") == nil)
+        #expect(line("debug1: remote forward failure for: listen 127.0.0.1:24567, connect 127.0.0.1:41234")
+                == .serverPortBusy)
+        #expect(line("Host key verification failed.") == .hostKey)
+        #expect(line("No ED25519 host key is known for [203.0.113.5]:2222 and you have requested strict checking.")
+                == .hostKey)
+        #expect(line("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @") == .hostKey)
+        #expect(line("deploy@203.0.113.5: Permission denied (publickey,password).") == .loginNeeded)
+        #expect(line("Received disconnect from 203.0.113.5 port 2222:2: Too many authentication failures")
+                == .loginNeeded)
+        // Debug lines say these words about other things: only ssh's own messages count.
+        #expect(line("debug1: Permission denied (publickey) for a file") == nil)
+        #expect(line("debug1: Host key verification failed.") == nil)
+        #expect(line("debug1: Connection established.") == nil)
+        #expect(line("") == nil)
+    }
+
+    @Test func settingsKeepsSSHsOwnMessagesNotItsDebugLines() {
+        #expect(Config.keepsSSHLine("deploy@203.0.113.5: Permission denied (publickey)."))
+        #expect(Config.keepsSSHLine("Authenticated to 203.0.113.5 ([203.0.113.5]:22) using \"publickey\"."))
+        #expect(Config.keepsSSHLine("debug1: remote forward success for: listen 127.0.0.1:24567, connect 127.0.0.1:1"))
+        #expect(!Config.keepsSSHLine("debug1: channel 1: new forwarded-tcpip [127.0.0.1]"))
+        #expect(!Config.keepsSSHLine("debug2: channel 1: rcvd adjust 65536"))
+        #expect(!Config.keepsSSHLine("debug3: send packet: type 98"))
+        #expect(!Config.keepsSSHLine(""))
+    }
+
+    @Test func sshsOutputSplitsIntoLinesAsItComes() {
+        var lines = Config.SSHLines()
+        #expect(lines.read(Data("Authenticated to h".utf8)) == [])
+        #expect(lines.read(Data("ost.\r\ndebug1: one\nde".utf8)) == ["Authenticated to host.", "debug1: one"])
+        #expect(lines.finish() == ["de"])
+        #expect(lines.finish() == [])
+        var long = Config.SSHLines()
+        let cut = long.read(Data(String(repeating: "x", count: 5000).utf8))
+        #expect(cut.count == 1 && cut[0].count == Config.SSHLines.longest)
+        #expect(long.read(Data("yyy\nnext\n".utf8)) == ["next"], "the rest of a cut line is dropped")
+    }
+
+    @Test func theSSHMessagesNameTheServerAndSayWhatToDo() {
+        #expect(Config.sshHostKeyProblem("web-1").contains("web-1"))
+        #expect(Config.sshHostKeyProblem("web-1").contains("remote tab"))
+        #expect(Config.sshLoginProblem("web-1").contains("web-1"))
+        #expect(Config.sshLoginNeeded("web-1").contains("web-1"))
+        let busy = Config.RouteWarning.serverPortBusy(server: "web-1", port: serverPort).message
+        #expect(busy.contains("24567") && busy.contains("web-1"))
+    }
+
+    /// The server port's listen failing has three causes ssh can't tell apart, and one of them takes the requests:
+    /// the warning names each, what to do, and the way to another port.
+    @Test func aBusyServerPortSaysWhyItMayBeAndWhatHoldsTheRequests() {
+        let busy = Config.RouteWarning.serverPortBusy(server: "web-1", port: serverPort).message
+        #expect(busy.contains("earlier connection") && busy.contains("ClientAliveInterval"))
+        #expect(busy.contains("AllowTcpForwarding") && busy.contains("PermitListen"))
+        #expect(busy.contains("another program"))
+        #expect(busy.contains("requests meant for Next Term"))
+        #expect(busy.contains(Config.newServerPortTitle) && busy.contains("Caddy"))
+    }
+
+    /// A login tab opened while the user wasn't turning Remote access on stays in the background; the Mac says
+    /// where it is.
+    @Test func aLoginTabInTheBackgroundIsNamedInANotification() {
+        let notice = Config.sshLoginTabNotice("web-1")
+        #expect(notice.title.contains("log in"))
+        #expect(notice.body.contains("web-1") && notice.body.contains("tab"))
+    }
+
+    // MARK: Caddy on your own server (R48)
+
+    @Test func theCaddyfileUsesTheSavedHostnameAndServerPort() {
+        let text = Config.caddyfile(hostname: host, serverPort: serverPort)
+        #expect(text == "mcp.example.com {\n\treverse_proxy 127.0.0.1:24567\n}\n")
+    }
+
+    @Test func caddysSetupInstallsAddsTheSiteAndReloads() throws {
+        let apt = try #require(Config.caddySetup(.apt, hostname: host, serverPort: serverPort))
+        #expect(Array(apt.prefix(2)) == ["sudo apt-get update", "sudo apt-get install -y caddy"])
+        let dnf = try #require(Config.caddySetup(.dnf, hostname: host, serverPort: serverPort))
+        #expect(dnf.first == "sudo dnf install -y caddy")
+        let installed = try #require(Config.caddySetup(.installed, hostname: host, serverPort: serverPort))
+        #expect(!installed.contains { $0.contains("install") })
+        for commands in [apt, dnf, installed] {
+            #expect(commands.last == "sudo systemctl reload caddy")
+            let site = commands.filter { $0.contains(Config.caddySiteFile) && $0.contains("tee") }
+            #expect(site.count == 1)
+            #expect(site.first?.contains("mcp.example.com {\\n\\treverse_proxy 127.0.0.1:24567\\n}\\n") == true)
+            #expect(commands.contains { $0.contains("caddy validate") })
+        }
+    }
+
+    /// The user's own Caddyfile keeps its sites: the door's site is a file of its own, imported once.
+    @Test func caddysSetupNeverReplacesTheUsersCaddyfile() throws {
+        let commands = try #require(Config.caddySetup(.apt, hostname: host, serverPort: serverPort))
+        let main = "/etc/caddy/Caddyfile"
+        for command in commands where command.contains(main + " ") || command.hasSuffix(main) {
+            #expect(!command.contains("> \(main)") || command.contains(">> \(main)"), "\(command)")
+            #expect(!command.contains("tee \(main)"), "\(command)")
+        }
+        let append = commands.filter { $0.contains(">> \(main)") }
+        #expect(append.count == 1)
+        #expect(append.first?.contains("grep") == true, "only when no import is there yet")
+    }
+
+    /// Typed as one line into the user's login shell, whatever it is: no history, variable or command expansion,
+    /// one sudo prompt for all of it.
+    @Test func caddysSetupIsOneLineAnyLoginShellReadsTheSame() throws {
+        for system in Config.CaddySystem.allCases {
+            let commands = try #require(Config.caddySetup(system, hostname: host, serverPort: serverPort))
+            let line = Config.caddySetupLine(commands)
+            #expect(line == commands.joined(separator: " && "))
+            for character in ["!", "$", "`", "\n", "\r", "\t", "~"] {
+                #expect(!line.contains(character), "\(system): \(character)")
+            }
+            // Outside quotes, nothing fish or tcsh reads otherwise: no ( for fish's command substitution, no
+            // braces, globs, comments or redirections.
+            let bare = unquoted(line)
+            for character in "(){}*?[]#<>;" {
+                #expect(!bare.contains(character), "\(system): \(character) in \(bare)")
+            }
+        }
+    }
+
+    /// The text of a shell line outside its single and double quotes.
+    func unquoted(_ line: String) -> String {
+        var bare = ""
+        var quote: Character?
+        for character in line {
+            if let open = quote {
+                if character == open { quote = nil }
+            } else if character == "'" || character == "\"" {
+                quote = character
+            } else {
+                bare.append(character)
+            }
+        }
+        return bare
+    }
+
+    /// The typed line run for real by /bin/sh in a folder standing in for /etc/caddy, with sudo, systemctl and
+    /// Caddy's check left out: whether the check passes is `validates`.
+    func runCaddySetup(in folder: URL, validates: Bool) throws -> Int32 {
+        let commands = try #require(Config.caddySetup(.installed, hostname: host, serverPort: serverPort))
+        var line = Config.caddySetupLine(commands)
+        line = line.replacingOccurrences(of: "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
+                                         with: validates ? "true" : "false")
+        line = line.replacingOccurrences(of: "systemctl enable --now caddy", with: "true")
+        line = line.replacingOccurrences(of: "systemctl reload caddy", with: "true")
+        line = line.replacingOccurrences(of: "sudo ", with: "")
+        line = line.replacingOccurrences(of: "/etc/caddy", with: folder.path)
+        #expect(!line.contains("/etc/"), "everything stays in the test's folder")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", line]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    func caddyFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ra-caddy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("other.example.com {\n\trespond 200\n}\n".utf8).write(to: folder.appendingPathComponent("Caddyfile"))
+        return folder
+    }
+
+    func contents(_ folder: URL) throws -> [String: String] {
+        var found: [String: String] = [:]
+        let manager = FileManager.default
+        for name in try manager.subpathsOfDirectory(atPath: folder.path) {
+            let url = folder.appendingPathComponent(name)
+            var isFolder: ObjCBool = false
+            guard manager.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue else { continue }
+            found[name] = try String(contentsOf: url, encoding: .utf8)
+        }
+        return found
+    }
+
+    /// A Caddyfile that fails Caddy's check with the door's site, such as one that already has a block for the
+    /// hostname, is put back as it was, and so is the door's earlier site, so the next restart still works.
+    @Test func aFailedCaddyCheckPutsEverythingBackAsItWas() throws {
+        let folder = try caddyFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let before = try contents(folder)
+        #expect(try runCaddySetup(in: folder, validates: false) != 0, "the line stops there")
+        #expect(try contents(folder) == before, "no site file, no import, no copy left")
+
+        let earlier = "mcp.example.com {\n\treverse_proxy 127.0.0.1:20001\n}\n"
+        let site = folder.appendingPathComponent("Caddyfile.d/next-term.caddyfile")
+        try FileManager.default.createDirectory(at: site.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(earlier.utf8).write(to: site)
+        let imported = "other.example.com {\n\trespond 200\n}\n\nimport \(folder.path)/Caddyfile.d/*.caddyfile\n"
+        try Data(imported.utf8).write(to: folder.appendingPathComponent("Caddyfile"))
+        let set = try contents(folder)
+        #expect(try runCaddySetup(in: folder, validates: false) != 0)
+        #expect(try contents(folder) == set, "the earlier site is back")
+    }
+
+    @Test func aPassedCaddyCheckKeepsTheSiteAndTheImportOnly() throws {
+        let folder = try caddyFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(try runCaddySetup(in: folder, validates: true) == 0)
+        let after = try contents(folder)
+        #expect(after["Caddyfile.d/next-term.caddyfile"] == Config.caddyfile(hostname: host, serverPort: serverPort))
+        let main = try #require(after["Caddyfile"])
+        #expect(main.hasPrefix("other.example.com {\n\trespond 200\n}\n"), "the user's sites stay")
+        #expect(main.hasSuffix("\nimport \(folder.path)/Caddyfile.d/*.caddyfile\n"), "at its end, on a line of its own")
+        #expect(main.components(separatedBy: "Caddyfile.d/*.caddyfile").count == 2, "imported once")
+        #expect(after.count == 2, "no copy left: \(after.keys.sorted())")
+        // Again: the import is there already, and the site is written fresh.
+        #expect(try runCaddySetup(in: folder, validates: true) == 0)
+        let again = try contents(folder)
+        #expect(again["Caddyfile"] == main)
+        #expect(again.count == 2)
+    }
+
+    @Test func caddysSetupRefusesAnythingButAPublicHostnameAndAServerPort() {
+        #expect(Config.caddySetup(.apt, hostname: "mcp.example.com'; rm -rf /", serverPort: serverPort) == nil)
+        #expect(Config.caddySetup(.apt, hostname: "localhost", serverPort: serverPort) == nil)
+        #expect(Config.caddySetup(.apt, hostname: "%s.example.com", serverPort: serverPort) == nil)
+        #expect(Config.caddySetup(.apt, hostname: host, serverPort: 22) == nil)
+        #expect(Config.caddySetup(.apt, hostname: "MCP.Example.com", serverPort: serverPort)?
+                    .contains { $0.contains("mcp.example.com {") } == true)
+    }
+
+    /// Copies first, then the changes, then Caddy's check, which puts the copies back when it fails; only past it
+    /// are the copies removed and Caddy started.
+    @Test func caddysSetupChecksBeforeItStartsCaddy() throws {
+        let commands = try #require(Config.caddySetup(.apt, hostname: host, serverPort: serverPort))
+        func index(_ text: String) throws -> Int {
+            try #require(commands.firstIndex { $0.contains(text) }, "\(text)")
+        }
+        let copy = try index("cp -p /etc/caddy/Caddyfile ")
+        let site = try index("tee \(Config.caddySiteFile)")
+        let imports = try index(">> /etc/caddy/Caddyfile")
+        let check = try index("caddy validate")
+        let removed = try index("rm -f /etc/caddy/Caddyfile.before-next-term")
+        let start = try index("systemctl enable")
+        #expect(copy < site && site < imports && imports < check && check < removed && removed < start)
+        #expect(commands[check].contains("exit 1"), "a failed check stops the line")
+    }
+
+    /// Each label names only systems its command works on as it is; any other installs Caddy itself first.
+    @Test func eachCaddySystemHasALabel() {
+        let labels = Config.CaddySystem.allCases.map(\.label)
+        #expect(Set(labels).count == labels.count)
+        #expect(labels.allSatisfy { !$0.isEmpty })
+        #expect(Config.CaddySystem.apt.label.contains("Debian 12") && Config.CaddySystem.apt.label.contains("24.04"))
+        #expect(Config.CaddySystem.dnf.label == "Fedora")
+    }
 }

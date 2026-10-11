@@ -283,6 +283,161 @@ import Testing
         #expect(!watch.finished)
     }
 
+    // MARK: your own server over ssh (U15)
+
+    static let web1 = RemoteHost(id: "a1b2c3d4e5f6", name: "web-1", destination: "deploy@203.0.113.5")
+    static let server = Config.OwnServer(host: web1, port: 24567)
+
+    func sshWatch(limits: Watch.Limits = .standard) -> Watch {
+        var watch = Watch(kind: .ownServer, host: Self.host, port: Self.port, limits: limits, server: Self.server)
+        _ = watch.started(at: Self.t0)
+        return watch
+    }
+
+    @Test func theForwardHoldingAfterTheLoginIsReady() {
+        var watch = sshWatch()
+        #expect(watch.ssh(.loggedIn, at: at(1)) == [])
+        #expect(watch.ssh(.forwardHolds, at: at(1)) == [.report(.ready(host: Self.host))])
+        #expect(watch.downSince == nil)
+        #expect(watch.exited(at: at(50)) == [.report(.notReady), .restart(after: 1)], "a drop restarts")
+    }
+
+    @Test func aForwardLineBeforeTheLoginIsNotReady() {
+        var watch = sshWatch()
+        #expect(watch.ssh(.forwardHolds, at: at(1)) == [], "a server's banner comes before the login")
+        _ = watch.exited(at: at(2))
+        _ = watch.started(at: at(3))
+        #expect(watch.ssh(.forwardHolds, at: at(4)) == [], "each child logs in again")
+    }
+
+    @Test func anUnknownOrChangedHostKeyStopsAndSaysToConnectInATab() {
+        var watch = sshWatch()
+        #expect(watch.ssh(.hostKey, at: at(1)) == [])
+        let message = Config.sshHostKeyProblem("web-1")
+        #expect(watch.exited(at: at(1)) == [.report(.tunnelFailed(message))])
+        #expect(watch.finished)
+        #expect(watch.started(at: at(2)) == [] && watch.exited(at: at(3)) == [])
+    }
+
+    @Test func aLoginThatNeedsTheUserOpensATabOnceThenStartsAgain() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loginNeeded, at: at(1))
+        #expect(watch.exited(at: at(1)) == [.report(.notReady), .openLoginTab(inFront: false)])
+        #expect(!watch.finished)
+        #expect(watch.tick(at: at(30)) == [])
+        #expect(watch.loggedIn(at: at(40)) == [.restart(after: 0)])
+        #expect(watch.loggedIn(at: at(41)) == [], "once per tab")
+        _ = watch.started(at: at(41))
+        _ = watch.ssh(.loggedIn, at: at(42))
+        #expect(watch.ssh(.forwardHolds, at: at(42)) == [.report(.ready(host: Self.host))])
+    }
+
+    @Test func aLoginThatStillNeedsTheUserAfterTheTabStops() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loginNeeded, at: at(1))
+        _ = watch.exited(at: at(1))
+        _ = watch.loggedIn(at: at(20))
+        _ = watch.started(at: at(20))
+        _ = watch.ssh(.loginNeeded, at: at(21))
+        #expect(watch.exited(at: at(21)) == [.report(.tunnelFailed(Config.sshLoginProblem("web-1")))])
+        #expect(watch.finished)
+    }
+
+    @Test func aLoginNeededAgainAfterItWasReadyOpensATabAgain() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loginNeeded, at: at(1))
+        _ = watch.exited(at: at(1))
+        _ = watch.loggedIn(at: at(20))
+        _ = watch.started(at: at(20))
+        _ = watch.ssh(.loggedIn, at: at(21))
+        _ = watch.ssh(.forwardHolds, at: at(21))
+        _ = watch.exited(at: at(500))
+        _ = watch.started(at: at(501))
+        _ = watch.ssh(.loginNeeded, at: at(502))
+        #expect(watch.exited(at: at(502)) == [.report(.notReady), .openLoginTab(inFront: false)])
+    }
+
+    @Test func aLoginTabThatEndsWithoutTheLoginStops() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loginNeeded, at: at(1))
+        _ = watch.exited(at: at(1))
+        #expect(watch.loginEnded(at: at(30)) == [.report(.tunnelFailed(Config.sshLoginNeeded("web-1")))])
+        #expect(watch.finished)
+        var waiting = sshWatch()
+        #expect(waiting.loginEnded(at: at(5)) == [], "nothing waits for a login")
+        #expect(waiting.loggedIn(at: at(5)) == [])
+    }
+
+    @Test func aBusyServerPortWarnsAndKeepsTrying() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loggedIn, at: at(1))
+        _ = watch.ssh(.serverPortBusy, at: at(1))
+        #expect(watch.exited(at: at(1)) == [.report(.notReady), .restart(after: 1)])
+        #expect(watch.warnings == [.serverPortBusy(server: "web-1", port: 24567)])
+        _ = watch.started(at: at(2))
+        _ = watch.ssh(.loggedIn, at: at(3))
+        _ = watch.ssh(.forwardHolds, at: at(3))
+        #expect(watch.warnings.isEmpty, "gone once the forward holds")
+    }
+
+    @Test func sshLinesMeanNothingToTheOtherTunnels() {
+        var watch = watch()
+        #expect(watch.ssh(.loggedIn, at: at(1)) == [])
+        #expect(watch.ssh(.forwardHolds, at: at(1)) == [])
+        _ = watch.ssh(.hostKey, at: at(1))
+        #expect(watch.exited(at: at(2)) == [.report(.notReady), .restart(after: 1)])
+    }
+
+    /// Only right after the user's own Turn On is the login tab put in front of them: a launch's start, a restart
+    /// after the forward held, or one long after the click opens it in the background, where nothing typed in Next
+    /// Term reaches it.
+    @Test func theLoginTabIsInFrontOnlyRightAfterTheUsersTurnOn() {
+        func needsLogin(_ watch: inout Watch, at seconds: TimeInterval) -> [Watch.Output] {
+            _ = watch.ssh(.loginNeeded, at: at(seconds))
+            return watch.exited(at: at(seconds))
+        }
+        var clicked = Watch(kind: .ownServer, host: Self.host, port: Self.port, server: Self.server, askedAt: Self.t0)
+        _ = clicked.started(at: Self.t0)
+        #expect(needsLogin(&clicked, at: 3) == [.report(.notReady), .openLoginTab(inFront: true)])
+
+        var late = Watch(kind: .ownServer, host: Self.host, port: Self.port, server: Self.server, askedAt: Self.t0)
+        _ = late.started(at: Self.t0)
+        _ = late.exited(at: at(1))
+        _ = late.started(at: at(Config.loginTabInFrontFor + 1))
+        #expect(needsLogin(&late, at: Config.loginTabInFrontFor + 2) == [.report(.notReady),
+                                                                          .openLoginTab(inFront: false)])
+
+        var held = Watch(kind: .ownServer, host: Self.host, port: Self.port, server: Self.server, askedAt: Self.t0)
+        _ = held.started(at: Self.t0)
+        _ = held.ssh(.loggedIn, at: at(1))
+        _ = held.ssh(.forwardHolds, at: at(1))
+        _ = held.exited(at: at(20))
+        _ = held.started(at: at(21))
+        #expect(needsLogin(&held, at: 22) == [.report(.notReady), .openLoginTab(inFront: false)], "a drop")
+
+        var launched = sshWatch()
+        #expect(needsLogin(&launched, at: 1) == [.report(.notReady), .openLoginTab(inFront: false)])
+    }
+
+    /// A master connection a tab holds makes a new tab join it with no login, which gets the child no key: the
+    /// login it needs can't happen in a tab, so it stops, saying so.
+    @Test func aLoginNoTabCanHelpWithStops() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loginNeeded, at: at(1))
+        _ = watch.exited(at: at(1))
+        #expect(watch.loginWontHelp(at: at(1)) == [.report(.tunnelFailed(Config.sshLoginProblem("web-1")))])
+        #expect(watch.finished && !watch.awaitingLogin)
+        var waiting = sshWatch()
+        #expect(waiting.loginWontHelp(at: at(1)) == [], "nothing waits for a login")
+    }
+
+    @Test func sshDownForTenMinutesTellsTheMac() {
+        var watch = sshWatch()
+        _ = watch.ssh(.loginNeeded, at: at(1))
+        _ = watch.exited(at: at(1))
+        #expect(watch.tick(at: at(601)) == [.report(.tunnelDown)])
+    }
+
     // MARK: the child's output
 
     @Test func outputKeepsTheLastTwentyCompleteLines() {
@@ -434,6 +589,9 @@ import Testing
         #expect(said(200, metadata("other.example.com")).contains("not as Next Term"))
         #expect(said(200, Data("<html>".utf8)).contains("not as Next Term"))
         #expect(said(500, kind: .funnel) == "mcp.example.com answered 500.")
+        #expect(said(502, server: "Caddy", kind: .ownServer).contains("ssh forward"))
+        #expect(said(504, kind: .ownServer).contains("ssh forward"))
+        #expect(said(500, kind: .ownServer) == "mcp.example.com answered 500.")
     }
 
     @Test func noAnswerSaysWhy() {

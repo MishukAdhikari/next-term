@@ -14,6 +14,15 @@ import NextTermCore
 ///   (Confirm Host); a different one later stops it. Connected with no routing for 2 minutes, it stops.
 /// - Funnel: `tailscale status --json` first, then `tailscale funnel http://127.0.0.1:<port>` in the foreground, so
 ///   the share ends with the child, and `tailscale funnel status --json` at each check.
+/// - Your own server (U15): the system ssh with U15's arguments, one reverse forward from the server's
+///   `127.0.0.1:<server port>` to the door and nothing else, on a connection of its own. It never prompts and never
+///   takes a host key: an unknown or changed one stops it (R47). Before each start, `ssh -G` with the same arguments
+///   shows what the user's ssh config adds, and a forward of its own refuses the start. A login that needs the user
+///   opens a remote tab on the server, and ssh starts again once that tab's login got through (R47): in front right
+///   after the user's Turn On, otherwise in the background with the Mac told, so nothing typed in Next Term goes
+///   to the server; none when a master connection is up, since a tab joining it logs in to nothing. It is On once
+///   the server took the forward, which ssh's lines say; its exit is handled after the lines before it. Its
+///   environment is a remote tab's: no MCP socket, the login shell's PATH and ssh agent.
 /// - Every child gets a watchdog (`nxtrm tunnel-guard`, RemoteAccessTunnelGuard) that ends it within 5 seconds if
 ///   Next Term exits any other way, and a `0600` pid record that names it and this Next Term, deleted once it is gone.
 ///   The record is written off the main thread, since each write flushes to the disk itself.
@@ -73,6 +82,10 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
     #endif
 
     var report: ((RemoteAccessStatus.Event) -> Void)?
+    /// A tunnel line for the audit log, beside the reducer's own (R39): a login tab opened (U15).
+    var audit: ((String, String?) -> Void)?
+    /// A notification on the Mac: a login tab opened in the background (U15).
+    var notify: ((String, String) -> Void)?
 
     /// The child's last lines, masked (Settings, U11).
     private(set) var output = RemoteAccessTunnelOutput()
@@ -98,19 +111,23 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
 
     // MARK: the seam (U9)
 
-    func start(_ kind: Config.Kind, port: UInt16, host: String?, token: Config.Token?) {
+    func start(_ kind: Config.Kind, port: UInt16, host: String?, token: Config.Token?, server: Config.OwnServer?,
+               askedAt: Date?) {
         stop()
         output = RemoteAccessTunnelOutput(token: token)
         setWarnings([])
         let timings = Timings.current
-        let watch = RemoteAccessTunnelWatch(kind: kind, host: host, port: Int(port), limits: timings.limits)
+        let watch = RemoteAccessTunnelWatch(kind: kind, host: host, port: Int(port), limits: timings.limits,
+                                            server: server, askedAt: askedAt)
         switch kind {
         case .advanced:
             // The user's own tunnel: the controller never starts one.
             return
         case .ownServer:
-            report?(.tunnelFailed("This build of Next Term can't run \(kind.label) yet."))
-            return
+            guard server != nil else {
+                report?(.tunnelFailed(Config.serverNeeded))
+                return
+            }
         case .cloudflare:
             guard token != nil else {
                 report?(.tunnelFailed(RemoteAccessStatus.tokenNeeded))
@@ -120,10 +137,13 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
             break
         }
         let run = Run(kind: kind, port: Int(port), token: token, watch: watch, timings: timings)
+        run.server = server
         self.run = run
         let folder = self.folder
+        // Read here, on the main thread, as remote tabs read it: its first read sets the process's umask a moment.
+        let ssh = server.map { SSHStart(server: $0, doorPort: Int(port), configFile: RemoteConnection.configFile) }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let prepared = Self.prepare(kind, folder: folder)
+            let prepared = Self.prepare(kind, folder: folder, ssh: ssh)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.prepared(prepared, for: run) }
             }
@@ -187,21 +207,36 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
 
     // MARK: starting
 
-    /// What a start found off the main thread: the program, the login PATH, Settings' warnings, and `cloudflared`'s
-    /// settings file.
+    /// What a start found off the main thread: the program, the login PATH, Settings' warnings, `cloudflared`'s
+    /// settings file, and ssh's environment and config file.
     struct Prepared: Sendable {
         var program: String
         var loginPath: [String]
         var warnings: [String]
         var settings: URL?
+        var sshEnvironment: [String: String]?
+        var sshConfig: String?
+    }
+
+    /// Your own server's start, gathered on the main thread: the server, the door's port and Next Term's ssh config.
+    struct SSHStart: Sendable {
+        var server: Config.OwnServer
+        var doorPort: Int
+        var configFile: String?
     }
 
     /// Finds the tool and checks it can run: `cloudflared` 2025.4.0 or later (R30), with its settings file written
-    /// here, or Tailscale logged in. With Funnel or HTTPS not enabled for the tailnet, `tailscale funnel` starts
-    /// anyway: it prints its own message with the link that enables it, and waits. Reads `LoginShell.path`, whose
-    /// first read can take 5 seconds, and flushes the settings file to the disk, so never on the main thread.
-    nonisolated static func prepare(_ kind: Config.Kind, folder: URL) -> Result<Prepared, Problem> {
+    /// here, or Tailscale logged in, or ssh's settings for your own server. With Funnel or HTTPS not enabled for the
+    /// tailnet, `tailscale funnel` starts anyway: it prints its own message with the link that enables it, and
+    /// waits. Reads `LoginShell.path`, whose first read can take 5 seconds, and flushes the settings file to the
+    /// disk, so never on the main thread.
+    nonisolated static func prepare(_ kind: Config.Kind, folder: URL,
+                                    ssh: SSHStart? = nil) -> Result<Prepared, Problem> {
         let loginPath = LoginShell.path
+        if kind == .ownServer {
+            guard let ssh else { return .failure(Problem(Config.serverNeeded)) }
+            return prepareSSH(ssh, loginPath: loginPath)
+        }
         let tool: Config.Tool = kind == .funnel ? .tailscale : .cloudflared
         guard let program = locate(tool, loginPath: loginPath) else { return .failure(Problem(tool.missing)) }
         let environment = toolEnvironment(loginPath: loginPath)
@@ -232,6 +267,38 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
             let share = funnelStatus(program, environment: environment)
             if let share, Config.funnelShareExists(share) { prepared.warnings.append(Config.funnelShareWarning) }
         }
+        return .success(prepared)
+    }
+
+    /// The system ssh, as remote tabs run it (RemoteConnection): its path (the self-test's stand-in in a debug
+    /// build), the environment of a remote tab's ssh, with the login shell's PATH and ssh agent and without Next
+    /// Term's MCP socket, and Next Term's ssh config, so ProxyJump hops ask about host keys too. After
+    /// `LoginShell.path`, so the environment has what the login shell sets.
+    ///
+    /// Then `ssh -G` with the child's arguments, which connects to nothing: a forward the user's ssh config adds for
+    /// the server, or none for the door, refuses the start (`Config.sshSettingsProblem`). A stand-in ssh answers
+    /// `-G` as ssh prints it, the door's `remoteforward` line at least.
+    nonisolated static func prepareSSH(_ ssh: SSHStart, loginPath: [String]) -> Result<Prepared, Problem> {
+        let program = RemoteConnection.sshPath
+        guard FileManager.default.isExecutableFile(atPath: program) else {
+            return .failure(Problem("Next Term can't find ssh at \(program)."))
+        }
+        var environment: [String: String] = [:]
+        for pair in RemoteConnection.environment() {
+            guard let equals = pair.firstIndex(of: "=") else { continue }
+            let key = String(pair[..<equals])
+            if environment[key] == nil { environment[key] = String(pair[pair.index(after: equals)...]) }
+        }
+        let check = Config.sshCheckArguments(ssh.server, doorPort: ssh.doorPort, configFile: ssh.configFile)
+        // Longer than a version's read: a Match exec or a canonical hostname lookup in the config runs here too.
+        let data = capture(program, check, environment: environment, timeout: 10)
+        let printed = data.map { String(decoding: $0, as: UTF8.self) }
+        if let problem = Config.sshSettingsProblem(printed, server: ssh.server, doorPort: ssh.doorPort) {
+            return .failure(Problem(problem))
+        }
+        var prepared = Prepared(program: program, loginPath: loginPath, warnings: [])
+        prepared.sshEnvironment = environment
+        prepared.sshConfig = ssh.configFile
         return .success(prepared)
     }
 
@@ -274,6 +341,10 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
             let base = ProcessInfo.processInfo.environment
             process.environment = Config.cloudflaredEnvironment(token: token, loginPath: prepared.loginPath, base: base)
             input = Config.cloudflaredInput(token)
+        case .ownServer:
+            guard let server = run.server else { return fail(Config.serverNeeded) }
+            process.arguments = Config.sshArguments(server, doorPort: run.port, configFile: prepared.sshConfig)
+            process.environment = prepared.sshEnvironment
         default:
             process.arguments = Config.funnelArguments(port: run.port)
             process.environment = Self.toolEnvironment(loginPath: prepared.loginPath)
@@ -283,7 +354,11 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         let printed = Pipe()
         process.standardOutput = printed
         process.standardError = printed
-        listen(to: printed, for: run)
+        // ssh's lines are read for what they say, and its exit waits for them (U15). They reach the main thread
+        // after this launch returns, so after the watch knows the child started.
+        let lines = run.kind == .ownServer ? Lines() : nil
+        run.lines = lines
+        listen(to: printed, for: run, lines: lines)
         process.terminationHandler = { [weak self] ended in
             let pid = ended.processIdentifier
             DispatchQueue.main.async {
@@ -294,7 +369,8 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
             try process.run()
         } catch {
             printed.fileHandleForReading.readabilityHandler = nil
-            let name = run.kind == .funnel ? "tailscale" : "cloudflared"
+            let names: [Config.Kind: String] = [.funnel: "tailscale", .ownServer: "ssh"]
+            let name = names[run.kind] ?? "cloudflared"
             return fail("Next Term could not start \(name): \(error.localizedDescription)")
         }
         // Written once and closed, so cloudflared reads it to its end. A child already gone is no SIGPIPE, and no
@@ -307,9 +383,14 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         }
         let pid = process.processIdentifier
         guard let start = RemoteAccessProcesses.start(of: pid) else {
-            // Gone already. Its termination handler finds no child, so the exit is counted here, and it restarts.
+            // Gone already. Its termination handler finds no child, so the exit is counted here, and it restarts;
+            // ssh's once its lines are read.
             perform(run.watch.started(at: Date()), in: run)
-            perform(run.watch.exited(at: Date()), in: run)
+            guard let lines else { return perform(run.watch.exited(at: Date()), in: run) }
+            lines.afterOutput { [weak self] in
+                guard let self, self.run === run, run.lines === lines, run.child == nil else { return }
+                self.perform(run.watch.exited(at: Date()), in: run)
+            }
             return
         }
         if let record = RemoteAccessProcesses.record(for: pid) { RemoteAccessProcesses.save(record, in: folder) }
@@ -335,8 +416,15 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
     }
 
     /// The child exited by itself: what is left of its process group is ended and then its record goes, and the
-    /// watch says when it restarts.
+    /// watch says when it restarts. ssh's exit waits for the end of its output, at most a second, so the watch has
+    /// every line that says why before it (U15).
     private func exited(_ pid: pid_t, in run: Run) {
+        guard self.run === run, let child = run.child, child.pid == pid else { return }
+        guard run.kind == .ownServer, let lines = run.lines else { return handleExit(pid, in: run) }
+        lines.afterOutput { [weak self] in self?.handleExit(pid, in: run) }
+    }
+
+    private func handleExit(_ pid: pid_t, in run: Run) {
         guard self.run === run, let child = run.child, child.pid == pid else { return }
         run.child = nil
         run.checking = false
@@ -353,6 +441,8 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
                 report?(event)
             case .restart(let wait):
                 run.restart(after: wait) { [weak self] in self?.launch(run) }
+            case .openLoginTab(let inFront):
+                openLoginTab(run, inFront: inFront)
             }
         }
         guard self.run === run, let prepared = run.prepared else { return }
@@ -363,11 +453,13 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
 
     private func tick(_ run: Run) {
         guard self.run === run else { return }
-        guard run.child != nil else { return perform(run.watch.tick(at: Date()), in: run) }
+        // ssh says where it stands in its lines, and ends when its connection does: no check to make.
+        guard run.child != nil, run.kind != .ownServer else { return perform(run.watch.tick(at: Date()), in: run) }
         check(run)
     }
 
     private func check(_ run: Run) {
+        guard run.kind != .ownServer else { return }
         guard let child = run.child, let prepared = run.prepared, !run.checking else { return }
         if run.kind == .cloudflare, child.metricsPort == nil { return }
         run.checking = true
@@ -454,21 +546,49 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
 
     // MARK: output and warnings
 
-    /// The child's output, kept masked; nothing else sees it.
-    private func listen(to pipe: Pipe, for run: Run) {
+    /// The child's output, kept masked; nothing else sees it. ssh's is read line by line for what it says (U15).
+    private func listen(to pipe: Pipe, for run: Run, lines: Lines?) {
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                guard let lines else { return }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.outputEnded(lines, in: run) }
+                }
                 return
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.run === run else { return }
-                    self.output.append(data)
+                    guard let lines else { return self.output.append(data) }
+                    self.received(data, into: lines, in: run)
                 }
             }
         }
+    }
+
+    /// ssh's output as it comes: each line to the watch, and the ones Settings keeps to the output.
+    private func received(_ data: Data, into lines: Lines, in run: Run) {
+        said(lines.reader.read(data), from: lines, in: run)
+    }
+
+    /// Only the newest child's lines count: one already handled says nothing about the next.
+    private func said(_ read: [String], from lines: Lines, in run: Run) {
+        guard let serverPort = run.server?.port else { return }
+        for line in read {
+            guard self.run === run, run.lines === lines else { return }
+            if Config.keepsSSHLine(line) { output.append(Data((line + "\n").utf8)) }
+            guard let meaning = Config.sshLine(line, serverPort: serverPort) else { continue }
+            perform(run.watch.ssh(meaning, at: Date()), in: run)
+        }
+    }
+
+    /// ssh's output ended: its last line is read, then an exit that waited for it is handled.
+    private func outputEnded(_ lines: Lines, in run: Run) {
+        guard !lines.ended else { return }
+        said(lines.reader.finish(), from: lines, in: run)
+        lines.outputEnded()
     }
 
     private func setWarnings(_ new: [String]) {
@@ -600,6 +720,38 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         return port > 0 ? port : nil
     }
 
+    // MARK: your own server's login (U15)
+
+    /// ssh needs the user to log in: a remote tab on the server, where ssh asks, and ssh starts again once that
+    /// tab's login got through. The tab closing first stops Remote access (R47). In front only right after the
+    /// user's own Turn On; otherwise it opens in the background and the Mac says where, so nothing the user is
+    /// typing goes to the server. With a master connection up, a new tab would join it and log in to nothing,
+    /// which gets the child no key: no tab, and it stops, saying what ssh needs.
+    private func openLoginTab(_ run: Run, inFront: Bool) {
+        guard self.run === run, let server = run.server else { return }
+        if RemoteConnection.masterAlive(server.host) {
+            return perform(run.watch.loginWontHelp(at: Date()), in: run)
+        }
+        let tab = RemoteAccessServerTab.open(server.host, inFront: inFront)
+        audit?("login_tab", "\(server.name), \(inFront ? "in front" : "in the background")")
+        if !inFront {
+            let notice = Config.sshLoginTabNotice(server.name)
+            notify?(notice.title, notice.body)
+        }
+        run.waitForLogin { [weak self, weak tab] in
+            guard let self, self.run === run else { return true }
+            if let tab, tab.remoteConnected, !tab.disconnected {
+                self.perform(run.watch.loggedIn(at: Date()), in: run)
+                return true
+            }
+            guard let tab, RemoteAccessServerTab.isOpen(tab), !tab.exited else {
+                self.perform(run.watch.loginEnded(at: Date()), in: run)
+                return true
+            }
+            return false
+        }
+    }
+
     // MARK: one run
 
     /// A running child.
@@ -612,6 +764,36 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         let watchdog: Process?
     }
 
+    /// One ssh child's output, read on the main thread, so its exit is handled after its last line: once its
+    /// output ended, or a second after the exit when something it started still holds the pipe.
+    @MainActor
+    final class Lines {
+        var reader = Config.SSHLines()
+        private(set) var ended = false
+        private var exit: (@MainActor () -> Void)?
+
+        /// Runs `body` once the output ended, or a second from now, whichever comes first; once.
+        func afterOutput(_ body: @escaping @MainActor () -> Void) {
+            guard exit == nil else { return }
+            guard !ended else { return body() }
+            exit = body
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                MainActor.assumeIsolated { self?.runExit() }
+            }
+        }
+
+        func outputEnded() {
+            ended = true
+            runExit()
+        }
+
+        private func runExit() {
+            let body = exit
+            exit = nil
+            body?()
+        }
+    }
+
     /// One start, until Turn Off: its child (one at a time), its watch and its timers. A reply for another run is
     /// dropped.
     private final class Run: @unchecked Sendable { // read and changed on the main thread only
@@ -619,6 +801,10 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         let port: Int
         /// Read at each launch; dropped when the run ends, though a closure of its child may still hold the run.
         var token: Config.Token?
+        /// Your own server and its server port.
+        var server: Config.OwnServer?
+        /// The newest ssh child's output.
+        var lines: Lines?
         var watch: RemoteAccessTunnelWatch
         let timings: Timings
         var prepared: Prepared?
@@ -626,6 +812,7 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
         var checking = false
         private var checks: DispatchSourceTimer?
         private var restart: DispatchSourceTimer?
+        private var login: DispatchSourceTimer?
 
         init(kind: Config.Kind, port: Int, token: Config.Token?, watch: RemoteAccessTunnelWatch, timings: Timings) {
             self.kind = kind
@@ -653,13 +840,30 @@ final class RemoteAccessTunnel: RemoteAccessTunnelRunner {
             timer.resume()
         }
 
+        /// Asks `body` twice a second until it says it is done: whether the login tab's login got through.
+        func waitForLogin(_ body: @escaping @MainActor () -> Bool) {
+            login?.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+            timer.setEventHandler { [weak self] in
+                MainActor.assumeIsolated {
+                    guard body() else { return }
+                    self?.login?.cancel()
+                    self?.login = nil
+                }
+            }
+            login = timer
+            timer.resume()
+        }
+
         func cancelTimers() {
-            for timer in [checks, restart].compactMap({ $0 }) {
+            for timer in [checks, restart, login].compactMap({ $0 }) {
                 timer.cancel()
                 timer.setEventHandler(handler: nil)
             }
             checks = nil
             restart = nil
+            login = nil
         }
     }
 }

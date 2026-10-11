@@ -14,6 +14,10 @@ import Foundation
 ///   (2026-10-11). Funnel has no such limit; its CLI waits there for Funnel to be enabled.
 /// - An exit restarts after 1 second, doubling to 60, counted from the last time it was ready (R32).
 /// - Down for 10 minutes tells the Mac once per outage (R32).
+/// - Your own server (U15): ready once ssh logged in and the server took the forward. An unknown or changed host key
+///   stops (R47). A login that needs the user waits for a visible tab's login, once, then ssh starts again; still
+///   needing the user after that stops, and so does a login no tab can help with. The tab is in front only right
+///   after the user's own Turn On. A busy server port warns and keeps trying.
 /// - Messages name only the saved hostname and the door, as U6's do; a hostname read from the tunnel is shown only
 ///   once it passed the public hostname check.
 public struct RemoteAccessTunnelWatch: Sendable {
@@ -52,6 +56,10 @@ public struct RemoteAccessTunnelWatch: Sendable {
         case report(RemoteAccessStatus.Event)
         /// Start the child again after this many seconds.
         case restart(after: TimeInterval)
+        /// Your own server: show the user a remote tab on the server to log in, and tell the watch once its login got
+        /// through (`loggedIn`), the tab ended (`loginEnded`), or a tab's login can't help (`loginWontHelp`). In
+        /// front of the user only right after their own Turn On; otherwise in the background, with the Mac told.
+        case openLoginTab(inFront: Bool)
     }
 
     public let kind: Config.Kind
@@ -59,6 +67,10 @@ public struct RemoteAccessTunnelWatch: Sendable {
     public private(set) var host: String?
     public let port: Int
     public let limits: Limits
+    /// Your own server: the host and the server port, for messages.
+    public let server: Config.OwnServer?
+    /// When the user's own Turn On started this run; nil for a launch's start.
+    public let askedAt: Date?
 
     /// The child runs.
     public private(set) var running = false
@@ -74,12 +86,25 @@ public struct RemoteAccessTunnelWatch: Sendable {
     public private(set) var warnings: [Config.RouteWarning] = []
     /// The Mac was told of this outage.
     private var told = false
+    /// ssh logged in, for this child.
+    private var sshLoggedIn = false
+    /// What went wrong for this child, by ssh's lines: the first that says.
+    private var sshTrouble: Config.SSHLine?
+    /// A login tab was opened since the forward last held.
+    private var loginOffered = false
+    /// Waiting for the login tab: no child runs meanwhile.
+    public private(set) var awaitingLogin = false
+    /// The tunnel was ready once in this run.
+    private var wasReady = false
 
-    public init(kind: Config.Kind, host: String?, port: Int, limits: Limits = .standard) {
+    public init(kind: Config.Kind, host: String?, port: Int, limits: Limits = .standard,
+                server: Config.OwnServer? = nil, askedAt: Date? = nil) {
         self.kind = kind
         self.host = host
         self.port = port
         self.limits = limits
+        self.server = server
+        self.askedAt = askedAt
     }
 
     /// The hostname the reducer saved during this run: the one the user confirmed, or Funnel's first. Later checks
@@ -92,19 +117,93 @@ public struct RemoteAccessTunnelWatch: Sendable {
     public mutating func started(at now: Date) -> [Output] {
         guard !finished else { return [] }
         running = true
+        awaitingLogin = false
+        sshLoggedIn = false
+        sshTrouble = nil
         if downSince == nil { downSince = now }
         return []
     }
 
-    /// The child exited by itself: not ready, and a restart after the next wait.
+    /// The child exited by itself: not ready, and a restart after the next wait. For ssh, what its lines said
+    /// decides first; the app hands them all over before the exit.
     public mutating func exited(at now: Date) -> [Output] {
         guard running, !finished else { return [] }
+        if let trouble = sshTrouble, kind == .ownServer, let server {
+            switch trouble {
+            case .hostKey:
+                return finish(.tunnelFailed(Config.sshHostKeyProblem(server.name)))
+            case .loginNeeded where loginOffered:
+                return finish(.tunnelFailed(Config.sshLoginProblem(server.name)))
+            case .loginNeeded:
+                running = false
+                loginOffered = true
+                awaitingLogin = true
+                if downSince == nil { downSince = now }
+                return [.report(.notReady), .openLoginTab(inFront: loginTabInFront(at: now))] + downNotice(at: now)
+            case .serverPortBusy:
+                warnings = [.serverPortBusy(server: server.name, port: server.port)]
+            case .loggedIn, .forwardHolds:
+                break
+            }
+        }
         running = false
         waitingSince = nil
         attempt += 1
         if downSince == nil { downSince = now }
         let wait = Config.restartWait(attempt: attempt) * limits.restartScale
         return [.report(.notReady), .restart(after: wait)] + downNotice(at: now)
+    }
+
+    /// A line of the ssh child's output (your own server): ready once it logged in and the server took the forward.
+    /// The rest is kept for its exit.
+    public mutating func ssh(_ line: Config.SSHLine, at now: Date) -> [Output] {
+        guard kind == .ownServer, running, !finished else { return [] }
+        switch line {
+        case .loggedIn:
+            sshLoggedIn = true
+            return []
+        case .forwardHolds:
+            // Only after the login line: ssh prints the server's banner, shown before the login, as it came. That
+            // only narrows it, since a banner can hold a login line too. Only the user's own server, its host key
+            // checked, sends one, and the most it can do is show On while the forward doesn't hold, which Test
+            // Connection then shows.
+            guard sshLoggedIn else { return [] }
+            warnings = []
+            loginOffered = false
+            return ready(host: host)
+        case .hostKey, .loginNeeded, .serverPortBusy:
+            if sshTrouble == nil { sshTrouble = line }
+            return []
+        }
+    }
+
+    /// The login tab's login got through: ssh starts again at once.
+    public mutating func loggedIn(at now: Date) -> [Output] {
+        guard awaitingLogin, !finished else { return [] }
+        awaitingLogin = false
+        return [.restart(after: 0)]
+    }
+
+    /// The login tab ended before its login got through.
+    public mutating func loginEnded(at now: Date) -> [Output] {
+        guard awaitingLogin, !finished else { return [] }
+        awaitingLogin = false
+        return finish(.tunnelFailed(Config.sshLoginNeeded(server?.name ?? Self.unnamedServer)))
+    }
+
+    /// No tab's login can get ssh what it needs: a tab would join the master connection one of the user's tabs
+    /// holds, with no login and nothing for the agent. It stops, as a login still needed after a tab's does.
+    public mutating func loginWontHelp(at now: Date) -> [Output] {
+        guard awaitingLogin, !finished else { return [] }
+        awaitingLogin = false
+        return finish(.tunnelFailed(Config.sshLoginProblem(server?.name ?? Self.unnamedServer)))
+    }
+
+    /// In front of the user only while they are waiting for the Turn On they just clicked: never at a launch,
+    /// after the tunnel was ready, or once `Config.loginTabInFrontFor` has passed.
+    private func loginTabInFront(at now: Date) -> Bool {
+        guard let askedAt, !wasReady else { return false }
+        return now.timeIntervalSince(askedAt) < Config.loginTabInFrontFor
     }
 
     /// Time passed with no check, between restarts: only the 10 minutes down are counted.
@@ -129,6 +228,7 @@ public struct RemoteAccessTunnelWatch: Sendable {
 
     /// Shown in a stop's message when nothing names the hostname yet.
     static let unnamedHost = "the public hostname"
+    static let unnamedServer = "your server"
 
     private mutating func cloudflare(connected: Bool, config: Data?, at now: Date) -> [Output] {
         guard let config else { return notReady(at: now) }
@@ -186,7 +286,8 @@ public struct RemoteAccessTunnelWatch: Sendable {
 
     // MARK: reports
 
-    private mutating func ready(host reported: String) -> [Output] {
+    private mutating func ready(host reported: String?) -> [Output] {
+        wasReady = true
         attempt = 0
         downSince = nil
         told = false
@@ -201,6 +302,7 @@ public struct RemoteAccessTunnelWatch: Sendable {
     private mutating func finish(_ event: RemoteAccessStatus.Event) -> [Output] {
         finished = true
         running = false
+        awaitingLogin = false
         return [.report(event)]
     }
 
@@ -412,6 +514,9 @@ public enum RemoteAccessConnectionTest {
             return "\(host) answered 404: the request didn't reach Next Term."
         case 502...504 where cloudflare, 520...530 where cloudflare:
             return "Cloudflare answered \(status): it can't reach Next Term through the tunnel."
+        case 502...504 where kind == .ownServer:
+            return "\(host) answered \(status): your server's proxy can't reach Next Term through the ssh forward. "
+                + "Check that Remote access is On."
         default:
             return "\(host) answered \(status)."
         }

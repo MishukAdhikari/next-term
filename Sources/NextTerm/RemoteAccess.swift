@@ -25,13 +25,17 @@ final class RemoteAccess {
     /// Posted on the main thread when the status, the settings or the grants change (U11's views and status item).
     static let didChange = Notification.Name("NextTermRemoteAccessDidChange")
 
-    /// What is saved: the switch, the port, the public hostname, the tunnel and Keep Awake on Battery. The token is
-    /// in the Keychain, never here.
+    /// What is saved: the switch, the port, the public hostname, the tunnel, your own server and its server ports,
+    /// and Keep Awake on Battery. The token is in the Keychain, never here.
     struct Settings: Equatable {
         var on = false
         var port: UInt16?
         var host: String?
         var tunnel: RemoteAccessTunnelConfig.Kind?
+        /// Your own server: the remote host's id (R46).
+        var server: String?
+        /// Each remote host's server port, by its id, picked once (U15).
+        var serverPorts: [String: Int] = [:]
         var keepAwakeOnBattery = false
 
         private enum Key {
@@ -39,6 +43,8 @@ final class RemoteAccess {
             static let port = "remoteAccessPort"
             static let host = "remoteAccessHost"
             static let tunnel = "remoteAccessTunnel"
+            static let server = "remoteAccessServer"
+            static let serverPorts = "remoteAccessServerPorts"
             static let keepAwake = "remoteAccessKeepAwakeOnBattery"
         }
 
@@ -51,6 +57,12 @@ final class RemoteAccess {
             let host = defaults.string(forKey: Key.host).map(RemoteAccessTunnelConfig.publicHostname)
             if case .success(let name)? = host { self.host = name }
             tunnel = defaults.string(forKey: Key.tunnel).flatMap(RemoteAccessTunnelConfig.Kind.init(rawValue:))
+            server = defaults.string(forKey: Key.server)
+            let ports = defaults.dictionary(forKey: Key.serverPorts) ?? [:]
+            for (id, value) in ports {
+                guard let port = value as? Int, RemoteAccessTunnelConfig.serverPorts.contains(port) else { continue }
+                serverPorts[id] = port
+            }
             keepAwakeOnBattery = defaults.bool(forKey: Key.keepAwake)
         }
 
@@ -59,6 +71,8 @@ final class RemoteAccess {
             defaults.set(port.map { Int($0) }, forKey: Key.port)
             defaults.set(host, forKey: Key.host)
             defaults.set(tunnel?.rawValue, forKey: Key.tunnel)
+            defaults.set(server, forKey: Key.server)
+            defaults.set(serverPorts.isEmpty ? nil : serverPorts, forKey: Key.serverPorts)
             defaults.set(keepAwakeOnBattery, forKey: Key.keepAwake)
         }
     }
@@ -85,6 +99,9 @@ final class RemoteAccess {
     private var run = 0
     /// When quit began, while it runs: the tunnel's end is counted from it, so quit waits at most 3 seconds (R42).
     private var quitBegan: DispatchTime?
+    /// When the user's own Turn On started this run; nil for a launch's. A login tab opens in front only right
+    /// after it (U15).
+    private var askedAt: Date?
     private var activity: NSObjectProtocol?
     private var awake: RemoteAccessAwake?
     private var powerSource: CFRunLoopSource?
@@ -183,8 +200,39 @@ final class RemoteAccess {
         send(.dismiss)
     }
 
-    /// A change to the saved settings. The tunnel, the host and the port apply at the next start; Keep Awake on
-    /// Battery at once. The switch itself changes only through `turnOn` and `turnOff`.
+    /// Your own server (R46): the saved remote host the user chose, found by its id, with its server port, picked
+    /// and saved the first time (U15). Nil when none is chosen or the host was removed.
+    func ownServer() -> RemoteAccessTunnelConfig.OwnServer? {
+        guard let id = settings.server, let host = RemoteHosts.all.first(where: { $0.id == id }) else { return nil }
+        return RemoteAccessTunnelConfig.OwnServer(host: host, port: serverPort(for: host))
+    }
+
+    /// The host's server port: the saved one, or one picked from `RemoteAccessTunnelConfig.serverPorts` and saved
+    /// with it, never changed by itself. Settings shows it in the Caddyfile before Remote access is on.
+    func serverPort(for host: RemoteHost) -> Int {
+        let saved = settings.serverPorts[host.id]
+        let port = RemoteAccessTunnelConfig.serverPort(saved: saved)
+        guard port != saved else { return port }
+        settings.serverPorts[host.id] = port
+        save()
+        changedNotice()
+        return port
+    }
+
+    /// New Server Port (U11's button): another one for the host, saved, when the server keeps the saved one busy.
+    /// It applies at the next start, and the server's Caddyfile needs it too, through Set Up Caddy again.
+    @discardableResult
+    func newServerPort(for host: RemoteHost) -> Int {
+        let port = RemoteAccessTunnelConfig.newServerPort(replacing: serverPort(for: host))
+        settings.serverPorts[host.id] = port
+        save()
+        changedNotice()
+        auditTunnel("server_port", detail: "\(host.name): \(port)")
+        return port
+    }
+
+    /// A change to the saved settings. The tunnel, the host, the server and the port apply at the next start; Keep
+    /// Awake on Battery at once. The switch itself changes only through `turnOn` and `turnOff`.
     func change(_ body: (inout Settings) -> Void) {
         var changed = settings
         body(&changed)
@@ -220,6 +268,7 @@ final class RemoteAccess {
         guard !status.isOn else { return }
         run += 1
         token = nil
+        askedAt = launch ? nil : Date()
         let agentControl = AppDelegate.shared?.agentControl ?? false
         let choice = RemoteAccessPort.choose(saved: settings.port, isFree: Self.isFree)
         let start = RemoteAccessStatus.Start(tunnel: settings.tunnel, host: settings.host, port: choice,
@@ -251,7 +300,8 @@ final class RemoteAccess {
             openDoor(port)
         case .startTunnel:
             guard let kind = status.tunnel, let port = status.port else { return }
-            tunnel.start(kind, port: port, host: status.host, token: token)
+            let server = kind == .ownServer ? ownServer() : nil
+            tunnel.start(kind, port: port, host: status.host, token: token, server: server, askedAt: askedAt)
         case .closeDoor:
             door?.stop(revokeAll: batch.contains(.dropTokens(revokeAll: true)))
             // At quit, the answers the stop queued reach their connections before the process ends.
@@ -389,6 +439,27 @@ final class RemoteAccess {
 
     private func connect(_ runner: RemoteAccessTunnelRunner) {
         runner.report = { [weak self] event in self?.send(event) }
+        runner.audit = { [weak self] state, detail in self?.auditTunnel(state, detail: detail) }
+        runner.notify = { [weak self] title, body in self?.notify(title: title, body: body) }
+    }
+
+    /// A tunnel line in the audit log (R39): through the open door's state, or, with the door closed (Set Up Caddy
+    /// while Remote access is off), straight to the log, off the main thread, since each write flushes to the disk.
+    func auditTunnel(_ state: String, detail: String?) {
+        if let doorState {
+            doorState.audit([RemoteAccessAuditEntry.tunnel(state, detail: detail, time: doorState.now)])
+            return
+        }
+        let folder = self.folder
+        let entry = RemoteAccessAuditEntry.tunnel(state, detail: detail, time: Date())
+        DispatchQueue.global(qos: .utility).async {
+            var log = RemoteAccessAuditLog(folder: folder)
+            do {
+                try log.append(entry, now: entry.time)
+            } catch {
+                NSLog("Next Term: Remote access could not write its audit log: %@", "\(error)")
+            }
+        }
     }
 
     /// A tunnel child a crash left running, its watchdog gone too (R42, AE10): ended only when its pid, start time
@@ -527,9 +598,14 @@ extension RemoteAccess {
 @MainActor
 protocol RemoteAccessTunnelRunner: AnyObject {
     var report: ((RemoteAccessStatus.Event) -> Void)? { get set }
-    /// Starts the chosen tunnel's child once the door holds `port`, with Cloudflare's token read at this start.
+    /// A tunnel line for the audit log beside the reducer's (state, detail), and a notification (title, body): your
+    /// own server's login tab (U15).
+    var audit: ((String, String?) -> Void)? { get set }
+    var notify: ((String, String) -> Void)? { get set }
+    /// Starts the chosen tunnel's child once the door holds `port`, with Cloudflare's token read at this start, or
+    /// your own server and its server port (U15). `askedAt`: when the user's own Turn On started it, nil at a launch.
     func start(_ kind: RemoteAccessTunnelConfig.Kind, port: UInt16, host: String?,
-               token: RemoteAccessTunnelConfig.Token?)
+               token: RemoteAccessTunnelConfig.Token?, server: RemoteAccessTunnelConfig.OwnServer?, askedAt: Date?)
     /// The hostname the reducer saved while it runs (Confirm Host, or Funnel's first): checks name it from then on.
     func use(host: String)
     /// SIGTERM now, the rest on timers: gone within 3 seconds (R37). Nothing when no child runs.

@@ -3,7 +3,8 @@ import Foundation
 /// The tunnel checks for Remote access, all pure: the four tunnel choices, the public hostname a user types, where
 /// `cloudflared` and `tailscale` are and how old they are, the Cloudflare tunnel token, the arguments and the
 /// environment each child runs with, what `cloudflared`'s `/ready` and `/config` say, what Tailscale's status and
-/// Funnel share say, and the waits between restarts. The app (RemoteAccessTunnel) runs the processes and the timers.
+/// Funnel share say, your own server's ssh forward, server port and Caddy setup (U15), and the waits between
+/// restarts. The app (RemoteAccessTunnel) runs the processes and the timers.
 ///
 /// Rules this file keeps:
 /// - Arguments are arrays, never shell text (as in Remote.swift).
@@ -533,6 +534,9 @@ public enum RemoteAccessTunnelConfig {
         case backgroundShare
         /// Funnel: something else on this Mac is shared too.
         case otherShare
+        /// Your own server: the server didn't let ssh listen on the server port. ssh can't tell why: an earlier
+        /// connection the server hasn't dropped yet, another program, or sshd's rules. ssh starts again meanwhile.
+        case serverPortBusy(server: String, port: Int)
 
         public var message: String {
             switch self {
@@ -545,6 +549,16 @@ public enum RemoteAccessTunnelConfig {
                 return "This Funnel share runs in the background, so it stays public while Remote access is off."
             case .otherShare:
                 return "Funnel also shares something else from this Mac. It stays public while Remote access is off."
+            case .serverPortBusy(let server, let port):
+                let causes = "\(server) didn't let ssh listen on port \(port) for Next Term. An earlier connection may "
+                    + "still hold it until \(server) drops it (ClientAliveInterval 15 in its sshd_config makes that "
+                    + "take a minute), another program may use it, or its sshd may not allow it (AllowTcpForwarding, "
+                    + "PermitListen)."
+                let risk = "Meanwhile, whatever holds that port gets the requests meant for Next Term."
+                let button = RemoteAccessTunnelConfig.newServerPortTitle
+                let next = "Next Term keeps trying. To use another port, choose \(button) in Settings, then set up "
+                    + "Caddy again."
+                return [causes, risk, next].joined(separator: " ")
             }
         }
     }
@@ -877,6 +891,363 @@ public enum RemoteAccessTunnelConfig {
             let allowed = entry.config["AllowFunnel"] as? [String: Any] ?? [:]
             return allowed.values.contains(where: isSet)
         }
+    }
+
+    // MARK: your own server over ssh (R46, R47, U15)
+
+    /// "Your own server": a host the user saved in Next Term's remote hosts (R46), and the port on it, on its
+    /// loopback only, that forwards to the door.
+    public struct OwnServer: Equatable, Sendable {
+        public var host: RemoteHost
+        public var port: Int
+
+        public init(host: RemoteHost, port: Int) {
+            self.host = host
+            self.port = port
+        }
+
+        public var name: String { host.name }
+    }
+
+    /// Where a server port is picked from, once per host: below Linux's ephemeral ports (32768 to 60999), so a
+    /// reconnect's listen never meets the port of one of the server's outgoing connections.
+    public static let serverPorts: ClosedRange<Int> = 20000...32767
+
+    /// The saved server port while it is in the range, never another; otherwise one picked from the range, to be
+    /// saved with the host's Remote access settings. `random(n)` gives a number from 0 to n - 1 (others are
+    /// wrapped into that).
+    public static func serverPort(saved: Int?, random: (Int) -> Int = { Int.random(in: 0..<$0) }) -> Int {
+        if let saved, serverPorts.contains(saved) { return saved }
+        let count = serverPorts.count
+        let offset = ((random(count) % count) + count) % count
+        return serverPorts.lowerBound + offset
+    }
+
+    /// The button that picks another server port, when the server keeps the saved one busy.
+    public static let newServerPortTitle = "New Server Port"
+
+    /// Another server port from the range, never `old`: for New Server Port. The server's Caddyfile then needs the
+    /// new one, through Set Up Caddy again.
+    public static func newServerPort(replacing old: Int, random: (Int) -> Int = { Int.random(in: 0..<$0) }) -> Int {
+        guard serverPorts.contains(old) else { return serverPort(saved: nil, random: random) }
+        let count = serverPorts.count - 1
+        let port = serverPorts.lowerBound + ((random(count) % count) + count) % count
+        return port >= old ? port + 1 : port
+    }
+
+    /// The one forward: the server's `127.0.0.1:<server port>` to the door at `127.0.0.1:<door port>`. The server
+    /// side names loopback, so it listens there only while the server's sshd keeps GatewayPorts at no (its
+    /// default) or clientspecified. With GatewayPorts yes, sshd listens on every address whatever this says, and
+    /// nothing on the Mac can see it: the docs and hand check H15 cover it.
+    public static func sshForward(serverPort: Int, doorPort: Int) -> String {
+        "127.0.0.1:\(serverPort):127.0.0.1:\(doorPort)"
+    }
+
+    /// The system ssh's arguments for the reverse forward (R46, R47), an array and never shell text:
+    /// - `-N`: no session, so no command, shell, agent or X11 forwarding: only the door's forward.
+    /// - It never prompts (BatchMode): a login that needs the user happens in a visible remote tab first.
+    /// - It never takes a host key (StrictHostKeyChecking=yes), nor writes one (UpdateHostKeys=no).
+    /// - It ends when the forward fails, and within 45 seconds of a dead connection, so it starts again.
+    /// - Its own connection: never a master for the user's sessions, never one of theirs (a forward made through a
+    ///   master outlives the client that asked for it).
+    /// - ssh's debug lines say when the server took the forward: the status is On only then.
+    /// - `configFile`: Next Term's ssh config (RemoteConnection's), so ProxyJump hops ask about host keys too, and
+    ///   a hop that would ask fails here, with no terminal.
+    /// - What the user's ssh config may set for every ssh they run is set back here, since the first value ssh
+    ///   reads wins and these come before the config: it never goes to the background
+    ///   (ForkAfterAuthentication), where it would leave the process group Turn Off and quit end, the watchdog and
+    ///   the pid record; it runs no command on the server or the Mac (RemoteCommand, PermitLocalCommand); and it
+    ///   forwards no agent, X11 display or network device. ClearAllForwardings stays no, since yes would clear the
+    ///   door's forward too.
+    /// - A forward the user's config adds for the server can't be cleared without the door's, so each start checks
+    ///   with `sshCheckArguments` first and refuses one (`sshSettingsProblem`).
+    public static func sshArguments(_ server: OwnServer, doorPort: Int, configFile: String?) -> [String] {
+        var arguments: [String] = configFile.map { ["-F", $0] } ?? []
+        arguments.append("-N")
+        let options = [
+            "BatchMode=yes", "StrictHostKeyChecking=yes", "UpdateHostKeys=no", "ExitOnForwardFailure=yes",
+            "ServerAliveInterval=15", "ServerAliveCountMax=3", "ConnectTimeout=15",
+            "ControlMaster=no", "ControlPath=none",
+            "ForkAfterAuthentication=no", "ClearAllForwardings=no", "RemoteCommand=none", "PermitLocalCommand=no",
+            "Tunnel=no", "ForwardAgent=no", "ForwardX11=no",
+            "LogLevel=DEBUG1",
+        ]
+        for option in options { arguments += ["-o", option] }
+        arguments += ["-R", sshForward(serverPort: server.port, doorPort: doorPort)]
+        if let port = server.host.port { arguments += ["-p", String(port)] }
+        return arguments + ["--", server.host.destination]
+    }
+
+    /// `ssh -G` with the child's own arguments: ssh prints the settings it would connect with, the user's config
+    /// read, and connects to nothing. Run before each start.
+    public static func sshCheckArguments(_ server: OwnServer, doorPort: Int, configFile: String?) -> [String] {
+        ["-G"] + sshArguments(server, doorPort: doorPort, configFile: configFile)
+    }
+
+    /// Why the child must not start, from what `ssh -G` printed (nil or empty: it couldn't read its config), or
+    /// nil. Every forward has to be the door's: a LocalForward, DynamicForward or RemoteForward the user's config
+    /// sets for the server would ride along on the child, and with ExitOnForwardFailure a busy one would make it
+    /// restart forever. The door's forward must be there, and ssh must not go to the background.
+    public static func sshSettingsProblem(_ printed: String?, server: OwnServer, doorPort: Int) -> String? {
+        let name = server.name
+        guard let printed, !printed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "ssh can't read its settings for \(name). Run ssh -G \(server.host.destination) in a terminal to "
+                + "see why."
+        }
+        let names = ["localforward": "LocalForward", "dynamicforward": "DynamicForward",
+                     "remoteforward": "RemoteForward"]
+        let door = "127.0.0.1:\(server.port) 127.0.0.1:\(doorPort)"
+        var doorFound = false
+        var others: [String] = []
+        var forks = false
+        for line in printed.split(whereSeparator: \.isNewline) {
+            let words = line.split(separator: " ", maxSplits: 1).map(String.init)
+            guard let key = words.first?.lowercased() else { continue }
+            let value = words.count > 1 ? words[1].trimmingCharacters(in: .whitespaces) : ""
+            if key == "forkafterauthentication", value.lowercased() == "yes" { forks = true }
+            guard let shown = names[key] else { continue }
+            let plain = value.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+            if key == "remoteforward", plain == door, !doorFound {
+                doorFound = true
+            } else {
+                others.append("\(shown) \(plain)")
+            }
+        }
+        if !others.isEmpty {
+            let listed = others.prefix(3).joined(separator: ", ") + (others.count > 3 ? ", …" : "")
+            return "Your ssh config adds forwards for \(name) (\(listed)), and Remote access forwards only its own "
+                + "port. Remove them from that host's entry in ~/.ssh/config or /etc/ssh/ssh_config, then turn "
+                + "Remote access on again."
+        }
+        if !doorFound {
+            return "ssh's settings for \(name) leave out the door's forward, so Remote access can't start. Check "
+                + "\(name)'s entry in ~/.ssh/config and /etc/ssh/ssh_config."
+        }
+        if forks {
+            return "ssh would go to the background for \(name), out of reach of Turn Off, so Remote access can't "
+                + "start. Check \(name)'s entry in ~/.ssh/config and /etc/ssh/ssh_config."
+        }
+        return nil
+    }
+
+    /// What a line of the ssh child's output says about the forward.
+    public enum SSHLine: Equatable, Sendable {
+        /// Logged in to the server.
+        case loggedIn
+        /// The server listens on the server port for the door.
+        case forwardHolds
+        /// The server could not listen on the server port.
+        case serverPortBusy
+        /// The host key is not known on this Mac, or it changed.
+        case hostKey
+        /// The login needs the user: a password, a passphrase that isn't in the agent, a security key, or no key
+        /// the server takes.
+        case loginNeeded
+    }
+
+    /// One line of ssh's output, as OpenSSH prints it. The forward's lines are ssh's debug lines and name the
+    /// server port; the others are its own messages, never a debug line that happens to hold the same words.
+    public static func sshLine(_ line: String, serverPort: Int) -> SSHLine? {
+        let text = line.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("debug1: ") {
+            if text.contains("remote forward success for: listen 127.0.0.1:\(serverPort),") { return .forwardHolds }
+            if text.contains("remote forward failure for: listen 127.0.0.1:\(serverPort),") { return .serverPortBusy }
+            return nil
+        }
+        guard !isDebugLine(text) else { return nil }
+        if text.hasPrefix("Authenticated to ") { return .loggedIn }
+        if text.hasSuffix("remote port forwarding failed for listen port \(serverPort)") { return .serverPortBusy }
+        let hostKey = ["Host key verification failed.", "REMOTE HOST IDENTIFICATION HAS CHANGED"]
+        if hostKey.contains(where: text.contains) { return .hostKey }
+        if text.contains(" host key is known for ") && text.contains("strict checking") { return .hostKey }
+        let login = ["Permission denied (", "Too many authentication failures"]
+        if login.contains(where: text.contains) { return .loginNeeded }
+        return nil
+    }
+
+    /// Whether Settings keeps the line: ssh's own messages and the forward's success, not its other debug lines,
+    /// which every request through the forward adds.
+    public static func keepsSSHLine(_ line: String) -> Bool {
+        let text = line.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return false }
+        guard isDebugLine(text) else { return true }
+        return text.hasPrefix("debug1: remote forward ")
+    }
+
+    private static func isDebugLine(_ text: String) -> Bool {
+        ["debug1: ", "debug2: ", "debug3: "].contains(where: text.hasPrefix)
+    }
+
+    /// The ssh child's output, split into lines as it comes, `\r\n` or `\n`. A line longer than `longest` is cut
+    /// there and the rest of it dropped.
+    public struct SSHLines: Sendable {
+        public static let longest = 4096
+
+        private var part = Data()
+        private var skipping = false
+
+        public init() {}
+
+        public mutating func read(_ data: Data) -> [String] {
+            var lines: [String] = []
+            var rest = data[...]
+            while let newline = rest.firstIndex(of: UInt8(ascii: "\n")) {
+                if skipping {
+                    skipping = false
+                } else {
+                    part.append(rest[rest.startIndex..<newline])
+                    lines.append(Self.text(part))
+                }
+                part.removeAll()
+                rest = rest[rest.index(after: newline)...]
+            }
+            guard !skipping else { return lines }
+            part.append(rest)
+            guard part.count > Self.longest else { return lines }
+            lines.append(Self.text(part.prefix(Self.longest)))
+            part.removeAll()
+            skipping = true
+            return lines
+        }
+
+        /// What is left once the output ends.
+        public mutating func finish() -> [String] {
+            defer {
+                part.removeAll()
+                skipping = false
+            }
+            return part.isEmpty || skipping ? [] : [Self.text(part)]
+        }
+
+        private static func text(_ bytes: Data) -> String {
+            var line = String(decoding: bytes, as: UTF8.self)
+            if line.hasSuffix("\r") { line.removeLast() }
+            return line
+        }
+    }
+
+    public static let serverNeeded = "Choose your server from your remote hosts in Settings › Remote Access first."
+
+    /// An unknown or changed host key: nothing starts (R47).
+    public static func sshHostKeyProblem(_ server: String) -> String {
+        "Next Term doesn't know \(server)'s host key yet, or the key changed. Connect to \(server) once in a "
+            + "remote tab and check its key there, then turn Remote access on again."
+    }
+
+    /// The login still needs the user after they logged in in the tab: a password, or a key that isn't in the agent.
+    public static func sshLoginProblem(_ server: String) -> String {
+        "\(server) needs you at each login (a password, a passphrase or a security key), and Remote access logs in "
+            + "on its own. Add your key to the ssh agent, or set up key login for \(server), then turn Remote access "
+            + "on again."
+    }
+
+    /// The login tab ended before its login got through.
+    public static func sshLoginNeeded(_ server: String) -> String {
+        "Log in to \(server) in a remote tab to turn Remote access on."
+    }
+
+    /// How long after the user's own Turn On a login tab is put in front of them. Any later one, at a launch, after
+    /// a drop, or long after the click, opens in the background, where nothing typed in Next Term reaches it, and
+    /// the Mac is told (`sshLoginTabNotice`).
+    public static let loginTabInFrontFor: TimeInterval = 120
+
+    /// The Mac's notification for a login tab opened in the background.
+    public static func sshLoginTabNotice(_ server: String) -> (title: String, body: String) {
+        let body = "Remote access needs you to log in to \(server) again. Next Term opened a tab on \(server) in the "
+            + "background: log in there, and Remote access starts again."
+        return ("Remote access: log in to \(server)", body)
+    }
+
+    // MARK: Caddy on your own server (R48)
+
+    /// The server's system, for Caddy's install command. Picked in the confirmation, never read from the server.
+    /// Each label names only systems whose own packages have Caddy; any other installs it first (Caddy's install
+    /// docs) and picks "installed already".
+    public enum CaddySystem: String, Sendable, CaseIterable {
+        case apt
+        case dnf
+        case installed
+
+        public var label: String {
+            switch self {
+            case .apt: return "Debian 12 or later, Ubuntu 24.04 or later"
+            case .dnf: return "Fedora"
+            case .installed: return "Caddy is installed already"
+            }
+        }
+    }
+
+    /// The door's site, a file of its own beside the user's Caddyfile, which keeps its sites.
+    public static let caddySiteFile = "/etc/caddy/Caddyfile.d/next-term.caddyfile"
+    static let caddyMainFile = "/etc/caddy/Caddyfile"
+    /// Copies of the Caddyfile and of the door's earlier site, kept while Caddy's check runs, outside the folder
+    /// the Caddyfile imports.
+    static let caddyMainCopy = "/etc/caddy/Caddyfile.before-next-term"
+    static let caddySiteCopy = "/etc/caddy/next-term.caddyfile.before"
+
+    /// The door's site: TLS for the hostname, and every request to the forward on the server's loopback. Caddy
+    /// passes the Host header as it came.
+    public static func caddyfile(hostname: String, serverPort: Int) -> String {
+        "\(hostname) {\n\treverse_proxy 127.0.0.1:\(serverPort)\n}\n"
+    }
+
+    /// The commands "Set up Caddy" types, in order: install Caddy, keep copies of the Caddyfile and of the door's
+    /// earlier site, write the door's site, import it from the Caddyfile unless it is imported already, check the
+    /// whole config, remove the copies, start Caddy, reload it. A failed check puts both copies back and stops
+    /// there (R48): a Caddyfile that already has a block for the hostname fails it, and left in place it would stop
+    /// every site at Caddy's next restart. Nil unless the hostname is a public hostname and the port a server port.
+    ///
+    /// They are typed as one line into the user's own login shell on the server, so sudo asks once, and every shell
+    /// reads them alike (sh, bash, zsh, fish, tcsh): no `!`, `$`, backquote, tab or line break, and no `~`; anything
+    /// more than `&&` and a pipe goes to `sh -c`, quoted.
+    public static func caddySetup(_ system: CaddySystem, hostname: String, serverPort: Int) -> [String]? {
+        guard case .success(let name) = publicHostname(hostname), name == hostname.lowercased() else { return nil }
+        guard serverPorts.contains(serverPort) else { return nil }
+        var commands: [String] = []
+        switch system {
+        case .apt: commands += ["sudo apt-get update", "sudo apt-get install -y caddy"]
+        case .dnf: commands.append("sudo dnf install -y caddy")
+        case .installed: break
+        }
+        let folder = (caddySiteFile as NSString).deletingLastPathComponent
+        commands.append("sudo mkdir -p \(folder)")
+        commands.append("sudo cp -p \(caddyMainFile) \(caddyMainCopy)")
+        commands.append("sudo sh -c \"rm -f \(caddySiteCopy) && if test -e \(caddySiteFile); then "
+            + "cp -p \(caddySiteFile) \(caddySiteCopy); fi\"")
+        // Written as the Caddyfile reads, its line breaks and tab given to printf.
+        let site = caddyfile(hostname: name, serverPort: serverPort)
+        let format = site.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\t", with: "\\t")
+        commands.append("printf '\(format)' | sudo tee \(caddySiteFile)")
+        commands.append(caddyImport)
+        commands.append(caddyCheck)
+        commands.append("sudo rm -f \(caddyMainCopy) \(caddySiteCopy)")
+        commands.append("sudo systemctl enable --now caddy")
+        commands.append("sudo systemctl reload caddy")
+        return commands
+    }
+
+    /// Adds the import of the door's site to the Caddyfile, at its end on a line of its own, unless the Caddyfile
+    /// imports that folder already (Fedora's does).
+    static let caddyImport: String = {
+        let pattern = "^[[:space:]]*import[[:space:]]+(/etc/caddy/)?Caddyfile[.]d/[*][.]caddyfile"
+        let line = "import /etc/caddy/Caddyfile.d/*.caddyfile"
+        let check = "grep -qsE '\(pattern)' \(caddyMainFile)"
+        return "sudo sh -c \"\(check) || printf '\\n\(line)\\n' >> \(caddyMainFile)\""
+    }()
+
+    /// Caddy's check of the whole config; when it fails, the Caddyfile and the door's earlier site (or none) are
+    /// put back from their copies, and the line stops.
+    static let caddyCheck: String = {
+        let validate = "caddy validate --config \(caddyMainFile) --adapter caddyfile"
+        let site = "if test -e \(caddySiteCopy); then mv \(caddySiteCopy) \(caddySiteFile); "
+            + "else rm -f \(caddySiteFile); fi"
+        let back = "mv \(caddyMainCopy) \(caddyMainFile); \(site); exit 1"
+        return "sudo sh -c \"\(validate) || { \(back); }\""
+    }()
+
+    /// The one line typed: each command after the one before succeeded.
+    public static func caddySetupLine(_ commands: [String]) -> String {
+        commands.joined(separator: " && ")
     }
 
     // MARK: checks and restarts (R32)
