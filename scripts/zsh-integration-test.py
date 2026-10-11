@@ -1307,8 +1307,10 @@ for label, rc in (("server", "PS1='server$ '\n"), ("server, hostile", "setopt no
         return done, took
     done, took = no_answer(11)
     check(done == ["000011", "native"] and took > 0.45, f"[{label}] with no answer, the server's hook waits 0.6 s", f"{done} {took:.2f} s")
-    done, took = no_answer(12, ["w200"])
-    check(done == ["000012", "native"] and took < 0.45, f"[{label}] and `w200` on the Tab key makes it 0.2 s", f"{done} {took:.2f} s")
+    # Measured against the wait just above, not the clock: a busy runner adds the same to both, and 0.4 s apart is the point.
+    done, short = no_answer(12, ["w200"])
+    check(done == ["000012", "native"] and short < took - 0.2, f"[{label}] and `w200` on the Tab key makes it 0.2 s",
+          f"{done} {short:.2f} s against {took:.2f} s")
     # A `w` on a config key is no longer read: the wait comes only with a Tab.
     sh.send(frame("c", 0, ["w150"]), 0.3)
     done, took = no_answer(13, ["w600"])
