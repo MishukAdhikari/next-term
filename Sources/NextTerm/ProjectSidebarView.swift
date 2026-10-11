@@ -19,6 +19,8 @@ protocol ProjectSidebarDelegate: AnyObject {
     func sidebar(_ sidebar: ProjectSidebarView, sendToAgent urls: [(url: URL, isFolder: Bool)])
     /// Show a file's changes side by side.
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL)
+    /// Rollback… on files, folders or deleted files: their uncommitted changes back to the last commit.
+    func sidebar(_ sidebar: ProjectSidebarView, rollback urls: [URL])
     /// A Databases row's Open or hand-off.
     func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction)
     /// An Agent Sessions row's Resume (Go to Tab when it is open in one) or Fork, an agent's Continue
@@ -1056,6 +1058,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             if !entry.isDirectory {
                 add(menu, "Show What Was Deleted", #selector(showDeletedFromMenu), "showChanges:").representedObject = entry
             }
+            add(menu, "Rollback…", #selector(rollbackFromMenu(_:)), "gitRollback:").representedObject = entry
             add(menu, "Copy Path", #selector(copyDeletedPath(_:)), "sidebar.copyPath").representedObject = entry
             add(menu, "Copy Relative Path", #selector(copyDeletedPath(_:)), "sidebar.copyRelativePath").representedObject = entry
             return
@@ -1065,6 +1068,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let single = nodes.count == 1
         if single && !node.isDirectory { add(menu, "Open", #selector(openNode), "sidebar.open") }
         if single && !node.isDirectory, change(of: node) != nil { add(menu, "Show Changes", #selector(showChangesFromMenu), "showChanges:") }
+        if nodes.contains(where: hasChanges) { add(menu, "Rollback…", #selector(rollbackFromMenu(_:)), "gitRollback:") }
         if single {
             let folder = node.isDirectory ? node.path : node.url.deletingLastPathComponent().path
             let title = node.isDirectory ? "Open in New Tab" : "Open Folder in New Tab"
@@ -1128,6 +1132,22 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         guard let entry = sender.representedObject as? DeletedEntry else { return }
         let relative = root.flatMap { root in entry.url.path.hasPrefix(root.path + "/") ? String(entry.url.path.dropFirst(root.path.count + 1)) : nil }
         copy(sender.title == "Copy Path" ? entry.url.path : relative ?? entry.url.path)
+    }
+
+    /// Rollback… on the deleted file it was opened on, or on the rows the menu is for.
+    @objc private func rollbackFromMenu(_ sender: NSMenuItem) {
+        if let entry = sender.representedObject as? DeletedEntry { return delegate?.sidebar(self, rollback: [entry.url]) ?? () }
+        delegate?.sidebar(self, rollback: menuNodes.map(\.url))
+    }
+
+    /// A file with an uncommitted change (not one git ignores), or a folder with one under it.
+    private func hasChanges(_ node: FileNode) -> Bool {
+        guard let snapshot = git.snapshot else { return false }
+        let root = canonicalPath(snapshot.root), path = canonicalPath(node.url.path)
+        guard path == root || path.hasPrefix(root + "/") else { return false }
+        let relative = path == root ? "" : String(path.dropFirst(root.count + 1))
+        if !node.isDirectory { return snapshot.files[relative].map { $0 != .ignored } ?? false }
+        return snapshot.files.contains { $0.value != .ignored && (relative.isEmpty || $0.key.hasPrefix(relative + "/")) }
     }
 
     @objc private func showChangesFromMenu() {

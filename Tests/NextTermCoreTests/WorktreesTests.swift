@@ -263,10 +263,11 @@ import Testing
         #expect(AgentGuard.info([claude], .continuing) == "In the tab “✳ Slack thread discussion”. Continuing changes the files under it.")
         #expect(AgentGuard.info([claude], .skipping).contains("Skipping changes the files"))
         #expect(AgentGuard.info([claude], .switching(to: nil)).contains("Switching branches changes the files"))
+        #expect(AgentGuard.info([claude], .rollingBack) == "In the tab “✳ Slack thread discussion”. Rolling back changes the files under it.")
         // Each caller's button, and the worktree button only for a switch.
         let anyway: [(AgentGuard.Action, String)] = [(.switching(to: "x"), "Switch Anyway"), (.updating, "Update Anyway"), (.merging, "Merge Anyway"),
                                                       (.rebasing, "Rebase Anyway"), (.continuing, "Continue Anyway"), (.skipping, "Skip Anyway"),
-                                                      (.aborting, "Abort Anyway")]
+                                                      (.aborting, "Abort Anyway"), (.rollingBack, "Roll Back Anyway")]
         for (action, label) in anyway {
             #expect(AgentGuard.anyway(action) == label)
             #expect(AgentGuard.buttons(action, worktree: false) == [label, "Cancel"])

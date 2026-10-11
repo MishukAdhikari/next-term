@@ -1584,6 +1584,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "p", [.command, .option])
         item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "b", [.command, .shift])
         git.addItem(.separator())
+        // ⌥⌘Z, the JetBrains IDEs' Rollback: the file's uncommitted changes back to the last commit, with Undo.
+        item(git, "Rollback…", #selector(TerminalWindowController.gitRollback(_:)), "z", [.command, .option])
+        git.addItem(.separator())
         item(git, "Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
         item(git, "Git Diff", #selector(TerminalWindowController.showGitDiff(_:)), "g", [.command, .control])
         item(git, "Git Commands", #selector(TerminalWindowController.showGitCommands(_:)), "")

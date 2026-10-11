@@ -597,11 +597,12 @@ enum SelfTest {
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys or import), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import or rollback), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
+        case "rollback": return await rollbackChecks(c)
         default: break
         }
         #endif
@@ -742,6 +743,7 @@ enum SelfTest {
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
         await gitAndViewKeyChecks(c, proj: proj)
+        await rollbackChecks(c)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
@@ -1867,7 +1869,7 @@ enum SelfTest {
             check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
             // Its menu: each item a command showing its key.
             let menu = sidebarMenuKeyAudit([(sidebarMenu(c.sidebar, row: at), "gone.txt")])
-            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Copy Path", "Copy Relative Path"],
+            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Rollback…", "Copy Path", "Copy Relative Path"],
                   "its menu's items are commands showing their keys", (menu.wrong + menu.titles).joined(separator: "; "))
         }
         if let diffRow = row("diff.txt"), let goneRow = row("gone.txt"), let mainRow = row("main.php") {

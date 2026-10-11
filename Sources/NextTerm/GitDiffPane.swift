@@ -641,6 +641,15 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         list.onSelectScope = { [weak self] scope in self?.select(scope: scope) }
         list.onNeedMoreCommits = { [weak self] in self?.loadMoreCommits() }
         list.onOpenFile = { [weak self] file in self?.openFile(file) }
+        // Only uncommitted changes roll back: in a commit, or All changes since the base, a file may differ by commits.
+        list.canRollback = { [weak self] file in
+            guard let self else { return false }
+            return self.effectiveScope == .uncommitted || self.monitor.snapshot?.files[file.path].map { $0 != .ignored } == true
+        }
+        list.onRollback = { [weak self] file in
+            guard let self, let controller = self.window?.windowController as? TerminalWindowController else { return }
+            controller.rollback([URL(fileURLWithPath: self.root).appendingPathComponent(file.path)])
+        }
         list.onReturn = { [weak self] in
             guard let self, let pane = self.diffPane else { return }
             self.window?.makeFirstResponder(pane.focusView)

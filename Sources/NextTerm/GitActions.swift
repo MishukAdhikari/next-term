@@ -3,8 +3,9 @@ import NextTermCore
 
 /// What the branch popup and the Git menu do. Each is a few git commands with fixed flags (run by
 /// GitWriter, so each is in Git Commands as it would be typed), with the rules from the design: never
-/// change files under a working agent without asking, never discard (a stash is kept, by its id), say
-/// what an error means and offer a terminal when a person is needed.
+/// change files under a working agent without asking, never discard without a way back (a stash is kept, by
+/// its id; a rollback keeps every file and its index entry for Undo), say what an error means and offer a
+/// terminal when a person is needed.
 struct GitActions {
     let popup: BranchPopupController
     init(_ popup: BranchPopupController) { self.popup = popup }
@@ -345,6 +346,91 @@ struct GitActions {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: rollback
+
+    /// Git › Rollback…: `paths` (relative to the root; a folder takes every change under it) back to the last commit,
+    /// after asking, and after the agents working here are asked about. Changes and deletions come back from HEAD; a file
+    /// HEAD doesn't have leaves the index and goes to the Trash (Rollback.plan, from git's status read now). Every file
+    /// and its index entry are kept first, so Undo puts them back exactly, what was staged staged again. Refused: a file
+    /// with unsaved edits in the editor (save or close it first) and a conflict (resolve it first).
+    func rollback(_ paths: [String]) {
+        let root = self.root
+        guard let git = GitWriter.git, !paths.isEmpty, !root.isEmpty, !sheetIsUp else { return NSSound.beep() }
+        let unsaved = (controller?.editorArea.dirtyDocuments ?? []).map { canonicalPath($0.path) }.filter { path in
+            paths.contains { path == canonicalPath(root + "/" + $0) || path.hasPrefix(canonicalPath(root + "/" + $0) + "/") }
+        }
+        if let first = unsaved.first {
+            return GitPrompt.ask("“\((first as NSString).lastPathComponent)” has unsaved edits", info: "Save or close it before rolling it back.",
+                                 buttons: ["OK"], over: window) { _ in }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let snapshot = GitRunner.snapshot(for: root, git: git)
+            DispatchQueue.main.async {
+                guard let snapshot else { return toast("Could not read the changes to roll back") }
+                switch Rollback.plan(paths, in: snapshot) {
+                case let .failure(.conflicted(path)):
+                    GitPrompt.ask("“\((path as NSString).lastPathComponent)” is in a conflict", info: "Resolve it, or abort the merge or rebase, before rolling it back.",
+                                  buttons: ["OK"], over: window) { _ in }
+                case .failure(.unchanged):
+                    toast("Nothing to roll back: no uncommitted changes there")
+                case let .success(steps):
+                    confirmRollback(steps, named: paths, snapshot: snapshot, git: git)
+                }
+            }
+        }
+    }
+
+    private func confirmRollback(_ steps: [Rollback.Step], named paths: [String], snapshot: GitSnapshot, git: String) {
+        let touched = Rollback.touched(steps)
+        let title = paths.count == 1 && touched.count <= 2
+            ? "Roll back “\((paths[0] as NSString).lastPathComponent)”?" : "Roll back \(touched.count) files?"
+        let trashed = Rollback.trashed(steps).count
+        var info = touched.count == 1 ? "Its uncommitted changes go back to the last commit." : "Their uncommitted changes go back to the last commit."
+        if trashed > 0 { info += trashed == 1 ? " A new file goes to the Trash." : " \(trashed) new files go to the Trash." }
+        info += " Undo puts everything back for a while after."
+        GitPrompt.ask(title, info: info, buttons: ["Roll Back", "Cancel"], destructive: 0, style: .warning, over: window) { choice in
+            guard choice == 0 else { return }
+            confirmAgents(.rollingBack) { performRollback(steps, named: paths, snapshot: snapshot, git: git) }
+        }
+    }
+
+    private func performRollback(_ steps: [Rollback.Step], named paths: [String], snapshot: GitSnapshot, git: String) {
+        let root = self.root
+        let touched = Rollback.touched(steps)
+        guard let backup = RollbackBackup(root: root, paths: touched, git: git, intentToAdd: Rollback.intentToAdd(touched, in: snapshot)) else {
+            return toast("Could not keep a copy of the files, so nothing was rolled back")
+        }
+        let commands = Rollback.commands(steps)
+        run("Rollback", commands.unstage) { unstaged in
+            guard unstaged.ok else { return failed("Could not roll back", unstaged, retry: nil) }
+            for path in Rollback.trashed(steps) { backup.trash(path) }
+            run("Rollback", commands.restore) { restored in
+                controller?.editorArea.checkDisk()
+                guard restored.ok else {
+                    failed("Could not roll back", restored, retry: nil)
+                    return undoRollback(backup, quietly: true)
+                }
+                backup.noteAfter()
+                GitToast.show(Rollback.done(paths.count == 1 ? paths : touched), in: window, button: "Undo") { undoRollback(backup, quietly: false) }
+            }
+        }
+    }
+
+    /// The files back as they were before the rollback, then the index; refused when one changed since the rollback.
+    private func undoRollback(_ backup: RollbackBackup, quietly: Bool) {
+        if !quietly, let changed = backup.changedSince() {
+            return GitPrompt.ask("“\((changed as NSString).lastPathComponent)” changed since the rollback", info: "Undo would overwrite that change, so nothing was undone.",
+                                 buttons: ["OK"], over: window) { _ in }
+        }
+        backup.restoreFiles()
+        run("Undo Rollback", Rollback.undoIndexCommands(backup.paths, before: backup.entries, intentToAdd: backup.intentToAdd)) { result in
+            controller?.editorArea.checkDisk()
+            if !result.ok { return failed("Could not undo the rollback", result, retry: nil) }
+            backup.discard()
+            if !quietly { toast("Undone: the changes are back") }
         }
     }
 

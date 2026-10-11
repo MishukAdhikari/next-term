@@ -320,6 +320,8 @@ public enum AgentGuard {
         /// Checkout, Checkout and Update, a tag or revision, New Branch switching to it: to `target` when known.
         case switching(to: String?)
         case updating, merging, rebasing, continuing, skipping, aborting
+        /// Git › Rollback…: the files put back to the last commit are ones the agent may be working on.
+        case rollingBack
     }
 
     public static let openInNewWorktree = "Open in New Worktree…"
@@ -347,6 +349,7 @@ public enum AgentGuard {
         case .continuing: return "Continue Anyway"
         case .skipping: return "Skip Anyway"
         case .aborting: return "Abort Anyway"
+        case .rollingBack: return "Roll Back Anyway"
         }
     }
 
@@ -365,6 +368,7 @@ public enum AgentGuard {
         case .continuing: return "Continuing"
         case .skipping: return "Skipping"
         case .aborting: return "Aborting"
+        case .rollingBack: return "Rolling back"
         }
     }
 

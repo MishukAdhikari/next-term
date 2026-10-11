@@ -952,6 +952,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(gitRollback(_:)) { return gitFolder != nil && window?.attachedSheet == nil && !rollbackTargets.isEmpty }
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
@@ -1784,6 +1785,37 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
+
+    /// ⌥⌘Z, Git › Rollback…: the uncommitted changes of the file being edited, or of what is selected in the sidebar
+    /// (files, folders, deleted files), back to the last commit, after asking (GitActions.rollback).
+    @objc func gitRollback(_ sender: Any?) {
+        let targets = rollbackTargets
+        guard !targets.isEmpty else { return NSSound.beep() }
+        rollback(targets)
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, rollback urls: [URL]) { rollback(urls) }
+
+    /// What Git › Rollback… acts on: as Show Changes, the editor's file while the sidebar doesn't have the keyboard,
+    /// else the sidebar's selection, deleted files included.
+    var rollbackTargets: [URL] {
+        let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
+        if fromEditor, editorArea.activeDiff == nil, let path = editorArea.activePath { return [URL(fileURLWithPath: path)] }
+        return sidebar.selection.map(\.url) + sidebar.selectedDeleted.map(\.url)
+    }
+
+    /// Rolls back `urls`, all in the repository of the first: the others are left alone.
+    func rollback(_ urls: [URL]) {
+        guard let first = urls.first else { return NSSound.beep() }
+        let start = canonicalPath(first.path)
+        let root = canonicalPath(ProjectRoot.find(from: (start as NSString).deletingLastPathComponent))
+        let paths = urls.map { canonicalPath($0.path) }.compactMap { path -> String? in
+            if path == root { return "" }
+            return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : nil
+        }
+        guard !paths.isEmpty, FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(".git")) else { return NSSound.beep() }
+        withGit(at: root) { $0.rollback(paths) }
+    }
 
     /// A Databases row's action. Hand-offs read the password from the project's file themselves.
     func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction) {

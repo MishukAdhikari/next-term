@@ -36,7 +36,8 @@ public enum MenuKeys {
             "resumeSession:": optCmd("o"), "sendToAgent:": optCmd("k"), "suggestCommand:": ctrlCmd("k"),
             // Git
             "showBranches:": optCmd("b"), "gitFetch:": cmd("r"), "gitUpdate:": optCmd("u"), "gitCommit:": shiftCmd("c"),
-            "gitPush:": optCmd("p"), "gitNewBranch:": shiftCmd("b"), "showGitLog:": optCmd("l"), "showGitDiff:": ctrlCmd("g"),
+            "gitPush:": optCmd("p"), "gitNewBranch:": shiftCmd("b"), "gitRollback:": optCmd("z"), "showGitLog:": optCmd("l"),
+            "showGitDiff:": ctrlCmd("g"),
             // Window
             "performMiniaturize:": cmd("m"), "showNextTab:": shiftCmd("]"), "showPreviousTab:": shiftCmd("["),
             "selectPaneLeft:": optCmd(left), "selectPaneRight:": optCmd(right), "selectPaneAbove:": optCmd(up),
