@@ -136,7 +136,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private var databaseItems: [String: DatabaseItem] = [:]
     /// Bumped by every scan, so one that finishes after a newer one started is dropped.
     private(set) var databaseScanToken = 0
-    private var databaseScanQueued = false
+    /// Scans set off by file changes: a second after the first change, then one every 5 s at most, and none while
+    /// nobody can see the window (one when it shows again, if something changed meanwhile).
+    private let databaseScans = GatedRefresh(interval: 5, settle: 1)
     #if DEBUG
     /// For the self-test, when the Databases group is late: how this tree's scans went.
     private(set) var databaseScanStats = DatabaseScanStats()
@@ -211,6 +213,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                                object: scrollView.contentView)
 
         git.onChange = { [weak self] snapshot in self?.gitChanged(snapshot) }
+        databaseScans.run = { [weak self] in self?.scanDatabases() }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -219,7 +222,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let window { git.window = window }
+        if let window {
+            git.window = window
+            databaseScans.window = window
+        }
     }
 
     /// Its window closed: stop watching files and git now, not when the sidebar is freed, so an app left running
@@ -229,6 +235,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         watcher = nil
         gitDirWatcher = nil
         git.stop()
+        databaseScans.cancel()
     }
 
     override func layout() {
@@ -297,6 +304,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         gitEvents = nil
         git.watch(canonical)
         showDatabases(DatabaseScan())
+        databaseScans.cancel() // the old folder's
         scanDatabases()
         showSessions([], tabs: SessionTabs())
         loadSessions()
@@ -312,11 +320,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         let token = databaseScanToken
         let queued = Date()
         noteDatabaseScan(.started(queued))
+        databaseScans.started()
         DispatchQueue.global(qos: .utility).async {
             let began = Date()
             let scan = Databases.scan(root: path)
             let read = DatabaseScanStats.Event.read(waited: began.timeIntervalSince(queued), took: Date().timeIntervalSince(began))
             DispatchQueue.main.async { [weak self] in
+                self?.databaseScans.finished()
                 self?.noteDatabaseScan(read)
                 guard let self, token == self.databaseScanToken, self.root?.path == path else {
                     self?.noteDatabaseScan(.dropped)
@@ -377,23 +387,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         #endif
     }
 
-    /// Something changed near the top of the project (an env file, a config, a SQLite file): scan again
-    /// soon. Changes in dependency and build folders are ignored.
+    /// Something changed where the scan looks (an env file, a config, a folder that can hold a SQLite file):
+    /// scan again when the gate says. Hidden, dependency and build folders, and anything deeper than the search
+    /// goes, set off nothing (Databases.scanMayChange).
     private func scheduleDatabaseScan(for paths: [String]) {
-        guard let root, !databaseScanQueued else { return }
-        let ignored = ["/node_modules/", "/vendor/", "/.git/", "/.next/", "/build/", "/dist/", "/.build/", "/storage/framework/"]
-        let relevant = paths.contains { raw in
-            let path = raw.hasSuffix("/") ? raw : raw + "/"
-            guard path == root.path + "/" || path.hasPrefix(root.path + "/") else { return false }
-            let rest = path.dropFirst(root.path.count)
-            return !ignored.contains { rest.contains($0) } && rest.split(separator: "/").count <= 3
-        }
-        guard relevant else { return }
-        databaseScanQueued = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.databaseScanQueued = false
-            self?.scanDatabases()
-        }
+        guard let root, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
+        databaseScans.changed()
     }
 
     private func showDatabases(_ scan: DatabaseScan) {
