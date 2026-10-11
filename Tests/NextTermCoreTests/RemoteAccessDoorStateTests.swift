@@ -360,6 +360,114 @@ import Testing
         #expect(locked.saved().isEmpty)
     }
 
+    // MARK: from one state to the next
+
+    /// The next state on the door's folder and clock, as the next start or a change while the door is closed
+    /// makes it, carrying what the last one left.
+    static func next(_ door: Door, host: String? = RemoteAccessDoorStateTests.host,
+                     carrying carried: RemoteAccessDoorState.Carried?) -> RemoteAccessDoorState {
+        let clock = door.clock
+        return RemoteAccessDoorState(folder: door.folder.url, host: host,
+                                     calls: RemoteAccessCalls(clock: { clock.now }), clock: { clock.now },
+                                     report: { _ in }, carrying: carried)
+    }
+
+    /// A revoke whose save failed goes to the next state, which takes it over the file's older grants: the grant
+    /// doesn't work again there, and that state saves it at its tick. A state whose saves all went through hands
+    /// over no grants, so the next one reads the file.
+    @Test func aRevokeWhoseSaveFailedGoesToTheNextState() throws {
+        let door = Door()
+        let paired = try Self.pair(door)
+        #expect(door.state.carried().unsaved == nil)
+
+        Files.lock(door.folder.url)
+        defer { Files.unlock(door.folder.url) }
+        #expect(throws: RemoteAccessStoreError.self) { try door.state.revoke(grant: paired.grant.id) }
+        let carried = door.state.carried()
+        #expect(carried.unsaved?.grants.isEmpty == true)
+        let next = Self.next(door, carrying: carried)
+        #expect(door.saved().map(\.id) == [paired.grant.id])
+        #expect(next.grants.isEmpty)
+        let refreshed = next.token(Self.body(Flow.refreshParameters(paired.refresh, client: paired.client)))
+        #expect(refreshed.flatMap(Flow.tokens) == nil)
+        #expect(next.carried().unsaved != nil)
+
+        Files.unlock(door.folder.url)
+        door.clock.advance(15)
+        next.tick()
+        #expect(door.saved().isEmpty)
+        #expect(next.carried().unsaved == nil)
+    }
+
+    /// The same with no host saved: a Revoke All whose save failed goes to the next state, whose tick saves it,
+    /// and a host saved after it brings none of those grants back.
+    @Test func aRevokeAllWithNoHostWhoseSaveFailedGoesToTheNextState() throws {
+        let door = Door()
+        _ = try Self.pair(door)
+        let closed = Self.next(door, host: nil, carrying: nil)
+        Files.lock(door.folder.url)
+        defer { Files.unlock(door.folder.url) }
+        #expect(throws: RemoteAccessStoreError.self) { try closed.revokeAll() }
+        let next = Self.next(door, host: nil, carrying: closed.carried())
+        next.tick()
+        #expect(door.saved().count == 1)
+
+        Files.unlock(door.folder.url)
+        next.tick()
+        #expect(door.saved().isEmpty)
+        next.setHost(Self.host)
+        #expect(next.grants.isEmpty)
+    }
+
+    /// R20, R37: a list-changed mark no stream took, made while the door was open or closed, and the last hour's
+    /// calls go to the next state, so a change made before a start still reaches the client's next stream.
+    @Test func theListChangedMarksAndTheLastHoursCallsGoToTheNextState() throws {
+        let door = Door()
+        let paired = try Self.pair(door)
+        var fewer = RemoteAccessOptions.readOnly
+        fewer[.editor] = false
+        try door.state.changeOptions(of: paired.grant.id, to: fewer)
+        let calls = (0..<3).map { _ in
+            Entry.call(time: door.clock.now, grant: paired.grant, tool: "list_tabs", arguments: nil,
+                       decision: .allowed)
+        }
+        door.state.audit(calls)
+        door.state.turnOff(revokeAll: false)
+        let carried = door.state.carried()
+        #expect(carried.unsaved == nil)
+        #expect(carried.listChanged == [paired.grant.id])
+
+        let next = Self.next(door, carrying: carried)
+        #expect(next.callsInLastHour == 3)
+        #expect(next.options(of: paired.grant.id, listed: false) == fewer)
+        let opened = next.calls.open(grant: paired.grant.id, connection: 1, streamed: true) { _ in }
+        guard case .call(_, let marked) = opened else { Issue.record("no call"); return }
+        #expect(marked)
+    }
+
+    /// States that share one audit queue (the app's open and closed doors, and its reads of the log) write every
+    /// line in the order it was queued, even when each one's first write drops entries past 30 days.
+    @Test func statesThatShareAnAuditQueueLoseNoLine() throws {
+        let folder = Files.Folder()
+        let clock = RemoteAccessCallsTests.Clock()
+        let long = clock.now.addingTimeInterval(-40 * 86_400)
+        var old = RemoteAccessAuditLog(folder: folder.url)
+        try old.append(Entry.tunnel("old", time: long), now: long)
+        let queue = DispatchQueue(label: "test.remote-access.audit")
+        let states = (0..<2).map { _ in
+            RemoteAccessDoorState(folder: folder.url, host: nil, clock: { clock.now }, report: { _ in },
+                                  auditQueue: queue)
+        }
+        var written: [String] = []
+        for index in 0..<40 {
+            states[index % 2].audit([Entry.tunnel("line \(index)", time: clock.now)])
+            written.append("line \(index)")
+        }
+        #expect(states[0].flushAudit())
+        var log = RemoteAccessAuditLog(folder: folder.url)
+        #expect(log.tail(now: clock.now).compactMap(\.reason) == written)
+    }
+
     // MARK: the list
 
     /// R20: a `tools/list` reads the options and clears the mark in one step, so an options change either shows

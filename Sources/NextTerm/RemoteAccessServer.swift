@@ -407,6 +407,8 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
     // MARK: routes
 
     private func serve(_ request: RemoteAccessHTTP.Request, on connection: Connection) {
+        // A request read before Turn Off is not served after it: no token is issued, no grant saved.
+        guard !stopped else { return close(connection) }
         // The host can change between a head and its body (Confirm Host): the checks run again on the whole request.
         let checked = RemoteAccessHTTP.check(request, host: state.host)
         guard case .route(let route) = checked else {
@@ -724,10 +726,12 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
 
 extension RemoteAccessDoorState {
     /// The state for a door, its registry with the door's deadline: 100 seconds, shortened only under a debug
-    /// self-test (U12).
-    static func forDoor(folder: URL, host: String?) -> RemoteAccessDoorState {
+    /// self-test (U12). Its log is written on the app's one audit queue, and it takes over what the last state
+    /// left (`carried`).
+    static func forDoor(folder: URL, host: String?, carrying carried: Carried?) -> RemoteAccessDoorState {
         let calls = RemoteAccessCalls(deadline: RemoteAccessServer.Timings.current.deadline)
-        return RemoteAccessDoorState(folder: folder, host: host, calls: calls)
+        return RemoteAccessDoorState(folder: folder, host: host, calls: calls, auditQueue: RemoteAccess.auditQueue,
+                                     carrying: carried)
     }
 }
 

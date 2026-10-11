@@ -16,6 +16,12 @@ import Foundation
 /// Audit lines are queued in order and written on their own queue, never under this lock, so a slow disk, a
 /// rotation or the hourly 30-day prune can't hold up the door's queue or the main thread's `begin`. `flushAudit`
 /// waits for them. Anything that reads the log while the door runs (the activity view) reads it on that queue too.
+/// The app gives every state one queue, which its own reads and writes of the log use while the door is closed, so
+/// no two of them rewrite the file at once.
+///
+/// A door's state serves one start. What it leaves the next state (`carried()`) goes on: the grants when a save
+/// failed, the list-changed marks no stream took yet, and the last hour's calls. A change while the door is closed
+/// runs on a state of its own made the same way.
 ///
 /// Until a host is saved (Confirm Host), there is no authority, and every route answers nil: the door sends 421.
 ///
@@ -43,7 +49,7 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     private var saved: Saved
     /// What the store held at launch, for when the host is saved. Revoke All with no host ends its grants here.
     private var loaded: RemoteAccessGrantStore.Loaded
-    private let auditQueue = DispatchQueue(label: "nextterm.remote-access.audit")
+    private let auditQueue: DispatchQueue
     private var log: RemoteAccessAuditLog
 
     private struct Saved: Equatable {
@@ -67,20 +73,59 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
     /// The state for a door, from the grant store in `folder` (the Remote access folder, or a self-test's temp
     /// folder, KTD18), with the saved public hostname, if there is one. A door's state serves one start: turning
     /// off ends its registry for good, so the next start makes a new one. `report` gets what failed to save or
-    /// write; it never holds a token.
+    /// write; it never holds a token. `auditQueue` is where the log is written, its own when nil. `carried` is
+    /// what the last state left: its grants, when the file holds older ones, take their place and are saved at
+    /// the first chance; its marks and its call count go on here.
     public init(folder: URL, host: String?, calls: RemoteAccessCalls = RemoteAccessCalls(),
                 clock: @escaping @Sendable () -> Date = { Date() },
                 random: @escaping @Sendable (Int) -> [UInt8] = RemoteAccessOAuth.systemRandom,
-                report: @escaping @Sendable (String) -> Void = { NSLog("%@", $0) }) {
+                report: @escaping @Sendable (String) -> Void = { NSLog("%@", $0) },
+                auditQueue: DispatchQueue? = nil, carrying carried: Carried? = nil) {
         self.calls = calls
         self.clock = clock
         self.random = random
         self.report = report
+        self.auditQueue = auditQueue ?? DispatchQueue(label: "nextterm.remote-access.audit")
         store = RemoteAccessGrantStore(folder: folder)
         log = RemoteAccessAuditLog(folder: folder)
         loaded = store.load(now: clock())
+        // What the file holds: grants carried over that differ from it are saved by the next change, tick or quit.
         saved = Saved(loaded.clients, loaded.grants)
+        if let carried {
+            if let unsaved = carried.unsaved {
+                loaded.clients = unsaved.clients
+                loaded.grants = unsaved.grants
+            }
+            callCount = carried.callCount
+            for grantID in carried.listChanged { calls.markListChanged(grantID) }
+        }
         if let host { setHost(host) }
+    }
+
+    /// What a state leaves the next one (see the type's comment).
+    public struct Carried: Sendable {
+        /// The clients and grants as a state left them, when the file holds older ones.
+        public struct Unsaved: Sendable {
+            public var clients: [RemoteAccessOAuth.Client]
+            public var grants: [RemoteAccessOAuth.Grant]
+        }
+
+        /// Nil when the file holds what the state held.
+        public var unsaved: Unsaved?
+        /// The grants whose options changed since their client last listed its tools (R20).
+        public var listChanged: Set<String>
+        public var callCount: RemoteAccessCallCount
+    }
+
+    /// What the next state takes over from this one: after it turned off, or after a change while the door is
+    /// closed.
+    public func carried() -> Carried {
+        lock.lock()
+        defer { lock.unlock() }
+        let clients = authority?.clients ?? loaded.clients
+        let grants = authority?.grants ?? loaded.grants
+        let unsaved = Saved(clients, grants) == saved ? nil : Carried.Unsaved(clients: clients, grants: grants)
+        return Carried(unsaved: unsaved, listChanged: calls.listChangedGrants, callCount: callCount)
     }
 
     public var now: Date { clock() }
@@ -129,9 +174,6 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
 
     public func authorizationServerMetadata() -> Data? { locked { authority?.authorizationServerMetadata() } }
 
-    /// A grant's options as they are now, for `initialize` and `tools/list`; nil when it is gone. With `listed`
-    /// (a `tools/list`), the grant's list-changed mark goes in the same step, so an options change either shows in
-    /// this list or marks the next stream (R20).
     /// The grants as they are now, still active, for Settings and the status item (U11).
     public var grants: [RemoteAccessOAuth.Grant] {
         locked {
@@ -140,11 +182,14 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         }
     }
 
-    /// The tool calls the audit log got in the last hour, allowed or refused, to the minute (R37).
+    /// The tool calls of the last hour, allowed, refused or past the limits, to the minute (R37).
     public var callsInLastHour: Int {
         locked { callCount.count(at: clock()) }
     }
 
+    /// A grant's options as they are now, for `initialize` and `tools/list`; nil when it is gone. With `listed`
+    /// (a `tools/list`), the grant's list-changed mark goes in the same step, so an options change either shows in
+    /// this list or marks the next stream (R20).
     public func options(of grantID: String, listed: Bool) -> RemoteAccessOptions? {
         lock.lock()
         defer { lock.unlock() }
@@ -310,7 +355,11 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         defer { lock.unlock() }
         let now = clock()
         append(refusals.due(now: now), now: now)
-        if let authority { saveIfChanged(authority, now: now) }
+        if let authority {
+            saveIfChanged(authority, now: now)
+        } else {
+            saveLoadedIfChanged(now: now)
+        }
     }
 
     /// On quit (U9): a grant change whose save failed, and a use the file doesn't hold yet, are written now.
@@ -319,11 +368,8 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         defer { lock.unlock() }
         let now = clock()
         guard let authority else {
-            // No host: only a Revoke All whose save failed can have changed the grants.
-            let current = Saved(loaded.clients, loaded.grants)
-            guard current != saved else { return }
-            try store.save(clients: loaded.clients, grants: loaded.grants, now: now)
-            saved = current
+            // No host: only a Revoke All whose save failed, here or in the state before, can have changed them.
+            if let failure = saveLoadedIfChanged(now: now) { throw failure }
             return
         }
         if let failure = saveIfChanged(authority, now: now) { throw failure }
@@ -374,11 +420,13 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         append(refusals.count(kind, first: first ?? "", now: now), now: now)
     }
 
-    /// A call past its grant's limits (R27), summed with the minute's others in one line per grant (R39).
+    /// A call past its grant's limits (R27), summed with the minute's others in one line per grant (R39). It
+    /// counts as a call all the same (R37).
     public func countOverLimit(_ grant: RemoteAccessOAuth.Grant, tool: String) {
         lock.lock()
         defer { lock.unlock() }
         let now = clock()
+        callCount.note(at: now)
         append(refusals.countOverLimit(grant: grant, tool: tool, now: now), now: now)
     }
 
@@ -440,6 +488,23 @@ public final class RemoteAccessDoorState: @unchecked Sendable { // under `lock`,
         guard current != saved else { return nil }
         do {
             try store.save(clients: authority.clients, grants: authority.grants, now: now)
+            saved = current
+            return nil
+        } catch {
+            report("Next Term: Remote access could not save its grants: \(error)")
+            return error
+        }
+    }
+
+    /// With no host, so no authority: saves the clients and grants the state holds when the file holds others (a
+    /// Revoke All whose save failed, here or in the state before). On a failure `saved` stays as it was, so the
+    /// next tick or quit tries again. The save's error.
+    @discardableResult
+    private func saveLoadedIfChanged(now: Date) -> Error? {
+        let current = Saved(loaded.clients, loaded.grants)
+        guard current != saved else { return nil }
+        do {
+            try store.save(clients: loaded.clients, grants: loaded.grants, now: now)
             saved = current
             return nil
         } catch {

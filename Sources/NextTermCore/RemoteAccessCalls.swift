@@ -254,12 +254,12 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
     }
 
     /// Turned off, or quitting (R37, R42): every open call is answered with the revoke text, and no call opens
-    /// after it. Returns how many it answered.
+    /// after it. The list-changed marks stay, for the next start's registry (`listChangedGrants`). Returns how many
+    /// it answered.
     @discardableResult
     public func turnOff() -> Int {
         lock.lock()
         off = true
-        listChanged.removeAll()
         let now = clock()
         let ids = calls.filter { $0.value.ended == nil }.keys
         let answers = ids.sorted().compactMap { end($0, at: now) }
@@ -335,6 +335,13 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         lock.lock()
         listChanged.remove(grant)
         lock.unlock()
+    }
+
+    /// The grants whose mark no stream took yet: what the next start's registry marks again.
+    public var listChangedGrants: Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return listChanged
     }
 
     // MARK: state

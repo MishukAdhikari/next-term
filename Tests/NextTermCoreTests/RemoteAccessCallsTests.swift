@@ -477,6 +477,18 @@ import Testing
         #expect(message["id"] == nil)
     }
 
+    /// Turning off opens no more calls but keeps the marks no stream took, for the next start's registry; a
+    /// revoked grant's mark is gone.
+    @Test func turningOffKeepsTheMarksForTheNextStart() throws {
+        let calls = makeCalls(Clock())
+        calls.markListChanged("g1")
+        calls.markListChanged("g2")
+        _ = calls.revoke(grants: ["g2"])
+        _ = calls.turnOff()
+        #expect(calls.listChangedGrants == ["g1"])
+        #expect(openCall(calls, grant: "g1", streamed: true) == nil)
+    }
+
     /// A tools/list gives the client the new list, so it clears the mark; so does the grant's end.
     @Test func aToolsListOrARevokeClearsTheMark() throws {
         let calls = makeCalls(Clock())

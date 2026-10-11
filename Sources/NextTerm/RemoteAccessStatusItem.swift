@@ -127,9 +127,12 @@ final class RemoteAccessStatusItem: NSObject, NSMenuDelegate {
         return item
     }
 
+    /// Revoke from the menu. A save that failed is told as a notification, since no Settings view shows it here.
     @objc private func revoke(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
-        if let problem = RemoteAccess.shared.revoke(id) { NSLog("Next Term: %@", problem) }
+        guard let problem = RemoteAccess.shared.revoke(id) else { return }
+        NSLog("Next Term: %@", problem)
+        RemoteAccess.shared.notify(title: "Remote access", body: problem)
     }
 
     @objc private func openSettings() {

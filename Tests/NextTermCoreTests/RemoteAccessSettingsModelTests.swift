@@ -384,6 +384,16 @@ import Testing
         #expect(door.state.callsInLastHour == 0)
     }
 
+    /// Calls past R27's limits are summed in one audit line a minute, but each still counts as a call (R37).
+    @Test func callsPastTheLimitsCountTowardTheHour() throws {
+        let door = RemoteAccessDoorStateTests.Door()
+        let grant = Self.grant("a")
+        for _ in 0..<5 { door.state.countOverLimit(grant, tool: "read_tab") }
+        door.state.audit([Entry.call(time: door.clock.now, grant: grant, tool: "list_tabs", arguments: nil,
+                                     decision: .allowed)])
+        #expect(door.state.callsInLastHour == 6)
+    }
+
     @Test func theActivityReadsAndClearsTheLogOnTheDoorsQueue() throws {
         let door = RemoteAccessDoorStateTests.Door()
         door.state.audit([Entry.tunnel("started", time: door.clock.now), Entry.tunnel("ready", time: door.clock.now)])
@@ -425,6 +435,16 @@ import Testing
         #expect(list.contains("Bot Fight Mode"))
         #expect(list.contains("Access"))
         #expect(list.contains("first level"))
+    }
+
+    /// With no port free, the checklist and the steps say so, never port 0.
+    @Test func withNoPortFreeTheChecklistSaysSo() {
+        let list = RemoteAccessSettingsText.cloudflareChecklist(port: nil).joined(separator: "\n")
+        #expect(!list.contains("127.0.0.1:0"))
+        #expect(list.contains("none from 40000 to 48999 is free"))
+        var facts = Self.bare
+        facts.cloudflared = .installed
+        #expect(Guide.steps(.cloudflare, facts, port: nil)[1].detail.contains("none from 40000 to 48999 is free"))
     }
 
     @Test func otherTexts() {

@@ -62,9 +62,15 @@ public enum RemoteAccessSettingsText {
         return String(format: "Pairing closes in %d:%02d", left / 60, left % 60)
     }
 
+    /// The door's local address, or, with no port free to pick, what stands in for it.
+    public static func doorAddress(port: Int?) -> String {
+        port.map { RemoteAccessTunnelConfig.doorAddress(port: $0) }
+            ?? "http://127.0.0.1 at the door's port (none from 40000 to 48999 is free now)"
+    }
+
     /// What to check in the Cloudflare dashboard (R33). Next Term reads the route itself, but not the rest.
-    public static func cloudflareChecklist(port: Int) -> [String] {
-        let address = RemoteAccessTunnelConfig.doorAddress(port: port)
+    public static func cloudflareChecklist(port: Int?) -> [String] {
+        let address = doorAddress(port: port)
         return [
             "The public hostname is at the first level of your domain, such as mcp.example.com, so Cloudflare's "
                 + "certificate covers it.",
@@ -184,7 +190,7 @@ public enum RemoteAccessGuide {
         steps.firstIndex { !$0.done }
     }
 
-    /// A choice's setup, in order. `port` is the door's port, when one is saved.
+    /// A choice's setup, in order. `port` is the door's port, nil when none is free.
     public static func steps(_ kind: Kind, _ facts: Facts, port: Int?) -> [Step] {
         switch kind {
         case .funnel: return funnelSteps(facts)
@@ -194,9 +200,9 @@ public enum RemoteAccessGuide {
         }
     }
 
-    /// The door's address for a step, or what stands in for it before a port is saved.
+    /// The door's address for a step, or what stands in for it when no port is free.
     private static func address(_ port: Int?) -> String {
-        port.map { Config.doorAddress(port: $0) } ?? "http://127.0.0.1 at the port Settings shows"
+        RemoteAccessSettingsText.doorAddress(port: port)
     }
 
     /// Tailscale's problems that come before Funnel: the Mac is not logged in or Tailscale doesn't run.

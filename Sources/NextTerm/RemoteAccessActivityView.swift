@@ -5,9 +5,9 @@ import NextTermCore
 /// Clear Log and Show in Finder. Each row's tooltip holds the line's masked details: what was typed or approved, the
 /// arguments, or a summed refusal's first Host or path. Tokens and tool output are never in the log, so never here.
 ///
-/// The log is read off the main thread, on the open door's audit queue after the lines it has queued, or on a queue
-/// of its own while the door is closed. It is read again when the view shows, when Remote access changes, and every
-/// 10 seconds while its window is visible.
+/// The log is read off the main thread, on Remote access's one audit queue, after the lines queued before it, the
+/// door open or closed. It is read again when the view shows, when Remote access changes, and every 10 seconds while
+/// its window is visible.
 @MainActor
 final class RemoteAccessActivityView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static let width: CGFloat = 548

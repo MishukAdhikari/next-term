@@ -81,6 +81,10 @@ final class RemoteAccess {
     private(set) var settings: Settings
     /// The open door's state: Connect a Client, the grants, Revoke (U11). A new one each start.
     private(set) var doorState: RemoteAccessDoorState?
+    /// What the last door state, or the last change while the door was closed, left the next one: the grants when
+    /// their save failed, the list-changed marks no stream took and the last hour's calls. Nil while the door is
+    /// open.
+    private(set) var carried: RemoteAccessDoorState.Carried?
     private(set) var door: RemoteAccessServer?
     /// The Remote access folder: the grants, the audit log and the tunnel's pid record.
     let folder: URL
@@ -90,6 +94,11 @@ final class RemoteAccess {
         didSet { connect(tunnel) }
     }
 
+    /// Every audit read and write: the open door's, a closed door's change, the tunnel's lines while the door is
+    /// closed, and the activity view's reads and clears. One at a time, so no two rewrite the file at once.
+    nonisolated static let auditQueue = DispatchQueue(label: "nextterm.remote-access.audit", qos: .utility)
+    /// The log as the app reads and writes it while the door is closed, only on `auditQueue`.
+    let closedLog: RemoteAccessClosedLog
     private let defaults: UserDefaults?
     /// The tunnel token, read once per start and held in memory only while the switch is on (R44).
     private var token: RemoteAccessTunnelConfig.Token?
@@ -120,6 +129,7 @@ final class RemoteAccess {
             tokens = RemoteAccessKeychain()
             settings = Settings(defaults: .standard)
         }
+        closedLog = RemoteAccessClosedLog(folder: folder)
         tunnel = RemoteAccessTunnel(folder: folder)
         connect(tunnel)
         let center = NSWorkspace.shared.notificationCenter
@@ -149,14 +159,16 @@ final class RemoteAccess {
     func launched() {
         RemoteAccessStatusItem.shared.follow() // the menu bar icon, shown while it is on (U11)
         endLeftoverTunnel()
+        pruneAuditLog()
         guard settings.on else { return }
         start(launch: true)
     }
 
-    /// "Let agents control Next Term" changed: off turns Remote access off and saves it off (R1).
+    /// "Let agents control Next Term" changed: off turns Remote access off and saves it off (R1). Either way
+    /// Settings' switch follows it, though the status may not change.
     func agentControlChanged(_ on: Bool) {
-        guard !on else { return }
-        send(.agentControlOff)
+        if !on { send(.agentControlOff) }
+        changedNotice()
     }
 
     /// Quit, as `applicationWillTerminate`'s first call, so the public door closes before anything else. Timers
@@ -168,6 +180,8 @@ final class RemoteAccess {
     func stopForQuit() {
         quitBegan = .now()
         defer { quitBegan = nil }
+        // With the door closed there is nothing to close first: a grant change whose save failed is written now.
+        if doorState == nil { saveCarried() }
         send(.quit)
     }
 
@@ -353,30 +367,40 @@ final class RemoteAccess {
     // MARK: the door
 
     /// A new door state from the grants file and the saved host (none until Confirm Host, so the door answers 421),
-    /// and the door bound on `127.0.0.1:<port>` alone. A busy port is reported as such; no other port is tried.
+    /// carrying what the last state left, and the door bound on `127.0.0.1:<port>` alone. A busy port is reported
+    /// as such; no other port is tried.
     private func openDoor(_ port: UInt16) {
-        let state = RemoteAccessDoorState.forDoor(folder: folder, host: status.host)
+        let state = RemoteAccessDoorState.forDoor(folder: folder, host: status.host, carrying: carried)
         state.onEvents = { [weak self] events in self?.authorityEvents(events) }
         let server = RemoteAccessServer(port: port, state: state)
         server.onFailure = { [weak self, weak server] in
             guard let self, let server, self.door === server else { return }
             self.send(.doorFailed("The door on port \(port) stopped. Turn Remote access on again."))
         }
+        let reason: (portInUse: Bool, text: String)
         do {
             try server.start()
+            carried = nil
+            doorState = state
+            door = server
+            return send(.bound)
         } catch let error as RemoteAccessServer.StartError {
-            if case .portInUse = error { return send(.bindFailed(portInUse: true, reason: error.description)) }
-            return send(.bindFailed(portInUse: false, reason: error.description))
+            if case .portInUse = error {
+                reason = (true, error.description)
+            } else {
+                reason = (false, error.description)
+            }
         } catch {
-            return send(.bindFailed(portInUse: false, reason: "The door could not start: \(error)"))
+            reason = (false, "The door could not start: \(error)")
         }
-        doorState = state
-        door = server
-        send(.bound)
+        // The state that never served is the latest view of the grants all the same.
+        carried = state.carried()
+        send(.bindFailed(portInUse: reason.portInUse, reason: reason.text))
     }
 
     /// After the door closed: a grant change whose save failed and the last uses are written, since this state
-    /// ends here; at quit the audit lines are waited for too. With no door, Revoke All ends the saved grants.
+    /// ends here; at quit the audit lines are waited for too. What it leaves (a save that failed again, the marks,
+    /// the call count) goes on to the next state. With no door, Revoke All ends the saved grants.
     private func doorClosed(revokeAll: Bool) {
         if let doorState {
             do {
@@ -385,6 +409,7 @@ final class RemoteAccess {
                 NSLog("Next Term: Remote access could not save its grants: %@", "\(error)")
             }
             if quitBegan != nil { doorState.flushAudit(within: 0.5) }
+            carried = doorState.carried()
         } else if revokeAll {
             revokeSavedGrants()
         }
@@ -396,14 +421,37 @@ final class RemoteAccess {
     /// Turn Off and Revoke All with the door closed: every grant the file holds ends, with no host saved too (the
     /// last host's grants would work again if it were typed back in), and the log gets the kill switch's line (R39).
     private func revokeSavedGrants() {
-        let state = RemoteAccessDoorState(folder: folder, host: settings.host)
-        state.turnOff(revokeAll: true)
         do {
-            try state.saveOnQuit()
+            try withClosedDoor { $0.turnOff(revokeAll: true) }
         } catch {
             NSLog("Next Term: Remote access could not save its grants: %@", "\(error)")
         }
-        state.flushAudit(within: 1)
+    }
+
+    /// A change while the door is closed (Revoke, Revoke All, Edit…, Turn Off and Revoke All): a door state of its
+    /// own on the grants file and the saved hostname, carrying what the last state left, the change saved, and its
+    /// audit lines written before it returns (`flush` seconds at most). What it leaves goes on to the next state,
+    /// so a save that failed holds in memory and is tried again by the next change, the next start and quit.
+    func withClosedDoor(flush: TimeInterval = 1, _ body: (RemoteAccessDoorState) throws -> Void) throws {
+        let state = RemoteAccessDoorState(folder: folder, host: settings.host, auditQueue: Self.auditQueue,
+                                          carrying: carried)
+        defer {
+            carried = state.carried()
+            state.flushAudit(within: flush)
+        }
+        try body(state)
+        try state.saveOnQuit()
+    }
+
+    /// At quit with the door closed: grants whose save failed are written now, so a revoke holds after the
+    /// relaunch.
+    private func saveCarried() {
+        guard carried?.unsaved != nil else { return }
+        do {
+            try withClosedDoor(flush: 0.5) { _ in }
+        } catch {
+            NSLog("Next Term: Remote access could not save its grants: %@", "\(error)")
+        }
     }
 
     /// The authority's events: a reused key cuts its grant and the Mac is told (R16). Pairing never alerts (R14).
@@ -445,20 +493,32 @@ final class RemoteAccess {
     }
 
     /// A tunnel line in the audit log (R39): through the open door's state, or, with the door closed (Set Up Caddy
-    /// while Remote access is off), straight to the log, off the main thread, since each write flushes to the disk.
+    /// or a token saved while Remote access is off), on the audit queue, off the main thread, since each write
+    /// flushes to the disk.
     func auditTunnel(_ state: String, detail: String?) {
         if let doorState {
             doorState.audit([RemoteAccessAuditEntry.tunnel(state, detail: detail, time: doorState.now)])
             return
         }
-        let folder = self.folder
+        let closedLog = self.closedLog
         let entry = RemoteAccessAuditEntry.tunnel(state, detail: detail, time: Date())
-        DispatchQueue.global(qos: .utility).async {
-            var log = RemoteAccessAuditLog(folder: folder)
+        Self.auditQueue.async {
             do {
-                try log.append(entry, now: entry.time)
+                try closedLog.log.append(entry, now: entry.time)
             } catch {
                 NSLog("Next Term: Remote access could not write its audit log: %@", "\(error)")
+            }
+        }
+    }
+
+    /// At launch: entries older than 30 days go, and files past the fifth, while Remote access stays off (R39).
+    private func pruneAuditLog() {
+        let closedLog = self.closedLog
+        Self.auditQueue.async {
+            do {
+                try closedLog.log.prune(now: Date())
+            } catch {
+                NSLog("Next Term: Remote access could not prune its audit log: %@", "\(error)")
             }
         }
     }
@@ -552,7 +612,7 @@ final class RemoteAccess {
 
     /// A Mac notification, guarded as `AppDelegate.notificationCenter` is; in the self-test it goes to the list the
     /// self-test reads, never to Notification Center.
-    private func notify(title: String, body: String) {
+    func notify(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -565,6 +625,16 @@ final class RemoteAccess {
         }
         guard Bundle.main.bundleIdentifier != nil else { return }
         UNUserNotificationCenter.current().add(request)
+    }
+}
+
+/// The audit log as the app reads and writes it while the door is closed. Only `RemoteAccess.auditQueue` touches
+/// it, so its hourly 30-day prune runs once an hour, not on every read.
+final class RemoteAccessClosedLog: @unchecked Sendable { // `log` is used only on `RemoteAccess.auditQueue`
+    var log: RemoteAccessAuditLog
+
+    init(folder: URL) {
+        log = RemoteAccessAuditLog(folder: folder)
     }
 }
 

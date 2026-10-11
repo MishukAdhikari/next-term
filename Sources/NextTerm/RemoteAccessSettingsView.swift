@@ -168,8 +168,10 @@ final class RemoteAccessSettingsView: NSView {
         refresh()
     }
 
-    /// Every second: the pairing countdown; every 30, the connections' times.
+    /// Every second while the window shows: the pairing countdown; every 30, the connections' times. A closed
+    /// Settings window keeps its views, so the timer runs on, but does nothing.
     private func tick() {
+        guard window?.isVisible == true else { return }
         refreshCountdown()
         ticks += 1
         if ticks % 30 == 0 { refreshConnections() }
@@ -670,7 +672,10 @@ extension RemoteAccessSettingsView {
         }
         providerBox.isHidden = false
         let locked = access.isOn
-        let port = access.ensurePort().map(Int.init)
+        // Cloudflare's route and your own tunnel are pointed at the door's port by hand, so it is picked as their
+        // setup shows. Funnel and your own server get it at the first turn-on (R2): Next Term points them itself.
+        let pointedByHand = kind == .cloudflare || kind == .advanced
+        let port = (pointedByHand ? access.ensurePort() : access.settings.port).map(Int.init)
         providerTitle.stringValue = "\(kind.label) setup"
         trafficLabel.stringValue = kind.traffic
         refreshTool(kind)
@@ -752,7 +757,7 @@ extension RemoteAccessSettingsView {
         saveTokenButton.isEnabled = !locked && !tokenBusy
         removeTokenButton.isEnabled = !locked && !tokenBusy
         tokenMessage.isHidden = tokenMessage.stringValue.isEmpty
-        checklistLabel.stringValue = Text.cloudflareChecklist(port: port ?? 0).map { "• \($0)" }
+        checklistLabel.stringValue = Text.cloudflareChecklist(port: port).map { "• \($0)" }
             .joined(separator: "\n")
     }
 
@@ -1072,17 +1077,19 @@ private final class RemoteAccessFlippedView: NSView {
 // MARK: - the controller's entries for Settings and the status item (U11)
 
 extension RemoteAccess {
-    /// Kept by a closed door's reads and clears of the audit log, one at a time.
-    private static let closedLog = DispatchQueue(label: "nextterm.remote-access.activity", qos: .utility)
-
-    static let notSaved = "The connection ended, but Next Term could not save that yet. It tries again, and at quit."
+    static let notSaved = "The connection ended, but Next Term could not save that yet. It tries again, and at quit; "
+        + "until it can, the connection would work again after Next Term restarts."
+    static let allNotSaved = "Every connection ended, but Next Term could not save that yet. It tries again, and at "
+        + "quit; until it can, they would work again after Next Term restarts."
     static let connectionEnded = "That connection ended, so there is nothing to change."
 
     /// The connections as they are now: the open door's, or, with the door closed, the grants file's under the
-    /// saved hostname. The file is only read, never moved aside or written, so looking changes nothing.
+    /// saved hostname, or the last state's when their save failed. The file is only read, never moved aside or
+    /// written, so looking changes nothing.
     func connectionRows(now: Date = Date()) -> [RemoteAccessConnectionRow] {
         if let doorState { return RemoteAccessConnectionRow.rows(doorState.grants, host: doorState.host, now: now) }
-        return RemoteAccessConnectionRow.rows(savedGrants(), host: settings.host, now: now)
+        let grants = carried?.unsaved?.grants ?? savedGrants()
+        return RemoteAccessConnectionRow.rows(grants, host: settings.host, now: now)
     }
 
     private func savedGrants() -> [RemoteAccessOAuth.Grant] {
@@ -1096,17 +1103,19 @@ extension RemoteAccess {
         connectionRows().first { $0.id == grantID }?.options
     }
 
-    /// What the status item shows.
+    /// What the status item shows: the calls of the last hour, across starts too.
     func statusItemModel() -> RemoteAccessStatusItemModel {
         let rows = status.isOn ? connectionRows() : []
-        return RemoteAccessStatusItemModel(status: status, rows: rows, calls: doorState?.callsInLastHour ?? 0)
+        let calls = doorState?.callsInLastHour ?? carried?.callCount.count(at: Date()) ?? 0
+        return RemoteAccessStatusItemModel(status: status, rows: rows, calls: calls)
     }
 
     /// The saved token's tunnel id, all Settings shows of it.
     var savedTunnelID: String? { tokens.tunnelID }
 
     /// Revoke, on a connection's row or in the status item: it ends now, and its open calls are answered (R38).
-    /// With the door closed, the grants file's own ends. Why it could not be saved, or nil.
+    /// With the door closed, the grants file's own ends. Why it could not be saved, or nil: it holds all the same
+    /// while Next Term runs, and the save is tried again (`withClosedDoor`).
     @discardableResult
     func revoke(_ grantID: String) -> String? {
         defer { told() }
@@ -1134,7 +1143,7 @@ extension RemoteAccess {
             }
             return nil
         } catch {
-            return "Every connection ended, but Next Term could not save that yet. It tries again, and at quit."
+            return Self.allNotSaved
         }
     }
 
@@ -1153,16 +1162,6 @@ extension RemoteAccess {
         } catch {
             return "Next Term could not save the new options, so nothing changed. Try again."
         }
-    }
-
-    /// A change while the door is closed: a door state of its own on the grants file and the saved hostname, the
-    /// change saved, and its audit lines written before it returns. With no hostname saved there is no grant to
-    /// change, but Revoke All still ends what the file holds.
-    private func withClosedDoor(_ body: (RemoteAccessDoorState) throws -> Void) throws {
-        let state = RemoteAccessDoorState(folder: folder, host: settings.host)
-        defer { state.flushAudit(within: 1) }
-        try body(state)
-        try state.saveOnQuit()
     }
 
     /// The pasted token: checked for shape first, so a bad one is never saved (R30); then written to the Keychain
@@ -1212,9 +1211,10 @@ extension RemoteAccess {
         }
     }
 
-    /// The door's port, for the local address before the first turn-on: the saved one, or one picked now from
-    /// 40000 to 48999 and saved, as the first turn-on would pick it (R2), so the tunnel can be pointed at it before
-    /// Remote access is on. It never changes by itself after that. Nil when none is free.
+    /// The door's port, for the local address before the first turn-on of a tunnel the user points at it by hand
+    /// (Cloudflare's route, Advanced): the saved one, or one picked now from 40000 to 48999 and saved, as the first
+    /// turn-on would pick it (R2), so the tunnel can be pointed at it before Remote access is on. It never changes
+    /// by itself after that. Nil when none is free.
     func ensurePort() -> UInt16? {
         if let port = settings.port { return port }
         guard let choice = RemoteAccessPort.choose(saved: nil, isFree: Self.isFree) else { return nil }
@@ -1233,17 +1233,16 @@ extension RemoteAccess {
     /// The audit log's file, for Show in Finder.
     var auditFile: URL { folder.appendingPathComponent(RemoteAccessAuditRetention.fileName(0)) }
 
-    /// The activity view's read: the last 500 entries, oldest first, on the open door's audit queue or, with the
-    /// door closed, on a queue of its own. `done` gets them on the main thread.
+    /// The activity view's read: the last 500 entries, oldest first, on the audit queue, after the open door's
+    /// lines or the closed door's. `done` gets them on the main thread.
     func readActivity(done: @escaping @MainActor ([RemoteAccessAuditEntry]) -> Void) {
         let deliver: @Sendable ([RemoteAccessAuditEntry]) -> Void = { entries in
             DispatchQueue.main.async { MainActor.assumeIsolated { done(entries) } }
         }
         if let doorState { return doorState.readAudit(done: deliver) }
-        let folder = self.folder
-        Self.closedLog.async {
-            var log = RemoteAccessAuditLog(folder: folder)
-            deliver(log.tail(now: Date()))
+        let closedLog = self.closedLog
+        Self.auditQueue.async {
+            deliver(closedLog.log.tail(now: Date()))
         }
     }
 
@@ -1254,10 +1253,10 @@ extension RemoteAccess {
             DispatchQueue.main.async { MainActor.assumeIsolated { done(problem) } }
         }
         if let doorState { return doorState.clearAudit(done: deliver) }
-        let folder = self.folder
-        Self.closedLog.async {
+        let closedLog = self.closedLog
+        Self.auditQueue.async {
             do {
-                try RemoteAccessAuditLog(folder: folder).clear()
+                try closedLog.log.clear()
                 deliver(nil)
             } catch {
                 deliver(error)
