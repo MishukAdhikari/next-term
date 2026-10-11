@@ -667,17 +667,11 @@ public enum RemoteAccessAuditMask {
     static let remoteToken = try! NSRegularExpression(
         pattern: #"nt(?:at|rt)(?:_|%5f)(?:[a-z0-9_\-]|%[0-9a-f]{2})+"#, options: [.caseInsensitive])
 
-    /// The text with secrets masked. The door's tokens go first, so no pattern of `MCPRedaction` can split one
-    /// and leave part of it. When a pattern could not read the whole text, the text goes whole.
+    /// The text with secrets masked as the door masks a result (`RemoteAccessPolicy.mask`). The door's tokens go
+    /// first, so no pattern of `MCPRedaction` can split one and leave part of it. When a pattern could not read the
+    /// whole text, the text goes as one mask.
     public static func whole(_ text: String) -> String {
-        var masked = text
-        var complete = true
-        _ = MCPRedaction.replace(remoteToken, in: &masked, complete: &complete) { _, _ in MCPRedaction.mask }
-        let redacted = MCPRedaction.redact(masked, maskingRun: { (run: String) -> String? in
-            MCPRedaction.looksRandom(run) ? MCPRedaction.mask : nil
-        })
-        guard complete, redacted.complete else { return MCPRedaction.mask }
-        return redacted.text
+        RemoteAccessPolicy.mask(text).text
     }
 
     /// Masked, cut to `argumentLength`, and on one line (see `visible`).
