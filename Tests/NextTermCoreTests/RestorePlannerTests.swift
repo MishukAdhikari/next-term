@@ -682,6 +682,19 @@ import Testing
         }
     }
 
+    /// Aider's note names the permission options it ran with (R7), from argv's options or, without them, the typed line's.
+    @Test func aidersNoteNamesThePermissionOptionsItRanWith() {
+        let note = "Aider was running. Start it with --restore-chat-history --yes-always to reload the chat."
+        let fromArgv = Evidence(agent: .aider, startedAt: start, options: [.init(["--yes-always"]), .init(["--model", "sonnet"])])
+        let fromTyped = Evidence(agent: .aider, startedAt: start, confirmed: [.init(["--yes-always"])])
+        for evidence in [fromArgv, fromTyped] {
+            let result = plan(pane(1, typed("aider --yes-always --model sonnet"), agent: evidence), world: world())
+            #expect(result.outcome == .agentHint && result.line == nil && result.pending.action == .note)
+            #expect(text(result) == note)
+            #expect(!text(result).contains("--model"))
+        }
+    }
+
     @Test func anAgentInAShellWithoutTheIntegrationGetsANoteWithItsResumeCommand() {
         let (evidence, facts) = exactClaude()
         let bash = pane(1, typed("claude", source: .polled), agent: evidence, systemZsh: false)

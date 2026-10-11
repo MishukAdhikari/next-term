@@ -448,7 +448,7 @@ public enum RestorePlanner {
         var folder: String?
         /// The options an agent's line leaves off, by name: the table can't tell their value from a prompt word.
         var leftOff: [String] = []
-        /// The permission options an automatic resume carries, each as its words.
+        /// The permission options an automatic resume carries, or that Aider's note names, each as its words.
         var permissions: [String] = []
     }
 
@@ -471,7 +471,12 @@ public enum RestorePlanner {
     private static func decide(agent evidence: SessionSnapshot.Evidence, _ input: PaneInput, integrated: Bool) -> Decision {
         // The user's launch with the resume form (KTD7): the launcher replayed, or the program and argv's options.
         guard let putBack = evidence.putBack(id: input.session?.id, folder: evidence.sessionFolder) else {
-            return Decision(outcome: .agentHint)
+            // Aider's note names the permission options it ran with (R7): argv's, or the typed line's without them.
+            let cli = evidence.agent.cli
+            let named = (evidence.options ?? evidence.confirmed)
+                .filter { cli.options[$0.name]?.kind == .permission }
+                .map { $0.words.joined(separator: " ") }
+            return Decision(outcome: .agentHint, permissions: named)
         }
         let line = putBack.line
         // The note names the session the line names, and none when the line has no id.
@@ -722,7 +727,8 @@ public struct RestoreNote: Equatable, Sendable {
     public var session: NamedSession?
     /// The options the line leaves off, by name only: the table can't tell their value from a prompt word.
     public var leftOff: [String] = []
-    /// The permission options an automatic resume carried, each as its words: named, so a bypass is never silent (R5).
+    /// The permission options an automatic resume carried, or that Aider's note names, each as its words: named, so a
+    /// bypass is never silent (R5, R7).
     public var permissions: [String] = []
     /// The restart cut the agent's turn off.
     public var interrupted = false
@@ -880,7 +886,9 @@ public struct RestoreNote: Equatable, Sendable {
         case .agentHint:
             switch agent {
             case .agy?: return ["agy was running. Type /resume in agy to reopen the conversation."]
-            case .aider?: return ["Aider was running. Start it with --restore-chat-history to reload the chat."]
+            case .aider?:
+                let with = permissions.isEmpty ? "" : " " + permissions.joined(separator: " ")
+                return ["Aider was running. Start it with --restore-chat-history\(with) to reload the chat."]
             default: return ["An agent was running. Next Term does not know how to resume it."]
             }
         case .commandNote:
