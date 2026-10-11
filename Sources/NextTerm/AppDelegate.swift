@@ -1601,6 +1601,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(git, "Git Diff", #selector(TerminalWindowController.showGitDiff(_:)), "g", [.command, .control])
         item(git, "Git Commands", #selector(TerminalWindowController.showGitCommands(_:)), "")
 
+        // Settings › Notifications, in the menu bar: each choice with its checkmark.
+        MainActor.assumeIsolated { NotificationsMenu.shared.fill(submenu(main, "Notifications")) }
+
         let window = submenu(main, "Window")
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
         window.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")

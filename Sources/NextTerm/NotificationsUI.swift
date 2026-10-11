@@ -88,6 +88,8 @@ final class NotificationSettingsView: NSView {
         refresh()
         // Back from System Settings, the permission may have changed.
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive), name: NSApplication.didBecomeActiveNotification, object: nil)
+        // A choice made in the Notifications menu, or by an agent over MCP (settings_set).
+        NotificationCenter.default.addObserver(self, selector: #selector(choicesChanged), name: NotificationsMenu.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -99,7 +101,14 @@ final class NotificationSettingsView: NSView {
 
     @objc private func appBecameActive() { refreshPermission() }
 
+    @objc private func choicesChanged() { refreshChoices() }
+
     func refresh() {
+        refreshChoices()
+        refreshPermission()
+    }
+
+    private func refreshChoices() {
         let settings = NotificationSettings(defaults: .standard)
         decisions.state = settings.decisions ? .on : .off
         agentFinished.state = settings.agentFinished ? .on : .off
@@ -107,7 +116,6 @@ final class NotificationSettingsView: NSView {
         sound.state = settings.sound ? .on : .off
         commands.selectItem(at: CommandNotifications.allCases.firstIndex(of: settings.commands) ?? 0)
         threshold.selectItem(at: WorkThreshold.allCases.firstIndex(of: settings.threshold) ?? 0)
-        refreshPermission()
     }
 
     private func refreshPermission() {

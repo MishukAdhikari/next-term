@@ -67,10 +67,14 @@ extension SelfTest {
         let askedNew = await wait(10) { sheetText().contains("so it goes to the Trash") }
         check(askedNew, "rollback: a new file's question says it goes to the Trash", sheetText())
         if askedNew { _ = await press("Roll Back") }
-        let trashed = await wait(10) { !fm.fileExists(atPath: repo.appendingPathComponent("new.txt").path) }
-        check(trashed, "rollback: the new file is gone from the project")
+        // The Trash comes first, before git: the notice with Undo once git is done too.
+        let trashed = await wait(10) { !fm.fileExists(atPath: repo.appendingPathComponent("new.txt").path) && GitToast.text == "Rolled back new.txt" }
+        check(trashed, "rollback: the new file is gone from the project, and the notice says so", GitToast.text ?? "no notice")
         GitToast.pressButtonForTest()
-        check(await wait(10) { read("new.txt") == "new\n" }, "rollback: Undo takes the new file back out of the Trash")
+        // The file first, then git's index: done once the notice says so (a git command of this test's own before then
+        // would find the index locked).
+        check(await wait(10) { read("new.txt") == "new\n" && GitToast.text == "Undone: the changes are back" }, "rollback: Undo takes the new file back out of the Trash",
+              GitToast.text ?? "no notice")
         GitToast.dismiss()
 
         // A file where a deleted folder was: the folder's file can't come back through it, so it's refused, and the

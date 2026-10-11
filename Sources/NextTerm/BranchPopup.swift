@@ -131,8 +131,10 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     private(set) var isReading = false
     /// Counts the popup's openings: only the read the latest one started ends `isReading`.
     private var openings = 0
-    /// Git › Worktrees…: the first worktree's row is selected once the rows are read.
+    /// Git › Worktrees…: the first worktree's row is selected as the rows are drawn, until the latest read of the
+    /// branches is in (one started earlier may not have the worktrees yet).
     var focusWorktrees = false
+    private var reads = 0
     /// The last read came back with nothing: not a repository any more, or git failed.
     private var readFailed = false
     /// Tag names, newest first, read on the first search of an opening (nil until then).
@@ -235,6 +237,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
     func reload(then done: (() -> Void)? = nil) {
         guard let git = GitWriter.git else { return }
         let directory = self.directory
+        reads += 1
+        let read = reads
         Self.readQueue.async { [weak self] in
             let fresh = BranchModel.read(at: directory, git: git)
             DispatchQueue.main.async {
@@ -245,7 +249,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
                 self.model = fresh
                 self.readFailed = fresh == nil
                 if self.panel.isVisible { self.rebuild() }
-                done?()
+                done?() // as the popup opens, this draws the rows read (`isReading` is still on above)
+                if read == self.reads { self.focusWorktrees = false } // the latest read: there are worktrees to go to, or none
             }
         }
     }
@@ -256,8 +261,8 @@ final class BranchPopupController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let previous = selectedItemKey
         items = field.stringValue.trimmingCharacters(in: .whitespaces).isEmpty ? browseItems() : searchItems(field.stringValue)
         table.reloadData()
+        // Git › Worktrees…: the first worktree, from the rows drawn before the read too (cleared once read: `reload`).
         let worktree = focusWorktrees ? items.firstIndex { if case .worktree = $0 { return true } else { return false } } : nil
-        if model != nil { focusWorktrees = false } // once read: there are worktrees to go to, or none
         let index = worktree ?? items.firstIndex { key(of: $0) == previous && previous != nil } ?? items.firstIndex { $0.isSelectable }
         if let index {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)

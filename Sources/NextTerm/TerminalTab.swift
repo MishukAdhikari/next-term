@@ -832,9 +832,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         gitOutputStart = nil
         guard code != 0, remote == nil, let last = lastTextRow(), last >= start else { return }
         let terminal = view.getTerminal()
-        let text = (max(start, last - 60)...last).compactMap { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) }
-            .joined(separator: "\n")
-        guard let held = GitOutput.heldBranch(text) else { return }
+        // A line the terminal wrapped is one line again: git's message names a long path.
+        var lines: [String] = []
+        for row in max(start, last - 60)...last {
+            guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
+            let text = line.translateToString(trimRight: true)
+            if line.isWrapped, !lines.isEmpty { lines[lines.count - 1] += text } else { lines.append(text) }
+        }
+        guard let held = GitOutput.heldBranch(lines.joined(separator: "\n")) else { return }
         AppDelegate.shared.controllers.first { $0.tabs.contains { $0 === self } }?.noticeHeldBranch(held.branch, at: held.path, from: directory)
     }
 
