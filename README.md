@@ -143,7 +143,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   update, or after a quit, your windows, tabs, splits and scrollback come back, Claude Code, Codex and Qwen
   Code resume their conversations as you started them, and other agents' resume commands wait on the
   line for Return.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 23 MB to download, 50 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 23 MB to download, 51 MB
   installed. macOS 13 or later.
 
 ## Install
