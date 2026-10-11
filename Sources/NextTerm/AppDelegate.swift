@@ -1539,7 +1539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "a", [.command, .shift, .control], target: self)
         item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "l", [.command, .shift, .control], target: self)
         view.addItem(.separator())
-        item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
+        // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
+        item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
