@@ -51,9 +51,10 @@ def escape(text):
         out += bytes([byte]) if 0x21 <= byte <= 0x7E and byte not in b"\\;" else b"\\x%02x" % byte
     return out
 
-# The pause after each thing sent is for zsh's output to come: a CI runner, slower and busier, gets twice as long
-# (ZSH_TEST_SLOW sets it). Only ever longer: an answer meant to come late still comes late.
-SLOW = float(os.environ.get("ZSH_TEST_SLOW", "2" if os.environ.get("CI") else "1"))
+# The pause after each thing sent is for zsh's output to come: ZSH_TEST_SLOW lengthens them all (2 for twice as
+# long). Only ever longer: an answer meant to come late still comes late. Twice as long on CI didn't steady its
+# engine checks (2026-10-12), so CI retries the run instead and keeps this at 1.
+SLOW = float(os.environ.get("ZSH_TEST_SLOW", "1"))
 
 def frame(kind, ident, fields=()):
     payload = b";".join(escape(f) for f in fields)
