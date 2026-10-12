@@ -6,7 +6,8 @@ extension SelfTest {
     /// What the import sheet says when a move or a scan doesn't go as planned, on the fixture home of
     /// `secretsImportChecks` (its files as they were, the token stored under GITHUB_TOKEN): a move that changes no file
     /// doesn't leave the sheet waiting for Touch ID (K4 problem 2); a file it couldn't check is listed, and the sheet
-    /// never says no keys were found (review finding 16, K4 problem 3).
+    /// never says no keys were found (review finding 16, K4 problem 3); closing it cancels its scan, and it plans off the
+    /// main thread (K4 problem 4).
     static func secretsImportReportChecks(view: SecretsView, home: URL, token: String, cursorText: String, codexText: String) async {
         let fm = FileManager.default
         let cursor = home.appendingPathComponent(".cursor/mcp.json")
@@ -17,6 +18,14 @@ extension SelfTest {
             try? codexText.write(to: codex, atomically: true, encoding: .utf8)
             try? fm.removeItem(at: gemini.deletingLastPathComponent())
         }
+
+        // Closed as it opens: its scan is cancelled, and the closed sheet shows nothing it found (K4 problem 4).
+        view.importKeys()
+        let closed = view.importSheet
+        closed?.closeSheet()
+        let shown = await wait(2) { closed?.scan != nil || closed?.groupRows.isEmpty == false }
+        check(closed != nil && !shown && view.importSheet == nil,
+              "secrets: closing the import sheet at once cancels its scan, which shows nothing")
 
         // The key ticked, then rotated in both files before Move: both are left, no Touch ID is asked, and the line above
         // the rows doesn't wait for one (K4 problem 2).
@@ -44,6 +53,8 @@ extension SelfTest {
               "secrets: a key rotated in its files after the scan is left in both, with no Touch ID and nothing saved", result)
         check(refused.statusLabel.isHidden && refused.statusLabel.stringValue != SecretImportSheet.touchIDLine,
               "secrets: after a move that changed no file, the sheet doesn't wait for Touch ID", refused.statusLabel.stringValue)
+        check(refused.plannedOnMainThread == false, "secrets: the import plans off the main thread (it reads every file again)",
+              "\(String(describing: refused.plannedOnMainThread))")
         refused.closeSheet()
         _ = await wait(5) { view.importSheet == nil }
 

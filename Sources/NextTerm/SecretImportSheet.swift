@@ -70,6 +70,10 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     private(set) var isBusy = false
     /// The scan under way: cancelled when the sheet closes or scans again, so it stops between files.
     private var scanTask: Task<Void, Never>?
+    #if DEBUG
+    /// Whether the last plan ran on the main thread, for the self-test: it reads every file again, so it never should.
+    private(set) var plannedOnMainThread: Bool?
+    #endif
 
     init(_ setup: Setup, done: @escaping () -> Void) {
         self.setup = setup
@@ -160,8 +164,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         scanTask = Task.detached {
             let sources = SecretImport.sources(home: setup.home, projects: setup.projects)
             let found = SecretImport.scan(sources, inGitWorkTree: Self.isInGitWorkTree, isOpen: { setup.running.contains($0) })
-            guard !Task.isCancelled else { return }
-            await MainActor.run { self.show(found) }
+            // Checked again on the main actor, where `closeSheet` cancels: a scan that ended as the sheet closed shows nothing.
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                self.show(found)
+            }
         }
     }
 
@@ -348,7 +355,13 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         setBusy(true, Self.readingLine)
         let setup = setup
         Task { @MainActor in
-            let planned = await Task.detached { SecretImport.plan(moves, nxtrm: nxtrm) }.value
+            let planned = await Task.detached { () -> (edits: [SecretImport.FileEdit], failures: [SecretImport.PlanFailure], onMain: Bool) in
+                let plan = SecretImport.plan(moves, nxtrm: nxtrm)
+                return (plan.edits, plan.failures, pthread_main_np() != 0)
+            }.value
+            #if DEBUG
+            self.plannedOnMainThread = planned.onMain
+            #endif
             for failure in planned.failures { self.results[failure.path] = .skipped(failure.reason) }
             var edits = planned.edits
             guard !edits.isEmpty else {

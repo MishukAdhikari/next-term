@@ -1578,7 +1578,9 @@ extension SelfTest {
         SecretsView.importSetup = { setup }
         view.importKeys()
         let unplaced = view.importSheet
-        check(unplaced?.headerLabel.stringValue == SecretImportSheet.placeRefusal && unplaced?.groupRows.isEmpty == true
+        // The scan runs off the main thread: long enough for one to have shown its rows, had it started.
+        let scanned = await wait(2) { unplaced?.scan != nil || unplaced?.groupRows.isEmpty == false }
+        check(unplaced?.headerLabel.stringValue == SecretImportSheet.placeRefusal && unplaced?.groupRows.isEmpty == true && !scanned
               && unplaced?.moveButton.isEnabled == false && read(cursor) == cursorText,
               "secrets: from a copy whose path won't last, the import says to move Next Term to Applications and moves nothing",
               unplaced?.headerLabel.stringValue ?? "no sheet")
