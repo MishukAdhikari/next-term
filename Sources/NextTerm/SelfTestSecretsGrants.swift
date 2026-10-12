@@ -33,8 +33,43 @@ extension SelfTest {
         let toolAnswer = SecretsMCP.answer(for: .usedAlready, tool: "run_with_secrets")
         check(toolAnswer["status"] as? String == "refused", "secrets: the call whose Allow once was used already hears nothing ran",
               secretsJSON(toolAnswer))
+        await secretsLeftCallerChecks()
         await secretsGrantEndChecks(store)
         _ = try? await store.perform(.delete(name: "PANEL_KEY"))
+    }
+
+    /// A wrapper that left in the moment before "Allow once", its leaving not yet passed on by the socket's poll, does
+    /// not take the one use: the identical wrapper still waiting gets the keys, and with none waiting, the one-use grant
+    /// is made, as when it leaves during Touch ID.
+    static func secretsLeftCallerChecks() async {
+        let requests = SecretRequests.shared
+        requests.resetForSelfTest()
+        let leftAnswers = SecretsAnswers()
+        let waitingAnswers = SecretsAnswers()
+        let gone = secretsRequest(asker: "wrapper:selftest-left", command: ["node", "left.js"], tab: "tab 3")
+        let waiting = secretsRequest(asker: "wrapper:selftest-left", command: ["node", "left.js"], tab: "tab 3")
+        requests.ask(gone, left: { true }) { leftAnswers.take($0) }
+        let tookOver = requests.ask(waiting) { waitingAnswers.take($0) }?.request === gone
+        gone.panel?.durationChoice[.once]?.performClick(nil)
+        gone.panel?.allowButton.performClick(nil)
+        _ = await wait(10) { !waitingAnswers.all.isEmpty }
+        check(tookOver && secretsAllowed(waitingAnswers.last)?.how == .once && leftAnswers.all.isEmpty && requests.book.grants.isEmpty,
+              "secrets: Allow once passes over a wrapper that left the moment before, to the identical one still waiting",
+              "took over \(tookOver), \(leftAnswers.all.count)/\(waitingAnswers.all.count) answers, \(requests.book.grants.count) grants")
+
+        let lone = secretsRequest(asker: "wrapper:selftest-lone", command: ["node", "lone.js"], tab: "tab 3")
+        let loneAnswers = SecretsAnswers()
+        requests.ask(lone, left: { true }) { loneAnswers.take($0) }
+        let lonePanel = lone.panel
+        lonePanel?.durationChoice[.once]?.performClick(nil)
+        lonePanel?.allowButton.performClick(nil)
+        let oneUse = await wait(10) { requests.book.grants.contains { $0.kind == .oneUse && $0.binding == lone.binding } }
+        let lingers = lonePanel?.window.map { $0.isVisible && texts($0.contentView).contains(SecretApprovalPanel.stoppedDuringApprovalText) }
+        check(oneUse && lingers == true && loneAnswers.all.isEmpty,
+              "secrets: a lone wrapper that left the moment before Allow once gets the one-use approval, and its panel says so",
+              "one use \(oneUse), lingers \(String(describing: lingers)), \(loneAnswers.all.count) answers")
+        lonePanel?.close()
+        requests.resetForSelfTest()
     }
 
     /// A grant's values go the moment it ends on its own or is used, with no request after it (review finding 9).

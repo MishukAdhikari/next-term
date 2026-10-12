@@ -10,7 +10,7 @@ import NextTermCore
 ///   paused for 10 minutes, a reached count.
 /// - An identical request (the same binding as one waiting, or as a pending card) takes over that panel or card. It
 ///   does not count and does not queue. Otherwise up to 5 wait, and more get `busy`. "Allow once" there still starts one
-///   command: the first caller uses it, and the others hear it was used already.
+///   command: the first caller still waiting uses it, and the others hear it was used already.
 /// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes" and
 ///   "Allow this command until the Mac locks" keep copies of exactly those keys' values in a grant.
 /// - Grants end on a lock, a sleep, the session resigning, Revoke, a key's change, the hour pause, and for
@@ -129,7 +129,7 @@ final class SecretRequests {
         fileprivate(set) var gone = false
         fileprivate var goneAt: ContinuousClock.Instant?
         /// Who waits for the answer: its own caller, and each identical request that took it over.
-        fileprivate var replies: [(id: UUID, reply: (Decision) -> Void)] = []
+        fileprivate var replies: [Caller] = []
         fileprivate(set) var panel: SecretApprovalPanel?
         /// request_secret's window, in place of the panel.
         fileprivate(set) var requestWindow: SecretRequestWindow?
@@ -158,6 +158,10 @@ final class SecretRequests {
             return false
         }
     }
+
+    /// One caller waiting on a request: its reply, and whether it has left as of now, though its leaving may not have
+    /// reached here yet (a wrapper's closed connection).
+    fileprivate typealias Caller = (id: UUID, reply: (Decision) -> Void, left: () -> Bool)
 
     /// Where a caller's reply waits: the request that holds it (its own, or the one it took over) and the reply's id.
     /// A caller that leaves takes only its own reply away.
@@ -201,9 +205,10 @@ final class SecretRequests {
     // MARK: asking
 
     /// Answers `request` from a grant, refuses it, lets it take over an identical one, or queues it for the panel.
-    /// Returns where its reply waits, or nil when it was answered at once.
+    /// Returns where its reply waits, or nil when it was answered at once. `left` tells whether its caller has gone, as
+    /// of now, before its leaving reaches here.
     @discardableResult
-    func ask(_ request: Request, reply: @escaping (Decision) -> Void) -> Waiting? {
+    func ask(_ request: Request, left: @escaping () -> Bool = { false }, reply: @escaping (Decision) -> Void) -> Waiting? {
         let now = now()
         expire(at: now)
         if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
@@ -223,7 +228,7 @@ final class SecretRequests {
         let id = UUID()
         if let waiting = queue.first(where: { $0.binding == request.binding && !$0.isAnswered }) {
             limits.record(.tookOver, asker: request.asker, binding: request.binding, at: now)
-            waiting.replies.append((id, reply))
+            waiting.replies.append((id, reply, left))
             if waiting.gone {
                 waiting.gone = false
                 waiting.goneAt = nil
@@ -236,7 +241,7 @@ final class SecretRequests {
             reply(.refused(.busy))
             return nil
         }
-        request.replies = [(id, reply)]
+        request.replies = [(id, reply, left)]
         queue.append(request)
         let drop = Self.dropAfter
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.seconds(drop)) { [weak request] in
@@ -375,6 +380,10 @@ final class SecretRequests {
     }
 
     private func allowed(_ request: Request, how: How, values: [String: SecretBytes]) {
+        // "Allow once" goes to one caller. One that left in the moment before, its leaving not heard here yet, is let go
+        // now as its leaving would have been: the use passes to the next caller, or a wrapper's one-use grant is made.
+        if how == .once { letGo(callersLeftOf: request) }
+        guard !request.isAnswered else { return }
         let now = now()
         var kind = how.grantKind
         // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
@@ -505,7 +514,7 @@ final class SecretRequests {
 
     /// Answers each caller waiting on one request, in turn. An Allow is used as `SecretApprovalUse` says: "Allow once"
     /// by the first caller alone, here, before any command starts; each later caller hears it was used already.
-    private func answer(_ replies: [(id: UUID, reply: (Decision) -> Void)], with decision: Decision, for request: Request) {
+    private func answer(_ replies: [Caller], with decision: Decision, for request: Request) {
         guard case .allowed(_, let how) = decision else {
             for waiting in replies { waiting.reply(decision) }
             return
@@ -518,6 +527,14 @@ final class SecretRequests {
                 audit(.refused, request, approval: how, outcome: "its Allow once was used by an identical request")
                 waiting.reply(.usedAlready)
             }
+        }
+    }
+
+    /// Callers gone though their leaving has not reached here yet, let go as `wrapperLeft` and `callerLeft` do.
+    private func letGo(callersLeftOf request: Request) {
+        for caller in request.replies where caller.left() {
+            let gone = Waiting(request: request, reply: caller.id)
+            if request.isWrapper { wrapperLeft(gone) } else { callerLeft(gone) }
         }
     }
 
@@ -642,7 +659,7 @@ final class SecretRequests {
     /// panel shows the tab's real environment before Allow, and a grant checks it too. Returns where its reply waits,
     /// for the socket to notice the wrapper leaving.
     @discardableResult
-    func redeem(ticket id: String, peerTab: TerminalTab?, request: SecretRun.Request,
+    func redeem(ticket id: String, peerTab: TerminalTab?, request: SecretRun.Request, left: @escaping () -> Bool = { false },
                 reply: @escaping (SecretRun.Answer) -> Void) -> Waiting? {
         let now = now()
         guard let ticket = tickets[id], !ticket.used, let typedAt = ticket.typedAt, now - typedAt <= Self.ticketWindow else {
@@ -674,7 +691,7 @@ final class SecretRequests {
         let folder = ticket.folder
         let decided = ticket.decided
         ticket.decided = nil
-        return ask(asking) { decision in
+        return ask(asking, left: left) { decision in
             reply(SecretSocket.answer(for: decision, request: asked, argv: argv, directory: folder))
             decided?(decision)
         }

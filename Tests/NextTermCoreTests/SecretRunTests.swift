@@ -256,6 +256,18 @@ import Testing
         }
     }
 
+    /// The app sees a wrapper that left the moment it asks, reading nothing and never waiting: "Allow once" then passes
+    /// to an identical wrapper still waiting, not to one whose end is closed.
+    @Test func aWrapperThatLeftIsSeenAtOnce() throws {
+        let ends = try pair()
+        defer { close(ends.app) }
+        #expect(!SecretRun.peerLeft(ends.app))
+        close(ends.wrapper)
+        let started = Date()
+        #expect(SecretRun.peerLeft(ends.app))
+        #expect(Date().timeIntervalSince(started) < 1)
+    }
+
     /// More than the limit and no newline is no answer the app writes.
     @Test func aLineOverTheLimitIsTooLong() throws {
         let ends = try pair()

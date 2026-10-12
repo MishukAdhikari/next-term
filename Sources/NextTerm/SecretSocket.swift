@@ -14,7 +14,8 @@ import NextTermCore
 /// - **The asker.** The tab is the one whose shell is above the wrapper; the agent, the first process above it that
 ///   classifies as one, going by its program's name.
 /// - **Waiting.** It loops on `poll` while `SecretRequests` decides. A readable socket with `recv(MSG_PEEK)` giving 0
-///   means the wrapper left: its request becomes a pending card.
+///   means the wrapper left: its request becomes a pending card. "Allow once" peeks too, as it goes out, so a wrapper
+///   that left in that moment does not take the one use from an identical wrapper still waiting.
 /// - **The answer** is written only to this connection, as its own line, never through `encodeAnswer`, and its
 ///   buffer is wiped after.
 enum SecretSocket {
@@ -47,7 +48,7 @@ enum SecretSocket {
         var warnings = request.warn.keys.sorted().map(SecretRun.warningText)
         warnings += SecretRun.warnings(argv: request.argv)
         warnings += SecretRun.envFileWarnings(directory: request.directory)
-        let waiter = Waiter()
+        let waiter = Waiter(fd: fd)
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 ask(request, pid: pid, full: full, agent: agent, envDigest: envDigest, warnings: warnings, waiter: waiter)
@@ -79,6 +80,28 @@ enum SecretSocket {
         private var answer: SecretRun.Answer?
         /// Where this wrapper's reply waits, set on the main thread once it is asked.
         private var waiting: SecretRequests.Waiting?
+        /// The connection, open until `wait` returns and says so here; it is peeked at only under the lock before that.
+        private let fd: Int32
+        private var waitEnded = false
+
+        init(fd: Int32) {
+            self.fd = fd
+        }
+
+        /// Whether the wrapper has left, as of now: its end closed, even before the serve thread's poll has passed that
+        /// on to the main thread. "Allow once" asks it, so a wrapper that left in that moment does not take the use.
+        var hasLeft: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return waitEnded || SecretRun.peerLeft(fd)
+        }
+
+        /// The serve thread stopped waiting: the connection closes after this, and is never peeked at again.
+        func waitEndedNow() {
+            lock.lock()
+            waitEnded = true
+            lock.unlock()
+        }
 
         func set(_ answer: SecretRun.Answer) {
             lock.lock()
@@ -121,7 +144,10 @@ enum SecretSocket {
         let tabs = AppDelegate.shared.controllers.flatMap(\.tabs)
         let tab = ClaudeIDEServer.tab(for: pid, among: tabs)
         if let ticket = request.ticket {
-            return waiter.asked(SecretRequests.shared.redeem(ticket: ticket, peerTab: tab, request: request) { waiter.set($0) })
+            let waiting = SecretRequests.shared.redeem(ticket: ticket, peerTab: tab, request: request, left: { waiter.hasLeft }) {
+                waiter.set($0)
+            }
+            return waiter.asked(waiting)
         }
         var facts = SecretRequests.AskedBy()
         facts.agent = agent?.name
@@ -143,7 +169,7 @@ enum SecretSocket {
         let program = ((request.argv.first ?? "") as NSString).lastPathComponent
         let asking = SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: request.argv, folder: request.directory,
                                             warnings: warnings, agentWords: nil, askedBy: facts, program: program, isRemote: false)
-        let waiting = SecretRequests.shared.ask(asking) { decision in
+        let waiting = SecretRequests.shared.ask(asking, left: { waiter.hasLeft }) { decision in
             waiter.set(answer(for: decision, request: request))
         }
         waiter.asked(waiting)
@@ -193,15 +219,14 @@ enum SecretSocket {
 
     /// Waits for the answer, watching for the wrapper leaving; writes the answer when it comes.
     private static func wait(on fd: Int32, for waiter: Waiter) {
+        defer { waiter.waitEndedNow() }
         var scratch = [UInt8](repeating: 0, count: 256)
         while true {
             if let answer = waiter.take() { return write(answer, to: fd) }
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             let ready = poll(&poller, 1, 1000)
             guard ready > 0 else { continue }
-            var byte: UInt8 = 0
-            let peeked = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
-            if peeked == 0 || (peeked < 0 && errno != EAGAIN && errno != EINTR) {
+            if SecretRun.peerLeft(fd) {
                 // The wrapper left: its reply goes. A wrapper's request becomes a pending card, a ticket's ends unanswered,
                 // unless an identical request that took it over still waits. Read on the main thread, after the ask
                 // queued there first, so a wrapper that leaves at once is not missed.

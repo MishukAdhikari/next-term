@@ -280,6 +280,14 @@ public enum SecretRun {
         return read
     }
 
+    /// Whether the wrapper at the far end of the app's `fd` has left, as of now: its end is closed (a read would give
+    /// 0) or the connection broke. It reads nothing and never waits.
+    public static func peerLeft(_ fd: Int32) -> Bool {
+        var byte: UInt8 = 0
+        let peeked = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+        return peeked == 0 || (peeked < 0 && errno != EAGAIN && errno != EINTR)
+    }
+
     // MARK: statuses
 
     /// The app's answers, by status.
