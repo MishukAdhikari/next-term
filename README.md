@@ -259,6 +259,12 @@ closes; tabs that don't fit go behind the » button.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
+- **Secrets** (Settings › Secrets, Window › Secrets) keeps API and MCP keys in a vault sealed on disk, with
+  the key that opens it guarded by the Secure Enclave (by the login keychain on a Mac without one). Agents
+  use a key by name, after Next Term's own panel shows who asks, which keys and the command, and you approve
+  with Touch ID or your password; no MCP tool returns a value. Stored keys are masked, best effort, in what agents read through Next Term. A command you
+  approve gets the key and can send it on, and Secrets can't stop malware already running as you. See
+  [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
   while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That
