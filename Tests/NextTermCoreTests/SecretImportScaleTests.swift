@@ -143,6 +143,24 @@ import Testing
         #expect(found.findings.filter { $0.source.path == home.file("proj/.cursor/mcp.json") }.count == 1_000)
     }
 
+    /// A file the scan can't read is reported with its reason, never passed over as if it were not there: one over the
+    /// 8 MB the import reads, and one this account can't open. A file that is not there, a folder and a link to nothing
+    /// are passed over.
+    @Test func aFileTooLargeOrClosedToTheScanIsReported() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        home.write(".cursor/mcp.json", String(repeating: " ", count: 8 * 1024 * 1024) + F.cursorJSON)
+        home.write(".codex/config.toml", F.codexTOML)
+        chmod(home.file(".codex/config.toml"), 0)
+        try FileManager.default.createDirectory(atPath: home.file(".gemini/settings.json"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: home.file(".qwen"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home.file(".qwen/settings.json"), withDestinationPath: home.file("nowhere.json"))
+        let found = SecretImport.scan(F.sources(home))
+        let reasons = Dictionary(found.unreadable.map { ($0.source.path, $0.reason) }, uniquingKeysWith: { first, _ in first })
+        #expect(reasons == [home.file(".cursor/mcp.json"): SecretImport.tooLargeReason, home.file(".codex/config.toml"): SecretImport.cantReadReason])
+        #expect(found.findings.isEmpty && found.read.isEmpty)
+    }
+
     /// The sheet cancels its scan when it closes: a cancelled scan reads no further file.
     @Test func aCancelledScanStopsBetweenFiles() async {
         let home = F.Home()

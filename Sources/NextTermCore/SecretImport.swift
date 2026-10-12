@@ -182,7 +182,7 @@ public enum SecretImport {
         public var findings: [Finding] = []
         /// Entries that already run `nxtrm secret run`: "uses Next Term's Secrets".
         public var wrapped: [(source: Source, location: Location)] = []
-        /// Files that could not be read as their format.
+        /// Files that are there but could not be read, or read as their format, or list more than the import shows.
         public var unreadable: [(source: Source, reason: String)] = []
         /// The files that were read.
         public var read: [Source] = []
@@ -201,11 +201,16 @@ public enum SecretImport {
         return text
     }
 
+    /// The largest file the import reads.
+    static let maxFileSize = 8 * 1024 * 1024
+    static let tooLargeReason = "it is larger than the 8 MB Next Term reads"
+    static let cantReadReason = "Next Term can't open it"
+
     /// Reads a plain file of at most 8 MB; nil for anything else (a link to nothing, a folder).
     public static func readFile(_ path: String) -> Data? {
         let real = canonicalPath(path)
         guard isRegularFile(real), let size = (try? FileManager.default.attributesOfItem(atPath: real))?[.size] as? Int,
-              size <= 8 * 1024 * 1024 else { return nil }
+              size <= maxFileSize else { return nil }
         return FileManager.default.contents(atPath: path)
     }
 
@@ -221,7 +226,11 @@ public enum SecretImport {
         var scan = Scan()
         for source in sources {
             if Task.isCancelled { break }
-            guard let data = read(source.path) else { continue }
+            guard let data = read(source.path) else {
+                // Reported, not passed over: "no keys found" would be a false all-clear.
+                if let reason = unreadReason(source.path) { scan.unreadable.append((source, reason)) }
+                continue
+            }
             guard let text = text(of: data) else {
                 scan.unreadable.append((source, "not UTF-8 text"))
                 continue
@@ -264,6 +273,15 @@ public enum SecretImport {
             }
         }
         return scan
+    }
+
+    /// Why a file the scan couldn't read is reported: a plain file over 8 MB, or one this account can't open. Nil for one
+    /// that is not there, a folder or a link to nothing, which the scan passes over.
+    static func unreadReason(_ path: String) -> String? {
+        let real = canonicalPath(path)
+        guard isRegularFile(real) else { return nil }
+        let size = (try? FileManager.default.attributesOfItem(atPath: real))?[.size] as? Int ?? 0
+        return size > maxFileSize ? tooLargeReason : cantReadReason
     }
 
     /// One server entry, as read: what it runs, what it holds, and where.

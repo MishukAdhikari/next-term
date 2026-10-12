@@ -1634,6 +1634,9 @@ extension SelfTest {
         _ = await wait(5) { store.recentBackups().isEmpty }
         check(store.recentBackups().isEmpty && store.index?.entry(named: "GITHUB_TOKEN") != nil,
               "secrets: the backups that went back are removed, and the key stays in Secrets")
+        #if DEBUG
+        await secretsImportReportChecks(view: view, home: home, token: token, cursorText: cursorText, codexText: codexText)
+        #endif
         _ = try? await store.perform(.delete(name: "GITHUB_TOKEN"))
     }
 }

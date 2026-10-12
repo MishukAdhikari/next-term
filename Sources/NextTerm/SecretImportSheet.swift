@@ -172,7 +172,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         statusLabel.isHidden = true
     }
 
-    /// The rows: one per group of identical values, unticked; then what can't move, and what uses Secrets already.
+    /// The rows: one per group of identical values, unticked; then what can't move, what uses Secrets already, and the
+    /// files that couldn't be checked.
     func show(_ found: SecretImport.Scan) {
         scan = found
         for view in rows.arrangedSubviews { view.removeFromSuperview() }
@@ -191,10 +192,27 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             listed.append(text)
             rows.addArrangedSubview(Self.small(text, color: .secondaryLabelColor))
         }
-        let movable = groups.count
-        statusLabel.stringValue = movable == 0 && listed.isEmpty ? "No keys in plain text were found."
-            : "\(movable) \(movable == 1 ? "key" : "keys") can move. Tick the ones to move."
+        let shown = listed.count
+        // Files there but not read: keys in them were not looked for, so the sheet never says none were found.
+        for (source, reason) in found.unreadable {
+            let text = "\(source.client.name), \(Self.file(source.path)): \(Self.notChecked) (\(reason))"
+            listed.append(text)
+            rows.addArrangedSubview(Self.warning(text))
+        }
+        statusLabel.stringValue = Self.status(movable: groups.count, listed: shown, unchecked: found.unreadable.count)
         refreshMove()
+    }
+
+    static let noKeysLine = "No keys in plain text were found."
+    static let notChecked = "not checked"
+
+    /// The line above the rows: what can move, and how many files were not checked.
+    static func status(movable: Int, listed: Int, unchecked: Int) -> String {
+        var text = "\(movable) \(movable == 1 ? "key" : "keys") can move. Tick the ones to move."
+        if movable == 0, listed == 0 { text = unchecked == 0 ? noKeysLine : "No keys in plain text were found in the files Next Term read." }
+        guard unchecked > 0 else { return text }
+        return text + " \(unchecked) \(unchecked == 1 ? "file couldn't be checked for keys; it is" : "files couldn't be checked for keys; they are")"
+            + " listed below."
     }
 
     private func addGroupRow(_ group: SecretImport.Group) {
