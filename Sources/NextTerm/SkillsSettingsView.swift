@@ -293,6 +293,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     static func stateText(_ row: SkillRow) -> String {
+        // Next Term's own (BuiltInSkill): Settings › Editor turns it off, and a new app brings its text up to date.
+        if row.name == BuiltInSkill.name, row.health == .ok, isBuiltIn(row) { return "Built in" }
         switch row.health {
         case .broken: return "Broken link"
         case .drifted: return "\(row.distinctCopies.count) copies differ"
@@ -302,6 +304,11 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             if needsAttention(row) { return "Ignored copy" }
             return row.copies.first?.root.kind == .shared ? "Shared" : "One copy"
         }
+    }
+
+    /// The skill's shared copy is the one Next Term wrote (it carries its mark).
+    static func isBuiltIn(_ row: SkillRow) -> Bool {
+        row.copies.contains { $0.root.kind == .shared && FileManager.default.fileExists(atPath: ($0.path as NSString).appendingPathComponent(".next-term-built-in")) }
     }
 
     private var selectedRow: SkillRow? { rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil }

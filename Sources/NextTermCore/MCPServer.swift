@@ -24,23 +24,46 @@ public enum MCPServer {
         (working, done, needs attention). Start an agent with new_tab (directory plus a command such as \
         "claude" or "codex"), give it a task with send_to_tab, then wait_for_tab until it stops and \
         read_tab to see what it said. An agent that needs a decision shows state "attention", the \
-        question, its choices and a question_id; answer it with answer_agent (tab_id, question_id and the \
-        choice), which refuses if the question has changed since. Never type into your own tab ("you": true). \
-        read_file, find_in_files, git_status and get_diff read an open project's files and changes (what \
-        an agent did). get_editor_selection returns what the user has selected in the editor. Servers (VPSes) the user \
-        connected are in list_hosts: new_remote_tab opens a tab on one (then use it like any tab), \
-        host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there. \
-        list_skills shows the user's agent skills and which agent loads each; install_skill and remove_skill \
-        ask the user, who reviews and decides in Next Term (nothing changes on your say alone). \
-        propose_edit shows a file edit in the editor's diff for the user to accept; write_file, create_file, \
-        stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout and settings_set ask the user \
-        on the Mac first, and change nothing when declined or unanswered. To bring the user's settings over \
-        from another editor or terminal, use list_import_sources and preview_import, never those apps' files \
-        (they sit next to tokens); apply_import and undo_import open Next Term's import window, where only \
-        the user's Apply changes anything. A tab Next Term brings back after an \
-        update or a quit keeps its id, with restored details (why, and what the restart did to it) until its \
-        next command, and calls made while it restarts say what happens to their tab.
+        question, its choices and a question_id for answer_agent, which refuses if the question changed. \
+        Never type into your own tab ("you": true). read_file, find_in_files, git_status and get_diff read \
+        a project's files and changes; get_editor_selection gives the editor's selection. list_hosts, \
+        new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills shows agent \
+        skills; install_skill and remove_skill ask the user. propose_edit shows an edit in the editor's diff \
+        to accept; write_file, create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, \
+        set_layout and settings_set ask the user on the Mac first, and change nothing when declined. For \
+        settings from another app use list_import_sources and preview_import, never its files; apply_import \
+        and undo_import ask the user. A tab Next Term brings back after an update or a quit keeps its id.
         """
+
+    /// The offer, first in the instructions when the agent runs in a Next Term tab and Settings › Editor › "Agents offer
+    /// to run parallel work in tabs" is on (the same as the next-term-tabs skill, BuiltInSkill, for agents that read
+    /// instructions and not skills). Whole within its first 512 characters, as some clients read only those.
+    public static let offerParagraph = """
+        This agent runs in a Next Term tab. When the user asks for tasks in parallel, at the same time or \
+        in the background, or for another agent (Codex, Claude…) to do or review part of the work, offer \
+        once to run them in Next Term tabs, one agent each, that the user can watch and answer: name each \
+        tab, agent and task, say each uses its own tokens, and open them only after the user types yes. \
+        Not for small work, after a no, when the user named subagents, or in a tab with opened_by.
+        """
+
+    /// Whether a process (the MCP bridge, `nxtrm mcp`) runs under the Next Term app at `executable`: an agent in one of its
+    /// tabs started it. Walks the parents (the agent, its shell, the app), not the environment, which some agents filter
+    /// before they start a server.
+    public static func runsUnder(executable: String, from pid: Int32 = getpid()) -> Bool {
+        let app = canonicalPath(executable)
+        var current = ProcessSnapshot.record(of: pid)?.parent ?? 0
+        for _ in 0..<24 where current > 1 {
+            if let path = IDEPeer.executablePath(current), canonicalPath(path) == app { return true }
+            guard let parent = ProcessSnapshot.record(of: current)?.parent, parent != current else { return false }
+            current = parent
+        }
+        return false
+    }
+
+    /// What `initialize` says: the offer first when `offeringTabs`.
+    public static func instructions(offeringTabs: Bool) -> String {
+        offeringTabs ? offerParagraph + " " + instructions : instructions
+    }
 
     // MARK: tools
 
@@ -70,7 +93,7 @@ public enum MCPServer {
 
     public static let tools: [Tool] = [
         Tool(name: "list_tabs", title: "List projects and tabs",
-             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. A local agent tab whose agent works in a git repository also has, once read, its checkout, its branch (or detached_at), and sync: same (the window shows that checkout), elsewhere (another checkout of the window's repository), switched_under (its branch was switched under the chat) or other_repository (the window shows another repository, or none); and chat_branch and switched_by whenever the chat's branch was switched under it. The tab you run in has \"you\": true.",
+             description: "Every Next Term window (one per project) and its terminal tabs: id, title, folder, the program running, and its state: idle, working (an agent is busy), done, failed, or attention (an agent waits for a decision; the question, its choices and a question_id for answer_agent are included). Remote tabs also have their host, and can be connecting (ssh is logging in; login_prompt: the user must answer ssh in that tab) or disconnected. A local agent tab whose agent works in a git repository also has, once read, its checkout, its branch (or detached_at), and sync: same (the window shows that checkout), elsewhere (another checkout of the window's repository), switched_under (its branch was switched under the chat) or other_repository (the window shows another repository, or none); and chat_branch and switched_by whenever the chat's branch was switched under it. The tab you run in has \"you\": true. A tab another agent started with new_tab has opened_by (that tab's id): its agent opens no tabs unless the user asks it to, there. A tab Next Term brought back after an update or a quit has restored (why, and what the restart did to it) until its next command, and calls made while a tab restarts say what happens to it.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_tab", title: "Read a tab's screen",
@@ -114,8 +137,8 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute folder path."}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 30),
         Tool(name: "new_tab", title: "New tab",
-             description: "Opens a terminal tab in a folder (in the window of the project that holds it, opening the project if needed), or a pane split beside another tab, and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"gemini\"). Returns the tab's id.",
-             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "title": {"type": "string", "description": "Tab title."}, "split_beside": {"type": "string", "description": "A tab id: open as a pane split beside that tab instead of a new tab."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}}, "required": ["directory"], "additionalProperties": false}"#,
+             description: "Opens a terminal tab in a folder (in the window of the project that holds it, opening the project if needed), or a pane split beside another tab, and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"gemini\"). Returns the tab's id. Before starting agents in several tabs for parallel work, offer it to the user and wait for their yes; a tab you start has your tab as its opened_by.",
+             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "title": {"type": "string", "description": "Tab title: for an agent, name its task."}, "split_beside": {"type": "string", "description": "A tab id: open as a pane split beside that tab instead of a new tab."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}}, "required": ["directory"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 30),
         Tool(name: "send_to_tab", title: "Type into a tab",
              description: "Types text into a tab, as if pasted, and presses Return unless submit is false: a prompt for the agent in that tab, an answer to its question, or a shell command.",
@@ -218,7 +241,7 @@ public enum MCPServer {
     }
 
     /// Answers one JSON-RPC message (nil for notifications). `call` runs a tool; it may block.
-    public static func respond(to message: [String: Any], version: String,
+    public static func respond(to message: [String: Any], version: String, instructions said: String = instructions,
                                call: (_ name: String, _ arguments: [String: Any]) -> CallResult) -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil } // a response to us: none expected
         guard let id = message["id"], !(id is NSNull) else { return nil } // a notification
@@ -234,7 +257,7 @@ public enum MCPServer {
                 "protocolVersion": supportedVersions.contains(asked) ? asked : supportedVersions[0],
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": name, "title": "Next Term", "version": version],
-                "instructions": instructions,
+                "instructions": said,
             ])
         case "ping":
             return result([String: Any]())

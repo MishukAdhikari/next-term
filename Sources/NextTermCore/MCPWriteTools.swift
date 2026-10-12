@@ -109,11 +109,11 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
-             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position and the notification switches. Other settings are not listed.",
+             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner and agents_offer_tabs. Other settings are not listed.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "settings_set", title: "Change settings",
-             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
+             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false), notify_commands (in_another_app, always or never), agent_spinner (spinning, still or off: how a tab shows its agent working) and agents_offer_tabs (true or false: agents offer to run parallel work in Next Term tabs, with the next-term-tabs skill). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
              inputSchema: #"{"type": "object", "properties": {"values": {"type": "object", "description": "Setting names and their new values, as settings_get lists them.", "minProperties": 1}, \#(reasonArgument)}, "required": ["values"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
     ]
@@ -677,6 +677,9 @@ public enum MCPSettings {
         Setting(name: "notify_agent_finished", title: "Notify when an agent finishes", kind: .flag),
         Setting(name: "notify_program_alerts", title: "Notify on a program's own bell or notification", kind: .flag),
         Setting(name: "notification_sound", title: "Play a sound with notifications", kind: .flag),
+        Setting(name: "notify_commands", title: "Notify when a command finishes or fails", kind: .choice(["in_another_app", "always", "never"])),
+        Setting(name: "agent_spinner", title: "How a tab shows its agent working (View › Agent Spinner)", kind: .choice(["spinning", "still", "off"])),
+        Setting(name: "agents_offer_tabs", title: "Agents offer to run parallel work in tabs", kind: .flag),
     ]
 
     public static func setting(_ name: String) -> Setting? { allowlist.first { $0.name == name } }

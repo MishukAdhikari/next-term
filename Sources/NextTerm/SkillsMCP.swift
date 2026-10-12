@@ -100,7 +100,10 @@ enum SkillsMCP {
             }
             var item: [String: Any] = ["name": row.name, "agents": agents]
             if let description = row.distinctCopies.first?.frontMatter?.description { item["description"] = String(description.prefix(300)) }
-            if let source = tracked[row.name] {
+            if row.name == BuiltInSkill.name, SkillsSettingsView.isBuiltIn(row) {
+                item["source"] = "built into Next Term (Settings › Editor › Agents offer to run parallel work in tabs; settings_set agents_offer_tabs)"
+                item["installed_by"] = "next-term"
+            } else if let source = tracked[row.name] {
                 item["source"] = source.source.shortName + (source.path.isEmpty ? "" : "/" + source.path)
                 item["installed_by"] = recorded.contains(row.name) ? "next-term" : "npx skills"
             }

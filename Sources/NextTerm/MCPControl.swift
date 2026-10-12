@@ -315,6 +315,10 @@ enum MCPControl {
         info.merge(MCPRestoredTabs.fields(tab)) { $1 } // what a restart did to it (U13)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
+        if let openedBy = tab.openedBy {
+            info["opened_by"] = openedBy.uuidString.lowercased()
+            if tab === caller { info["note"] = "Another agent started this tab: open no tabs unless the user asks you to, here." }
+        }
         // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
         if let url = tab.servedURL { info["served_url"] = ServedURL.shared(url) }
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
@@ -479,6 +483,7 @@ enum MCPControl {
             }
         }
         driven.insert(tab.id)
+        tab.openedBy = caller?.id // an agent's worker: it opens no tabs of its own unless the user asks it to
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
         let answer = { reply(ok(["id": tab.id.uuidString.lowercased(), "directory": tab.directory, "project": (controller.project as Any?) ?? NSNull()])) }
