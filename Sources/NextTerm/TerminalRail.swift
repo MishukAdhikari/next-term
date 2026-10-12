@@ -343,7 +343,10 @@ private final class RailMarkButton: NSButton {
         bezelStyle = .regularSquare
         dot.pulsesForAttention = false // the rail pulsed once; after that the mark stays still
         addSubview(dot)
+        NotificationCenter.default.addObserver(self, selector: #selector(spinnerChanged), name: AgentSpinner.changed, object: nil)
     }
+
+    @objc private func spinnerChanged() { needsDisplay = true } // the idle dot, for a working tab with the ring off
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -375,8 +378,9 @@ private final class RailMarkButton: NSButton {
             NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
             place.fill()
         }
-        // An idle tab has no mark in the tab bar; here it still needs something to see and click.
-        if mark?.state == .idle {
+        // An idle tab has no mark in the tab bar (nor a working one with Agent Spinner off); here it still needs
+        // something to see and click.
+        if let state = mark?.state, !StatusDotView.shows(state) {
             Theme.textDim.withAlphaComponent(0.7).setFill()
             NSBezierPath(ovalIn: NSRect(x: bounds.midX - 2.5, y: bounds.midY - 2.5, width: 5, height: 5)).fill()
         }

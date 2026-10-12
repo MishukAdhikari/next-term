@@ -64,6 +64,48 @@ extension SelfTest {
         check(pane.agentFinished.state == .on, "notifications menu: and follows it while open")
     }
 
+    /// View › Agent Spinner: Spinning turns the blue ring, Still keeps it put, Off hides it (and a split tab's other
+    /// pane's cross shows instead); Settings › Notifications and the menu's checkmark follow; an agent's spinner frame
+    /// leaves the title unless the ring turns. Only the terminal tab's mark: the done, failed and attention marks stay.
+    static func agentSpinnerChecks() {
+        let saved = UserDefaults.standard.string(forKey: AgentSpinner.key)
+        AgentSpinner.reducesMotionOverride = false
+        defer {
+            AgentSpinner.reducesMotionOverride = nil
+            if let saved { UserDefaults.standard.set(saved, forKey: AgentSpinner.key) } else { UserDefaults.standard.removeObject(forKey: AgentSpinner.key) }
+            NotificationCenter.default.post(name: AgentSpinner.changed, object: nil)
+        }
+        let dot = StatusDotView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        dot.state = .working
+        let pane = NotificationSettingsView()
+        let item = NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu?.items.first { $0.title == "Agent Spinner" }?.submenu
+        check(item?.items.map(\.title) == ["Spinning", "Still", "Off"], "agent spinner: View › Agent Spinner has Spinning, Still and Off",
+              item?.items.map(\.title).joined(separator: ", ") ?? "no menu")
+        AgentSpinner.current = .spinning
+        check(dot.ringShows && dot.ringTurns, "agent spinner: Spinning, the working ring turns")
+        check(AgentSpinner.shown("⠋ Fixing") == "⠋ Fixing", "agent spinner: Spinning, the agent's own title is as it sends it")
+        if let still = item?.items.first(where: { $0.title == "Still" }) { NSApp.sendAction(still.action!, to: still.target, from: still) }
+        check(dot.ringShows && !dot.ringTurns && pane.spinner.titleOfSelectedItem == "Still",
+              "agent spinner: Still, the ring stays put, and Settings › Notifications shows it", pane.spinner.titleOfSelectedItem ?? "none")
+        check(AgentSpinner.shown("⠋ Fixing") == "Fixing", "agent spinner: Still, the agent's spinner frame leaves the tab's title")
+        if let still = item?.items.first(where: { $0.title == "Still" }) {
+            _ = AppDelegate.shared.validateMenuItem(still)
+            check(still.state == .on, "agent spinner: the menu checks the choice")
+        }
+        pane.spinner.selectItem(withTitle: "Off")
+        pane.spinner.sendAction(pane.spinner.action, to: pane.spinner.target)
+        check(AgentSpinner.current == .off && !dot.ringShows, "agent spinner: Off from Settings, no ring")
+        check(TerminalWindowController.mostUrgent([.working, .failed]) == .failed && TerminalWindowController.mostUrgent([.working, .attention]) == .attention,
+              "agent spinner: Off, a split tab shows another pane's cross rather than nothing")
+        check(StatusDotView.shows(.failed) && StatusDotView.shows(.attention) && !StatusDotView.shows(.working),
+              "agent spinner: Off hides only the working ring; done, failed and attention still show")
+        AgentSpinner.current = .spinning
+        AgentSpinner.reducesMotionOverride = true
+        NotificationCenter.default.post(name: AgentSpinner.changed, object: nil)
+        check(dot.ringShows && !dot.ringTurns, "agent spinner: Reduce Motion keeps Spinning still, at once")
+        check(TerminalWindowController.mostUrgent([.working, .failed]) == .working, "agent spinner: shown, working ranks before failed as before")
+    }
+
     static func notificationChecks(_ c: TerminalWindowController) async {
         guard let app = AppDelegate.shared else { return }
         let defaults = UserDefaults.standard

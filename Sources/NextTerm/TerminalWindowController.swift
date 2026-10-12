@@ -770,9 +770,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let items = groups.enumerated().map { index, group -> TabBarItem in
             let tab = group.focused
             guard group.isSplit else {
-                return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
+                return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                                   accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
-                                  shorterTitles: tab.shorterTitles, editableTitle: tab.editableTitle)
+                                  shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map(\.paneSummary)
@@ -781,11 +781,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let spoken = group.panes.filter { $0 !== tab || $0.paneSummary != $0.title }.map(\.paneSummary)
             let mark = group.remoteMark
             let others = "  +\(group.panes.count - 1)"
-            return TabBarItem(title: tab.title + others, truncation: tab.titleTruncation,
+            return TabBarItem(title: AgentSpinner.shown(tab.title) + others, truncation: tab.titleTruncation,
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
                               accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
-                              shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
+                              shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: placeMarked(items), selectedIndex: activeIndex)
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
@@ -805,9 +805,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         noteAgentTabs()
     }
 
-    /// Needs you, then working, failed, done, idle.
-    static func mostUrgent(_ states: [TabState]) -> TabState {
-        let order: [TabState] = [.attention, .working, .failed, .done, .idle]
+    /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never
+    /// hides another pane's cross or check: it comes after them.
+    static func mostUrgent(_ states: [TabState], workingShown: Bool = AgentSpinner.current != .off) -> TabState {
+        let order: [TabState] = workingShown ? [.attention, .working, .failed, .done, .idle] : [.attention, .failed, .done, .working, .idle]
         return order.first { states.contains($0) } ?? .idle
     }
 

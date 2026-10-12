@@ -10,6 +10,8 @@ final class NotificationSettingsView: NSView {
     let threshold = NSPopUpButton()
     let programAlerts = NSButton(checkboxWithTitle: "A program’s own bell or notification (OSC 9/777)", target: nil, action: nil)
     let sound = NSButton(checkboxWithTitle: "Play a sound", target: nil, action: nil)
+    /// View › Agent Spinner: how a terminal tab shows its agent working.
+    let spinner = NSPopUpButton()
     /// Whether macOS lets Next Term notify you.
     let permission = NSTextField(wrappingLabelWithString: "")
     let openSystemSettings = NSButton(title: "Open Notification Settings…", target: nil, action: nil)
@@ -41,6 +43,14 @@ final class NotificationSettingsView: NSView {
         threshold.action = #selector(thresholdChanged)
         threshold.toolTip = "For an agent or a command that finished. A decision, a bell or a program’s notification always counts."
         threshold.setAccessibilityLabel("Only for work that took at least")
+        for choice in AgentSpinner.allCases {
+            spinner.addItem(withTitle: choice.title)
+            spinner.lastItem?.representedObject = choice.rawValue
+        }
+        spinner.target = self
+        spinner.action = #selector(spinnerChanged)
+        spinner.setAccessibilityLabel("Agent spinner")
+        spinner.toolTip = "The blue ring a terminal tab shows while its agent works. Still: it stays put. Off: no ring; hovering the tab or VoiceOver still says Working. Reduce motion (System Settings › Accessibility › Motion) keeps Spinning still."
         permission.textColor = .secondaryLabelColor
         permission.font = .systemFont(ofSize: 11)
         permission.preferredMaxLayoutWidth = 400
@@ -71,6 +81,7 @@ final class NotificationSettingsView: NSView {
             row("Finished work:", [NSTextField(labelWithString: "Only for work that took at least:"), threshold]),
             row("Programs:", [programAlerts]),
             row("Sound:", [sound]),
+            row("Tabs:", [NSTextField(labelWithString: "Agent spinner:"), spinner]),
             row("macOS:", [permission]),
             row("", [sendTest, openSystemSettings]),
             note,
@@ -90,6 +101,7 @@ final class NotificationSettingsView: NSView {
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         // A choice made in the Notifications menu, or by an agent over MCP (settings_set).
         NotificationCenter.default.addObserver(self, selector: #selector(choicesChanged), name: NotificationsMenu.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(choicesChanged), name: AgentSpinner.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -116,6 +128,12 @@ final class NotificationSettingsView: NSView {
         sound.state = settings.sound ? .on : .off
         commands.selectItem(at: CommandNotifications.allCases.firstIndex(of: settings.commands) ?? 0)
         threshold.selectItem(at: WorkThreshold.allCases.firstIndex(of: settings.threshold) ?? 0)
+        spinner.selectItem(at: AgentSpinner.allCases.firstIndex(of: AgentSpinner.current) ?? 0)
+    }
+
+    @objc private func spinnerChanged() {
+        guard let raw = spinner.selectedItem?.representedObject as? String, let choice = AgentSpinner(rawValue: raw) else { return }
+        AgentSpinner.current = choice
     }
 
     private func refreshPermission() {
