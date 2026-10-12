@@ -24,25 +24,19 @@ public enum MCPServer {
         (working, done, needs attention). Start an agent with new_tab (directory plus a command such as \
         "claude" or "codex"), give it a task with send_to_tab, then wait_for_tab until it stops and \
         read_tab to see what it said. An agent that needs a decision shows state "attention", the \
-        question, its choices and a question_id; answer it with answer_agent (tab_id, question_id and the \
-        choice), which refuses if the question has changed since. Never type into your own tab ("you": true). \
-        read_file, find_in_files, git_status and get_diff read an open project's files and changes (what \
-        an agent did). get_editor_selection returns what the user has selected in the editor. Servers (VPSes) the user \
-        connected are in list_hosts: new_remote_tab opens a tab on one (then use it like any tab), \
-        host_sessions lists the sessions kept there, host_changes shows what changed in a git work tree there. \
-        list_skills shows the user's agent skills and which agent loads each; install_skill and remove_skill \
-        ask the user, who reviews and decides in Next Term (nothing changes on your say alone). \
-        propose_edit shows a file edit in the editor's diff for the user to accept; write_file, create_file, \
-        stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout and settings_set ask the user \
-        on the Mac first, and change nothing when declined or unanswered. To bring the user's settings over \
-        from another editor or terminal, use list_import_sources and preview_import, never those apps' files \
-        (they sit next to tokens); apply_import and undo_import open Next Term's import window, where only \
-        the user's Apply changes anything. A tab Next Term brings back after an \
-        update or a quit keeps its id, with restored details (why, and what the restart did to it) until its \
-        next command, and calls made while it restarts say what happens to their tab. \
-        list_secrets lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a \
-        command with keys in its environment once the user approves on the Mac with Touch ID. request_secret asks \
-        the user to type a key into Next Term. store_secret saves a key you already hold.
+        question, its choices and a question_id for answer_agent, which refuses if the question changed. \
+        Never type into your own tab ("you": true). read_file, find_in_files, git_status and get_diff read \
+        a project's files and changes; get_editor_selection gives the editor's selection. list_hosts, \
+        new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills shows the \
+        user's agent skills; install_skill and remove_skill ask the user. propose_edit shows an edit in the \
+        editor's diff to accept; write_file, create_file, stage, commit, focus_tab, split_pane, close_pane, \
+        zoom_pane, set_layout and settings_set ask the user on the Mac first, and change nothing when \
+        declined. For settings from another app use list_import_sources and preview_import, never its \
+        files; apply_import and undo_import ask the user. A tab Next Term brings back after an update or a \
+        quit keeps its id. list_secrets lists the user's stored keys by name; no tool returns a key's value. \
+        run_with_secrets runs a command with keys in its environment once the user approves on the Mac with \
+        Touch ID. request_secret asks the user to type a key into Next Term. store_secret saves a key you \
+        already hold.
         """
 
     // MARK: tools

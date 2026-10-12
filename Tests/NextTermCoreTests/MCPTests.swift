@@ -20,6 +20,14 @@ import Testing
         #expect((newer?["result"] as? [String: Any])?["protocolVersion"] as? String == MCPServer.supportedVersions[0])
     }
 
+    /// Claude Code keeps a server's instructions up to 2,048 characters and cuts the rest, so every sentence must fit in
+    /// them, the secret tools' at the end included.
+    @Test func theInstructionsFitInTwoThousandAndFortyEightCharacters() {
+        let count = MCPServer.instructions.utf16.count
+        #expect(count <= 2048, "\(count) characters")
+        #expect(MCPServer.instructions.hasSuffix("store_secret saves a key you already hold."))
+    }
+
     /// A 2026-07-28 client first asks `server/discover` (Claude Code 2.1.295 does); "method not found" sends it
     /// back to the 2025 handshake at once.
     @Test func discoverIsNotFoundSoTheClientShakesHandsThe2025Way() {

@@ -48,6 +48,7 @@ import Testing
             (.peerCheck, "nxtrm: the program at Next Term’s socket is not this copy of Next Term, so no key was asked for.", 1),
             (.timedOut, "nxtrm: GITHUB_TOKEN is waiting for your approval in Next Term. Allow it there, then restart this command.", 1),
             (.timedOutTicket, "nxtrm: no answer in Next Term within 10 minutes, so no key was given.", 1),
+            (.closed, "nxtrm: Next Term quit before it answered, so no key was given. Restart this command once Next Term is open again.", 1),
             (.answer(.declined, name: nil, until: nil), "nxtrm: Next Term declined GITHUB_TOKEN for npx.", 1),
             (.answer(.paused, name: nil, until: now.addingTimeInterval(720)),
              "nxtrm: you declined this a few minutes ago, so Next Term won’t ask again until 12:12 PM.", 1),
@@ -203,5 +204,63 @@ import Testing
         var other = request
         other.argv = ["/usr/bin/false"]
         #expect(SecretRun.binding(request: other, agentPath: "/usr/bin/env", agentScript: nil, program: "codex", envDigest: "none").asker != one.asker)
+    }
+}
+
+@Suite struct SecretRunReadTests {
+    /// A connected pair: the wrapper's end and the app's.
+    func pair() throws -> (wrapper: Int32, app: Int32) {
+        var fds: [Int32] = [-1, -1]
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        for fd in fds {
+            var on: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        }
+        return (fds[0], fds[1])
+    }
+
+    func put(_ text: String, on fd: Int32) {
+        _ = Array(text.utf8).withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+    }
+
+    /// The app's answer comes as one line, maybe in parts; what follows its newline is not read as part of it.
+    @Test func theAnswersLine() throws {
+        let ends = try pair()
+        defer { [ends.wrapper, ends.app].forEach { close($0) } }
+        put(#"{"status""#, on: ends.app)
+        put(#": "declined"}"# + "\nmore", on: ends.app)
+        #expect(SecretRun.readAnswer(from: ends.wrapper, within: 2) == .line(Data(#"{"status": "declined"}"#.utf8)))
+    }
+
+    /// No answer within the wait: the request still waits in Next Term, as a pending card.
+    @Test func noAnswerWithinTheWaitTimesOut() throws {
+        let ends = try pair()
+        defer { [ends.wrapper, ends.app].forEach { close($0) } }
+        put(#"{"sta"#, on: ends.app)
+        let started = Date()
+        #expect(SecretRun.readAnswer(from: ends.wrapper, within: 0.3) == .timedOut)
+        #expect(Date().timeIntervalSince(started) < 2)
+    }
+
+    /// The app closed the connection without an answer: it quit, or restarted for an update, while the request waited,
+    /// so the request and its card are gone. Told at once, apart from a timeout, whatever came of a line before.
+    @Test func aConnectionClosedUnansweredIsNotATimeout() throws {
+        for partial in ["", #"{"status": "allo"#] {
+            let ends = try pair()
+            defer { close(ends.wrapper) }
+            put(partial, on: ends.app)
+            close(ends.app)
+            let started = Date()
+            #expect(SecretRun.readAnswer(from: ends.wrapper, within: 10) == .closed, "\(partial)")
+            #expect(Date().timeIntervalSince(started) < 2, "\(partial)")
+        }
+    }
+
+    /// More than the limit and no newline is no answer the app writes.
+    @Test func aLineOverTheLimitIsTooLong() throws {
+        let ends = try pair()
+        defer { [ends.wrapper, ends.app].forEach { close($0) } }
+        put(String(repeating: "x", count: 64), on: ends.app)
+        #expect(SecretRun.readAnswer(from: ends.wrapper, within: 2, limit: 32) == .tooLong)
     }
 }

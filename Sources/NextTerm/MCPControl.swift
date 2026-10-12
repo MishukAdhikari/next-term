@@ -105,16 +105,18 @@ final class MCPControlServer: @unchecked Sendable {
         }
         let request = ended ? Self.request(in: line) : nil
         // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool. The quit's drain leaves it be,
-        // and one the quit answered first gets nothing written: the wrapper reads the closed connection. Its connection
-        // closes as the call ends, as every other one does.
-        if let request, request.tool == SecretSocket.tool {
-            guard calls.answersItself(call) else { return }
-            return SecretSocket.handle(fd: fd, arguments: request.arguments, peer: peer, auditToken: token)
+        // and one the quit answered first gets nothing written: the wrapper reads the closed connection. A wrapper the quit
+        // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
+        // ends, as every other one does.
+        let route = calls.route(call, read: request, selfAnswering: request?.tool == SecretSocket.tool) {
+            SecretSocket.isWrapper(pid: peer)
         }
-        if let drained = call.answer {
-            // A wrapper the quit found before its line came is no MCP caller either: no MCP answer goes to it.
-            if request == nil, SecretSocket.isWrapper(pid: peer) { return }
-            return send(drained, on: fd)
+        switch route {
+        case .answerItself:
+            return SecretSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+        case .nothing: return
+        case .drained(let answer): return send(answer, on: fd)
+        case .serve: break
         }
         if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
         guard let request else { return }
@@ -245,6 +247,12 @@ enum MCPControl {
     static var fieldMasks = true
     static func field(_ text: String) -> String { fieldMasks ? SecretMask.current.mask(text) : text }
     static func fieldRows(_ rows: [String]) -> [String] { fieldMasks ? SecretMask.current.mask(rows: rows) : rows }
+    /// A tab's restored details (MCPRestoredTabs), masked: their note can quote a command line or a resume's screen, saved
+    /// before a key in it was stored.
+    static func restoredFields(_ tab: TerminalTab) -> [String: Any] {
+        let fields = MCPRestoredTabs.fields(tab)
+        return fieldMasks ? SecretMask.current.mask(fields: fields) : fields
+    }
 
     static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
@@ -346,7 +354,7 @@ enum MCPControl {
             info["command"] = String(field(tab.status.command).prefix(300))
         }
         info.merge(questionInfo(tab)) { $1 }
-        info.merge(MCPRestoredTabs.fields(tab)) { $1 } // what a restart did to it (U13)
+        info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
         // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
@@ -394,7 +402,7 @@ enum MCPControl {
     private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
         var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
         info.merge(questionInfo(tab)) { $1 }
-        info.merge(MCPRestoredTabs.fields(tab)) { $1 }
+        info.merge(restoredFields(tab)) { $1 }
         info["screen"] = fieldRows(tab.screenTail(min(2000, max(1, lines)))).joined(separator: "\n")
         return ok(info)
     }
@@ -409,7 +417,7 @@ enum MCPControl {
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
             info.merge(questionInfo(tab)) { $1 }
-            info.merge(MCPRestoredTabs.fields(tab)) { $1 }
+            info.merge(restoredFields(tab)) { $1 }
             info["screen"] = fieldRows(tab.screenTail(40)).joined(separator: "\n")
             return reply(ok(info))
         }

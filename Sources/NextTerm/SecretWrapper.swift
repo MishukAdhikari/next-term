@@ -60,9 +60,19 @@ enum SecretWrapper {
             end(.noSocket, names: invocation.names, program: program)
         }
         let limit = wait ?? (isTicket ? SecretRun.ticketWait : SecretRun.wait)
-        guard var reply = readLine(from: fd, within: limit) else {
+        var reply: Data
+        switch SecretRun.readAnswer(from: fd, within: limit) {
+        case .line(let line): reply = line
+        case .timedOut:
             close(fd)
             end(isTicket ? .timedOutTicket : .timedOut, names: invocation.names, program: program)
+        case .closed:
+            // Next Term quit, or restarted for an update, before it answered: the request is gone, not waiting.
+            close(fd)
+            end(.closed, names: invocation.names, program: program)
+        case .tooLong:
+            close(fd)
+            end(.answer(.refused, name: nil, until: nil), names: invocation.names, program: program)
         }
         let answer = SecretRun.Answer.decode(reply)
         SecretBytes.wipe(&reply)
@@ -188,28 +198,6 @@ enum SecretWrapper {
                 offset += written
             }
             return true
-        }
-    }
-
-    /// One line from `fd` within `seconds`, or nil: the app did not answer in time, or closed the connection.
-    static func readLine(from fd: Int32, within seconds: TimeInterval) -> Data? {
-        let deadline = Date().addingTimeInterval(seconds)
-        var line = Data()
-        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-        defer { SecretBytes.wipe(&buffer) }
-        while true {
-            if let end = line.firstIndex(of: 0x0A) { return line[..<end] }
-            let left = deadline.timeIntervalSinceNow
-            guard left > 0 else { return nil }
-            var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&poller, 1, Int32(min(1000, max(1, left * 1000))))
-            if ready < 0, errno == EINTR { continue }
-            guard ready > 0 else { continue }
-            let count = read(fd, &buffer, buffer.count)
-            if count < 0, errno == EINTR { continue }
-            guard count > 0 else { return nil }
-            line.append(contentsOf: buffer[0..<count])
-            guard line.count <= 4 * 1024 * 1024 else { return nil }
         }
     }
 

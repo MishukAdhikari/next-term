@@ -505,11 +505,12 @@ import Testing
     }
 
     /// KTD16: a call that only asks again for the answer to a request already open (propose_edit with proposal_id;
-    /// install_skill, remove_skill, apply_import or undo_import with request_id) starts nothing, so the wait lets it through.
-    /// Every other call that changes something is still new work.
+    /// install_skill, remove_skill, apply_import, undo_import, request_secret, store_secret or run_with_secrets with
+    /// request_id) starts nothing, so the wait lets it through. Every other call that changes something is still new work.
     @Test func whileAnUpdateWaitsAFollowUpOnAnOpenRequestStillWorks() {
         let waited: Set<String> = ["a"]
-        for tool in ["propose_edit", "install_skill", "remove_skill", "apply_import", "undo_import"] {
+        let secretTools = ["request_secret", "store_secret", "run_with_secrets"]
+        for tool in ["propose_edit", "install_skill", "remove_skill", "apply_import", "undo_import"] + secretTools {
             #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: true, safeMode: false, waitingFor: waited) == nil, "\(tool)")
             let asked = MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: false, safeMode: false, waitingFor: waited)
             #expect(asked?.hasPrefix("update_pending") == true, "\(tool)")
@@ -523,7 +524,13 @@ import Testing
         #expect(MCPRestoreGate.isFollowUp("propose_edit", ["proposal_id": "p1", "path": "a.txt", "content": "x"]))
         #expect(!MCPRestoreGate.isFollowUp("propose_edit", ["proposal_id": "", "path": "a.txt", "content": "x"]))
         #expect(!MCPRestoreGate.isFollowUp("propose_edit", ["request_id": "r1"]))
-        for tool in ["install_skill", "remove_skill", "apply_import", "undo_import"] {
+        // A secret tool's poll waits on the same asker's call: it learns the key was saved or the command started.
+        let poll = MCPRestoreGate.isFollowUp("run_with_secrets", ["request_id": "r1"])
+        #expect(MCPRestoreGate.refusal(tool: "run_with_secrets", tabID: nil, followUp: poll, safeMode: false, waitingFor: waited) == nil)
+        let fresh = MCPRestoreGate.isFollowUp("run_with_secrets", ["secrets": ["A"], "command": "true", "directory": "/tmp"])
+        #expect(MCPRestoreGate.refusal(tool: "run_with_secrets", tabID: nil, followUp: fresh, safeMode: false,
+                                       waitingFor: waited)?.hasPrefix("update_pending") == true)
+        for tool in ["install_skill", "remove_skill", "apply_import", "undo_import"] + secretTools {
             #expect(MCPRestoreGate.isFollowUp(tool, ["request_id": "r1"]), "\(tool)")
             #expect(MCPRestoreGate.isFollowUp(tool, ["request_id": "r1", "source": "x"]), "\(tool)")
             #expect(!MCPRestoreGate.isFollowUp(tool, ["source": "x"]), "\(tool)")
@@ -698,6 +705,60 @@ import Testing
         #expect(!calls.answersItself(lateCall))
         calls.end(lateCall)
         calls.end(open)
+        #expect(done.wait(timeout: .now() + 2) == .success)
+    }
+
+    /// The serve thread's route, once a call's line is read or the drain cut its reading (no request): `nxtrm secret run`'s
+    /// answers itself unless the quit answered the call first, and then gets nothing; a call the quit answered gets that
+    /// answer, but a wrapper whose line the drain cut, which is no MCP caller (its process is looked at only then); any
+    /// other call is served.
+    @Test func serveRoutesACallByItsLineAndTheDrain() throws {
+        let calls = MCPCalls()
+        let pairs = try (0..<6).map { _ in try socketPair() }
+        defer { pairs.forEach { Darwin.close($0.caller) } }
+        let secretRun = MCPCalls.Request(tool: "secret_run", arguments: [:])
+        let listTabs = MCPCalls.Request(tool: "list_tabs", arguments: [:])
+        var looked = 0
+        func route(_ call: MCPCalls.Call, _ request: MCPCalls.Request?, wrapper: Bool) -> String {
+            let route = calls.route(call, read: request, selfAnswering: request?.tool == "secret_run") {
+                looked += 1
+                return wrapper
+            }
+            switch route {
+            case .answerItself: return "answer itself"
+            case .nothing: return "nothing"
+            case .drained(let answer): return answer.text
+            case .serve: return "serve"
+            }
+        }
+        // No quit: served, or answering itself.
+        let served = calls.begin(pairs[0].served)
+        #expect(route(served, listTabs, wrapper: false) == "serve")
+        let unread = calls.begin(pairs[1].served)
+        #expect(route(unread, nil, wrapper: true) == "serve")
+        let wrapper = calls.begin(pairs[2].served)
+        #expect(route(wrapper, secretRun, wrapper: true) == "answer itself")
+        #expect(looked == 0)
+        // The quit drains: it answers the calls it serves, but the one answering itself.
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            calls.drain(wait: 5, answer: MCPRestartTests.drained)
+            done.signal()
+        }.start()
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(wrapper.answer == nil)
+        #expect(route(served, listTabs, wrapper: false) == "drained unread false")
+        #expect(looked == 0)
+        // A wrapper's line read after the quit answered its call: nothing more is written to it.
+        let late = calls.begin(pairs[3].served)
+        #expect(route(late, secretRun, wrapper: true) == "nothing")
+        // A line the drain cut: a wrapper's peer gets nothing, any other the quit's answer.
+        let cutWrapper = calls.begin(pairs[4].served)
+        #expect(route(cutWrapper, nil, wrapper: true) == "nothing")
+        let cutCaller = calls.begin(pairs[5].served)
+        #expect(route(cutCaller, nil, wrapper: false) == "drained unread false")
+        #expect(looked == 2)
+        for call in [served, unread, wrapper, late, cutWrapper, cutCaller] { calls.end(call) }
         #expect(done.wait(timeout: .now() + 2) == .success)
     }
 

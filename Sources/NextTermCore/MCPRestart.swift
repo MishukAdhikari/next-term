@@ -377,6 +377,7 @@ public enum MCPRestoreGate {
     static let followUpID: [String: String] = [
         "propose_edit": "proposal_id", "install_skill": "request_id", "remove_skill": "request_id",
         "apply_import": "request_id", "undo_import": "request_id",
+        "request_secret": "request_id", "store_secret": "request_id", "run_with_secrets": "request_id",
     ]
 
     /// Whether the call asks again for the answer to a request already open (its proposal_id or request_id), which starts

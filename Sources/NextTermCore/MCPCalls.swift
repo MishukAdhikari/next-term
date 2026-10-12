@@ -127,6 +127,29 @@ public final class MCPCalls: @unchecked Sendable {
         return true
     }
 
+    /// What the serve thread does with a call once its line is read.
+    public enum Route {
+        /// It answers itself on its connection (`answersItself`).
+        case answerItself
+        /// Nothing is written to it: the quit answered a call that answers itself first, or cut the reading of a line
+        /// whose peer is a wrapper, which is no MCP caller.
+        case nothing
+        /// The quit's answer.
+        case drained(MCPServer.CallResult)
+        /// Asked, run and answered as ever.
+        case serve
+    }
+
+    /// The route for `call`, whose line read as `request` (nil when none did: the drain cut its reading, or it was not a
+    /// whole request). `selfAnswering`: the request is `nxtrm secret run`'s, which answers itself (SecretSocket), unless the
+    /// quit answered the call first. A call the quit answered gets that answer, except a wrapper whose line the drain cut;
+    /// `isWrapper` looks at the peer's process, only then.
+    public func route(_ call: Call, read request: Request?, selfAnswering: Bool, isWrapper: () -> Bool) -> Route {
+        if request != nil, selfAnswering { return answersItself(call) ? .answerItself : .nothing }
+        guard let drained = call.answer else { return .serve }
+        return request == nil && isWrapper() ? .nothing : .drained(drained)
+    }
+
     /// The call's answer is written: its connection closes.
     public func end(_ call: Call) {
         call.close()

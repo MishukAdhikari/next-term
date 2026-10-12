@@ -261,6 +261,23 @@ public final class SecretMask: @unchecked Sendable {
         }
     }
 
+    /// An answer's fields with each string in them masked as `mask(_:)` masks it, in nested objects and lists too, and the
+    /// rest as it was. For fields before they become JSON: there a value with a `"`, a `\` or a control character in it is
+    /// escaped, so a pass over the answer's text misses it.
+    public func mask(fields: [String: Any]) -> [String: Any] {
+        guard !isEmpty else { return fields }
+        return fields.mapValues(maskValue)
+    }
+
+    private func maskValue(_ value: Any) -> Any {
+        switch value {
+        case let text as String: return mask(text)
+        case let object as [String: Any]: return object.mapValues(maskValue)
+        case let list as [Any]: return list.map(maskValue)
+        default: return value
+        }
+    }
+
     /// `bytes` with each range (relative to its start) made "•••".
     static func replacing(_ ranges: [Range<Int>], in bytes: ArraySlice<UInt8>) -> String {
         let dots = Array(MCPRedaction.mask.utf8)

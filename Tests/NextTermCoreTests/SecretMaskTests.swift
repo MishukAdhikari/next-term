@@ -137,4 +137,52 @@ private let key40 = "Zq8pLmW2vXn4Rt7yKb1sQe5uHj3oAc6dFg9iTw0e" // 40 characters,
         #expect(masked == "$ printenv OUT\nvalue: ••• (done)")
         #expect(!masked.contains(stored.prefix(9)) && !masked.contains(stored.dropFirst(9)))
     }
+
+    /// AE11's second half through the saved scrollback itself (`ScrollbackText.saved`), with the stored keys' mask in place
+    /// of `SecretMask.current`: a value a wrap split, on rows the terminal flagged; the same rows read without wrap flags,
+    /// as behind the alternate screen (`maskAcrossRows`); and the value's base64, whole and split by a wrap.
+    @Test func theSavedScrollbackMasksAStoredValue() {
+        let m = mask([stored])
+        func saved(_ rows: [ScrollbackText.Row]) -> String {
+            ScrollbackText.saved(rows, firstRow: 0, dropped: [], extent: .all, limits: .standard,
+                                 masking: { (text: String) -> String in CommandSecrets.mask(text, mask: m) })
+        }
+        let head = String(stored.prefix(9)), tail = String(stored.dropFirst(9))
+        let base64 = Data(stored.utf8).base64EncodedString()
+        let wrapped = saved([.init("$ printenv OUT"), .init("value: \(head)"), .init("\(tail) (done)", wrapped: true)])
+        #expect(wrapped == "$ printenv OUT\r\nvalue: ••• (done)")
+        let unflagged = saved([.init("$ printenv OUT", wrapped: nil, full: false), .init("value: \(head)", wrapped: nil, full: true),
+                               .init("\(tail) (done)", wrapped: nil, full: false)])
+        #expect(unflagged == "$ printenv OUT\r\nvalue: •••\r\n••• (done)")
+        let encoded = saved([.init("$ printenv OUT | base64"), .init(base64)])
+        #expect(encoded == "$ printenv OUT | base64\r\n•••")
+        let encodedWrapped = saved([.init("$ printenv OUT | base64"), .init("b64 \(base64.prefix(10))"),
+                                    .init(String(base64.dropFirst(10)), wrapped: true)])
+        #expect(encodedWrapped == "$ printenv OUT | base64\r\nb64 •••")
+        for text in [wrapped, unflagged, encoded, encodedWrapped] {
+            #expect(!text.contains(head) && !text.contains(tail), "\(text)")
+            #expect(!text.contains(base64.prefix(10)) && !text.contains(base64.dropFirst(10)), "\(text)")
+        }
+    }
+
+    /// An answer's fields (a tab's restored details) masked before they become JSON: each string, in nested objects and
+    /// lists too, and nothing else changed. In the JSON a value with a `"`, a `\` or a tab is escaped, so the last pass
+    /// over the answer's text can't find it there.
+    @Test func everyStringInAnAnswersFieldsIsMasked() {
+        let quoted = "Rk7v\"Qp2x\\Lm9n\tWz4c"
+        let m = mask([stored, quoted])
+        let restored: [String: Any] = ["note": "it ran deploy --token \(quoted)", "outcome": "resumed", "interrupted": true,
+                                       "lines": ["a \(stored)", 7] as [Any]]
+        let fields: [String: Any] = ["restored": restored, "update_wait": "update_pending"]
+        let masked = m.mask(fields: fields)
+        let inner = masked["restored"] as? [String: Any]
+        #expect(inner?["note"] as? String == "it ran deploy --token •••")
+        #expect(inner?["outcome"] as? String == "resumed" && inner?["interrupted"] as? Bool == true)
+        let lines = inner?["lines"] as? [Any]
+        #expect(lines?.first as? String == "a •••" && lines?.last as? Int == 7)
+        #expect(masked["update_wait"] as? String == "update_pending")
+        #expect(m.mask(MCPServer.json(fields)).contains(#"Rk7v\"Qp2x"#))
+        #expect(!MCPServer.json(masked).contains("Rk7v"))
+        #expect(SecretMask.empty.mask(fields: fields)["update_wait"] as? String == "update_pending")
+    }
 }

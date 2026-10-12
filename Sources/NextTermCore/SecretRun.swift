@@ -241,6 +241,45 @@ public enum SecretRun {
         }
     }
 
+    /// What the wrapper read on its connection.
+    public enum Read: Equatable, Sendable {
+        /// The answer's line, without its newline.
+        case line(Data)
+        /// Nothing within the wait: the request still waits in Next Term.
+        case timedOut
+        /// Next Term closed the connection without an answer (`Ending.closed`).
+        case closed
+        /// More than the limit with no newline: no answer Next Term writes.
+        case tooLong
+    }
+
+    /// One line from `fd` within `seconds`. The buffer read into, and a part of a line that never ended, are wiped.
+    public static func readAnswer(from fd: Int32, within seconds: TimeInterval, limit: Int = 4 * 1024 * 1024) -> Read {
+        let deadline = Date().addingTimeInterval(seconds)
+        var line = Data()
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+        defer { SecretBytes.wipe(&buffer) }
+        while true {
+            if let end = line.firstIndex(of: 0x0A) { return .line(line[..<end]) }
+            let left = deadline.timeIntervalSinceNow
+            guard left > 0 else { return unanswered(.timedOut, &line) }
+            var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&poller, 1, Int32(min(1000, max(1, left * 1000))))
+            if ready < 0, errno == EINTR { continue }
+            guard ready > 0 else { continue }
+            let count = read(fd, &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { return unanswered(.closed, &line) }
+            line.append(contentsOf: buffer[0..<count])
+            guard line.count <= limit else { return unanswered(.tooLong, &line) }
+        }
+    }
+
+    private static func unanswered(_ read: Read, _ part: inout Data) -> Read {
+        SecretBytes.wipe(&part)
+        return read
+    }
+
     // MARK: statuses
 
     /// The app's answers, by status.
@@ -261,6 +300,9 @@ public enum SecretRun {
         case peerCheck
         case timedOut
         case timedOutTicket
+        /// Next Term closed the connection without an answer: it quit, or restarted for an update, while the request
+        /// waited, so the request and its card are gone.
+        case closed
         case usage
         case notFound(String)
         case cantRun(String)
@@ -280,6 +322,8 @@ public enum SecretRun {
             return ("nxtrm: \(keys) is waiting for your approval in Next Term. Allow it there, then restart this command.", 1)
         case .timedOutTicket:
             return ("nxtrm: no answer in Next Term within 10 minutes, so no key was given.", 1)
+        case .closed:
+            return ("nxtrm: Next Term quit before it answered, so no key was given. Restart this command once Next Term is open again.", 1)
         case .usage:
             return (usage, 2)
         case .notFound(let command):
