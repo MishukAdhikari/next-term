@@ -503,6 +503,8 @@ public enum SecretImport {
             entry.notMovable = "its \(envName) is not an object"
             return
         }
+        // Its server reads the last; a ticked row could be the other, and the value in use would be lost.
+        if variables.hasRepeatedKeys { entry.notMovable = "repeated keys" }
         for variable in variables.members {
             guard case .scalar(let range) = variable.value, let value = string(variable.value), let kind = detect(name: variable.key, value: value) else {
                 continue
@@ -713,9 +715,13 @@ public enum SecretImport {
                     entry.notMovable = entry.notMovable ?? "its env is written in a shape Next Term can't edit"
                 }
             }
+            var names = variables.map(\.key)
             for key in table.envKeys where key.path.count == 1 {
+                names.append(key.path[0])
                 if let (range, value) = outline.string(at: key.value) { variables.append((key.path[0], value, range)) }
             }
+            // A variable named twice (inline and in its env table, or twice in either): which one Codex reads is unsure.
+            if Set(names).count < names.count { entry.notMovable = "repeated keys" }
             for variable in variables {
                 guard let kind = detect(name: variable.key, value: variable.value) else { continue }
                 entry.detected.append(Detected(field: .env(variable.key), variable: variable.key, value: SecretBytes(utf8: variable.value), kind: kind,
@@ -929,22 +935,25 @@ public enum SecretImport {
     static func planFile(_ source: Source, moves: [Move], nxtrm: [String], data: Data, now: Date,
                          batch: String) -> Result<FileEdit, PlanFailure> {
         guard var text = text(of: data) else { return .failure(PlanFailure(path: source.path, reason: "not UTF-8 text")) }
-        // The moves by entry, in the order the file has them.
+        // The moves by entry, in the order the file has them, and the values the scan found there: what Secrets stores.
         var byEntry: [Location: [(name: String, variable: String)]] = [:]
+        var values: [Location: [String: SecretBytes]] = [:]
         var locations: [Location] = []
         for move in moves {
             for finding in move.findings {
                 guard case .env(let variable) = finding.field else { continue }
                 if byEntry[finding.location] == nil { locations.append(finding.location) }
                 byEntry[finding.location, default: []].append((move.name, variable))
+                values[finding.location, default: [:]][variable] = finding.value
             }
         }
         var backups: [EntryBackup] = []
         for location in locations {
             guard let pairs = byEntry[location] else { continue }
+            let expected = values[location] ?? [:]
             let result = source.format == .toml
-                ? editTOML(text, location: location, pairs: pairs, nxtrm: nxtrm)
-                : editJSON(text, source: source, location: location, pairs: pairs, nxtrm: nxtrm)
+                ? editTOML(text, location: location, pairs: pairs, expected: expected, nxtrm: nxtrm)
+                : editJSON(text, source: source, location: location, pairs: pairs, expected: expected, nxtrm: nxtrm)
             switch result {
             case .failure(let failure): return .failure(PlanFailure(path: source.path, reason: failure.reason))
             case .success(let edited):
@@ -1043,8 +1052,20 @@ public enum SecretImport {
         return "nxtrm secret run couldn't start it that way: \(error.reason); give each key its own name, or edit it by hand"
     }
 
+    /// Why an entry is left: the value in the file is not the one the scan found, which Secrets would store.
+    static func changedReason(_ variable: String) -> String { "\(variable) changed since the scan; open the import again" }
+
+    /// Why an entry can't lose `variable` now: it is not there, or its value is not `expected`, the one the scan found
+    /// and Secrets stores (taken out, a newer key would be in neither place). Nil when it is that value.
+    static func changeRefusal(_ entry: Entry, variable: String, expected: SecretBytes?) -> String? {
+        guard let detected = entry.detected.first(where: { $0.field == .env(variable) }), let expected, detected.value == expected else {
+            return changedReason(variable)
+        }
+        return nil
+    }
+
     static func editJSON(_ text: String, source: Source, location: Location, pairs: [(name: String, variable: String)],
-                         nxtrm: [String]) -> Result<Edited, EditFailure> {
+                         expected: [String: SecretBytes], nxtrm: [String]) -> Result<Edited, EditFailure> {
         guard let entries = jsonEntries(text, source: source), let entry = entries.first(where: { $0.location == location }) else {
             return .failure(EditFailure("the entry is not there any more"))
         }
@@ -1058,6 +1079,7 @@ public enum SecretImport {
         var env = planned[envKey] as? [String: Any] ?? [:]
         for pair in pairs {
             guard env[pair.variable] is String else { return .failure(EditFailure("\(pair.variable) is not in the entry any more")) }
+            if let reason = changeRefusal(entry, variable: pair.variable, expected: expected[pair.variable]) { return .failure(EditFailure(reason)) }
             env[pair.variable] = nil
         }
         if env.isEmpty {
@@ -1096,11 +1118,14 @@ public enum SecretImport {
     }
 
     static func editTOML(_ text: String, location: Location, pairs: [(name: String, variable: String)],
-                         nxtrm: [String]) -> Result<Edited, EditFailure> {
+                         expected: [String: SecretBytes], nxtrm: [String]) -> Result<Edited, EditFailure> {
         guard let entries = tomlEntries(text), let entry = entries.first(where: { $0.location == location }) else {
             return .failure(EditFailure("the entry is not there any more"))
         }
         if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
+        for pair in pairs {
+            if let reason = changeRefusal(entry, variable: pair.variable, expected: expected[pair.variable]) { return .failure(EditFailure(reason)) }
+        }
         if let reason = wrapperRefusal(pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
         guard let outline = TOMLOutline(text), let table = tomlTables(outline).first(where: { $0.name == location.server }),
               let command = table.keys.first(where: { $0.path == ["command"] }), let commandString = outline.string(at: command.value) else {
