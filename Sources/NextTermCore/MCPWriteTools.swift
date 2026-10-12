@@ -49,7 +49,7 @@ extension MCPServer {
     static let scopeTags: [String: Scope] = {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
-                    "host_changes", "list_skills", "settings_get", "list_import_sources", "preview_import"]
+                    "host_changes", "list_skills", "get_skill", "settings_get", "list_import_sources", "preview_import"]
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
                      "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",

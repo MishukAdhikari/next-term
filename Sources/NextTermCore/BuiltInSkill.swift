@@ -1,20 +1,15 @@
 import Foundation
 
-/// The skill Next Term ships, on by default under Settings › Editor › "Agents offer to run parallel work in tabs" (and
-/// MCP's settings_set agents_offer_tabs): how an agent running in a Next Term tab offers to run several tasks in tabs
-/// of their own, one agent each, that the user can watch, answer and stop, and how it runs them through Next Term's
-/// MCP tools once the user says yes. Written in the Agent Skills format to `~/.agents/skills/next-term-tabs` (Codex,
-/// Gemini CLI, opencode, Copilot CLI, Cursor, Command Code and others read it there), with links from Claude Code's and
-/// Qwen Code's own skill folders. It updates with the app, never touches a folder of that name it didn't write, and
-/// turning the switch off sends it to the Trash. The same offer, shorter, is in the MCP instructions for agents that
-/// read those and not skills (`MCPServer.instructions(offeringTabs:)`).
+/// The skill Next Term ships in its library (SkillLibrary, over MCP's get_skill): how an agent running in a Next Term tab
+/// offers to run several tasks in tabs of their own, one agent each, that the user can watch, answer and stop, and how it
+/// runs them through Next Term's MCP tools once the user says yes. Nothing is written to any agent's folders: an agent
+/// gets it from Next Term while it runs in a tab, and Settings › Editor › "Agents offer to run parallel work in tabs" (MCP
+/// settings_set agents_offer_tabs) takes it out of the library and its offer out of the MCP instructions.
 public enum BuiltInSkill {
     public static let name = "next-term-tabs"
-    /// In the skill's folder: says Next Term wrote it, and for which version of the text.
-    static let marker = ".next-term-built-in"
 
-    /// The skill. Its description is what every session of an agent that reads skills lists: it says when it applies
-    /// (inside Next Term, on a request for parallel work or another agent) so it costs a line, and nothing elsewhere.
+    /// The skill, in the Agent Skills format. Its description is what list_skills shows: when it applies (inside Next
+    /// Term, on a request for parallel work or for another agent).
     public static let text = #"""
     ---
     name: next-term-tabs
@@ -23,7 +18,7 @@ public enum BuiltInSkill {
 
     # Parallel work in Next Term tabs
 
-    Next Term is the terminal you may be running in. Its MCP server (`next-term`) can open tabs, start an agent in each, send it a task, wait for it and read what it said. The user sees every tab, with a mark for its state (working, done, failed, or waiting on a decision), and can click in and answer or stop any of them.
+    Next Term is the terminal you may be running in, and this skill comes from its library (MCP `get_skill`). Its MCP server (`next-term`) can open tabs, start an agent in each, send it a task, wait for it and read what it said. The user sees every tab, with a mark for its state (working, done, failed, or waiting on a decision), and can click in and answer or stop any of them.
 
     The user's own instructions win over this skill: what they told you, and their CLAUDE.md or AGENTS.md. If those say how to run parallel work, or never to open tabs, do that.
 
@@ -57,88 +52,14 @@ public enum BuiltInSkill {
     ## How to run them
 
     1. `list_tabs`: find your tab (`"you": true`) and its folder.
-    2. For each task, `new_tab` with the project's folder, the agent's command (`claude`, `codex`, `gemini`…) and a `title` naming the task. Tasks that edit files in the same checkout can overwrite each other: split them by files, or give each its own worktree (`claude -w <name>`, `codex --worktree`) and say so in the offer.
-    3. `send_to_tab` with the task: what to do, which files are its, that another agent started this tab and it should open no tabs, and that it should end with a one-line result (and the branch or worktree its changes are on).
-    4. `wait_for_tab` on each, calling again while it says `timed_out`; `read_tab` for its result. While one waits on a decision (`state: "attention"`, with its question), tell the user here which tab asks what; answer with `answer_agent` only what the user told you to, and leave permission prompts to the user.
+    2. For each task, `new_tab` with the project's folder, a `title` naming the task, and the agent started with the task as its first prompt, on one line: `claude "…"`, `codex "…"`, `gemini -i "…"`. The task says what to do, which files are its, that another agent started this tab and it should open no tabs, and that it should end with a one-line result (and the branch or worktree its changes are on). Never type the task into an agent that has just started: it may be showing an update or a trust question first, and what you type answers it.
+    3. Tasks that edit files in the same checkout can overwrite each other: split them by files, or give each its own worktree (`claude -w <name> "…"`, `codex --worktree "…"`), and say so in the offer.
+    4. `wait_for_tab` on each, calling again while it says `timed_out`; `read_tab` for its result. When one waits on a question (`state: "attention"`: a trust, update or permission question, or the agent asking something), tell the user here which tab asks what; answer with `answer_agent` only what the user told you to.
     5. Report each result here, one line per tab, with where its changes are. Don't merge branches, close tabs or commit for the user unless they ask.
 
     Never type into your own tab. If a tab fails or its agent isn't installed, say so and go on with the others.
     """#
 
-    /// Where each agent finds skills, relative to the home folder: the folder the skill is written to, then the links.
-    static let folder = ".agents/skills"
-    static let links = [".claude/skills", ".qwen/skills"]
-
-    /// The text's version: its hash, so a new app writes the skill again only when the text changed.
-    public static var version: String {
-        var hash: UInt64 = 0xcbf29ce484222325
-        for byte in text.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 0x100000001b3
-        }
-        return String(hash, radix: 16)
-    }
-
-    public enum State: Equatable, Sendable {
-        /// Not there.
-        case absent
-        /// Ours, with this text.
-        case current
-        /// Ours, with an older text: written again.
-        case outdated
-        /// A folder of that name Next Term didn't write: never touched.
-        case someoneElses
-    }
-
-    public static func state(home: String) -> State {
-        let skill = home + "/" + folder + "/" + name
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: skill, isDirectory: &isFolder) else { return .absent }
-        guard isFolder.boolValue, let mark = try? String(contentsOfFile: skill + "/" + marker, encoding: .utf8) else { return .someoneElses }
-        return mark.trimmingCharacters(in: .whitespacesAndNewlines) == version ? .current : .outdated
-    }
-
-    /// Writes the skill (when absent or outdated, never over someone else's) and links it from the agents' own skill
-    /// folders that exist (a link already there, or anything else at that name, is left alone). Returns whether it is
-    /// in place now.
-    @discardableResult
-    public static func install(home: String) -> Bool {
-        let fm = FileManager.default
-        let skill = home + "/" + folder + "/" + name
-        switch state(home: home) {
-        case .someoneElses: return false
-        case .current: break
-        case .absent, .outdated:
-            do {
-                try fm.createDirectory(atPath: skill, withIntermediateDirectories: true)
-                try Data(text.utf8).write(to: URL(fileURLWithPath: skill + "/SKILL.md"), options: .atomic)
-                try Data((version + "\n").utf8).write(to: URL(fileURLWithPath: skill + "/" + marker), options: .atomic)
-            } catch {
-                return false
-            }
-        }
-        for place in links {
-            let parent = home + "/" + place
-            // Only for an agent that is there: its own folder (~/.claude, ~/.qwen) exists.
-            guard fm.fileExists(atPath: (parent as NSString).deletingLastPathComponent) else { continue }
-            let link = parent + "/" + name
-            var info = stat()
-            guard lstat(link, &info) != 0 else { continue } // a link or a folder of that name: as it is
-            try? fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
-            try? fm.createSymbolicLink(atPath: link, withDestinationPath: skill)
-        }
-        return true
-    }
-
-    /// The paths to send to the Trash to turn it off: the skill, when ours, and each link to it.
-    public static func removable(home: String) -> [String] {
-        guard state(home: home) == .current || state(home: home) == .outdated else { return [] }
-        let skill = home + "/" + folder + "/" + name
-        var paths: [String] = []
-        for place in links {
-            let link = home + "/" + place + "/" + name
-            if (try? FileManager.default.destinationOfSymbolicLink(atPath: link)) == skill { paths.append(link) }
-        }
-        return paths + [skill]
-    }
+    /// The description in its front matter.
+    public static var description: String { SkillFrontMatter.parse(text)?.description ?? "" }
 }

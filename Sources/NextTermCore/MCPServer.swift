@@ -27,8 +27,9 @@ public enum MCPServer {
         question, its choices and a question_id for answer_agent, which refuses if the question changed. \
         Never type into your own tab ("you": true). read_file, find_in_files, git_status and get_diff read \
         a project's files and changes; get_editor_selection gives the editor's selection. list_hosts, \
-        new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills shows agent \
-        skills; install_skill and remove_skill ask the user. propose_edit shows an edit in the editor's diff \
+        new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills and get_skill \
+        give the skills of your project, the user's and Next Term's, as your agent finds them: read one that \
+        fits the task and your agent doesn't load itself; install_skill and remove_skill ask the user. propose_edit shows an edit in the editor's diff \
         to accept; write_file, create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, \
         set_layout and settings_set ask the user on the Mac first, and change nothing when declined. For \
         settings from another app use list_import_sources and preview_import, never its files; apply_import \
@@ -36,14 +37,14 @@ public enum MCPServer {
         """
 
     /// The offer, first in the instructions when the agent runs in a Next Term tab and Settings › Editor › "Agents offer
-    /// to run parallel work in tabs" is on (the same as the next-term-tabs skill, BuiltInSkill, for agents that read
-    /// instructions and not skills). Whole within its first 512 characters, as some clients read only those.
+    /// to run parallel work in tabs" is on; it sends the agent to the next-term-tabs skill (BuiltInSkill, over
+    /// get_skill) for the rules. Whole within its first 512 characters, as some clients read only those.
     public static let offerParagraph = """
         This agent runs in a Next Term tab. When the user asks for tasks in parallel, at the same time or \
-        in the background, or for another agent (Codex, Claude…) to do or review part of the work, offer \
-        once to run them in Next Term tabs, one agent each, that the user can watch and answer: name each \
-        tab, agent and task, say each uses its own tokens, and open them only after the user types yes. \
-        Not for small work, after a no, when the user named subagents, or in a tab with opened_by.
+        in the background, or for another agent (Codex, Claude…) to do or review part of the work, read \
+        get_skill next-term-tabs, then offer once to run them in Next Term tabs, one agent each: name each \
+        tab, agent and task, say each uses its own tokens, and open them only after the user types yes. Not \
+        for small work, after a no, when the user named subagents, or in a tab with opened_by.
         """
 
     /// Whether a process (the MCP bridge, `nxtrm mcp`) runs under the Next Term app at `executable`: an agent in one of its
@@ -189,8 +190,12 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
         Tool(name: "list_skills", title: "List agent skills",
-             description: "Lists the user's personal agent skills (~/.agents/skills, ~/.claude/skills, ~/.codex/skills, ~/.commandcode/skills): each skill's name and description, what Claude Code, Codex and Command Code each do with it (loads, off, skipped, none), where it came from when known, and whether an update was found.",
-             inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
+             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, with which of Claude Code, Codex and Command Code loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in Next Term tabs). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
+             inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "get_skill", title: "Get a skill",
+             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs: when the user asks for work in parallel, in the background, in tabs, or by another agent.",
+             inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "The skill's name, as list_skills gives it."}, "scope": {"type": "string", "enum": ["project", "personal", "next-term"], "description": "That scope's copy instead of the one your agent's rule picks."}, "project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "required": ["name"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "install_skill", title: "Ask to install a skill",
              description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, failed (with a note saying why), busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",

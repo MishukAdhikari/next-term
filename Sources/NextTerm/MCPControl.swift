@@ -251,9 +251,10 @@ enum MCPControl {
         case "open_in_editor": reply(openInEditor(arguments))
         case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
             RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
-        case "list_skills", "install_skill", "remove_skill":
+        case "list_skills", "get_skill", "install_skill", "remove_skill":
             MainActor.assumeIsolated {
-                SkillsMCP.call(tool, arguments, caller: caller, approval: approval, connection: connection, requester: requester, reply: reply)
+                SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
+                               requester: requester, reply: reply)
             }
         case _ where MCPServer.isImportTool(tool):
             MainActor.assumeIsolated {
