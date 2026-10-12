@@ -114,6 +114,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             UserDefaults.standard.set(newValue, forKey: "agentControl")
             if newValue { startAgentControl() } else { MCPControlServer.shared.stop(); MCPRegistration.update(on: false) }
+            keepBuiltInSkill()
+        }
+    }
+
+    /// Settings › Editor › "Agents offer to run parallel work in tabs" (MCP: agents_offer_tabs): the next-term-tabs skill
+    /// (BuiltInSkill) in the agents' skill folders, and the offer first in the MCP instructions an agent in a tab gets
+    /// (MCPBridge). On by default, while agents may control Next Term; off sends the skill to the Trash.
+    static let offerTabsKey = "agentsOfferTabs"
+    static let offerTabsChanged = Notification.Name("NextTermAgentsOfferTabsChanged")
+    var agentsOfferTabs: Bool {
+        get { UserDefaults.standard.object(forKey: Self.offerTabsKey) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.offerTabsKey)
+            keepBuiltInSkill()
+            NotificationCenter.default.post(name: Self.offerTabsChanged, object: nil)
+        }
+    }
+
+    /// The built-in skill as the settings say: written (or brought up to date with this app's text) while both are on,
+    /// sent to the Trash when either is off. Only the app's own home: never a self-test's, never another folder of that
+    /// name. Off the main thread.
+    /// At launch (`atLaunch`), a skill Next Term wrote that is gone was removed by hand: that turns the setting off, so it
+    /// is never written again until turned on.
+    func keepBuiltInSkill(atLaunch: Bool = false) {
+        guard SelfTest.mode == .app else { return }
+        let home = NSHomeDirectory(), written = "builtInSkillWritten"
+        if atLaunch, agentControl, agentsOfferTabs, UserDefaults.standard.bool(forKey: written), BuiltInSkill.state(home: home) == .absent {
+            UserDefaults.standard.set(false, forKey: Self.offerTabsKey)
+        }
+        let wanted = agentControl && agentsOfferTabs
+        DispatchQueue.global(qos: .utility).async {
+            if wanted {
+                let placed = BuiltInSkill.install(home: home)
+                return DispatchQueue.main.async { if placed { UserDefaults.standard.set(true, forKey: written) } }
+            }
+            for path in BuiltInSkill.removable(home: home) {
+                try? FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+            }
+            DispatchQueue.main.async { UserDefaults.standard.set(false, forKey: written) }
         }
     }
 
@@ -358,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // The MCP socket too: tabs are told where it is. Off, the Claude app may still have the entry: it was
         // open when the setting was turned off, and closed after Next Term.
         if agentControl { startAgentControl() } else { MCPRegistration.update(on: false, claudeAppOnly: true) }
+        keepBuiltInSkill(atLaunch: true) // the next-term-tabs skill, with this version's text
         MCPRegistration.watchClaudeApp()
         // The menus as built are the defaults, read before they are the menu bar (which keeps one item per key).
         let menu = buildMenu()

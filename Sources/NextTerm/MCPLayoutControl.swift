@@ -236,6 +236,9 @@ extension MCPWriteControl {
         case "notify_agent_finished": return .flag(notifications.agentFinished)
         case "notify_program_alerts": return .flag(notifications.programAlerts)
         case "notification_sound": return .flag(notifications.sound)
+        case "notify_commands": return .choice(mcpName(notifications.commands))
+        case "agent_spinner": return .choice(AgentSpinner.current.rawValue)
+        case "agents_offer_tabs": return .flag(app.agentsOfferTabs)
         default: return .flag(false)
         }
     }
@@ -252,10 +255,25 @@ extension MCPWriteControl {
         case ("notify_agent_finished", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.agentFinished)
         case ("notify_program_alerts", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.programAlerts)
         case ("notification_sound", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.sound)
+        case ("notify_commands", .choice(let name)):
+            if let choice = CommandNotifications.allCases.first(where: { mcpName($0) == name }) {
+                UserDefaults.standard.set(choice.rawValue, forKey: NotificationSettings.Key.commands)
+            }
+        case ("agent_spinner", .choice(let name)): if let choice = AgentSpinner(rawValue: name) { AgentSpinner.current = choice }
+        case ("agents_offer_tabs", .flag(let on)): app.agentsOfferTabs = on
         default: break
         }
         // Settings › Notifications shows it, if open.
         if setting.name.hasPrefix("notif") { NotificationCenter.default.post(name: NotificationsMenu.changed, object: nil) }
+    }
+
+    /// A command notification choice as MCP names it: in_another_app, always, never.
+    private static func mcpName(_ choice: CommandNotifications) -> String {
+        switch choice {
+        case .inAnotherApp: return "in_another_app"
+        case .always: return "always"
+        case .never: return "never"
+        }
     }
 
     private static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {

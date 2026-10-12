@@ -392,6 +392,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     let id: UUID
     /// Set for a tab on a server.
     let remote: RemoteTab?
+    /// The tab whose agent started this one over MCP (new_tab): list_tabs says opened_by, the tooltip "Started by".
+    var openedBy: UUID?
     /// The connection to the host dropped; the tab waits to reconnect.
     private(set) var disconnected = false
     /// The tab's script runs on the host: ssh got past its login (password, host key). Until then
@@ -1090,6 +1092,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(ServedURL.shared(servedURL))") } // its token, if any, stays out of sight
+        if let openedBy, let opener = AppDelegate.shared?.controllers.flatMap(\.tabs).first(where: { $0.id == openedBy }) {
+            lines.append("Started by “\(opener.title)”")
+        }
         if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
         lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")

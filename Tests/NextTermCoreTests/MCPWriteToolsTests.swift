@@ -83,7 +83,14 @@ import Testing
 @Suite struct MCPSettingsTests {
     @Test func theAllowlistIsShortAndHarmless() {
         #expect(MCPSettings.allowlist.map(\.name) == ["font_size", "line_height", "soft_wrap", "terminal_position", "notify_decisions",
-                                                      "notify_agent_finished", "notify_program_alerts", "notification_sound"])
+                                                      "notify_agent_finished", "notify_program_alerts", "notification_sound", "notify_commands",
+                                                      "agent_spinner", "agents_offer_tabs"])
+        if case .success(let changes) = MCPSettings.changes(["agent_spinner": "still", "agents_offer_tabs": false]) {
+            #expect(changes.map(\.1) == [.choice("still"), .flag(false)])
+        } else {
+            Issue.record("agent_spinner and agents_offer_tabs are settings agents may change")
+        }
+        #expect(MCPSettings.changes(["agent_spinner": "slow"]).failureText?.contains("takes spinning, still, off") == true)
         // The guards and the switches that reach other programs are never on it, by any spelling.
         for name in ["agent_control", "agentControl", "share_with_claude", "shareWithClaude", "shareWithCopilot", "remote_access",
                      "check_for_updates", "checkForUpdates", "updateInstallWithoutAsking", "keyBindings", "key_bindings", "hideEnvValues",

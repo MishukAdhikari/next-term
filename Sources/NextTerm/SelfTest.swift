@@ -597,13 +597,16 @@ enum SelfTest {
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees or notifications), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees, parallel (with scrollback) or notifications), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
         case "held": return await heldWorktreeChecks(c)
+        case "parallel":
+            await parallelTabsChecks(c, proj: proj)
+            return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
         case "notifications":
             notificationsMenuChecks()
@@ -755,6 +758,7 @@ enum SelfTest {
         await placeChecks(c)
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
+        await parallelTabsChecks(c, proj: proj)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
