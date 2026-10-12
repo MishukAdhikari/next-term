@@ -65,93 +65,36 @@ enum ServiceText {
 }
 
 /// A service row, or the group's: the kind's icon, the name, its kind and file dimmed, the badge that opens its page
-/// (":6334", "Console"), and ⋯. Laid out as a database row, so the two sections line up. The name and the detail are
-/// two labels on one baseline, sized by NameDetailFit: in a narrow sidebar the detail gives way first and the name
-/// stays whole.
+/// (":6334", "Console"), and ⋯. Laid out as a database row (NameDetailLine), so the two sections line up and cut alike:
+/// in a narrow sidebar the detail gives way first and the name stays whole.
 final class ServiceCellView: NSTableCellView {
-    /// Where the name starts, past the icon; the gap the name leaves before the badge; the badge's before ⋯; ⋯'s width
-    /// and its gap to the row's end.
-    private static let nameStart: CGFloat = 21
-    private static let toBadge: CGFloat = 6
-    private static let toMore: CGFloat = 2
-    private static let moreWidth: CGFloat = 20
-    private static let toEnd: CGFloat = 2
-    /// The space between the name's last letter and the detail's first.
-    private static let detailGap: CGFloat = 7
-
     private let icon = NSImageView()
-    private let name = NSTextField(labelWithString: "")
-    private let detail = NSTextField(labelWithString: "")
+    /// The name and the dimmed detail; the self-test reads their places.
+    let line = NameDetailLine()
     let badge = LinkBadgeStack()
     private(set) lazy var more = MoreButton(toolTip: "Service actions") { [weak self] in self?.onMenu?() ?? NSMenu() }
     /// The ⋯ menu for this row (set by the sidebar each time the cell is configured).
     var onMenu: (() -> NSMenu)?
     private(set) var tipText = ""
     private(set) weak var item: ServiceItem?
-    private var nameWidth: NSLayoutConstraint!
-    private var detailWidth: NSLayoutConstraint!
-    private var detailLead: NSLayoutConstraint!
-    /// The narrowest the detail may be cut to: its first two characters and the ellipsis.
-    private var minimumDetail: CGFloat = 0
 
     init() {
         super.init(frame: .zero)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        Typography.singleLine(name, truncation: .byTruncatingTail)
-        Typography.singleLine(detail, truncation: .byTruncatingTail)
-        // The widths come from NameDetailFit; if the two ever disagree with the badge, the detail gives way first.
-        name.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        badge.setContentCompressionResistancePriority(.required, for: .horizontal)
-        badge.setContentHuggingPriority(.required, for: .horizontal)
         more.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Service actions")?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-        for view in [icon, name, detail, badge, more] as [NSView] {
+        for view in [icon, line.name, line.detail, badge, more] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         imageView = icon
-        textField = name
-        NSLayoutConstraint.activate(iconPlace() + textPlace() + endPlace())
-    }
-
-    private func iconPlace() -> [NSLayoutConstraint] {
-        [
+        textField = line.name
+        NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 15),
             icon.heightAnchor.constraint(equalToConstant: 15),
-        ]
-    }
-
-    /// The name, centred in the row, and the detail on its baseline; neither runs past the badge.
-    private func textPlace() -> [NSLayoutConstraint] {
-        nameWidth = name.widthAnchor.constraint(equalToConstant: 0)
-        nameWidth.priority = .init(999)
-        detailWidth = detail.widthAnchor.constraint(equalToConstant: 0)
-        detailWidth.priority = .init(998)
-        detailLead = detail.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 0)
-        return [
-            name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.nameStart),
-            name.centerYAnchor.constraint(equalTo: centerYAnchor),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -Self.toBadge),
-            nameWidth,
-            detailLead,
-            detail.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
-            detail.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -Self.toBadge),
-            detailWidth,
-        ]
-    }
-
-    private func endPlace() -> [NSLayoutConstraint] {
-        [
-            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
-            badge.trailingAnchor.constraint(equalTo: more.leadingAnchor, constant: -Self.toMore),
-            more.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.toEnd),
-            more.centerYAnchor.constraint(equalTo: centerYAnchor),
-            more.widthAnchor.constraint(equalToConstant: Self.moreWidth),
-            more.heightAnchor.constraint(equalToConstant: 20),
-        ]
+        ] + line.place(in: self, badge: badge, more: more))
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -165,12 +108,12 @@ final class ServiceCellView: NSTableCellView {
         let detailFont = NSFont.systemFont(ofSize: 11.5)
         let title = NSAttributedString(string: row.name, attributes: [.font: nameFont, .foregroundColor: Theme.text])
         let kindAndFile = NSAttributedString(string: row.detail, attributes: [.font: detailFont, .foregroundColor: Theme.textDim])
-        show(title, detail: kindAndFile)
+        line.show(title, detail: kindAndFile)
         badge.show(row.badges)
         more.isHidden = false
         tipText = row.tooltip
         setAccessibilityLabel(row.accessibilityLabel)
-        fitText()
+        line.fit(in: self, badge: badge)
     }
 
     func configureGroup(_ group: ServicesGroup) {
@@ -182,60 +125,25 @@ final class ServiceCellView: NSTableCellView {
         let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         let title = NSAttributedString(string: "Services", attributes: [.font: titleFont, .foregroundColor: Theme.text])
         let count = NSAttributedString(string: "\(group.items.count)", attributes: [.font: countFont, .foregroundColor: Theme.textDim])
-        show(title, detail: count)
+        line.show(title, detail: count)
         badge.show([])
         more.isHidden = true
         tipText = group.scan.tooltip
         setAccessibilityLabel("Services, \(group.items.count)")
-        fitText()
+        line.fit(in: self, badge: badge)
     }
 
     /// What the row shows, for the self-test: the name, then its detail, hidden or not.
-    var nameText: String { detail.stringValue.isEmpty ? name.stringValue : name.stringValue + " " + detail.stringValue }
+    var nameText: String { line.text }
 
     /// The tooltip at `point`, in the cell's coordinates: over the badge, the page it opens; elsewhere, the row's.
     func tip(at point: NSPoint) -> String {
         badge.tip(at: convert(point, to: badge)) ?? tipText
     }
 
-    // MARK: fitting the name and the detail
-
-    /// A label never shown, to measure text as the row's labels lay it out.
-    private static let sizer = NSTextField(labelWithString: "")
-
-    /// The row's two runs of text, each cut at its tail when it has to be, and the narrowest the detail may be cut to:
-    /// its first two characters and the ellipsis, about three characters.
-    private func show(_ title: NSAttributedString, detail line: NSAttributedString) {
-        name.attributedStringValue = Typography.truncating(title, .byTruncatingTail)
-        detail.attributedStringValue = Typography.truncating(line, .byTruncatingTail)
-        let attributes = line.length > 0 ? line.attributes(at: 0, effectiveRange: nil) : [:]
-        Self.sizer.attributedStringValue = NSAttributedString(string: String(line.string.prefix(2)) + "…", attributes: attributes)
-        minimumDetail = Self.sizer.intrinsicContentSize.width
-    }
-
-    /// Sizes the name and the detail for the row's width (NameDetailFit): the detail gives way first and hides rather
-    /// than show a sliver; the name is cut only when it alone does not fit. The badge and ⋯ keep their places.
-    private func fitText() {
-        guard nameWidth != nil else { return }  // still in init
-        let ends: CGFloat = Self.toBadge + badge.intrinsicContentSize.width + Self.toMore + Self.moreWidth + Self.toEnd
-        let room: CGFloat = bounds.width - Self.nameStart - ends
-        let nameWhole: CGFloat = name.intrinsicContentSize.width
-        let detailWhole: CGFloat = detail.stringValue.isEmpty ? 0 : detail.intrinsicContentSize.width
-        let fit = NameDetailFit.fit(room: Double(room), name: Double(nameWhole), detail: Double(detailWhole),
-                                    gap: Double(Self.detailGap), minimumDetail: Double(minimumDetail))
-        Self.set(nameWidth, to: CGFloat(fit.name))
-        Self.set(detailWidth, to: CGFloat(fit.detail ?? 0))
-        Self.set(detailLead, to: fit.detail == nil ? 0 : Self.detailGap)
-        detail.isHidden = fit.detail == nil
-    }
-
-    private static func set(_ constraint: NSLayoutConstraint, to constant: CGFloat) {
-        if constraint.constant != constant { constraint.constant = constant }
-    }
-
     /// A narrower or wider sidebar refits the text.
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        fitText()
+        line.fit(in: self, badge: badge)
     }
 }

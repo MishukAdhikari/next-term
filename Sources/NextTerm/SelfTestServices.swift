@@ -578,6 +578,7 @@ extension SelfTest {
         await cloudAndDocsPages(w)
         await serviceMenuChecks(w, names, project: project)
         checkNoLinkSecret(sidebar, ["NOT-A-"], "links: no key value in the RAG project's rows, tips, badges, pages or menus")
+        rowFitChecks(sidebar)
         await servicesShot(sidebar)
     }
 

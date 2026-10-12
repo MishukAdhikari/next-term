@@ -114,10 +114,12 @@ final class BadgeView: NSView {
 }
 
 /// A database row, or the group's: icon, name with its source dimmed, provider badges (each opening its provider's
-/// page), ⋯ menu.
+/// page), ⋯ menu. Laid out as a service row (NameDetailLine): in a narrow sidebar the source gives way first and the
+/// name stays whole.
 final class DatabaseCellView: NSTableCellView {
     private let icon = NSImageView()
-    private let name = NSTextField(labelWithString: "")
+    /// The name and the dimmed source; the self-test reads their places.
+    let line = NameDetailLine()
     let badge = LinkBadgeStack()
     private(set) lazy var more = MoreButton(toolTip: "Database actions") { [weak self] in self?.onMenu?() ?? NSMenu() }
     /// The ⋯ menu for this row (set by the sidebar each time the cell is configured).
@@ -128,33 +130,22 @@ final class DatabaseCellView: NSTableCellView {
     init() {
         super.init(frame: .zero)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        Typography.singleLine(name, truncation: .byTruncatingMiddle)
-        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         badge.setContentCompressionResistancePriority(.required, for: .horizontal)
         badge.setContentHuggingPriority(.required, for: .horizontal)
         more.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Database actions")?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-        for view in [icon, name, badge, more] as [NSView] {
+        for view in [icon, line.name, line.detail, badge, more] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         imageView = icon
-        textField = name
+        textField = line.name
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 15),
             icon.heightAnchor.constraint(equalToConstant: 15),
-            name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 21),
-            name.centerYAnchor.constraint(equalTo: centerYAnchor),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -6),
-            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
-            badge.trailingAnchor.constraint(equalTo: more.leadingAnchor, constant: -2),
-            more.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            more.centerYAnchor.constraint(equalTo: centerYAnchor),
-            more.widthAnchor.constraint(equalToConstant: 20),
-            more.heightAnchor.constraint(equalToConstant: 20),
-        ])
+        ] + line.place(in: self, badge: badge, more: more))
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -166,17 +157,16 @@ final class DatabaseCellView: NSTableCellView {
         icon.image = NSImage(systemSymbolName: DatabaseText.symbol(db.engine), accessibilityDescription: db.engine.displayName)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
         icon.contentTintColor = color
-        let text = NSMutableAttributedString(string: db.name, attributes: [.font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: db.isConnection ? (db.environment == .local ? Theme.text : color) : Theme.textDim])
-        let detail = DatabaseText.detail(db)
-        if !detail.isEmpty {
-            text.append(Typography.gap(7, font: .systemFont(ofSize: 11.5)))
-            text.append(NSAttributedString(string: detail, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim]))
-        }
-        name.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
+        let nameColor: NSColor = db.isConnection ? (db.environment == .local ? Theme.text : color) : Theme.textDim
+        let text = NSAttributedString(string: db.name, attributes: [.font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: nameColor])
+        let source = DatabaseText.detail(db)
+        let detail = NSAttributedString(string: source, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim])
+        line.show(text, detail: detail)
         badge.show(db.badges)
         more.isHidden = false
         tipText = DatabaseText.tooltip(db)
         setAccessibilityLabel(DatabaseText.accessibility(db))
+        line.fit(in: self, badge: badge)
     }
 
     func configureGroup(_ group: DatabasesGroup) {
@@ -184,23 +174,29 @@ final class DatabaseCellView: NSTableCellView {
         icon.image = NSImage(systemSymbolName: "cylinder.split.1x2", accessibilityDescription: "Databases")?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
         icon.contentTintColor = Theme.textDim
-        let text = NSMutableAttributedString(string: "Databases", attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .foregroundColor: Theme.text])
-        text.append(Typography.gap(7, font: .systemFont(ofSize: 11.5)))
-        text.append(NSAttributedString(string: "\(group.items.count)", attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: Theme.textDim]))
-        name.attributedStringValue = Typography.truncating(text, .byTruncatingTail)
+        let text = NSAttributedString(string: "Databases", attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .foregroundColor: Theme.text])
+        let count = NSAttributedString(string: "\(group.items.count)", attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: Theme.textDim])
+        line.show(text, detail: count)
         badge.show(DatabaseLinks.groupBadges(vercelProject: group.vercelProject))
         more.isHidden = true
         var tip = "Databases this project’s files name, found offline: env files, Prisma, Drizzle, Supabase and SQLite files. Nothing connects until you choose a hand-off."
         if let project = group.vercelProject { tip += "\nLinked to Vercel" + (project == "linked" ? "." : " project “\(project)”.") }
         tipText = tip
         setAccessibilityLabel("Databases, \(group.items.count)")
+        line.fit(in: self, badge: badge)
     }
 
-    /// What the row shows, for the self-test.
-    var nameText: String { name.stringValue }
+    /// What the row shows, for the self-test: the name, then its source, hidden or not.
+    var nameText: String { line.text }
 
     /// The tooltip at `point`, in the cell's coordinates: over a badge, the page it opens; elsewhere, the row's.
     func tip(at point: NSPoint) -> String {
         badge.tip(at: convert(point, to: badge)) ?? tipText
+    }
+
+    /// A narrower or wider sidebar refits the text.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        line.fit(in: self, badge: badge)
     }
 }
