@@ -51,6 +51,11 @@ def escape(text):
         out += bytes([byte]) if 0x21 <= byte <= 0x7E and byte not in b"\\;" else b"\\x%02x" % byte
     return out
 
+# The pause after each thing sent is for zsh's output to come: ZSH_TEST_SLOW lengthens them all (2 for twice as
+# long). Only ever longer: an answer meant to come late still comes late. Twice as long on CI didn't steady its
+# engine checks (2026-10-12), so CI retries the run instead and keeps this at 1.
+SLOW = float(os.environ.get("ZSH_TEST_SLOW", "1"))
+
 def frame(kind, ident, fields=()):
     payload = b";".join(escape(f) for f in fields)
     return PREFIX + kind.encode() + b"%06d" % ident + b"%06d" % len(payload) + payload
@@ -106,7 +111,7 @@ class Shell:
     def send(self, data, wait=0.0):
         os.write(self.fd, data if isinstance(data, bytes) else data.encode())
         if wait:
-            self.read_for(wait)
+            self.read_for(wait * SLOW)
 
     def text(self, since=0):
         return self.buf[since:].decode("utf-8", "replace")
@@ -365,8 +370,10 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     tab_key(sh, 3, 0.05)
     if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 3, ["n"]), 0.5)
-    check(drawn(sh, start, "ls /System/") and sh.wait_mark("done", start, 0.1) is None,
-          f"[{label}] a `native` answer runs zsh's own Tab", repr(sh.line(start)))
+    # Its own Tab's `done` only: the step before's can come late on a slow machine.
+    own = sh.wait_mark("done", start, 0.1, lambda fields: fields[:1] == ["000003"])
+    check(drawn(sh, start, "ls /System/") and own is None,
+          f"[{label}] a `native` answer runs zsh's own Tab", f"{sh.line(start)!r} {own}")
     sh.send("\x03", 0.4)
 
     # A scripted open: one `line` mark at once; typing reports the word; take replaces it; a stale take does nothing.
@@ -1305,10 +1312,13 @@ for label, rc in (("server", "PS1='server$ '\n"), ("server, hostile", "setopt no
         took = time.time() - sent
         sh.send("\x03", 0.5)
         return done, took
-    done, took = no_answer(11)
-    check(done == ["000011", "native"] and took > 0.45, f"[{label}] with no answer, the server's hook waits 0.6 s", f"{done} {took:.2f} s")
-    # Measured against the wait just above, not the clock: a busy runner adds the same to both, and 0.4 s apart is the point.
-    done, short = no_answer(12, ["w200"])
+    # The fastest of three tries each: a busy runner only ever adds time, and not the same to every try.
+    tries = [no_answer(11) for _ in range(3)]
+    done, took = tries[0][0], min(t for _, t in tries)
+    check(all(d == ["000011", "native"] for d, _ in tries) and took > 0.45, f"[{label}] with no answer, the server's hook waits 0.6 s", f"{done} {took:.2f} s")
+    # Measured against the wait just above, not the clock: 0.4 s apart is the point.
+    tries = [no_answer(12, ["w200"]) for _ in range(3)]
+    done, short = (tries[0][0] if all(d == tries[0][0] for d, _ in tries) else None), min(t for _, t in tries)
     check(done == ["000012", "native"] and short < took - 0.2, f"[{label}] and `w200` on the Tab key makes it 0.2 s",
           f"{done} {short:.2f} s against {took:.2f} s")
     # A `w` on a config key is no longer read: the wait comes only with a Tab.

@@ -351,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         RemotePoller.shared.start() // status of remote tabs, from their hosts
+        followAgentSpinner()
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
         if shareWithCopilot { startCopilotLink() } // Copilot CLI's, in CopilotIDE.swift
@@ -919,6 +920,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
+    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
+    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
+    func copiesIgnoredFiles(for main: String) -> Bool {
+        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    }
+
+    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+        choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
+        choices[canonicalPath(main)] = on
+        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+    }
+
     // MARK: projects
 
     private var recent: RecentProjects {
@@ -1244,6 +1258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
+        if item.action == #selector(setAgentSpinner(_:)) { item.state = item.representedObject as? String == AgentSpinner.current.rawValue ? .on : .off }
         if item.action == #selector(setLineHeight(_:)), let value = item.representedObject as? Double {
             item.state = abs(CGFloat(value) - editorLineHeight) < 0.001 ? .on : .off
         }
@@ -1251,6 +1266,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
         }
         return true
+    }
+
+    /// View › Agent Spinner: Spinning, Still or Off, for every window at once.
+    @objc func setAgentSpinner(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let choice = AgentSpinner(rawValue: raw) else { return }
+        AgentSpinner.current = choice
+    }
+
+    /// The tabs' marks and titles drawn again when Agent Spinner (or Reduce Motion) changes.
+    private func followAgentSpinner() {
+        AgentSpinner.followSystemMotion()
+        NotificationCenter.default.addObserver(forName: AgentSpinner.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.controllers.forEach { $0.refresh() } }
+        }
     }
 
     // MARK: font size
@@ -1557,6 +1586,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             entry.representedObject = Double(value)
         }
         view.addItem(withTitle: "Line Height", action: nil, keyEquivalent: "").submenu = heights
+        // How a terminal tab shows its agent working; also in Settings › Notifications.
+        let spinner = NSMenu(title: "Agent Spinner")
+        for choice in AgentSpinner.allCases {
+            item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
+        }
+        view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)

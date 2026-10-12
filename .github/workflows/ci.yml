@@ -33,8 +33,13 @@ jobs:
           scripts/test.sh
 
       - name: zsh integration test
-        timeout-minutes: 15 # about 5 minutes on a fast Mac since Tab completion's going-into-folders checks
-        run: python3 -u scripts/zsh-integration-test.py
+        timeout-minutes: 25 # about 5 minutes on a fast Mac since Tab completion's going-into-folders checks; twice with the retry
+        # Once more when it fails: on a busy runner a different engine check misses its moment each time (2026-10-12,
+        # five runs in an hour, none on a Mac). A real failure fails both runs; the first run's lines stay in the log.
+        run: |
+          python3 -u scripts/zsh-integration-test.py && exit 0
+          echo "::warning::zsh integration test failed once; running it again"
+          python3 -u scripts/zsh-integration-test.py
 
       - name: Build DMG
         timeout-minutes: 20

@@ -20,19 +20,30 @@ extension GitActions {
         let root = self.root
         let location = AppDelegate.shared.worktreeLocation
         let listed = model.worktrees.map(\.path)
+        // "Copy ignored files too" names what the sidebar already knows git ignores at the checkout's top.
+        let snapshot = controller?.sidebar.git.snapshot.flatMap { canonicalPath($0.root) == canonicalPath(root) ? $0 : nil }
+        let ignoredHere = snapshot.map { snapshot in
+            snapshot.wholeFolders.filter { $0.value == .ignored && !$0.key.contains("/") }.map { $0.key + "/" }
+                + snapshot.files.filter { $0.value == .ignored && !$0.key.contains("/") }.map(\.key)
+        }
+        let copyTitle = ignoredHere.map(WorktreeCopy.checkboxTitle(ignored:)) ?? "Copy ignored files too"
+        let copyOn = AppDelegate.shared.copiesIgnoredFiles(for: main)
         DispatchQueue.global(qos: .userInitiated).async {
             let ignored = location == .claudeWorktrees && WorktreeFolder.ignoresClaudeWorktrees(mainCheckout: main, git: git)
             // A submodule's go beside its superproject, in no repository's files.
             let outermost = WorktreeFolder.outermostCheckout(main, git: git)
             let includes = WorktreeInclude.exists(in: root)
+            let place = WorktreeFolder.place(mainCheckout: main, outermost: outermost, location: location, claudeWorktreesIgnored: ignored)
+            let canClone = WorktreeCopy.canClone(from: root, into: place.folder)
             DispatchQueue.main.async {
-                let place = WorktreeFolder.place(mainCheckout: main, outermost: outermost, location: location, claudeWorktreesIgnored: ignored)
-                askWorktreeName(target, place: place, listed: listed, includes: includes, update: update)
+                let copy = copyTitle.map { WorktreeSheet.CopyChoice(title: $0, on: copyOn && canClone, enabled: canClone, main: main) }
+                askWorktreeName(target, place: place, listed: listed, includes: includes, copy: copy, update: update)
             }
         }
     }
 
-    private func askWorktreeName(_ target: WorktreeTarget, place: WorktreeFolder.Place, listed: [String], includes: Bool, update: Bool) {
+    private func askWorktreeName(_ target: WorktreeTarget, place: WorktreeFolder.Place, listed: [String], includes: Bool,
+                                 copy: WorktreeSheet.CopyChoice?, update: Bool) {
         let folder = canonicalPath(place.folder)
         func path(_ name: String) -> String { folder + "/" + name }
         /// A worktree git lists at that path (its folder may be gone).
@@ -42,12 +53,14 @@ extension GitActions {
         let taken = { (name: String) in WorktreeFolder.exists(path(name)) || isListed(name) }
         let prefill = WorktreeFolder.suggestedName(prefix: place.prefix, short: target.shortName, isTaken: taken)
         let checkout = ((model?.root ?? root) as NSString).lastPathComponent
+        let footnotes = (off: WorktreeFolder.sheetInfo(checkout: checkout, includes: includes), on: WorktreeCopy.footnote(checkout: checkout))
         let sheet = WorktreeSheet(title: WorktreeFolder.sheetTitle(target), folder: folder, prefill: prefill, prefix: place.prefix,
-                                  footnote: WorktreeFolder.sheetInfo(checkout: checkout, includes: includes)) { name in
+                                  footnotes: footnotes, copy: copy) { name in
             WorktreeFolder.problem(name, in: folder, isTaken: { WorktreeFolder.exists(path($0)) },
                                    isRegistered: { isListed($0) && !WorktreeFolder.exists(path($0)) })
         }
         sheet.present(over: window) { name, sheet in
+            if let copy, copy.enabled { AppDelegate.shared.setCopiesIgnoredFiles(sheet.copiesIgnored, for: copy.main) }
             createWorktree(target, at: path(name), update: update, sheet: sheet)
         }
     }
@@ -69,17 +82,28 @@ extension GitActions {
                 sheet.finish()
                 return failed("Could not create “\(folder)”", result, retry: args)
             }
+            let copiesIgnored = sheet.copiesIgnored, stop = sheet.stop
+            if copiesIgnored { sheet.beginCopying() }
             DispatchQueue.global(qos: .userInitiated).async {
-                let copied = Self.copyIncludes(from: root, to: path)
+                // The box ticked: what git ignores there, cloned, the window opening once it is in; else what
+                // .worktreeinclude lists, as before.
+                let ignored = copiesIgnored ? Self.copyIgnored(from: root, to: path, stop: stop, sheet: sheet) : nil
+                let copied = copiesIgnored ? [] : Self.copyIncludes(from: root, to: path)
                 DispatchQueue.main.async {
                     sheet.finish()
                     let opened = AppDelegate.shared.openWorktreeWindow(path)
+                    if let ignored { Self.logCopy(ignored.report, in: path) }
                     guard result.ok else {
                         let skipped = update && target.branchName != nil ? "It wasn’t brought up to date: Update Project there does it." : nil
                         return failed("“\(folder)” was made, but git reported an error", result, retry: nil, note: skipped, there: (opened, path))
                     }
+                    if let ignored, let problem = Self.copyProblem(ignored.report, folder: folder) {
+                        GitPrompt.ask(problem.title, info: problem.info, buttons: ["Show Git Commands", "OK"], over: opened.window) { choice in
+                            if choice == 0 { GitCommandsWindowController.shared.present() }
+                        }
+                    }
                     let on = target.branchName.map { "on \($0)" } ?? "at \(target.shown), detached"
-                    let notice = "New worktree \(on)" + Self.copiedNotice(copied)
+                    let notice = "New worktree \(on)" + (ignored.map { WorktreeCopy.notice($0.report, hints: $0.hints) } ?? Self.copiedNotice(copied))
                     if update, let branch = target.branchName { return fastForward(branch, in: path, repository: commonDir, over: opened, notice: notice) }
                     GitToast.show(notice, in: opened.window)
                 }
@@ -100,6 +124,47 @@ extension GitActions {
         guard let git = GitWriter.git, WorktreeInclude.exists(in: root) else { return [] }
         let files = WorktreeInclude.files(in: root, git: git)
         return WorktreeInclude.copy(files, from: root, to: path).copied
+    }
+
+    /// "Copy ignored files too": the entries git ignores in the checkout the window shows that the new branch ignores
+    /// too, cloned (WorktreeCopy), the sheet saying which one it is at; what to run there after. Off the main thread.
+    private static func copyIgnored(from root: String, to path: String, stop: WorktreeCopy.Stop, sheet: WorktreeSheet)
+        -> (report: WorktreeCopy.Report, hints: [String]) {
+        guard let git = GitWriter.git else { return (WorktreeCopy.Report(), []) }
+        guard let entries = WorktreeCopy.entries(from: root, to: path, git: git) else {
+            var report = WorktreeCopy.Report()
+            report.fatal = "git couldn’t say which files it ignores"
+            return (report, [])
+        }
+        let includes = Set(WorktreeInclude.files(in: root, git: git))
+        let worktrees = WorktreeCopy.worktrees(of: root, git: git)
+        var shown = Date.distantPast
+        let report = WorktreeCopy.clone(entries, from: root, to: path, worktrees: worktrees, includes: includes,
+                                        hasTracked: { WorktreeCopy.tracks($0, in: path, git: git) }, stop: stop) { entry, index, count in
+            // At most ten times a second.
+            guard Date().timeIntervalSince(shown) > 0.1 || index == 1 else { return }
+            shown = Date()
+            DispatchQueue.main.async { sheet.copying(entry, index, count) }
+        }
+        return (report, WorktreeCopy.hints(for: report, source: root, destination: path, git: git))
+    }
+
+    /// What was cloned and left out, in Git Commands.
+    private static func logCopy(_ report: WorktreeCopy.Report, in path: String) {
+        let now = Date()
+        GitCommandLog.shared.add(GitCommandLog.Entry(title: "Copy ignored files", command: "clone the ignored files into \((path as NSString).lastPathComponent)",
+                                                     directory: path, start: now, duration: 0, status: report.failures.isEmpty && report.fatal == nil ? 0 : 1,
+                                                     output: WorktreeCopy.logText(report)))
+    }
+
+    /// The question when the copy went wrong: what couldn't be copied, never what was left out by design.
+    private static func copyProblem(_ report: WorktreeCopy.Report, folder: String) -> (title: String, info: String)? {
+        let failures = report.failures
+        guard report.fatal != nil || !failures.isEmpty else { return nil }
+        var lines = failures.prefix(5).map { "\($0.path): \($0.why.reason)" }
+        if failures.count > 5 { lines.append("and \(failures.count - 5) more") }
+        if let fatal = report.fatal { lines.insert("It stopped: \(fatal).", at: 0) }
+        return ("“\(folder)” was made, but some ignored files weren’t copied", lines.joined(separator: "\n") + "\n\nGit › Git Commands lists them all.")
     }
 
     /// "; copied .env from .worktreeinclude", or "; copied 12 files from .worktreeinclude".
@@ -222,8 +287,22 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     /// The sheet up now, for the self-test.
     private(set) static var current: WorktreeSheet?
 
+    /// "Copy ignored files too": its title, whether it starts ticked, whether the disk lets it be (else it is off,
+    /// and says why), and the main checkout it is remembered for.
+    struct CopyChoice {
+        let title: String
+        let on: Bool
+        let enabled: Bool
+        let main: String
+    }
+
     private let alert = NSAlert()
     private let field = PrefixField()
+    private let note = NSTextField(wrappingLabelWithString: "")
+    private var copyBox: NSButton?
+    private let footnotes: (off: String, on: String)
+    /// Stop Copying sets it; the copy reads it between clone calls.
+    let stop = WorktreeCopy.Stop()
     private let pathLine = NSTextField(labelWithString: "")
     private let problem = NSTextField(wrappingLabelWithString: "")
     private let spinner = NSProgressIndicator()
@@ -237,10 +316,12 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     private var creating = false
     private weak var parent: NSWindow?
 
-    init(title: String, folder: String, prefill: String, prefix: String, footnote: String, check: @escaping (String) -> String?) {
+    init(title: String, folder: String, prefill: String, prefix: String, footnotes: (off: String, on: String), copy: CopyChoice? = nil,
+         check: @escaping (String) -> String?) {
         self.folder = folder
         self.prefix = prefix
         self.check = check
+        self.footnotes = footnotes
         alert.messageText = title
         alert.informativeText = ""
         create = alert.addButton(withTitle: "Create")
@@ -249,11 +330,11 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         super.init()
         create.target = self
         create.action = #selector(createPressed)
-        build(prefill: prefill, footnote: footnote)
+        build(prefill: prefill, copy: copy)
         changed()
     }
 
-    private func build(prefill: String, footnote: String) {
+    private func build(prefill: String, copy: CopyChoice?) {
         let width: CGFloat = 380
         let label = NSTextField(labelWithString: "Folder name:")
         label.alignment = .right
@@ -267,7 +348,8 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         }
         pathLine.lineBreakMode = .byTruncatingMiddle
         problem.textColor = Theme.failed
-        let note = NSTextField(wrappingLabelWithString: footnote)
+        // Laid out for the longer footnote, so the sheet keeps its size when the box swaps them.
+        note.stringValue = copy == nil || footnotes.off.count > footnotes.on.count ? footnotes.off : footnotes.on
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
         note.preferredMaxLayoutWidth = width
@@ -275,7 +357,16 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
-        let views: [NSView] = [label, field, pathLine, problem, note, spinner]
+        var views: [NSView] = [label, field, pathLine, problem, note, spinner]
+        if let copy {
+            let box = NSButton(checkboxWithTitle: copy.title, target: self, action: #selector(copyToggled))
+            box.state = copy.on ? .on : .off
+            box.isEnabled = copy.enabled
+            box.toolTip = copy.enabled ? "Clones of what git ignores here, on the same disk: they share space until either side changes." : WorktreeCopy.cantClone
+            box.lineBreakMode = .byTruncatingTail
+            copyBox = box
+            views.append(box)
+        }
         let box = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 0))
         for view in views {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -296,15 +387,23 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
             problem.leadingAnchor.constraint(equalTo: pathLine.leadingAnchor),
             problem.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             problem.heightAnchor.constraint(equalToConstant: 28),
-            note.topAnchor.constraint(equalTo: problem.bottomAnchor, constant: 6),
+            note.topAnchor.constraint(equalTo: copyBox?.bottomAnchor ?? problem.bottomAnchor, constant: copyBox == nil ? 6 : 8),
             note.leadingAnchor.constraint(equalTo: box.leadingAnchor),
             note.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             spinner.topAnchor.constraint(equalTo: note.bottomAnchor, constant: 8),
             spinner.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             spinner.bottomAnchor.constraint(equalTo: box.bottomAnchor),
         ])
+        if let copyBox {
+            NSLayoutConstraint.activate([
+                copyBox.topAnchor.constraint(equalTo: problem.bottomAnchor, constant: 4),
+                copyBox.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+                copyBox.trailingAnchor.constraint(lessThanOrEqualTo: box.trailingAnchor),
+            ])
+        }
         box.layoutSubtreeIfNeeded()
         box.setFrameSize(NSSize(width: width, height: box.fittingSize.height))
+        note.stringValue = copiesIgnored ? footnotes.on : footnotes.off
         alert.accessoryView = box
         alert.window.initialFirstResponder = field
     }
@@ -362,6 +461,39 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         create.isEnabled = why == nil
     }
 
+    /// The box ticked or not: the footnote says what the new folder gets.
+    @objc private func copyToggled() {
+        note.stringValue = copiesIgnored ? footnotes.on : footnotes.off
+    }
+
+    /// Whether the ignored files are copied: the box there, ticked, and on a disk that clones.
+    var copiesIgnored: Bool { copyBox.map { $0.isEnabled && $0.state == .on } ?? false }
+
+    /// After git, while the ignored files are cloned: the sheet stays up, Cancel is Stop Copying.
+    func beginCopying() {
+        create.title = "Copying…"
+        cancel.title = "Stop Copying"
+        cancel.target = self
+        cancel.action = #selector(stopPressed)
+        cancel.isEnabled = true
+        copyBox?.isEnabled = false
+        problem.textColor = .secondaryLabelColor
+        problem.stringValue = "Copying ignored files…"
+    }
+
+    /// "Copying vendor (2 of 9)…", as each entry git listed starts.
+    func copying(_ entry: String, _ index: Int, _ count: Int) {
+        guard !stop.isSet else { return }
+        problem.stringValue = "Copying \(entry) (\(index) of \(count))…"
+    }
+
+    /// Stop Copying: the copy ends after the clone call it is in; what was copied stays, and the window opens.
+    @objc private func stopPressed() {
+        stop.set()
+        cancel.isEnabled = false
+        problem.stringValue = "Stopping…"
+    }
+
     @objc private func createPressed() {
         guard !creating, check(field.stringValue) == nil, let onCreate else { return NSSound.beep() }
         creating = true
@@ -377,7 +509,12 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     var name: String { field.stringValue }
     var pathText: String { pathLine.stringValue }
     var problemText: String { problem.stringValue }
-    var footnote: String { (alert.accessoryView?.subviews.compactMap { $0 as? NSTextField }.last?.stringValue) ?? "" }
+    var footnote: String { note.stringValue }
+    var copyTitle: String? { copyBox?.title }
+    var copyEnabled: Bool { copyBox?.isEnabled ?? false }
+    func toggleCopy() { copyBox?.performClick(nil) }
+    var cancelTitle: String { cancel.title }
+    func pressStop() { cancel.performClick(nil) }
     var title: String { alert.messageText }
     var canCreate: Bool { create.isEnabled }
     var createTitle: String { create.title }

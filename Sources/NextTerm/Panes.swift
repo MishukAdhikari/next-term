@@ -205,9 +205,10 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     /// Takes the pane's title, mark and server mark. Called several times a second: touch only what changed
     /// (setting a tooltip again resets it).
     func update() {
-        if tab.title != title || tab.shorterTitles != shorterTitles {
-            title = tab.title
-            shorterTitles = tab.shorterTitles
+        let shown = AgentSpinner.shown(tab.title) // an agent's spinner frame left out unless the ring turns
+        if shown != title || tab.shorterTitles.map(AgentSpinner.shown) != shorterTitles {
+            title = shown
+            shorterTitles = tab.shorterTitles.map(AgentSpinner.shown)
             label.stringValue = title
             needsLayout = true // layout may shorten it
         }

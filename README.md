@@ -174,8 +174,8 @@ NextTerm-x.y.z.dmg.sha256` before allowing it.
 
 | Mark | Meaning |
 |---|---|
-| none | At the prompt, or a plain command running |
-| spinner | An AI agent is working |
+| none | At the prompt, a plain command running, or an agent working with View › Agent Spinner set to Off |
+| spinner | An AI agent is working (View › Agent Spinner: Spinning, Still or Off) |
 | green ✓ | An agent stopped and is waiting for your next prompt, or a command finished |
 | amber ! | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
 | red ✕ | A command exited with an error (the exit code is in the tooltip) |
