@@ -282,7 +282,7 @@ enum SecretsMCP {
         if let refusal = requests.precheck(asker: asker, binding: preliminary, names: invocation.names, command: command, folder: folder) {
             return reply(MCPControl.ok(answer(for: .refused(refusal), tool: "run_with_secrets")))
         }
-        let ticketTab = target ?? newTab(folder: folder, program: program, keys: invocation.names)
+        let ticketTab = target ?? newTab(folder: folder, program: program, keys: invocation.names, caller: caller)
         let tabID = ticketTab.id.uuidString.lowercased()
         let call = Call(asker: asker, tool: "run_with_secrets")
         let ticket = SecretRequests.Ticket(asker: asker, keys: keys, command: command, folder: folder, target: targetWord,
@@ -354,10 +354,12 @@ enum SecretsMCP {
     }
 
     /// A new tab in the folder's window (new_tab's rule), never a reused one, without taking the keyboard. Its title
-    /// names the program and the keys.
-    static func newTab(folder: String, program: String, keys: [String]) -> TerminalTab {
+    /// names the program and the keys; as with new_tab, the asking agent's tab is its opened_by, so an agent run there
+    /// is that agent's worker and opens no tabs of its own unless the user asks it to.
+    static func newTab(folder: String, program: String, keys: [String], caller: TerminalTab?) -> TerminalTab {
         let (controller, _) = MCPControl.window(for: folder)
         let tab = controller.addTab(directory: folder, select: false)
+        tab.openedBy = caller?.id
         tab.userTitle = "\(program) · with \(SecretReason.keys(keys))"
         controller.refresh()
         return tab
