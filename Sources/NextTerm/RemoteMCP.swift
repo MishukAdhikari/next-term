@@ -243,7 +243,10 @@ enum RemoteMCP {
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
         let withDiff = arguments["diff"] as? Bool ?? true
         let limit = min(2_000_000, max(1000, arguments["max_bytes"] as? Int ?? 200_000))
-        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? limit + 1 : 0)
+        // The diff is masked before it is cut: the host sends the longest stored form's bytes past the cut, so a value
+        // that starts before it is there whole, and is left out whole (SecretMask.maskedPrefix).
+        let mask = SecretMask.current
+        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? limit + mask.longest + 1 : 0)
         RemoteConnection.run(found, script: script, timeout: 50) { output in
             guard let changes = RemoteChanges.parse(output.output) else {
                 if output.status == 3 || output.status == 4 { return reply(fail("\(directory) on \(found.name): \(output.problem)")) }
@@ -252,9 +255,9 @@ enum RemoteMCP {
             var info: [String: Any] = ["host": found.name, "directory": directory, "branch": changes.branch,
                                        "files": changes.files, "stat": changes.stat]
             if withDiff {
-                let cut = changes.diff.utf8.count > limit
-                info["diff"] = cut ? String(decoding: Array(changes.diff.utf8.prefix(limit)), as: UTF8.self) : changes.diff
-                if cut { info["diff_cut_at_bytes"] = limit }
+                let shown = mask.maskedPrefix(changes.diff, maxBytes: limit)
+                info["diff"] = shown.text
+                if shown.cut { info["diff_cut_at_bytes"] = limit }
             }
             reply(ok(info))
         }
