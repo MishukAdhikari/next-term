@@ -15,10 +15,14 @@ struct GitActions {
     var model: BranchModel? { popup.model }
     var root: String { model?.root ?? "" }
 
-    /// A sheet is over the window. The Git menu's commands are off while one is, but a key pressed twice, or held,
-    /// passes that check before the first press's question is up (each reads the branches first, and Push… its
-    /// outgoing commits): where such a press would ask, it asks nothing while a sheet is up, so no second question waits.
+    /// A sheet is over the window. The Git menu's commands are off while one is; a second press of the same command
+    /// before it is up does nothing (TerminalWindowController.gitAsking). Two different commands pressed together pass
+    /// both: where one would ask, it asks nothing while a sheet is up, so no second question waits.
     var sheetIsUp: Bool { window?.attachedSheet != nil }
+
+    /// Called once the command's question or sheet is up, or it ended without one: the Git menu's key gives back its
+    /// claim (TerminalWindowController.gitAsking). Nothing for the branch popup's own calls.
+    var settle: () -> Void = {}
 
     /// `place`: the worktree and repository to run in, when they must be those of an earlier step (a rollback's Undo),
     /// not what the window shows now.
@@ -312,6 +316,7 @@ struct GitActions {
     // MARK: branches
 
     func askNewBranch(base: BranchRef?) {
+        defer { settle() } // the name's sheet is up as this returns
         guard !sheetIsUp else { return }
         let existing = Set(model?.locals.map(\.name) ?? [])
         let from = base.map { "From “\($0.name)”." } ?? "From what’s checked out now" + (model?.current.map { " (\($0))" } ?? "") + "."
@@ -569,6 +574,9 @@ struct GitActions {
     }
 
     func updateProject() {
+        // Given back as it asks or ends here, or once the fetch and the read after it are done.
+        var settles = true
+        defer { if settles { settle() } }
         guard let current = model?.currentRef else {
             return GitPrompt.ask("Not on a branch", info: "HEAD is detached. New Branch… keeps work made here.", buttons: ["OK"], over: window) { _ in }
         }
@@ -577,10 +585,15 @@ struct GitActions {
                                  buttons: ["OK"], over: window) { _ in }
         }
         let begun = GitToast.count
+        settles = false
         run("Update Project", [["fetch", remote]], activity: .pulling) { fetched in
-            guard fetched.ok else { return failed("Could not fetch from \(remote)", fetched, retry: ["fetch", remote]) }
+            guard fetched.ok else {
+                settle()
+                return failed("Could not fetch from \(remote)", fetched, retry: ["fetch", remote])
+            }
             fetchedByHand(remote: remote)
             popup.reload {
+                defer { settle() }
                 guard let fresh = popup.model?.currentRef else { return }
                 guard fresh.behind > 0 else { return toast("Already up to date", begun: begun) }
                 confirmAgents(.updating) { bringUp(fresh) }
@@ -704,6 +717,9 @@ struct GitActions {
     }
 
     func push(branch: BranchRef? = nil) {
+        // Given back as it asks or ends here, or once the outgoing commits are read and the question is up.
+        var settles = true
+        defer { if settles { settle() } }
         guard !sheetIsUp else { return }
         guard let ref = branch ?? model?.currentRef, !ref.isRemote else {
             return GitPrompt.ask("Not on a branch", info: "HEAD is detached: New Branch… first.", buttons: ["OK"], over: window) { _ in }
@@ -721,7 +737,8 @@ struct GitActions {
             let publishing = ref.upstream == nil || ref.upstreamGone || target != upstreamName
             let range = publishing ? [ref.name, "--not", "--remotes"] : ["\(remote)/\(target)..\(ref.name)"]
             run("Outgoing commits", [["log", "--format=%h %s", "--max-count=10"] + range]) { log in
-                guard !sheetIsUp else { return } // a second press's, under the first's question
+                defer { settle() }
+                guard !sheetIsUp else { return } // another command's, under the first's question
                 let commits = log.output.trimmingCharacters(in: .whitespacesAndNewlines)
                 let title = publishing ? "Publish “\(ref.name)” to \(remote)/\(target)?" : "Push “\(ref.name)” to \(remote)/\(target)?"
                 GitPrompt.ask(title, info: commits.isEmpty ? "Nothing new to send; \(publishing ? "it creates the branch there." : "it’s up to date.")" : commits,
@@ -749,6 +766,7 @@ struct GitActions {
                 if choice == 1 { go(upstreamName) }
             }
         } else {
+            settles = false
             go(upstreamName ?? ref.name)
         }
     }
@@ -800,15 +818,21 @@ struct GitActions {
     static var commitAgentForTest: (agent: CommitMessageAgent, path: String)?
 
     func commit() {
+        // Given back as it ends here, or once the commit sheet is up (or was up already).
+        var settles = true
+        defer { if settles { settle() } }
         guard let controller, let git = GitWriter.git, model != nil else { return }
         let root = self.root
         // Write with Agent asks the agent working here, if the sheet knows it; else the first installed.
         let working = agentsHere().map(\.status.program)
         let forTest = Self.commitAgentForTest
+        let settle = self.settle
+        settles = false
         DispatchQueue.global(qos: .userInitiated).async {
             let staged = BranchModel.stagedFiles(at: root, git: git)
             let agent = forTest ?? CommitMessageAgent.find(preferring: working, in: LoginShell.path)
             DispatchQueue.main.async {
+                defer { settle() }
                 let snapshot = controller.sidebar.git.snapshot
                 let files: [String: GitChange] = snapshot?.files ?? [:]
                 let newFolders: [String] = (snapshot?.wholeFolders ?? [:]).filter { $0.value == .untracked }.map { $0.key + "/" }

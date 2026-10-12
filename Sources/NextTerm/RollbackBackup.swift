@@ -76,11 +76,12 @@ final class RollbackBackup: @unchecked Sendable { // made, and its files sent to
 
     // MARK: the folder
 
+    /// The plain self-test's own folder for the copies, removed when it finishes (SelfTest.finish).
+    static let selfTestFolder = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-selftest-rollbacks-\(getpid())", isDirectory: true)
+
     /// Where the copies go: Next Term's folder in Application Support, or the plain self-test's own temporary one.
     private static var parent: URL? {
-        if SelfTest.mode == .plain {
-            return FileManager.default.temporaryDirectory.appendingPathComponent("next-term-selftest-rollbacks-\(getpid())", isDirectory: true)
-        }
+        if SelfTest.mode == .plain { return selfTestFolder }
         return SelfTest.supportFolder?.appendingPathComponent("Rollbacks", isDirectory: true)
     }
 
