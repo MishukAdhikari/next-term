@@ -182,6 +182,8 @@ final class SecretRequests {
     private(set) var book = SecretGrantBook()
     /// Each grant's own values, by its id.
     private var held: [String: [String: SecretBytes]] = [:]
+    /// Each grant's timer for its own end, by its id, until it fires or the grant ends otherwise.
+    private var endTimers: [String: DispatchSourceTimer] = [:]
     /// The clock: the self-test moves it.
     var now: () -> ContinuousClock.Instant = { .now }
     private var observers: [NSObjectProtocol] = []
@@ -726,6 +728,7 @@ final class SecretRequests {
     /// A grant is over: its values go, wiped, and the audit log says why.
     private func over(_ grant: SecretGrant, outcome: String) {
         drop(grant.id)
+        endTimers.removeValue(forKey: grant.id)?.cancel()
         let line = SecretAudit.Line(event: .grantEnd, names: grant.names, command: grant.binding.command.joined(separator: " "),
                                     folder: grant.binding.folder, outcome: outcome)
         SecretsStore.shared.record(line)
@@ -770,12 +773,21 @@ final class SecretRequests {
         #else
         let delay = Self.seconds(left) + 0.5
         #endif
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            MainActor.assumeIsolated { SecretRequests.shared.expireDue() }
+        // A strict timer with a quarter second's leeway: a plain one may fire up to a tenth of its wait late (a minute
+        // for 15 minutes), and later under App Nap, with the values still held.
+        let id = grant.id
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        timer.schedule(deadline: .now() + delay, leeway: .milliseconds(250))
+        timer.setEventHandler {
+            MainActor.assumeIsolated { SecretRequests.shared.endTimerFired(id) }
         }
+        endTimers.removeValue(forKey: id)?.cancel()
+        endTimers[id] = timer
+        timer.resume()
     }
 
-    private func expireDue() {
+    private func endTimerFired(_ id: String) {
+        endTimers.removeValue(forKey: id)?.cancel()
         guard !expire(at: now()).isEmpty else { return }
         changedNow()
     }
@@ -835,6 +847,8 @@ final class SecretRequests {
         limits = SecretLimits()
         book = SecretGrantBook()
         held.removeAll()
+        for timer in endTimers.values { timer.cancel() }
+        endTimers.removeAll()
         now = { .now }
         #if DEBUG
         Self.grantTimer = nil

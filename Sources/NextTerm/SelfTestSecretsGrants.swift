@@ -204,6 +204,24 @@ extension SelfTest {
               "secrets: a one-use grant and its values go the moment it is used, with a grant-end line",
               "made \(oneUse), gone \(gone), line \(usedLine)")
 
+        // A one-use grant never used: its timer ends it at its 2 minutes, with nothing asking after it, and its values go.
+        let unusedStart = ContinuousClock.now
+        requests.now = { unusedStart }
+        SecretRequests.grantTimer = 3
+        let unused = secretsRequest(asker: "wrapper:selftest-unused", command: ["node", "unused.js"], tab: "tab 3")
+        let unusedWaits = requests.ask(unused) { _ in }
+        let unusedPanel = unused.panel
+        unusedPanel?.allowButton.performClick(nil)
+        if let unusedWaits { requests.wrapperLeft(unusedWaits) }
+        let unusedMade = await wait(10) { requests.book.grants.contains { $0.kind == .oneUse } && !requests.heldGrants.isEmpty }
+        unusedPanel?.close()
+        let beforeEnd = secretsAudit(store).count
+        requests.now = { unusedStart.advanced(by: SecretGrant.oneUseWindow + .seconds(1)) }
+        let unusedWiped = await wait(10) { requests.heldGrants.isEmpty && requests.book.grants.isEmpty }
+        let unusedLine = await wait(5) { ended("expired", after: beforeEnd) }
+        check(unusedMade && unusedWiped && unusedLine,
+              "secrets: a one-use grant never used ends at its 2 minutes with nothing asking after it: its values go, with a grant-end line",
+              "made \(unusedMade), wiped \(unusedWiped), line \(unusedLine)")
     }
 }
 #endif
