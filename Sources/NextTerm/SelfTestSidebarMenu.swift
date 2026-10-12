@@ -219,12 +219,13 @@ extension SelfTest {
 
     /// What is wrong with sidebar menus' keys, and every item's title: each item is a command (its identifier) showing the
     /// key that command has now, one without ⌘ or ⌃ named in its tooltip instead. Of the agents' Continue Latest, only the
-    /// first is a command: one key does one of them.
+    /// first is a command: one key does one of them. Likewise, of a row's pages ("Open Neon Console"), only the first is
+    /// Open Service Page.
     static func sidebarMenuKeyAudit(_ menus: [(menu: NSMenu, row: String)]) -> (wrong: [String], titles: [String]) {
         let shortcuts = KeyboardShortcuts.shared
         var wrong: [String] = [], titles: [String] = []
         for (menu, row) in menus {
-            var continues = 0
+            var continues = 0, pages = 0
             for item in menu.items where !item.isSeparatorItem {
                 titles.append(item.title)
                 let key = KeyboardShortcuts.chord(of: item)
@@ -233,8 +234,13 @@ extension SelfTest {
                     continues += 1
                     if (id == "sidebar.continueLatest") != (continues == 1) { wrong.append("\(row): \(item.title) is \(id ?? "no command")") }
                 }
+                if item.representedObject is ServiceLink {
+                    pages += 1
+                    if (id == "sidebar.openServicePage") != (pages == 1) { wrong.append("\(row): \(item.title) is \(id ?? "no command")") }
+                }
+                let later = item.title.hasPrefix("Continue Latest") || item.representedObject is ServiceLink
                 guard let id else {
-                    if key != nil || !item.title.hasPrefix("Continue Latest") { wrong.append("\(row): \(item.title) is no command") }
+                    if key != nil || !later { wrong.append("\(row): \(item.title) is no command") }
                     continue
                 }
                 let chord = shortcuts.chord(for: id)

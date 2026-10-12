@@ -267,7 +267,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         let row = outline.row(at: point)
         guard row >= 0, outline.visibleRect.contains(point) else { return "" }
-        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DatabaseCellView { return cell.tipText }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DatabaseCellView {
+            return cell.tip(at: cell.convert(point, from: outline))
+        }
         if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionRowCellView { return cell.tipText }
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
         return cell.tipText

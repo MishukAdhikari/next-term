@@ -37,10 +37,6 @@ enum DatabaseText {
         return db.sourceFile ?? ""
     }
 
-    static func badge(_ db: DetectedDatabase) -> String {
-        db.providers.prefix(2).map(\.rawValue).joined(separator: " · ")
-    }
-
     static func tooltip(_ db: DetectedDatabase) -> String {
         var lines = [([db.engine.displayName] + db.providers.map(\.rawValue)).joined(separator: " · ")]
         lines.append(db.masked)
@@ -117,11 +113,12 @@ final class BadgeView: NSView {
     }
 }
 
-/// A database row, or the group's: icon, name with its source dimmed, provider badge, ⋯ menu.
+/// A database row, or the group's: icon, name with its source dimmed, provider badges (each opening its provider's
+/// page), ⋯ menu.
 final class DatabaseCellView: NSTableCellView {
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
-    let badge = BadgeView()
+    let badge = LinkBadgeStack()
     private(set) lazy var more = MoreButton(toolTip: "Database actions") { [weak self] in self?.onMenu?() ?? NSMenu() }
     /// The ⋯ menu for this row (set by the sidebar each time the cell is configured).
     var onMenu: (() -> NSMenu)?
@@ -176,7 +173,7 @@ final class DatabaseCellView: NSTableCellView {
             text.append(NSAttributedString(string: detail, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim]))
         }
         name.attributedStringValue = Typography.truncating(text, .byTruncatingMiddle)
-        badge.text = DatabaseText.badge(db)
+        badge.show(db.badges)
         more.isHidden = false
         tipText = DatabaseText.tooltip(db)
         setAccessibilityLabel(DatabaseText.accessibility(db))
@@ -191,7 +188,7 @@ final class DatabaseCellView: NSTableCellView {
         text.append(Typography.gap(7, font: .systemFont(ofSize: 11.5)))
         text.append(NSAttributedString(string: "\(group.items.count)", attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: Theme.textDim]))
         name.attributedStringValue = Typography.truncating(text, .byTruncatingTail)
-        badge.text = group.vercelProject == nil ? "" : DatabaseProvider.vercel.rawValue
+        badge.show(DatabaseLinks.groupBadges(vercelProject: group.vercelProject))
         more.isHidden = true
         var tip = "Databases this project’s files name, found offline: env files, Prisma, Drizzle, Supabase and SQLite files. Nothing connects until you choose a hand-off."
         if let project = group.vercelProject { tip += "\nLinked to Vercel" + (project == "linked" ? "." : " project “\(project)”.") }
@@ -201,4 +198,9 @@ final class DatabaseCellView: NSTableCellView {
 
     /// What the row shows, for the self-test.
     var nameText: String { name.stringValue }
+
+    /// The tooltip at `point`, in the cell's coordinates: over a badge, the page it opens; elsewhere, the row's.
+    func tip(at point: NSPoint) -> String {
+        badge.tip(at: convert(point, to: badge)) ?? tipText
+    }
 }

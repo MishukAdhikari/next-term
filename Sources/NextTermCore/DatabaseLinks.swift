@@ -345,3 +345,41 @@ extension DatabaseLinks {
         return Page(name: "Portal", url: https("portal.azure.com", "/", fragment: kind?.list))
     }
 }
+
+// MARK: - Badges
+
+/// A badge on a row: its words, and the page a click on it opens. With no page it is a label, and a click on it is a
+/// click on the row.
+public struct ServiceBadge: Sendable, Equatable {
+    public let word: String
+    public let link: ServiceLink?
+
+    public init(word: String, link: ServiceLink?) {
+        self.word = word
+        self.link = link
+    }
+
+    /// A row's badges as they read side by side: "Neon · Vercel".
+    public static func text(_ badges: [ServiceBadge]) -> String {
+        badges.map { (badge: ServiceBadge) -> String in badge.word }.joined(separator: " · ")
+    }
+}
+
+extension DetectedDatabase {
+    /// The row's badges: its first two providers, most specific first, each opening its own provider's page. Two at
+    /// most, so the name keeps its room; the row's menu has every page.
+    public var badges: [ServiceBadge] {
+        providers.prefix(2).map { (provider: DatabaseProvider) -> ServiceBadge in
+            ServiceBadge(word: provider.rawValue, link: link(for: provider))
+        }
+    }
+}
+
+extension DatabaseLinks {
+    /// The Databases group's own badge, for a folder linked to a Vercel project: Vercel, opening the team's storage as
+    /// a Vercel badge on a row does. The project is not named there: the page is the team's.
+    public static func groupBadges(vercelProject: String?) -> [ServiceBadge] {
+        guard vercelProject != nil else { return [] }
+        return [ServiceBadge(word: DatabaseProvider.vercel.rawValue, link: vercel()?.link(.vercel))]
+    }
+}

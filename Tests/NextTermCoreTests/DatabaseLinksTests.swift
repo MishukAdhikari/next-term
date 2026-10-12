@@ -490,6 +490,55 @@ func linkText(_ scan: DatabaseScan) -> String {
         }
     }
 
+    // MARK: badges
+
+    @Test func aRowsBadgesAreItsFirstTwoProvidersEachOpeningItsOwnPage() throws {
+        let project = FixtureProject()
+        project.write(".env.local", Self.neonFromVercel)
+        project.write(".neon", #"{"projectId": "cold-grass-40154007"}"#)
+        let database = try onlyRow(project)
+        let badges = database.badges
+        #expect(badges.map(\.word) == ["Neon", "Vercel"])
+        #expect(ServiceBadge.text(badges) == "Neon · Vercel")
+        #expect(badges.first?.link?.url.absoluteString == "https://console.neon.tech/app/projects/cold-grass-40154007")
+        #expect(badges.first?.link?.tooltip == "Open Neon Console: project cold-grass-40154007")
+        #expect(badges.last?.link?.url.absoluteString == "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fstores")
+        // The row's menu starts with one item per page, in the badges' order.
+        #expect(database.links.map(\.title) == ["Open Neon Console", "Open Vercel Storage"])
+    }
+
+    @Test func aBadgeWithNoPageIsALabelAndARowShowsTwoAtMost() {
+        var row = DetectedDatabase(
+            id: "x", engine: .postgres, name: "shop", host: "db.example.com", port: 5432, user: "shopuser", database: "shop",
+            socket: nil, providers: [.neon, .vercel, .aws], environment: .remote, masked: "", sources: [], filePath: nil,
+            hasPassword: true, isConnection: true, note: nil, tools: [])
+        #expect(row.badges.map(\.word) == ["Neon", "Vercel"])
+        #expect(row.badges.allSatisfy { (badge: ServiceBadge) -> Bool in badge.link == nil })
+        // A badge finds its own provider's page, whatever its place in the links.
+        let links = DatabaseLinks.links(for: row, facts: ProjectFacts())
+        row.links = links.reversed()
+        #expect(row.badges.compactMap(\.link?.badge) == ["Neon", "Vercel"])
+        row.links = links.filter { (link: ServiceLink) -> Bool in link.badge != "Neon" }
+        #expect(row.badges.map(\.word) == ["Neon", "Vercel"] && row.badges.first?.link == nil)
+        let plain = DetectedDatabase(
+            id: "y", engine: .sqlite, name: "app.db", host: nil, port: nil, user: nil, database: nil, socket: nil, providers: [],
+            environment: .local, masked: "", sources: [], filePath: "/tmp/app.db", hasPassword: false, isConnection: true,
+            note: nil, tools: [])
+        #expect(plain.badges.isEmpty && ServiceBadge.text(plain.badges).isEmpty)
+    }
+
+    @Test func theGroupsVercelBadgeOpensTheTeamsStorage() throws {
+        #expect(DatabaseLinks.groupBadges(vercelProject: nil).isEmpty)
+        for project in ["shop-web", "linked"] {
+            let badges = DatabaseLinks.groupBadges(vercelProject: project)
+            #expect(badges.map(\.word) == ["Vercel"], "\(project)")
+            let link = try #require(badges.first?.link)
+            #expect(link.url.absoluteString == "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fstores")
+            #expect(link.title == "Open Vercel Storage" && link.tooltip == "Open Vercel Storage")
+            #expect(SafeWebLink.isAllowed(link.url) && !link.tooltip.contains(project))
+        }
+    }
+
     // MARK: the facts the scan hands on
 
     @Test func theScanHandsItsFactsOnWithNoRawValue() throws {
