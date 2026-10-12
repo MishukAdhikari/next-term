@@ -535,3 +535,45 @@ private final class FolderFixture {
         #expect(f.mode(f.folder.path(SecretFolder.auditName)) == 0o600)
     }
 }
+
+@Suite struct SecretVaultMarkTests {
+    /// vault.json's marks are checked when it is decoded: a length outside 12 to the longest form a 16 KB value can
+    /// have, or a tag that is not 16 bytes, makes the file tampered, even with its MAC made again by hand.
+    @Test func aMarkNoValueCouldHaveIsTampered() throws {
+        let f = try VaultFixture()
+        let tag = Data(count: SecretMask.tagLength).base64EncodedString()
+        func withMark(_ mark: [String: Any]) throws -> Data {
+            try edited(f.file, vault: f.vault, resealed: true) { body in
+                entries(&body) { list in
+                    var marks = list[0]["marks"] as? [[String: Any]] ?? []
+                    marks.append(mark)
+                    list[0]["marks"] = marks
+                }
+            }
+        }
+        // A mark a value could have reads back: the edit itself is sound.
+        let good = try SecretVault.index(from: withMark(["length": 40, "head": 7, "tag": tag]))
+        #expect(good.entries.first?.marks.last?.length == 40)
+        let bad: [(String, [String: Any])] = [
+            ("Int.max", ["length": Int.max, "head": 7, "tag": tag]),
+            ("past the longest form", ["length": SecretMask.maximumLength + 1, "head": 7, "tag": tag]),
+            ("negative", ["length": -40, "head": 7, "tag": tag]),
+            ("under 12", ["length": 11, "head": 7, "tag": tag]),
+            ("a short tag", ["length": 40, "head": 7, "tag": Data(count: 4).base64EncodedString()]),
+        ]
+        for (label, mark) in bad {
+            let changed = try withMark(mark)
+            #expect(throws: SecretVault.Failure.tampered, "\(label)") { _ = try SecretVault.index(from: changed) }
+        }
+    }
+
+    /// A 16 KB value whose percent-encoded form is three times as long is a real value: its vault reads back.
+    @Test func theLongestRealFormReadsBack() throws {
+        let f = try VaultFixture()
+        let value = SecretBytes([UInt8](repeating: UInt8(ascii: "+"), count: SecretVault.maxValueBytes))
+        let file = try f.vault.add(name: "WIDE_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false, value: value,
+                                   maskKey: SymmetricKey(size: .bits256))
+        let index = try SecretVault.index(from: file)
+        #expect(index.entry(named: "WIDE_KEY")?.marks.map(\.length).max() == SecretMask.maximumLength)
+    }
+}

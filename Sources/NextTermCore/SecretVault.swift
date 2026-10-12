@@ -763,7 +763,7 @@ public final class SecretVault {
         HMAC<SHA256>.isValidAuthenticationCode(file.mac, authenticating: file.body, using: indexKey(key))
     }
 
-    /// The outer object and the body, decoded as untrusted input: the format on both, the limits, the names.
+    /// The outer object and the body, decoded as untrusted input: the format on both, the limits, the names, the marks.
     static func decode(_ data: Data) throws -> (file: File, index: Index) {
         guard data.count <= maxFileSize else { throw Failure.tooLarge }
         guard let file = try? decoder.decode(File.self, from: data), file.format == format,
@@ -781,7 +781,7 @@ public final class SecretVault {
         for entry in index.entries {
             guard StoredSecretName.isValid(entry.name), !entry.id.isEmpty, entry.id.utf8.count <= 64,
                   entry.purpose.count <= maxPurposeLength, names.insert(entry.name).inserted,
-                  ids.insert(entry.id).inserted else { return false }
+                  ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible) else { return false }
         }
         return true
     }

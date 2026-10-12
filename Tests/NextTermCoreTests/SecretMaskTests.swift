@@ -214,3 +214,43 @@ private let key40 = "Zq8pLmW2vXn4Rt7yKb1sQe5uHj3oAc6dFg9iTw0e" // 40 characters,
         #expect(SecretMask.empty.mask(answer: answer) == answer)
     }
 }
+
+@Suite struct SecretMaskHostileMarkTests {
+    /// Marks come from vault.json with no MAC check, at launch and on every activation. One with a length past what any
+    /// value's form can be, up to `Int.max`, and a head made to match the text, is dropped: the matching loop never
+    /// adds it to a position, so it cannot overflow and crash the app.
+    @Test func aMarkLongerThanAnyFormIsDroppedAndNeverCrashes() {
+        let key = SymmetricKey(size: .bits256)
+        let text = "x" + key40 + " y"
+        let constants = SecretMask.headConstants(key)
+        // The head at position 1, where key40 starts: the hostile mark is looked at there, past position 0.
+        let head = Array(text.utf8).withUnsafeBufferPointer { buffer in
+            SecretMask.headOf(buffer.baseAddress! + 1, constants.multiplier, constants.offset)
+        }
+        let real = SecretMask.marks(for: SecretBytes(utf8: key40), key: key)
+        for length in [Int.max, Int.max - 1, SecretMask.maximumLength + 1, Int.min, -1, 11] {
+            let hostile = SecretVault.Mark(length: length, head: head, tag: Data(count: SecretMask.tagLength))
+            let m = SecretMask(key: key, marks: [hostile] + real)
+            #expect(!m.marks.contains(hostile), "\(length)")
+            #expect(m.marks.count == real.count, "\(length)")
+            #expect(m.mask(text) == "x••• y", "\(length)")
+            #expect(m.mask(rows: ["x" + key40.prefix(9), String(key40.dropFirst(9)) + " y"]) == ["x•••", "••• y"], "\(length)")
+            #expect(m.longest == real.map(\.length).max(), "\(length)")
+        }
+        // A tag that is not 16 bytes is dropped too.
+        let shortTag = SecretVault.Mark(length: real[0].length, head: real[0].head, tag: Data(count: 4))
+        #expect(SecretMask(key: key, marks: [shortTag]).isEmpty)
+    }
+
+    /// The longest form a value can have, a 16 KB value with no unreserved character percent-encoded, is kept.
+    @Test func theLongestFormIsKept() {
+        let key = SymmetricKey(size: .bits256)
+        let value = String(repeating: "+", count: SecretVault.maxValueBytes)
+        let marks = SecretMask.marks(for: SecretBytes(utf8: value), key: key)
+        #expect(marks.map(\.length).max() == SecretMask.maximumLength)
+        let m = SecretMask(key: key, marks: marks)
+        #expect(m.marks.count == marks.count && m.longest == SecretMask.maximumLength)
+        let percent = String(repeating: "%2B", count: SecretVault.maxValueBytes)
+        #expect(m.mask("a \(percent) b") == "a ••• b")
+    }
+}

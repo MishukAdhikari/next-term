@@ -22,6 +22,9 @@ import Foundation
 public final class SecretMask: @unchecked Sendable {
     /// The shortest value, in UTF-8 bytes, that gets marks.
     public static let minimumLength = 12
+    /// The longest form a value can have: a 16 KB value percent-encoded, three bytes for each. A mark from vault.json
+    /// that is longer (or shorter than `minimumLength`) is not a value's and is dropped.
+    public static let maximumLength = 3 * SecretVault.maxValueBytes
     static let headInfo = "nextterm mask head/1"
     static let tagInfo = "nextterm mask tag/1"
     static let tagLength = 16
@@ -54,6 +57,8 @@ public final class SecretMask: @unchecked Sendable {
     /// One bit per head: the hot loop's test before any dictionary lookup.
     private let heads: [UInt64]
     private let shortest: Int
+    /// The longest form's length in bytes, 0 with no marks: how far past a cut a value that starts before it can reach.
+    public let longest: Int
     public let marks: [SecretVault.Mark]
 
     private init() {
@@ -63,16 +68,18 @@ public final class SecretMask: @unchecked Sendable {
         byHead = [:]
         heads = []
         shortest = Int.max
+        longest = 0
         marks = []
     }
 
-    /// The mask for `marks`, made with the mask key `key` (`mask.key`'s bytes).
+    /// The mask for `marks`, made with the mask key `key` (`mask.key`'s bytes). A mark no value's form could have, by
+    /// its length or its tag's, is dropped: vault.json's marks are read with no MAC check.
     public init(key: SymmetricKey, marks: [SecretVault.Mark]) {
         let constants = Self.headConstants(key)
         multiplier = constants.multiplier
         offset = constants.offset
         tagKey = Self.tagKey(key)
-        let usable = Array(Set(marks.filter { $0.length >= Self.minimumLength && $0.tag.count == Self.tagLength }))
+        let usable = Array(Set(marks.filter(Self.isPlausible)))
         self.marks = usable
         var byHead: [UInt16: [SecretVault.Mark]] = [:]
         var heads = [UInt64](repeating: 0, count: 1024)
@@ -83,6 +90,12 @@ public final class SecretMask: @unchecked Sendable {
         self.byHead = byHead
         self.heads = heads
         shortest = usable.map(\.length).min() ?? Int.max
+        longest = usable.map(\.length).max() ?? 0
+    }
+
+    /// A mark some value's form could have: 12 bytes up to `maximumLength`, with a 16-byte tag.
+    public static func isPlausible(_ mark: SecretVault.Mark) -> Bool {
+        (minimumLength...maximumLength).contains(mark.length) && mark.tag.count == tagLength
     }
 
     /// The mask for every entry of an index.
@@ -199,7 +212,8 @@ public final class SecretMask: @unchecked Sendable {
         while position <= last {
             let head = Self.headOf(base + position, multiplier, offset)
             if heads[Int(head >> 6)] & (1 << UInt64(head & 63)) != 0, let candidates = byHead[head] {
-                for mark in candidates where position + mark.length <= bytes.count {
+                // `position <= last` keeps the right side at 0 or more, so this cannot overflow.
+                for mark in candidates where mark.length <= bytes.count - position {
                     let candidate = UnsafeBufferPointer(start: base + position, count: mark.length)
                     if Self.tag(UnsafeRawBufferPointer(candidate), key: tagKey) == mark.tag {
                         found.append(position..<position + mark.length)
