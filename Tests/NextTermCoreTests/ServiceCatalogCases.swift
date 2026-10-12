@@ -121,3 +121,35 @@ extension ServiceCatalogTests {
                   not: [".env": "OPENAI_BASE_URL=https://helicone.example.com/v1\n"]),
     ]
 }
+
+extension ServiceCatalogTests {
+    static let agents: [EntryCase] = [
+        EntryCase("langgraph", ["langgraph.json": #"{"graphs": {"agent": "./agent.py:graph"}}"#],
+                  name: "LangGraph", badge: "Studio", url: "https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024",
+                  not: ["requirements.txt": "langgraph\n"]),
+        EntryCase("temporal", [".env": "TEMPORAL_ADDRESS=localhost:7233\n"],
+                  name: "Temporal", badge: ":8233", url: "http://localhost:8233",
+                  not: ["requirements.txt": "temporalio\n"]),
+        EntryCase("google-adk", ["requirements.txt": "google-adk\n"],
+                  name: "Google ADK", badge: ":8000", url: "http://localhost:8000",
+                  not: ["requirements.txt": "google-genai\n"]),
+        EntryCase("inngest", ["package.json": #"{"dependencies": {"inngest": "^3.40.0"}}"#],
+                  name: "Inngest", badge: ":8288", url: "http://localhost:8288",
+                  not: ["package.json": #"{"devDependencies": {"@inngest/eslint-plugin": "^0.0.7"}}"#]),
+        EntryCase("mastra", ["package.json": #"{"dependencies": {"@mastra/core": "^0.20.0"}}"#],
+                  name: "Mastra", badge: ":4111", url: "http://localhost:4111",
+                  not: ["package.json": #"{"dependencies": {"@mastra/client-js": "^0.20.0"}}"#]),
+        EntryCase("trigger-dev", ["trigger.config.ts": "export default defineConfig({ project: \"proj_abcdefghijklmnop\" })\n"],
+                  name: "Trigger.dev", badge: "Project", url: "https://cloud.trigger.dev/projects/v3/proj_abcdefghijklmnop",
+                  not: ["trigger.config.ts": "export default defineConfig({ project: process.env.TRIGGER_PROJECT })\n"]),
+        EntryCase("crewai", ["pyproject.toml": "[project]\nname = \"crew\"\n\n[tool.crewai]\ntype = \"crew\"\n"],
+                  name: "CrewAI", badge: "AMP", url: "https://app.crewai.com",
+                  not: ["requirements.txt": "crewai-tools-lite\n"]),
+        EntryCase("n8n", ["compose.yaml": composeFile("n8n", "docker.n8n.io/n8nio/n8n:1.110.0", ["5679:5678"])],
+                  name: "n8n", badge: ":5679", url: "http://localhost:5679",
+                  not: [".env": "N8N_EDITOR_BASE_URL=javascript:alert(1)\n"]),
+        EntryCase("langflow", ["requirements.txt": "langflow==1.5\n"],
+                  name: "Langflow", badge: ":7860", url: "http://localhost:7860",
+                  not: ["requirements.txt": "langchain\n"]),
+    ]
+}

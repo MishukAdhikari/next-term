@@ -320,3 +320,49 @@ extension ProjectServicesTests {
         #expect(try row(scan, "helicone.cloud").link.url.absoluteString == "https://eu.helicone.ai/requests")
     }
 }
+
+// MARK: - Agents
+
+extension ProjectServicesTests {
+    @Test func studioOpensOnTheLangSmithSiteForTheDevServersPort() throws {
+        let project = FixtureProject(["langgraph.json": "{}\n", "Makefile": "dev:\n\tuv run langgraph dev --port 2100\n",
+                                      ".env": "LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com\n"])
+        let langGraph = try row(project.services(), "langgraph.local")
+        #expect(urls(langGraph) == ["https://eu.smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2100",
+                                    "http://127.0.0.1:2100/docs"])
+        #expect(langGraph.link.badge == "Studio")
+        #expect(langGraph.link.tooltip == "Open LangGraph Studio at 127.0.0.1:2100 (from Makefile's dev target)")
+        #expect(langGraph.links.map(\.title) == ["Open LangGraph Studio", "Open LangGraph API Docs"])
+    }
+
+    @Test func temporalOpensItsDevUIOrItsCloudNamespace() throws {
+        let cloud = FixtureProject([".env": "TEMPORAL_ADDRESS=shop.a1b2c.tmprl.cloud:7233\n"])
+        let namespace = try row(cloud.services(), "temporal.cloud")
+        #expect(namespace.name == "Temporal Cloud")
+        #expect(urls(namespace) == ["https://cloud.temporal.io/namespaces/shop.a1b2c"])
+        #expect(namespace.link.tooltip == "Open Temporal Cloud Namespace: namespace shop.a1b2c")
+        let compose = FixtureProject(["compose.yaml": composeFile("temporal-ui", "temporalio/ui:2.40.0", ["8081:8080"]),
+                                      ".env": "TEMPORAL_ADDRESS=localhost:7233\n"])
+        let ui = try row(compose.services(), "temporal.local")
+        #expect(urls(ui) == ["http://localhost:8081"])
+        #expect(ui.link.tooltip == "Open Temporal UI at localhost:8081 (from compose.yaml)")
+        let script = FixtureProject(["Procfile": "temporal: temporal server start-dev --port 7300\n"])
+        #expect(try row(script.services(), "temporal.local").link.url.absoluteString == "http://localhost:8300")
+    }
+
+    @Test func inngestKeepsItsCloudBesideTheDevServer() throws {
+        let project = FixtureProject(["package.json": #"{"dependencies": {"inngest": "^3.40.0"}}"#,
+                                      "inngest.json": #"{"port": 8299}"#])
+        let inngest = try row(project.services(), "inngest.local")
+        #expect(urls(inngest) == ["http://localhost:8299", "https://app.inngest.com"])
+        #expect(inngest.links.map(\.title) == ["Open Inngest Dev Server", "Open Inngest Cloud"])
+        #expect(inngest.links.map(\.badge) == [":8299", "Cloud"])
+    }
+
+    @Test func n8nOpensItsEditorsOriginNeverItsPath() throws {
+        let project = FixtureProject([".env": "N8N_EDITOR_BASE_URL=https://n8n.example.com/webhook/NOT-A-SECRET-PATH\n"])
+        let n8n = try row(project.services(), "n8n.cloud")
+        #expect(urls(n8n) == ["https://n8n.example.com"])
+        expectNoSecret(project.services())
+    }
+}
