@@ -345,7 +345,7 @@ public enum SecretImport {
         if value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return "the value has line breaks, which Secrets can't keep yet" }
         if value.utf8.count > SecretVault.maxValueBytes { return "the value is over 16 KB" }
         if value.contains("\u{0}") { return "the value holds a NUL character" }
-        if !SecretName.isValid(variable) || SecretName.isRefusedEnvName(variable) {
+        if !StoredSecretName.isValid(variable) || StoredSecretName.isRefusedEnvName(variable) {
             return "the server reads it as \(variable), which nxtrm secret run can't set"
         }
         return nil
@@ -751,12 +751,12 @@ public enum SecretImport {
         }
         var taken = Set(stored)
         return groups.map { group in
-            let base = SecretName.suggested(from: group.findings[0].variable)
+            let base = StoredSecretName.suggested(from: group.findings[0].variable)
             var name = base
             var number = 2
             while taken.contains(name) {
                 let suffix = "_\(number)"
-                name = String(base.prefix(SecretName.maxLength - suffix.count)) + suffix
+                name = String(base.prefix(StoredSecretName.maxLength - suffix.count)) + suffix
                 number += 1
             }
             taken.insert(name)

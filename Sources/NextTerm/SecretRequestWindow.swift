@@ -220,8 +220,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     /// "Saved as …" or the rule, the replace line for a stored name, the short-value line, and Save's state.
     private func refreshName() {
         let name = self.name
-        let valid = SecretName.isValid(name)
-        savedAsLabel.stringValue = valid ? "Saved as \(name)" : SecretName.rule
+        let valid = StoredSecretName.isValid(name)
+        savedAsLabel.stringValue = valid ? "Saved as \(name)" : StoredSecretName.rule
         savedAsLabel.textColor = valid ? .secondaryLabelColor : .systemOrange
         let stored = valid ? SecretsStore.shared.index?.entry(named: name) : nil
         replaceLabel.stringValue = stored.map { Self.replaceLine($0) } ?? ""
@@ -247,7 +247,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     @objc private func save() {
         guard !answered, !isBusy else { return }
         let name = self.name
-        guard SecretName.isValid(name) else { return }
+        guard StoredSecretName.isValid(name) else { return }
         let value = SecretBytes(utf8: valueField.stringValue)
         let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         onSave(Form(name: name, purpose: purpose, purposeBy: purposeEdited ? .user : .agent, value: value,

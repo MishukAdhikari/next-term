@@ -62,9 +62,9 @@ public enum SecretRun {
             let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
             let name = parts[0]
             let envName = parts.count == 2 ? parts[1] : name
-            guard SecretName.isValid(name) else { return .failure(UsageError(reason: "\(name) is not a key's name")) }
-            guard SecretName.isValid(envName) else { return .failure(UsageError(reason: "\(envName) is not a variable's name")) }
-            guard !SecretName.isRefusedEnvName(envName) else { return .failure(UsageError(reason: "a key can't be given as \(envName)")) }
+            guard StoredSecretName.isValid(name) else { return .failure(UsageError(reason: "\(name) is not a key's name")) }
+            guard StoredSecretName.isValid(envName) else { return .failure(UsageError(reason: "\(envName) is not a variable's name")) }
+            guard !StoredSecretName.isRefusedEnvName(envName) else { return .failure(UsageError(reason: "a key can't be given as \(envName)")) }
             guard map[name] == nil else { return .failure(UsageError(reason: "\(name) is named twice")) }
             guard envNames.insert(envName).inserted else { return .failure(UsageError(reason: "\(envName) is set twice")) }
             names.append(name)

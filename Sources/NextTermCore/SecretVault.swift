@@ -84,7 +84,7 @@ public final class SecretBytes: @unchecked Sendable, Equatable, CustomStringConv
 
 /// A key's name: capital letters, digits and underscores, starting with a letter, at most 64 characters. ASCII only,
 /// so a look-alike letter can't pose as another key.
-public enum SecretName {
+public enum StoredSecretName {
     public static let maxLength = 64
     public static let rule = "Capital letters, digits and _, starting with a letter."
 
@@ -468,7 +468,7 @@ public final class SecretVault {
     public func add(name: String, purpose: String, purposeBy: PurposeBy, origin: Origin, writeOnly: Bool,
                     value: SecretBytes, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
-        guard SecretName.isValid(name) else { throw Failure.badName }
+        guard StoredSecretName.isValid(name) else { throw Failure.badName }
         guard index.entry(named: name) == nil else { throw Failure.nameTaken(name) }
         guard index.entries.count < Self.maxEntries else { throw Failure.tooManyKeys }
         let purpose = try Self.checkedPurpose(purpose)
@@ -489,7 +489,7 @@ public final class SecretVault {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
         if let newName, newName != name {
-            guard SecretName.isValid(newName) else { throw Failure.badName }
+            guard StoredSecretName.isValid(newName) else { throw Failure.badName }
             guard index.entry(named: newName) == nil else { throw Failure.nameTaken(newName) }
             let value = try Self.open(entry, key: key)
             entry.box = try Self.seal(value, key: key, id: entry.id, name: newName, writeOnly: entry.writeOnly, origin: entry.origin)
@@ -766,7 +766,7 @@ public final class SecretVault {
         var names = Set<String>()
         var ids = Set<String>()
         for entry in index.entries {
-            guard SecretName.isValid(entry.name), !entry.id.isEmpty, entry.id.utf8.count <= 64,
+            guard StoredSecretName.isValid(entry.name), !entry.id.isEmpty, entry.id.utf8.count <= 64,
                   entry.purpose.count <= maxPurposeLength, names.insert(entry.name).inserted,
                   ids.insert(entry.id).inserted else { return false }
         }

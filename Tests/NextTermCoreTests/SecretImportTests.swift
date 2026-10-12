@@ -138,7 +138,7 @@ typealias F = SecretImportFixtures
         #expect(inline.movable && table.movable && slow.movable && old.movable)
         #expect(!dotted.movable && dotted.notMovable?.contains("By hand") == true)
         #expect(finding(found, "STRIPE_MODE") == nil && finding(found, "LOG") == nil)
-        let moves = [inline, table, slow, old].map { SecretImport.Move(name: SecretName.suggested(from: $0.variable), findings: [$0]) }
+        let moves = [inline, table, slow, old].map { SecretImport.Move(name: StoredSecretName.suggested(from: $0.variable), findings: [$0]) }
         let edit = try #require(SecretImport.plan(moves, nxtrm: F.nxtrm).edits.first)
         #expect(SecretImport.apply(edit) == .written)
         let text = home.read(".codex/config.toml")

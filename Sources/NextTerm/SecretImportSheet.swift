@@ -259,7 +259,7 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     /// A ticked row's name is checked as typed: the rule, a stored key, or another ticked row.
     func nameProblem(_ row: GroupRow) -> String? {
         let name = row.name
-        guard SecretName.isValid(name) else { return SecretName.rule }
+        guard StoredSecretName.isValid(name) else { return StoredSecretName.rule }
         if SecretsStore.shared.index?.entry(named: name) != nil { return "A key named \(name) is stored already." }
         if groupRows.contains(where: { $0 !== row && $0.box.state == .on && $0.name == name }) { return "Another row has this name." }
         return nil

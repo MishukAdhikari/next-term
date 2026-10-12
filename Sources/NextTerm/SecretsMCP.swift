@@ -56,7 +56,7 @@ enum SecretsMCP {
                      requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         if tool == "list_secrets" { return reply(MCPControl.ok(listSecrets())) }
         if isRemote(requester: requester, connection: connection), tool == "request_secret" || tool == "store_secret" {
-            let name = (arguments["name"] as? String).flatMap { SecretName.isValid($0) ? $0 : nil }
+            let name = (arguments["name"] as? String).flatMap { StoredSecretName.isValid($0) ? $0 : nil }
             let who = "the remote connection “\(connectionName(requester ?? "a remote connection"))”"
             SecretsStore.shared.record(SecretAudit.Line(event: .refused, names: name.map { [$0] } ?? [], who: who,
                                                         outcome: "\(tool) from a remote connection: only someone at the Mac can add keys"))
@@ -150,7 +150,7 @@ enum SecretsMCP {
 
     static func requestSecret(_ arguments: [String: Any], asker: String, facts: SecretRequests.AskedBy, words: String?,
                               reply: @escaping Reply) {
-        guard let name = arguments["name"] as? String, SecretName.isValid(name) else {
+        guard let name = arguments["name"] as? String, StoredSecretName.isValid(name) else {
             return reply(answer(.refused, note: "Give name: capital letters, digits and _, starting with a letter, at most 64 characters."))
         }
         let store = SecretsStore.shared
@@ -165,7 +165,7 @@ enum SecretsMCP {
         let request = SecretRequests.Request(binding: binding, keys: [SecretRequests.Key(name: name, envName: name)], command: "", argv: [],
                                              folder: "", warnings: [], agentWords: words, askedBy: facts, program: "request_secret",
                                              isRemote: facts.connection != nil)
-        let purpose = SecretName.purpose(fromReason: words ?? "")
+        let purpose = StoredSecretName.purpose(fromReason: words ?? "")
         request.kind = .add(SecretRequestWindow.Content(title: "\(subject(facts)) asks you to add \(name)",
                                                         askedBy: SecretRequests.who(request), agentWords: words, name: name, purpose: purpose))
         let call = Call(asker: asker, tool: "request_secret")
@@ -178,7 +178,7 @@ enum SecretsMCP {
 
     static func storeSecret(_ arguments: [String: Any], asker: String, facts: SecretRequests.AskedBy, words: String?,
                             reply: @escaping Reply) {
-        guard let name = arguments["name"] as? String, SecretName.isValid(name) else {
+        guard let name = arguments["name"] as? String, StoredSecretName.isValid(name) else {
             return reply(answer(.refused, note: "Give name: capital letters, digits and _, starting with a letter, at most 64 characters."))
         }
         guard let text = arguments["value"] as? String, let value = checkedValue(text) else {

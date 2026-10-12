@@ -303,49 +303,49 @@ private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0)
     }
 }
 
-@Suite struct SecretNameTests {
+@Suite struct StoredSecretNameTests {
     @Test func theNameRule() {
         for name in ["GITHUB_TOKEN", "A", "K2", "A_B_C", String(repeating: "A", count: 64)] {
-            #expect(SecretName.isValid(name), "\(name)")
+            #expect(StoredSecretName.isValid(name), "\(name)")
         }
         for name in ["github_token", "1KEY", "KEY-1", "\u{0410}PI_KEY", "_KEY", "", "KEY ONE", String(repeating: "A", count: 65)] {
-            #expect(!SecretName.isValid(name), "\(name)")
+            #expect(!StoredSecretName.isValid(name), "\(name)")
         }
     }
 
     @Test func refusedEnvironmentNames() {
         for name in ["PATH", "DYLD_X", "DYLD_INSERT_LIBRARIES", "GIT_SSH_COMMAND", "NEXTTERM_X", "NODE_OPTIONS", "BASH_ENV", "LD_PRELOAD"] {
-            #expect(SecretName.isRefusedEnvName(name), "\(name)")
+            #expect(StoredSecretName.isRefusedEnvName(name), "\(name)")
         }
         for name in ["GITHUB_TOKEN", "OPENAI_API_KEY", "PATHS", "GITHUB_PAT"] {
-            #expect(!SecretName.isRefusedEnvName(name), "\(name)")
+            #expect(!StoredSecretName.isRefusedEnvName(name), "\(name)")
         }
     }
 
     /// An agent's reason as what a key is for: cut at the last space before the 200th character, with "…".
     @Test func aReasonBecomesWhatAKeyIsFor() {
-        #expect(SecretName.purpose(fromReason: "to run the billing tests") == "to run the billing tests")
-        #expect(SecretName.purpose(fromReason: "two\nlines\there") == "two lines here")
+        #expect(StoredSecretName.purpose(fromReason: "to run the billing tests") == "to run the billing tests")
+        #expect(StoredSecretName.purpose(fromReason: "two\nlines\there") == "two lines here")
         let words = String(repeating: "word ", count: 100)
-        let cut = SecretName.purpose(fromReason: words)
+        let cut = StoredSecretName.purpose(fromReason: words)
         #expect(cut.count <= 200 && cut.hasSuffix("…") && !cut.contains("wor…") && cut.hasPrefix("word word"))
-        let solid = SecretName.purpose(fromReason: String(repeating: "x", count: 500))
+        let solid = StoredSecretName.purpose(fromReason: String(repeating: "x", count: 500))
         #expect(solid.count == 200 && solid.hasSuffix("…"))
-        #expect(SecretName.purpose(fromReason: String(repeating: "y", count: 200)).count == 200)
+        #expect(StoredSecretName.purpose(fromReason: String(repeating: "y", count: 200)).count == 200)
         // What it makes is always a purpose the vault takes.
         for text in [words, String(repeating: "x", count: 500), "a\u{2028}b"] {
-            #expect((try? SecretVault.checkedPurpose(SecretName.purpose(fromReason: text))) != nil)
+            #expect((try? SecretVault.checkedPurpose(StoredSecretName.purpose(fromReason: text))) != nil)
         }
     }
 
     @Test func suggestedNames() {
-        #expect(SecretName.suggested(from: "github-token") == "GITHUB_TOKEN")
-        #expect(SecretName.suggested(from: "2fa") == "KEY_2FA")
-        #expect(SecretName.suggested(from: "apiKey") == "APIKEY")
-        #expect(SecretName.suggested(from: "-token-") == "TOKEN")
-        #expect(SecretName.suggested(from: "") == "KEY")
-        #expect(SecretName.isValid(SecretName.suggested(from: String(repeating: "x", count: 100))))
-        #expect(SecretName.isValid(SecretName.suggested(from: "clé d’API")))
+        #expect(StoredSecretName.suggested(from: "github-token") == "GITHUB_TOKEN")
+        #expect(StoredSecretName.suggested(from: "2fa") == "KEY_2FA")
+        #expect(StoredSecretName.suggested(from: "apiKey") == "APIKEY")
+        #expect(StoredSecretName.suggested(from: "-token-") == "TOKEN")
+        #expect(StoredSecretName.suggested(from: "") == "KEY")
+        #expect(StoredSecretName.isValid(StoredSecretName.suggested(from: String(repeating: "x", count: 100))))
+        #expect(StoredSecretName.isValid(StoredSecretName.suggested(from: "clé d’API")))
     }
 }
 

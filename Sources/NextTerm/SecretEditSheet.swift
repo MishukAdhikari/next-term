@@ -89,7 +89,7 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         nameField.setAccessibilityLabel("Name")
         if case .replace = mode { nameField.isEditable = false }
         savedAsLabel.font = .systemFont(ofSize: 11)
-        let hint = SecretApprovalPanel.label(SecretName.rule, size: 11)
+        let hint = SecretApprovalPanel.label(StoredSecretName.rule, size: 11)
         hint.textColor = .secondaryLabelColor
         views += [Self.caption("Name"), nameField, savedAsLabel, hint]
         if case .replace = mode {} else {
@@ -189,8 +189,8 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     func refresh() {
         let name = self.name
         let taken = name != mode.entry?.name && SecretsStore.shared.index?.entry(named: name) != nil
-        if !SecretName.isValid(name) {
-            savedAsLabel.stringValue = name.isEmpty ? "" : SecretName.rule
+        if !StoredSecretName.isValid(name) {
+            savedAsLabel.stringValue = name.isEmpty ? "" : StoredSecretName.rule
             savedAsLabel.textColor = .systemOrange
         } else if taken {
             savedAsLabel.stringValue = "A key named \(name) is stored already."
@@ -202,7 +202,7 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         let length = valueField.stringValue.trimmingCharacters(in: .whitespaces).utf8.count
         shortLabel.isHidden = !hasValue || length == 0 || length >= SecretMask.minimumLength
         let purposeOK = purposeField.stringValue.count <= SecretVault.maxPurposeLength
-        saveButton?.isEnabled = !isBusy && SecretName.isValid(name) && !taken && purposeOK && (!hasValue || length > 0)
+        saveButton?.isEnabled = !isBusy && StoredSecretName.isValid(name) && !taken && purposeOK && (!hasValue || length > 0)
     }
 
     // MARK: saving

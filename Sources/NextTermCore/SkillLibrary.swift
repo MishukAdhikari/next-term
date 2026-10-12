@@ -210,7 +210,7 @@ public enum SkillLibrary {
         guard let entry = entries(from: start, home: home, nextTerm: nextTerm, reader: reader).first(where: { $0.name == name }),
               let copy = ([entry.copy] + entry.others).first(where: { scope == nil || $0.scope == scope }) else { return nil }
         guard let folder = copy.folder else { return (entry, copy, BuiltInSkill.text, []) }
-        guard let file = skillFile(in: folder), let text = readText(file) else { return nil }
+        guard let file = skillFile(in: folder), let text = readText(file, in: folder) else { return nil }
         return (entry, copy, text, otherFiles(in: folder))
     }
 
@@ -219,7 +219,7 @@ public enum SkillLibrary {
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
         return names.prefix(500).compactMap { name in
             let folder = root + "/" + name
-            guard let file = skillFile(in: folder), let text = readText(file) else { return nil }
+            guard let file = skillFile(in: folder), let text = readText(file, in: folder) else { return nil }
             let description = SkillFrontMatter.parse(text)?.description ?? ""
             return Copy(name: name, description: description, scope: scope, folder: folder, place: place, kind: kind)
         }
@@ -229,10 +229,30 @@ public enum SkillLibrary {
         ["SKILL.md", "skill.md"].map { folder + "/" + $0 }.first { FileManager.default.fileExists(atPath: $0) }
     }
 
-    /// A SKILL.md's text, when it is a readable file under 256 KB.
-    static func readText(_ file: String) -> String? {
-        guard let size = (try? FileManager.default.attributesOfItem(atPath: file))?[.size] as? Int, size <= 256 * 1024,
-              let data = FileManager.default.contents(atPath: file) else { return nil }
+    /// The most of a SKILL.md read.
+    static let maxText = 256 * 1024
+
+    /// A SKILL.md's text, read safely, since a cloned repository's skill folder is anyone's: only a regular file of at
+    /// most 256 KB, inside the skill's own folder once every link is followed (a link from SKILL.md to the project's
+    /// .env, or out of the folder, is refused), never one MCPProjects.secretReason names, and never more than 256 KB read
+    /// (a link to /dev/zero, or a file growing, can't make it read on). A folder that is itself a link (Claude Code's
+    /// link to the shared copy) is that folder. Nil otherwise.
+    public static func readText(_ file: String, in folder: String) -> String? {
+        let real = canonicalPath(file), top = canonicalPath(folder)
+        guard real.hasPrefix(top + "/"), MCPProjects.secretReason(String(real.dropFirst(top.count + 1))) == nil else { return nil }
+        // No link left to follow; nonblocking, so a FIFO put there after the check can't hold the read.
+        let fd = open(real, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= off_t(maxText) else { return nil }
+        var data = Data(), buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while data.count <= maxText {
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        guard data.count <= maxText else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

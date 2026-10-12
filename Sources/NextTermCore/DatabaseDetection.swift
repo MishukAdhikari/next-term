@@ -20,7 +20,21 @@ public enum Databases {
         if env.isEmpty { env = gather(context, live: false) } // a fresh clone: what .env.example expects
         var all = env + others(context)
         applyHints(&all, context.hints)
-        return DatabaseScan(databases: merge(all).map(\.public), vercelProject: context.vercelProject)
+        // Read here once, not in Context, which every hand-off builds again for its password.
+        let facts = ProjectFacts.read(root: context.root, valueKeys: factValueKeys, startWords: ServiceCatalog.startWords,
+                                      markerFiles: ServiceCatalog.markerFiles)
+        let databases = merge(all).map { (group: CandidateGroup) -> DetectedDatabase in
+            var database = group.public
+            database.links = DatabaseLinks.links(for: database, facts: facts)
+            return database
+        }
+        return DatabaseScan(databases: databases, vercelProject: context.vercelProject, facts: facts)
+    }
+
+    /// The keys whose values the scan reads from env files beyond its own connection keys, each with its role: what
+    /// the provider links and the services list need. A key whose name marks a secret is never read, whatever its role.
+    static let factValueKeys: [String: KeyRole] = DatabaseLinks.valueKeys.merging(ServiceCatalog.valueKeys) {
+        (links: KeyRole, _: KeyRole) -> KeyRole in links
     }
 
     /// Reads the password again, from the file it came from, for a hand-off. nil if it is gone or changed.
@@ -61,6 +75,8 @@ public enum Databases {
         let herdInstalled: Bool
         var vercelProject: String?
         var isLaravel = false
+        /// A `fly.toml` beside the project's files: its `.internal` hosts are Fly.io's private network.
+        var hasFlyConfig = false
         var appURLHost: String?
         var hints: [OrmHint] = []
 
@@ -69,6 +85,7 @@ public enum Databases {
             self.herdInstalled = herdInstalled
             let fm = FileManager.default
             isLaravel = fm.fileExists(atPath: root + "/artisan")
+            hasFlyConfig = fm.fileExists(atPath: root + "/fly.toml")
             if let data = Self.small(root + "/.vercel/project.json"),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], json["projectId"] is String {
                 vercelProject = (json["projectName"] as? String) ?? "linked"
@@ -94,6 +111,7 @@ public enum Databases {
             let path = context.path(file)
             guard let entries = EnvFile.read(path) else { continue }
             let values = EnvFile.values(entries)
+            // Herd's badge only: a link to the site reads APP_URL through SafeWebLink (DatabaseLinks).
             if context.appURLHost == nil, let app = values["APP_URL"] {
                 context.appURLHost = DatabaseURL.hostAndPort(String(app.split(separator: "/").dropFirst().first ?? "")).0
             }

@@ -323,7 +323,7 @@ final class SecretRequests {
             let entry = store.index?.entry(named: key.name)
             let used = store.lastUse[key.name]
             // store_secret for a new name: what it will be for, the agent's reason.
-            let purpose = entry?.purpose ?? (request.isUse ? "" : SecretName.purpose(fromReason: request.agentWords ?? ""))
+            let purpose = entry?.purpose ?? (request.isUse ? "" : StoredSecretName.purpose(fromReason: request.agentWords ?? ""))
             return SecretApprovalPanel.Content.KeyRow(name: key.name, envName: key.envName, purpose: purpose,
                                                       purposeByAgent: entry.map { $0.purposeBy == .agent } ?? !request.isUse,
                                                       writeOnly: entry?.writeOnly == true,
@@ -403,7 +403,7 @@ final class SecretRequests {
         if let stored {
             action = .replace(name: name, value: value, writeOnly: stored.writeOnly, origin: .agent)
         } else {
-            let purpose = SecretName.purpose(fromReason: request.agentWords ?? "")
+            let purpose = StoredSecretName.purpose(fromReason: request.agentWords ?? "")
             action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value)
         }
         let reason = stored == nil ? SecretReason.save(name) : SecretReason.replaceWithAgentsKey(name)
