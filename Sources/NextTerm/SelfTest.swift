@@ -596,6 +596,15 @@ enum SelfTest {
         try? Data().write(to: proj.appendingPathComponent("AGENTS.md"))
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
+        // Every tab reads the self-test's own zsh config, never the user's: a tab of its own, zdotTab for its ZDOTDIR, then closed.
+        let ownConfig = shellConfigFolder ?? ""
+        let zdotTab = c.addTab(directory: proj.path, select: false)
+        _ = await wait(20) { zdotTab.status.integrated }
+        zdotTab.view.send(txt: "[[ ${ZDOTDIR-} == \(ShellQuote.quote(ownConfig)) ]] && echo ZD\"\"OWN || echo ZD\"\"OTHER=${ZDOTDIR-unset}\r")
+        let answered = await wait(10) { zdotTab.screenTail(6).contains { $0.contains("ZDOWN") || $0.contains("ZDOTHER=") } }
+        check(!ownConfig.isEmpty && answered && zdotTab.screenTail(6).contains { $0.contains("ZDOWN") },
+              "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
+        c.remove(zdotTab)
         #if DEBUG
         // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees, parallel (with scrollback), skills, notifications or services), for its own failures
         // without the whole run's 25 minutes.
@@ -5058,6 +5067,7 @@ enum SelfTest {
         CopilotIDEServer.shared.stop()
         try? FileManager.default.removeItem(at: copilotLockFolder)
         try? FileManager.default.removeItem(at: claudeLockFolder)
+        if let ownShellConfig { try? FileManager.default.removeItem(at: ownShellConfig) } // its tabs' zsh config and history
         record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"

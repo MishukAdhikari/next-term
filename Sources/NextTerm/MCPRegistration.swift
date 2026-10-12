@@ -222,11 +222,9 @@ enum LoginShell {
         process.executableURL = URL(fileURLWithPath: program)
         process.arguments = arguments
         var environment = TerminalEnvironment.clean(ProcessInfo.processInfo.environment)
-        #if DEBUG
-        // The relaunch harness's tabs read its own zsh config, not the user's (SelfTestRestore.prepareShells): so does the
-        // login shell their agents' routing is compared with.
-        if let own = SelfTestRestore.harness?.zdotdir.path { environment["ZDOTDIR"] = own }
-        #endif
+        // A self-test's tabs read its own zsh config, never the user's (SelfTest.shellConfigFolder): so does the login shell
+        // their agents' routing is compared with.
+        if let own = SelfTest.shellConfigFolder { environment["ZDOTDIR"] = own }
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
