@@ -401,8 +401,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// Something changed where the scan looks (an env file, a config, a folder that can hold a SQLite file):
-    /// scan again when the gate says. Hidden, dependency and build folders, and anything deeper than the search
-    /// goes, set off nothing (Databases.scanMayChange).
+    /// scan again when the gate says. Dependency, build and deep folders, and hidden ones other than those the
+    /// readers look in (.vercel, .ddev, supabase/.temp), set off nothing (Databases.scanMayChange).
     private func scheduleDatabaseScan(for paths: [String]) {
         guard let root, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
         databaseScans.changed()

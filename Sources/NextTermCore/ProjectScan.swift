@@ -3,8 +3,8 @@ import Foundation
 /// What the sidebar's one scan of a project finds: its Databases rows, then its Services rows from the same read of its
 /// files. The sidebar runs it off the main thread, on one gated refresh, and shows both groups together; each group
 /// redraws only when what it shows changed (`DatabaseScan` and `ServiceScan` compare what their rows show). It prints
-/// row ids and counts only.
-public struct ProjectScan: Sendable, Equatable {
+/// kinds and counts only: each database row's engine, never its host, user, port, name or file.
+public struct ProjectScan: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var databases: DatabaseScan
     public var services: ServiceScan
 
@@ -22,4 +22,16 @@ public struct ProjectScan: Sendable, Equatable {
                                             herdInstalled: herdInstalled)
         return ProjectScan(databases: databases, services: services)
     }
+
+    /// The database rows' engines, whether a Vercel project is linked, the Services rows' ids and the facts' counts.
+    public var description: String {
+        let engines = databases.databases.map { (database: DetectedDatabase) -> String in database.engine.rawValue }
+        let vercel: String = databases.isVercelLinked ? "linked" : "none"
+        let parts: [String] = ["databases: [\(engines.joined(separator: ", "))]", "vercel: \(vercel)",
+                               services.description, databases.facts.description]
+        return "ProjectScan(" + parts.joined(separator: ", ") + ")"
+    }
+
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: [:]) }
 }

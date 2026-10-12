@@ -269,7 +269,9 @@ extension ProjectFacts {
     /// The files the readers look at, relative to the project, and `markerFiles`: where a change can change what
     /// `read` finds. Taken from a run of the readers themselves that opens and looks up nothing, so a new reader's
     /// file is in it with no second list to keep. A folder ends in `/` (`requirements/`, `mlruns/`); the project's
-    /// own folder, whose names the readers list too, is left out. Each once, in the order the readers ask.
+    /// own folder, whose names the readers list too, is left out. Each once, in the order the readers ask. A file a
+    /// reader would find only by reading another is not in it, so `FactReader.text` never opens one a change to which
+    /// sets off no scan.
     static func paths(markerFiles: [String]) -> [String] {
         let log = FactReader.Log()
         var reader = FactReader(root: "", log: log)
@@ -451,8 +453,9 @@ extension ProjectFacts {
 
 // MARK: - Files
 
-/// The one way the fact readers open a file: a path inside the project, resolved, that stays inside it; a regular
-/// file of at most 512 KB; and not one iCloud has evicted, which reading would download. Each file read is recorded.
+/// The one way the fact readers open a file: a path inside the project, resolved, that stays inside it, in a folder
+/// whose changes set off a scan; a regular file of at most 512 KB; and not one iCloud has evicted, which reading
+/// would download. Each file read is recorded.
 /// With a log it is a listing: it notes each path asked for and looks up, lists and opens nothing.
 struct FactReader {
     let root: String
@@ -557,10 +560,21 @@ struct FactReader {
         return isFile(marker)
     }
 
-    /// A file's text, checked by its path first, so that a placeholder or a pipe is never opened at all.
+    /// Whether a change to a project file sets off a new scan, by the folder FSEvents names for it
+    /// (`Databases.scanMayChange`). Only such a file is read, so no fact comes from a file whose change the sidebar
+    /// would miss: a reader that opens a file another one names (an env file `langgraph.json` points at) in a hidden,
+    /// dependency or deep folder gets nothing until that folder is watched, and its own tests say so.
+    func setsOffScan(_ relative: String) -> Bool {
+        let folder = (relative as NSString).deletingLastPathComponent
+        let path: String = folder.isEmpty ? root : root + "/" + folder
+        return Databases.scanMayChange(after: path, root: root)
+    }
+
+    /// A file's text, checked by its path first, so that a placeholder or a pipe is never opened at all, and only
+    /// when a change to it sets off a scan.
     mutating func text(_ relative: String) -> String? {
         if listed(relative) { return nil }
-        guard let path = inside(relative) else { return nil }
+        guard setsOffScan(relative), let path = inside(relative) else { return nil }
         var info = stat()
         guard stat(path, &info) == 0, Self.mayRead(info), let data = Self.contents(of: path) else { return nil }
         opened.append(relative)

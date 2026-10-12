@@ -31,8 +31,10 @@ import Testing
     // MARK: one read
 
     /// One scan gives both groups, the Services rows as their own pass gives them after the Databases pass, and the
-    /// readers open each file once.
-    @Test func oneScanGivesBothGroupsAndReadsEachFileOnce() {
+    /// fact readers open each file once (`facts.read` records every file they open). The Databases pass's own
+    /// connection reads (`EnvFile.read`, the Vercel CLI header, `.vercel/project.json`, `supabase/config.toml`) are
+    /// older than this count and outside it; the Services pass opens nothing (`theServicesPassOpensNoFile`).
+    @Test func oneScanGivesBothGroupsAndTheFactReadersOpenEachFileOnce() {
         let project = FixtureProject(Self.ragProject)
         let scan = ProjectScan.scan(root: project.root, herdInstalled: false)
         #expect(scan.databases.databases.map(\.name) == ["support"])
@@ -159,5 +161,53 @@ import Testing
             #expect(named, "\(file)")
             #expect(Self.mayChange(folder), "\(file)")
         }
+    }
+
+    /// The fact readers open only a file whose change sets off a scan, by the folder FSEvents names for it. A reader
+    /// that opens a file another one names (an env file `langgraph.json` points at) in a hidden, dependency or deep
+    /// folder gets nothing, so its own tests fail before the sidebar could keep a fact that no change refreshes.
+    @Test func theReadersOpenOnlyAFileWhoseChangeSetsOffAScan() {
+        let opened = [".env", "requirements/dev.txt", "supabase/config.toml", "supabase/.temp/project-ref",
+                      ".ddev/config.yaml", ".vercel/project.json", "apps/agent/.env"]
+        let refused = [".config/agent.env", "apps/.agent/.env", "node_modules/pkg/package.json", "a/b/c/d/notes.txt",
+                       "storage/framework/x.env"]
+        let project = FixtureProject()
+        for file in opened + refused { project.write(file, "# made up\n") }
+        var reader = FactReader(root: project.root)
+        for file in opened { #expect(reader.text(file) == "# made up\n", "\(file)") }
+        for file in refused {
+            #expect(reader.text(file) == nil, "\(file)")
+            #expect(!Self.mayChange(Self.folder(of: file), root: project.root), "\(file)")
+        }
+        #expect(reader.opened == opened)
+    }
+
+    // MARK: printing
+
+    /// A printed scan, as a log or a debugger shows it, names kinds and counts only: each database row's engine,
+    /// whether a Vercel project is linked, the Services rows' ids and the facts' counts. No host, user, port, path,
+    /// project name or value.
+    @Test func aPrintedScanShowsKindsAndCountsOnly() {
+        var files = Self.ragProject
+        files[".env"] = """
+        OPENAI_API_KEY=sk-test-NOT-A-KEY
+        QDRANT_URL=http://qdrant:6333/?api_key=NOT-A-KEY
+        DATABASE_URL=postgresql://made-up-user:NOT-A-PASSWORD@db.made-up.example:5544/support
+        """
+        files[".vercel/project.json"] = #"{"projectId":"prj_madeup1","orgId":"team_madeup1","projectName":"made-up-app"}"#
+        let project = FixtureProject(files)
+        project.write("database/app.sqlite", data: Data("SQLite format 3\0".utf8) + Data(count: 84))
+        let scan = ProjectScan.scan(root: project.root, herdInstalled: false)
+        #expect(scan.databases.databases.count == 2)
+        #expect(scan.databases.isVercelLinked)
+        var dumped = ""
+        dump(scan, to: &dumped)
+        let secrets = ["NOT-A-", "sk-test", "api_key", "made-up-user", "db.made-up.example", "5544", "made-up-app",
+                       "prj_madeup1", "team_madeup1", project.root, "app.sqlite", "support"]
+        for text in [String(describing: scan), String(reflecting: scan), dumped, "\(scan)"] {
+            for secret in secrets { #expect(!text.contains(secret), "\(secret) in \(text)") }
+            #expect(text.contains("postgres") && text.contains("sqlite"), "\(text)")
+        }
+        #expect(String(describing: scan).hasPrefix("ProjectScan("))
     }
 }
