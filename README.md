@@ -52,6 +52,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
   closed). The tools are marked honestly, so agents ask you before they type into a tab. Local only: a
   private socket, no network port.
+- **Secrets.** API and MCP keys sealed on your Mac, used by agents by name after you approve with Touch ID or
+  your password. See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot
   CLI kept for it is there, newest first, with its title, branch and model, including the ones started in
