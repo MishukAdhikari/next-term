@@ -438,6 +438,9 @@ final class SecretsStore {
         var work = Work()
         try folder.withLock {
             var maskKey: SymmetricKey?
+            // The keyring a first add made: the keychain item it added is deleted when its vault wasn't written.
+            var madeKeyring: VaultKeyring?
+            defer { discardUnwritten(madeKeyring, folder: folder) }
             if let data = try folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength {
                 maskKey = SymmetricKey(data: data)
             }
@@ -457,7 +460,9 @@ final class SecretsStore {
                 guard makes else { throw SecretVault.Failure.noSuchKey(firstName ?? "") }
                 let made: (vault: SecretVault, maskKey: SecretBytes)
                 do {
-                    made = try SecretVault.create(keyring: newKeyring())
+                    let fresh = try newKeyring()
+                    madeKeyring = fresh
+                    made = try SecretVault.create(keyring: fresh)
                 } catch let failure as SecretVault.Failure {
                     throw failure
                 } catch {
@@ -490,6 +495,21 @@ final class SecretsStore {
         }
         work.index = vault?.index
         return work
+    }
+
+    /// After a first add, under the vault's lock: the keychain item its new keyring added is deleted unless
+    /// `vault.json` names that key (the vault was written, even by a write that then failed) or can't be read to tell.
+    /// A first add that failed leaves no item that opens nothing.
+    nonisolated private static func discardUnwritten(_ keyring: VaultKeyring?, folder: SecretFolder) {
+        guard let made = keyring as? KeychainKeyring, let publicKey = try? made.publicKey() else { return }
+        let current: Data?
+        do {
+            current = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
+        } catch {
+            return
+        }
+        if let current, (try? SecretVault.index(from: current))?.publicKey == publicKey { return }
+        made.discard()
     }
 
     // MARK: the import

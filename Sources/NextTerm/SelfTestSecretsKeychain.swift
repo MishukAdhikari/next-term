@@ -48,6 +48,24 @@ extension SelfTest {
         let overwrote = (try? KeychainKeyring.make(items: { _ in taken })) != nil
         check(!overwrote && (try? taken.read()) == Data("there before".utf8) && taken.writes == 1,
               "secrets: a new keychain key is never written over an item that is there", "\(taken.writes) writes")
+
+        // A first Add that fails after its key was made (here, a value with a line break) leaves no item behind.
+        let fresh = MemoryKeychain()
+        let (unmade, _) = secretsKeychainStore(base, "keychain-failed-add", keychain: fresh)
+        var refused: SecretsStore.Failure?
+        do {
+            try await unmade.perform(.add(name: "BAD_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                          value: SecretBytes(utf8: "two\nlines")))
+        } catch {
+            refused = error as? SecretsStore.Failure
+        }
+        let left = fresh.accounts
+        _ = try? await unmade.perform(.add(name: "GOOD_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                           value: SecretBytes(utf8: secretsValue("after-failed-add"))))
+        let madeOne: Bool = unmade.index != nil && fresh.accounts.count == 1
+        check(refused == .vault(.badValue("BAD_KEY")) && left.isEmpty && madeOne,
+              "secrets: a first keychain Add that fails leaves no item behind, and the next Add makes one",
+              "\(String(describing: refused)), left \(left.joined(separator: ", ")), then \(fresh.accounts.count)")
         await secretsSharedItemChecks(base)
         await secretsKeychainPromptChecks(base)
     }

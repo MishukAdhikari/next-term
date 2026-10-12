@@ -323,6 +323,14 @@ final class KeychainKeyring: VaultKeyring {
         return made.publicKey()
     }
 
+    /// Deletes the item `make` added, for a first add whose vault was never written, so no item is left that opens
+    /// nothing. The keyring of an existing vault deletes nothing.
+    func discard() {
+        guard let made else { return }
+        try? items(LoginKeychain.vaultKeyAccount(publicKey: made.publicKey())).delete()
+        self.made = nil
+    }
+
     /// The vault's item is there, or the shared item of earlier builds. Their data is never read for this. A keychain
     /// that wouldn't say (locked and its unlock cancelled) passes: only an item that is surely gone fails the check.
     func check(publicKey: Data) -> Bool {
