@@ -323,7 +323,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     // MARK: databases
 
-    /// Reads the project's files for databases, off the main thread.
+    /// Reads the project's files for databases and services, off the main thread: one read for both groups, shown
+    /// together, each redrawn only if what it shows changed (ProjectScan).
     func scanDatabases() {
         guard let root else { return }
         let path = root.path
@@ -334,7 +335,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         databaseScans.started()
         DispatchQueue.global(qos: .utility).async {
             let began = Date()
-            let scan = Databases.scan(root: path)
+            let scan = ProjectScan.scan(root: path)
             let read = DatabaseScanStats.Event.read(waited: began.timeIntervalSince(queued), took: Date().timeIntervalSince(began))
             DispatchQueue.main.async { [weak self] in
                 self?.databaseScans.finished()
@@ -346,7 +347,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 if self.isRenaming { self.noteDatabaseScan(.held) }
                 self.whenNotRenaming("databases") { [weak self] in
                     guard let self, self.root?.path == path else { return }
-                    self.showDatabases(scan)
+                    self.showDatabases(scan.databases)
+                    self.showServices(scan.services)
                 }
             }
         }

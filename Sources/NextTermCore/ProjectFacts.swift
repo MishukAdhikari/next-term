@@ -263,6 +263,22 @@ extension ProjectFacts {
     public static func read(root: String, valueKeys: [String: KeyRole], startWords: [String] = [],
                             markerFiles: [String] = []) -> ProjectFacts {
         var reader = FactReader(root: canonicalPath(root))
+        return run(&reader, valueKeys: valueKeys, startWords: startWords, markerFiles: markerFiles)
+    }
+
+    /// The files the readers look at, relative to the project, and `markerFiles`: where a change can change what
+    /// `read` finds. Taken from a run of the readers themselves that opens and looks up nothing, so a new reader's
+    /// file is in it with no second list to keep. A folder ends in `/` (`requirements/`, `mlruns/`); the project's
+    /// own folder, whose names the readers list too, is left out. Each once, in the order the readers ask.
+    static func paths(markerFiles: [String]) -> [String] {
+        let log = FactReader.Log()
+        var reader = FactReader(root: "", log: log)
+        _ = run(&reader, valueKeys: [:], startWords: [], markerFiles: markerFiles)
+        return log.paths
+    }
+
+    static func run(_ reader: inout FactReader, valueKeys: [String: KeyRole], startWords: [String],
+                    markerFiles: [String]) -> ProjectFacts {
         var facts = ProjectFacts()
         let rootEnv = facts.readEnv(&reader, valueKeys: valueKeys)
         facts.readCompose(&reader, rootEnv: rootEnv)
@@ -437,17 +453,29 @@ extension ProjectFacts {
 
 /// The one way the fact readers open a file: a path inside the project, resolved, that stays inside it; a regular
 /// file of at most 512 KB; and not one iCloud has evicted, which reading would download. Each file read is recorded.
+/// With a log it is a listing: it notes each path asked for and looks up, lists and opens nothing.
 struct FactReader {
     let root: String
     var opened: [String] = []
     private var topNames: [String]?
+    let log: Log?
+
+    /// The paths a listing run was asked for, each once, in order: a folder with a trailing `/`.
+    final class Log {
+        private(set) var paths: [String] = []
+
+        func note(_ path: String) {
+            if !path.isEmpty, path != "/", !paths.contains(path) { paths.append(path) }
+        }
+    }
 
     static let maxSize = 512 * 1024
     /// `SF_DATALESS` in `st_flags`: the file's content is in iCloud, not on this Mac.
     static let dataless: UInt32 = 0x4000_0000
 
-    init(root: String) {
+    init(root: String, log: Log? = nil) {
         self.root = root
+        self.log = log
     }
 
     /// A path relative to the project with no empty, `.` or `..` part.
@@ -469,6 +497,7 @@ struct FactReader {
     /// not followed, so one that leads out of the project or nowhere still counts, and nothing outside is looked at.
     /// A pipe counts too (some secret managers serve `.env` so), though it is never read.
     func exists(_ name: String) -> Bool {
+        if listed(name) { return false }
         guard Self.isPlain(name), !name.contains("/") else { return false }
         var info = stat()
         return lstat(root + "/" + name, &info) == 0 && (info.st_mode & S_IFMT) != S_IFDIR
@@ -481,13 +510,22 @@ struct FactReader {
         return regular && small && info.st_flags & dataless == 0
     }
 
+    /// In a listing, notes the path and says so; the caller then looks at nothing.
+    func listed(_ path: String) -> Bool {
+        guard let log else { return false }
+        log.note(path)
+        return true
+    }
+
     func isFile(_ relative: String) -> Bool {
+        if listed(relative) { return false }
         guard let path = inside(relative) else { return false }
         var info = stat()
         return stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
     }
 
     func isFolder(_ relative: String) -> Bool {
+        if listed(relative + "/") { return false }
         guard let path = inside(relative) else { return false }
         var info = stat()
         return stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR
@@ -495,6 +533,7 @@ struct FactReader {
 
     /// The names in a project folder (`""` for the project's own), sorted; empty if it is not one inside.
     func names(in relative: String) -> [String] {
+        if listed(relative.isEmpty ? "" : relative + "/") { return [] }
         let folder = relative.isEmpty ? root : inside(relative)
         guard let folder, let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [] }
         return names.sorted()
@@ -520,6 +559,7 @@ struct FactReader {
 
     /// A file's text, checked by its path first, so that a placeholder or a pipe is never opened at all.
     mutating func text(_ relative: String) -> String? {
+        if listed(relative) { return nil }
         guard let path = inside(relative) else { return nil }
         var info = stat()
         guard stat(path, &info) == 0, Self.mayRead(info), let data = Self.contents(of: path) else { return nil }

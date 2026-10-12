@@ -182,9 +182,10 @@ extension Databases {
     static let sqliteExtensions: Set<String> = ["sqlite", "sqlite3", "db", "db3"]
 
     /// Whether a change FSEvents reports in `folder` can change what `scan(root:)` finds, so the sidebar scans again
-    /// only for those: the project's own folder (env files, ORM configs, artisan), `.vercel` (the project link), and
-    /// the folders the SQLite search lists, three deep at most and never hidden, a dependency or a build folder.
-    /// Laravel's storage/framework, written on every request, is left out too.
+    /// only for those: the project's own folder (env files, ORM configs, artisan), `.vercel` (the project link), the
+    /// folders the services' readers look in, hidden ones too (`ServiceCatalog.watchedFolders`: `supabase/.temp`,
+    /// `.ddev`), and the folders the SQLite search lists, three deep at most and never hidden, a dependency or a build
+    /// folder. Laravel's storage/framework, written on every request, is left out too.
     public static func scanMayChange(after folder: String, root: String) -> Bool {
         let path = folder.count > 1 && folder.hasSuffix("/") ? String(folder.dropLast()) : folder
         let root = root.count > 1 && root.hasSuffix("/") ? String(root.dropLast()) : root
@@ -192,6 +193,7 @@ extension Databases {
         guard path.hasPrefix(root + "/") else { return false }
         let names = path.dropFirst(root.count + 1).split(separator: "/").map(String.init)
         if names == [".vercel"] { return true }
+        if ServiceCatalog.watchedFolders.contains(names.joined(separator: "/")) { return true }
         guard names.count <= 3 else { return false }
         if zip(names, names.dropFirst()).contains(where: { $0 == "storage" && $1 == "framework" }) { return false }
         return !names.contains { $0.hasPrefix(".") || skippedFolders.contains($0) }

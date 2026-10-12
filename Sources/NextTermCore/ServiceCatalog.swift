@@ -401,6 +401,26 @@ public enum ServiceCatalog {
         for entry in all { files += entry.markerFiles.filter { (file: String) -> Bool in !files.contains(file) } }
         return files
     }()
+
+    /// Every file the scan's readers look at for the catalog, relative to the project: env files, manifests, Compose,
+    /// tool configs and the entries' marker files, a folder with a trailing `/`. From the readers themselves
+    /// (`ProjectFacts.paths`), so a new reader's file is watched with no second list to keep.
+    public static let watchedFiles: [String] = ProjectFacts.paths(markerFiles: markerFiles)
+
+    /// The folders below the project's own that FSEvents names for a change to one of those files: its folder, and for
+    /// a folder the readers list or look for, that folder too. Hidden ones among them (`supabase/.temp`, `.ddev`,
+    /// `.streamlit`, `.chainlit`) are the reason it exists: the sidebar's change filter skips hidden folders otherwise.
+    public static let watchedFolders: Set<String> = {
+        var folders = Set<String>()
+        for path in watchedFiles {
+            let isFolder: Bool = path.hasSuffix("/")
+            let trimmed = isFolder ? String(path.dropLast()) : path
+            let parent = (trimmed as NSString).deletingLastPathComponent
+            if isFolder { folders.insert(trimmed) }
+            if !parent.isEmpty { folders.insert(parent) }
+        }
+        return folders
+    }()
 }
 
 // MARK: - What an entry asks of the readers
