@@ -169,6 +169,10 @@ public struct ProjectFacts: Sendable, Equatable, CustomStringConvertible, Custom
     public var envNames: [EnvNames] = []
     /// The values of keys the caller asked for whose names do not mark a secret, most preferred file first.
     public var envValues: [ServiceFact] = []
+    /// The keys asked for whose value was written but not kept, in any env file: it names another value, holds a user
+    /// or password, or is not the URL, host, port or name its role takes. Names only. A link such a value would have
+    /// built is not replaced by a vendor's default: the project said where its server is.
+    public var refused: Set<String> = []
     public var dependencies: [ManifestNames] = []
     public var compose: ComposeFile?
     public var startCommands: [StartCommand] = []
@@ -232,7 +236,7 @@ public struct ProjectFacts: Sendable, Equatable, CustomStringConvertible, Custom
         let names = envNames.reduce(0) { (count: Int, file: EnvNames) -> Int in count + file.names.count }
         let deps = dependencies.reduce(0) { (count: Int, file: ManifestNames) -> Int in count + file.names.count }
         let parts: [String] = ["env files: \(envNames.count)", "env names: \(names)",
-                               "values: [\(keys.joined(separator: ", "))]",
+                               "values: [\(keys.joined(separator: ", "))]", "refused: \(refused.count)",
                                "dependencies: \(deps)", "compose services: \(compose?.services.count ?? 0)",
                                "start commands: \(startCommands.count)", "files: \(files.count)",
                                "named: [\(facts.joined(separator: ", "))]", "read: \(read.count)"]
@@ -276,6 +280,7 @@ extension ProjectFacts {
             let entries = EnvFile.parse(text, interpolating: false)
             envNames.append(EnvNames(file: file, names: Self.uniqueKeys(entries)))
             envValues += Self.facts(entries, file: file, valueKeys: valueKeys)
+            refused.formUnion(Self.refusedKeys(entries, valueKeys: valueKeys))
             if file == ".env" { rootEnv = entries }
         }
         let fresh: Bool = !Self.envFiles.contains { (file: String) -> Bool in reader.exists(file) }
@@ -309,6 +314,19 @@ extension ProjectFacts {
                   let value = factValue(written, role: role) else { return nil }
             return ServiceFact(file: file, key: key, role: role, value: value)
         }
+    }
+
+    /// The allowed keys whose last value in one file is written, yet gives no fact.
+    static func refusedKeys(_ entries: [EnvEntry], valueKeys: [String: KeyRole]) -> Set<String> {
+        var last: [String: String] = [:]
+        for entry in entries where mayRead(entry.key, valueKeys: valueKeys) { last[entry.key] = entry.value }
+        var refused = Set<String>()
+        for (key, written) in last {
+            guard let role = valueKeys[key] else { continue }
+            let text = written.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty, factValue(text, role: role) == nil { refused.insert(key) }
+        }
+        return refused
     }
 
     /// Compose's file, the first of its names that exists; a port's variable from the root `.env` when Compose may

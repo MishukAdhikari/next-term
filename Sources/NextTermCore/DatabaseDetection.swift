@@ -21,7 +21,8 @@ public enum Databases {
         var all = env + others(context)
         applyHints(&all, context.hints)
         // Read here once, not in Context, which every hand-off builds again for its password.
-        let facts = ProjectFacts.read(root: context.root, valueKeys: factValueKeys)
+        let facts = ProjectFacts.read(root: context.root, valueKeys: factValueKeys, startWords: ServiceCatalog.startWords,
+                                      markerFiles: ServiceCatalog.markerFiles)
         let databases = merge(all).map { (group: CandidateGroup) -> DetectedDatabase in
             var database = group.public
             database.links = DatabaseLinks.links(for: database, facts: facts)
@@ -31,8 +32,10 @@ public enum Databases {
     }
 
     /// The keys whose values the scan reads from env files beyond its own connection keys, each with its role: what
-    /// the provider links need. A key whose name marks a secret is never read, whatever its role.
-    static let factValueKeys: [String: KeyRole] = DatabaseLinks.valueKeys
+    /// the provider links and the services list need. A key whose name marks a secret is never read, whatever its role.
+    static let factValueKeys: [String: KeyRole] = DatabaseLinks.valueKeys.merging(ServiceCatalog.valueKeys) {
+        (links: KeyRole, _: KeyRole) -> KeyRole in links
+    }
 
     /// Reads the password again, from the file it came from, for a hand-off. nil if it is gone or changed.
     public static func credentials(for database: DetectedDatabase, root: String, herdInstalled: Bool = herdIsInstalled) -> DatabaseCredentials? {

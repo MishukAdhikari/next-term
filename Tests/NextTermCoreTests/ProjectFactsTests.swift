@@ -60,6 +60,26 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(text.contains("QDRANT_URL"))
     }
 
+    /// A value written but not kept is named as refused, by its key only: a link it would have built must not fall
+    /// back to a vendor's default. An empty value is not written; a secret's is never looked at.
+    @Test func aRefusedValueIsNamedByItsKeyOnly() {
+        let project = FixtureProject()
+        project.write(".env", """
+        QDRANT_URL=${QDRANT_HOST}
+        LANGFUSE_HOST=
+        MLFLOW_TRACKING_URI=https://u:NOT-A-PASSWORD@ml.example.com
+        LANCEDB_URI=db://shop-vectors
+        OPENAI_API_KEY=${NOT-A-KEY}
+        CHROMA_HOST=chroma
+        """)
+        project.write(".env.local", "CHROMA_HOST=javascript:alert(1)\n")
+        let facts = read(project)
+        #expect(facts.refused == ["QDRANT_URL", "MLFLOW_TRACKING_URI", "CHROMA_HOST"])
+        #expect(facts.value("CHROMA_HOST")?.file == ".env")
+        let text = printed(facts)
+        for secret in ["NOT-A-", "QDRANT_HOST", "javascript"] { #expect(!text.contains(secret), "\(secret)") }
+    }
+
     @Test func aURLIsCutToItsOrigin() throws {
         let project = FixtureProject()
         project.write(".env", """
