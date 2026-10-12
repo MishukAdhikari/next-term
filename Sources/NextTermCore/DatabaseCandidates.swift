@@ -25,13 +25,17 @@ struct Candidate {
         self.keys = keys
         self.file = file
         let host = url.host?.lowercased() ?? ""
-        let isLocal = DatabaseEnvironment.classify(host: url.host, socket: url.socket) == .local
+        let place = DatabaseEnvironment.classify(host: url.host, socket: url.socket)
+        let isLocal = place == .local
         if let provider = DatabaseProvider.from(host: url.host, user: url.user) { providers.append(provider) }
         // Vercel's Blob, KV and legacy Postgres hosts; the Postgres ones are Neon's too.
         if host.hasSuffix(".vercel-storage.com") { providers.append(.vercel) }
         if context.hasFlyConfig, providers.isEmpty, DatabaseProvider.isFlyPrivate(host) { providers.append(.fly) }
-        // `prisma dev` serves this scheme on this Mac: a local database, not Prisma's cloud.
-        if url.scheme == "prisma+postgres", !isLocal, !providers.contains(.prismaPostgres) { providers.append(.prismaPostgres) }
+        // `prisma dev` serves this scheme on this Mac, reached from a container too (`host.docker.internal`, a
+        // Compose service): only a remote host is Prisma's cloud.
+        if url.scheme == "prisma+postgres", place == .remote, !providers.contains(.prismaPostgres) {
+            providers.append(.prismaPostgres)
+        }
         pooled = host.contains("-pooler.") || host.contains(".pooler.") || host.hasPrefix("pooler.")
             || url.parameters.contains { $0.key.lowercased() == "pgbouncer" && $0.value == "true" }
         if context.herdInstalled, isLocal, [.mysql, .mariadb, .postgres].contains(engine),

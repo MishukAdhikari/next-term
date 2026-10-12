@@ -249,15 +249,32 @@ extension DatabaseLinks {
         return Page(name: "Dashboard", url: url, detail: "database " + label, source: database.sourceFile)
     }
 
-    /// The app `fly.toml` names, for a host on Fly.io's private network; the dashboard for Managed Postgres
-    /// (`*.flympg.net`), whose organisation no file names, or when `fly.toml` names no app.
+    /// The database's own app, which a host on Fly.io's private network names (`<app>.flycast`, `<app>.internal`,
+    /// `top1.nearest.of.<app>.internal`): Fly Postgres runs as an app of its own beside the web app `fly.toml` names.
+    /// `fly.toml`'s app when the host names none; the dashboard for Managed Postgres (`*.flympg.net`), whose
+    /// organisation no file names, or when nothing names an app.
     static func fly(_ database: DetectedDatabase, _ facts: ProjectFacts) -> Page? {
-        let managed: Bool = (database.host ?? "").lowercased().hasSuffix(".flympg.net")
-        guard !managed, let app = facts.named(.flyApp), SafeWebLink.Placeholder.slug.accepts(app) else {
-            return Page(name: "Dashboard", url: https("fly.io", "/dashboard"))
+        let host = (database.host ?? "").lowercased()
+        let dashboard = Page(name: "Dashboard", url: https("fly.io", "/dashboard"))
+        guard !host.hasSuffix(".flympg.net") else { return dashboard }
+        if let app = flyApp(onHost: host) { return flyAppPage(app, source: database.sourceFile) }
+        if let app = facts.named(.flyApp), SafeWebLink.Placeholder.slug.accepts(app) {
+            return flyAppPage(app, source: facts.namedFile(.flyApp))
         }
+        return dashboard
+    }
+
+    /// The label before `.flycast` or `.internal`, when it is an app's name.
+    static func flyApp(onHost host: String) -> String? {
+        let labels = host.split(separator: ".").map(String.init)
+        guard labels.count >= 2, let last = labels.last, last == "flycast" || last == "internal" else { return nil }
+        let app = labels[labels.count - 2]
+        return SafeWebLink.Placeholder.slug.accepts(app) ? app : nil
+    }
+
+    static func flyAppPage(_ app: String, source: String?) -> Page {
         let url = SafeWebLink.make(scheme: "https", host: "fly.io", path: [.fixed("/apps/"), .value(app, .slug)])
-        return Page(name: "App", url: url, detail: app, source: facts.namedFile(.flyApp))
+        return Page(name: "App", url: url, detail: app, source: source)
     }
 }
 
@@ -265,31 +282,55 @@ extension DatabaseLinks {
 
 extension DatabaseLinks {
     /// The instance or Aurora cluster its `<id>.<endpoint>.<region>.rds.amazonaws.com` host names, in that region's
-    /// console; the region's list for an RDS Proxy (its name is not a database's); else the console's home. A host in
-    /// another partition (`amazonaws.com.cn`) has no AWS badge at all.
+    /// console; the region's list for an endpoint whose name is not a database's (an RDS Proxy and its endpoints, an
+    /// Aurora custom endpoint); else the console's home. A host in another partition (`amazonaws.com.cn`) has no AWS
+    /// badge at all.
     static func aws(_ database: DetectedDatabase) -> Page? {
         let host = (database.host ?? "").lowercased()
         let labels = host.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
         let home = Page(name: "RDS Console", url: https("console.aws.amazon.com", "/rds/home"))
-        guard labels.count == 6, host.hasSuffix(".rds.amazonaws.com") else { return home }
+        // `<id>.<endpoint>.<region>.rds.amazonaws.com`, or a proxy endpoint's `<name>.endpoint.proxy-<hash>.<region>…`.
+        guard labels.count == 6 || labels.count == 7, host.hasSuffix(".rds.amazonaws.com") else { return home }
         let id = labels[0]
-        let endpoint = labels[1]
-        let region = labels[2]
+        let region = labels[labels.count - 4]
         guard SafeWebLink.Placeholder.awsRegion.accepts(region) else { return home }
-        let console = region + ".console.aws.amazon.com"
+        let console = awsConsole(region)
         let path: [SafeWebLink.Part] = [.fixed("/rds/home")]
         let query = [SafeWebLink.QueryItem("region", .value(region, .awsRegion))]
-        guard !endpoint.hasPrefix("proxy-"), SafeWebLink.Placeholder.slug.accepts(id) else {
+        let named: Bool? = labels.count == 6 ? isCluster(endpoint: labels[1]) : nil
+        guard let cluster = named, SafeWebLink.Placeholder.slug.accepts(id) else {
             let list: [SafeWebLink.Part] = [.fixed("databases:")]
             let url = SafeWebLink.make(scheme: "https", host: console, path: path, query: query, fragment: list)
             return Page(name: "RDS Console", url: url, detail: region)
         }
-        let cluster: Bool = endpoint.hasPrefix("cluster-")
         let fragment: [SafeWebLink.Part] = [.fixed("database:id="), .value(id, .slug),
                                             .fixed(cluster ? ";is-cluster=true" : ";is-cluster=false")]
         let url = SafeWebLink.make(scheme: "https", host: console, path: path, query: query, fragment: fragment)
         let detail = (cluster ? "cluster " : "database ") + id + " in " + region
         return Page(name: "RDS Console", url: url, detail: detail, source: database.sourceFile)
+    }
+
+    /// What an RDS endpoint's second label says its first names: an instance (`<hash>`, false), an Aurora cluster
+    /// (`cluster-<hash>`, or its readers' `cluster-ro-<hash>`, true), or no database's id (nil): an RDS Proxy's
+    /// `proxy-<hash>`, a custom endpoint's `cluster-custom-<hash>`, or a form not known.
+    static func isCluster(endpoint: String) -> Bool? {
+        if endpoint.wholeMatch(of: rdsHash) != nil { return false }
+        let rest: Substring
+        if endpoint.hasPrefix("cluster-ro-") {
+            rest = endpoint.dropFirst("cluster-ro-".count)
+        } else if endpoint.hasPrefix("cluster-") {
+            rest = endpoint.dropFirst("cluster-".count)
+        } else {
+            return nil
+        }
+        return rest.wholeMatch(of: rdsHash) != nil ? true : nil
+    }
+
+    static let rdsHash = #/[a-z0-9]{1,40}/#
+
+    /// The console a region's accounts sign in to: GovCloud has its own (I, H2), each other region its subdomain.
+    static func awsConsole(_ region: String) -> String {
+        region.contains("-gov-") ? "console.amazonaws-us-gov.com" : region + ".console.aws.amazon.com"
     }
 
     /// The portal's list of that kind of server: a resource's own page needs a subscription no file names.

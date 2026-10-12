@@ -233,13 +233,20 @@ public struct DetectedDatabase: Sendable, Equatable, Identifiable {
     /// Frameworks and ORMs that read it: Laravel, Prisma, Drizzle.
     public let tools: [String]
 
-    /// The page each provider badge opens, one per provider in the same order: a provider with no page has none.
-    /// Built from the host and the project's facts, never from the user, the password or a query value.
+    /// The page each provider badge opens, one per provider in the same order: a provider with no page has none, so
+    /// a badge finds its own with `link(for:)`. Built from the host and the project's facts, never from the user, the
+    /// password or a query value.
     public internal(set) var links: [ServiceLink] = []
 
     /// The file it was read from first, relative to the project.
     public var sourceFile: String? { sources.first?.file }
     public var hasPooledAndDirect: Bool { sources.contains { $0.pooled } && sources.contains { !$0.pooled } }
+
+    /// The page a provider's badge opens. A badge finds its link by its provider, never by its place in `links`.
+    public func link(for provider: DatabaseProvider) -> ServiceLink? {
+        let prefix = provider.serviceID + "."
+        return links.first { (link: ServiceLink) -> Bool in link.id.hasPrefix(prefix) }
+    }
 }
 
 /// What a hand-off needs and nothing else may see. Its descriptions are redacted, so printing it or
@@ -259,8 +266,9 @@ public struct DatabaseScan: Sendable, Equatable {
     public var databases: [DetectedDatabase] = []
     /// `.vercel/project.json` links the folder to a Vercel project.
     public var vercelProject: String?
-    /// What the project's files say, read once with the databases and handed on, so no file is read twice. It holds
-    /// key names and the values links may use, cut to their form, and prints names and counts only.
+    /// What the project's files say, read once per scan for the rows' links and handed on, so the Services pass reads
+    /// none of those files again. It holds key names and the values links may use, cut to their form, and prints
+    /// names and counts only. `==` leaves it out.
     public var facts = ProjectFacts()
     public var isVercelLinked: Bool { vercelProject != nil }
     public var isEmpty: Bool { databases.isEmpty }
@@ -269,5 +277,12 @@ public struct DatabaseScan: Sendable, Equatable {
         self.databases = databases
         self.vercelProject = vercelProject
         self.facts = facts
+    }
+
+    /// Equal when the Databases group shows the same: its rows and the Vercel link. A fact a row's link reads is in
+    /// that row already, so a change only the Services pass reads (a dependency in `package.json`) reloads no
+    /// database row. Take `facts` from the scan just made, not from one kept because it was equal.
+    public static func == (lhs: DatabaseScan, rhs: DatabaseScan) -> Bool {
+        lhs.databases == rhs.databases && lhs.vercelProject == rhs.vercelProject
     }
 }

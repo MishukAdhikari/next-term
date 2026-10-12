@@ -103,6 +103,22 @@ func linkText(_ scan: DatabaseScan) -> String {
         let remote = FixtureProject()
         remote.write(".env", "DATABASE_URL=prisma+postgres://accelerate.prisma-data.net/?api_key=NOT-A-KEY\n")
         #expect(try onlyRow(remote).providers == [.prismaPostgres])
+        // A remote host of its own gets the badge by the scheme alone.
+        let other = FixtureProject()
+        other.write(".env", "DATABASE_URL=prisma+postgres://prisma.shop.example.com/?api_key=NOT-A-KEY\n")
+        #expect(try urls(onlyRow(other)) == ["https://console.prisma.io"])
+    }
+
+    @Test func prismaDevReachedAnyLocalWayGetsNoCloudBadge() throws {
+        // Loopback as written any way, and `prisma dev` reached from a container: Docker's name or a Compose service.
+        let hosts = ["LOCALHOST:51213", "127.0.0.1:51213", "[::1]:51213", "host.docker.internal:51213", "db:51213"]
+        for host in hosts {
+            let project = FixtureProject()
+            project.write(".env", "DATABASE_URL=prisma+postgres://\(host)/?api_key=NOT-A-KEY\n")
+            let database = try onlyRow(project)
+            #expect(database.providers.isEmpty && database.links.isEmpty, "\(host)")
+            #expect(database.environment != .remote, "\(host)")
+        }
     }
 
     @Test func legacyVercelPostgresIsNeonAndVercel() throws {
@@ -115,6 +131,11 @@ func linkText(_ scan: DatabaseScan) -> String {
         #expect(database.providers == [.neon, .vercel] && database.hasPooledAndDirect)
         #expect(database.links.map(\.badge) == ["Neon", "Vercel"])
         #expect(database.links.first?.url.absoluteString == "https://console.neon.tech/app/projects")
+        // Under the Vercel CLI's header, which names Vercel too: still one Vercel badge.
+        let pulled = FixtureProject()
+        pulled.write(".env.local", "# Created by Vercel CLI\n"
+            + "POSTGRES_URL=postgres://shopuser:NOT-A-PASSWORD@ep-x-pooler.us-east-1.postgres.vercel-storage.com/verceldb\n")
+        #expect(try onlyRow(pulled).links.map(\.badge) == ["Neon", "Vercel"])
     }
 
     @Test func renderPostgresOpensItsDatabase() throws {
@@ -129,6 +150,10 @@ func linkText(_ scan: DatabaseScan) -> String {
         let inside = FixtureProject()
         inside.write(".env", "DATABASE_URL=postgres://shopuser:NOT-A-PASSWORD@dpg-abcdefghijklmnopqrst-a/shop\n")
         #expect(try onlyRow(inside).providers == [.render])
+        // Render's form under someone else's domain is not Render's.
+        let elsewhere = FixtureProject()
+        elsewhere.write(".env", "DATABASE_URL=postgres://shopuser:NOT-A-PASSWORD@dpg-abcdefghijklmnopqrst-a.example.com/shop\n")
+        #expect(try onlyRow(elsewhere).providers.isEmpty)
     }
 
     // MARK: Supabase
@@ -203,6 +228,10 @@ func linkText(_ scan: DatabaseScan) -> String {
         let fallback = try #require(try onlyRow(plain).links.first)
         #expect(fallback.url.absoluteString == "http://127.0.0.1:54323")
         #expect(fallback.tooltip == "Open Supabase Studio at 127.0.0.1:54323 (default port)" && fallback.source == nil)
+        // A linked cloud project does not move the local stack's link to the cloud.
+        project.write("supabase/.temp/project-ref", "klmnopqrstabcdefghij\n")
+        let linked = try #require(try onlyRow(project).links.first)
+        #expect(linked.url.absoluteString == "http://127.0.0.1:54423" && linked.id == "supabase.studio")
     }
 
     // MARK: Herd
@@ -253,21 +282,43 @@ func linkText(_ scan: DatabaseScan) -> String {
         let database = try onlyRow(project, herd: true)
         #expect(database.providers == [.herd])
         #expect(urls(database) == ["http://shop.test"])
+        for quoted in ["name: 'shop'\n", "name: \"shop\"\nsecured: true\n"] {
+            project.write("herd.yml", quoted)
+            let site = try #require(try onlyRow(project, herd: true).links.first)
+            #expect(site.url.host == "shop.test" && site.source == "herd.yml", "\(quoted)")
+        }
+    }
+
+    @Test func herdWithAnAppURLOffTestAndNoHerdYAMLOpensItsDocs() throws {
+        let project = FixtureProject()
+        project.write(".env", "APP_URL=http://localhost:8000\nDB_CONNECTION=mysql\nDB_SOCKET=/opt/Herd/mysql.sock\nDB_DATABASE=shop\n")
+        let database = try onlyRow(project, herd: true)
+        #expect(database.providers == [.herd])
+        #expect(urls(database) == ["https://herd.laravel.com/docs/macos/herd-pro-services/services"])
     }
 
     // MARK: Fly.io and Railway
 
-    @Test func flyPrivateHostsOpenTheApp() throws {
-        for host in ["shop-db.flycast", "shop-db.internal", "top2.nearest.of.shop-db.internal"] {
+    @Test func flyPrivateHostsOpenTheDatabasesOwnApp() throws {
+        // The host names the app the database runs as; fly.toml's app is the web app beside it.
+        let hosts = ["shop-db.flycast", "shop-db.internal", "top2.nearest.of.shop-db.internal", "fra.shop-db.internal"]
+        for host in hosts {
             let project = FixtureProject()
             project.write("fly.toml", "app = \"shop-api\"\nprimary_region = \"ams\"\n")
             project.write(".env", "DATABASE_URL=postgres://shopuser:NOT-A-PASSWORD@\(host):5432/shop\n")
             let database = try onlyRow(project)
             #expect(database.providers == [.fly], "\(host)")
             let fly = try #require(database.links.first)
-            #expect(fly.url.absoluteString == "https://fly.io/apps/shop-api" && fly.source == "fly.toml")
-            #expect(fly.title == "Open Fly.io App" && fly.tooltip == "Open Fly.io App: shop-api" && fly.badge == "Fly.io")
+            #expect(fly.url.absoluteString == "https://fly.io/apps/shop-db" && fly.source == ".env", "\(host)")
+            #expect(fly.title == "Open Fly.io App" && fly.tooltip == "Open Fly.io App: shop-db" && fly.badge == "Fly.io")
         }
+        // A host that names no app: fly.toml's.
+        let project = FixtureProject()
+        project.write("fly.toml", "app = \"shop-api\"\n")
+        project.write(".env", "DATABASE_URL=postgres://shopuser:NOT-A-PASSWORD@_apps.internal:5432/shop\n")
+        let fly = try #require(try onlyRow(project).links.first)
+        #expect(fly.url.absoluteString == "https://fly.io/apps/shop-api" && fly.source == "fly.toml")
+        #expect(fly.tooltip == "Open Fly.io App: shop-api")
     }
 
     @Test func dotInternalIsFlyOnlyWithFlyToml() throws {
@@ -284,7 +335,7 @@ func linkText(_ scan: DatabaseScan) -> String {
         #expect(try onlyRow(railway).providers == [.railway])
         let flycast = FixtureProject()
         flycast.write(".env", "DATABASE_URL=postgres://shopuser:NOT-A-PASSWORD@shop-db.flycast:5432/shop\n")
-        #expect(try urls(onlyRow(flycast)) == ["https://fly.io/dashboard"])
+        #expect(try urls(onlyRow(flycast)) == ["https://fly.io/apps/shop-db"])
         let managed = FixtureProject()
         managed.write("fly.toml", "app = \"shop-api\"\n")
         managed.write(".env", "DATABASE_URL=postgres://shopuser:NOT-A-PASSWORD@pgbouncer.abc123.flympg.net/shop\n")
@@ -328,17 +379,36 @@ func linkText(_ scan: DatabaseScan) -> String {
         #expect(instance.url.absoluteString == instanceURL && instance.badge == "AWS")
         #expect(instance.title == "Open AWS RDS Console")
         #expect(instance.tooltip == "Open AWS RDS Console: database shop in eu-west-1")
-        let cluster = try #require(try awsLink("shop.cluster-abc123def456.us-gov-west-1.rds.amazonaws.com"))
-        let clusterURL = "https://us-gov-west-1.console.aws.amazon.com/rds/home?region=us-gov-west-1#database:id=shop;is-cluster=true"
+        let cluster = try #require(try awsLink("shop.cluster-abc123def456.us-east-2.rds.amazonaws.com"))
+        let clusterURL = "https://us-east-2.console.aws.amazon.com/rds/home?region=us-east-2#database:id=shop;is-cluster=true"
         #expect(cluster.url.absoluteString == clusterURL)
-        #expect(cluster.tooltip == "Open AWS RDS Console: cluster shop in us-gov-west-1")
+        #expect(cluster.tooltip == "Open AWS RDS Console: cluster shop in us-east-2")
         let reader = try #require(try awsLink("shop.cluster-ro-abc123def456.us-east-1.rds.amazonaws.com"))
         #expect(reader.url.absoluteString.hasSuffix("#database:id=shop;is-cluster=true"))
-        // A proxy's name is not a database's: the region's list.
-        let proxy = try #require(try awsLink("shop-proxy.proxy-abc123def456.us-east-1.rds.amazonaws.com"))
-        #expect(proxy.url.absoluteString == "https://us-east-1.console.aws.amazon.com/rds/home?region=us-east-1#databases:")
         // Another partition: no badge, so no link.
         #expect(try awsLink("shop.abc123def456.cn-north-1.rds.amazonaws.com.cn") == nil)
+    }
+
+    @Test func awsEndpointsThatNameNoDatabaseOpenTheRegionsList() throws {
+        // A proxy's, a proxy endpoint's and an Aurora custom endpoint's names are not a database's id.
+        let hosts = ["shop-proxy.proxy-abc123def456.us-east-1.rds.amazonaws.com",
+                     "shop-reader.endpoint.proxy-abc123def456.us-east-1.rds.amazonaws.com",
+                     "reporting.cluster-custom-abc123def456.us-east-1.rds.amazonaws.com"]
+        for host in hosts {
+            let link = try #require(try awsLink(host))
+            let list = "https://us-east-1.console.aws.amazon.com/rds/home?region=us-east-1#databases:"
+            #expect(link.url.absoluteString == list, "\(host)")
+            #expect(link.tooltip == "Open AWS RDS Console: us-east-1" && link.source == nil, "\(host)")
+        }
+    }
+
+    @Test func awsGovCloudOpensItsOwnConsole() throws {
+        let cluster = try #require(try awsLink("shop.cluster-abc123def456.us-gov-west-1.rds.amazonaws.com"))
+        let clusterURL = "https://console.amazonaws-us-gov.com/rds/home?region=us-gov-west-1#database:id=shop;is-cluster=true"
+        #expect(cluster.url.absoluteString == clusterURL)
+        #expect(cluster.tooltip == "Open AWS RDS Console: cluster shop in us-gov-west-1")
+        let proxy = try #require(try awsLink("shop-proxy.proxy-abc123def456.us-gov-east-1.rds.amazonaws.com"))
+        #expect(proxy.url.absoluteString == "https://console.amazonaws-us-gov.com/rds/home?region=us-gov-east-1#databases:")
     }
 
     @Test func atlasOpensTheProjectItsIdNames() throws {
@@ -404,6 +474,20 @@ func linkText(_ scan: DatabaseScan) -> String {
             #expect(SafeWebLink.isAllowed(link.url) && link.url.scheme == "https", "\(link.url)")
             #expect(link.title.hasPrefix("Open ") && link.tooltip.hasPrefix("Open "), "\(link.title)")
         }
+        // A badge finds its link by its provider, whatever the place.
+        var row = database
+        row.links = links.reversed()
+        for provider in DatabaseProvider.allCases {
+            #expect(row.link(for: provider)?.badge == provider.rawValue, "\(provider)")
+        }
+        row.links = []
+        #expect(row.link(for: .neon) == nil)
+    }
+
+    @Test func noKeyTheLinksReadHasASecretsName() {
+        for key in DatabaseLinks.valueKeys.keys {
+            #expect(!SecretName.isSecret(key), "\(key)")
+        }
     }
 
     // MARK: the facts the scan hands on
@@ -430,5 +514,20 @@ func linkText(_ scan: DatabaseScan) -> String {
         }
         // Equal scans of an unchanged project, so the sidebar redraws only on a change.
         #expect(project.scan() == scan)
+    }
+
+    @Test func aChangeNoDatabaseRowShowsLeavesTheScanEqual() throws {
+        let project = FixtureProject()
+        project.write(".env.local", Self.neonFromVercel)
+        project.write("package.json", #"{"dependencies": {"pg": "8.16.0"}}"#)
+        let before = project.scan()
+        // A dependency only the Services pass reads: the Databases group has nothing to reload.
+        project.write("package.json", #"{"dependencies": {"pg": "8.16.0", "openai": "5.0.0"}}"#)
+        let after = project.scan()
+        #expect(after.facts != before.facts)
+        #expect(after == before)
+        // A fact a row's link reads changes the row, so the scan.
+        project.write(".neon", #"{"projectId": "cold-grass-40154007"}"#)
+        #expect(project.scan() != after)
     }
 }
