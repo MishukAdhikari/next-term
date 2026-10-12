@@ -4,9 +4,9 @@ import NextTermCore
 /// The clipboard for Secrets, on an injected pasteboard: the app passes `.general`, the self-test a
 /// private named one, so the user's clipboard is never read or cleared by a check.
 ///
-/// - **Copy** prepares the pasteboard for this Mac only (`.currentHostOnly`), then writes the value with the
-///   concealed and transient markers, so clipboard managers and Universal Clipboard are asked to leave it. After 60
-///   seconds, when nothing else was copied since, Next Term clears it.
+/// - **Copy** prepares the pasteboard for this Mac only (`.currentHostOnly`), then writes the value and the concealed
+///   and transient markers in one item, in one write, so clipboard managers and Universal Clipboard are asked to leave
+///   it and none sees the value without them. After 60 seconds, when nothing else was copied since, Next Term clears it.
 /// - **A paste into a value field** records the pasteboard's change count. On Save the pasteboard is cleared only when
 ///   that count is unchanged. Next Term never reads the pasteboard, so macOS's paste alert never shows.
 @MainActor
@@ -26,6 +26,10 @@ final class SecretClipboard {
     private(set) var copiedCount: Int?
     /// The last Copy asked for this Mac only (`.currentHostOnly`), for the self-test: macOS gives no way to read it back.
     private(set) var preparedForThisMacOnly = false
+    #if DEBUG
+    /// The last Copy's writes to the pasteboard, each the types it put there at once, for the self-test.
+    private(set) var lastCopyWrites: [[NSPasteboard.PasteboardType]] = []
+    #endif
 
     init(pasteboard: NSPasteboard) {
         self.pasteboard = pasteboard
@@ -38,15 +42,26 @@ final class SecretClipboard {
         guard let text = value.utf8String() else { return false }
         pasteboard.prepareForNewContents(with: .currentHostOnly)
         preparedForThisMacOnly = true
-        let wrote = pasteboard.setString(text, forType: .string)
-        pasteboard.setData(Data(), forType: Self.concealedType)
-        pasteboard.setData(Data(), forType: Self.transientType)
+        let item = Self.markedItem(text)
+        #if DEBUG
+        lastCopyWrites = [item.types]
+        #endif
+        let wrote = pasteboard.writeObjects([item])
         let count = pasteboard.changeCount
         copiedCount = count
         DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) { [weak self] in
             MainActor.assumeIsolated { self?.clearCopy(ifStill: count) }
         }
         return wrote
+    }
+
+    /// `text` and both markers in one pasteboard item, the markers first.
+    static func markedItem(_ text: String) -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setData(Data(), forType: concealedType)
+        item.setData(Data(), forType: transientType)
+        item.setString(text, forType: .string)
+        return item
     }
 
     /// The copy's clear: only when the pasteboard still holds what Copy put there.

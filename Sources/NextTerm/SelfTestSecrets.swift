@@ -1460,6 +1460,15 @@ extension SelfTest {
               && view.actionLabel.stringValue == SecretClipboard.copiedLine,
               "secrets: Copy puts the key on the pasteboard for this Mac only, marked concealed and transient, and says it clears in 60 seconds",
               types.map(\.rawValue).joined(separator: ", "))
+        #if DEBUG
+        // One pasteboard write holds the value with both markers: a clipboard manager reading between writes never sees
+        // the value unmarked.
+        let writes = clipboard.lastCopyWrites
+        let marked = [SecretClipboard.concealedType, SecretClipboard.transientType, .string]
+        check(writes.count == 1 && marked.allSatisfy(writes[0].contains) && clipboard.pasteboard.pasteboardItems?.count == 1,
+              "secrets: Copy writes the key in one write that holds the concealed and transient markers too",
+              writes.map { $0.map(\.rawValue).joined(separator: "+") }.joined(separator: ", "))
+        #endif
         let cleared = await wait(5) { clipboard.pasteboard.string(forType: .string) == nil }
         check(cleared, "secrets: Copy's pasteboard is cleared after the delay when nothing was copied since")
         view.copyButton.performClick(nil)
