@@ -195,7 +195,10 @@ public enum SecretImport {
     /// A file's text: its bytes as read, without a UTF-8 byte order mark (writing puts it back).
     static func text(of data: Data) -> String? {
         let mark = Data([0xEF, 0xBB, 0xBF])
-        return String(data: data.starts(with: mark) ? data.dropFirst(3) : data, encoding: .utf8)
+        guard var text = String(data: data.starts(with: mark) ? data.dropFirst(3) : data, encoding: .utf8) else { return nil }
+        // Native UTF-8, so a position's offset is found at once (`offset(_:in:)`).
+        text.makeContiguousUTF8()
+        return text
     }
 
     /// Reads a plain file of at most 8 MB; nil for anything else (a link to nothing, a folder).
@@ -206,12 +209,18 @@ public enum SecretImport {
         return FileManager.default.contents(atPath: path)
     }
 
+    /// The most keys and wrapped servers one file lists: past it, the file is reported, not listed row by row (a crafted
+    /// project file could list a hundred thousand).
+    static let maxListed = 1_000
+    static let tooManyReason = "it lists more than 1,000 keys or servers, more than Next Term shows"
+
     /// Every finding in `sources`. `inGitWorkTree` and `isOpen` (a bundle identifier's app is running) are the
-    /// caller's; values stay in memory.
+    /// caller's; values stay in memory. A task cancelled meanwhile stops it between files, with what it found so far.
     public static func scan(_ sources: [Source], read: (String) -> Data? = readFile, inGitWorkTree: (String) -> Bool = { _ in false },
                             isOpen: (String) -> Bool = { _ in false }) -> Scan {
         var scan = Scan()
         for source in sources {
+            if Task.isCancelled { break }
             guard let data = read(source.path) else { continue }
             guard let text = text(of: data) else {
                 scan.unreadable.append((source, "not UTF-8 text"))
@@ -235,6 +244,10 @@ public enum SecretImport {
                 }
                 entries = found
             }
+            guard entries.reduce(0, { $0 + ($1.isWrapped ? 1 : $1.detected.count) }) <= maxListed else {
+                scan.unreadable.append((source, tooManyReason))
+                continue
+            }
             for entry in entries {
                 if entry.isWrapped {
                     scan.wrapped.append((source, entry.location))
@@ -256,7 +269,7 @@ public enum SecretImport {
     /// One server entry, as read: what it runs, what it holds, and where.
     struct Entry {
         var location: Location
-        /// The entry's text, as scalar offsets into the file.
+        /// The entry's text, as UTF-8 offsets into the file.
         var range: Range<Int>
         var command: [String]
         var args: [String]
@@ -272,7 +285,7 @@ public enum SecretImport {
         var value: SecretBytes
         var kind: String
         var notMovable: String?
-        /// The value's literal in the file (with its quotes), as scalar offsets.
+        /// The value's literal in the file (with its quotes), as UTF-8 offsets.
         var range: Range<Int>
     }
 
@@ -390,25 +403,31 @@ public enum SecretImport {
 
     // MARK: JSON
 
-    /// The scalar offset of an index in `text`.
+    /// The UTF-8 offset of an index in `text`: found at once in native text, where counting scalars walks the text from
+    /// its start, and a scan that did so for each value took time that grows with the square of the file.
     static func offset(_ index: String.Index, in text: String) -> Int {
-        text.unicodeScalars.distance(from: text.unicodeScalars.startIndex, to: index)
+        text.utf8.distance(from: text.utf8.startIndex, to: index)
     }
 
     static func offsets(_ range: Range<String.Index>, in text: String) -> Range<Int> {
         offset(range.lowerBound, in: text)..<offset(range.upperBound, in: text)
     }
 
-    /// The containers a JSON source has: its own, or for `~/.claude.json` the top-level `mcpServers` and each
-    /// project's.
-    static func containers(of source: Source, root: JSONC.Object) -> [[String]] {
-        if let containers = source.containers { return containers }
-        var list = [["mcpServers"]]
-        if let projects = root.member("projects"), case .object(let object) = projects.value {
-            for project in object.members {
-                guard case .object(let settings) = project.value, settings.member("mcpServers") != nil else { continue }
-                list.append(["projects", project.key, "mcpServers"])
-            }
+    /// The containers a JSON source has, with their objects: its own, or for `~/.claude.json` the top-level `mcpServers`
+    /// and each project's. Each project is read where the walk finds it (the first of a repeated key, as `object(at:)`
+    /// would), not looked up again from the top, so many projects take no longer than reading them.
+    static func containers(of source: Source, root: JSONC.Object) -> [(path: [String], servers: JSONC.Object)] {
+        if let containers = source.containers {
+            return containers.compactMap { path in object(at: path, in: root).map { (path, $0) } }
+        }
+        var list: [(path: [String], servers: JSONC.Object)] = []
+        if let servers = object(at: ["mcpServers"], in: root) { list.append((["mcpServers"], servers)) }
+        guard let projects = root.member("projects"), case .object(let object) = projects.value else { return list }
+        var seen = Set<String>()
+        for project in object.members where seen.insert(project.key).inserted {
+            guard case .object(let settings) = project.value, let member = settings.member("mcpServers"),
+                  case .object(let servers) = member.value else { continue }
+            list.append((["projects", project.key, "mcpServers"], servers))
         }
         return list
     }
@@ -428,15 +447,14 @@ public enum SecretImport {
         let strictRefusal: String? = source.format == .strictJSON && (document.hasComments || document.hasTrailingCommas)
             ? "comments in a file that must be plain JSON" : nil
         var entries: [Entry] = []
-        for path in containers(of: source, root: root) {
-            guard let servers = object(at: path, in: root) else { continue }
+        for (path, servers) in containers(of: source, root: root) {
             let repeated = servers.hasRepeatedKeys
             for member in servers.members {
                 guard case .object(let object) = member.value else { continue }
                 var entry = Entry(location: Location(container: path, server: member.key), range: offsets(member.value.range, in: text),
                                   command: [], args: [])
-                entry.hasComments = String(text.unicodeScalars[member.value.range]).contains("//")
-                    || String(text.unicodeScalars[member.value.range]).contains("/*")
+                let entryText = document.string(member.value.range)
+                entry.hasComments = entryText.contains("//") || entryText.contains("/*")
                 read(object, into: &entry, document: document, text: text, client: source.client)
                 if repeated || object.hasRepeatedKeys { entry.notMovable = "repeated keys" }
                 if entry.notMovable == nil { entry.notMovable = strictRefusal }
@@ -616,17 +634,26 @@ public enum SecretImport {
         let envHeader: TOMLOutline.Header?
     }
 
+    /// The servers' tables. The keys are sorted by table, and the `env` headers found, once for the file: looked for
+    /// table by table, they took time that grows with the square of the number of tables.
     static func tomlTables(_ outline: TOMLOutline) -> [TOMLTable] {
         var tables: [TOMLTable] = []
         let headers = outline.headers
+        var keysByTable: [[String]: [TOMLOutline.Key]] = [:]
+        for key in outline.keys { keysByTable[key.table, default: []].append(key) }
+        var envHeaders: [String: TOMLOutline.Header] = [:]
+        for header in headers where !header.isArray && header.path.count == 3 && header.path[0] == "mcp_servers" && header.path[2] == "env" {
+            if envHeaders[header.path[1]] == nil { envHeaders[header.path[1]] = header }
+        }
         for (index, header) in headers.enumerated() where !header.isArray && header.path.count == 2 && header.path[0] == "mcp_servers" {
             let name = header.path[1]
             let own = ["mcp_servers", name]
+            // Only this table's own tables are passed over, so the walks over all the tables take one pass.
             let next = headers[(index + 1)...].first { !$0.path.starts(with: own) || $0.path == own }
             let end = next.map { outline.commentsAbove($0.line.lowerBound) } ?? outline.text.unicodeScalars.endIndex
-            let keys = outline.keys.filter { $0.table == own }
-            let envKeys = outline.keys.filter { $0.table == own + ["env"] }
-            let envHeader = headers.first { $0.path == own + ["env"] && !$0.isArray }
+            let keys = keysByTable[own] ?? []
+            let envKeys = keysByTable[own + ["env"]] ?? []
+            let envHeader = envHeaders[name]
             tables.append(TOMLTable(name: name, header: header, range: header.line.lowerBound..<max(end, header.line.upperBound), keys: keys,
                                     envKeys: envKeys, envHeader: envHeader))
         }
@@ -698,15 +725,20 @@ public enum SecretImport {
             if odd.contains(table.name) { entry.notMovable = oddShapeReason(table.name) }
             entries.append(entry)
         }
-        // Servers with no table of their own (all dotted keys): what they hold is listed, not movable.
+        // Servers with no table of their own (all dotted keys): what they hold is listed, not movable. Their env keys are
+        // sorted by server in one pass.
+        var oddEnv: [String: [(variable: String, value: String.Index)]] = [:]
+        for key in outline.keys {
+            let full = key.table + key.path
+            guard full.count == 4, full[0] == "mcp_servers", full[2] == "env", odd.contains(full[1]) else { continue }
+            oddEnv[full[1], default: []].append((full[3], key.value))
+        }
         for name in odd.subtracting(entries.map(\.location.server)).sorted() {
             var entry = Entry(location: Location(container: ["mcp_servers"], server: name), range: 0..<0, command: [], args: [])
             entry.notMovable = oddShapeReason(name)
-            for key in outline.keys {
-                let full = key.table + key.path
-                guard full.count == 4, full[0] == "mcp_servers", full[1] == name, full[2] == "env",
-                      let (range, value) = outline.string(at: key.value), let kind = detect(name: full[3], value: value) else { continue }
-                entry.detected.append(Detected(field: .env(full[3]), variable: full[3], value: SecretBytes(utf8: value), kind: kind,
+            for key in oddEnv[name] ?? [] {
+                guard let (range, value) = outline.string(at: key.value), let kind = detect(name: key.variable, value: value) else { continue }
+                entry.detected.append(Detected(field: .env(key.variable), variable: key.variable, value: SecretBytes(utf8: value), kind: kind,
                                                notMovable: entry.notMovable, range: offsets(range, in: text)))
             }
             entries.append(entry)
@@ -739,26 +771,39 @@ public enum SecretImport {
     /// The movable findings grouped by identical value, each group named after its first variable (capitals, `_`); a
     /// clash with a stored key or another group adds `_2`, `_3`. A group holds at most one variable of each entry.
     public static func groups(_ findings: [Finding], stored: [String]) -> [Group] {
-        var groups: [(value: SecretBytes, findings: [Finding])] = []
+        struct Place: Hashable {
+            let path: String
+            let location: Location
+        }
+        var groups: [(value: SecretBytes, findings: [Finding], places: Set<Place>)] = []
+        // The groups by their value's digest (in memory only): a finding finds its group at once, not by a walk over all.
+        var byValue: [SHA256.Digest: [Int]] = [:]
         for finding in findings where finding.movable {
+            let place = Place(path: finding.source.path, location: finding.location)
+            let digest = finding.value.withUnsafeBytes { SHA256.hash(data: $0) }
             // An entry that holds the value under two variables needs a key for each: the wrapper takes a name once.
-            let sameEntry = { (other: Finding) in other.source.path == finding.source.path && other.location == finding.location }
-            if let index = groups.firstIndex(where: { $0.value == finding.value && !$0.findings.contains(where: sameEntry) }) {
+            let same = byValue[digest]?.first { groups[$0].value == finding.value && !groups[$0].places.contains(place) }
+            if let index = same {
                 groups[index].findings.append(finding)
+                groups[index].places.insert(place)
             } else {
-                groups.append((finding.value, [finding]))
+                byValue[digest, default: []].append(groups.count)
+                groups.append((finding.value, [finding], [place]))
             }
         }
         var taken = Set(stored)
+        // Where each name's numbers go on from: names are only ever taken, so the ones below are taken still.
+        var numbers: [String: Int] = [:]
         return groups.map { group in
             let base = StoredSecretName.suggested(from: group.findings[0].variable)
             var name = base
-            var number = 2
+            var number = numbers[base] ?? 2
             while taken.contains(name) {
                 let suffix = "_\(number)"
                 name = String(base.prefix(StoredSecretName.maxLength - suffix.count)) + suffix
                 number += 1
             }
+            numbers[base] = number
             taken.insert(name)
             return Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
         }
@@ -941,13 +986,13 @@ public enum SecretImport {
 
     /// The entry's text with every detected value replaced by its marker, and the values kept in place, in order.
     static func marked(_ text: String, entry: Entry, moved: [String: String]) -> (text: String, kept: [SecretBytes]) {
-        let scalars = Array(text.unicodeScalars)
+        let bytes = Array(text.utf8)
         let detected = entry.detected.sorted { $0.range.lowerBound < $1.range.lowerBound }
-        var out = String.UnicodeScalarView()
+        var out: [UInt8] = []
         var cursor = entry.range.lowerBound
         var kept: [SecretBytes] = []
         for found in detected where found.range.lowerBound >= cursor && found.range.upperBound <= entry.range.upperBound {
-            out.append(contentsOf: scalars[cursor..<found.range.lowerBound])
+            out.append(contentsOf: bytes[cursor..<found.range.lowerBound])
             let name: String?
             if case .env(let variable) = found.field { name = moved[variable] } else { name = nil }
             let marker: String
@@ -957,20 +1002,20 @@ public enum SecretImport {
                 marker = keptMarker(kept.count)
                 kept.append(found.value)
             }
-            out.append(contentsOf: "\"\(marker)\"".unicodeScalars)
+            out.append(contentsOf: "\"\(marker)\"".utf8)
             cursor = found.range.upperBound
         }
-        out.append(contentsOf: scalars[cursor..<entry.range.upperBound])
-        return (String(out), kept)
+        out.append(contentsOf: bytes[cursor..<entry.range.upperBound])
+        return (String(decoding: out, as: UTF8.self), kept)
     }
 
     static func sha256(_ text: String) -> String { SecretRun.digest(Data(text.utf8)) }
 
-    /// Replaces scalar ranges of `text`. An insertion (an empty range) goes before a change that starts where it does,
-    /// so a line added after `args` comes before the `env` line removed there. Ranges that overlap, or run past the
-    /// end, give nil: the edit is refused rather than guessed.
+    /// Replaces UTF-8 ranges of `text` (each from `offsets`, so on scalar boundaries). An insertion (an empty range) goes
+    /// before a change that starts where it does, so a line added after `args` comes before the `env` line removed there.
+    /// Ranges that overlap, or run past the end, give nil: the edit is refused rather than guessed.
     static func replacing(_ text: String, _ changes: [(range: Range<Int>, with: String)]) -> String? {
-        let scalars = Array(text.unicodeScalars)
+        let bytes = Array(text.utf8)
         let ordered = changes.indices.sorted { first, second in
             let a = changes[first].range
             let b = changes[second].range
@@ -978,17 +1023,17 @@ public enum SecretImport {
             if a.isEmpty != b.isEmpty { return a.isEmpty }
             return first < second
         }
-        var out = String.UnicodeScalarView()
+        var out: [UInt8] = []
         var cursor = 0
         for index in ordered {
             let change = changes[index]
-            guard change.range.lowerBound >= cursor, change.range.upperBound <= scalars.count else { return nil }
-            out.append(contentsOf: scalars[cursor..<change.range.lowerBound])
-            out.append(contentsOf: change.with.unicodeScalars)
+            guard change.range.lowerBound >= cursor, change.range.upperBound <= bytes.count else { return nil }
+            out.append(contentsOf: bytes[cursor..<change.range.lowerBound])
+            out.append(contentsOf: change.with.utf8)
             cursor = change.range.upperBound
         }
-        out.append(contentsOf: scalars[cursor...])
-        return String(out)
+        out.append(contentsOf: bytes[cursor...])
+        return String(decoding: out, as: UTF8.self)
     }
 
     /// Why `nxtrm secret run` could not start the entry as planned: its keys and their variables, then the command, as
@@ -1115,13 +1160,13 @@ public enum SecretImport {
             return .failure(EditFailure("check failed"))
         }
         // Everything outside the entry is as it was.
-        let oldScalars = Array(text.unicodeScalars)
-        let newScalars = Array(updated.unicodeScalars)
+        let oldBytes = Array(text.utf8)
+        let newBytes = Array(updated.utf8)
         let oldRange = entry.range
         let newRange = offsets(newTable.range, in: updated)
-        guard Array(oldScalars[..<oldRange.lowerBound]) == Array(newScalars[..<newRange.lowerBound]),
-              Array(oldScalars[oldRange.upperBound...]) == Array(newScalars[newRange.upperBound...]) else { return .failure(EditFailure("check failed")) }
-        let writtenText = String(String.UnicodeScalarView(newScalars[newRange]))
+        guard oldBytes[..<oldRange.lowerBound].elementsEqual(newBytes[..<newRange.lowerBound]),
+              oldBytes[oldRange.upperBound...].elementsEqual(newBytes[newRange.upperBound...]) else { return .failure(EditFailure("check failed")) }
+        let writtenText = String(decoding: newBytes[newRange], as: UTF8.self)
         return .success(Edited(text: updated, original: backup.text, written: sha256(writtenText), kept: backup.kept))
     }
 

@@ -64,6 +64,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     /// Each file's result, after a move.
     private(set) var results: [String: SecretImport.Applied] = [:]
     private(set) var isBusy = false
+    /// The scan under way: cancelled when the sheet closes or scans again, so it stops between files.
+    private var scanTask: Task<Void, Never>?
 
     init(_ setup: Setup, done: @escaping () -> Void) {
         self.setup = setup
@@ -153,9 +155,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         headerLabel.stringValue = "Looked in your agents' settings and in the \(count) \(count == 1 ? "project" : "projects") open in Next Term."
         statusLabel.stringValue = "Looking…"
         let setup = setup
-        Task.detached {
+        scanTask?.cancel()
+        scanTask = Task.detached {
             let sources = SecretImport.sources(home: setup.home, projects: setup.projects)
             let found = SecretImport.scan(sources, inGitWorkTree: Self.isInGitWorkTree, isOpen: { setup.running.contains($0) })
+            guard !Task.isCancelled else { return }
             await MainActor.run { self.show(found) }
         }
     }
@@ -311,21 +315,26 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         }
     }
 
-    /// Plan, one Touch ID (the keys saved, the kept values sealed), the backups, then each file written.
+    /// Plan (off the main thread: it reads each file again), one Touch ID (the keys saved, the kept values sealed), the
+    /// backups, then each file written.
     func move(_ moves: [SecretImport.Move]) {
-        let planned = SecretImport.plan(moves, nxtrm: Self.nxtrmCommand())
-        for failure in planned.failures { results[failure.path] = .skipped(failure.reason) }
-        var edits = planned.edits
-        guard !edits.isEmpty else { return showResults(edits: [], moved: []) }
-        let movedNames = Set(edits.flatMap(\.names))
-        let keys = moves.filter { movedNames.contains($0.name) }.map { move in
-            SecretsStore.ImportKey(name: move.name, purpose: Self.purpose(move), value: move.findings[0].value)
-        }
-        var kept: [String: [SecretBytes]] = [:]
-        for edit in edits { for backup in edit.backups { kept[backup.id] = backup.keptValues } }
+        let nxtrm = Self.nxtrmCommand()
         setBusy(true)
         let setup = setup
         Task { @MainActor in
+            let planned = await Task.detached { SecretImport.plan(moves, nxtrm: nxtrm) }.value
+            for failure in planned.failures { self.results[failure.path] = .skipped(failure.reason) }
+            var edits = planned.edits
+            guard !edits.isEmpty else {
+                self.setBusy(false)
+                return self.showResults(edits: [], moved: [])
+            }
+            let movedNames = Set(edits.flatMap(\.names))
+            let keys = moves.filter { movedNames.contains($0.name) }.map { move in
+                SecretsStore.ImportKey(name: move.name, purpose: Self.purpose(move), value: move.findings[0].value)
+            }
+            var kept: [String: [SecretBytes]] = [:]
+            for edit in edits { for backup in edit.backups { kept[backup.id] = backup.keptValues } }
             do {
                 let boxes = try await SecretsStore.shared.performImport(keys, kept: kept, reason: SecretReason.moveOut(keys.count))
                 for index in edits.indices {
@@ -409,6 +418,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
 
     @objc func closeSheet() {
         guard !isBusy, let window else { return }
+        scanTask?.cancel()
+        scanTask = nil
         if let parent = window.sheetParent { parent.endSheet(window) } else { window.close() }
         done()
     }
