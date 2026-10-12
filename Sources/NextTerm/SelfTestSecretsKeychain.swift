@@ -139,6 +139,22 @@ extension SelfTest {
         let opened = await reveal()
         check(opened.values?["PROMPT_KEY"] == SecretBytes(utf8: value),
               "secrets: the next approval opens the vault after a refused keychain read", "\(String(describing: opened.failure))")
+        // A keychain that won't say whether the item is there (locked and its unlock cancelled, or no interaction
+        // allowed) passes the load check: only an item that is surely gone fails it.
+        var marked: [String] = []
+        for status in LoginKeychain.refusals {
+            item.searchFailure = status
+            await store.load()
+            if store.protection != .lessProtected { marked.append("\(status): \(store.protection)") }
+        }
+        item.searchFailure = nil
+        let statuses = [errSecSuccess, errSecItemNotFound, errSecNotAvailable] + LoginKeychain.refusals
+        let said: [Bool?] = statuses.map { LoginKeychain.existence($0) }
+        let unsaid: [Bool?] = LoginKeychain.refusals.map { _ -> Bool? in nil }
+        let expected: [Bool?] = [true, false, false] + unsaid
+        check(marked.isEmpty && said == expected,
+              "secrets: a keychain search that is refused says nothing of the item, and doesn't mark Secrets can't open at load()",
+              "\(marked.joined(separator: ", ")) \(said)")
         try? item.delete()
         let gone = await reveal()
         check(gone.failure == .vault(.cantOpen) && store.protection == .cantOpen,

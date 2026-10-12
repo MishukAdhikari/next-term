@@ -104,8 +104,9 @@ protocol PasswordStore: AnyObject {
     /// opens a vault.
     func add(_ data: Data) throws
     func delete() throws
-    /// Whether the item is there: its attributes only, never its data.
-    func exists() -> Bool
+    /// Whether the item is there: its attributes only, never its data. Nil when the keychain wouldn't say (locked and
+    /// its unlock cancelled, or no interaction allowed): that is no sign the item is gone.
+    func exists() -> Bool?
 }
 
 /// A generic password in the login keychain, by `SecItem` calls. The login keychain is a file, so data-protection
@@ -116,6 +117,15 @@ final class LoginKeychain: PasswordStore {
     /// item of its own; never written.
     static let sharedVaultKeyAccount = "vault key"
     static let recoveryAccount = "vault key recovery"
+    /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now: the user did not approve this
+    /// time, and the next try may ask again.
+    static let refusals: [OSStatus] = [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed]
+
+    /// What a search's status says of the item: there, gone, or nil when the keychain refused to say.
+    static func existence(_ status: OSStatus) -> Bool? {
+        if status == errSecSuccess { return true }
+        return refusals.contains(status) ? nil : false
+    }
 
     /// A keychain vault's own item: named after its public key, so a new vault (after Start Over) never touches the
     /// item of the vault it replaced.
@@ -167,12 +177,12 @@ final class LoginKeychain: PasswordStore {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure(status: status) }
     }
 
-    func exists() -> Bool {
+    func exists() -> Bool? {
         var request = query
         request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        return SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess
+        return Self.existence(SecItemCopyMatching(request as CFDictionary, &result))
     }
 }
 
@@ -183,6 +193,7 @@ final class MemoryPasswordStore: PasswordStore {
     /// The adds that wrote the item.
     private(set) var writes = 0
     private var failure: OSStatus?
+    private var searchStatus: OSStatus?
     private let lock = NSLock()
 
     /// The status every read fails with, as the login keychain's do when the user cancels its prompt. Nil: reads work.
@@ -196,6 +207,21 @@ final class MemoryPasswordStore: PasswordStore {
             lock.lock()
             defer { lock.unlock() }
             failure = newValue
+        }
+    }
+
+    /// The status every search for the item fails with, as the login keychain's does when it is locked and the user
+    /// cancels its unlock. Nil: searches work.
+    var searchFailure: OSStatus? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return searchStatus
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            searchStatus = newValue
         }
     }
 
@@ -221,9 +247,10 @@ final class MemoryPasswordStore: PasswordStore {
         data = nil
     }
 
-    func exists() -> Bool {
+    func exists() -> Bool? {
         lock.lock()
         defer { lock.unlock() }
+        if let searchStatus { return LoginKeychain.existence(searchStatus) }
         return data != nil
     }
 }
@@ -246,7 +273,7 @@ final class MemoryKeychain {
     }
 
     /// The accounts whose item is there, sorted.
-    var accounts: [String] { all.filter { $0.value.exists() }.map(\.key).sorted() }
+    var accounts: [String] { all.filter { $0.value.exists() == true }.map(\.key).sorted() }
     var reads: Int { all.values.reduce(0) { $0 + $1.reads } }
     var writes: Int { all.values.reduce(0) { $0 + $1.writes } }
 
@@ -296,10 +323,11 @@ final class KeychainKeyring: VaultKeyring {
         return made.publicKey()
     }
 
-    /// The vault's item is there, or the shared item of earlier builds. Their data is never read for this.
+    /// The vault's item is there, or the shared item of earlier builds. Their data is never read for this. A keychain
+    /// that wouldn't say (locked and its unlock cancelled) passes: only an item that is surely gone fails the check.
     func check(publicKey: Data) -> Bool {
-        let own = items(LoginKeychain.vaultKeyAccount(publicKey: publicKey))
-        return own.exists() || items(LoginKeychain.sharedVaultKeyAccount).exists()
+        guard items(LoginKeychain.vaultKeyAccount(publicKey: publicKey)).exists() == false else { return true }
+        return items(LoginKeychain.sharedVaultKeyAccount).exists() != false
     }
 
     func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
@@ -335,11 +363,9 @@ final class KeychainKeyring: VaultKeyring {
         return key
     }
 
-    /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now: the user did not approve this
-    /// time, and the next try may ask again.
+    /// A read the user refused: one of `LoginKeychain.refusals`.
     static func isRefused(_ error: Error) -> Bool {
         guard let failure = error as? LoginKeychain.Failure else { return false }
-        let refusals: [OSStatus] = [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed]
-        return refusals.contains(failure.status)
+        return LoginKeychain.refusals.contains(failure.status)
     }
 }
