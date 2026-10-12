@@ -30,6 +30,16 @@ extension SelfTest {
                 try? FileManager.default.removeItem(at: storeBase)
             }
         }
+        #if DEBUG
+        // Every zsh tab this part opens, by any route (run_with_secrets' among them), reads a config of the part's own
+        // and never the user's: the lines it types stay out of the user's history file, and no theme or plugin of
+        // theirs changes what its checks read on the screen. Other parts' tabs are as they were.
+        let savedZDOTDIR = TerminalTab.testUserZDOTDIR
+        let zsh = base.appendingPathComponent("zsh", isDirectory: true)
+        IsolatedShellConfig.prepare(zsh)
+        TerminalTab.testUserZDOTDIR = savedZDOTDIR ?? zsh.path
+        defer { TerminalTab.testUserZDOTDIR = savedZDOTDIR }
+        #endif
         let realFolder = SecretFolder(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let realBefore = secretsFolderDate(realFolder.url)
         let savedMask = SecretMask.current
@@ -1093,18 +1103,30 @@ extension SelfTest {
             app.controllers.flatMap(\.tabs).filter { !before.contains($0.id) }
         }
         func tabIDs() -> Set<UUID> { Set(app.controllers.flatMap(\.tabs).map(\.id)) }
+        func screen(_ tab: TerminalTab?) -> String { tab.map { $0.screenTail().joined(separator: "\n") } ?? "" }
         let command = #"printf "%s" "$K" | wc -c | tr -d ' '; echo LEN"#
         let arguments: [String: Any] = ["secrets": ["TOOL_KEY=K"], "command": command, "directory": folder.path, "reason": "the length"]
 
-        // A new tab, the ticket line in the self-test form, the panel, Allow, the run.
+        // A new tab, the ticket line in the self-test form, the panel, Allow, the run. The tab is the ticket's, found by
+        // its id: a folder no window holds gets a new project window first, whose own first tab is new too. The ticket
+        // is read before its wrapper redeems it, which drops it.
         let before = tabIDs()
         let call = secretsStart("run_with_secrets", arguments)
-        _ = await wait(15) { requests.showing?.panel != nil }
-        let tab = newTabs(since: before).first
-        if let tab { opened.append(tab) }
-        let typed = tab.map { $0.screenTail().joined(separator: "\n") } ?? ""
-        check(tab != nil && typed.contains("--self-test-secret-wrapper") && typed.contains("secret run --ticket") && !typed.contains(command),
-              "secrets: run_with_secrets opens a tab and types only the ticket line, in the self-test form", typed.suffix(300).description)
+        var ticket: (id: String, tab: UUID)?
+        _ = await wait(15) {
+            if ticket == nil, let made = requests.tickets.values.first(where: { !before.contains($0.tabID) }) {
+                ticket = (made.id, made.tabID)
+            }
+            return requests.showing?.panel != nil
+        }
+        let tab = app.controllers.flatMap(\.tabs).first { $0.id == ticket?.tab }
+        opened += newTabs(since: before)
+        // The screen's rows, without their breaks or spaces: the ticket line is longer than a row.
+        let typed = secretsUnwrapped(screen(tab))
+        let ticketWords = "secretrun--ticket" + (ticket?.id ?? "none")
+        check(tab != nil && typed.contains("--self-test-secret-wrapper") && typed.contains(ticketWords)
+              && !typed.contains(secretsUnwrapped(command)),
+              "secrets: run_with_secrets opens a tab and types only the ticket line, in the self-test form", String(screen(tab).suffix(300)))
         check(tab.map { MCPControl.controller(of: $0)?.activeTab !== $0 } == true, "secrets: the new tab does not take the keyboard")
         let panel = requests.showing?.panel
         let title = panel?.window?.title ?? ""
@@ -1114,7 +1136,6 @@ extension SelfTest {
         panel?.allowButton.performClick(nil)
         let started = await call.value
         let length = String(value.utf8.count)
-        func screen(_ tab: TerminalTab?) -> String { tab.map { $0.screenTail().joined(separator: "\n") } ?? "" }
         let ran = await wait(15) { screen(tab).contains("\(length)LEN") || screen(tab).contains("\(length)\nLEN") }
         check(started["status"] as? String == "started" && started["approved"] as? String == "once"
               && started["tab_id"] as? String == tab?.id.uuidString.lowercased() && ran && !secretsJSON(started).contains(value),
@@ -1127,16 +1148,16 @@ extension SelfTest {
             check(clean, "secrets: the tab's shell has no K after the run, and its history holds only the ticket line", String(screen(tab).suffix(200)))
         }
         // A used ticket can't be used again.
-        let ticketID = screen(tab).components(separatedBy: "--ticket ").last.map { String($0.prefix(26)) } ?? ""
+        let ticketID = ticket?.id ?? ""
         let reuse = SecretsWrapperRun(["--ticket", ticketID])
         _ = reuse.start()
         let reuseExit = await reuse.finish()
         check(SecretRun.isTicket(ticketID) && reuseExit == 1 && reuse.errorText.contains("expired or was used already") && requests.showing == nil,
               "secrets: a used ticket gets expired", reuse.errorText)
         #if DEBUG
-        // The shell read the self-test's own zsh config, never the user's: its ZDOTDIR, as zsh has it once started.
+        // The shell read this part's own zsh config, never the user's: its ZDOTDIR, as zsh has it once started.
         if let tab {
-            let own = SelfTest.shellConfigFolder ?? ""
+            let own = TerminalTab.testUserZDOTDIR ?? ""
             if await wait(10, { !tab.status.running }) {
                 tab.view.send(txt: "[[ ${ZDOTDIR-} == \(ShellQuote.quote(own)) ]] && echo ZD\"\"OWN || echo ZD\"\"OTHER=${ZDOTDIR-unset}\r")
                 let answered = await wait(10) { screen(tab).contains("ZDOWN") || screen(tab).contains("ZDOTHER=") }
@@ -1299,10 +1320,20 @@ extension SelfTest {
               "secrets: a ticket not redeemed in time ends refused", secretsJSON(late))
         SecretRequests.ticketWindow = .seconds(30)
         for tab in AppDelegate.shared.controllers.flatMap(\.tabs) where !before.contains(tab.id) { opened.append(tab) }
-        let lateTab = opened.last
-        _ = await wait(10) { lateTab?.screenTail().joined().contains("expired or was used already") == true }
-        check(lateTab?.screenTail().joined().contains("expired or was used already") == true,
-              "secrets: its wrapper, starting late, gets expired")
+        // Its tab by the id in the answer: a new tab goes in after the window's active one, so not always last.
+        let lateTab = opened.first { $0.id.uuidString.lowercased() == late["tab_id"] as? String }
+        func expired() -> Bool {
+            secretsUnwrapped(lateTab?.screenTail().joined() ?? "").contains(secretsUnwrapped("expired or was used already"))
+        }
+        _ = await wait(10) { expired() }
+        check(lateTab != nil && expired(), "secrets: its wrapper, starting late, gets expired",
+              lateTab.map { String($0.screenTail().joined(separator: "\n").suffix(200)) } ?? "no tab with the answer's tab_id")
+    }
+
+    /// Text as it reads on the screen whatever the window's width: without line breaks or spaces, since a line longer
+    /// than a row goes on in the next one, and a row's trailing spaces are trimmed.
+    static func secretsUnwrapped(_ text: String) -> String {
+        text.filter { !$0.isWhitespace }
     }
 }
 

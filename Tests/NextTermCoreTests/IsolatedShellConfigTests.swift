@@ -10,15 +10,6 @@ import Testing
         return url
     }
 
-    @Test func theIsolatedFolderWinsOverTheUsersOwn() {
-        let env = ["ZDOTDIR": "/Users/me/.config/zsh", "HOME": "/Users/me"]
-        #expect(IsolatedShellConfig.userConfigFolder(environment: env, isolated: "/tmp/test-zsh") == "/tmp/test-zsh")
-        #expect(IsolatedShellConfig.userConfigFolder(environment: env, isolated: nil) == "/Users/me/.config/zsh")
-        // An empty folder is no folder: it would send zsh to the home folder's config.
-        #expect(IsolatedShellConfig.userConfigFolder(environment: env, isolated: "") == "/Users/me/.config/zsh")
-        #expect(IsolatedShellConfig.userConfigFolder(environment: [:], isolated: nil) == "")
-    }
-
     @Test func prepareWritesAPrivateConfigThatKeepsItsHistoryInside() throws {
         let folder = try temporaryFolder("zsh 'own' config")
         defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
@@ -65,13 +56,13 @@ import Testing
         let folder = home.deletingLastPathComponent().appendingPathComponent("test zsh", isDirectory: true)
         #expect(IsolatedShellConfig.prepare(folder))
 
-        let isolated = try tabShell(home: home, userFolder: IsolatedShellConfig.userConfigFolder(environment: [:], isolated: folder.path))
+        let isolated = try tabShell(home: home, userFolder: folder.path)
         #expect(!isolated.contains("USERCONFIG"), "the shell read the user's own config: \(isolated)")
         #expect(isolated.contains("ZD=\(folder.path)\n") && isolated.contains("HF=\(folder.path)/.zsh_history\n"), "\(isolated)")
         #expect(isolated.contains("PR=%1~ %# \n"), "\(isolated)")
 
-        // Without it, the same shell reads every one of the user's files: what the test above would see.
-        let own = try tabShell(home: home, userFolder: IsolatedShellConfig.userConfigFolder(environment: [:], isolated: nil))
+        // Without it (no ZDOTDIR of the user's: the home folder), the same shell reads every one of the user's files.
+        let own = try tabShell(home: home, userFolder: "")
         for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] { #expect(own.contains("USERCONFIG\(name)"), "\(own)") }
         #expect(own.contains("ZD=unset\n"), "\(own)")
     }

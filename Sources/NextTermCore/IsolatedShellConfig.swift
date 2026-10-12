@@ -27,11 +27,4 @@ public enum IsolatedShellConfig {
             return false
         }
     }
-
-    /// The folder a tab's zsh hands over to for its config (the integration's `NEXTTERM_USER_ZDOTDIR`): `isolated` when
-    /// there is one, else the `ZDOTDIR` the app was given, or "" for the home folder.
-    public static func userConfigFolder(environment: [String: String], isolated: String?) -> String {
-        if let isolated, !isolated.isEmpty { return isolated }
-        return environment["ZDOTDIR"] ?? ""
-    }
 }

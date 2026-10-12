@@ -5056,7 +5056,6 @@ enum SelfTest {
         CopilotIDEServer.shared.stop()
         try? FileManager.default.removeItem(at: copilotLockFolder)
         try? FileManager.default.removeItem(at: claudeLockFolder)
-        if let ownShellConfig { try? FileManager.default.removeItem(at: ownShellConfig) } // its tabs' zsh config and history
         record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"
