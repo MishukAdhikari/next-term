@@ -106,11 +106,13 @@ public struct ServiceScan: Sendable, Equatable, CustomStringConvertible, CustomD
         return seen
     }
 
-    /// The group row's tooltip: the kinds found, and that keys are read by name only.
+    /// The group row's tooltip: the kinds found, and that secrets are read by name only. Not every key: the scan reads
+    /// the values of address, port, name and id keys (`LANGSMITH_PROJECT` gives "Project: support-bot").
     public var tooltip: String {
         let found = kinds.map(\.plural).joined(separator: ", ")
         let first = "Services this project’s files name, found offline: " + found + "."
-        return first + "\nKeys are read by name only. A badge opens its page in your browser."
+        let secrets = "Secret keys (API keys, tokens, passwords) are read by name only."
+        return first + "\n" + secrets + " A badge opens its page in your browser."
     }
 
     public var description: String {

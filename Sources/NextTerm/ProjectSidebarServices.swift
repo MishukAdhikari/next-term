@@ -75,21 +75,35 @@ extension ProjectSidebarView {
         return true
     }
 
+    /// The group's rows appeared in this project's tree: it opens, stays closed if you closed it here, or opens with the
+    /// project's folder. Closed is set too, as the outline can show the one group object open from another project.
+    func servicesGroupAppeared() {
+        guard let root else { return }
+        let group = servicesGroup
+        switch group.expansion.rowsAppeared(in: root.path, rootIsOpen: outline.isItemExpanded(root)) {
+        case .expand: outline.expandItem(group)
+        case .collapse: if outline.isItemExpanded(group) { outline.collapseItem(group) }
+        case .waitForRoot: break
+        }
+    }
+
     /// Keeps the Services group as you left it: one you closed stays closed for this project (not one that closed with
     /// the project's folder), and one found while the folder was closed opens with it. True when `item` is the group, so
     /// the notification needs nothing more.
     func servicesGroupExpansion(_ item: Any, _ name: Notification.Name) -> Bool {
         guard let root else { return false }
         let group = servicesGroup
+        let opened = name == NSOutlineView.itemDidExpandNotification
         if item is ServicesGroup {
-            let collapsed = name == NSOutlineView.itemDidCollapseNotification
-            if collapsed, outline.isItemExpanded(root) { group.collapsedRoots.insert(root.path) }
-            if name == NSOutlineView.itemDidExpandNotification { group.collapsedRoots.remove(root.path) }
+            if opened { group.expansion.groupOpened(in: root.path) }
+            if name == NSOutlineView.itemDidCollapseNotification {
+                group.expansion.groupClosed(in: root.path, rootIsOpen: outline.isItemExpanded(root))
+            }
             return true
         }
-        if item as AnyObject === root, name == NSOutlineView.itemDidExpandNotification, group.expandWithRoot {
-            group.expandWithRoot = false
-            if !group.items.isEmpty { outline.expandItem(group) }
+        // The wait is this project's own: a switch that opens another project's saved folder leaves the group alone.
+        if item as AnyObject === root, opened, group.expansion.rootOpened(root.path), !group.items.isEmpty {
+            outline.expandItem(group)
         }
         return false
     }

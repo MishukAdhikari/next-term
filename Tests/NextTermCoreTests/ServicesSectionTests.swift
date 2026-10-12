@@ -35,8 +35,17 @@ import Testing
         let lines = scan.tooltip.components(separatedBy: "\n")
         #expect(lines == [
             "Services this project’s files name, found offline: AI models, vector stores, tracing and evals, local servers.",
-            "Keys are read by name only. A badge opens its page in your browser.",
+            "Secret keys (API keys, tokens, passwords) are read by name only. A badge opens its page in your browser.",
         ])
+    }
+
+    /// The scan reads the values of address, port, name and id keys (LANGSMITH_PROJECT gives "Project: support-bot"),
+    /// so the group's tooltip promises name-only reading for secrets alone.
+    @Test func theGroupsTooltipPromisesNameOnlyForSecretsAlone() throws {
+        let scan = Self.ragProject().services()
+        #expect(try row(scan, "LangSmith").notes == ["Project: support-bot"], "a value the scan reads")
+        #expect(!scan.tooltip.contains("Keys are read by name only"))
+        #expect(scan.tooltip.contains("Secret keys (API keys, tokens, passwords) are read by name only."))
     }
 
     @Test func aKindIsListedOnceHoweverManyRowsItHas() {
@@ -66,6 +75,23 @@ import Testing
             #expect(row.detail == row.kind.title + " · " + file)
             #expect(!file.hasPrefix("/") && !file.contains(".."), "\(file) stays in the project")
         }
+    }
+
+    /// No file named the row (none listed, or a blank name): the detail is the kind alone, and the menu leaves Reveal
+    /// Source File out, as it reads `sourceFile`.
+    @Test func aRowNoFileNamedHasNothingToReveal() throws {
+        let url = try #require(URL(string: "https://platform.openai.com"))
+        let link = ServiceLink(id: "openai.cloud.platform", badge: "Platform", title: "Open OpenAI Platform",
+                               tooltip: "Open OpenAI Platform", url: url)
+        func openAI(_ sources: [ServiceSource]) -> ServiceRow {
+            ServiceRow(id: "openai.cloud", entryID: "openai", name: "OpenAI", kind: .aiModel, place: .cloud,
+                       sources: sources, notes: [], links: [link], isLocal: false)
+        }
+        for row in [openAI([]), openAI([ServiceSource(file: "", names: ["OPENAI_API_KEY"])])] {
+            #expect(row.sourceFile == nil, "\(row.sources)")
+            #expect(row.detail == "AI model")
+        }
+        #expect(openAI([ServiceSource(file: ".env", names: ["OPENAI_API_KEY"])]).sourceFile == ".env")
     }
 
     @Test func voiceOverReadsTheNameTheKindAndWhetherItIsOnThisMac() throws {

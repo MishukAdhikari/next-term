@@ -6,9 +6,9 @@ import NextTermCore
 final class ServicesGroup {
     var items: [ServiceItem] = []
     private(set) var scan = ServiceScan()
-    /// Projects whose group you closed: it stays closed for them.
-    var collapsedRoots: Set<String> = []
-    var expandWithRoot = false
+    /// Open or closed, project by project: one you closed stays closed for that project, and a wait for a folder to
+    /// open is that project's alone, so a switch between projects changes neither.
+    var expansion = SidebarGroupExpansion()
 
     /// Takes a scan's rows, keeping each row's object (and so its place and selection in the outline) by its id. False
     /// when the scan shows what the group shows already.
@@ -23,6 +23,12 @@ final class ServicesGroup {
             return item
         }
         return true
+    }
+
+    /// Empties the group without touching the outline: on a project switch, before the new project's tree loads, so the
+    /// old project's rows never sit in it.
+    func clear() {
+        _ = update(ServiceScan())
     }
 
     /// The group's own row or one of its rows: the outline asks these the same questions.

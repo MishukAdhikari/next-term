@@ -292,6 +292,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         runHeld()
         saveCurrentTree()
         rowCache.removeAll()
+        servicesGroup.clear()
         if let saved = savedTrees[canonical] {
             root = saved.node
             outline.reloadData()
@@ -314,7 +315,6 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         gitEvents = nil
         git.watch(canonical)
         showDatabases(DatabaseScan())
-        showServices(ServiceScan())
         databaseScans.cancel() // the old folder's
         scanDatabases()
         showSessions([], tabs: SessionTabs())
@@ -447,9 +447,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         } else if hasRows {
             outline.reloadItem(group, reloadChildren: true)
         }
-        if !hadRows, hasRows, !group.collapsedRoots.contains(root.path) {
-            if outline.isItemExpanded(root) { outline.expandItem(group) } else { group.expandWithRoot = true }
-        }
+        if !hadRows, hasRows { servicesGroupAppeared() }
         updateToolTips()
     }
 
