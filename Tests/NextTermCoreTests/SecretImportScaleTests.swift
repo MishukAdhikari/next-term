@@ -53,6 +53,62 @@ import Testing
         #expect(dotted?.variable == "D_TOKEN" && dotted?.movable == false && found.unreadable.isEmpty)
     }
 
+    /// Plans one group's move out of `relative` and writes it, each in time, and gives the file as written.
+    func moveAll(_ home: F.Home, _ relative: String, count: Int) throws -> String {
+        let found = SecretImport.scan(F.sources(home, projects: [home.path + "/proj"]))
+        let group = try #require(SecretImport.groups(found.findings, stored: []).first)
+        #expect(group.findings.count == count && group.summary == "Same value in \(count) servers")
+        var planned: (edits: [SecretImport.FileEdit], failures: [SecretImport.PlanFailure]) = ([], [])
+        let planning = clock.measure {
+            planned = SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: group.findings)], nxtrm: F.nxtrm)
+        }
+        #expect(planning < limit, "the plan took \(planning)")
+        #expect(planned.failures.isEmpty && planned.edits.count == 1)
+        let edit = try #require(planned.edits.first)
+        #expect(edit.backups.count == count && Set(edit.servers).count == count)
+        var applied: SecretImport.Applied?
+        let writing = clock.measure { applied = SecretImport.apply(edit) }
+        #expect(writing < limit, "the write took \(writing)")
+        #expect(applied == .written)
+        return home.read(relative)
+    }
+
+    /// Many keys in one large file: the plan reads the file once for all of them, and the write checks it once. Planned
+    /// entry by entry (each parsed the whole file about four times), 40 entries in a 277 KB file took 19 seconds.
+    @Test func manyEntriesInALargeJSONConfigArePlannedAndWrittenInTime() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        var servers: [String] = []
+        for index in 0..<5_000 {
+            servers.append("\"s\(index)\": {\"command\": \"x\", \"args\": [\"a\", \"b\"]}")
+            if index % 125 == 0 {
+                servers.append("\"k\(index)\": {\"command\": \"npx\", \"args\": [\"-y\", \"gh\"], \"env\": {\"GITHUB_TOKEN\": \"\(F.github)\", \"LOG\": \"1\"}}")
+            }
+        }
+        home.write("proj/.mcp.json", "{\"mcpServers\": {\n" + servers.joined(separator: ",\n") + "\n}}\n")
+        let text = try moveAll(home, "proj/.mcp.json", count: 40)
+        #expect(!text.contains(F.github) && text.components(separatedBy: "\"secret\",\"run\",\"GITHUB_TOKEN\",\"--\",\"npx\"").count == 41)
+        #expect(text.contains("\"s4999\": {\"command\": \"x\", \"args\": [\"a\", \"b\"]}\n}}\n"))
+    }
+
+    @Test func manyEntriesInALargeTOMLConfigArePlannedAndWrittenInTime() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        var text = "model = \"gpt-5\"\n\n"
+        for index in 0..<3_000 {
+            text += "[mcp_servers.s\(index)]\ncommand = \"x\"\nargs = [\"a\"]\n\n"
+            if index % 75 == 0 {
+                text += "[mcp_servers.k\(index)]\ncommand = \"npx\"\nargs = [\"-y\", \"gh\"]\nenv = { GITHUB_TOKEN = \"\(F.github)\", LOG = \"1\" }\n\n"
+            }
+        }
+        text += "[profiles.fast]\nmodel = \"gpt-5-mini\"\n"
+        home.write("proj/.codex/config.toml", text)
+        let written = try moveAll(home, "proj/.codex/config.toml", count: 40)
+        #expect(!written.contains(F.github) && written.components(separatedBy: "startup_timeout_sec = 30").count == 41)
+        #expect(written.components(separatedBy: "env = { LOG = \"1\" }").count == 41)
+        #expect(written.hasSuffix("[mcp_servers.s2999]\ncommand = \"x\"\nargs = [\"a\"]\n\n[profiles.fast]\nmodel = \"gpt-5-mini\"\n"))
+    }
+
     @Test func manyFindingsAreGroupedInTime() {
         let source = SecretImport.Source(path: "/p/.mcp.json", client: .claudeCode, format: .json, containers: [["mcpServers"]])
         var findings: [SecretImport.Finding] = []

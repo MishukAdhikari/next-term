@@ -443,7 +443,13 @@ public enum SecretImport {
     }
 
     static func jsonEntries(_ text: String, source: Source) -> [Entry]? {
-        guard let document = JSONC(text), case .object(let root)? = document.root else { return nil }
+        JSONC(text).flatMap { jsonEntries($0, source: source) }
+    }
+
+    /// The entries of a parsed file: a plan reads them from the document it edits, so the file is parsed once.
+    static func jsonEntries(_ document: JSONC, source: Source) -> [Entry]? {
+        guard case .object(let root)? = document.root else { return nil }
+        let text = document.text
         let strictRefusal: String? = source.format == .strictJSON && (document.hasComments || document.hasTrailingCommas)
             ? "comments in a file that must be plain JSON" : nil
         var entries: [Entry] = []
@@ -675,7 +681,12 @@ public enum SecretImport {
     }
 
     static func tomlEntries(_ text: String) -> [Entry]? {
-        guard let outline = TOMLOutline(text) else { return nil }
+        TOMLOutline(text).map(tomlEntries)
+    }
+
+    /// The entries of a read outline: a plan reads them from the outline it edits, so the file is read once.
+    static func tomlEntries(_ outline: TOMLOutline) -> [Entry] {
+        let text = outline.text
         let reader = TOMLReader(outline)
         var entries: [Entry] = []
         let odd = tomlOddServers(outline)
@@ -952,11 +963,12 @@ public enum SecretImport {
         return (edits, failures)
     }
 
-    /// A file's edit from its bytes: each entry changed in turn, each with its backup.
+    /// A file's edit from its bytes: every entry it changes planned from one reading of the file, each with its backup.
+    /// Planned entry by entry, each read the whole file again, and a file with many keys took minutes.
     static func planFile(_ source: Source, moves: [Move], nxtrm: [String], data: Data, now: Date,
                          batch: String) -> Result<FileEdit, PlanFailure> {
-        guard var text = text(of: data) else { return .failure(PlanFailure(path: source.path, reason: "not UTF-8 text")) }
-        // The moves by entry, in the order the file has them, and the values the scan found there: what Secrets stores.
+        guard let text = text(of: data) else { return .failure(PlanFailure(path: source.path, reason: "not UTF-8 text")) }
+        // The moves by entry, in the order they come, and the values the scan found there: what Secrets stores.
         var byEntry: [Location: [(name: String, variable: String)]] = [:]
         var values: [Location: [String: SecretBytes]] = [:]
         var locations: [Location] = []
@@ -968,24 +980,23 @@ public enum SecretImport {
                 values[finding.location, default: [:]][variable] = finding.value
             }
         }
-        var backups: [EntryBackup] = []
-        for location in locations {
-            guard let pairs = byEntry[location] else { continue }
-            let expected = values[location] ?? [:]
-            let result = source.format == .toml
-                ? editTOML(text, location: location, pairs: pairs, expected: expected, nxtrm: nxtrm)
-                : editJSON(text, source: source, location: location, pairs: pairs, expected: expected, nxtrm: nxtrm)
-            switch result {
-            case .failure(let failure): return .failure(PlanFailure(path: source.path, reason: failure.reason))
-            case .success(let edited):
-                let id = UUID().uuidString.lowercased().prefix(12)
-                backups.append(EntryBackup(id: String(id), batch: batch, date: now, path: source.path, client: source.client, format: source.format,
-                                           location: location, names: pairs.map(\.name), original: edited.original, written: edited.written,
-                                           keptCount: edited.kept.count, keptBox: nil, keptValues: edited.kept))
-                text = edited.text
-            }
+        let entries = locations.map { EntryMove(location: $0, pairs: byEntry[$0] ?? [], expected: values[$0] ?? [:]) }
+        let result = source.format == .toml
+            ? editTOML(text, entries: entries, nxtrm: nxtrm)
+            : editJSON(text, source: source, entries: entries, nxtrm: nxtrm)
+        let edited: Edited
+        switch result {
+        case .failure(let failure): return .failure(PlanFailure(path: source.path, reason: failure.reason))
+        case .success(let made): edited = made
         }
-        var plan = MCPRegistrar.Plan(.registered, text: text)
+        var backups: [EntryBackup] = []
+        for (entry, made) in zip(entries, edited.entries) {
+            let id = UUID().uuidString.lowercased().prefix(12)
+            backups.append(EntryBackup(id: String(id), batch: batch, date: now, path: source.path, client: source.client, format: source.format,
+                                       location: entry.location, names: entry.pairs.map(\.name), original: made.original,
+                                       written: made.written, keptCount: made.kept.count, keptBox: nil, keptValues: made.kept))
+        }
+        var plan = MCPRegistrar.Plan(.registered, text: edited.text)
         plan.original = data
         return .success(FileEdit(source: source, servers: locations.map(\.server), backups: backups, moves: moves, nxtrm: nxtrm, plan: plan))
     }
@@ -996,12 +1007,32 @@ public enum SecretImport {
         init(_ reason: String) { self.reason = reason }
     }
 
-    /// What an entry's edit made: the file's new text, the entry's backup text and digest, and the values kept.
-    struct Edited {
-        var text: String
+    /// One entry to change: its keys (each name in Secrets and the variable it leaves), and the values the scan found
+    /// there, which Secrets stores.
+    struct EntryMove {
+        let location: Location
+        let pairs: [(name: String, variable: String)]
+        let expected: [String: SecretBytes]
+    }
+
+    /// What one entry's edit made: its backup text, the digest of what Next Term wrote, and the values kept.
+    struct EditedEntry {
         var original: String
         var written: String
         var kept: [SecretBytes]
+    }
+
+    /// What a file's edit made: its new text, and each entry's, in order.
+    struct Edited {
+        var text: String
+        var entries: [EditedEntry]
+    }
+
+    /// The first of each location in `entries`, as `first(where:)` finds it, for the locations wanted.
+    static func firstByLocation(_ entries: [Entry], wanted: Set<Location>) -> [Location: Entry] {
+        var found: [Location: Entry] = [:]
+        for entry in entries where wanted.contains(entry.location) && found[entry.location] == nil { found[entry.location] = entry }
+        return found
     }
 
     /// The new args: `secret`, `run`, each `NAME` or `NAME=ENVNAME`, `--`, then the old command and its arguments.
@@ -1015,8 +1046,8 @@ public enum SecretImport {
     }
 
     /// The entry's text with every detected value replaced by its marker, and the values kept in place, in order.
-    static func marked(_ text: String, entry: Entry, moved: [String: String]) -> (text: String, kept: [SecretBytes]) {
-        let bytes = Array(text.utf8)
+    /// `bytes` is the file's UTF-8, taken once for all its entries.
+    static func marked(_ bytes: [UInt8], entry: Entry, moved: [String: String]) -> (text: String, kept: [SecretBytes]) {
         let detected = entry.detected.sorted { $0.range.lowerBound < $1.range.lowerBound }
         var out: [UInt8] = []
         var cursor = entry.range.lowerBound
@@ -1085,76 +1116,191 @@ public enum SecretImport {
         return nil
     }
 
-    static func editJSON(_ text: String, source: Source, location: Location, pairs: [(name: String, variable: String)],
-                         expected: [String: SecretBytes], nxtrm: [String]) -> Result<Edited, EditFailure> {
-        guard let entries = jsonEntries(text, source: source), let entry = entries.first(where: { $0.location == location }) else {
+    /// The JSON entries' edits, made on one parse of the file and checked on one parse of the result.
+    static func editJSON(_ text: String, source: Source, entries moves: [EntryMove], nxtrm: [String]) -> Result<Edited, EditFailure> {
+        guard let document = JSONC(text), case .object(let root)? = document.root, let entries = jsonEntries(document, source: source) else {
             return .failure(EditFailure("the entry is not there any more"))
         }
-        if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
-        if let reason = wrapperRefusal(pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
-        guard let document = JSONC(text), case .object(let root)? = document.root, let servers = object(at: location.container, in: root),
-              let member = servers.member(location.server), var planned = member.value.object(in: text) as? [String: Any] else {
-            return .failure(EditFailure("the entry can't be read"))
-        }
+        let wanted = Set(moves.map(\.location))
+        let found = firstByLocation(entries, wanted: wanted)
+        let members = jsonMembers(of: source, root: root, wanted: wanted)
+        let bytes = Array(text.utf8)
         let envKey = source.client == .opencode ? "environment" : "env"
-        var env = planned[envKey] as? [String: Any] ?? [:]
-        for pair in pairs {
-            guard env[pair.variable] is String else { return .failure(EditFailure("\(pair.variable) is not in the entry any more")) }
-            if let reason = changeRefusal(entry, variable: pair.variable, expected: expected[pair.variable]) { return .failure(EditFailure(reason)) }
-            env[pair.variable] = nil
+        var changes: [(range: Range<Int>, with: String)] = []
+        var planned: [Location: [String: Any]] = [:]
+        var made: [EditedEntry] = []
+        for move in moves {
+            guard let entry = found[move.location] else { return .failure(EditFailure("the entry is not there any more")) }
+            if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
+            if let reason = wrapperRefusal(move.pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
+            guard let member = members[move.location], var object = member.value.object(in: text) as? [String: Any] else {
+                return .failure(EditFailure("the entry can't be read"))
+            }
+            var env = object[envKey] as? [String: Any] ?? [:]
+            for pair in move.pairs {
+                guard env[pair.variable] is String else { return .failure(EditFailure("\(pair.variable) is not in the entry any more")) }
+                if let reason = changeRefusal(entry, variable: pair.variable, expected: move.expected[pair.variable]) {
+                    return .failure(EditFailure(reason))
+                }
+                env[pair.variable] = nil
+            }
+            if env.isEmpty {
+                object.removeValue(forKey: envKey)
+            } else {
+                object[envKey] = env
+            }
+            let args = wrapped(move.pairs, nxtrm: nxtrm, command: entry.command + entry.args)
+            if source.client == .opencode {
+                object["command"] = [nxtrm[0]] + args
+            } else {
+                object["command"] = nxtrm[0]
+                object["args"] = args
+            }
+            guard let newEntry = MCPRegistrar.compact(object) else { return .failure(EditFailure("the new entry can't be written")) }
+            let moved = Dictionary(move.pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
+            let backup = marked(bytes, entry: entry, moved: moved)
+            changes.append((entry.range, newEntry))
+            planned[move.location] = object
+            made.append(EditedEntry(original: backup.text, written: sha256(newEntry), kept: backup.kept))
         }
-        if env.isEmpty {
-            planned.removeValue(forKey: envKey)
-        } else {
-            planned[envKey] = env
-        }
-        if source.client == .opencode {
-            planned["command"] = [nxtrm[0]] + wrapped(pairs, nxtrm: nxtrm, command: entry.command + entry.args)
-        } else {
-            planned["command"] = nxtrm[0]
-            planned["args"] = wrapped(pairs, nxtrm: nxtrm, command: entry.command + entry.args)
-        }
-        guard let newEntry = MCPRegistrar.compact(planned) else { return .failure(EditFailure("the new entry can't be written")) }
-        let moved = Dictionary(pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let backup = marked(text, entry: entry, moved: moved)
-        guard let updated = replacing(text, [(entry.range, newEntry)]),
-              verifyJSON(updated, before: text, source: source, location: location, planned: planned) else {
+        guard let updated = replacing(text, changes), verifyJSON(updated, before: document, source: source, planned: planned) else {
             return .failure(EditFailure("check failed"))
         }
-        return .success(Edited(text: updated, original: backup.text, written: sha256(newEntry), kept: backup.kept))
+        return .success(Edited(text: updated, entries: made))
     }
 
-    /// The edit parses, the entry is what was planned, and every other server is as it was; a strict file parses plainly.
-    static func verifyJSON(_ text: String, before: String, source: Source, location: Location, planned: [String: Any]) -> Bool {
-        guard let document = JSONC(text), case .object(let root)? = document.root, let servers = object(at: location.container, in: root),
-              let member = servers.member(location.server), let written = member.value.object(in: text) as? [String: Any],
-              NSDictionary(dictionary: written).isEqual(to: planned) else { return false }
-        guard let old = JSONC(before), case .object(let oldRoot)? = old.root, let oldServers = object(at: location.container, in: oldRoot),
-              oldServers.members.count == servers.members.count else { return false }
-        for (new, previous) in zip(servers.members, oldServers.members) where new.key != location.server {
-            guard new.key == previous.key, document.string(new.value.range) == old.string(previous.value.range) else { return false }
+    /// The member of each wanted location, the first of its name in its container, as `object(at:)` and `member(_:)` find
+    /// it, in one walk over the containers.
+    static func jsonMembers(of source: Source, root: JSONC.Object, wanted: Set<Location>) -> [Location: JSONC.Member] {
+        let paths = Set(wanted.map(\.container))
+        var members: [Location: JSONC.Member] = [:]
+        for (path, servers) in containers(of: source, root: root) where paths.contains(path) {
+            for member in servers.members {
+                let location = Location(container: path, server: member.key)
+                if wanted.contains(location), members[location] == nil { members[location] = member }
+            }
+        }
+        return members
+    }
+
+    /// The edit parses, each entry is what was planned, and every other server in their containers is as it was; a
+    /// strict file parses plainly.
+    static func verifyJSON(_ text: String, before old: JSONC, source: Source, planned: [Location: [String: Any]]) -> Bool {
+        guard let document = JSONC(text), case .object(let root)? = document.root, case .object(let oldRoot)? = old.root else { return false }
+        let paths = Set(planned.keys.map(\.container))
+        func byPath(_ root: JSONC.Object) -> [[String]: JSONC.Object] {
+            let list = containers(of: source, root: root).filter { paths.contains($0.path) }
+            return Dictionary(list.map { ($0.path, $0.servers) }, uniquingKeysWith: { first, _ in first })
+        }
+        let now = byPath(root)
+        let before = byPath(oldRoot)
+        for path in paths {
+            guard let servers = now[path], let oldServers = before[path], servers.members.count == oldServers.members.count else { return false }
+            var checked = Set<String>()
+            for (new, previous) in zip(servers.members, oldServers.members) {
+                guard new.key == previous.key else { return false }
+                if checked.insert(new.key).inserted, let wanted = planned[Location(container: path, server: new.key)] {
+                    guard let written = new.value.object(in: text) as? [String: Any], NSDictionary(dictionary: written).isEqual(to: wanted) else {
+                        return false
+                    }
+                } else if document.string(new.value.range) != old.string(previous.value.range) {
+                    return false
+                }
+            }
+            for location in planned.keys where location.container == path && !checked.contains(location.server) { return false }
         }
         if source.format == .strictJSON, (try? JSONSerialization.jsonObject(with: Data(text.utf8))) == nil { return false }
         return true
     }
 
-    static func editTOML(_ text: String, location: Location, pairs: [(name: String, variable: String)],
-                         expected: [String: SecretBytes], nxtrm: [String]) -> Result<Edited, EditFailure> {
-        guard let entries = tomlEntries(text), let entry = entries.first(where: { $0.location == location }) else {
-            return .failure(EditFailure("the entry is not there any more"))
-        }
-        if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
-        for pair in pairs {
-            if let reason = changeRefusal(entry, variable: pair.variable, expected: expected[pair.variable]) { return .failure(EditFailure(reason)) }
-        }
-        if let reason = wrapperRefusal(pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
-        guard let outline = TOMLOutline(text), let table = tomlTables(outline).first(where: { $0.name == location.server }),
-              let command = table.keys.first(where: { $0.path == ["command"] }), let commandString = outline.string(at: command.value) else {
-            return .failure(EditFailure("the entry can't be read"))
-        }
+    /// The TOML entries' edits, made on one reading of the file and checked on one reading of the result.
+    static func editTOML(_ text: String, entries moves: [EntryMove], nxtrm: [String]) -> Result<Edited, EditFailure> {
+        guard let outline = TOMLOutline(text) else { return .failure(EditFailure("the entry is not there any more")) }
+        let wanted = Set(moves.map(\.location))
+        let names = Set(wanted.map(\.server))
+        let found = firstByLocation(tomlEntries(outline), wanted: wanted)
+        let tables = firstTables(outline, named: names)
         let reader = TOMLReader(outline)
+        let bytes = Array(text.utf8)
         let newline = text.contains("\r\n") ? "\r\n" : "\n"
-        let args = wrapped(pairs, nxtrm: nxtrm, command: entry.command + entry.args)
+        var changes: [(range: Range<Int>, with: String)] = []
+        var argsWanted: [Location: [String]] = [:]
+        var made: [EditedEntry] = []
+        for move in moves {
+            guard let entry = found[move.location] else { return .failure(EditFailure("the entry is not there any more")) }
+            if let reason = entry.notMovable { return .failure(EditFailure(reason)) }
+            for pair in move.pairs {
+                if let reason = changeRefusal(entry, variable: pair.variable, expected: move.expected[pair.variable]) {
+                    return .failure(EditFailure(reason))
+                }
+            }
+            if let reason = wrapperRefusal(move.pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
+            guard let table = tables[move.location.server],
+                  let own = tomlChanges(table, move: move, command: entry.command + entry.args, nxtrm: nxtrm, reader: reader, newline: newline)
+            else {
+                return .failure(EditFailure("the entry can't be read"))
+            }
+            changes += own.changes
+            argsWanted[move.location] = own.args
+            let moved = Dictionary(move.pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
+            let backup = marked(bytes, entry: entry, moved: moved)
+            made.append(EditedEntry(original: backup.text, written: "", kept: backup.kept))
+        }
+        guard let updated = replacing(text, changes), let check = TOMLOutline(updated) else { return .failure(EditFailure("check failed")) }
+        let newFound = firstByLocation(tomlEntries(check), wanted: wanted)
+        let newTables = firstTables(check, named: names)
+        // Each entry now starts the wrapper and holds none of its moved keys.
+        var spans: [(old: Range<Int>, new: Range<Int>)] = []
+        for move in moves {
+            let moved = Set(move.pairs.map(\.variable))
+            guard let old = found[move.location], let table = newTables[move.location.server], let newEntry = newFound[move.location],
+                  newEntry.command == [nxtrm[0]], newEntry.args == argsWanted[move.location],
+                  !newEntry.detected.contains(where: { if case .env(let name) = $0.field { return moved.contains(name) }; return false }) else {
+                return .failure(EditFailure("check failed"))
+            }
+            spans.append((old.range, offsets(table.range, in: updated)))
+        }
+        // Everything outside the entries is as it was.
+        let newBytes = Array(updated.utf8)
+        guard sameOutside(bytes, newBytes, spans) else { return .failure(EditFailure("check failed")) }
+        for index in made.indices {
+            made[index].written = sha256(String(decoding: newBytes[spans[index].new], as: UTF8.self))
+        }
+        return .success(Edited(text: updated, entries: made))
+    }
+
+    /// The first table of each name wanted, as `first(where:)` finds it.
+    static func firstTables(_ outline: TOMLOutline, named names: Set<String>) -> [String: TOMLTable] {
+        var tables: [String: TOMLTable] = [:]
+        for table in tomlTables(outline) where names.contains(table.name) && tables[table.name] == nil { tables[table.name] = table }
+        return tables
+    }
+
+    /// The bytes outside the spans (each an entry's range before and after the edit) are the same, in the same order.
+    static func sameOutside(_ old: [UInt8], _ new: [UInt8], _ spans: [(old: Range<Int>, new: Range<Int>)]) -> Bool {
+        var oldCursor = 0
+        var newCursor = 0
+        for span in spans.sorted(by: { $0.old.lowerBound < $1.old.lowerBound }) {
+            guard span.old.lowerBound >= oldCursor, span.new.lowerBound >= newCursor, span.old.upperBound <= old.count,
+                  span.new.upperBound <= new.count,
+                  old[oldCursor..<span.old.lowerBound].elementsEqual(new[newCursor..<span.new.lowerBound]) else { return false }
+            oldCursor = span.old.upperBound
+            newCursor = span.new.upperBound
+        }
+        return old[oldCursor...].elementsEqual(new[newCursor...])
+    }
+
+    /// One TOML entry's changes, as UTF-8 ranges of the file, and its new args: `command` and `args` replaced (or `args`
+    /// added), the moved keys taken out of `env`, and the start-up wait raised to 30 seconds. Nil when its command can't
+    /// be read.
+    static func tomlChanges(_ table: TOMLTable, move: EntryMove, command old: [String], nxtrm: [String], reader: TOMLReader,
+                            newline: String) -> (changes: [(range: Range<Int>, with: String)], args: [String])? {
+        let outline = reader.outline
+        let text = outline.text
+        guard let command = table.keys.first(where: { $0.path == ["command"] }), let commandString = outline.string(at: command.value) else {
+            return nil
+        }
+        let args = wrapped(move.pairs, nxtrm: nxtrm, command: old)
         let argsText = "[" + args.map(MCPRegistrar.tomlString).joined(separator: ", ") + "]"
         var changes: [(range: Range<Int>, with: String)] = [(offsets(commandString.range, in: text), MCPRegistrar.tomlString(nxtrm[0]))]
         // New lines go after args, or after command when there was no args.
@@ -1166,7 +1312,7 @@ public enum SecretImport {
         } else {
             inserted.append("args = " + argsText)
         }
-        let moved = Set(pairs.map(\.variable))
+        let moved = Set(move.pairs.map(\.variable))
         if let env = table.keys.first(where: { $0.path == ["env"] }), let (members, end) = reader.members(at: env.value) {
             let left = members.filter { !moved.contains($0.key) }.map { String(text.unicodeScalars[$0.range]) }
             if left.isEmpty {
@@ -1196,24 +1342,7 @@ public enum SecretImport {
             let lines = inserted.map { $0 + newline }.joined()
             changes.append((at..<at, (lineEnds ? "" : newline) + lines))
         }
-        let movedNames = Dictionary(pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let backup = marked(text, entry: entry, moved: movedNames)
-        guard let updated = replacing(text, changes) else { return .failure(EditFailure("check failed")) }
-        guard let check = TOMLOutline(updated), let newTable = tomlTables(check).first(where: { $0.name == location.server }),
-              let newEntry = tomlEntries(updated)?.first(where: { $0.location == location }),
-              newEntry.command == [nxtrm[0]], newEntry.args == args,
-              !newEntry.detected.contains(where: { if case .env(let name) = $0.field { return moved.contains(name) }; return false }) else {
-            return .failure(EditFailure("check failed"))
-        }
-        // Everything outside the entry is as it was.
-        let oldBytes = Array(text.utf8)
-        let newBytes = Array(updated.utf8)
-        let oldRange = entry.range
-        let newRange = offsets(newTable.range, in: updated)
-        guard oldBytes[..<oldRange.lowerBound].elementsEqual(newBytes[..<newRange.lowerBound]),
-              oldBytes[oldRange.upperBound...].elementsEqual(newBytes[newRange.upperBound...]) else { return .failure(EditFailure("check failed")) }
-        let writtenText = String(decoding: newBytes[newRange], as: UTF8.self)
-        return .success(Edited(text: updated, original: backup.text, written: sha256(writtenText), kept: backup.kept))
+        return (changes, args)
     }
 
     /// A bare value (a number) at `index`, and where it ends.
@@ -1294,18 +1423,17 @@ public enum SecretImport {
     /// The file as written is what the edit planned: each entry Next Term wrote, by its digest, and nothing else changed.
     public static func verify(_ edit: FileEdit, written data: Data) -> Bool {
         guard let text = text(of: data), text == edit.plan.text else { return false }
-        return edit.backups.allSatisfy { backup in entryText(backup.location, format: backup.format, in: text).map(sha256) == backup.written }
+        // Every entry found in one reading of the file: one reading each took time that grows with entries times file.
+        let ranges = entryRanges(edit.backups.map(\.location), format: edit.source.format, in: text)
+        let bytes = Array(text.utf8)
+        return edit.backups.allSatisfy { backup in
+            ranges[backup.location].map { sha256(String(decoding: bytes[$0], as: UTF8.self)) } == backup.written
+        }
     }
 
     /// The text of the entry at `location` now, or nil when it is not there.
     static func entryText(_ location: Location, format: Format, in text: String) -> String? {
-        if format == .toml {
-            guard let outline = TOMLOutline(text), let table = tomlTables(outline).first(where: { $0.name == location.server }) else { return nil }
-            return String(text.unicodeScalars[table.range])
-        }
-        guard let document = JSONC(text), case .object(let root)? = document.root, let servers = object(at: location.container, in: root),
-              let member = servers.member(location.server) else { return nil }
-        return document.string(member.value.range)
+        entryRange(location, format: format, in: text).map { String(decoding: Array(text.utf8)[$0], as: UTF8.self) }
     }
 
     // MARK: Undo
@@ -1343,13 +1471,29 @@ public enum SecretImport {
     }
 
     static func entryRange(_ location: Location, format: Format, in text: String) -> Range<Int>? {
+        entryRanges([location], format: format, in: text)[location]
+    }
+
+    /// Where each entry at `locations` is now, as UTF-8 offsets, from one reading of the file: in TOML the first table of
+    /// its server's name, in JSON the first member of its name in its container. One not there is left out.
+    static func entryRanges(_ locations: [Location], format: Format, in text: String) -> [Location: Range<Int>] {
+        var ranges: [Location: Range<Int>] = [:]
         if format == .toml {
-            guard let outline = TOMLOutline(text), let table = tomlTables(outline).first(where: { $0.name == location.server }) else { return nil }
-            return offsets(table.range, in: text)
+            guard let outline = TOMLOutline(text) else { return [:] }
+            let tables = firstTables(outline, named: Set(locations.map(\.server)))
+            for location in locations { ranges[location] = tables[location.server].map { offsets($0.range, in: text) } }
+            return ranges
         }
-        guard let document = JSONC(text), case .object(let root)? = document.root, let servers = object(at: location.container, in: root),
-              let member = servers.member(location.server) else { return nil }
-        return offsets(member.value.range, in: text)
+        guard let document = JSONC(text), case .object(let root)? = document.root else { return [:] }
+        let wanted = Set(locations)
+        for path in Set(locations.map(\.container)) {
+            guard let servers = object(at: path, in: root) else { continue }
+            for member in servers.members {
+                let location = Location(container: path, server: member.key)
+                if wanted.contains(location), ranges[location] == nil { ranges[location] = offsets(member.value.range, in: text) }
+            }
+        }
+        return ranges
     }
 
     /// The project files the import reads, by their place in a project.
