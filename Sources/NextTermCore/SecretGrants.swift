@@ -147,6 +147,13 @@ public struct SecretGrant: Identifiable, Sendable {
         }
     }
 
+    /// How long until it ends on its own, zero once it has; nil for until the Mac locks. The app's timer drops its
+    /// values right then.
+    public func timeLeft(at now: ContinuousClock.Instant) -> Duration? {
+        guard let expires else { return nil }
+        return now >= expires ? .zero : expires - now
+    }
+
     public func isExpired(at now: ContinuousClock.Instant) -> Bool {
         if let expires, now >= expires { return true }
         return usesLeft == 0

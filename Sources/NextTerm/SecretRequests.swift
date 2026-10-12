@@ -14,7 +14,8 @@ import NextTermCore
 /// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes" and
 ///   "Allow this command until the Mac locks" keep copies of exactly those keys' values in a grant.
 /// - Grants end on a lock, a sleep, the session resigning, Revoke, a key's change, the hour pause, and for
-///   `run_with_secrets` when its asking tab gets input from MCP. Values are dropped with them.
+///   `run_with_secrets` when its asking tab gets input from MCP. They also end on their own: after 15 minutes, and a
+///   one-use grant at its use or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
 @MainActor
 final class SecretRequests {
     static let shared = SecretRequests()
@@ -176,6 +177,12 @@ final class SecretRequests {
     /// The clock: the self-test moves it.
     var now: () -> ContinuousClock.Instant = { .now }
     private var observers: [NSObjectProtocol] = []
+    #if DEBUG
+    /// The self-test's: a grant's timer fires after this many seconds instead of at its end.
+    static var grantTimer: Double?
+    /// The self-test's: the grants whose values are held.
+    var heldGrants: [String] { Array(held.keys) }
+    #endif
 
     private init() {
         observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.locked, object: nil, queue: .main) { note in
@@ -201,7 +208,7 @@ final class SecretRequests {
         expire(at: now)
         if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
             limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
-            if grant.isExpired(at: now) { drop(grant.id) }
+            expire(at: now) // a one-use grant is over now, and its values go now
             audit(.use, request, approval: .grant, outcome: "allowed")
             changedNow()
             reply(.allowed(copies(values), how: .grant))
@@ -378,6 +385,7 @@ final class SecretRequests {
             book.add(grant)
             held[grant.id] = copies(values)
             audit(.grant, request, approval: how.approval, outcome: kind.rawValue)
+            endWhenDue(grant)
         }
         if stoppedDuringApproval {
             request.isAnswered = true
@@ -690,13 +698,16 @@ final class SecretRequests {
     func end(_ event: SecretGrantEvent) {
         let ended = book.end(event)
         guard !ended.isEmpty else { return }
-        for grant in ended {
-            drop(grant.id)
-            let line = SecretAudit.Line(event: .grantEnd, names: grant.names, command: grant.binding.command.joined(separator: " "),
-                                        folder: grant.binding.folder, outcome: "\(event)")
-            SecretsStore.shared.record(line)
-        }
+        for grant in ended { over(grant, outcome: "\(event)") }
         changedNow()
+    }
+
+    /// A grant is over: its values go, wiped, and the audit log says why.
+    private func over(_ grant: SecretGrant, outcome: String) {
+        drop(grant.id)
+        let line = SecretAudit.Line(event: .grantEnd, names: grant.names, command: grant.binding.command.joined(separator: " "),
+                                    folder: grant.binding.folder, outcome: outcome)
+        SecretsStore.shared.record(line)
     }
 
     /// A lock, a sleep or the session resigning: every grant ends, and pending cards are dropped.
@@ -721,8 +732,31 @@ final class SecretRequests {
         lingering.removeAll()
     }
 
-    private func expire(at now: ContinuousClock.Instant) {
-        for grant in book.expire(at: now) { drop(grant.id) }
+    /// Ends the grants over at `now`: their time is up, or a one-use grant was used.
+    @discardableResult
+    private func expire(at now: ContinuousClock.Instant) -> [SecretGrant] {
+        let ended = book.expire(at: now)
+        for grant in ended { over(grant, outcome: grant.usesLeft == 0 ? "used" : "expired") }
+        return ended
+    }
+
+    /// A grant with an end of its own ends right then, with no request after it, so its values never outlive it.
+    private func endWhenDue(_ grant: SecretGrant) {
+        guard let left = grant.timeLeft(at: now()) else { return }
+        // Half a second after, so the clock has surely passed its end when the timer fires.
+        #if DEBUG
+        let delay = Self.grantTimer ?? Self.seconds(left) + 0.5
+        #else
+        let delay = Self.seconds(left) + 0.5
+        #endif
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            MainActor.assumeIsolated { SecretRequests.shared.expireDue() }
+        }
+    }
+
+    private func expireDue() {
+        guard !expire(at: now()).isEmpty else { return }
+        changedNow()
     }
 
     private func drop(_ grantID: String) {
@@ -781,6 +815,9 @@ final class SecretRequests {
         book = SecretGrantBook()
         held.removeAll()
         now = { .now }
+        #if DEBUG
+        Self.grantTimer = nil
+        #endif
         changedNow()
     }
 

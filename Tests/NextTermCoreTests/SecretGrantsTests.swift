@@ -75,6 +75,27 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         }
     }
 
+    /// How long until a grant ends on its own, for the app's timer that drops its values right then.
+    @Test func timeLeftUntilAGrantEnds() {
+        let fifteen = SecretGrant(kind: .fifteenMinutes, binding: wrapperBinding(), made: start)
+        #expect(fifteen.timeLeft(at: start) == .seconds(900))
+        #expect(fifteen.timeLeft(at: start.advanced(by: .seconds(60))) == .seconds(840))
+        #expect(fifteen.timeLeft(at: start.advanced(by: .seconds(901))) == .zero)
+        #expect(SecretGrant(kind: .oneUse, binding: wrapperBinding(), made: start).timeLeft(at: start) == .seconds(120))
+        #expect(SecretGrant(kind: .untilLock, binding: wrapperBinding(), made: start).timeLeft(at: start) == nil)
+    }
+
+    /// A one-use grant is over the moment it is used: the same instant's expire drops it, so the app wipes its values
+    /// then, not at the next request.
+    @Test func aUsedOneUseGrantIsOverAtOnce() {
+        var book = SecretGrantBook()
+        book.add(SecretGrant(kind: .oneUse, binding: wrapperBinding(), made: start, id: "once"))
+        let at = start.advanced(by: .seconds(5))
+        let taken = book.take(wrapperBinding(), at: at)
+        let over = book.expire(at: at)
+        #expect(taken?.id == "once" && over.map(\.id) == ["once"] && over.first?.usesLeft == 0 && book.grants.isEmpty)
+    }
+
     @Test func whatEndsAGrant() {
         func book() -> SecretGrantBook {
             var book = SecretGrantBook()
