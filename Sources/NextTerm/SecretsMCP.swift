@@ -375,7 +375,11 @@ enum SecretsMCP {
     static func ticketLine(_ ticket: SecretRequests.Ticket, shell: String) -> String? {
         let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
         let words: [String]
-        if SelfTest.isRequested {
+        var selfTestForm = false
+        #if DEBUG
+        selfTestForm = SelfTest.isRequested // only a debug build has the self-test's wrapper form
+        #endif
+        if selfTestForm {
             words = [executable, "--cli", "--self-test-secret-wrapper", SelfTest.mcpSocketPath, "25", "secret", "run", "--ticket", ticket.id]
         } else if let script = CommandLineTool.script?.path {
             words = [script, "secret", "run", "--ticket", ticket.id]

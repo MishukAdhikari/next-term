@@ -14,7 +14,9 @@ import NextTermCore
 enum SecretWrapper {
     /// The self-test's form, `--self-test-secret-wrapper <socket> <wait-seconds> secret run …`: its own socket and
     /// wait, with the peer checks as ever. Its `argv_full` can be set with `NEXTTERM_SELFTEST_ARGV_FULL` (JSON), so the
-    /// self-test can check that a claim the kernel's argv doesn't match is refused. Only this form reads it.
+    /// self-test can check that a claim the kernel's argv doesn't match is refused. Only this form reads it, and only a
+    /// debug build has it.
+    #if DEBUG
     static func runSelfTest(_ arguments: [String]) -> Never {
         let claimed = ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ARGV_FULL"]
             .flatMap { try? JSONDecoder().decode([String].self, from: Data($0.utf8)) }
@@ -23,6 +25,7 @@ enum SecretWrapper {
         run(Array(arguments.dropFirst(5)), socket: socket, wait: wait ?? SecretRun.wait,
             argvFull: claimed ?? CommandLine.arguments)
     }
+    #endif
 
     /// Runs it with the arguments after `secret run`. `socket` and `wait` are the self-test's
     /// (`--self-test-secret-wrapper`); a wrapper otherwise uses the fixed path and ignores `NEXTTERM_MCP_SOCKET`.
