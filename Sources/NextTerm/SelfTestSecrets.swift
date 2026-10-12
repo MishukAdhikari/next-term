@@ -1133,6 +1133,21 @@ extension SelfTest {
         let reuseExit = await reuse.finish()
         check(SecretRun.isTicket(ticketID) && reuseExit == 1 && reuse.errorText.contains("expired or was used already") && requests.showing == nil,
               "secrets: a used ticket gets expired", reuse.errorText)
+        #if DEBUG
+        // The shell read the self-test's own zsh config, never the user's: its ZDOTDIR, as zsh has it once started.
+        if let tab {
+            let own = SelfTest.shellConfigFolder ?? ""
+            if await wait(10, { !tab.status.running }) {
+                tab.view.send(txt: "[[ ${ZDOTDIR-} == \(ShellQuote.quote(own)) ]] && echo ZD\"\"OWN || echo ZD\"\"OTHER=${ZDOTDIR-unset}\r")
+                let answered = await wait(10) { screen(tab).contains("ZDOWN") || screen(tab).contains("ZDOTHER=") }
+                check(!own.isEmpty && answered && screen(tab).contains("ZDOWN"),
+                      "secrets: the tab run_with_secrets opens reads the self-test's own zsh config, not the user's",
+                      "test config \(own), " + (answered ? String(screen(tab).suffix(200)) : "no answer"))
+            } else {
+                note("secrets: the zsh config of the tab run_with_secrets opened was not asked: its shell stayed busy")
+            }
+        }
+        #endif
 
         // "Allow for 15 minutes": the same call starts with no panel, until the folder's .env changes.
         let again = secretsStart("run_with_secrets", arguments)
