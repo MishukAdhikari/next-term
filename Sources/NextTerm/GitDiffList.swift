@@ -70,6 +70,9 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
     /// ↩ on a file: to the diff.
     var onReturn: (() -> Void)?
     var onOpenFile: ((ChangedFile) -> Void)?
+    /// Rollback… on a file with uncommitted changes; nil (no item) where the list shows committed changes only.
+    var canRollback: ((ChangedFile) -> Bool)?
+    var onRollback: ((ChangedFile) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -391,11 +394,15 @@ final class GitDiffListView: NSView, NSOutlineViewDataSource, NSOutlineViewDeleg
         return cell
     }
 
-    /// The menu of a file row: Open File, Copy Path.
+    /// The menu of a file row: Open File, Rollback… (when it has uncommitted changes), Copy Path.
     func menu(forRow row: Int) -> NSMenu? {
         guard let item = outline.item(atRow: row) as? Item, let file = item.file else { return nil }
         let menu = NSMenu()
         menu.addBlock("Open File", enabled: file.status != .deleted) { [weak self] in self?.onOpenFile?(file) }
+        if canRollback?(file) == true {
+            let rollback = menu.addBlock("Rollback…") { [weak self] in self?.onRollback?(file) }
+            KeyboardShortcuts.show("gitRollback:", on: rollback)
+        }
         menu.addBlock("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(file.path, forType: .string)
@@ -458,6 +465,11 @@ final class GitDiffOutlineView: NSOutlineView, NSMenuDelegate {
             built.removeItem(item)
             menu.addItem(item)
         }
+    }
+
+    /// Its keys only while it is open, as the sidebar's menu (ProjectSidebarView.menuDidClose): Git › Rollback… keeps ⌥⌘Z.
+    func menuDidClose(_ menu: NSMenu) {
+        for item in menu.items { KeyboardShortcuts.set(nil, on: item) }
     }
 }
 

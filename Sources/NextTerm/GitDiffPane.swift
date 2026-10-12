@@ -77,6 +77,12 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
 
     deinit { monitor.stop() }
 
+    /// Its window's visibility gates the refreshes file changes set off.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { monitor.window = window }
+    }
+
     static let tabIcon: NSImage? = NSImage(systemSymbolName: "plus.forwardslash.minus", accessibilityDescription: "Git Diff")?
         .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .medium).applying(.init(paletteColors: [Theme.gitModified])))
 
@@ -135,6 +141,18 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         placeDetail()
         if path == nil, !wasAll || allFiles?.entries.isEmpty != false || !hasRead { reload(quietly: hasRead) }
         onTitleChange?()
+    }
+
+    /// A file of the list has uncommitted changes to roll back. In a commit, or All changes since the base, a file may
+    /// differ by commits only.
+    func canRollback(_ path: String) -> Bool {
+        effectiveScope == .uncommitted || monitor.snapshot?.files[path].map { $0 != .ignored } == true
+    }
+
+    /// What Git › Rollback… acts on while this tab is in front: the file selected, when it has uncommitted changes.
+    var rollbackTarget: URL? {
+        guard let path = selectedPath, canRollback(path) else { return nil }
+        return URL(fileURLWithPath: root).appendingPathComponent(path)
     }
 
     /// What to compare: All changes, Uncommitted, or a commit.
@@ -546,13 +564,17 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
     // MARK: watching
 
     /// A file or a branch changing (yours, an agent's, a commit, a stage) is read again once things settle;
-    /// what can't matter (git's objects, files it ignores) is not.
+    /// what can't matter (git's objects, folders it ignores, nested worktrees) is not.
     private func watch() {
         let objects = GitRunner.commonGitDir(root: root).map { canonicalPath($0) + "/objects" }
         let changed: ([String]) -> Void = { [weak self] paths in
             guard let self else { return }
             let relevant = paths.filter { path in objects.map { !canonicalPath(path).hasPrefix($0) } ?? true }
             guard !relevant.isEmpty else { return }
+            if let snapshot = self.monitor.snapshot {
+                let filter = GitEventFilter(snapshot: snapshot, workTree: canonicalPath(snapshot.root))
+                guard relevant.contains(where: { filter.matters($0, isRepository: { GitEventFilter.isNestedRepository($0) }) }) else { return }
+            }
             self.touched.formUnion(relevant.map { canonicalPath($0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0) })
             self.monitor.refreshSoon()
         }
@@ -631,6 +653,12 @@ final class GitDiffPane: NSView, NSSplitViewDelegate {
         list.onSelectScope = { [weak self] scope in self?.select(scope: scope) }
         list.onNeedMoreCommits = { [weak self] in self?.loadMoreCommits() }
         list.onOpenFile = { [weak self] file in self?.openFile(file) }
+        // Only uncommitted changes roll back: in a commit, or All changes since the base, a file may differ by commits.
+        list.canRollback = { [weak self] file in self?.canRollback(file.path) == true }
+        list.onRollback = { [weak self] file in
+            guard let self, let controller = self.window?.windowController as? TerminalWindowController else { return }
+            controller.rollback([URL(fileURLWithPath: self.root).appendingPathComponent(file.path)])
+        }
         list.onReturn = { [weak self] in
             guard let self, let pane = self.diffPane else { return }
             self.window?.makeFirstResponder(pane.focusView)

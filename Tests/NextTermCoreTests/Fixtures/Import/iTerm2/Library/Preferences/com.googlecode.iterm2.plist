@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Default Bookmark Guid</key>
+	<string>DYN-WORK</string>
+	<key>LoadPrefsFromCustomFolder</key>
+	<true/>
+	<key>PrefsCustomFolder</key>
+	<string>https://example.invalid/prefs?token=FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA</string>
+	<key>NoSyncClaudeCodeToken</key>
+	<string>eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU</string>
+	<key>New Bookmarks</key>
+	<array>
+		<dict>
+			<key>Guid</key>
+			<string>REG-1</string>
+			<key>Name</key>
+			<string>Default</string>
+			<key>Normal Font</key>
+			<string>Monaco 12</string>
+			<key>Command</key>
+			<string>/bin/zsh -c 'export GITHUB_TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU; exec zsh'</string>
+			<key>Custom Command</key>
+			<string>Yes</string>
+			<key>Ansi 0 Color</key>
+			<dict>
+				<key>Red Component</key>
+				<real>0.0</real>
+				<key>Green Component</key>
+				<real>0.0</real>
+				<key>Blue Component</key>
+				<real>0.0</real>
+				<key>Color Space</key>
+				<string>sRGB</string>
+			</dict>
+			<key>Background Color</key>
+			<dict>
+				<key>Red Component</key>
+				<real>0.1</real>
+				<key>Green Component</key>
+				<real>0.1</real>
+				<key>Blue Component</key>
+				<real>0.1</real>
+				<key>Color Space</key>
+				<string>sRGB</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>Guid</key>
+			<string>REG-2</string>
+			<key>Name</key>
+			<string>Plain</string>
+			<key>Normal Font</key>
+			<string>Menlo 11</string>
+		</dict>
+	</array>
+</dict>
+</plist>

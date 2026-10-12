@@ -8,32 +8,51 @@ import NextTermCore
 
 /// The apps on this Mac an import can read, and their plans.
 enum ImportSources {
-    /// Every app found, most recently used first. Folders and dates only: nothing is parsed yet.
+    /// Every app found, most recently used first, those not used lately (180 days) last. No setting is read yet
+    /// beyond what DetectedApp names.
     static func detect() -> [DetectedApp] {
-        let found = detectors.flatMap { $0() }
-        return found.sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
+        var found = detectors.flatMap { $0() }
+        for index in found.indices where DetectedApp.isNotUsedLately(found[index].lastUsed) { found[index].notUsedLately = true }
+        return found.sorted { a, b in
+            if a.notUsedLately != b.notUsedLately { return !a.notUsedLately }
+            return (a.lastUsed ?? .distantPast) > (b.lastUsed ?? .distantPast)
+        }
     }
 
     static func plan(for app: DetectedApp) -> ImportPlan {
-        planner(app, usesUSKeyboard) ?? ImportPlan(preset: app.preset)
+        plan(for: app, usKeyboard: usesUSKeyboard)
     }
 
-    static let noneFound = "No settings from VS Code, Cursor, a JetBrains IDE, Zed, iTerm2, Ghostty, Warp or a changed Terminal profile were found on this Mac."
+    /// The plan with the keyboard layout given (read on the main thread), so it can be made off it.
+    static func plan(for app: DetectedApp, usKeyboard: Bool) -> ImportPlan {
+        planner(app, usKeyboard) ?? ImportPlan(preset: app.preset)
+    }
+
+    static let noneFound = "No settings were found on this Mac from VS Code or an editor built on it (VS Code Insiders, VSCodium, "
+        + "Cursor, Windsurf, Kiro, Trae and others), a JetBrains IDE, Zed, Sublime Text, iTerm2, Ghostty, cmux, kitty, Alacritty, "
+        + "WezTerm, Kaku, Warp or a changed Terminal profile."
 
     /// Each family's reader (NextTermCore/Import*.swift). The self-test can swap these for its own.
     nonisolated(unsafe) static var detectors: [() -> [DetectedApp]] = [
         { ImportVSCode.detect() }, { ImportJetBrains.detect() }, { ImportZed.detect() }, { ImportITerm2.detect() },
-        { ImportGhostty.detect() }, { ImportWarp.detect() }, { ImportTerminalApp.detect() },
+        { ImportGhostty.detect() }, { ImportWarp.detect() }, { ImportTerminalApp.detect() }, { ImportKitty.detect() },
+        { ImportAlacritty.detect() }, { ImportWezTerm.detect() }, { ImportCmux.detect() }, { ImportSublimeText.detect() },
     ]
     nonisolated(unsafe) static var planner: (DetectedApp, Bool) -> ImportPlan? = { app, usKeyboard in
         switch app.kind {
-        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop: return ImportVSCode.plan(for: app, usKeyboard: usKeyboard)
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork:
+            return ImportVSCode.plan(for: app, usKeyboard: usKeyboard)
         case .jetBrains: return ImportJetBrains.plan(for: app, usKeyboard: usKeyboard)
         case .zed: return ImportZed.plan(for: app, usKeyboard: usKeyboard)
         case .iTerm2: return ImportITerm2.plan(for: app, usKeyboard: usKeyboard)
         case .ghostty: return ImportGhostty.plan(for: app, usKeyboard: usKeyboard)
         case .warp: return ImportWarp.plan(for: app, usKeyboard: usKeyboard)
         case .terminalApp: return ImportTerminalApp.plan(for: app, usKeyboard: usKeyboard)
+        case .kitty: return ImportKitty.plan(for: app, usKeyboard: usKeyboard)
+        case .alacritty: return ImportAlacritty.plan(for: app, usKeyboard: usKeyboard)
+        case .wezTerm, .kaku: return ImportWezTerm.plan(for: app, usKeyboard: usKeyboard)
+        case .cmux: return ImportCmux.plan(for: app, usKeyboard: usKeyboard)
+        case .sublimeText: return ImportSublimeText.plan(for: app, usKeyboard: usKeyboard)
         }
     }
 
@@ -58,20 +77,8 @@ struct ImportChoice {
 final class ImportCoordinator {
     static let shared = ImportCoordinator()
 
-    struct Snapshot: Codable {
-        let date: Date
-        let source: String
-        let summary: String
-        /// UserDefaults keys the import touched → their values before (missing: there was none).
-        let before: [String: Value]
-        let touched: [String]
-
-        enum Value: Codable, Equatable {
-            case double(Double), bool(Bool), string(String), strings([String])
-            /// The saved shortcuts, byte for byte (`keyBindings`).
-            case data(Data)
-        }
-    }
+    /// UserDefaults keys the import changed, their values before and just after (NextTermCore/ImportUndo.swift).
+    typealias Snapshot = ImportSnapshot
 
     private static let snapshotKey = "importSnapshot"
     static let changed = Notification.Name("NextTermImportChanged")
@@ -88,30 +95,32 @@ final class ImportCoordinator {
         }
     }
 
-    /// How many things an import would change.
+    /// How many things an import would change, as an agent's preview counts them (MCPImport.changes): a ticked
+    /// setting Next Term already has changes nothing, so it isn't counted.
     static func count(_ choice: ImportChoice, plan: ImportPlan) -> Int {
-        (choice.usePreset && plan.preset != KeyboardShortcuts.shared.preset ? plan.preset.overrides.count : 0)
-            + choice.settings.count + choice.shortcuts.count + (choice.recentProjects.isEmpty ? 0 : 1)
+        let preset = choice.usePreset && plan.preset != KeyboardShortcuts.shared.preset ? plan.preset.overrides.count : 0
+        return preset + changing(choice.settings).count + choice.shortcuts.count + (choice.recentProjects.isEmpty ? 0 : 1)
     }
 
-    func apply(_ choice: ImportChoice, plan: ImportPlan, from source: String) {
+    /// The ticked settings that would change something.
+    static func changing(_ settings: [PlannedSetting]) -> [PlannedSetting] {
+        settings.filter { !ImportCurrent.has($0.setting) }
+    }
+
+    /// Applies what was ticked and remembers it for Undo. An Apply that changes nothing (every value was
+    /// already so) returns nil and keeps the Undo of the import before it.
+    @discardableResult
+    func apply(_ choice: ImportChoice, plan: ImportPlan, from source: String) -> Snapshot? {
         let defaults = UserDefaults.standard
         var keys: [String] = []
         if choice.usePreset { keys.append("keymapPreset") }
         keys += choice.settings.flatMap(\.setting.keys)
         if !choice.shortcuts.isEmpty { keys.append("keyBindings") }
         if !choice.recentProjects.isEmpty { keys.append("recentProjects") }
-        var before: [String: Snapshot.Value] = [:]
-        for key in Set(keys) {
-            switch defaults.object(forKey: key) {
-            case let value as Bool where ImportedSetting.boolKeys.contains(key): before[key] = .bool(value)
-            case let value as Data: before[key] = .data(value)
-            case let value as Double: before[key] = .double(value)
-            case let value as String: before[key] = .string(value)
-            case let value as [String]: before[key] = .strings(value)
-            default: break
-            }
-        }
+        var unique: [String] = []
+        for key in keys where !unique.contains(key) { unique.append(key) }
+        let before = Snapshot.values(of: unique, in: defaults)
+        let settingsChanging = Self.changing(choice.settings).count
         let app = AppDelegate.shared!
         if choice.usePreset { KeyboardShortcuts.shared.preset = plan.preset }
         // The user's own shortcuts go on top of the preset, as their own changes.
@@ -121,9 +130,30 @@ final class ImportCoordinator {
         var parts: [String] = []
         if choice.usePreset { parts.append("\(plan.preset.name) shortcuts") }
         if !choice.shortcuts.isEmpty { parts.append("\(choice.shortcuts.count) of your shortcut\(choice.shortcuts.count == 1 ? "" : "s")") }
-        if !choice.settings.isEmpty { parts.append("\(choice.settings.count) setting\(choice.settings.count == 1 ? "" : "s")") }
+        if settingsChanging > 0 { parts.append("\(settingsChanging) setting\(settingsChanging == 1 ? "" : "s")") }
         if !added.isEmpty { parts.append("\(added.count) project\(added.count == 1 ? "" : "s")") }
-        last = Snapshot(date: Date(), source: source, summary: parts.joined(separator: ", "), before: before, touched: Array(Set(keys)))
+        let after = Snapshot.values(of: unique, in: defaults)
+        guard let snapshot = Snapshot.applied(keys: unique, before: before, after: after, source: source,
+                                              summary: parts.joined(separator: ", ")) else { return nil }
+        last = snapshot
+        return snapshot
+    }
+
+    /// The settings the last import changed that hold something else now: changed by hand since, so Undo
+    /// puts them back too. Named as Settings names them.
+    func changedSinceImport() -> [String] {
+        guard let snapshot = last else { return [] }
+        let current = Snapshot.values(of: snapshot.touched, in: UserDefaults.standard)
+        return Snapshot.titles(of: snapshot.changedSince(current))
+    }
+
+    /// What the Undo Import alert says, naming what was changed since the import.
+    static func undoMessage(changedSince: [String]) -> String {
+        let base = "The shortcuts, settings and recent projects it changed go back to what they were before."
+        guard !changedSince.isEmpty else { return base }
+        let list = ListFormatter.localizedString(byJoining: changedSince)
+        return base + " You changed \(changedSince.count == 1 ? "this" : "these") since the import, and Undo puts "
+            + "\(changedSince.count == 1 ? "it" : "them") back too: \(list)."
     }
 
     /// Puts every key the last import touched back as it was.
@@ -142,7 +172,8 @@ final class ImportCoordinator {
                 else { UserDefaults.standard.removeObject(forKey: key) }
                 KeyboardShortcuts.shared.apply()
             case "recentProjects":
-                if case .strings(let paths)? = value { app.setRecentProjects(paths) } else { app.setRecentProjects([]) }
+                // Only the folders the import added go: projects opened since stay.
+                app.setRecentProjects(snapshot.recentProjectsAfterUndo(current: UserDefaults.standard.stringArray(forKey: key) ?? []))
             default:
                 app.restoreSetting(key, to: value)
             }
@@ -156,6 +187,7 @@ extension AppDelegate {
     func applyImported(_ setting: ImportedSetting) {
         switch setting {
         case .fontSize(let size): setFontSize(CGFloat(size))
+        case .terminalFontSize(let size): setTerminalFontSize(CGFloat(size))
         case .editorLineHeight(let factor): editorLineHeight = CGFloat(factor)
         case .softWrap(let on): if softWrap != on { toggleSoftWrap(nil) }
         case .optionAsMeta(let on): if Preferences.optionAsMeta != on { toggleOptionAsMeta(nil) }
@@ -179,6 +211,21 @@ extension AppDelegate {
             // Added to the patterns you have.
             let mine = Preferences.hiddenFilePatterns
             setHiddenFilePatterns(mine + patterns.filter { !mine.contains($0) })
+        default: applyWindowSetting(setting)
+        }
+    }
+
+    /// How files and projects open, what reopens at launch, diffs and git, as their menus and Settings set them.
+    private func applyWindowSetting(_ setting: ImportedSetting) {
+        switch setting {
+        case .sidebarSingleClick(let on): sidebarSingleClickOpens = on
+        case .backgroundFetch(let raw): if let frequency = FetchFrequency(rawValue: raw) { BackgroundFetcher.shared.frequency = frequency }
+        case .diffLayout(let raw): if let layout = DiffLayout(rawValue: raw) { DiffLayout.current = layout }
+        case .currentLineBlame(let on): setCurrentLineBlame(on)
+        case .openProjectsIn(let raw): if let target = ProjectTarget(rawValue: raw) { projectTarget = target }
+        case .launchOpens(let raw):
+            if LaunchOpens(rawValue: raw) != nil { UserDefaults.standard.set(raw, forKey: LaunchSettings.Key.opens) }
+        default: break
         }
     }
 
@@ -186,7 +233,9 @@ extension AppDelegate {
     func restoreSetting(_ key: String, to value: ImportCoordinator.Snapshot.Value?) {
         switch (key, value) {
         case ("fontSize", .double(let size)?): setFontSize(CGFloat(size))
-        case ("fontSize", nil): resetFontSize(nil)
+        case ("fontSize", nil): setFontSize(Theme.defaultFontSize)
+        case ("terminalFontSize", .double(let size)?): setTerminalFontSize(CGFloat(size))
+        case ("terminalFontSize", nil): setTerminalFontSize(nil)
         case ("editorLineHeight", .double(let factor)?): editorLineHeight = CGFloat(factor)
         case ("editorLineHeight", nil): editorLineHeight = 1.35
         case ("softWrap", .bool(let on)?): applyImported(.softWrap(on))
@@ -227,7 +276,44 @@ extension AppDelegate {
         case ("trimTrailingWhitespace", .bool(let on)?), ("insertFinalNewline", .bool(let on)?): defaults.set(on, forKey: key)
         case ("terminalStartFolder", nil), ("trimTrailingWhitespace", nil), ("insertFinalNewline", nil):
             defaults.removeObject(forKey: key)
+        default: restoreWindowSetting(key, to: value)
+        }
+    }
+
+    /// Undo for how files and projects open, what reopens at launch, diffs and git: the value before, or none,
+    /// so the default returns.
+    private func restoreWindowSetting(_ key: String, to value: ImportCoordinator.Snapshot.Value?) {
+        let defaults = UserDefaults.standard
+        switch (key, value) {
+        case ("sidebarSingleClickOpens", .bool(let on)?): sidebarSingleClickOpens = on
+        case ("currentLineBlame", .bool(let on)?): setCurrentLineBlame(on)
+        case ("backgroundFetch", .string(let raw)?), ("diffLayout", .string(let raw)?), ("openProjectsIn", .string(let raw)?),
+             (LaunchSettings.Key.opens, .string(let raw)?):
+            applyWindowSetting(Self.windowSetting(key, raw))
+        case ("sidebarSingleClickOpens", nil):
+            sidebarSingleClickOpens = false
+            defaults.removeObject(forKey: key)
+        case ("currentLineBlame", nil):
+            setCurrentLineBlame(false)
+            defaults.removeObject(forKey: key)
+        case ("backgroundFetch", nil):
+            BackgroundFetcher.shared.frequency = .standard
+            defaults.removeObject(forKey: key)
+        case ("diffLayout", nil):
+            DiffLayout.current = .sideBySide
+            defaults.removeObject(forKey: key)
+        case ("openProjectsIn", nil), (LaunchSettings.Key.opens, nil):
+            defaults.removeObject(forKey: key)
         default: break
+        }
+    }
+
+    private static func windowSetting(_ key: String, _ raw: String) -> ImportedSetting {
+        switch key {
+        case "backgroundFetch": return .backgroundFetch(raw)
+        case "diffLayout": return .diffLayout(raw)
+        case "openProjectsIn": return .openProjectsIn(raw)
+        default: return .launchOpens(raw)
         }
     }
 
@@ -259,6 +345,32 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     private var recentsBox: NSButton?
     private var applyButton: NSButton?
     private var radios: [NSButton] = []
+    /// After one click: Undo Import on the window that says what came over.
+    private var importedUndoButton: NSButton?
+
+    /// An agent's request (apply_import): this window is its ask, with the agent's rows ticked and a banner naming it.
+    struct AgentAsk {
+        /// Who asks, as the approval windows name it ("the agent in the tab “claude” in api").
+        let who: String
+        /// The agent's reason, shown as its own words.
+        let reason: String?
+        /// The row ids it asked for (MCPImport's ids), ticked at first; the rest start unticked.
+        let ticks: Set<String>
+        /// Lines under its words: an earlier import's Undo that would go, a file's warning.
+        let notes: [String]
+        /// How the user answered, once.
+        let answered: (AgentOutcome) -> Void
+    }
+
+    enum AgentOutcome {
+        /// Applied with these rows ticked; `snapshot` nil when nothing changed, `replaced` the import whose Undo went.
+        case applied(ticked: Set<String>, snapshot: ImportSnapshot?, replaced: ImportSnapshot?)
+        case declined(stopAsking: Bool)
+    }
+
+    private(set) var agentAsk: AgentAsk?
+    /// The user's own import window is open (not an agent's request).
+    var isOpenForUser: Bool { window?.isVisible == true && agentAsk == nil }
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520), styleMask: [.titled, .closable],
@@ -272,20 +384,36 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     /// `completion` runs once, when the window closes (with the plan applied, or nil).
+    /// One list grouped by kind of app (editors, then terminals), each app with its version (or "app removed"), when
+    /// it was last used and what it can bring; then keeping Next Term's shortcuts; then, folded, the apps not used
+    /// lately.
     func showChooser(firstRun: Bool, completion: ((_ imported: ImportPlan?) -> Void)?) {
+        // An agent's request is open here: it comes to the front instead, and stays as the user left it.
+        if agentAsk != nil {
+            window?.makeKeyAndOrderFront(nil)
+            completion?(nil)
+            return
+        }
         self.completion = completion
         apps = ImportSources.detect()
         let title = Self.label(firstRun ? "Coming from another app?" : "Bring over your settings and shortcuts", size: 20, weight: .semibold)
-        let intro = Self.wrapping("Next Term can use the shortcuts and settings you already have. You’ll see every change first, and one click undoes it.")
+        let intro = Self.wrapping("Next Term can use the shortcuts and settings you already have. Import brings an app’s over in one click; "
+            + "Preview… shows every change first. Undo Import puts it all back.")
         var rows: [NSView] = [title, intro]
         radios = []
         let keep = NSButton(radioButtonWithTitle: "Keep Next Term’s shortcuts", target: self, action: #selector(radioChanged(_:)))
         keep.tag = -1
+        keep.identifier = .init("spaced")
         radios.append(keep)
+        var appRows: [[NSView]] = []
         for (index, found) in apps.enumerated() {
-            let radio = NSButton(radioButtonWithTitle: found.name + Self.used(found.lastUsed), target: self, action: #selector(radioChanged(_:)))
+            let radio = NSButton(radioButtonWithTitle: found.name, target: self, action: #selector(radioChanged(_:)))
             radio.tag = index
+            let detail = Self.detail(found)
+            radio.setAccessibilityHelp(detail)
             radios.append(radio)
+            appRows.append([Self.appLine(radio, importing: importButton(for: index, name: found.name)),
+                            Self.wrapping(detail, secondary: true, size: 11, indent: true)])
         }
         // First run defaults to keeping everything; from the menu, to the app used last.
         let selected = firstRun || apps.isEmpty ? keep : radios[1]
@@ -293,19 +421,75 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         if apps.isEmpty {
             rows.append(Self.wrapping(ImportSources.noneFound, secondary: true))
         }
-        rows += radios.dropFirst() + [keep]
+        // Apps used lately, by kind; apps not used lately (180 days) come last, folded, after keeping Next Term's.
+        for family in ImportFamily.allCases {
+            let members = apps.indices.filter { !apps[$0].notUsedLately && apps[$0].kind.family == family }
+            guard !members.isEmpty else { continue }
+            rows.append(Self.heading(family.title))
+            for index in members { rows += appRows[index] }
+        }
+        rows.append(keep)
+        let stale = apps.indices.filter { apps[$0].notUsedLately }
+        staleList = nil
+        if !stale.isEmpty {
+            let disclosure = NSButton(title: "", target: self, action: #selector(toggleStaleList(_:)))
+            disclosure.bezelStyle = .disclosure
+            disclosure.setButtonType(.pushOnPushOff)
+            disclosure.setAccessibilityLabel("Show the apps not used lately")
+            let header = NSStackView(views: [disclosure, Self.heading("Not used lately (\(stale.count))")])
+            header.spacing = 4
+            header.identifier = .init("heading")
+            let list = NSStackView(views: stale.flatMap { appRows[$0] })
+            list.orientation = .vertical
+            list.alignment = .leading
+            list.spacing = 8
+            // Open when every app found is not used lately (the first run chooses Keep, and folded they would look
+            // like nothing was found), or when one of them is chosen.
+            let open = stale.count == apps.count || stale.contains { radios[$0 + 1] === selected }
+            disclosure.state = open ? .on : .off
+            list.isHidden = !open
+            staleList = list
+            rows += [header, list]
+        }
         rows.append(Self.wrapping("Reads files on this Mac only. Never changes the other app. Nothing leaves your Mac.", secondary: true, size: 11))
         let preview = NSButton(title: "Preview…", target: self, action: #selector(previewChosen))
         preview.keyEquivalent = "\r"
         let close = NSButton(title: firstRun ? "Keep Next Term’s Shortcuts" : "Close", target: self, action: #selector(closeWithoutImport))
         close.keyEquivalent = "\u{1b}"
         preview.isEnabled = !apps.isEmpty
-        layout(rows, buttons: [close, preview])
+        previewButton = preview
+        layout(rows, buttons: [close, preview], scrolls: apps.count > Self.appsShownWithoutScrolling)
         showWindow(nil)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         updatePreviewButton()
+    }
+
+    /// More apps than this, and the chooser scrolls.
+    static let appsShownWithoutScrolling = 7
+
+    /// The folded list of apps not used lately.
+    private var staleList: NSView?
+    private var previewButton: NSButton?
+
+    @objc private func toggleStaleList(_ sender: NSButton) {
+        staleList?.isHidden = sender.state != .on
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    /// "1.105.1  ·  used 3 days ago  ·  brings shortcuts, settings, fonts and colours", or "app removed" for an app
+    /// whose settings stayed behind.
+    static func detail(_ app: DetectedApp) -> String {
+        var parts: [String] = []
+        if app.appRemoved {
+            parts.append("app removed")
+        } else if let version = app.version {
+            parts.append(version)
+        }
+        if let used = used(app.lastUsed) { parts.append(used) }
+        parts.append("brings " + ImportContent.list(app.kind.canBring))
+        return parts.joined(separator: "  ·  ")
     }
 
     @objc private func radioChanged(_ sender: NSButton) {
@@ -315,8 +499,101 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     private func updatePreviewButton() {
         let chosen = radios.first { $0.state == .on }?.tag ?? -1
-        (window?.contentView?.subviews.compactMap { $0 as? NSStackView }.first?.arrangedSubviews.last as? NSStackView)?
-            .arrangedSubviews.compactMap { $0 as? NSButton }.first { $0.title == "Preview…" }?.isEnabled = chosen >= 0
+        previewButton?.isEnabled = chosen >= 0
+    }
+
+    /// An app's Import, at the end of its row: one click brings over what its preview ticks at first.
+    private func importButton(for index: Int, name: String) -> NSButton {
+        let button = NSButton(title: "Import", target: self, action: #selector(importApp(_:)))
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.tag = index
+        button.setAccessibilityLabel("Import from \(name)")
+        button.toolTip = "Brings over what Preview… ticks at first, in one click. Undo Import puts it all back."
+        return button
+    }
+
+    /// The app's radio button, and its Import at the row's end.
+    private static func appLine(_ radio: NSButton, importing button: NSButton) -> NSView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let line = NSStackView(views: [radio, spacer, button])
+        line.orientation = .horizontal
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.widthAnchor.constraint(equalToConstant: 512).isActive = true
+        return line
+    }
+
+    @objc private func importApp(_ sender: NSButton) {
+        guard apps.indices.contains(sender.tag) else { return }
+        importRecommended(from: apps[sender.tag])
+    }
+
+    /// What the preview ticks at first, for `source` settled as the preview settles it: the rows MCPImport.defaultTicks
+    /// names (the shortcut set when it differs from the one in use, each row the importer ticks, the recent projects not
+    /// listed yet). An agent's preview starts from the same rows.
+    static func recommended(_ source: ImportPlan) -> (plan: ImportPlan, choice: ImportChoice) {
+        let current = KeyboardShortcuts.shared.preset
+        let plan = settle(source, under: source.preset)
+        let projects = plan.recentProjects.filter { !AppDelegate.shared.recentProjects.contains($0) }
+        let ticks = MCPImport.defaultTicks(plan, currentPreset: current, newRecents: projects)
+        let ids = MCPImport.rowIDs(plan)
+        let settings = plan.settings.indices.filter { ticks.contains(ids.settings[$0]) }.map { plan.settings[$0] }
+        let shortcuts = plan.shortcuts.indices.filter { ticks.contains(ids.shortcuts[$0]) && plan.shortcuts[$0].allowed }
+            .map { plan.shortcuts[$0] }
+        let choice = ImportChoice(usePreset: ticks.contains(MCPImport.presetID), settings: settings, shortcuts: shortcuts,
+                                  recentProjects: ticks.contains(MCPImport.recentsID) ? projects : [])
+        return (plan, choice)
+    }
+
+    /// One click (an app's Import, here or in Settings › Import): the recommended rows applied, then the window says what
+    /// came over, with Undo Import. Not while an agent's request is open here: that comes to the front instead.
+    func importRecommended(from found: DetectedApp) {
+        guard agentAsk == nil else {
+            window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let source = ImportSources.plan(for: found)
+        let (plan, choice) = Self.recommended(source)
+        app = found
+        self.source = source
+        self.plan = plan
+        let snapshot = ImportCoordinator.count(choice, plan: plan) > 0
+            ? ImportCoordinator.shared.apply(choice, plan: plan, from: found.name) : nil
+        showImported(from: found, snapshot: snapshot, skipped: plan.skipped.count)
+    }
+
+    /// After one click: what came over (or that nothing would change), and Undo Import; Done closes the window.
+    private func showImported(from found: DetectedApp, snapshot: ImportSnapshot?, skipped: Int) {
+        var rows: [NSView] = []
+        if let snapshot {
+            rows.append(Self.label("Brought over from \(found.name)", size: 20, weight: .semibold))
+            rows.append(Self.wrapping(snapshot.summary.prefix(1).uppercased() + snapshot.summary.dropFirst() + "."))
+            rows.append(Self.wrapping("Undo Import puts all of it back, here or in Settings › Import.", secondary: true, size: 12))
+        } else {
+            rows.append(Self.label("Nothing to bring over from \(found.name)", size: 20, weight: .semibold))
+            rows.append(Self.wrapping("Next Term already has what \(found.name) would bring."))
+        }
+        if skipped > 0 {
+            rows.append(Self.wrapping("\(skipped) thing\(skipped == 1 ? " wasn’t" : "s weren’t") brought over: Preview… in Settings › Import "
+                                      + "lists each one and why.", secondary: true, size: 12))
+        }
+        let undo = NSButton(title: "Undo Import", target: self, action: #selector(undoImported))
+        undo.isHidden = snapshot == nil
+        let done = NSButton(title: "Done", target: self, action: #selector(doneImporting))
+        done.keyEquivalent = "\r"
+        importedUndoButton = undo
+        layout(rows, buttons: [undo, done])
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func doneImporting() { finish(with: plan) }
+
+    /// Undo straight after the import: nothing has changed since, so nothing needs naming first.
+    @objc private func undoImported() {
+        ImportCoordinator.shared.undo()
+        finish(with: nil)
     }
 
     @objc private func previewChosen() {
@@ -328,11 +605,47 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     /// The preview: every change with where it came from, each one a checkbox.
     func showPreview(for found: DetectedApp, plan given: ImportPlan? = nil) {
+        if agentAsk != nil {
+            window?.makeKeyAndOrderFront(nil)
+            return
+        }
         app = found
         source = given ?? ImportSources.plan(for: found)
         buildPreview(usePreset: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// An agent's request: the preview of `plan` with the rows it asked for ticked and the others unticked, under a
+    /// banner naming the agent. Shown in front without taking the keyboard, and Return never applies it.
+    func showAgentRequest(for found: DetectedApp, plan: ImportPlan, ask: AgentAsk) {
+        agentAsk = ask
+        completion = nil
+        app = found
+        source = plan
+        buildPreview(usePreset: ask.ticks.contains(MCPImport.presetID))
+        window?.center()
+        window?.orderFront(nil)
+        if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+    }
+
+    /// Ends an agent's request as a decline (no answer in time): the window closes.
+    func endAgentRequest() {
+        guard agentAsk != nil else { return }
+        closeWithoutImport()
+    }
+
+    /// The banner over an agent's request: who asks, in whose words, and what the user decides.
+    private func agentBanner(_ ask: AgentAsk, from name: String) -> [NSView] {
+        let who = ask.who.prefix(1).uppercased() + String(ask.who.dropFirst())
+        var views = [Self.wrapping("\(who) asks to bring these over from \(name). Only the rows you tick change, and only when you click Apply.")]
+        if let words = ask.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
+            let quote = Self.wrapping("The agent says: “\(String(words.prefix(500)))”", secondary: true, size: 12)
+            quote.toolTip = "These are the agent's words, not Next Term's."
+            views.append(quote)
+        }
+        for note in ask.notes { views.append(Self.wrapping(note, secondary: true, size: 12)) }
+        return views
     }
 
     /// The user's own shortcuts are checked against Next Term's as they will be: under the plan's preset
@@ -345,6 +658,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         self.plan = plan
         settingBoxes = []
         var rows: [NSView] = [Self.label("Bring over from \(found.name)", size: 20, weight: .semibold)]
+        let ask = agentAsk
+        if let ask { rows += agentBanner(ask, from: found.name) }
+        let ids = MCPImport.rowIDs(plan)
 
         // Shortcuts.
         if plan.preset != .nextTerm || current != .nextTerm {
@@ -353,6 +669,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
                                : "Use \(plan.preset.name) shortcuts (\(plan.preset.overrides.count) differ from Next Term’s)",
                                target: self, action: #selector(presetToggled))
             box.state = plan.preset != current && usePreset ? .on : .off
+            box.identifier = .init(MCPImport.presetID)
             box.isEnabled = plan.preset != current
             presetBox = box
             rows.append(box)
@@ -369,10 +686,12 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             rows.append(Self.heading("Your shortcuts (\(plan.shortcuts.count))"))
             let chords = KeyboardShortcuts.shared.chords(under: under)
             var list: [NSView] = []
-            for planned in plan.shortcuts {
+            for (index, planned) in plan.shortcuts.enumerated() {
                 let box = NSButton(checkboxWithTitle: Self.describe(planned, from: chords[planned.command] ?? nil),
                                    target: self, action: #selector(recount))
-                box.state = planned.ticked ? .on : .off
+                let ticked = ask.map { $0.ticks.contains(ids.shortcuts[index]) && planned.allowed } ?? planned.ticked
+                box.state = ticked ? .on : .off
+                box.identifier = .init(ids.shortcuts[index])
                 box.isEnabled = planned.allowed
                 shortcutBoxes.append((box, planned))
                 list.append(box)
@@ -403,9 +722,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         // Settings.
         if !plan.settings.isEmpty {
             rows.append(Self.heading("Settings"))
-            for planned in plan.settings {
+            for (index, planned) in plan.settings.enumerated() {
                 let box = NSButton(checkboxWithTitle: Self.describe(planned.setting), target: self, action: #selector(recount))
-                box.state = planned.ticked ? .on : .off
+                let ticked = ask.map { $0.ticks.contains(ids.settings[index]) } ?? planned.ticked
+                box.state = ticked ? .on : .off
+                box.identifier = .init(ids.settings[index])
                 settingBoxes.append((box, planned))
                 rows.append(box)
                 if case .terminalPalette(let palette) = planned.setting { rows.append(Self.swatches(palette)) }
@@ -420,7 +741,9 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             rows.append(Self.heading("Recent projects"))
             let box = NSButton(checkboxWithTitle: "Add \(projects.count) recent project\(projects.count == 1 ? "" : "s") to Open Recent and the Welcome window",
                                target: self, action: #selector(recount))
-            box.state = .on
+            let recentsTicked = ask.map { $0.ticks.contains(MCPImport.recentsID) } ?? true
+            box.state = recentsTicked ? .on : .off
+            box.identifier = .init(MCPImport.recentsID)
             recentsBox = box
             rows.append(box)
             let names = projects.prefix(8).map { RecentProjects.abbreviate($0) }.joined(separator: "\n")
@@ -446,11 +769,18 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(closeWithoutImport))
-        cancel.keyEquivalent = "\u{1b}"
         let apply = NSButton(title: "Apply", target: self, action: #selector(applyChosen))
-        apply.keyEquivalent = "\r"
         applyButton = apply
-        layout(rows, buttons: [cancel, apply], scrolls: true)
+        if ask != nil {
+            // An agent asks at a moment of its own choosing: no key answers it, and only a click applies.
+            apply.refusesFirstResponder = true
+            let stop = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
+            layout(rows, buttons: [stop, cancel, apply], scrolls: true)
+        } else {
+            cancel.keyEquivalent = "\u{1b}"
+            apply.keyEquivalent = "\r"
+            layout(rows, buttons: [cancel, apply], scrolls: true)
+        }
         recount()
     }
 
@@ -486,10 +816,11 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     private var choice: ImportChoice {
         let projects = plan?.recentProjects.filter { !AppDelegate.shared.recentProjects.contains($0) } ?? []
-        return ImportChoice(usePreset: presetBox?.isEnabled == true && presetBox?.state == .on,
-                            settings: settingBoxes.filter { $0.0.state == .on }.map(\.1),
-                            shortcuts: shortcutBoxes.filter { $0.0.state == .on && $0.1.allowed }.map(\.1),
-                            recentProjects: recentsBox?.state == .on ? projects : [])
+        let usePreset = presetBox?.isEnabled == true && presetBox?.state == .on
+        let settings: [PlannedSetting] = settingBoxes.filter { $0.0.state == .on }.map(\.1)
+        let shortcuts: [PlannedShortcut] = shortcutBoxes.filter { $0.0.state == .on && $0.1.allowed }.map(\.1)
+        let recents: [String] = recentsBox?.state == .on ? projects : []
+        return ImportChoice(usePreset: usePreset, settings: settings, shortcuts: shortcuts, recentProjects: recents)
     }
 
     @objc private func recount() {
@@ -503,21 +834,58 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func applyChosen() {
         guard let plan, let app else { return }
-        ImportCoordinator.shared.apply(choice, plan: plan, from: app.name)
+        let ticked = tickedIDs
+        let replaced = ImportCoordinator.shared.last
+        let snapshot = ImportCoordinator.shared.apply(choice, plan: plan, from: app.name)
+        if let ask = agentAsk {
+            agentAsk = nil
+            ask.answered(.applied(ticked: ticked, snapshot: snapshot, replaced: snapshot == nil ? nil : replaced))
+        }
         finish(with: plan)
+    }
+
+    /// The ids of the rows ticked now (MCPImport's), for an agent's answer.
+    var tickedIDs: Set<String> {
+        guard let plan else { return [] }
+        let ids = MCPImport.rowIDs(plan)
+        var ticked = Set<String>()
+        if presetBox?.isEnabled == true, presetBox?.state == .on { ticked.insert(MCPImport.presetID) }
+        for (index, entry) in settingBoxes.enumerated() where entry.0.state == .on { ticked.insert(ids.settings[index]) }
+        for (index, entry) in shortcutBoxes.enumerated() where entry.0.state == .on && entry.1.allowed { ticked.insert(ids.shortcuts[index]) }
+        if recentsBox?.state == .on { ticked.insert(MCPImport.recentsID) }
+        return ticked
+    }
+
+    @objc private func declineAndStop() { declineAgent(stopAsking: true) }
+
+    /// Answers an agent's request as declined, once.
+    private func declineAgent(stopAsking: Bool) {
+        if let ask = agentAsk {
+            agentAsk = nil
+            ask.answered(.declined(stopAsking: stopAsking))
+        }
+        finish(with: nil)
     }
 
     @objc private func copySkipped() {
         guard let plan else { return }
-        var text = "Next Term imported settings from \(app?.name ?? "another app"). These were not brought over; help me with them if Next Term has a way:\n"
+        let name = app?.name ?? "another app"
+        var text = "Next Term imported settings from \(name). These were not brought over; help me with them if Next Term has a way. "
+            + "Next Term's MCP tools list_import_sources, preview_import and apply_import show and ask for the same rows: use them rather than "
+            + "reading \(name)'s own files, which sit next to tokens.\n"
         text += plan.skipped.map { "- \($0.item): \($0.reason)" }.joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    @objc private func closeWithoutImport() { finish(with: nil) }
+    @objc private func closeWithoutImport() { declineAgent(stopAsking: false) }
 
     func windowWillClose(_ notification: Notification) {
+        // Closing an agent's request is a decline.
+        if let ask = agentAsk {
+            agentAsk = nil
+            ask.answered(.declined(stopAsking: false))
+        }
         let done = completion
         completion = nil
         done?(nil)
@@ -532,7 +900,26 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
 
     /// For the self-test: tick state and apply.
     var applyTitle: String { applyButton?.title ?? "" }
+    /// For the self-test: the app chosen in the chooser, and whether the apps not used lately are shown.
+    var chosenTitle: String? { radios.first { $0.state == .on }?.title }
+    var staleListIsOpen: Bool { staleList?.isHidden == false }
     func applyForTest() { applyChosen() }
+    /// For the self-test: the Import buttons on the chooser's rows, and the one-click result's Undo Import.
+    var importButtons: [NSButton] {
+        func find(_ view: NSView) -> [NSButton] {
+            ((view as? NSButton).map { $0.action == #selector(importApp(_:)) ? [$0] : [] } ?? []) + view.subviews.flatMap(find)
+        }
+        return window?.contentView.map(find) ?? []
+    }
+    var undoImportedButton: NSButton? { importedUndoButton }
+    /// For the self-test: a shortcut row's note and tick, and ticking it as a click does.
+    func shortcutRow(for command: String) -> (note: String?, ticked: Bool)? {
+        shortcutBoxes.first { $0.1.command == command }.map { ($0.1.note, $0.0.state == .on) }
+    }
+    func tickShortcutForTest(_ command: String) {
+        shortcutBoxes.first { $0.1.command == command }?.0.state = .on
+        recount()
+    }
 
     // MARK: layout
 
@@ -541,7 +928,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        for (i, row) in rows.enumerated() where i > 0 && (row.identifier?.rawValue == "heading") {
+        for (i, row) in rows.enumerated() where i > 0 && ["heading", "spaced"].contains(row.identifier?.rawValue) {
             stack.setCustomSpacing(16, after: rows[i - 1])
         }
         stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 16, right: 24)
@@ -586,7 +973,17 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         ])
         if !scrolls { stack.widthAnchor.constraint(equalToConstant: 560).isActive = true }
         window?.contentView = content
-        if scrolls { window?.setContentSize(NSSize(width: 560, height: 560)) } else { content.layoutSubtreeIfNeeded() }
+        if scrolls { window?.setContentSize(NSSize(width: 560, height: 560)) } else { fitHeight(content) }
+    }
+
+    /// The window as tall as what it shows, its top edge where it was: a short page (the chooser with one app, what one
+    /// click brought over) after a long one keeps no empty space.
+    private func fitHeight(_ content: NSView) {
+        content.layoutSubtreeIfNeeded()
+        guard let window else { return }
+        let fitting = content.fittingSize
+        let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: NSSize(width: max(fitting.width, 560), height: fitting.height)))
+        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - frame.height, width: frame.width, height: frame.height), display: true)
     }
 
     private static func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular) -> NSTextField {
@@ -642,15 +1039,17 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         return box
     }
 
-    private static func used(_ date: Date?) -> String {
-        guard let date else { return "" }
+    /// "used 3 days ago" (nil: no date).
+    static func used(_ date: Date?) -> String? {
+        guard let date else { return nil }
         let days = Int(Date().timeIntervalSince(date) / 86400)
         switch days {
-        case ..<1: return "  ·  used today"
-        case 1: return "  ·  used yesterday"
-        case 2..<14: return "  ·  used \(days) days ago"
-        case 14..<60: return "  ·  used \(days / 7) weeks ago"
-        default: return "  ·  used \(days / 30) months ago"
+        case ..<1: return "used today"
+        case 1: return "used yesterday"
+        case 2..<14: return "used \(days) days ago"
+        case 14..<60: return "used \(days / 7) weeks ago"
+        case 60..<730: return "used \(days / 30) months ago"
+        default: return "used \(days / 365) years ago"
         }
     }
 
@@ -678,7 +1077,8 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     static func describe(_ setting: ImportedSetting) -> String {
         let app = AppDelegate.shared!
         switch setting {
-        case .fontSize(let size): return "Font size \(Int(app.fontSize)) → \(Int(size)) pt"
+        case .fontSize(let size): return "Editor font size \(Int(app.fontSize)) → \(Int(size)) pt"
+        case .terminalFontSize(let size): return "Terminal font size \(Int(app.terminalFontSize)) → \(Int(size)) pt"
         case .editorLineHeight(let factor): return String(format: "Line height %.2f× → %.2f×", app.editorLineHeight, factor)
         case .softWrap(let on): return on ? "Wrap long lines" : "Don’t wrap long lines"
         case .optionAsMeta(let on): return on ? "Use Option as Meta in the terminal" : "Option types special characters"
@@ -701,7 +1101,34 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         case .trimTrailingWhitespace(let on): return on ? "Trim trailing spaces on save" : "Don’t trim trailing spaces on save"
         case .insertFinalNewline(let on): return on ? "End files with a newline on save" : "Don’t add a final newline on save"
         case .hiddenFiles(let patterns): return "Hide in the project sidebar: " + FileHiding.text(of: patterns)
+        default: return describeWindowSetting(setting)
         }
+    }
+
+    static func describeWindowSetting(_ setting: ImportedSetting) -> String {
+        switch setting {
+        case .sidebarSingleClick(let on):
+            return on ? "Open files with a single click, in a preview tab" : "Open files with a double click"
+        case .backgroundFetch(let raw):
+            let frequency = FetchFrequency(rawValue: raw) ?? .standard
+            return "Fetch in the background: " + lowerFirst(frequency.title)
+        case .diffLayout(let raw): return raw == "unified" ? "Show diffs in one column (Unified Diffs)" : "Show diffs side by side"
+        case .currentLineBlame(let on): return on ? "Show the current line’s last commit (Current Line Blame)" : "Don’t show the current line’s last commit"
+        case .openProjectsIn(let raw):
+            switch raw {
+            case "newWindow": return "Open projects in a new window"
+            case "thisWindow": return "Open projects in the window in use"
+            default: return "Ask where to open projects"
+            }
+        case .launchOpens(let raw): return "At launch: " + lowerFirst((LaunchOpens(rawValue: raw) ?? .standard).title)
+        default: return ""
+        }
+    }
+
+    /// "Every 5 minutes" → "every 5 minutes", leaving the rest ("the Welcome window") as it is.
+    static func lowerFirst(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return first.lowercased() + String(text.dropFirst())
     }
 
     static func startFolderTitle(_ folder: StartFolder) -> String {
@@ -792,7 +1219,17 @@ final class ImportSettingsView: NSView {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.tag = index
-            let row = NSStackView(views: [NSTextField(labelWithString: app.name), button])
+            var tags: [String] = []
+            if app.appRemoved { tags.append("app removed") }
+            if app.notUsedLately { tags.append("not used lately") }
+            let name = NSTextField(labelWithString: ([app.name] + tags).joined(separator: "  ·  "))
+            let importing = NSButton(title: "Import", target: self, action: #selector(importApp(_:)))
+            importing.bezelStyle = .rounded
+            importing.controlSize = .small
+            importing.tag = index
+            importing.setAccessibilityLabel("Import from \(app.name)")
+            importing.toolTip = "Brings over what Preview… ticks at first, in one click. Undo Import puts it all back."
+            let row = NSStackView(views: [name, button, importing])
             appsStack.addArrangedSubview(row)
         }
         if let last = ImportCoordinator.shared.last {
@@ -817,10 +1254,17 @@ final class ImportSettingsView: NSView {
         ImportWindowController.shared.showPreview(for: apps[sender.tag])
     }
 
+    /// One click, as on the import window's rows.
+    @objc private func importApp(_ sender: NSButton) {
+        let apps = ImportSources.detect()
+        guard apps.indices.contains(sender.tag) else { return }
+        ImportWindowController.shared.importRecommended(from: apps[sender.tag])
+    }
+
     @objc private func undo() {
         let alert = NSAlert()
         alert.messageText = "Undo the import?"
-        alert.informativeText = "The shortcuts, settings and recent projects it changed go back to what they were before."
+        alert.informativeText = ImportCoordinator.undoMessage(changedSince: ImportCoordinator.shared.changedSinceImport())
         alert.addButton(withTitle: "Undo Import")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

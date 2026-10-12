@@ -1,0 +1,12 @@
+// Trae's settings: VS Code's format.
+{
+	"editor.fontSize": 14,
+	"editor.wordWrap": "on",
+	"terminal.integrated.env.osx": {
+		"OPENAI_API_KEY": "eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU"
+	},
+	"vim.useSystemClipboard": true,
+	"vim.leader": "<space>",
+	"vim.hlsearch": true,
+	"workbench.colorTheme": "Dark Modern",
+}

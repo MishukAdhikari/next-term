@@ -20,6 +20,92 @@ extension SelfTest {
         }
     }
 
+    /// The Notifications menu: Settings › Notifications in the menu bar. Each switch shows its checkmark and flips the
+    /// saved choice, a choice in a submenu is the one checked, and Settings › Notifications shows what the menu chose.
+    static func notificationsMenuChecks() {
+        let restore = defaultNotificationSettings()
+        defer { restore() }
+        guard let menu = NSApp.mainMenu?.items.first(where: { $0.title == "Notifications" })?.submenu else {
+            return check(false, "notifications menu: Notifications is in the menu bar, after Git", NSApp.mainMenu?.items.map(\.title).joined(separator: ", ") ?? "no menu")
+        }
+        let bar = NSApp.mainMenu?.items.map(\.title) ?? []
+        check(bar.firstIndex(of: "Notifications").map { bar[safe: $0 - 1] == "Git" && bar[safe: $0 + 1] == "Window" } == true,
+              "notifications menu: Notifications is in the menu bar, between Git and Window", bar.joined(separator: ", "))
+        let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
+        check(titles == ["When an Agent Needs Your Decision", "When an Agent Finishes", "When a Command Finishes or Fails", "Only for Work That Took at Least",
+                         "A Program’s Own Bell or Notification", "Play a Sound", "—", "Send Test Notification", "Notification Settings…"],
+              "notifications menu: the choices of Settings › Notifications, then Send Test Notification and Notification Settings…", titles.joined(separator: " | "))
+        let shared = NotificationsMenu.shared
+        func item(_ title: String, in menu: NSMenu) -> NSMenuItem? { menu.items.first { $0.title == title } }
+        func checked(_ item: NSMenuItem?) -> Bool {
+            guard let item else { return false }
+            _ = shared.validateMenuItem(item)
+            return item.state == .on
+        }
+        let finishes = item("When an Agent Finishes", in: menu)
+        check(checked(finishes), "notifications menu: When an Agent Finishes is checked by default")
+        finishes.map { NSApp.sendAction($0.action!, to: $0.target, from: $0) }
+        check(!checked(finishes) && NotificationSettings(defaults: .standard).agentFinished == false,
+              "notifications menu: choosing it turns it off, saved as Settings saves it")
+        let commands = item("When a Command Finishes or Fails", in: menu)?.submenu
+        let never = commands.flatMap { item("Never", in: $0) }
+        never.map { NSApp.sendAction($0.action!, to: $0.target, from: $0) }
+        let inAnotherApp = commands.flatMap { item("Only When I’m in Another App", in: $0) }
+        check(checked(never) && !checked(inAnotherApp) && NotificationSettings(defaults: .standard).commands == .never,
+              "notifications menu: a command choice in its submenu is the one checked, and saved")
+        let threshold = item("Only for Work That Took at Least", in: menu)?.submenu
+        let minute = threshold.flatMap { item("1 minute", in: $0) }
+        minute.map { NSApp.sendAction($0.action!, to: $0.target, from: $0) }
+        check(checked(minute) && NotificationSettings(defaults: .standard).threshold == .oneMinute, "notifications menu: the time choice too")
+        let pane = NotificationSettingsView()
+        check(pane.agentFinished.state == .off && pane.commands.indexOfSelectedItem == CommandNotifications.allCases.firstIndex(of: .never),
+              "notifications menu: Settings › Notifications shows what the menu chose")
+        finishes.map { NSApp.sendAction($0.action!, to: $0.target, from: $0) }
+        check(pane.agentFinished.state == .on, "notifications menu: and follows it while open")
+    }
+
+    /// View › Agent Spinner: Spinning turns the blue ring, Still keeps it put, Off hides it (and a split tab's other
+    /// pane's cross shows instead); Settings › Notifications and the menu's checkmark follow; an agent's spinner frame
+    /// leaves the title unless the ring turns. Only the terminal tab's mark: the done, failed and attention marks stay.
+    static func agentSpinnerChecks() {
+        let saved = UserDefaults.standard.string(forKey: AgentSpinner.key)
+        AgentSpinner.reducesMotionOverride = false
+        defer {
+            AgentSpinner.reducesMotionOverride = nil
+            if let saved { UserDefaults.standard.set(saved, forKey: AgentSpinner.key) } else { UserDefaults.standard.removeObject(forKey: AgentSpinner.key) }
+            NotificationCenter.default.post(name: AgentSpinner.changed, object: nil)
+        }
+        let dot = StatusDotView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        dot.state = .working
+        let pane = NotificationSettingsView()
+        let item = NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu?.items.first { $0.title == "Agent Spinner" }?.submenu
+        check(item?.items.map(\.title) == ["Spinning", "Still", "Off"], "agent spinner: View › Agent Spinner has Spinning, Still and Off",
+              item?.items.map(\.title).joined(separator: ", ") ?? "no menu")
+        AgentSpinner.current = .spinning
+        check(dot.ringShows && dot.ringTurns, "agent spinner: Spinning, the working ring turns")
+        check(AgentSpinner.shown("⠋ Fixing") == "⠋ Fixing", "agent spinner: Spinning, the agent's own title is as it sends it")
+        if let still = item?.items.first(where: { $0.title == "Still" }) { NSApp.sendAction(still.action!, to: still.target, from: still) }
+        check(dot.ringShows && !dot.ringTurns && pane.spinner.titleOfSelectedItem == "Still",
+              "agent spinner: Still, the ring stays put, and Settings › Notifications shows it", pane.spinner.titleOfSelectedItem ?? "none")
+        check(AgentSpinner.shown("⠋ Fixing") == "Fixing", "agent spinner: Still, the agent's spinner frame leaves the tab's title")
+        if let still = item?.items.first(where: { $0.title == "Still" }) {
+            _ = AppDelegate.shared.validateMenuItem(still)
+            check(still.state == .on, "agent spinner: the menu checks the choice")
+        }
+        pane.spinner.selectItem(withTitle: "Off")
+        pane.spinner.sendAction(pane.spinner.action, to: pane.spinner.target)
+        check(AgentSpinner.current == .off && !dot.ringShows, "agent spinner: Off from Settings, no ring")
+        check(TerminalWindowController.mostUrgent([.working, .failed]) == .failed && TerminalWindowController.mostUrgent([.working, .attention]) == .attention,
+              "agent spinner: Off, a split tab shows another pane's cross rather than nothing")
+        check(StatusDotView.shows(.failed) && StatusDotView.shows(.attention) && !StatusDotView.shows(.working),
+              "agent spinner: Off hides only the working ring; done, failed and attention still show")
+        AgentSpinner.current = .spinning
+        AgentSpinner.reducesMotionOverride = true
+        NotificationCenter.default.post(name: AgentSpinner.changed, object: nil)
+        check(dot.ringShows && !dot.ringTurns, "agent spinner: Reduce Motion keeps Spinning still, at once")
+        check(TerminalWindowController.mostUrgent([.working, .failed]) == .working, "agent spinner: shown, working ranks before failed as before")
+    }
+
     static func notificationChecks(_ c: TerminalWindowController) async {
         guard let app = AppDelegate.shared else { return }
         let defaults = UserDefaults.standard

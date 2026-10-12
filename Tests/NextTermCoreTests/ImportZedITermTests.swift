@@ -35,7 +35,7 @@ import Testing
     func zedHome(settings: String) throws -> (home: String, app: DetectedApp) {
         let home = try home()
         try write(settings, to: home + "/.config/zed/settings.json")
-        let apps = ImportZed.detect(home: home)
+        let apps = ImportZed.detect(home: home, applications: [])
         try #require(apps.count == 1)
         return (home, apps[0])
     }
@@ -43,17 +43,17 @@ import Testing
     @Test func zedDetection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportZed.detect(home: home).isEmpty)
+        #expect(ImportZed.detect(home: home, applications: []).isEmpty)
 
         // A folder where the file should be is not a settings file.
         try FileManager.default.createDirectory(atPath: home + "/.config/zed/settings.json", withIntermediateDirectories: true)
-        #expect(ImportZed.detect(home: home).isEmpty)
+        #expect(ImportZed.detect(home: home, applications: []).isEmpty)
         try FileManager.default.removeItem(atPath: home + "/.config/zed/settings.json")
 
         // Detection only looks at dates: a file that isn't even valid JSON is still found.
         let edited = Date(timeIntervalSince1970: 1_790_000_000)
         try write("{ not json", to: home + "/.config/zed/settings.json", date: edited)
-        let app = try #require(ImportZed.detect(home: home).first)
+        let app = try #require(ImportZed.detect(home: home, applications: []).first)
         #expect(app.kind == .zed && app.name == "Zed")
         #expect(app.configPath == home + "/.config/zed")
         #expect(app.lastUsed == edited)
@@ -64,7 +64,7 @@ import Testing
         try write("", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite", date: Date(timeIntervalSince1970: 1_780_000_000))
         try write("", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite-wal", date: ran)
         try write("", to: home + "/Library/Application Support/Zed/db/other/db.sqlite", date: Date(timeIntervalSince1970: 1_799_000_000))
-        #expect(ImportZed.detect(home: home).first?.lastUsed == ran)
+        #expect(ImportZed.detect(home: home, applications: []).first?.lastUsed == ran)
     }
 
     @Test func zedBaseKeymapPicksThePreset() throws {
@@ -159,6 +159,7 @@ import Testing
         // The settings Next Term has too come over; the font isn't installed.
         #expect(plan.settings == [
             PlannedSetting(.fontSize(15), source: "buffer_font_size 15"),
+            PlannedSetting(.terminalFontSize(13), source: "terminal.font_size 13"),
             PlannedSetting(.editorLineHeight(1.4), source: "buffer_line_height 1.7"),
             PlannedSetting(.softWrap(true), source: "soft_wrap editor_width"),
             PlannedSetting(.optionAsMeta(true), source: "terminal.option_as_meta true"),
@@ -171,7 +172,6 @@ import Testing
         let expected: [String: String] = [
             "vim_mode": "Next Term has no Vim mode",
             "Editor font “Berkeley Mono”": "not installed on this Mac",
-            "terminal.font_size 13": "Next Term uses one size for the editor and the terminal, so the buffer's 15 is used",
             "ui_font_size": "Next Term's window text follows macOS",
             "theme": "colour themes come later",
             "terminal.shell": "never imported: can hold secrets",
@@ -198,7 +198,7 @@ import Testing
             defer { try? FileManager.default.removeItem(atPath: home) }
             try write(settings, to: home + "/.config/zed/settings.json")
             try FileManager.default.createDirectory(atPath: home + "/Code", withIntermediateDirectories: true)
-            let app = try #require(ImportZed.detect(home: home).first)
+            let app = try #require(ImportZed.detect(home: home, applications: []).first)
             return ImportZed.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
         }
         func settings(_ text: String) throws -> [ImportedSetting] { try plan(text).settings.map(\.setting) }
@@ -212,10 +212,9 @@ import Testing
         let column = try plan(#"{"soft_wrap": "preferred_line_length"}"#)
         #expect(column.settings.map(\.setting) == [.softWrap(true)])
         #expect(reasons(column)["soft_wrap preferred_line_length"] == "Next Term wraps at the window edge; a wrap column isn't supported")
-        // The terminal's size alone sets the one size.
+        // The terminal's size is the terminal's own.
         let terminalSize = try plan(#"{"terminal": {"font_size": 40}}"#).settings
-        #expect(terminalSize == [PlannedSetting(.fontSize(32), source: "terminal.font_size 40",
-                                                note: "Next Term's sizes go from 8 to 32; sets the editor too: Next Term has one size for both")])
+        #expect(terminalSize == [PlannedSetting(.terminalFontSize(32), source: "terminal.font_size 40", note: "Next Term's sizes go from 8 to 32")])
         // Option as Meta waits for a tick off a U.S. layout.
         #expect(try plan(#"{"terminal": {"option_as_meta": true}}"#, usKeyboard: false).settings.first?.ticked == false)
 
@@ -310,7 +309,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         let settings = home + "/.config/zed/settings.json"
         try write("{}", to: settings)
-        let app = try #require(ImportZed.detect(home: home).first)
+        let app = try #require(ImportZed.detect(home: home, applications: []).first)
 
         func plan(_ text: String?) throws -> ImportPlan {
             try? FileManager.default.removeItem(atPath: settings)
@@ -345,7 +344,7 @@ import Testing
         // A named pipe is never opened (opening one waits for a writer).
         try FileManager.default.removeItem(atPath: settings)
         #expect(mkfifo(settings, 0o600) == 0)
-        #expect(ImportZed.detect(home: home).isEmpty)
+        #expect(ImportZed.detect(home: home, applications: []).isEmpty)
         #expect(reasons(ImportZed.plan(for: app, home: home))["settings.json"] == "couldn't be read, so no settings came over")
 
         // Another app's entry gets nothing from the Zed reader.
@@ -389,10 +388,10 @@ import Testing
         try write("[{ \"bindings\": ", to: keymap)
         #expect(reasons(ImportZed.plan(for: app, home: home)) == ["keymap.json": "couldn't be read as JSON; your shortcuts were skipped"])
 
-        // Recents are Phase 2b: the database is only noticed, never opened.
+        // A database that can't be read is said so (ImportZedRecentsTests reads real ones).
         try write("not a database", to: home + "/Library/Application Support/Zed/db/0-stable/db.sqlite")
         plan = ImportZed.plan(for: app, home: home)
-        #expect(reasons(plan)["recent projects"] == "Zed's recent projects come in a later version")
+        #expect(reasons(plan)["recent projects"] == "couldn't be read; quit Zed and try again")
         #expect(plan.recentProjects.isEmpty)
     }
 
@@ -455,7 +454,7 @@ import Testing
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
         _ = try writePlist(root, home: home, format: format)
-        let app = try #require(ImportITerm2.detect(home: home).first)
+        let app = try #require(ImportITerm2.detect(home: home, applications: []).first)
         return ImportITerm2.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
     }
 
@@ -471,15 +470,15 @@ import Testing
     @Test func iTermDetection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportITerm2.detect(home: home).isEmpty)
+        #expect(ImportITerm2.detect(home: home, applications: []).isEmpty)
         try FileManager.default.createDirectory(atPath: home + plistPath, withIntermediateDirectories: true)
-        #expect(ImportITerm2.detect(home: home).isEmpty, "a folder is not the preferences file")
+        #expect(ImportITerm2.detect(home: home, applications: []).isEmpty, "a folder is not the preferences file")
         try FileManager.default.removeItem(atPath: home + plistPath)
 
         let used = Date(timeIntervalSince1970: 1_790_500_000)
         let path = try writePlist(preferences([profile(guid: "A")], defaultGuid: "A"), home: home, date: used)
-        #expect(ImportITerm2.detect(home: home) == [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: used)])
-        #expect(ImportITerm2.detect(home: home).first?.preset == .nextTerm)
+        #expect(ImportITerm2.detect(home: home, applications: []) == [DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: path, lastUsed: used)])
+        #expect(ImportITerm2.detect(home: home, applications: []).first?.preset == .nextTerm)
     }
 
     @Test func iTermUsesTheDefaultProfile() throws {
@@ -489,8 +488,7 @@ import Testing
             let plan = try iTermPlan(root, format: format)
             #expect(plan.preset == .nextTerm)
             #expect(plan.settings == [
-                PlannedSetting(.fontSize(14), source: "Normal Font JetBrainsMono-Regular 14",
-                               note: "sets the editor too: Next Term has one size for both"),
+                PlannedSetting(.terminalFontSize(14), source: "Normal Font JetBrainsMono-Regular 14"),
                 PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "Normal Font JetBrainsMono-Regular"),
                 PlannedSetting(.optionAsMeta(true), source: "Option Key Sends Esc+, Right Option Key Sends Esc+"),
                 PlannedSetting(.terminalPalette(fixtureColours), source: "the default profile's colours",
@@ -507,7 +505,7 @@ import Testing
         for guid in [nil, "gone"] as [String?] {
             let plan = try iTermPlan(preferences([profile(guid: "A", font: "Menlo 11"), profile(guid: "B", font: "Monaco 15")],
                                                  defaultGuid: guid))
-            #expect(plan.settings.first?.setting == .fontSize(11))
+            #expect(plan.settings.first?.setting == .terminalFontSize(11))
         }
     }
 
@@ -518,16 +516,16 @@ import Testing
             profile.normalFont = font
             return (ImportITerm2.fontSize(profile, skipped: &skipped), skipped)
         }
-        #expect(plan("Monaco 12").0?.setting == .fontSize(12))
-        #expect(plan("SFMono-Regular 13.5").0?.setting == .fontSize(14))
-        #expect(plan("Menlo-Regular 11.0").0?.setting == .fontSize(11))
+        #expect(plan("Monaco 12").0?.setting == .terminalFontSize(12))
+        #expect(plan("SFMono-Regular 13.5").0?.setting == .terminalFontSize(14))
+        #expect(plan("Menlo-Regular 11.0").0?.setting == .terminalFontSize(11))
         #expect(plan("Fira Code Retina 16").1.isEmpty) // the font itself: iTermFontFamily
 
         let big = plan("Menlo 40")
-        #expect(big.0?.setting == .fontSize(32))
-        #expect(big.0?.note == "iTerm2 has 40; Next Term's sizes go from 8 to 32, so 32; sets the editor too: Next Term has one size for both")
+        #expect(big.0?.setting == .terminalFontSize(32))
+        #expect(big.0?.note == "iTerm2 has 40; Next Term's sizes go from 8 to 32, so 32")
         #expect(big.0?.ticked == true)
-        #expect(plan("Menlo 6.5").0?.setting == .fontSize(8))
+        #expect(plan("Menlo 6.5").0?.setting == .terminalFontSize(8))
 
         // No size, or no font at all: no row.
         #expect(plan("Monaco").0 == nil)
@@ -729,7 +727,7 @@ import Testing
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
         let path = try writePlist(preferences([], defaultGuid: nil), home: home)
-        let app = try #require(ImportITerm2.detect(home: home).first)
+        let app = try #require(ImportITerm2.detect(home: home, applications: []).first)
         let unreadable = SkippedItem("com.googlecode.iterm2.plist", "couldn't be read, so no settings came over")
 
         // No profile saved yet (a fresh iTerm2 keeps its default profile built in).
@@ -740,7 +738,7 @@ import Testing
 
         // Profiles that aren't dictionaries are passed over.
         _ = try writePlist(preferences([], defaultGuid: "B", extra: ["New Bookmarks": ["junk", 3, profile(guid: "B", font: "Monaco 13")] as [Any]]), home: home)
-        #expect(ImportITerm2.plan(for: app, home: home).settings.first?.setting == .fontSize(13))
+        #expect(ImportITerm2.plan(for: app, home: home).settings.first?.setting == .terminalFontSize(13))
 
         // Not a plist, a plist that isn't a dictionary, an empty file, a missing file.
         for contents in [Data("not a plist".utf8), try PropertyListSerialization.data(fromPropertyList: ["a"], format: .binary, options: 0), Data()] {
@@ -753,7 +751,7 @@ import Testing
 
         // A named pipe is never opened.
         #expect(mkfifo(path, 0o600) == 0)
-        #expect(ImportITerm2.detect(home: home).isEmpty)
+        #expect(ImportITerm2.detect(home: home, applications: []).isEmpty)
         #expect(ImportITerm2.plan(for: app, home: home) == ImportPlan(preset: .nextTerm, skipped: [unreadable, paneNote]))
 
         // Another app's entry gets nothing from the iTerm2 reader.

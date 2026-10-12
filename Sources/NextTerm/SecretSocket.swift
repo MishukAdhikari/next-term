@@ -22,9 +22,8 @@ enum SecretSocket {
     /// How many parents are walked to find the agent above a wrapper.
     static let parentsWalked = 20
 
-    /// Serves one wrapper's request on the serve thread, then closes `fd`.
+    /// Serves one wrapper's request on the serve thread. The MCP server's call closes `fd` when this returns, once.
     static func handle(fd: Int32, arguments: [String: Any], peer: pid_t?, auditToken token: audit_token_t?) {
-        defer { close(fd) }
         var noSigPipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         guard let token, let pid = peer, PeerCode.pid(token) == pid, PeerCode.current.isThisProgram(auditToken: token) else {

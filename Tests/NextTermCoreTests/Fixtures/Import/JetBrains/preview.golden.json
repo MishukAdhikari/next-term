@@ -1,0 +1,192 @@
+{
+  "Android Studio 2025.3.4" : {
+    "changes_if_applied" : 12,
+    "not_brought_over" : [
+
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "options/terminal-font.xml FONT_SIZE 12",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 11,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "JetBrains (macOS)"
+    },
+    "source" : "Android Studio 2025.3.4",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "GoLand 2025.2" : {
+    "changes_if_applied" : 12,
+    "not_brought_over" : [
+
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "options/editor-font.xml FONT_SIZE 15",
+        "id" : "set:fontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "fontSize title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 11,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "JetBrains (macOS)"
+    },
+    "source" : "GoLand 2025.2",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "PhpStorm 2026.1" : {
+    "changes_if_applied" : 15,
+    "not_brought_over" : [
+      {
+        "item" : "Keymap “Escaped”",
+        "reason" : "the JetBrains preset follows JetBrains' macOS keymap, so some keys differ from this one"
+      },
+      {
+        "item" : "1 ignored file name",
+        "reason" : "looked like a credential"
+      },
+      {
+        "item" : "1 ignored file name",
+        "reason" : "not a name the sidebar can hide"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "options/editor.xml IS_ENSURE_NEWLINE_AT_EOF true",
+        "id" : "set:insertFinalNewline",
+        "note" : null,
+        "ticked" : true,
+        "title" : "insertFinalNewline title"
+      },
+      {
+        "from" : "options/filetypes.xml ignored files",
+        "id" : "set:hiddenFilePatterns",
+        "note" : null,
+        "ticked" : true,
+        "title" : "hiddenFilePatterns title"
+      },
+      {
+        "from" : "options/ide.general.xml reopenLastProject false",
+        "id" : "set:launchOpens",
+        "note" : null,
+        "ticked" : true,
+        "title" : "launchOpens title"
+      },
+      {
+        "from" : "options/ide.general.xml confirmOpenNewProject2 0",
+        "id" : "set:openProjectsIn",
+        "note" : null,
+        "ticked" : true,
+        "title" : "openProjectsIn title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 11,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "JetBrains (macOS)"
+    },
+    "source" : "PhpStorm 2026.1",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "RubyMine 2025.1" : {
+    "changes_if_applied" : 12,
+    "not_brought_over" : [
+      {
+        "item" : "idea.config.path in idea.properties",
+        "reason" : "uses a variable; only a full path or ${user.home} is read, so the settings here were read"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "options/editor.xml USE_SOFT_WRAPS MAIN_EDITOR",
+        "id" : "set:softWrap",
+        "note" : null,
+        "ticked" : true,
+        "title" : "softWrap title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 11,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "JetBrains (macOS)"
+    },
+    "source" : "RubyMine 2025.1",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "WebStorm 2024.2" : {
+    "changes_if_applied" : 12,
+    "not_brought_over" : [
+
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "options/editor.xml STRIP_TRAILING_SPACES Whole",
+        "id" : "set:trimTrailingWhitespace",
+        "note" : null,
+        "ticked" : true,
+        "title" : "trimTrailingWhitespace title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 11,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "JetBrains (macOS)"
+    },
+    "source" : "WebStorm 2024.2",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  }
+}

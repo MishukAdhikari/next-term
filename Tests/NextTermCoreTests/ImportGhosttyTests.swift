@@ -24,7 +24,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         try write(config, to: home + appSupport)
         for (path, text) in files { try write(text, to: home + path) }
-        let app = try #require(ImportGhostty.detect(home: home).first)
+        let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
         return ImportGhostty.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts, applications: [home + "/Applications"])
     }
 
@@ -35,15 +35,15 @@ import Testing
     @Test func detection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportGhostty.detect(home: home).isEmpty)
+        #expect(ImportGhostty.detect(home: home, applications: []).isEmpty)
         try FileManager.default.createDirectory(atPath: home + xdg, withIntermediateDirectories: true)
-        #expect(ImportGhostty.detect(home: home).isEmpty, "a folder is not a config file")
+        #expect(ImportGhostty.detect(home: home, applications: []).isEmpty, "a folder is not a config file")
         try FileManager.default.removeItem(atPath: home + xdg)
 
         let older = Date(timeIntervalSince1970: 1_790_000_000), newer = Date(timeIntervalSince1970: 1_791_000_000)
         try write("font-size = 13", to: home + xdg, date: newer)
         try write("# empty", to: home + appSupport, date: older)
-        let app = try #require(ImportGhostty.detect(home: home).first)
+        let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
         #expect(app == DetectedApp(kind: .ghostty, name: "Ghostty", configPath: home + appSupport, lastUsed: newer))
         #expect(app.preset == .nextTerm)
     }
@@ -59,7 +59,7 @@ import Testing
         #expect(plan.settings == [
             PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "font-family Operator Mono, JetBrains Mono",
                            note: "the first font in the list that this Mac has"),
-            PlannedSetting(.fontSize(15), source: "font-size 14.5", note: "sets the editor too: Next Term has one size for both"),
+            PlannedSetting(.terminalFontSize(15), source: "font-size 14.5"),
             PlannedSetting(.optionAsMeta(true), source: "macos-option-as-alt true"),
         ])
         #expect(plan.skipped == [SkippedItem("Terminal font “Operator Mono”", "not installed on this Mac")])
@@ -105,7 +105,7 @@ import Testing
         // A bundled theme, from Ghostty.app; a missing one; a path.
         let bundled = try self.plan("theme = Dracula", files: ["/Applications/Ghostty.app/Contents/Resources/ghostty/themes/Dracula": "background = #282a36"])
         #expect(bundled.settings.first?.source == "theme Dracula")
-        #expect(reasons(try self.plan("theme = Nowhere"))["theme Nowhere"] == "not found in Ghostty's themes folders")
+        #expect(reasons(try self.plan("theme = Nowhere"))["theme Nowhere"] == "not found in Ghostty's themes folders, or in an app that comes with them")
         #expect(reasons(try self.plan("theme = /etc/passwd"))["theme"] == "only a theme given by name is read")
         #expect(reasons(try self.plan("theme = ../../secret"))["theme"] == "only a theme given by name is read")
     }
@@ -330,7 +330,7 @@ import Testing
             #expect(!shown.contains(value), "\(value) reached the plan")
         }
         // The include inside Ghostty's folder is read (and a loop of includes stops).
-        #expect(plan.settings.map(\.setting) == [.fontSize(16)])
+        #expect(plan.settings.map(\.setting) == [.terminalFontSize(16)])
         #expect(reasons(plan)["command"] == "never imported: runs commands or can hold secrets")
         #expect(reasons(plan)["env"] == "never imported: runs commands or can hold secrets")
         #expect(reasons(plan)["working-directory"] == "the folder isn't on this Mac")
@@ -354,7 +354,7 @@ import Testing
             try FileManager.default.createDirectory(atPath: (home + path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
             try FileManager.default.createSymbolicLink(atPath: home + path, withDestinationPath: home + target)
         }
-        let app = try #require(ImportGhostty.detect(home: home).first)
+        let app = try #require(ImportGhostty.detect(home: home, applications: []).first)
         return ImportGhostty.plan(for: app, home: home, fonts: testFonts, applications: [home + "/Applications"])
     }
 
@@ -362,27 +362,29 @@ import Testing
     @Test func includesComeAfterGhosttysOwnFiles() throws {
         let later = try plan(files: [xdg: "config-file = local.conf\nfont-size = 10", "/.config/ghostty/local.conf": "font-size = 14",
                                      appSupport: "font-size = 12"])
-        #expect(later.settings.map(\.setting) == [.fontSize(14)])
+        let laterSize: [ImportedSetting] = [.terminalFontSize(14)]
+        #expect(later.settings.map(\.setting) == laterSize)
 
         let breadthFirst = try plan(files: [
             xdg: "config-file = a.conf\nconfig-file = b.conf",
             "/.config/ghostty/a.conf": "config-file = c.conf", "/.config/ghostty/b.conf": "font-size = 15",
             "/.config/ghostty/c.conf": "font-size = 17",
         ])
-        #expect(breadthFirst.settings.map(\.setting) == [.fontSize(17)])
+        let breadthFirstSize: [ImportedSetting] = [.terminalFontSize(17)]
+        #expect(breadthFirst.settings.map(\.setting) == breadthFirstSize)
     }
 
     @Test func includePaths() throws {
         // `~/` is the home folder.
         let tilde = try plan(files: [xdg: "config-file = ~/.config/ghostty/local.conf", "/.config/ghostty/local.conf": "font-size = 14"])
-        #expect(tilde.settings.map(\.setting) == [.fontSize(14)])
+        #expect(tilde.settings.map(\.setting) == [.terminalFontSize(14)])
         #expect(tilde.skipped.isEmpty)
 
         // A symlinked config (stow, chezmoi): an include is relative to where the config was opened from.
         let linked = try plan(files: ["/dotfiles/ghostty/config": "config-file = theme.conf", "/.config/ghostty/theme.conf": "font-size = 18",
                                       "/dotfiles/ghostty/theme.conf": "font-size = 20"],
                               links: [xdg: "/dotfiles/ghostty/config"])
-        #expect(linked.settings.map(\.setting) == [.fontSize(18)])
+        #expect(linked.settings.map(\.setting) == [.terminalFontSize(18)])
         #expect(linked.skipped.isEmpty)
 
         // A missing include is reported unless it is marked optional.

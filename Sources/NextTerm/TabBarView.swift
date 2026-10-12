@@ -926,6 +926,19 @@ final class StatusDotView: NSView {
         glyph.wantsLayer = true
         addSubview(glyph)
         apply()
+        // View › Agent Spinner, or Reduce Motion, changed: the ring follows at once.
+        NotificationCenter.default.addObserver(self, selector: #selector(spinnerChanged), name: AgentSpinner.changed, object: nil)
+    }
+
+    @objc private func spinnerChanged() { apply() }
+
+    // For the self-test.
+    var ringShows: Bool { !ring.isHidden }
+    var ringTurns: Bool { ring.animation(forKey: "spin") != nil }
+
+    /// Whether a mark shows for `state`: none at the prompt, and none while working with Agent Spinner off.
+    static func shows(_ state: TabState) -> Bool {
+        state != .idle && !(state == .working && AgentSpinner.current == .off)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -937,19 +950,20 @@ final class StatusDotView: NSView {
         ring.path = CGPath(ellipseIn: bounds.insetBy(dx: 1, dy: 1), transform: nil)
     }
 
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    private var reduceMotion: Bool { AgentSpinner.reducesMotion }
 
     private func apply() {
         ring.removeAllAnimations()
         glyph.layer?.removeAllAnimations()
-        ring.isHidden = state != .working
+        ring.isHidden = state != .working || AgentSpinner.current == .off
         glyph.isHidden = state == .working || state == .idle
         switch state {
         case .working:
             ring.strokeColor = Theme.working.cgColor
             ring.strokeStart = 0
             ring.strokeEnd = 0.7
-            if !reduceMotion {
+            // Spinning turns it, unless Reduce Motion is on; Still keeps it put; Off hides it (above).
+            if AgentSpinner.turns {
                 let spin = CABasicAnimation(keyPath: "transform.rotation.z")
                 spin.fromValue = 0
                 spin.toValue = -2 * Double.pi
@@ -1072,7 +1086,7 @@ private final class OverflowButton: NSButton {
             .foregroundColor: Theme.textDim, .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
         ])
         // Room for the status dot after the count is kerning, not padding spaces, and only when a dot shows.
-        if state != .idle { text.addAttribute(.kern, value: 14, range: NSRange(location: text.length - 1, length: 1)) }
+        if StatusDotView.shows(state) { text.addAttribute(.kern, value: 14, range: NSRange(location: text.length - 1, length: 1)) }
         attributedTitle = text
         dot.state = state
         toolTip = "\(hiddenCount) more tab\(hiddenCount == 1 ? "" : "s")"

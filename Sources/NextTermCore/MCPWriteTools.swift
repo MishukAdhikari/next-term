@@ -49,12 +49,13 @@ extension MCPServer {
     static let scopeTags: [String: Scope] = {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
-                    "host_changes", "list_skills", "settings_get", "list_secrets"]
+                    "host_changes", "list_skills", "settings_get", "list_import_sources", "preview_import",
+                    "list_secrets"]
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
                      "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
-                     "close_pane", "zoom_pane", "set_layout", "settings_set", "request_secret", "store_secret",
-                     "run_with_secrets"]
+                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import",
+                     "request_secret", "store_secret", "run_with_secrets"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
         for name in write { tags[name] = .write }
@@ -114,7 +115,7 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "settings_set", title: "Change settings",
-             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, shared by the editor and the terminal), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
+             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
              inputSchema: #"{"type": "object", "properties": {"values": {"type": "object", "description": "Setting names and their new values, as settings_get lists them.", "minProperties": 1}, \#(reasonArgument)}, "required": ["values"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
     ]
@@ -130,9 +131,11 @@ extension MCPServer.Tool {
     /// Next Term's scope tag (nil only for a tool nobody tagged, which a unit test refuses).
     public var scope: MCPServer.Scope? { MCPServer.scopeTags[name] }
 
-    /// The `_meta` it is listed with: Claude Code keeps it loaded, and the scope tag is there for any client.
+    /// The `_meta` it is listed with: Claude Code keeps it loaded (unless it is used only once in a while), and
+    /// the scope tag is there for any client.
     var meta: [String: Any] {
-        var meta: [String: Any] = ["anthropic/alwaysLoad": true]
+        var meta: [String: Any] = [:]
+        if alwaysLoad { meta["anthropic/alwaysLoad"] = true }
         if let scope { meta["next-term/scope"] = scope.rawValue }
         return meta
     }

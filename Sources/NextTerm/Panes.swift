@@ -205,9 +205,10 @@ final class PaneHeaderView: NSView, NSTextFieldDelegate {
     /// Takes the pane's title, mark and server mark. Called several times a second: touch only what changed
     /// (setting a tooltip again resets it).
     func update() {
-        if tab.title != title || tab.shorterTitles != shorterTitles {
-            title = tab.title
-            shorterTitles = tab.shorterTitles
+        let shown = AgentSpinner.shown(tab.title) // an agent's spinner frame left out unless the ring turns
+        if shown != title || tab.shorterTitles.map(AgentSpinner.shown) != shorterTitles {
+            title = shown
+            shorterTitles = tab.shorterTitles.map(AgentSpinner.shown)
             label.stringValue = title
             needsLayout = true // layout may shorten it
         }
@@ -456,6 +457,15 @@ final class PaneGroup {
     init(_ tab: TerminalTab) {
         root = .pane(tab)
         focused = tab
+    }
+
+    /// A tab the restore built (SessionRestore): its splits with their divider positions, the pane with the keyboard, and
+    /// the pane filling the tab. A focus or zoom on a pane the tree does not hold falls back to the first pane, and none.
+    init(root: Node, focused: TerminalTab, zoomed: TerminalTab? = nil) {
+        self.root = root
+        self.focused = root.contains(focused) ? focused : root.panes[0]
+        let fills = zoomed.map { (tab: TerminalTab) -> Bool in root.contains(tab) } ?? false
+        self.zoomed = fills && root.panes.count > 1 ? zoomed : nil
     }
 
     var panes: [TerminalTab] { root.panes }

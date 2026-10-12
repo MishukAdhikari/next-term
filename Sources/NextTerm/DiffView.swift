@@ -4,7 +4,7 @@ import Shiki
 
 /// A file's changes side by side: the old version on the left, the new on the right, rows aligned,
 /// removed lines tinted red, added green, the changed words within a line stronger, both sides
-/// syntax-coloured and scrolling together. Hunk by hunk you can stage, unstage or revert, each checked
+/// syntax-coloured and scrolling together. Hunk by hunk you can stage, unstage or roll back, each checked
 /// against what the diff was made from, so a change an agent made meanwhile is never overwritten.
 final class DiffPane: NSView, DiffSelectionHost {
     let root: String
@@ -24,7 +24,7 @@ final class DiffPane: NSView, DiffSelectionHost {
     private let position = NSTextField(labelWithString: "")
     private let stage = NSButton(title: "Stage Hunk", target: nil, action: nil)
     private let unstage = NSButton(title: "Unstage Hunk", target: nil, action: nil)
-    private let revert = NSButton(title: "Revert Hunk", target: nil, action: nil)
+    private let revert = NSButton(title: "Rollback Hunk", target: nil, action: nil)
     private let message = NSTextField(wrappingLabelWithString: "")
     private let accept = NSButton(title: "Accept", target: nil, action: nil)
     private let reject = NSButton(title: "Reject", target: nil, action: nil)
@@ -271,7 +271,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         position.textColor = Theme.textDim
         for (button, action, tip) in [(stage, #selector(stageHunk), "Stage this change (git add, for these lines only)"),
                                       (unstage, #selector(unstageHunk), "Unstage this change"),
-                                      (revert, #selector(revertHunk), "Undo this change in the file")] {
+                                      (revert, #selector(rollbackHunk), "Put these lines back as they were, with Undo on the notice after")] {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.font = .systemFont(ofSize: 11)
@@ -731,29 +731,21 @@ final class DiffPane: NSView, DiffSelectionHost {
     @objc private func stageHunk() { perform(.stage) }
     @objc private func unstageHunk() { perform(.unstage) }
 
-    @objc private func revertHunk() { confirmRevert(hunk: currentHunk, of: file) }
+    /// ⌥⌘Z here rolls back the current change: a diff of uncommitted changes, not of what is staged, with one.
+    var canRollBackHunk: Bool { commit == nil && proposal == nil && base != .staged && hunkCount > 0 }
 
-    /// Asks, then reverts change `index` of `shown`: the diff it was chosen in, whatever is read meanwhile.
-    func confirmRevert(hunk index: Int, of shown: FileDiff?) {
+    @objc private func rollbackHunk() { rollBack(hunk: currentHunk, of: file) }
+
+    /// Rollback Hunk: change `index` of `shown` (the diff it was chosen in, whatever is read meanwhile) undone in the file
+    /// at once, without a question: the notice after has Undo, and so has ⌘Z. A file with unsaved edits in the editor is
+    /// refused, as the reload would lose them.
+    func rollBack(hunk index: Int, of shown: FileDiff?) {
         guard let window else { return }
-        // Unsaved edits to this file in the editor would be overwritten by the reload: ask to save first.
         if let open = (window.windowController as? TerminalWindowController)?.editorArea.documents.first(where: { $0.path == canonicalPath(absolutePath) }),
            open.isDirty {
-            let alert = NSAlert()
-            alert.messageText = "“\((path as NSString).lastPathComponent)” has unsaved changes in the editor"
-            alert.informativeText = "Save or close it before reverting a change in it."
-            alert.beginSheetModal(for: window)
-            return
+            return tell("“\((path as NSString).lastPathComponent)” has unsaved edits in the editor", "Save or close it before rolling back a change in it.")
         }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Revert this change in “\((path as NSString).lastPathComponent)”?"
-        alert.informativeText = "The lines go back to how they were. You can undo this with ⌘Z."
-        alert.addButton(withTitle: "Revert")
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.perform(.revert, hunk: index, of: shown) }
-        }
+        perform(.revert, hunk: index, of: shown)
     }
 
     /// Runs a hunk operation on the current change, the one "2 of 3" names.
@@ -769,7 +761,7 @@ final class DiffPane: NSView, DiffSelectionHost {
         let outcome = HunkOps.perform(action, hunk: hunk, in: file, root: root, git: git)
         switch outcome {
         case .done:
-            if action == .revert, let before { registerUndo(restoring: before) }
+            if action == .revert, let before { offerUndo(restoring: before) }
         case .changedSinceDiff:
             tell("The file changed since this diff was made", "Nothing was changed. The diff is up to date again: check it and try once more.")
         case .gitBusy:
@@ -780,17 +772,28 @@ final class DiffPane: NSView, DiffSelectionHost {
         reload()
     }
 
-    /// ⌘Z after a revert puts the file back, if nothing changed it since.
-    private func registerUndo(restoring data: Data) {
+    /// Undo on the notice, or ⌘Z, after a rollback puts the file back, once, if nothing changed it since.
+    private func offerUndo(restoring data: Data) {
         let url = URL(fileURLWithPath: absolutePath)
         let after = try? Data(contentsOf: url)
-        window?.undoManager?.registerUndo(withTarget: self) { pane in
-            guard (try? Data(contentsOf: url)) == after else { return pane.tell("The file changed since", "The revert was not undone, so nothing is lost.") }
+        let once = UndoOnce()
+        let undo = { (pane: DiffPane) in
+            guard !once.done else { return }
+            guard (try? Data(contentsOf: url)) == after else { return pane.tell("The file changed since", "The rollback was not undone, so nothing is lost.") }
             try? TextFile.write(data, to: url)
+            once.done = true
             pane.reload()
+            GitToast.show("Undone: the change is back", in: pane.window)
         }
-        window?.undoManager?.setActionName("Revert Change")
+        window?.undoManager?.registerUndo(withTarget: self) { undo($0) }
+        window?.undoManager?.setActionName("Rollback Hunk")
+        GitToast.show("Rolled back a change in \((path as NSString).lastPathComponent)", in: window, button: "Undo") { [weak self] in
+            if let self { undo(self) }
+        }
     }
+
+    /// Whether an Undo, offered both on the notice and on ⌘Z, has run.
+    private final class UndoOnce: @unchecked Sendable { var done = false } // read and set on the main thread
 
     private func tell(_ title: String, _ text: String) {
         let alert = NSAlert()

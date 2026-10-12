@@ -53,7 +53,7 @@ extension AppDelegate {
     /// Sets the terminal's font family (nil: the default) in every open terminal.
     func setTerminalFontFamily(_ family: String?) {
         Preferences.terminalFontFamily = family
-        let font = Theme.terminalFont(size: fontSize)
+        let font = Theme.terminalFont(size: terminalFontSize)
         for controller in controllers { for tab in controller.tabs { tab.view.font = font } }
     }
 
@@ -198,6 +198,10 @@ final class TerminalSettingsView: NSView {
     /// Where LangGraph Studio's links open (WebLinks): the last row, before the note.
     let studioLinks = StudioLinksCheckbox.make()
     private let font = FontFamilyPopup()
+    /// The terminal's own size, or the editor's while "Same as the editor" is ticked (nothing saved).
+    private let fontSize = NSStepper()
+    private let fontSizeValue = NSTextField(labelWithString: "")
+    private let sameSize = NSButton(checkboxWithTitle: "Same as the editor", target: nil, action: nil)
     private let colours = NSPopUpButton()
     private let swatches = PaletteSwatches()
     let behaviour = TerminalBehaviourControls()
@@ -205,6 +209,16 @@ final class TerminalSettingsView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         font.onChange = { family in AppDelegate.shared.setTerminalFontFamily(family) }
+        fontSize.minValue = Double(Theme.fontSizeRange.lowerBound)
+        fontSize.maxValue = Double(Theme.fontSizeRange.upperBound)
+        fontSize.increment = 1
+        fontSize.target = self
+        fontSize.action = #selector(fontSizeChanged)
+        fontSize.setAccessibilityLabel("Terminal font size")
+        fontSizeValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        sameSize.target = self
+        sameSize.action = #selector(sameSizeChanged)
+        sameSize.toolTip = "Ticked: terminals use the editor’s font size (Settings › Editor). Unticked: they keep a size of their own, which ⌘+ and ⌘- change while a terminal has the keyboard."
         colours.target = self
         colours.action = #selector(coloursChanged)
         func row(_ title: String, _ views: [NSView]) -> NSStackView {
@@ -215,11 +229,12 @@ final class TerminalSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Monospaced fonts installed on this Mac. The size is shared with the editor (⌘+ and ⌘-). Colours brought over by an import are listed under Colours; Next Term default goes back to Next Term’s own, and they stay in the menu to choose again.")
+        let note = NSTextField(wrappingLabelWithString: "Monospaced fonts installed on this Mac. Terminals use the editor’s size until you untick Same as the editor; then ⌘+ and ⌘- in a terminal change the terminal’s size alone. Colours brought over by an import are listed under Colours; Next Term default goes back to Next Term’s own, and they stay in the menu to choose again.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
-        let stack = NSStackView(views: [row("Font:", [font]), row("Colours:", [colours]), row("", [swatches])] + behaviour.rows(row) + [note, CompletionSettingsPane()])
+        let sizeRow = row("Font size:", [fontSize, fontSizeValue, sameSize])
+        let stack = NSStackView(views: [row("Font:", [font]), sizeRow, row("Colours:", [colours]), row("", [swatches])] + behaviour.rows(row) + [note, CompletionSettingsPane()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
@@ -243,6 +258,12 @@ final class TerminalSettingsView: NSView {
 
     @objc func refresh() {
         font.show(Preferences.terminalFontFamily)
+        let own = AppDelegate.shared?.terminalOwnFontSize
+        let size = AppDelegate.shared?.terminalFontSize ?? Theme.defaultFontSize
+        fontSize.doubleValue = Double(size)
+        fontSize.isEnabled = own != nil
+        fontSizeValue.stringValue = "\(Int(size)) pt"
+        sameSize.state = own == nil ? .on : .off
         colours.removeAllItems()
         colours.addItem(withTitle: "Next Term default")
         let current = Preferences.terminalPalette
@@ -254,6 +275,31 @@ final class TerminalSettingsView: NSView {
         swatches.colours = Theme.terminalColours(current)
         behaviour.refresh()
     }
+
+    @objc private func fontSizeChanged() {
+        AppDelegate.shared.setTerminalFontSize(CGFloat(fontSize.doubleValue))
+        refresh()
+    }
+
+    /// Unticked, the terminal keeps the size it has now as its own, so nothing moves until it is changed.
+    @objc private func sameSizeChanged() {
+        guard let app = AppDelegate.shared else { return }
+        app.setTerminalFontSize(sameSize.state == .on ? nil : app.fontSize)
+        refresh()
+    }
+
+    /// For the self-test: tick or untick Same as the editor, or step the size, as a click would.
+    func setSameSizeForTest(_ same: Bool) {
+        sameSize.state = same ? .on : .off
+        sameSizeChanged()
+    }
+
+    func stepFontSizeForTest(to size: Int) {
+        fontSize.doubleValue = Double(size)
+        fontSizeChanged()
+    }
+
+    var fontSizeTextForTest: String { fontSizeValue.stringValue }
 
     @objc private func coloursChanged() {
         AppDelegate.shared.setTerminalPalette(colours.selectedItem?.representedObject as? TerminalPalette)

@@ -254,6 +254,8 @@ extension MCPWriteControl {
         case ("notification_sound", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.sound)
         default: break
         }
+        // Settings › Notifications shows it, if open.
+        if setting.name.hasPrefix("notif") { NotificationCenter.default.post(name: NotificationsMenu.changed, object: nil) }
     }
 
     private static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {

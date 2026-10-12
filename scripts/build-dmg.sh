@@ -34,6 +34,11 @@ dsymutil "$BIN" -o "$DIST/NextTerm.dSYM"
 UNSTRIPPED=$(stat -f%z "$BIN")
 strip -x "$BIN"
 echo "    strip -x: $((UNSTRIPPED / 1024)) KB -> $(($(stat -f%z "$BIN") / 1024)) KB"
+# The relaunch harness (SelfTestRestore.swift) and its staged-update stand-in are debug-only: a release binary that held
+# them would take its folders and its update from the command line.
+for HARNESS in --relaunch-harness SelfTestRestore stageStandIn; do
+  if LC_ALL=C grep -qaF -- "$HARNESS" "$BIN"; then echo "error: the release binary holds the relaunch harness ($HARNESS)" >&2; exit 1; fi
+done
 # The dSYM is this binary's only while their UUIDs match (strip and the signature leave the UUID alone).
 [[ "$(dwarfdump --uuid "$BIN" | awk '{print $2}')" == "$(dwarfdump --uuid "$DIST/NextTerm.dSYM" | awk '{print $2}')" ]] \
   || { echo "error: dist/NextTerm.dSYM is not the app binary's" >&2; exit 1; }
@@ -49,14 +54,12 @@ cp -R Resources/Icons "$APP/Contents/Resources/Icons"
 mkdir -p "$APP/Contents/Resources/bin"
 cp scripts/nxtrm "$APP/Contents/Resources/bin/nxtrm"
 chmod 755 "$APP/Contents/Resources/bin/nxtrm"
-# License notices travel with the app; Credits.html is what About Next Term shows.
+# License notices travel with the app (Next Term › Acknowledgements shows them); About Next Term only points there.
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 {
-  echo '<html><body style="font: 11px -apple-system; color: #888">'
-  echo "<p>Next Term is free software under the MIT License. It includes SwiftTerm (MIT), code from libsixel (MIT), Unicode data (Unicode License v3), shiki-swift (MIT) with Oniguruma (BSD-2-Clause), TextMate grammars under their own permissive licences, Material Icon Theme (MIT; icons from Pictogrammers MDI and Google Material Symbols, Apache-2.0) and SwiftDraw (Zlib). Product and technology logos are trademarks of their owners and are used only to identify file types.</p>"
-  echo "<pre style=\"font: 10px ui-monospace, Menlo; white-space: pre-wrap\">"
-  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' LICENSE THIRD_PARTY_NOTICES.md
-  echo "</pre></body></html>"
+  echo '<html><body style="font: 11px -apple-system; color: #888; text-align: center">'
+  echo "<p>Free software under the MIT License.<br>Next Term › Acknowledgements lists the open-source software it includes.</p>"
+  echo "</body></html>"
 } > "$APP/Contents/Resources/Credits.html"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

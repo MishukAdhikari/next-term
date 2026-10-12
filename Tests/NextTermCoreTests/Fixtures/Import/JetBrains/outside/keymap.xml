@@ -1,0 +1,5 @@
+<keymap version="1" name="Escaped" parent="Mac OS X 10.5+" note="eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU">
+  <action id="GotoFile">
+    <keyboard-shortcut first-keystroke="meta shift D" />
+  </action>
+</keymap>

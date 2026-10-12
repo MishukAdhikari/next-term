@@ -81,6 +81,10 @@ public struct KeyBindings: Equatable, Sendable {
         "selectPaneAbove:", "selectPaneBelow:", "selectNextPane:", "selectPreviousPane:", "toggleZoomPane:", "equalizePanes:",
     ]
 
+    /// The terminal command that keeps to a terminal with the keyboard when a command for everywhere has its key
+    /// too: Clear Buffer, whose ⌘K is Commit… everywhere else under the JetBrains set, as in JetBrains' IDEs.
+    public static let terminalKeyboardCommands: Set<String> = ["clearBuffer:"]
+
     /// The parts of the window a command can be kept to: its key works only there.
     public enum Part: Int, CaseIterable, Sendable {
         case editor, sidebar, gitLists, diff, branchPopup
@@ -179,6 +183,9 @@ public struct KeyBindings: Equatable, Sendable {
     /// and so is Accept's from the sidebar's.
     public static func canShareKey(_ first: String, _ second: String) -> Bool {
         let one = scope(of: first), other = scope(of: second)
+        // Clear Buffer while a terminal has the keyboard, the other command everywhere else.
+        if terminalKeyboardCommands.contains(first) && other == .everywhere { return true }
+        if terminalKeyboardCommands.contains(second) && one == .everywhere { return true }
         if case .part(let a) = one, case .part(let b) = other {
             // Accept answers wherever the keyboard is in the window, and the sidebar can be beside the proposed edit.
             if Set([a, b]) == [.diff, .sidebar] { return false }
@@ -198,24 +205,40 @@ public struct KeyBindings: Equatable, Sendable {
     }
 
     /// "⌘D is Duplicate Line while the editor has the keyboard, Split Right everywhere else": which of the commands
-    /// `ids` on one key has it where, the parts' first.
+    /// `ids` on one key has it where, the parts' first. Commands of one name are named once: "⌘R is Fetch while the
+    /// branch popup is open and everywhere else".
     public static func sharingNote(_ chord: KeyChord, _ ids: [String], title: (String) -> String) -> String {
+        if let first = ids.first, ids.count > 1, ids.allSatisfy({ title($0) == title(first) }) {
+            let parts = ids.compactMap { id -> Part? in
+                if case .part(let part) = scope(of: id) { return part }
+                return nil
+            }.sorted { $0.rawValue < $1.rawValue }
+            let places = parts.map(\.whileActive) + (parts.count < ids.count ? ["everywhere else"] : [])
+            let listed = places.count < 3 ? places.joined(separator: " and ")
+                : places.dropLast().joined(separator: ", ") + " and " + (places.last ?? "")
+            return "\(chord.display) is \(title(first)) " + listed
+        }
         func part(_ id: String) -> Part? {
             if case .part(let part) = scope(of: id) { return part }
             return nil
         }
         let inParts = ids.filter { part($0) != nil }.sorted { (part($0)?.rawValue ?? 0) < (part($1)?.rawValue ?? 0) }
-        let phrases = inParts.map { "\(title($0)) \(part($0)?.whileActive ?? "")" }
-            + ids.filter { part($0) == nil }.map { "\(title($0)) everywhere else" }
+        // Clear Buffer beside a command for everywhere: it keeps to a terminal with the keyboard.
+        let withEverywhere = ids.contains { scope(of: $0) == .everywhere }
+        let inTerminal = ids.filter { withEverywhere && terminalKeyboardCommands.contains($0) }
+        var phrases = inParts.map { "\(title($0)) \(part($0)?.whileActive ?? "")" }
+        phrases += inTerminal.map { "\(title($0)) while a terminal has the keyboard" }
+        phrases += ids.filter { part($0) == nil && !inTerminal.contains($0) }.map { "\(title($0)) everywhere else" }
         return "\(chord.display) is " + phrases.joined(separator: ", ")
     }
 
-    /// Whether `id`, a command outside the menus still on its default key `chord`, gives that key up: you gave it yourself
-    /// to another command it can't share it with (before it was this command's default, or by an import then). Settings
-    /// never lets two such commands have one key, and the one you chose keeps it. `isCommand`: whether an id is a command
-    /// still (a saved change can outlive its command).
+    /// Whether `id`, a command still on its default key `chord`, gives that key up: you gave it yourself to another
+    /// command it can't share it with (before it was this command's default, by an import then, or under another set of
+    /// keys). Settings never lets two such commands have one key, and the one you chose keeps it: a menu command's new
+    /// default as much as a key outside the menus. `isCommand`: whether an id is a command still (a saved change can
+    /// outlive its command).
     public func givesWay(_ id: String, _ chord: KeyChord, isCommand: (String) -> Bool) -> Bool {
-        guard overrides[id] == nil, case .part = Self.scope(of: id) else { return false }
+        guard overrides[id] == nil else { return false }
         return overrides.contains { other, key in
             key == chord && other != id && Self.isUsable(chord, for: other) && !Self.canShareKey(id, other) && isCommand(other)
         }

@@ -8,9 +8,62 @@ import SQLite3
 /// Run with `NextTerm --self-test <report-path>`; writes PASS/FAIL lines and quits.
 @MainActor
 enum SelfTest {
-    nonisolated static var isRequested: Bool { CommandLine.arguments.contains("--self-test") }
-    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use.
-    nonisolated static let mcpSocketPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    /// How this process runs: as the app, as the plain self-test (`--self-test <report-path>`), or as a step of the
+    /// relaunch harness, whose arguments only a debug build reads (SelfTestRestore).
+    enum Mode: Equatable, Sendable {
+        case app
+        case plain
+        case relaunchHarness
+    }
+
+    nonisolated static let mode: Mode = {
+        #if DEBUG
+        if SelfTestRestore.harness != nil { return .relaunchHarness }
+        #endif
+        return CommandLine.arguments.contains("--self-test") ? .plain : .app
+    }()
+
+    /// Either self-test: the guards that keep it off the user's machine apply, except those the relaunch harness points
+    /// at its own folder (`keptDefaults`, `supportFolder`, `sessionsParent`, `mcpSocketPath`).
+    nonisolated static var isRequested: Bool { mode != .app }
+
+    /// Where the records one launch leaves the next are kept (the projects open at quit, kept remote tabs, Settings ›
+    /// General): the user's defaults, the relaunch harness's own suite, or none for the plain self-test, which keeps none.
+    nonisolated static var keptDefaults: UserDefaults? {
+        switch mode {
+        case .app: return .standard
+        case .plain: return nil
+        case .relaunchHarness:
+            #if DEBUG
+            return SelfTestRestore.defaults
+            #else
+            return nil
+            #endif
+        }
+    }
+
+    /// Next Term's folder in Application Support, where the zsh integration and the sessions folders go: the user's, or
+    /// the relaunch harness's own, which writes nothing in the user's.
+    nonisolated static var supportFolder: URL? {
+        #if DEBUG
+        if let harness = SelfTestRestore.harness { return harness.stateFolder }
+        #endif
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return support?.appendingPathComponent("Next Term", isDirectory: true)
+    }
+
+    /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
+    /// saves or restores sessions.
+    nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }
+
+    /// The self-test's own MCP socket, so it never answers for (or takes over from) the Next Term you use: the relaunch
+    /// harness's in its folder, kept across its relaunch, else one for this process.
+    nonisolated static let mcpSocketPath: String = {
+        #if DEBUG
+        if let path = SelfTestRestore.harness?.mcpSocket { return path }
+        #endif
+        return (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-mcp-\(getpid()).sock")
+    }()
     /// The home agents' sessions are read from in a self-test run: a folder never made, so nothing of yours is read
     /// (your Claude Code records and transcripts) for the sidebar's sessions or the agents in its tabs. The parts
     /// that list sessions point SessionStore at sessions of their own, and back here after.
@@ -103,6 +156,26 @@ enum SelfTest {
     /// moments sit just before each redraw. In `wait`, a ^C goes to the trap at any moment.
     static func standInWait(_ seconds: String) -> String { "sleep \(seconds) & wait $!" }
 
+    /// A stand-in agent at `path` that the kernel names by its file: /bin/sleep copied there and signed ad hoc. A copy
+    /// that keeps Apple's signature is a platform binary off the system volume, which launch constraints kill as it
+    /// starts (the shell shows the command start and end at once). True once the stand-in has run and exited by itself.
+    static func sleepStandIn(at path: String) -> Bool {
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: path)
+        guard (try? fm.copyItem(atPath: "/bin/sleep", toPath: path)) != nil else { return false }
+        func ran(_ program: String, _ arguments: [String]) -> Bool {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: program)
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return false }
+            process.waitUntilExit()
+            return process.terminationReason == .exit && process.terminationStatus == 0
+        }
+        return ran("/usr/bin/codesign", ["--force", "--sign", "-", path]) && ran(path, ["0"])
+    }
+
     /// The processes on `tab`'s terminal with their state, for a check whose program didn't stop.
     static func terminalProcesses(_ tab: TerminalTab) -> String {
         guard let name = ptsname(tab.view.process.childfd) else { return "" }
@@ -156,6 +229,19 @@ enum SelfTest {
         window.makeFirstResponder(responder)
         item.menu?.update()
         return item.isEnabled
+    }
+
+    /// Importing settings from other apps: the importers, the import window, one click, the agents' tools and Undo.
+    private static func importPartChecks(_ c: TerminalWindowController, proj: URL) async {
+        await importChecks(c, proj: proj)
+        await importUndoGuardChecks()
+        await importForkChecks()
+        await importTerminalSizeChecks(c)
+        await importReachChecks()
+        await importTerminalChecks()
+        await importWindowChecks()
+        await importAgentChecks()
+        await importOneClickChecks()
     }
 
     private static func runAll() async {
@@ -510,6 +596,21 @@ enum SelfTest {
         try? Data().write(to: proj.appendingPathComponent("AGENTS.md"))
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
+        #if DEBUG
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees or notifications), for its own failures
+        // without the whole run's 25 minutes.
+        switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
+        case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
+        case "import": return await importPartChecks(c, proj: proj)
+        case "rollback": return await rollbackChecks(c)
+        case "held": return await heldWorktreeChecks(c)
+        case "worktrees": return await worktreeChecks(c)
+        case "notifications":
+            notificationsMenuChecks()
+            return agentSpinnerChecks()
+        default: break
+        }
+        #endif
 
         // Git: branch in the header, colours and +/− counts on changed files and their folders.
         if gitPath != nil {
@@ -641,21 +742,28 @@ enum SelfTest {
         await databaseChecks(c, proj: proj)
         await dataChecks(c, proj: proj)
         await updateChecks(c)
+        await updateSheetChecks(c)
         await updateSignatureChecks()
         await updateWaitChecks()
         await platformLinkChecks(c)
         await branchChecks(c, proj: proj)
+        await gitAndViewKeyChecks(c, proj: proj)
+        await rollbackChecks(c)
         await gitLogChecks(c, proj: proj)
         await gitLogPagingChecks(c)
         await gitLeftoverChecks(c)
         await placeChecks(c)
         await worktreeChecks(c)
+        await heldWorktreeChecks(c)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
+        await gitRefreshChecks(c)
+        await tabHangupChecks(c)
+        await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
-        await importChecks(c, proj: proj)
+        await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
         await safetyChecks(c, proj: proj)
@@ -800,11 +908,17 @@ enum SelfTest {
 
         await paneChecks(c)
         await menuChecks(c)
+        await MainActor.run { acknowledgementsChecks() }
         await newFileChecks(c)
         await paneHeaderChecks(c)
 
         await sessionChecks(proj: proj)
         await moreSessionChecks(proj: proj)
+        await agentEvidenceChecks(proj: proj)
+        terminalTextChecks()
+        await scrollbackChecks(proj: proj)
+        await restoreBuildChecks(proj: proj)
+        await restoreInputChecks(proj: proj)
 
         await lastTabChecks()
         await dockReopenChecks(c)
@@ -818,9 +932,12 @@ enum SelfTest {
 
         await linkChecks(c)
         await notificationChecks(c)
+        notificationsMenuChecks()
+        agentSpinnerChecks()
         await skillsChecks()
         await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
+        await restoreMCPChecks(proj: proj)
         await completionChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
@@ -1086,7 +1203,8 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: home)
         }
 
-        app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        let projectController = app.openFolder(project, newWindow: false) // a project you have opened is in the list
+        await openProjectChecks(app, from: projectController)
         app.showWelcome(nil)
         guard let welcome = app.welcomeController, let welcomeWindow = welcome.window else { return check(false, "the Welcome window opens") }
         welcome.select(project: project)
@@ -1096,13 +1214,26 @@ enum SelfTest {
         check(welcome.shownSessionTitles.first == "Fix the login redirect loop", "newest first, with the agent's own title")
         welcomeReturnKeyChecks(welcome, project: project)
         await pause(0.3)
-        await screenshot(welcomeWindow, suffix: "welcome")
-        welcome.resumeSelected()
+        await screenshot(welcomeWindow, suffix: "welcome") // every session listed, the search empty
+        let searched = await welcomeSessionSearchChecks(welcome, project: project)
+        if searched { await screenshot(welcomeWindow, suffix: "welcome-search") } // “loop fix” typed, its one session
+        // Return in the sessions search, where it is Resume's (Open Project has it everywhere else); without the
+        // keys (the app not in front), the button's own action.
+        if searched { pressAppKey(welcomeWindow, "\r", code: 36) } else { welcome.resumeSelected() }
         // In a new tab, or in the project window's untouched first tab when it is in that folder already.
         let resumed = await wait(10) { app.controllers.flatMap(\.tabs).contains { $0.screenTail(10).contains("claude --resume s1") } }
+        if searched { check(resumed, "Return in the sessions search resumes the session selected there") }
         let tab = app.controllers.flatMap(\.tabs).first { $0.screenTail(10).contains("claude --resume s1") }
         check(resumed && tab.map { canonicalPath($0.directory) == project } == true,
               "Resume runs `claude --resume <id>` in a new tab in the session's folder", tab?.screenTail(4).joined(separator: " | ") ?? "no tab")
+        welcome.close()
+        // Closed with a search typed (the keys above leave "loop fix"), and shown again, as when the last project
+        // window closes: the same project, every session listed.
+        welcome.sessionQuery = "loop fix"
+        app.showWelcome(nil)
+        check(await wait(5) { welcome.sessionQuery.isEmpty && welcome.shownSessionTitles.count == 3 },
+              "the Welcome window shown again empties the sessions search, and lists every session",
+              "“\(welcome.sessionQuery)”, \(welcome.shownSessionTitles.count) shown, project \(welcome.selectedProject ?? "none")")
         welcome.close()
 
         guard let holder = app.controllers.first(where: { $0.project == project }) ?? app.controllers.first(where: { $0.tabs.contains { $0 === tab } }),
@@ -1226,7 +1357,17 @@ enum SelfTest {
         window.showPreview(for: DetectedApp(kind: .vsCode, name: "VS Code", configPath: "/tmp", lastUsed: Date()), plan: plan)
         await pause(0.4)
         if let previewWindow = window.window { await screenshot(previewWindow, suffix: "import") }
-        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6) Changes", "the preview counts what is ticked", window.applyTitle)
+        // ⌥⌘P is Push…'s: the row waits unticked and says so; ticked, it moves the key from Push… (and Undo gives it back).
+        // A ticked setting Next Term already has (the font, if it is Menlo here) changes nothing and isn't counted.
+        let alreadySet = plan.settings.filter { $0.ticked && ImportCurrent.has($0.setting) }.count
+        let goToFileRow = window.shortcutRow(for: "goToFile:")
+        let namesPush = goToFileRow?.note?.contains("⌥⌘P is Push…’s here; tick to move it") == true
+        let countedWithout = "Apply \(KeymapPreset.vsCode.overrides.count + 5 - alreadySet) Changes"
+        check(goToFileRow?.ticked == false && namesPush && window.applyTitle == countedWithout,
+              "a key of yours another command has waits unticked, naming the command", "\(goToFileRow?.note ?? "no row") | \(window.applyTitle)")
+        window.tickShortcutForTest("goToFile:")
+        check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6 - alreadySet) Changes", "the preview counts what is ticked",
+              window.applyTitle)
         func swatches(in view: NSView?) -> [PaletteSwatches] {
             guard let view else { return [] }
             return (view as? PaletteSwatches).map { [$0] } ?? view.subviews.flatMap { swatches(in: $0) }
@@ -1248,6 +1389,8 @@ enum SelfTest {
               && shortcuts.chord(for: "goToLine:") == KeyChord(key: "l", command: true, control: true),
               "your own shortcut comes over on top of the preset, and the Control key doesn't",
               "\(shortcuts.chord(for: "goToFile:")?.display ?? "none") \(shortcuts.chord(for: "goToLine:")?.display ?? "none")")
+        check(shortcuts.chord(for: "gitPush:") == nil && item("gitPush:")?.keyEquivalent == "", "and Push… is left without ⌥⌘P",
+              shortcuts.chord(for: "gitPush:")?.display ?? "none")
         check(ImportCoordinator.shared.last?.source == "VS Code", "the import is remembered for Undo")
         ImportCoordinator.shared.undo()
         check(app.fontSize == before.0 && app.softWrap == before.1 && shortcuts.preset == before.3 && app.recentProjects == before.2,
@@ -1261,6 +1404,8 @@ enum SelfTest {
               && item("goToFile:")?.keyEquivalentModifierMask == .command,
               "Undo Import gives Go to File its old shortcut back, and your other changes stay",
               shortcuts.chord(for: "goToFile:")?.display ?? "none")
+        check(item("gitPush:")?.keyEquivalent == "p" && item("gitPush:")?.keyEquivalentModifierMask == [.command, .option],
+              "and gives Push… ⌥⌘P back", shortcuts.chord(for: "gitPush:")?.display ?? "none")
         shortcuts.bindings = savedBindings
         shortcuts.preset = savedPreset
         app.setRecentProjects(fullList)
@@ -1733,7 +1878,7 @@ enum SelfTest {
             check(cell.isDeletedRow && cell.statsText == "−3", "struck through, with the lines it had", cell.statsText)
             // Its menu: each item a command showing its key.
             let menu = sidebarMenuKeyAudit([(sidebarMenu(c.sidebar, row: at), "gone.txt")])
-            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Copy Path", "Copy Relative Path"],
+            check(menu.wrong.isEmpty && menu.titles == ["Show What Was Deleted", "Rollback…", "Copy Path", "Copy Relative Path"],
                   "its menu's items are commands showing their keys", (menu.wrong + menu.titles).joined(separator: "; "))
         }
         if let diffRow = row("diff.txt"), let goneRow = row("gone.txt"), let mainRow = row("main.php") {
@@ -2979,8 +3124,11 @@ enum SelfTest {
         check(text.contains("Next Term 99.0.0") && text.contains("Next Term 98.1.0") && text.contains("•\tThe update window.")
               && text.contains("◦\tNested, with code and a link.") && !text.contains("Drag it to Applications"),
               "it shows the notes of every version since this one, without the install steps", text)
-        check(prompt.installButton.title == "Install and Relaunch" && prompt.skipButton.title == "Skip This Version"
-              && prompt.laterButton.title == "Remind Me Later", "with Install and Relaunch, Remind Me Later and Skip This Version")
+        let installTip = prompt.installButton.toolTip ?? ""
+        check(prompt.installButton.title == "Install Update…" && prompt.skipButton.title == "Skip This Version"
+              && prompt.laterButton.title == "Remind Me Later", "with Install Update…, Remind Me Later and Skip This Version")
+        check(installTip == "Downloads and checks 99.0.0, then shows what happens to your tabs before relaunching.",
+              "Install Update… says it shows what happens to the tabs before relaunching", installTip)
         let bar = c.topRightBar
         let other = bar === c.tabBar ? c.editorArea.tabBar : c.tabBar
         bar.layoutSubtreeIfNeeded()
@@ -4396,7 +4544,7 @@ enum SelfTest {
         diff.perform(.unstage)
         check(await wait(5) { diff.hunkCount == 0 }, "Unstage Hunk takes it back out")
 
-        // Revert one change in the file; ⌘Z brings it back.
+        // Roll back one change in the file; ⌘Z brings it back.
         diff.base = .head
         _ = await wait(5) { diff.hunkCount == 2 }
         diff.go(toHunk: 1)
@@ -4404,7 +4552,7 @@ enum SelfTest {
         check(diff.currentHunk == 1, "the stepper's choice holds even when the whole diff fits on screen", "hunk \(diff.currentHunk + 1)")
         diff.perform(.revert)
         let reverted = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Revert Hunk undoes just that change in the file")
+        check(reverted.contains("line 12\n") && reverted.contains("line two\n"), "Rollback Hunk undoes just that change in the file")
         _ = await wait(5) { diff.hunkCount == 1 }
         c.window?.undoManager?.undo()
         check(((try? String(contentsOf: file, encoding: .utf8)) ?? "") == changed, "⌘Z brings the reverted change back")

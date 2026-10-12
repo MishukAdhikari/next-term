@@ -111,7 +111,7 @@ import Testing
         try modified(cursor, now)
         try modified(devin, now.addingTimeInterval(-2 * 86400))
 
-        let found = ImportVSCode.detect(home: home)
+        let found = ImportVSCode.detect(home: home, applications: [home + "/Applications"])
         #expect(found.map(\.kind) == [.cursor, .vsCode, .devinDesktop])
         #expect(found.map(\.name) == ["Cursor", "VS Code", "Devin Desktop"])
         #expect(found.map(\.configPath) == [cursor, code, devin])
@@ -125,7 +125,7 @@ import Testing
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
         let windsurf = try user(home, "Windsurf")
-        let found = ImportVSCode.detect(home: home)
+        let found = ImportVSCode.detect(home: home, applications: [home + "/Applications"])
         #expect(found == [DetectedApp(kind: .devinDesktop, name: "Windsurf", configPath: windsurf, lastUsed: found.first?.lastUsed)])
         #expect(found.first?.lastUsed != nil)
     }
@@ -135,13 +135,13 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         _ = try user(home, "Code - Insiders")
         _ = try user(home, "VSCodium")
-        #expect(Set(ImportVSCode.detect(home: home).map(\.name)) == ["VS Code Insiders", "VSCodium"])
+        #expect(Set(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).map(\.name)) == ["VS Code Insiders", "VSCodium"])
     }
 
     @Test func nothingInstalled() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportVSCode.detect(home: home).isEmpty)
+        #expect(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).isEmpty)
     }
 
     // MARK: font size
@@ -172,17 +172,23 @@ import Testing
         #expect(flag.settings.isEmpty && flag.skipped == [SkippedItem("editor.fontSize", "value not recognised")])
     }
 
-    @Test func terminalFontSizeOnlyWithoutAnEditorSize() throws {
+    @Test func terminalFontSizeIsTheTerminalsOwn() throws {
         let alone = try settings(#"{"terminal.integrated.fontSize": 15}"#)
-        #expect(alone.settings == [PlannedSetting(.fontSize(15), source: "terminal.integrated.fontSize 15")])
+        #expect(alone.settings == [PlannedSetting(.terminalFontSize(15), source: "terminal.integrated.fontSize 15")])
         let zoomed = try settings(#"{"terminal.integrated.fontSize": 15, "window.zoomLevel": 1}"#)
-        #expect(zoomed.settings == [PlannedSetting(.fontSize(18), source: "terminal.integrated.fontSize 15 at window.zoomLevel 1")])
+        let zoomedRows = [PlannedSetting(.fontSize(14), source: "window.zoomLevel 1 with the default editor.fontSize 12"),
+                          PlannedSetting(.terminalFontSize(18), source: "terminal.integrated.fontSize 15 at window.zoomLevel 1")]
+        #expect(zoomed.settings == zoomedRows)
 
         let differ = try settings(#"{"editor.fontSize": 14, "terminal.integrated.fontSize": 16}"#)
-        #expect(differ.settings == [PlannedSetting(.fontSize(14), source: "editor.fontSize 14")])
-        #expect(differ.skipped == [SkippedItem("terminal.integrated.fontSize", "one font size for editor and terminal today; the editor's size is used")])
+        let differRows = [PlannedSetting(.fontSize(14), source: "editor.fontSize 14"),
+                          PlannedSetting(.terminalFontSize(16), source: "terminal.integrated.fontSize 16")]
+        #expect(differ.settings == differRows)
+        #expect(differ.skipped.isEmpty)
         let same = try settings(#"{"editor.fontSize": 14, "terminal.integrated.fontSize": 14}"#)
-        #expect(same.settings.count == 1 && same.skipped.isEmpty)
+        #expect(same.settings.map(\.setting) == [.fontSize(14), .terminalFontSize(14)] && same.skipped.isEmpty)
+        let big = try settings(#"{"terminal.integrated.fontSize": 50}"#)
+        #expect(big.settings.map(\.setting) == [.terminalFontSize(32)])
     }
 
     // MARK: line height
@@ -414,6 +420,7 @@ import Testing
             PlannedSetting(.trimTrailingWhitespace(true), source: "files.trimTrailingWhitespace true"),
             PlannedSetting(.terminalCursorShape("bar"), source: "terminal.integrated.cursorStyle line"),
             PlannedSetting(.terminalScrollback(50000), source: "terminal.integrated.scrollback 50000"),
+            PlannedSetting(.backgroundFetch("5"), source: "git.autofetch true", note: "VS Code fetches every 3 minutes; Next Term every 5, 10 or 30"),
         ])
         // files.exclude hides only what the sidebar hides anyway, so it needs no row.
         #expect(result.skipped == [
@@ -424,7 +431,7 @@ import Testing
             SkippedItem("search.exclude", "Find in Files skips what git ignores; a file mask such as !dist/** leaves out more"),
             SkippedItem("editor.cursorBlinking", "the editor keeps macOS's text caret; the cursor style here is the terminal's"),
             SkippedItem("[python]", "per-language settings come later"),
-            SkippedItem("2 other settings", "Next Term has no matching setting"),
+            SkippedItem("1 other setting", "Next Term has no matching setting"),
         ])
         #expect(try settings(#"{"editor.fontSize": 13}"#).skipped.isEmpty)
         #expect(try settings(#"{"editor.minimap.enabled": false}"#).skipped == [SkippedItem("1 other setting", "Next Term has no matching setting")])
@@ -706,8 +713,9 @@ import Testing
         try stateDB(user + "/globalStorage/state.vscdb", entries: [["folderUri": uri(older)]], close: true)
         let plan = self.plan(app(user, .vsCodeInsiders, name: "VS Code Insiders"), home: home)
         #expect(plan.recentProjects == [older])
-        #expect(plan.skipped == [SkippedItem("recent projects in ~/.vscode-insiders-shared/sharedStorage",
-                                             "not found where VS Code Insiders keeps them; choose the file to bring them over")])
+        let reason = "not found in the shared storage where VS Code Insiders usually keeps them (a portable install keeps them elsewhere)"
+        #expect(plan.skipped == [SkippedItem("recent projects", reason)])
+        #expect(!String(describing: plan.skipped).contains(".vscode-insiders-shared"), "an app's folders are never named")
     }
 
     @Test func productJSONWithoutAUsableName() throws {
@@ -891,14 +899,16 @@ import Testing
 
     @Test func keybindingsSettledUnderTheVSCodeKeys() throws {
         let plan = ImportPlan(preset: .vsCode, shortcuts: try keybindings().shortcuts)
-            .settlingShortcuts(current: ImportShortcutsTests.current(.vsCode))
+            .settlingShortcuts(current: ImportShortcutsTests.current(.vsCode), titles: ["showBranches:": "Branches…"]) // the menu's title, as the app gives it
         func row(_ id: String) -> PlannedShortcut? { plan.shortcuts.first { $0.command == id } }
         // ⌘T is New Tab's, ⇧⌘D Split Down's: both left for the user to choose.
         #expect(row("goToFile:")?.ticked == false && row("goToFile:")?.note?.hasPrefix("⌘T is New Tab’s here") == true)
         #expect(row("splitRight:")?.ticked == false && row("splitRight:")?.note?.hasPrefix("⇧⌘D is Split Down’s here") == true)
         // Show Next Tab is ⇧⌘] already, so there is nothing to bring over.
         #expect(row("showNextTab:") == nil)
-        #expect(row("closeTab:")?.ticked == true && row("toggleProjectSidebar:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        #expect(row("closeTab:")?.ticked == true && row("toggleComment:")?.ticked == true)
+        // ⌥⌘B is Git › Branches… here.
+        #expect(row("toggleProjectSidebar:")?.ticked == false && row("toggleProjectSidebar:")?.note?.hasPrefix("⌥⌘B is Branches…’s here") == true)
         #expect(row("goToLine:")?.ticked == false && row("toggleTerminalCollapsed:")?.ticked == false)
         // ⌘D is free under the VS Code keys (Split Right is ⌘\ there, Duplicate Line has none), so it comes over.
         #expect(row("duplicateLine:")?.ticked == true && row("duplicateLine:")?.note == nil)
@@ -1055,8 +1065,8 @@ import Testing
         try write(#"{"editor.fontSize": 15, "editor.wordWrap": "off"}"#, to: user + "/settings.json")
         let project = try folder(home + "/proj")
         try stateDB(user + "/globalStorage/state.vscdb", entries: [["folderUri": uri(project)]], close: true)
-        let found = try #require(ImportVSCode.detect(home: home).first)
-        let plan = ImportVSCode.plan(for: found, home: home, usKeyboard: false)
+        let found = try #require(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).first)
+        let plan = ImportVSCode.plan(for: found, home: home, usKeyboard: false, applications: [home + "/Applications"])
         #expect(plan.preset == .vsCode)
         #expect(plan.settings.map(\.setting) == [.fontSize(15), .softWrap(false)])
         #expect(plan.recentProjects == [project])

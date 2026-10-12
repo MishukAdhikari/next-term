@@ -226,7 +226,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var activeTab: TerminalTab? { activeGroup?.focused }
     func group(of tab: TerminalTab) -> PaneGroup? { groups.first { $0.contains(tab) } }
 
-    init(directory: String?, project: String? = nil) {
+    /// `firstTab` false: a window the restore fills (`insertRestored`), with no tab of its own.
+    init(directory: String?, project: String? = nil, firstTab: Bool = true) {
         self.project = project.map(canonicalPath)
         projectTitle = Self.title(ofProject: self.project)
         let window = TerminalWindow(
@@ -313,7 +314,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         RunLoop.main.add(ticker, forMode: .common)
         self.ticker = ticker
 
-        addTab(directory: self.project ?? directory)
+        if firstTab { addTab(directory: self.project ?? directory) }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -360,8 +361,34 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return tab
     }
 
-    private func makeTab(directory: String?, remote: RemoteTab? = nil) -> TerminalTab {
-        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.fontSize, remote: remote)
+    /// A tab the restore puts back, with the id it had (SessionRestore). Not in the window until `insertRestored`.
+    func restoredTab(directory: String?, remote: RemoteTab?, id: UUID) -> TerminalTab {
+        makeTab(directory: directory, remote: remote, id: id)
+    }
+
+    /// A tab the restore built, with its panes, laid out at its real size before any shell starts, after the tabs here.
+    /// `starting`: the panes whose shells start now; the restore starts the others (on a server) itself. Hidden until
+    /// `select` brings it forward.
+    func insertRestored(_ group: PaneGroup, starting: [TerminalTab]) {
+        let view = group.view
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        groups.append(group)
+        window?.contentView?.layoutSubtreeIfNeeded() // the window's real size, set before any tab, reaches the tab
+        group.layout()
+        container.layoutSubtreeIfNeeded() // each pane's real size before its shell starts, so it draws once
+        for tab in starting { tab.start() }
+        view.isHidden = groups.count - 1 != activeIndex
+    }
+
+    private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID()) -> TerminalTab {
+        let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote, id: id)
         tab.delegate = self
         // ⌘-click on "src/a.ts:42" in the output opens the editor there.
         tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
@@ -507,7 +534,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return
         }
         // Asked about saving: that sheet said what closing stops.
-        guard !saveAsked, let warning = tab.closeWarning, let window else {
+        guard !saveAsked, let note = tab.closeNote, let window else {
             remove(tab, saveAsked: saveAsked)
             return
         }
@@ -515,7 +542,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close “\(tab.title)”?"
-        alert.informativeText = "Closing the \(isPane ? "pane" : "tab") stops \(warning)."
+        alert.informativeText = CloseText.text(lead: "Closing the \(isPane ? "pane" : "tab") stops", notes: [note])
         alert.addButton(withTitle: isPane ? "Close Pane" : "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -609,12 +636,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// tab whose shell ended by itself (`exit`, Ctrl-D). One that failed stays as it was, with its reason.
     private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
         guard let window, !askingToSave else { return }
-        let busy = closing.filter { $0.closeWarning != nil }
+        let busy = closing.filter { $0.closeNote != nil }
         var note = "Closing the window’s last tab closes the window."
         if closing.allSatisfy(\.exited) {
             note = "The shell in the window’s last tab has ended, so the window closes."
         } else if !busy.isEmpty {
-            note = "Closing the window’s last tab closes the window and stops " + Self.stopList(busy)
+            note = Self.stopText("Closing the window’s last tab closes the window and stops", busy, otherwise: note)
         }
         let alert = saveAlert(editorArea.dirtyDocuments, note: note)
         if !kept.isEmpty { alert.informativeText += "\n\n" + kept }
@@ -662,8 +689,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return quoted.dropLast().joined(separator: ", ") + " and " + last
     }
 
-    /// Tabs whose closing would stop a program or a job.
-    var busyTabs: [TerminalTab] { tabs.filter { $0.closeWarning != nil } }
+    /// Tabs whose closing would stop a program or a job, or leave one running that the user may expect to stop.
+    var busyTabs: [TerminalTab] { tabs.filter { $0.closeNote != nil } }
 
     /// What keeps running on servers after `tabs` close (kept tmux tabs with a program in front), for the
     /// close alerts: "“claude” on web-1 (tmux session nt-app-1a2b3c)". Empty: nothing.
@@ -676,12 +703,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return "Still running after closing, on the host: " + kept.joined(separator: "; ") + ". Reopen from File › New Remote Tab…"
     }
 
-    /// "“vim notes.md” (suspended); “npm run dev” (running); and more in 2 other tabs." The same ending
-    /// for every alert that stops tabs.
-    static func stopList(_ busy: [TerminalTab]) -> String {
-        let listed = busy.prefix(4).compactMap(\.closeWarning).joined(separator: "; ")
-        let rest = busy.count - 4
-        return listed + (rest > 0 ? "; and more in \(rest) other tab\(rest == 1 ? "" : "s")." : ".")
+    /// "<lead> “vim notes.md” (suspended); “claude” (running), “next-server” (started by “claude”); and more in 2
+    /// other tabs." then what keeps running ("“python3 serve.py” keeps running: it ignores hangups."). The same text
+    /// for every alert that stops tabs, from the plans their hangup follows. `otherwise`: the first sentence when
+    /// nothing stops.
+    static func stopText(_ lead: String, _ busy: [TerminalTab], otherwise: String = "") -> String {
+        CloseText.text(lead: lead, notes: busy.compactMap(\.closeNote), otherwise: otherwise)
     }
     var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil }.count }
 
@@ -726,6 +753,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let now = TerminalTab.now
         refreshVisibility()
         for tab in tabs {
+            tab.view.drawIfSeenAgain()
             if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
             tab.pollAgentScreen()
             tab.status.tick(at: now)
@@ -742,9 +770,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let items = groups.enumerated().map { index, group -> TabBarItem in
             let tab = group.focused
             guard group.isSplit else {
-                return TabBarItem(title: tab.title, truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
+                return TabBarItem(title: AgentSpinner.shown(tab.title), truncation: tab.titleTruncation, state: tab.status.state, tooltip: tab.tooltip,
                                   accessibilityStatus: tab.ownStateDescription ?? "", shortcut: shortcuts[index], remote: tab.remoteMark,
-                                  shorterTitles: tab.shorterTitles, editableTitle: tab.editableTitle)
+                                  shorterTitles: tab.shorterTitles.map(AgentSpinner.shown), editableTitle: tab.editableTitle)
             }
             // A split tab: named by the pane with the keyboard, marked by the pane that most needs you.
             let lines = group.panes.map(\.paneSummary)
@@ -753,11 +781,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let spoken = group.panes.filter { $0 !== tab || $0.paneSummary != $0.title }.map(\.paneSummary)
             let mark = group.remoteMark
             let others = "  +\(group.panes.count - 1)"
-            return TabBarItem(title: tab.title + others, truncation: tab.titleTruncation,
+            return TabBarItem(title: AgentSpinner.shown(tab.title) + others, truncation: tab.titleTruncation,
                               state: Self.mostUrgent(group.panes.map(\.status.state)),
                               tooltip: ([mark?.summary].compactMap { $0 } + lines).joined(separator: "\n"),
                               accessibilityStatus: spoken.joined(separator: "; "), shortcut: shortcuts[index], remote: mark,
-                              shorterTitles: tab.shorterTitles.map { $0 + others }, editableTitle: tab.editableTitle)
+                              shorterTitles: tab.shorterTitles.map { AgentSpinner.shown($0) + others }, editableTitle: tab.editableTitle)
         }
         tabBar.update(items: placeMarked(items), selectedIndex: activeIndex)
         // An agent started or stopped, or another one is the one Send to Agent types into: the Ask hints follow.
@@ -777,9 +805,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         noteAgentTabs()
     }
 
-    /// Needs you, then working, failed, done, idle.
-    static func mostUrgent(_ states: [TabState]) -> TabState {
-        let order: [TabState] = [.attention, .working, .failed, .done, .idle]
+    /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never
+    /// hides another pane's cross or check: it comes after them.
+    static func mostUrgent(_ states: [TabState], workingShown: Bool = AgentSpinner.current != .off) -> TabState {
+        let order: [TabState] = workingShown ? [.attention, .working, .failed, .done, .idle] : [.attention, .failed, .done, .working, .idle]
         return order.first { states.contains($0) } ?? .idle
     }
 
@@ -880,12 +909,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: projects
 
-    /// A window nobody has used yet: no project, one tab, nothing run in it.
+    /// A window nobody has used yet: no project, one tab, nothing run in it, and nothing restored into it.
     var isPristine: Bool {
         // A remote tab is never unused: commands there are seen only now and then, and its session matters.
         guard project == nil, groups.count == 1, tabs.count == 1, let tab = tabs.first, tab.remote == nil else { return false }
-        return tab.status.command.isEmpty && !tab.status.running && tab.closeWarning == nil
+        return tab.isUntouched && tab.closeNote == nil
     }
+
+    /// A tab here holds what the restore brought back, and the user has not put anything in it yet: Open Project never
+    /// takes this window over or replaces its tabs, but opens a window of its own (ProjectOpening.placement).
+    var holdsRestore: Bool { tabs.contains(where: \.holdsRestore) }
 
     /// Turns this window into `path`'s project: a fresh tab in the project, the old tabs closed.
     /// Callers confirm first if the old tabs are busy.
@@ -908,9 +941,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
-        let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
+        let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(showWorktrees(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
-        if let action = item.action, gitActions.contains(action) { return gitFolder != nil }
+        // Off while a sheet is over the window (the commit sheet, a question one of them asked): a key pressed twice, or
+        // held, asks nothing twice.
+        if let action = item.action, gitActions.contains(action) { return gitFolder != nil && window?.attachedSheet == nil }
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
@@ -918,6 +953,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(gitRollback(_:)) { return gitFolder != nil && window?.attachedSheet == nil && !rollbackTargets.isEmpty }
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
         }
@@ -1312,6 +1348,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func sidebar(_ sidebar: ProjectSidebarView, insert text: String) {
         guard let tab = activeTab else { return }
+        tab.userInput() // the user's text: a restored action waiting in the tab is dropped, never run after it
         tab.view.typeIn(text)
         window?.makeFirstResponder(tab.view)
     }
@@ -1375,12 +1412,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// A tab in `directory` running `command` once its shell is at the prompt. An untouched first tab in
-    /// the same folder is used rather than a second one.
+    /// the same folder is used rather than a second one; never a restored one, which may hold a put-back line.
     @discardableResult
     func runInNewTab(directory: String, command: String, title: String?) -> TerminalTab {
         let folder = canonicalPath(directory)
         let tab: TerminalTab
-        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.status.command.isEmpty, !only.status.running,
+        if groups.count == 1, tabs.count == 1, let only = tabs.first, only.remote == nil, only.isUntouched,
            canonicalPath(only.directory) == folder {
             tab = only
         } else {
@@ -1750,6 +1787,77 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func sidebar(_ sidebar: ProjectSidebarView, showChanges url: URL) { showChanges(of: url) }
 
+    /// ⌥⌘Z, Git › Rollback…, by where the keyboard is:
+    /// - in the editor with the caret or a selection on changed lines: those lines back to the last commit, at once
+    ///   (Rollback Lines, ⌘Z undoes it);
+    /// - in a diff of uncommitted changes: its current change, at once, the next one current after it (Rollback Hunk);
+    /// - else the file in front or what is selected in the sidebar (files, folders, deleted files), after asking
+    ///   (GitActions.rollback).
+    @objc func gitRollback(_ sender: Any?) {
+        if isEditorFocused, let editor = editorArea.activeEditor, editor.touchesChanges { return rollbackLines(in: editor) }
+        if let diff = editorArea.activeDiff, diff.canRollBackHunk, let view = window?.firstResponder as? NSView, view.isDescendant(of: diff) {
+            return diff.rollBack(hunk: diff.currentHunk, of: diff.file)
+        }
+        let targets = rollbackTargets
+        guard !targets.isEmpty else { return NSSound.beep() }
+        rollback(targets)
+    }
+
+    /// Rollback Lines in `editor`, then a notice with Undo. A file with no unsaved edits before is saved after, so git
+    /// and the sidebar see what the editor shows; one with unsaved edits stays unsaved, the rollback among them.
+    private func rollbackLines(in editor: CodeEditorView) {
+        let document = editor.document, wasSaved = !document.isDirty
+        editor.rollbackLines { [weak self, weak editor] count in
+            guard let self, let editor else { return }
+            guard count > 0 else { return NSSound.beep() }
+            if wasSaved { self.editorArea.save(document) }
+            let after = document.text
+            let lines = count == 1 ? "1 line" : "\(count) lines"
+            GitToast.show("Rolled back \(lines) in \(document.name)", in: self.window, button: "Undo") { [weak self, weak editor] in
+                // Only while nothing was typed since: then the edit on top of the undo stack is the rollback.
+                guard let self, let editor, document.text == after, editor.textView.undoManager?.canUndo == true else { return NSSound.beep() }
+                editor.textView.undoManager?.undo()
+                if wasSaved { self.editorArea.save(document) }
+            }
+        }
+    }
+
+    func sidebar(_ sidebar: ProjectSidebarView, rollback urls: [URL]) { rollback(urls) }
+
+    /// What Git › Rollback… acts on: as Show Changes, what is in front while the sidebar doesn't have the keyboard (the
+    /// file being edited, the Git Diff tab's selected file, a file's diff of its uncommitted changes), else the sidebar's
+    /// selection, deleted files included. A diff of a commit or a proposal has nothing to roll back.
+    var rollbackTargets: [URL] {
+        let fromEditor = isEditorFocused || window?.firstResponder !== sidebar.outline
+        if fromEditor, editorArea.activePane != nil {
+            if let gitDiff = editorArea.activeGitDiff { return gitDiff.rollbackTarget.map { [$0] } ?? [] }
+            if let diff = editorArea.activeDiff { return diff.commit == nil && diff.proposal == nil ? [URL(fileURLWithPath: diff.absolutePath)] : [] }
+            if let path = editorArea.activePath { return [URL(fileURLWithPath: path)] }
+        }
+        return sidebar.selection.map(\.url) + sidebar.selectedDeleted.map(\.url)
+    }
+
+    /// Rolls back `urls`, all in the repository of the first: the others are left alone. Paths are read as the kernel
+    /// spells them (`/tmp` is `/private/tmp`), but a file's own name as it is: a link is rolled back, not what it points to.
+    func rollback(_ urls: [URL]) {
+        guard let first = urls.first else { return NSSound.beep() }
+        func spelled(_ url: URL) -> String {
+            let path = url.standardizedFileURL.path
+            if Rollback.diskKind("", root: path) == .directory { return canonicalPath(path) }
+            return (canonicalPath((path as NSString).deletingLastPathComponent) as NSString).appendingPathComponent((path as NSString).lastPathComponent)
+        }
+        // A folder is its own start (the project's own row is the root itself); a file, or a deleted one, its folder's.
+        let start = spelled(first)
+        let isFolder = Rollback.diskKind("", root: start) == .directory
+        let root = canonicalPath(ProjectRoot.find(from: isFolder ? start : (start as NSString).deletingLastPathComponent))
+        let paths = urls.map(spelled).compactMap { path -> String? in
+            if path == root { return "" }
+            return path.hasPrefix(root + "/") ? String(path.dropFirst(root.count + 1)) : nil
+        }
+        guard !paths.isEmpty, FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(".git")) else { return NSSound.beep() }
+        withGit(at: root) { $0.rollback(paths) }
+    }
+
     /// A Databases row's action. Hand-offs read the password from the project's file themselves.
     func sidebar(_ sidebar: ProjectSidebarView, database: DetectedDatabase, perform action: DatabaseAction) {
         guard let root = sidebar.root?.path else { return }
@@ -1823,8 +1931,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         addTab(directory: directory)
     }
 
-    func applyFontSize(_ size: CGFloat) {
-        for tab in tabs { tab.view.font = Theme.terminalFont(size: size) }
+    /// The editor's size in the editors, and the terminals' size (their own, else the editor's) in the terminals.
+    func applyFontSizes() {
+        let font = Theme.terminalFont(size: AppDelegate.shared.terminalFontSize)
+        for tab in tabs { tab.view.font = font }
         editorArea.applyFont()
     }
 
@@ -1886,6 +1996,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func showBranches(_ sender: Any?) {
         guard let anchor = branchPopupAnchor, let folder = gitFolder else { return NSSound.beep() }
         if branchPopup.isVisible { return branchPopup.close() }
+        branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
+    }
+
+    /// A git command in a terminal tab here failed because the worktree at `path` has `branch` (TerminalTab): a notice
+    /// whose Free It… asks what to do with that worktree, Remove Worktree when it can go (GitActions.held, with no
+    /// switch: the command is the user's to run again).
+    func noticeHeldBranch(_ branch: String, at path: String, from directory: String) {
+        let root = canonicalPath(ProjectRoot.find(from: directory))
+        guard FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(".git")) else { return }
+        let folder = (path as NSString).lastPathComponent
+        GitToast.show("“\(branch)” is checked out in “\(folder)”", in: window, button: "Free It…") { [weak self] in
+            self?.withGit(at: root) { $0.held(branch, at: path) }
+        }
+    }
+
+    /// Git › Worktrees…: the branch popup with the first of the repository's other worktrees chosen, where each is
+    /// opened, unlocked or removed from its row's menu (→).
+    @objc func showWorktrees(_ sender: Any?) {
+        guard let anchor = branchPopupAnchor, let folder = gitFolder else { return NSSound.beep() }
+        branchPopup.focusWorktrees = true
+        if branchPopup.isVisible { return branchPopup.reload() }
         branchPopup.show(for: self, directory: folder, snapshot: sidebar.git.snapshot, anchor: anchor)
     }
 
@@ -2019,7 +2150,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = [busy.isEmpty ? "" : "Closing it stops " + Self.stopList(busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self] response in
@@ -2037,7 +2168,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func windowWillClose(_ notification: Notification) {
         ticker?.invalidate()
         ticker = nil
-        for tab in tabs { tab.terminate() }
+        sidebar.stopWatching()
+        _ = TerminalTab.terminate(tabs, finishLater: true)
         groups.removeAll()
         editorArea.closeAll()
         finder.close()
@@ -2069,7 +2201,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard group.isSplit else { return requestClose(group.focused) }
         // The tab's × closes all its panes, asking once if that stops anything (or, as the window's last
         // tab with files unsaved, whether to save them: the window closes too).
-        let busy = group.panes.filter { $0.closeWarning != nil }
+        let busy = group.panes.filter { $0.closeNote != nil }
         let kept = Self.keptList(group.panes)
         if closesWindow(group.panes), !editorArea.dirtyDocuments.isEmpty {
             return askToSave(closing: group.panes, kept: kept) { [weak self] in group.panes.forEach { self?.remove($0, saveAsked: true) } }
@@ -2078,7 +2210,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this tab and its \(group.panes.count) panes?"
-        alert.informativeText = [busy.isEmpty ? "" : "Closing it stops " + Self.stopList(busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Close Tab")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in

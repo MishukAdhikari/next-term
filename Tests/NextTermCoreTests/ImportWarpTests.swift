@@ -22,7 +22,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         try write(settings.replacingOccurrences(of: "$HOME", with: home), to: home + "/.warp/settings.toml")
         for (path, text) in files { try write(text, to: home + "/.warp/" + path) }
-        let app = try #require(ImportWarp.detect(home: home).first)
+        let app = try #require(ImportWarp.detect(home: home, applications: []).first)
         return ImportWarp.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
     }
 
@@ -88,10 +88,17 @@ import Testing
     @Test func detection() throws {
         let home = try home()
         defer { try? FileManager.default.removeItem(atPath: home) }
-        #expect(ImportWarp.detect(home: home).isEmpty)
+        #expect(ImportWarp.detect(home: home, applications: []).isEmpty)
         let used = Date(timeIntervalSince1970: 1_790_000_000)
         try write("", to: home + "/.warp/settings.toml", date: used)
-        #expect(ImportWarp.detect(home: home) == [DetectedApp(kind: .warp, name: "Warp", configPath: home + "/.warp", lastUsed: used)])
+        #expect(ImportWarp.detect(home: home, applications: []) == [DetectedApp(kind: .warp, name: "Warp", configPath: home + "/.warp", lastUsed: used)])
+        #expect(ImportWarp.detect(home: home, applications: []).first?.appRemoved == true)
+
+        // The app and its version, from the folders given.
+        let plist = #"<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>0.2025.10.01</string></dict></plist>"#
+        try write(plist, to: home + "/Applications/Warp.app/Contents/Info.plist", date: used)
+        let found = try #require(ImportWarp.detect(home: home, applications: [home + "/Applications"]).first)
+        #expect(found.appPath == home + "/Applications/Warp.app" && found.version == "0.2025.10.01" && !found.appRemoved)
     }
 
     @Test func settingsAndACustomTheme() throws {
@@ -105,7 +112,7 @@ import Testing
         let palette = TerminalPalette(name: "Warp colours", ansi: ansi, foreground: 0x839496, background: 0x002B36, cursor: 0x268BD2)
         #expect(plan.settings == [
             PlannedSetting(.terminalFontFamily("JetBrains Mono"), source: "font_name JetBrains Mono"),
-            PlannedSetting(.fontSize(14), source: "font_size 14", note: "sets the editor too: Next Term has one size for both"),
+            PlannedSetting(.terminalFontSize(14), source: "font_size 14"),
             PlannedSetting(.optionAsMeta(true), source: "extra_meta_keys left_alt, right_alt"),
             PlannedSetting(.terminalPalette(palette), source: "theme my_theme.yaml", note: "7 of 20 colours; the others stay Next Term's"),
         ])

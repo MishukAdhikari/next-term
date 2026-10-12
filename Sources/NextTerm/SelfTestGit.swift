@@ -132,7 +132,10 @@ extension SelfTest {
                   "Delete on Remote deletes only the commit it showed: after a push since the last fetch, it asks you to fetch", sheetText())
             check(run(remote, "rev-parse", "feat/remote-x") == pushedSince, "and the commit pushed since stays on the remote")
             _ = await press("Fetch")
-            check(await wait(10) { run(repo, "rev-parse", "origin/feat/remote-x") == pushedSince }, "Fetch brings that commit in")
+            // Its notice comes once the branches are read again, after the fetch: dismissed before then, it would come
+            // up over the delete's Undo below.
+            check(await wait(10) { run(repo, "rev-parse", "origin/feat/remote-x") == pushedSince && GitToast.text?.hasPrefix("Fetched") == true },
+                  "Fetch brings that commit in", GitToast.text ?? "no notice")
             GitToast.dismiss()
         }
 
@@ -167,6 +170,18 @@ extension SelfTest {
         } else {
             check(false, "the remote's branches are read")
         }
+        GitToast.dismiss()
+
+        // A notice for work begun before an Undo came up (a Fetch whose branches were still being read when a delete queued
+        // behind it finished) leaves that Undo up; one for work begun since takes its place.
+        let begun = GitToast.count
+        GitToast.show("Deleted feat/later (was 1234567)", in: window, button: "Undo") {}
+        GitToast.show("Fetched: up to date", in: window, begun: begun)
+        let kept = GitToast.text
+        GitToast.show("Fetched: up to date", in: window, begun: GitToast.count)
+        check(kept == "Deleted feat/later (was 1234567)" && GitToast.text == "Fetched: up to date",
+              "a notice for work begun before an Undo came up leaves that Undo up, and one begun since replaces it",
+              "\(kept ?? "no notice"), then \(GitToast.text ?? "no notice")")
         GitToast.dismiss()
 
         // Update a branch that isn't checked out: forward from its upstream; diverged, it says so and changes nothing.
@@ -215,7 +230,7 @@ extension SelfTest {
 
     /// git in `dir`, as the self-test's own committer; what it printed.
     @discardableResult
-    private static func gitOutput(_ git: String, _ dir: String, _ args: [String]) -> String {
+    static func gitOutput(_ git: String, _ dir: String, _ args: [String]) -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)
         p.arguments = ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",

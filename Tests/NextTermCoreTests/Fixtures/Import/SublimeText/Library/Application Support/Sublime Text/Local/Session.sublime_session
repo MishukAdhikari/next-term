@@ -1,0 +1,40 @@
+{
+	"folder_history":
+	[
+		"@HOME@/Code/alpha",
+		"@HOME@/Code/missing",
+		"Code/relative",
+		"@HOME@/Code/FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"@HOME@/Code/alpha"
+	],
+	"last_version": 4200,
+	"last_window_id": 3,
+	"settings":
+	{
+		"new_window_settings":
+		{
+			"find_state": { "find_history": [ "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" ] }
+		}
+	},
+	"windows":
+	[
+		{
+			"buffers":
+			[
+				{
+					"contents": "unsaved: export TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU",
+					"settings": { "name": "untitled" }
+				}
+			],
+			"folders": [ { "path": "@HOME@/Code/alpha" } ]
+		}
+	],
+	"workspaces":
+	{
+		"recent_workspaces":
+		[
+			"@HOME@/Code/beta/beta.sublime-workspace",
+			"@HOME@/Code/gamma.sublime-workspace"
+		]
+	}
+}

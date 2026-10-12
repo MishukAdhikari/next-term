@@ -1,0 +1,4 @@
+{
+	"installed_packages": ["LSP", "NeoVintageous", "Package Control"],
+	"https_proxy": "http://fixture:FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@proxy.invalid",
+}

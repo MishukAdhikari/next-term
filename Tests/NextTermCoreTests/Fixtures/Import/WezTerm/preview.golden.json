@@ -1,0 +1,252 @@
+{
+  "Kaku" : {
+    "changes_if_applied" : 3,
+    "not_brought_over" : [
+      {
+        "item" : "color_scheme Kaku Dark",
+        "reason" : "Kaku's built-in schemes are inside Kaku, so they can't be read yet"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "font_size 16",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "…",
+        "id" : "set:optionAsMeta",
+        "note" : null,
+        "ticked" : true,
+        "title" : "optionAsMeta title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "Kaku",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "keys CMD|SHIFT+RightArrow → ActivatePaneDirection",
+        "id" : "key:selectPaneRight:",
+        "new" : "⇧⌘→",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Pane on the Right"
+      }
+    ]
+  },
+  "WezTerm" : {
+    "changes_if_applied" : 15,
+    "not_brought_over" : [
+      {
+        "item" : "Terminal font “Operator Mono”",
+        "reason" : "not installed on this Mac"
+      },
+      {
+        "item" : "default_cwd",
+        "reason" : "WezTerm starts only its first window there; new tabs open in the folder of the pane in front"
+      },
+      {
+        "item" : "colors cursor_bg",
+        "reason" : "only #rrggbb colours are read"
+      },
+      {
+        "item" : "keys LEADER+a → SpawnWindow",
+        "reason" : "two-step keys aren't supported yet"
+      },
+      {
+        "item" : "1 key whose action is Lua code",
+        "reason" : "Lua code is never run"
+      },
+      {
+        "item" : "4 keys",
+        "reason" : "no matching Next Term command, or they send text to the terminal"
+      },
+      {
+        "item" : "window_background_opacity",
+        "reason" : "the terminal is opaque here"
+      },
+      {
+        "item" : "other settings: hide_tab_bar_if_only_one_tab",
+        "reason" : "no matching Next Term setting yet"
+      },
+      {
+        "item" : "default_prog",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "set_environment_variables",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "ssh_domains",
+        "reason" : "never imported: runs commands or can hold secrets"
+      },
+      {
+        "item" : "set by Lua code: line_height, term, enable_tab_bar",
+        "reason" : "only values written out in the file are read; it is never run"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "font Operator Mono, JetBrains Mono",
+        "id" : "set:terminalFontFamily",
+        "note" : "the first font in the list that this Mac has",
+        "ticked" : true,
+        "title" : "terminalFontFamily title"
+      },
+      {
+        "from" : "font_size 14",
+        "id" : "set:terminalFontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalFontSize title"
+      },
+      {
+        "from" : "default_cursor_style BlinkingBar",
+        "id" : "set:terminalCursorShape",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorShape title"
+      },
+      {
+        "from" : "default_cursor_style BlinkingBar",
+        "id" : "set:terminalCursorBlink",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalCursorBlink title"
+      },
+      {
+        "from" : "scrollback_lines 20000",
+        "id" : "set:terminalScrollback",
+        "note" : null,
+        "ticked" : true,
+        "title" : "terminalScrollback title"
+      },
+      {
+        "from" : "…",
+        "id" : "set:optionAsMeta",
+        "note" : null,
+        "ticked" : true,
+        "title" : "optionAsMeta title"
+      },
+      {
+        "colours" : 19,
+        "from" : "color_scheme Night Owl and colors",
+        "id" : "set:terminalPalette",
+        "note" : "19 of 20 colours; the others stay Next Term's",
+        "ticked" : true,
+        "title" : "terminalPalette title"
+      }
+    ],
+    "shortcut_set" : {
+      "in_use" : true,
+      "to" : "Next Term"
+    },
+    "source" : "WezTerm",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+      {
+        "allowed" : true,
+        "from" : "keys CMD+t → SpawnTab",
+        "id" : "key:newTab:",
+        "new" : "⌘T",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "New Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD+d → SplitHorizontal",
+        "id" : "key:splitRight:",
+        "new" : "⌘D",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Split Right"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD+D → SplitVertical",
+        "id" : "key:splitDown:",
+        "new" : "⇧⌘D",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Split Down"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD|SHIFT+[ → ActivateTabRelative",
+        "id" : "key:showPreviousTab:",
+        "new" : "⇧⌘[",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Show Previous Tab"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD|OPT+RightArrow → ActivatePaneDirection",
+        "id" : "key:selectPaneRight:",
+        "new" : "⌥⌘→",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Pane on the Right"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD+1 → ActivateTab",
+        "id" : "key:selectTabByNumber:#1",
+        "new" : "⌘1",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Select Tab 1"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD+k → ClearScrollback",
+        "id" : "key:clearBuffer:",
+        "new" : "⌘K",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Clear Buffer"
+      },
+      {
+        "allowed" : true,
+        "from" : "keys CMD|SHIFT+Enter → TogglePaneZoomState",
+        "id" : "key:toggleZoomPane:",
+        "new" : "⇧⌘↩",
+        "note" : null,
+        "now" : "no key",
+        "ticked" : true,
+        "title" : "Maximize Pane"
+      },
+      {
+        "allowed" : false,
+        "from" : "keys CTRL|SHIFT+c → CopyTo",
+        "id" : "key:copy:",
+        "new" : "⌃⇧C",
+        "note" : "Control keys without ⌘ stay with your shell and agents",
+        "now" : "no key",
+        "ticked" : false,
+        "title" : "Copy"
+      }
+    ]
+  }
+}

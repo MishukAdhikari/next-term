@@ -1,0 +1,161 @@
+{
+  "Forky" : {
+    "changes_if_applied" : 6,
+    "not_brought_over" : [
+
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "editor.fontSize 16",
+        "id" : "set:fontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "fontSize title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 5,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "VS Code"
+    },
+    "source" : "Forky",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "Kiro" : {
+    "changes_if_applied" : 12,
+    "not_brought_over" : [
+      {
+        "item" : "IntelliJ IDEA Keybindings extension",
+        "reason" : "its own keys aren't read; JetBrains (macOS) shortcuts are offered instead of VS Code’s"
+      },
+      {
+        "item" : "Emacs keys (Awesome Emacs Keymap extension)",
+        "reason" : "Next Term has no Emacs shortcut set"
+      },
+      {
+        "item" : "1 other extension",
+        "reason" : "extensions aren't imported"
+      },
+      {
+        "item" : "kiroAgent.apiToken",
+        "reason" : "never imported: can hold secrets"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "editor.fontSize 13",
+        "id" : "set:fontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "fontSize title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 11,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "JetBrains (macOS)"
+    },
+    "source" : "Kiro",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "Positron" : {
+    "changes_if_applied" : 5,
+    "not_brought_over" : [
+
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+
+    ],
+    "shortcut_set" : {
+      "differs" : 5,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "VS Code"
+    },
+    "source" : "Positron",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  },
+  "Trae" : {
+    "changes_if_applied" : 7,
+    "not_brought_over" : [
+      {
+        "item" : "Vim keys (Vim extension)",
+        "reason" : "Next Term has no Vim mode yet"
+      },
+      {
+        "item" : "3 other extensions",
+        "reason" : "extensions aren't imported"
+      },
+      {
+        "item" : "workbench.colorTheme",
+        "reason" : "colour themes come later"
+      },
+      {
+        "item" : "terminal.integrated.env.osx",
+        "reason" : "never imported: can hold secrets"
+      },
+      {
+        "item" : "3 other settings",
+        "reason" : "Next Term has no matching setting"
+      }
+    ],
+    "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
+    "plan_id" : "p-(differs with the home folder)",
+    "settings" : [
+      {
+        "from" : "editor.fontSize 14",
+        "id" : "set:fontSize",
+        "note" : null,
+        "ticked" : true,
+        "title" : "fontSize title"
+      },
+      {
+        "from" : "editor.wordWrap on",
+        "id" : "set:softWrap",
+        "note" : null,
+        "ticked" : true,
+        "title" : "softWrap title"
+      }
+    ],
+    "shortcut_set" : {
+      "differs" : 5,
+      "id" : "preset",
+      "lines" : [
+
+      ],
+      "ticked" : true,
+      "to" : "VS Code"
+    },
+    "source" : "Trae",
+    "up_to_date" : false,
+    "your_shortcuts" : [
+
+    ]
+  }
+}

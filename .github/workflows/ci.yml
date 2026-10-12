@@ -34,6 +34,8 @@ jobs:
 
       - name: zsh integration test
         timeout-minutes: 15 # about 5 minutes on a fast Mac since Tab completion's going-into-folders checks
+        # No retry: each answered Tab now sends its answer with the key, so a busy runner can't make it miss zsh's
+        # 150 ms window, and a failure here is a real one.
         run: python3 -u scripts/zsh-integration-test.py
 
       - name: Build DMG

@@ -17,6 +17,7 @@ final class MCPControlServer: @unchecked Sendable {
     private var listenSocket: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private let queue = DispatchQueue(label: "nextterm.mcp")
+    private let calls = MCPCalls()
 
     var isRunning: Bool { listenSocket >= 0 }
 
@@ -28,25 +29,11 @@ final class MCPControlServer: @unchecked Sendable {
         // Another Next Term already answers here (a second copy of the app): leave it be.
         if Self.answers(self.path) { NSLog("Next Term: another Next Term serves \(self.path)"); return }
         unlinkIfSocket(self.path)
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(self.path.utf8)
-        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { close(fd); return }
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.copyBytes(from: bytes)
-            buffer[bytes.count] = 0
-        }
-        // Owner only from the moment it exists.
-        let previousMask = umask(0o077)
-        let bound = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        umask(previousMask)
-        guard bound == 0, chmod(self.path, 0o600) == 0, listen(fd, 16) == 0 else {
+        // Owner only from the moment it exists, and never handed to a tab's shell (MCPSocket): a copy there would keep
+        // it listening after a quit or an update's drain closed this one.
+        let fd = MCPSocket.listen(path: self.path)
+        guard fd >= 0 else {
             NSLog("Next Term: MCP socket failed: \(String(cString: strerror(errno)))")
-            close(fd)
             return
         }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
@@ -78,27 +65,11 @@ final class MCPControlServer: @unchecked Sendable {
         return fd >= 0
     }
 
-    static func connectSocket(_ path: String) -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return -1 }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(path.utf8)
-        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { close(fd); return -1 }
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.copyBytes(from: bytes)
-            buffer[bytes.count] = 0
-        }
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        if connected != 0 { close(fd); return -1 }
-        return fd
-    }
+    static func connectSocket(_ path: String) -> Int32 { MCPSocket.connect(path: path) }
 
     private func acceptAll() {
         while true {
-            let client = accept(listenSocket, nil, nil)
+            let client = MCPSocket.accept(listenSocket) // close-on-exec: a new_tab request's connection is open while its shell starts
             guard client >= 0 else { return }
             var uid: uid_t = 0, gid: gid_t = 0
             guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); continue }
@@ -114,8 +85,10 @@ final class MCPControlServer: @unchecked Sendable {
     /// The longest request read (the self-test lowers it).
     static var requestLimit = MCPServer.maxRequestBytes
 
-    /// One request line in, one answer line out.
+    /// One request line in, one answer line out. The quit's drain can answer it at any point (`calls`).
     private func serve(_ fd: Int32, peer: pid_t?, token: audit_token_t? = nil) {
+        let call = calls.begin(fd)
+        defer { calls.end(call) }
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var noSigPipe: Int32 = 1
@@ -130,26 +103,36 @@ final class MCPControlServer: @unchecked Sendable {
             ended = buffer[0..<count].contains(0x0A)
             line.append(contentsOf: buffer[0..<count])
         }
+        if let drained = call.answer { return send(drained, on: fd) }
         if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
         guard let end = line.firstIndex(of: 0x0A),
               let request = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
-              let tool = request["tool"] as? String else {
-            close(fd)
-            return
-        }
+              let tool = request["tool"] as? String else { return }
         let arguments = request["arguments"] as? [String: Any] ?? [:]
-        // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool.
+        // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool. Its connection
+        // closes as the call ends, as every other one does.
         if tool == SecretSocket.tool { return SecretSocket.handle(fd: fd, arguments: arguments, peer: peer, auditToken: token) }
-        let done = DispatchSemaphore(value: 0)
-        var answer = MCPServer.CallResult(text: "No answer", isError: true)
-        DispatchQueue.main.async {
-            MCPControl.call(tool, arguments, caller: peer) { result in
-                answer = result
-                done.signal()
+        if call.asked(MCPCalls.Request(tool: tool, arguments: arguments)) {
+            DispatchQueue.main.async {
+                guard call.starts() else { return } // the quit answered it first
+                MCPControl.call(tool, arguments, caller: peer) { result in call.finish(result) }
             }
+            call.answered.wait()
         }
-        done.wait()
-        send(answer, on: fd)
+        send(call.answer ?? MCPServer.CallResult(text: "No answer", isError: true), on: fd)
+    }
+
+    /// As Next Term quits (KTD17): it takes no new connection, answers every call it is serving with `answer`, calls posted
+    /// to the main thread that never ran included, and waits up to `wait` for those answers to be written. An update's quit
+    /// leaves the socket file, so `nxtrm mcp` is refused there and reads that as a restart; any other quit removes it.
+    func drain(keepingSocket: Bool, wait: TimeInterval = 1, answer: @escaping (MCPCalls.Request?, Bool) -> MCPServer.CallResult) {
+        guard isRunning else { return }
+        acceptSource?.cancel()
+        acceptSource = nil
+        close(listenSocket)
+        listenSocket = -1
+        if !keepingSocket { unlinkIfSocket(path) }
+        calls.drain(wait: wait, answer: answer)
     }
 
     /// A request over the limit: the rest of it is read and dropped, so the caller has finished sending
@@ -164,8 +147,8 @@ final class MCPControlServer: @unchecked Sendable {
         send(MCPServer.CallResult(text: text, isError: true), on: fd)
     }
 
-    /// Writes the answer line and closes the connection. Stored keys' values are masked in it one last time, whatever
-    /// tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included).
+    /// Writes the answer line; the connection closes as its call ends. Stored keys' values are masked in it one last
+    /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included).
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
         let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer.text), isError: answer.isError)
         let data = MCPServer.encodeAnswer(masked)
@@ -177,7 +160,6 @@ final class MCPControlServer: @unchecked Sendable {
                 offset += written
             }
         }
-        close(fd)
     }
 }
 
@@ -201,7 +183,10 @@ enum MCPControl {
     static func isDriven(_ tab: TerminalTab) -> Bool { driven.contains(tab.id) }
 
     /// You pressed a key in the tab, or pasted into it: what happens there is yours again.
-    static func typedByUser(_ tab: TerminalTab) { driven.remove(tab.id) }
+    static func typedByUser(_ tab: TerminalTab) {
+        driven.remove(tab.id)
+        MCPRestoredTabs.typedByUser(tab) // a restored tab's details count your commands from here (U13)
+    }
 
     /// The tab closed.
     static func forget(_ tab: TerminalTab) {
@@ -257,6 +242,8 @@ enum MCPControl {
     static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, approval: MCPApproval = .askOnMac,
                      requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
+        // Safe mode runs only tools that read; an update's wait refuses new work elsewhere (U13).
+        if let refusal = MCPRestoredTabs.refusal(tool, arguments) { return reply(fail(refusal)) }
         switch tool {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
         case "list_projects": reply(listProjects())
@@ -286,6 +273,10 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
                                 reply: reply)
+            }
+        case _ where MCPServer.isImportTool(tool):
+            MainActor.assumeIsolated {
+                MCPImportControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
         case _ where MCPServer.isControlTool(tool):
             MainActor.assumeIsolated {
@@ -340,9 +331,11 @@ enum MCPControl {
             info["command"] = String(field(tab.status.command).prefix(300))
         }
         info.merge(questionInfo(tab)) { $1 }
+        info.merge(MCPRestoredTabs.fields(tab)) { $1 } // what a restart did to it (U13)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
-        if let url = tab.servedURL { info["served_url"] = field(url.absoluteString) } // a dev server's local address
+        // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
+        if let url = tab.servedURL { info["served_url"] = field(ServedURL.shared(url)) }
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
@@ -386,6 +379,7 @@ enum MCPControl {
     private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
         var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
         info.merge(questionInfo(tab)) { $1 }
+        info.merge(MCPRestoredTabs.fields(tab)) { $1 }
         info["screen"] = fieldRows(tab.screenTail(min(2000, max(1, lines)))).joined(separator: "\n")
         return ok(info)
     }
@@ -400,6 +394,7 @@ enum MCPControl {
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
             info.merge(questionInfo(tab)) { $1 }
+            info.merge(MCPRestoredTabs.fields(tab)) { $1 }
             info["screen"] = fieldRows(tab.screenTail(40)).joined(separator: "\n")
             return reply(ok(info))
         }
@@ -490,7 +485,8 @@ enum MCPControl {
         } else {
             let (owner, opened) = window(for: directory)
             controller = owner
-            if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.status.command.isEmpty,
+            // Never a restored tab: it may hold a put-back line (KTD10).
+            if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
                canonicalPath(first.directory) == directory {
                 tab = first
             } else {

@@ -1,0 +1,21 @@
+// Cursor's settings: VS Code's format, with comments and a trailing comma.
+{
+	"editor.fontSize": 15,
+	"editor.wordWrap": "on",
+	"files.trimTrailingWhitespace": true,
+	"files.exclude": {
+		"**/.turbo": true
+	},
+	"terminal.integrated.env.osx": {
+		"OPENAI_API_KEY": "eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU"
+	},
+	"cursor.general.apiKey": "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	"terminal.integrated.profiles.osx": {
+		"zsh": { "path": "/bin/zsh", "args": ["-l"] }
+	},
+	"workbench.colorTheme": "Cursor Dark",
+	"workbench.colorCustomizations": {
+		"terminal.ansiRed": "#ff5555",
+		"terminal.background": "#101010"
+	},
+}

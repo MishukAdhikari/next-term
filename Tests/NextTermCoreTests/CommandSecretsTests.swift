@@ -242,6 +242,26 @@ import Testing
         #expect(CommandSecrets.mask(#"DB_PASSWORD="hunter2 and more"#) == "DB_PASSWORD=•••")
     }
 
+    /// A password fed on stdin as a here-document: its first line, after a newline or joined as typed lines and
+    /// continuation rows are (a backslash and a newline).
+    @Test func aHereDocumentFedToAPasswordReaderIsMasked() {
+        let cases: [(text: String, masked: String)] = [
+            ("docker login -u me --password-stdin <<EOF\\\ns3cret\\\nEOF", "docker login -u me --password-stdin <<EOF\\\n•••\\\nEOF"),
+            ("docker login -u me --password-stdin <<EOF\ns3cret\nEOF", "docker login -u me --password-stdin <<EOF\n•••\nEOF"),
+            ("sudo -S whoami <<'END'\n  two words\nEND", "sudo -S whoami <<'END'\n  •••\nEND"),
+            ("gh auth login --with-token <<-\"T\" && echo ok\\\nghp_madeuptokenvalue\\\nT",
+             "gh auth login --with-token <<-\"T\" && echo ok\\\n•••\\\nT"),
+        ]
+        for (text, masked) in cases {
+            #expect(CommandSecrets.mask(text) == masked, "\(text)")
+        }
+        // Another command's here-document, or a password read from a file, is no secret's.
+        for text in ["cat <<EOF\nhello there\nEOF", "docker login --password-stdin < t.txt\nnext", "sudo tee x <<EOF\nline\nEOF",
+                     "docker login --password-stdin <<< \"$PW\"\nnext"] {
+            #expect(CommandSecrets.mask(text) == text, "\(text)")
+        }
+    }
+
     @Test func maskingTwiceChangesNothingMore() {
         for (line, masked) in Self.dropped {
             #expect(CommandSecrets.mask(masked) == masked, "\(line)")
@@ -265,7 +285,8 @@ import Testing
         let pieces = [
             "a-token-", " --token-", "token_", "eyJ", "password", "a.", "a-", "mysql ", "curl -u ", "\"a: ",
             "\"Authorization: ", "echo a ", "x://a:", "token=", "htpasswd -b ", "vault login -x ", "-----BEGIN A",
-            "a\n", " \n", "\\\n", "\"",
+            "a\n", " \n", "\\\n", "\"", "sudo -S <<a\n", "--password-stdin <<E\\\n", "--with-token <<",
+            "--password-stdin <<", "sudo -S <<",
         ]
         let clock = ContinuousClock()
         for piece in pieces {
@@ -273,5 +294,18 @@ import Testing
             let elapsed = clock.measure { _ = CommandSecrets.mask(row) }
             #expect(elapsed < .seconds(1), "\(piece): \(elapsed)")
         }
+        // One reader and many delimiters after it, with no line break to end the line.
+        let row = "--with-token " + String(repeating: "<<x ", count: 10_000)
+        let elapsed = clock.measure { _ = CommandSecrets.mask(row) }
+        #expect(elapsed < .seconds(1), "one reader, many delimiters: \(elapsed)")
+    }
+
+    /// A here-document's command line is read at most 512 characters past its delimiter, so a longer one
+    /// is not masked; one that ends within it is.
+    @Test func aHereDocumentIsReadUpTo512CharactersPastItsDelimiter() {
+        let within = "docker login --password-stdin <<EOF" + String(repeating: " x", count: 256) + "\ns3cret\nEOF"
+        #expect(CommandSecrets.mask(within).contains("\n•••\nEOF"))
+        let past = "docker login --password-stdin <<EOF" + String(repeating: " x", count: 257) + "\ns3cret\nEOF"
+        #expect(CommandSecrets.mask(past) == past)
     }
 }

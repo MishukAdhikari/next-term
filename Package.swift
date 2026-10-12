@@ -28,7 +28,8 @@ let package = Package(
                 .product(name: "SwiftDraw", package: "SwiftDraw"),
             ]
         ),
-        .testTarget(name: "NextTermCoreTests", dependencies: ["NextTermCore"]),
+        // Fixtures: hand-written config files of other apps for the import tests, read from the source tree.
+        .testTarget(name: "NextTermCoreTests", dependencies: ["NextTermCore"], exclude: ["Fixtures"]),
     ],
     swiftLanguageModes: [.v5]
 )

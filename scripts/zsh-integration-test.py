@@ -51,6 +51,11 @@ def escape(text):
         out += bytes([byte]) if 0x21 <= byte <= 0x7E and byte not in b"\\;" else b"\\x%02x" % byte
     return out
 
+# The pause after each thing sent is for zsh's output to come: ZSH_TEST_SLOW lengthens them all (2 for twice as
+# long). Never between a Tab key and its answer: the engine waits only 150 ms for it (`answered` sends both at once),
+# and a longer pause there made CI's engine checks fail more, not less (2026-10-12).
+SLOW = float(os.environ.get("ZSH_TEST_SLOW", "1"))
+
 def frame(kind, ident, fields=()):
     payload = b";".join(escape(f) for f in fields)
     return PREFIX + kind.encode() + b"%06d" % ident + b"%06d" % len(payload) + payload
@@ -106,7 +111,7 @@ class Shell:
     def send(self, data, wait=0.0):
         os.write(self.fd, data if isinstance(data, bytes) else data.encode())
         if wait:
-            self.read_for(wait)
+            self.read_for(wait * SLOW)
 
     def text(self, since=0):
         return self.buf[since:].decode("utf-8", "replace")
@@ -198,6 +203,17 @@ def tab_key(shell, ident, wait=0.6, fields=()):
     """Sends the private Tab key (a server's with its wait as a field); returns the offset where its marks start."""
     start = len(shell.buf)
     shell.send(frame("t", ident, fields), wait)
+    return start
+
+def answered(shell, ident, fields, wait):
+    """The private Tab key and the app's answer to it, in one write: the answer is waiting when zsh asks for it, so
+    it never misses the engine's 150 ms window, however busy the machine (on a busy CI runner a separate answer did,
+    and zsh's own Tab ran instead). A `done … native` for this Tab would mean it missed all the same: said as that."""
+    start = len(shell.buf)
+    shell.send(frame("t", ident) + frame("a", ident, fields), wait)
+    fell = [f for _, k, f in shell.marks(start) if k == "done" and f[:1] == ["%06d" % ident] and f[1:2] == ["native"]]
+    if fell and fields[:1] != ["n"]:
+        check(False, f"Tab {ident} got its answer in time, not zsh's own Tab", str(fell))
     return start
 
 def bindings(shell, keymaps=("main", "viins")):
@@ -301,6 +317,24 @@ check({"end", "cwd", "cmd"} <= off_kinds and not off_kinds & {"arm", "tab", "com
       "with Tab completion off, no completion mark and the others as before", str(sorted(off_kinds)))
 off.close()
 
+# 3b. A restored tab types its put-back line only once the shell is ready (plan 003's KTD6): its first `end` mark, then
+# bracketed paste on, which zsh's line editor switches on only after the first precmd. Typed then, the line is inserted
+# as a paste and never run. With the user's config and with the hostile one.
+for label, zdotdir in (("user config", os.environ.get("ZDOTDIR", "")), ("nounset + ksh_arrays", hostile)):
+    ready = Shell(f"ready {label}", zdotdir, completion_on=False)
+    raw = ready.buf
+    end = re.search(rb"\x1b\]6973;" + NONCE.encode() + rb";end;", raw)
+    paste_on = raw.find(b"\x1b[?2004h")
+    check(end is not None and paste_on > end.start(),
+          f"[{label}] bracketed paste switches on only after the first precmd's end mark",
+          f"end at {end.start() if end else None}, paste on at {paste_on}")
+    since = len(ready.buf)
+    ready.send(b"\x1b[200~echo put-back-line\x1b[201~", 1)
+    ran = "put-back-line\r\n" in ready.text(since).replace("echo put-back-line", "")
+    check(not ran and not any(k == "cmd" for _, k, _ in ready.marks(since)),
+          f"[{label}] a line pasted at the ready prompt is inserted, not run")
+    ready.close()
+
 # 4. Next Term's own engine: the hostile config has no compinit.
 tree = tempfile.mkdtemp()
 for d in ("Sources", "Resources", "Tests", "My Fo'lder $x", "café"):
@@ -319,7 +353,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls /Sys", 0.3)
     tab_key(sh, 1, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and tab[0] == "000001" and pdec(tab[2]) == "ls /Sys", f"[{label}] the private Tab key reports the line",
           str(tab))
     if tab:
@@ -335,28 +369,24 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # A scripted insert changes the word.
     start = len(sh.buf)
     sh.send("cd Te", 0.3)
-    tab_key(sh, 2, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 2, ["i", "Tests/"]), 0.4)
+    answered(sh, 2, ["i", "Tests/"], 0.4)
     check("cd Tests/" in sh.screen(start), f"[{label}] an `insert` answer replaces the word", repr(sh.screen(start)[-60:]))
     sh.send("\x03", 0.4)
 
     # A scripted native: zsh's own completion.
     start = len(sh.buf)
     sh.send("ls /Syst", 0.3)
-    tab_key(sh, 3, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 3, ["n"]), 0.5)
-    check(drawn(sh, start, "ls /System/") and sh.wait_mark("done", start, 0.1) is None,
-          f"[{label}] a `native` answer runs zsh's own Tab", repr(sh.line(start)))
+    answered(sh, 3, ["n"], 0.5)
+    # Its own Tab's `done` only: the step before's can come late on a slow machine.
+    own = sh.wait_mark("done", start, 0.1, lambda fields: fields[:1] == ["000003"])
+    check(drawn(sh, start, "ls /System/") and own is None,
+          f"[{label}] a `native` answer runs zsh's own Tab", f"{sh.line(start)!r} {own}")
     sh.send("\x03", 0.4)
 
     # A scripted open: one `line` mark at once; typing reports the word; take replaces it; a stale take does nothing.
     start = len(sh.buf)
     sh.send("cd So", 0.3)
-    tab_key(sh, 4, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 4, ["o"]), 0.3)
+    answered(sh, 4, ["o"], 0.3)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
     check(lines == [["000004", "0", "So", "So"]], f"[{label}] an `open` answer gives one `line` mark at once", str(lines))
     sh.send("u", 0.3)
@@ -375,9 +405,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # An open list: the cursor leaving the word reports it once and stops.
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
-    tab_key(sh, 5, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 5, ["o"]), 0.3)
+    answered(sh, 5, ["o"], 0.3)
     sh.send(" ", 0.3)
     sh.send("x", 0.3)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
@@ -387,9 +415,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # A take whose word no longer matches beeps and changes nothing.
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
-    tab_key(sh, 6, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 6, ["o"]), 0.3)
+    answered(sh, 6, ["o"], 0.3)
     sh.send(frame("k", 6, ["w", "Rx", "Resources/"]), 0.3)
     check("Resources/" not in sh.screen(start), f"[{label}] a take for a word the line no longer has does nothing")
     sh.send("\x03", 0.4)
@@ -397,9 +423,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # Into a folder (hook version 2): an `insert` with o puts the folder in and opens the list for the word now.
     start = len(sh.buf)
     sh.send("cd Te", 0.3)
-    tab_key(sh, 50, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 50, ["i", "Tests/", "o"]), 0.4)
+    answered(sh, 50, ["i", "Tests/", "o"], 0.4)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
     check(drawn(sh, start, "cd Tests/") and lines == [["000050", "0", "Tests/", "Tests/"]],
           f"[{label}] an `insert` with o puts the folder in and opens the list for the word now", f"{sh.line(start)!r} {lines}")
@@ -410,9 +434,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # reported too (Next Term goes back up by itself here), and a take from there replaces the word now.
     start = len(sh.buf)
     sh.send("cd So", 0.3)
-    tab_key(sh, 51, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 51, ["o"]), 0.3)
+    answered(sh, 51, ["o"], 0.3)
     sh.send(frame("k", 51, ["w", "So", "Sources/", "o"]), 0.4)
     sh.send("i", 0.3)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
@@ -428,9 +450,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # ← from inside a folder: a take with o puts back the word it was gone into from, and the list stays open for it.
     start = len(sh.buf)
     sh.send("cd So", 0.3)
-    tab_key(sh, 53, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 53, ["o"]), 0.3)
+    answered(sh, 53, ["o"], 0.3)
     sh.send(frame("k", 53, ["w", "So", "Sources/", "o"]), 0.4)
     mark = len(sh.buf)
     sh.send(frame("k", 53, ["w", "Sources/", "So", "o"]), 0.4)
@@ -444,11 +464,10 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # Term sends them: the take's word, the letter's, then `sync`, so the key acts on the list for `Sources/i`.
     start = len(sh.buf)
     sh.send("cd So", 0.3)
-    tab_key(sh, 54, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 54, ["o"]), 0.3)
+    answered(sh, 54, ["o"], 0.3)
     mark = len(sh.buf)
     sh.send(frame("k", 54, ["w", "So", "Sources/", "o"]) + b"i" + frame("s", 9), 0.5)
+    sh.wait_mark("sync", mark, 5)
     said = [(k, f) for _, k, f in sh.marks(mark) if k in ("line", "sync")]
     check(drawn(sh, start, "cd Sources/i") and said[-1:] == [("sync", ["000009"])] and [f for k, f in said[:-1]][-1:] == [["000054", "0", "Sources/i", "Sources/i"]],
           f"[{label}] the sync key after a take and a letter: the letter's word, then `sync`", f"{sh.line(start)!r} {said}")
@@ -458,9 +477,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # A take with o for a word the line no longer has: nothing changes, and the list is reported gone.
     start = len(sh.buf)
     sh.send("ls Re", 0.3)
-    tab_key(sh, 52, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 52, ["o"]), 0.3)
+    answered(sh, 52, ["o"], 0.3)
     sh.send(frame("k", 52, ["w", "Rx", "Resources/", "o"]), 0.3)
     lines = [f for _, k, f in sh.marks(start) if k == "line"]
     check("Resources/" not in sh.screen(start) and lines[-1:] == [["000052", "1"]],
@@ -470,9 +487,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     # The close key: no more reports.
     start = len(sh.buf)
     sh.send("ls Te", 0.3)
-    tab_key(sh, 7, 0.05)
-    if sh.wait_mark("tab", start, 1):
-        sh.send(frame("a", 7, ["o"]), 0.3)
+    answered(sh, 7, ["o"], 0.3)
     sh.send(frame("k", 7, ["c"]), 0.2)
     before = len(sh.marks(start))
     sh.send("s", 0.3)
@@ -533,7 +548,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     sh.send("ls \\\r", 0.3)
     sh.send("Sou", 0.2)
     tab_key(sh, 12, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and pdec(tab[4]).startswith("ls ") and [pdec(w) for w in tab[5].split(" ")][-1] == "Sou",
           f"[{label}] a continuation line sends PREBUFFER and the words", str(tab))
     sh.read_for(0.3)
@@ -544,7 +559,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     word = "cafe\u0301"
     sh.send("echo " + word, 0.3)
     tab_key(sh, 13, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and pdec(tab[2]) == "echo " + word, f"[{label}] LBUFFER bytes round-trip (a combining accent)", str(tab))
     sh.read_for(0.3)
     sh.send("\x03", 0.4)
@@ -553,7 +568,7 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     start = len(sh.buf)
     sh.send("ls ~/", 0.3)
     tab_key(sh, 14, 0.05)
-    tab = sh.wait_mark("tab", start, 1)
+    tab = sh.wait_mark("tab", start, 5)
     check(tab is not None and pdec(tab[8]) == "~/" and pdec(tab[9]) == os.path.expanduser("~") + "/",
           f"[{label}] a `~/` head is sent resolved", str(tab))
     sh.read_for(0.3)
@@ -1286,10 +1301,15 @@ for label, rc in (("server", "PS1='server$ '\n"), ("server, hostile", "setopt no
         took = time.time() - sent
         sh.send("\x03", 0.5)
         return done, took
-    done, took = no_answer(11)
-    check(done == ["000011", "native"] and took > 0.45, f"[{label}] with no answer, the server's hook waits 0.6 s", f"{done} {took:.2f} s")
-    done, took = no_answer(12, ["w200"])
-    check(done == ["000012", "native"] and took < 0.45, f"[{label}] and `w200` on the Tab key makes it 0.2 s", f"{done} {took:.2f} s")
+    # The fastest of three tries each: a busy runner only ever adds time, and not the same to every try.
+    tries = [no_answer(11) for _ in range(3)]
+    done, took = tries[0][0], min(t for _, t in tries)
+    check(all(d == ["000011", "native"] for d, _ in tries) and took > 0.45, f"[{label}] with no answer, the server's hook waits 0.6 s", f"{done} {took:.2f} s")
+    # Measured against the wait just above, not the clock: 0.4 s apart is the point.
+    tries = [no_answer(12, ["w200"]) for _ in range(3)]
+    done, short = (tries[0][0] if all(d == tries[0][0] for d, _ in tries) else None), min(t for _, t in tries)
+    check(done == ["000012", "native"] and short < took - 0.2, f"[{label}] and `w200` on the Tab key makes it 0.2 s",
+          f"{done} {short:.2f} s against {took:.2f} s")
     # A `w` on a config key is no longer read: the wait comes only with a Tab.
     sh.send(frame("c", 0, ["w150"]), 0.3)
     done, took = no_answer(13, ["w600"])

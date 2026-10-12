@@ -1,0 +1,11 @@
+{
+	"nameShort": "Cursor",
+	"nameLong": "Cursor",
+	"applicationName": "cursor",
+	"dataFolderName": ".cursor",
+	"darwinBundleIdentifier": "com.todesktop.230313mzl4w4u92",
+	"version": "1.7.40",
+	"crashReporter": {
+		"uploadToken": "FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	}
+}

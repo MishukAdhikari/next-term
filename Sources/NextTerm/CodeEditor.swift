@@ -282,7 +282,7 @@ final class CodeTextView: NSTextView {
 
     /// One edit, undone in one step (named in Edit › Undo), then the selection it gives. ⌘Z puts back the
     /// caret or the selection from before it, and ⇧⌘Z the one after.
-    private func apply(_ edit: LineEdits.Edit, named name: String) {
+    func apply(_ edit: LineEdits.Edit, named name: String) {
         guard isEditable else { return } // as shouldChangeText would say, before anything goes into the undo step
         breakUndoCoalescing() // typing just before is undone on its own
         let before = selectedRanges
@@ -826,6 +826,36 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     var onChangeMarkClick: ((_ line: Int) -> Void)? {
         get { ruler.onMarkClick }
         set { ruler.onMarkClick = newValue }
+    }
+
+    /// The lines (0-based) the caret or the selection is on.
+    var selectedLines: ClosedRange<Int> {
+        LineEdits.lines(touching: textView.selectedRange(), in: document.lines.length == document.storage.length ? document.lines : LineIndex(document.text))
+    }
+
+    /// The caret or the selection is on a change the gutter marks: a changed or added line, or a line just above or
+    /// below where lines were deleted. Then ⌥⌘Z rolls back those lines (`rollbackLines`), not the whole file.
+    var touchesChanges: Bool {
+        let lines = selectedLines, marks = ruler.marks
+        return marks.lines.keys.contains { lines.contains($0) } || marks.deletedBefore.contains { lines.contains($0 - 1) || lines.contains($0) }
+    }
+
+    /// Rollback Lines: the changes the caret or the selection touches, back as the last commit has them, as one edit
+    /// that ⌘Z undoes. The diff is made off the main thread, of the text as it is (unsaved edits too); nothing changes
+    /// if the text changes meanwhile. `done` gets the edit's line count, 0 when nothing was rolled back.
+    func rollbackLines(done: @escaping (Int) -> Void) {
+        guard baselineLoaded, let baseline, let git = Self.git, textView.isEditable else { return done(0) }
+        let current = document.text, lines = selectedLines
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let diff = baseline == current ? nil : GitRunner.diff(old: baseline, new: current, git: git, context: 0)
+            let hunks = diff.map { LineRollback.touched($0, lines: lines) } ?? []
+            let edit = LineRollback.edit(hunks, current: current, baseline: baseline)
+            DispatchQueue.main.async {
+                guard let self, let edit, self.document.text == current else { return done(0) }
+                self.textView.apply(edit, named: "Rollback Lines")
+                done(LineRollback.lineCount(hunks))
+            }
+        }
     }
 
     /// Reads the committed version again (after a save, a commit, or coming back to the window), then

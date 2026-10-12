@@ -56,7 +56,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot
   CLI kept for it is there, newest first, with its title, branch and model, including the ones started in
   its subfolders. Resume runs it again in a new tab, in the folder it was started in; Fork continues a copy;
-  a session open in a tab offers Go to Tab instead. In a project window, ⌥⌘O does the same, and the
+  a session open in a tab offers Go to Tab instead; type to search them by title, agent, branch or model.
+  In a project window, ⌥⌘O does the same, and the
   sidebar's Agent Sessions group shows the newest five, marks the running ones and continues an agent's
   latest session. Only titles and dates are read (never whole transcripts), secrets are scrubbed from
   titles, and nothing is written.
@@ -73,8 +74,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
   the project sidebar on the left or right. From the ⋯ buttons or the View menu. ⌘J folds the terminal
   away so the editor gets the room, and brings it back at its size.
-- **Projects.** Open a folder as a project (⌘O): its window keeps the project in the sidebar, and new tabs
-  open in it by default. Next Term opens to a Welcome window, or reopens your last projects if you choose,
+- **Projects.** ⌘O brings up the Welcome window with your recent projects; ⌘O again there (or Open…)
+  opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in it by
+  default. Next Term opens to a Welcome window, or reopens your last projects if you choose,
   like an IDE. Open Recent and Close Project too.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
@@ -124,19 +126,24 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   chooses which ones notify, after how long, and with or without a sound.
 - **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
   command; click one and press new keys. The shortcuts below are the defaults.
-- **Bring your settings over.** Coming from VS Code, Cursor, Devin Desktop, a JetBrains IDE, Zed, iTerm2,
-  Ghostty or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
+- **Bring your settings over.** Coming from VS Code or an editor built on it (Cursor, Devin Desktop, Trae,
+  Kiro, Antigravity, Positron, Qoder…), a JetBrains IDE, Zed, iTerm2, Ghostty, cmux, kitty, Alacritty,
+  WezTerm, Kaku or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
   the matching shortcut set, the keys you changed yourself, font size, line height, wrap, clean-up on
   save, hidden files, fonts, the terminal's colours, cursor, scrollback and start folder, and recent
   projects. Nothing changes unless you choose it: the preview shows every item as a
   checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
-  never opens files that can hold secrets. See
+  never opens files that can hold secrets. Your agent can run it too, through Next Term's import tools:
+  the import window opens with its choices ticked, and only your Apply changes anything. See
   [Switching to Next Term](https://nxtrm.mishuk.me/docs/switching/).
-- **Updates in one click.** Next Term checks GitHub Releases once a day, at 11:00 or later in your time zone (or Check for Updates). A new
-  version opens a window with what's new (Install, Remind Me Later or Skip This Version), and a blue
-  Update button at the top right brings it back. It downloads, is checked against its checksum signed
-  with the Next Term release key, and replaces the app when you relaunch.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 20 MB to download, 44 MB
+- **Updates that keep your tabs.** Next Term checks GitHub Releases once a day, at 11:00 or later in your
+  time zone (or Check for Updates). A new version opens a window with what's new, and a blue Update button
+  at the top right brings it back. It downloads and is checked against its checksum signed with the Next
+  Term release key; the update sheet then says what happens to each tab before anything quits. After the
+  update, or after a quit, your windows, tabs, splits and scrollback come back, Claude Code, Codex and Qwen
+  Code resume their conversations as you started them, and other agents' resume commands wait on the
+  line for Return.
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 24 MB to download, 51 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -167,8 +174,8 @@ NextTerm-x.y.z.dmg.sha256` before allowing it.
 
 | Mark | Meaning |
 |---|---|
-| none | At the prompt, or a plain command running |
-| spinner | An AI agent is working |
+| none | At the prompt, a plain command running, or an agent working with View › Agent Spinner set to Off |
+| spinner | An AI agent is working (View › Agent Spinner: Spinning, Still or Off) |
 | green ✓ | An agent stopped and is waiting for your next prompt, or a command finished |
 | amber ! | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
 | red ✕ | A command exited with an error (the exit code is in the tooltip) |
@@ -199,7 +206,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
 | New remote tab (on one of your servers) | ⌥⌘T |
-| Open project / Close project | ⌘O / File menu |
+| Open project (the Welcome window; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
@@ -221,10 +228,12 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Save / Save All | ⌘S / ⌥⌘S |
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
+| Soft wrap | ⌥⌘W |
 | Show a file's changes | ⌥⌘G |
 | Git Diff (the changed files and their diffs) | ⌃⌘G |
 | Branches (the branch popup) | ⌥⌘B |
 | Git Log (the commit graph) | ⌥⌘L |
+| Fetch / Update Project / Commit… / Push… / New Branch… | ⌘R / ⌥⌘U / ⇧⌘C / ⌥⌘P / ⇧⌘B |
 | Send to Agent | ⌥⌘K |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
@@ -279,6 +288,8 @@ To sign and notarize for distribution:
 scripts/test.sh                          # unit tests: status, agents, git, files, editor, nxtrm, shortcuts, updates
 python3 scripts/zsh-integration-test.py  # the shipped zsh hooks, in a real pty, with your zsh config
 scripts/selftest.sh                      # end-to-end: drives the real app (opens a window)
+scripts/orphan-check.sh                  # release check: what keeps running after Quit, closing tabs, Force Quit
+scripts/perf-budget.sh                   # release check: CPU, drawing, git and memory budgets of a release build
 ```
 
 The self-test opens real tabs and shells and checks every status transition, agent detection, jobs,

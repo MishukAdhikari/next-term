@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Profiles</key>
+	<array>
+		<dict>
+			<key>Guid</key>
+			<string>DYN-WORK</string>
+			<key>Name</key>
+			<string>Work</string>
+			<key>Dynamic Profile Parent Name</key>
+			<string>Base</string>
+			<key>Cursor Type</key>
+			<integer>1</integer>
+			<key>Initial Text</key>
+			<string>export TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU</string>
+			<key>Ansi 1 Color</key>
+			<dict>
+				<key>Red Component</key>
+				<real>1.0</real>
+				<key>Green Component</key>
+				<real>0.0</real>
+				<key>Blue Component</key>
+				<real>0.0</real>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

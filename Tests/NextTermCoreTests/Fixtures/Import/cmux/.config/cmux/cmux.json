@@ -1,0 +1,22 @@
+{
+  "$schema": "https://cmux.com/schemas/cmux.schema.json",
+  "schemaVersion": 1,
+  // cmux's own shortcuts.
+  "shortcuts": {
+    "bindings": {
+      "newSurface": "cmd+shift+t",
+      "splitRight": "cmd+backslash",
+      "toggleSplitZoom": "cmd+shift+enter",
+      "focusLeft": "cmd+ctrl+left",
+      "selectSurfaceByNumber": "cmd+opt+1",
+      "renameTab": null,
+      "newTab": ["ctrl+b", "c"],
+      "closeTab": ["ctrl+b", "x"],
+      "showNotifications": "cmd+i",
+      "toggleFileExplorer": "cmd+opt+b",
+    },
+  },
+  "agentChat": { "url": "http://127.0.0.1:7739", "startCommand": "cmux-chat --token FixtureSecretAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  "terminal": { "copyOnSelect": true },
+  "actions": { "deploy": { "command": "curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU' https://example.invalid" } },
+}

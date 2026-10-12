@@ -1,51 +1,25 @@
 import Foundation
 import SQLite3
 
-// "Coming from VS Code?": what VS Code, VS Code Insiders, VSCodium, Cursor and Devin Desktop (once Windsurf)
-// would bring over. Design: claudedocs/research_next-term-migration (§3.1 settings, §4 recents, §5 detection,
-// §6 safety). Everything here only reads, and only these: settings.json (a value is converted only for an
-// allowlisted key), keybindings.json (each rule's key, command and when: ImportVSCodeKeys.swift),
-// globalStorage/storage.json (the number of profiles), the app's product.json (one key),
-// one key of a state.vscdb opened in place read-only, and the folders list of a workspace file a recent entry
-// names. Nothing is written, copied or sent anywhere.
+// "Coming from VS Code?": what VS Code, VS Code Insiders, VSCodium, Cursor, Devin Desktop (once Windsurf) and
+// every other editor built on VS Code would bring over. Design: claudedocs/research_next-term-migration (§3.1
+// settings, §4 recents, §5 detection, §6 safety). Everything here only reads, and only these: settings.json (a
+// value is converted only for an allowlisted key), keybindings.json (each rule's key, command and when:
+// ImportVSCodeKeys.swift), globalStorage/storage.json (the number of profiles), the app's product.json (four
+// keys) and the extension ids in extensions.json (ImportVSCodeApps.swift), two keys of a state.vscdb opened in
+// place read-only, and the folders list of a workspace file a recent entry names. Nothing is written,
+// copied or sent anywhere.
 
-/// The VS Code family: detection by folder, and the plan for one detected app.
+/// The VS Code family: detection by product.json and folder (ImportVSCodeApps.swift), and the plan for one
+/// detected app.
 public enum ImportVSCode {
-    struct Source {
-        let kind: ImportSourceKind
-        let name: String
-        /// The data folder in ~/Library/Application Support (its `User` folder holds settings.json).
-        let folder: String
-        /// The app bundle's possible names in /Applications or ~/Applications, for its product.json.
-        let bundles: [String]
-    }
-
-    /// Devin Desktop's bundle name isn't documented, so both likely names are tried. Windsurf is its old name
-    /// and folder, used only when the Devin folder isn't there.
-    static let sources: [Source] = [
-        Source(kind: .vsCode, name: "VS Code", folder: "Code", bundles: ["Visual Studio Code.app"]),
-        Source(kind: .vsCodeInsiders, name: "VS Code Insiders", folder: "Code - Insiders", bundles: ["Visual Studio Code - Insiders.app"]),
-        Source(kind: .vsCodium, name: "VSCodium", folder: "VSCodium", bundles: ["VSCodium.app"]),
-        Source(kind: .cursor, name: "Cursor", folder: "Cursor", bundles: ["Cursor.app"]),
-        Source(kind: .devinDesktop, name: "Devin Desktop", folder: "Devin", bundles: ["Devin.app", "Devin Desktop.app"]),
-        Source(kind: .devinDesktop, name: "Windsurf", folder: "Windsurf", bundles: ["Windsurf.app"]),
-    ]
-
-    static let family: Set<ImportSourceKind> = [.vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop]
-
     // MARK: detection
 
-    /// The apps whose `User` folder exists, most recently used first. Only existence and modification dates
-    /// are looked at: nothing is opened until the user picks one.
-    public static func detect(home: String = NSHomeDirectory()) -> [DetectedApp] {
-        var found: [DetectedApp] = []
-        for source in sources {
-            if source.folder == "Windsurf", found.contains(where: { $0.kind == .devinDesktop }) { continue }
-            let user = (home as NSString).appendingPathComponent("Library/Application Support/\(source.folder)/User")
-            guard isDirectory(user) else { continue }
-            found.append(DetectedApp(kind: source.kind, name: source.name, configPath: user, lastUsed: lastUsed(user)))
-        }
-        return found.sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
+    /// The editors built on VS Code whose `User` folder exists, most recently used first (see
+    /// `detectApps(home:applications:)`). `applications`: the folders searched for app bundles, /Applications and
+    /// ~/Applications unless given.
+    public static func detect(home: String = NSHomeDirectory(), applications: [String]? = nil) -> [DetectedApp] {
+        detectApps(home: home, applications: applications ?? applicationFolders(home: home))
     }
 
     /// The later of settings.json's and the User folder's modification dates (a settings change, or a file
@@ -59,9 +33,9 @@ public enum ImportVSCode {
     /// What `app` would bring over: its settings (§3.1), the user's own shortcuts (§2.4), recent folders (§4)
     /// and what was left out, with why.
     /// `usKeyboard`: the current input source is U.S.-style, so Option isn't needed to type symbols.
-    public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true) -> ImportPlan {
-        plan(for: app, home: home, usKeyboard: usKeyboard,
-             applications: ["/Applications", (home as NSString).appendingPathComponent("Applications")])
+    public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true,
+                            applications: [String]? = nil) -> ImportPlan {
+        plan(for: app, home: home, usKeyboard: usKeyboard, applications: applications ?? applicationFolders(home: home), fonts: .system)
     }
 
     /// `applications`: the folders searched for the app bundle; `fonts`: the fonts this Mac has (tests pass
@@ -74,12 +48,18 @@ public enum ImportVSCode {
         plan.settings = settings.settings
         let keys = keybindingsPlan(user: app.configPath, usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
-        plan.skipped = settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
+        // Keymap extensions can point to the JetBrains set (§2.4 of the research; only their ids are read).
+        let product = installedProduct(for: app, applications: applications)
+        let dataFolders = product?.dataFolderName.map { [$0] } ?? source(folder: settingsFolder(of: app))?.dataFolders ?? []
+        let installed = extensions(home: home, dataFolders: dataFolders, user: app.configPath)
+        let keymap = keymapRows(installed, vimSettings: settings.vimSettings, preset: plan.preset)
+        plan.preset = keymap.preset
+        plan.skipped = keymap.skipped + settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
         let profiles = otherProfiles(user: app.configPath)
         if profiles > 0 {
             plan.skipped.append(SkippedItem(counted(profiles, "other profile"), "only the default profile is read; other profiles: choose in a later version"))
         }
-        let recents = recentProjects(app: app, home: home, applications: applications)
+        let recents = recentProjects(app: app, home: home, shared: product?.sharedDataFolderName)
         plan.recentProjects = recents.paths
         plan.skipped += recents.skipped
         var seen = Set<String>()
@@ -103,6 +83,8 @@ public enum ImportVSCode {
         "editor.fontFamily", "terminal.integrated.fontFamily", "workbench.colorCustomizations", "workbench.colorTheme",
         "files.trimTrailingWhitespace", "files.insertFinalNewline", "files.exclude", "terminal.integrated.cursorStyle",
         "terminal.integrated.cursorBlinking", "terminal.integrated.scrollback", "terminal.integrated.cwd",
+        "workbench.list.openMode", "window.openFoldersInNewWindow", "window.restoreWindows", "diffEditor.renderSideBySide",
+        "git.autofetch", "git.autofetchPeriod", "git.blame.editorDecoration.enabled",
     ]
 
     /// Keys Next Term has no setting for (§3.5), reported by name when the user set them.
@@ -163,6 +145,8 @@ public enum ImportVSCode {
     struct SettingsResult {
         var settings: [PlannedSetting] = []
         var skipped: [SkippedItem] = []
+        /// How many `vim.*` keys there are: a Vim user, even with the extension gone.
+        var vimSettings = 0
     }
 
     /// The default profile's settings.json (`<User>/settings.json`) as preview rows.
@@ -186,7 +170,7 @@ public enum ImportVSCode {
                              home: String = NSHomeDirectory()) -> SettingsResult {
         var result = SettingsResult()
         let font = fontSize(file)
-        result.settings += [font.setting].compactMap { $0 }
+        result.settings += font.settings
         result.skipped += font.skipped
         let line = lineHeight(file)
         result.settings += [line.setting].compactMap { $0 }
@@ -209,7 +193,11 @@ public enum ImportVSCode {
         let terminal = terminalBehaviour(file, appName: appName, home: home)
         result.settings += terminal.settings
         result.skipped += terminal.skipped
+        let window = windowAndGit(file, appName: appName)
+        result.settings += window.settings
+        result.skipped += window.skipped
         result.skipped += unmappedKeys(file)
+        result.vimSettings = Set(file.members.map(\.key).filter { $0.hasPrefix("vim.") }).count
         return result
     }
 
@@ -294,6 +282,64 @@ public enum ImportVSCode {
             }
         }
         return result
+    }
+
+    // MARK: opening files and projects, diffs and git
+
+    /// How a click opens a file, where projects open, what reopens at launch, how diffs show, and git's
+    /// fetching and blame: each only when the user set it.
+    static func windowAndGit(_ file: SettingsFile, appName: String) -> SettingsResult {
+        var result = SettingsResult()
+        func add(_ key: String, _ rows: [String: (ImportedSetting, String?)]) {
+            guard file.has(key) else { return }
+            let value = file.value(key)
+            let raw = string(value) ?? bool(value).map { $0 ? "true" : "false" }
+            guard let raw, let row = rows[raw] else { return result.skipped.append(SkippedItem(key, notRecognised)) }
+            result.settings.append(PlannedSetting(row.0, source: "\(key) \(raw)", note: row.1))
+        }
+        add("workbench.list.openMode", ["singleClick": (.sidebarSingleClick(true), nil), "doubleClick": (.sidebarSingleClick(false), nil)])
+        let thisWindow = ImportedSetting.openProjectsIn("thisWindow")
+        add("window.openFoldersInNewWindow", [
+            "on": (.openProjectsIn("newWindow"), nil), "off": (thisWindow, nil),
+            "default": (thisWindow, "as \(appName) opens a folder chosen in its File menu"),
+        ])
+        let last = ImportedSetting.launchOpens(LaunchOpens.lastProjects.rawValue)
+        add("window.restoreWindows", [
+            "none": (.launchOpens(LaunchOpens.welcome.rawValue), nil), "all": (last, nil), "folders": (last, nil), "preserve": (last, nil),
+            "one": (last, "\(appName) reopens only the last window; Next Term reopens every project that was open"),
+        ])
+        add("diffEditor.renderSideBySide", ["true": (.diffLayout("sideBySide"), nil), "false": (.diffLayout("unified"), nil)])
+        add("git.blame.editorDecoration.enabled", ["true": (.currentLineBlame(true), nil), "false": (.currentLineBlame(false), nil)])
+        let fetch = autofetch(file, appName: appName)
+        result.settings += [fetch.setting].compactMap { $0 }
+        result.skipped += fetch.skipped
+        return result
+    }
+
+    /// git.autofetch: off, or on (`true`, or `all` for every remote) every git.autofetchPeriod seconds (180
+    /// unless set), as Next Term's nearest choice: every 5, 10 or 30 minutes.
+    static func autofetch(_ file: SettingsFile, appName: String) -> Row {
+        let key = "git.autofetch", periodKey = "git.autofetchPeriod"
+        guard file.has(key) else { return (nil, []) }
+        let value = file.value(key)
+        if bool(value) == false { return (PlannedSetting(.backgroundFetch(FetchFrequency.off.rawValue), source: "\(key) false"), []) }
+        guard bool(value) == true || string(value) == "all" else { return (nil, [SkippedItem(key, notRecognised)]) }
+        var skipped: [SkippedItem] = []
+        var seconds = 180.0
+        var source = "\(key) \(bool(value) == true ? "true" : "all")"
+        if file.has(periodKey) {
+            if let period = number(file.value(periodKey)), period > 0, period < 1e7 {
+                seconds = period
+                source += ", \(periodKey) \(format(period))"
+            } else {
+                skipped.append(SkippedItem(periodKey, notRecognised))
+            }
+        }
+        let minutes = seconds / 60
+        let frequency: FetchFrequency = minutes <= 7.5 ? .fiveMinutes : minutes <= 20 ? .tenMinutes : .thirtyMinutes
+        let exact = (frequency.interval ?? 0) == seconds
+        let note = exact ? nil : "\(appName) fetches every \(format((minutes * 10).rounded() / 10)) minutes; Next Term every 5, 10 or 30"
+        return (PlannedSetting(.backgroundFetch(frequency.rawValue), source: source, note: note), skipped)
     }
 
     // MARK: fonts and colours
@@ -400,35 +446,31 @@ public enum ImportVSCode {
     }
 
     /// editor.fontSize and window.zoomLevel: round(size × 1.2^zoom), VS Code's defaults (12, zoom 0) for the
-    /// unset one, imported only if one of them is set. terminal.integrated.fontSize stands in for an unset
-    /// editor size (zoomed the same way, since the zoom scales the whole window); when both are set and
-    /// differ, the editor's wins and the difference is reported (one size is shared today).
-    static func fontSize(_ file: SettingsFile) -> Row {
-        var skipped: [SkippedItem] = []
-        let editor = size(file, "editor.fontSize", skipped: &skipped)
-        let terminal = size(file, "terminal.integrated.fontSize", skipped: &skipped)
+    /// unset one, imported only if one of them is set. terminal.integrated.fontSize is the terminal's own size,
+    /// zoomed the same way (the zoom scales the whole window); while it is unset, VS Code's terminal uses the
+    /// editor's size, as Next Term's does until it is given one of its own.
+    static func fontSize(_ file: SettingsFile) -> SettingsResult {
+        var result = SettingsResult()
+        let editor = size(file, "editor.fontSize", skipped: &result.skipped)
+        let terminal = size(file, "terminal.integrated.fontSize", skipped: &result.skipped)
         var zoom: Double?
         if file.has("window.zoomLevel") {
             zoom = number(file.value("window.zoomLevel"))
-            if zoom == nil { skipped.append(SkippedItem("window.zoomLevel", notRecognised)) }
-        }
-        if let editor, let terminal, editor != terminal {
-            skipped.append(SkippedItem("terminal.integrated.fontSize", "one font size for editor and terminal today; the editor's size is used"))
+            if zoom == nil { result.skipped.append(SkippedItem("window.zoomLevel", notRecognised)) }
         }
         let factor = pow(1.2, zoom ?? 0)
         let zoomed = zoom.map { " at window.zoomLevel \(format($0))" } ?? ""
-        let row: PlannedSetting
         if let editor {
-            row = PlannedSetting(.fontSize(clamping: editor * factor), source: "editor.fontSize \(format(editor))" + zoomed)
-        } else if let terminal {
-            row = PlannedSetting(.fontSize(clamping: terminal * factor), source: "terminal.integrated.fontSize \(format(terminal))" + zoomed)
+            result.settings.append(PlannedSetting(.fontSize(clamping: editor * factor), source: "editor.fontSize \(format(editor))" + zoomed))
         } else if let zoom {
-            row = PlannedSetting(.fontSize(clamping: defaultFontSize * factor),
-                                 source: "window.zoomLevel \(format(zoom)) with the default editor.fontSize \(format(defaultFontSize))")
-        } else {
-            return (nil, skipped)
+            result.settings.append(PlannedSetting(.fontSize(clamping: defaultFontSize * factor),
+                                                  source: "window.zoomLevel \(format(zoom)) with the default editor.fontSize \(format(defaultFontSize))"))
         }
-        return (row, skipped)
+        if let terminal {
+            result.settings.append(PlannedSetting(.terminalFontSize(clamping: terminal * factor),
+                                                  source: "terminal.integrated.fontSize \(format(terminal))" + zoomed))
+        }
+        return result
     }
 
     /// VS Code's editor font size on macOS when editor.fontSize is unset.
@@ -572,22 +614,21 @@ public enum ImportVSCode {
     }
 
     /// Recent folders, newest first. VS Code 1.118 and later keep them in the application-shared storage
-    /// (`~/<sharedDataFolderName>/sharedStorage/state.vscdb`, the name from the app's product.json); before
-    /// that, and in apps without the name (Cursor), in `User/globalStorage/state.vscdb`, which is also VS
-    /// Code's own fallback while the shared one lacks the key.
-    static func recentProjects(app: DetectedApp, home: String, applications: [String]) -> Recents {
+    /// (`~/<sharedDataFolderName>/sharedStorage/state.vscdb`, `shared` being that name from the installed app's
+    /// product.json); before that, and in apps without the name (Cursor), in `User/globalStorage/state.vscdb`,
+    /// which is also VS Code's own fallback while the shared one lacks the key.
+    static func recentProjects(app: DetectedApp, home: String, shared: String?) -> Recents {
         var databases: [String] = []
         var notes: [SkippedItem] = []
-        let folder = ((app.configPath as NSString).deletingLastPathComponent as NSString).lastPathComponent
-        let bundles = sources.first { $0.folder == folder }?.bundles ?? []
-        if let shared = sharedDataFolderName(bundles: bundles, applications: applications) {
+        if let shared {
             let path = (home as NSString).appendingPathComponent("\(shared)/sharedStorage/state.vscdb")
             if isRegularFile(path) {
                 databases.append(path)
             } else {
-                // A portable install or --shared-data-dir moves it, and Next Term can't see either.
-                notes.append(SkippedItem("recent projects in ~/\(shared)/sharedStorage",
-                                         "not found where \(app.name) keeps them; choose the file to bring them over"))
+                // A portable install or --shared-data-dir moves it, and Next Term can't see either. The folder isn't
+                // named: an agent's preview_import never gets an app's settings folders.
+                notes.append(SkippedItem("recent projects",
+                                         "not found in the shared storage where \(app.name) usually keeps them (a portable install keeps them elsewhere)"))
             }
         }
         databases.append((app.configPath as NSString).appendingPathComponent("globalStorage/state.vscdb"))
@@ -611,14 +652,8 @@ public enum ImportVSCode {
     static func sharedDataFolderName(bundles: [String], applications: [String]) -> String? {
         for folder in applications {
             for bundle in bundles {
-                let path = (folder as NSString).appendingPathComponent("\(bundle)/Contents/Resources/app/product.json")
-                guard let text = readText(path, limit: 4 << 20), let document = JSONC(text),
-                      case .object(let root)? = document.root else { continue }
-                guard let member = root.members.last(where: { $0.key == "sharedDataFolderName" }),
-                      let name = member.value.object(in: text) as? String,
-                      !name.isEmpty, !name.contains("/"), !name.contains("\0"), name != ".", name != "..",
-                      !SecretGuard.looksSecret(name) else { return nil }
-                return name
+                guard let product = product(bundle: (folder as NSString).appendingPathComponent(bundle)) else { continue }
+                return product.sharedDataFolderName
             }
         }
         return nil
@@ -648,6 +683,7 @@ public enum ImportVSCode {
         guard let escaped = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return (.failed, SQLITE_MISUSE) }
         var db: OpaquePointer?
         let uri = "file:\(escaped)?mode=ro" + (immutable ? "&immutable=1" : "")
+        ImportFile.record(path)
         let opened = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
         guard opened == SQLITE_OK, let db else {
             sqlite3_close(db)
@@ -759,6 +795,7 @@ public enum ImportVSCode {
     /// block the read forever.
     static func readText(_ path: String, limit: Int) -> String? {
         guard isRegularFile(path), let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        ImportFile.record(path)
         defer { try? handle.close() }
         let data: Data
         do {

@@ -83,6 +83,12 @@ final class KeyboardShortcuts {
     private(set) var editorKeys: [KeyChord: NSMenuItem] = [:]
     /// The item of another command on the same key, which gives it up while the menus are open over the editor.
     private var sharedKeys: [KeyChord: NSMenuItem] = [:]
+    /// Clear Buffer on a key a command for everywhere has too (⌘K, Commit… under the JetBrains set): its item holds
+    /// no key while the menus are closed, and a terminal with the keyboard answers it (NextTermView.performKeyEquivalent);
+    /// everywhere else the key is the other command's (KeyBindings.terminalKeyboardCommands).
+    private(set) var terminalKeys: [KeyChord: NSMenuItem] = [:]
+    /// The command for everywhere on each of those keys, which gives it up while the menus are open over a terminal.
+    private var terminalSharedKeys: [KeyChord: NSMenuItem] = [:]
     private var trackingObservers: [NSObjectProtocol] = []
     /// Whether the editor's items show their keys now (the menu bar is open).
     private(set) var showsEditorKeys = false
@@ -99,6 +105,16 @@ final class KeyboardShortcuts {
         return editorKeys[chord]
     }
 
+    /// The terminal command `event` presses while a terminal has the keyboard, if its key is shared (`terminalKeys`).
+    func terminalItem(for event: NSEvent) -> NSMenuItem? {
+        guard !terminalKeys.isEmpty, let chord = Self.chord(from: event) else { return nil }
+        if let typed = event.charactersIgnoringModifiers, typed.count == 1,
+           let item = terminalKeys[KeyChord(key: typed, command: chord.command, shift: chord.shift, option: chord.option, control: chord.control)] {
+            return item
+        }
+        return terminalKeys[chord]
+    }
+
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
     /// shown on the editor's command only, since that is what it does there.
     func menuBarOpened() {
@@ -110,15 +126,24 @@ final class KeyboardShortcuts {
             }
             Self.set(chord, on: item)
         }
+        // Over a terminal, a key Clear Buffer shares with a command for everywhere is shown on Clear Buffer.
+        if NSApp.keyWindow?.firstResponder is NextTermView {
+            for (chord, item) in terminalKeys {
+                terminalSharedKeys[chord].map { Self.set(nil, on: $0) }
+                Self.set(chord, on: item)
+            }
+        }
         showsEditorKeys = true
     }
 
-    /// The menu bar closed: the editor's items give their keys back.
+    /// The menu bar closed: the editor's and the terminal's items give their keys back.
     func menuBarClosed() {
         guard showsEditorKeys else { return }
         showsEditorKeys = false
         for item in editorKeys.values { Self.set(nil, on: item) }
+        for item in terminalKeys.values { Self.set(nil, on: item) }
         for (chord, other) in sharedKeys { Self.set(chord, on: other) }
+        for (chord, other) in terminalSharedKeys { Self.set(chord, on: other) }
     }
 
     private func walk(_ menu: NSMenu, path: [String]) {
@@ -195,9 +220,9 @@ final class KeyboardShortcuts {
                         option: flags.contains(.option), control: flags.contains(.control))
     }
 
-    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`). A key outside the
-    /// menus still at its default has none while you gave that key to a command it can't share it with
-    /// (KeyBindings.givesWay): the menus, the parts' own handlers and Settings all read it here.
+    /// A command's shortcut now (a saved one that can't be typed counts as the default, as in `apply`). A command still
+    /// at its default key has none while you gave that key to a command it can't share it with (KeyBindings.givesWay):
+    /// the menus, the parts' own handlers and Settings all read it here.
     func chord(for id: String) -> KeyChord? {
         let bindings = self.bindings
         let base = baseChord(for: id)
@@ -228,7 +253,9 @@ final class KeyboardShortcuts {
     }
 
     /// Lays the preset and the user's shortcuts over the menus. A saved shortcut that could not be typed
-    /// (no ⌘ or ⌃, or hand-edited preferences) is ignored rather than taking keys from typing.
+    /// (no ⌘ or ⌃, or hand-edited preferences) is ignored rather than taking keys from typing. A default you gave
+    /// to another command yourself stays that command's alone (KeyBindings.givesWay), so a key a version makes a
+    /// menu command's default never lands on a second item.
     func apply() {
         let bindings = self.bindings
         let preset = self.preset
@@ -238,6 +265,7 @@ final class KeyboardShortcuts {
             let base = preset.chord(for: command.id, default: command.defaultChord)
             var chord = bindings.chord(for: command.id, default: base)
             if let saved = chord, !KeyBindings.isUsable(saved, for: command.id) { chord = base }
+            if let kept = chord, bindings.givesWay(command.id, kept, isCommand: isCommand) { chord = nil }
             chords.append((item, chord))
         }
         // Every key comes off before any goes on: AppKit leaves a menu item without its key when another
@@ -249,11 +277,27 @@ final class KeyboardShortcuts {
         showsEditorKeys = false
         editorKeys = [:]
         sharedKeys = [:]
+        terminalKeys = [:]
+        terminalSharedKeys = [:]
         func isEditors(_ item: NSMenuItem) -> Bool { Self.id(of: item).map { editorIDs.contains($0) } ?? false }
+        func scope(_ item: NSMenuItem) -> KeyBindings.Scope? { Self.id(of: item).map(KeyBindings.scope(of:)) }
+        func keepsToTerminal(_ item: NSMenuItem) -> Bool {
+            Self.id(of: item).map { KeyBindings.terminalKeyboardCommands.contains($0) } ?? false
+        }
         for (item, chord) in chords where isEditors(item) {
             if let chord { editorKeys[chord] = item }
         }
+        // Keys a command for everywhere has: Clear Buffer gives such a key to it outside a terminal.
+        var everywhere: [KeyChord: NSMenuItem] = [:]
+        for (item, chord) in chords where scope(item) == .everywhere {
+            if let chord, everywhere[chord] == nil { everywhere[chord] = item }
+        }
         for (item, chord) in chords where !isEditors(item) {
+            if let chord, keepsToTerminal(item), let other = everywhere[chord] {
+                terminalKeys[chord] = item
+                terminalSharedKeys[chord] = other
+                continue
+            }
             Self.set(chord, on: item)
             if let chord, editorKeys[chord] != nil { sharedKeys[chord] = item }
         }
@@ -275,7 +319,7 @@ final class KeyboardShortcuts {
     }
 
     /// Every command's shortcut as it would be under `preset`, the user's own changes on top (a saved one
-    /// that can't be typed counts as the preset's, as in `apply`; a key outside the menus can give way, as in `chord(for:)`).
+    /// that can't be typed counts as the preset's, as in `apply`; a default can give way, as in `chord(for:)`).
     func chords(under preset: KeymapPreset) -> [String: KeyChord?] {
         let bindings = self.bindings
         var chords: [String: KeyChord?] = [:]
@@ -604,7 +648,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 680), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 700), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
@@ -944,7 +988,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. The font size is shared with the terminal (⌘+ and ⌘-); the terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. Terminals use this font size too unless the Terminal tab gives them their own; ⌘+ and ⌘- change the size of what has the keyboard. The terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420

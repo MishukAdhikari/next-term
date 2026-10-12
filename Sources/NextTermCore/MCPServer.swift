@@ -34,7 +34,12 @@ public enum MCPServer {
         ask the user, who reviews and decides in Next Term (nothing changes on your say alone). \
         propose_edit shows a file edit in the editor's diff for the user to accept; write_file, create_file, \
         stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout and settings_set ask the user \
-        on the Mac first, and change nothing when declined or unanswered. \
+        on the Mac first, and change nothing when declined or unanswered. To bring the user's settings over \
+        from another editor or terminal, use list_import_sources and preview_import, never those apps' files \
+        (they sit next to tokens); apply_import and undo_import open Next Term's import window, where only \
+        the user's Apply changes anything. A tab Next Term brings back after an \
+        update or a quit keeps its id, with restored details (why, and what the restart did to it) until its \
+        next command, and calls made while it restarts say what happens to their tab. \
         list_secrets lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a \
         command with keys in its environment once the user approves on the Mac with Touch ID. request_secret asks \
         the user to type a key into Next Term. store_secret saves a key you already hold.
@@ -56,6 +61,9 @@ public enum MCPServer {
         public let timeout: TimeInterval
         /// Reaches another machine (a server over ssh), not only this Mac.
         public var openWorld = false
+        /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (the
+        /// import tools) leave it off, so they cost nothing until tool search finds them.
+        public var alwaysLoad = true
     }
 
     private static let tabID = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs."}"#
@@ -176,7 +184,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + secretTools
+    ] + controlTools + importTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 
@@ -194,7 +202,7 @@ public enum MCPServer {
                     "idempotentHint": tool.idempotent,
                     "openWorldHint": tool.openWorld,
                 ],
-                // Claude Code defers MCP tools behind its tool search; these are few and worth having at hand.
+                // Claude Code defers MCP tools behind its tool search; most are worth having at hand (Tool.alwaysLoad).
                 "_meta": tool.meta,
             ]
         }

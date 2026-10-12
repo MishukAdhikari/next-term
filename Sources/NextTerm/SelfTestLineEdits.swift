@@ -256,6 +256,10 @@ extension SelfTest {
                                                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) else { return }
             NSApp.sendEvent(event)
         }
+        // A key typed from outside while the window came to the front (the Mac in use during the run) lands in the file,
+        // over the selection left above: that fails once, here, and the keys below start from the file as saved.
+        check(doc.text == "one\ntwo\nthree\n", "line keys: the file is as saved when they are pressed", doc.text.debugDescription)
+        if doc.isDirty { doc.reload() }
         let text = doc.text
         let panes = c.activeGroup?.panes.count ?? 0
         window.makeFirstResponder(view)

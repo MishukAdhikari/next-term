@@ -1,0 +1,4 @@
+[[keyboard.bindings]]
+key = "D"
+mods = "Command"
+action = "CreateNewWindow"

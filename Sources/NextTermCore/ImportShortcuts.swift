@@ -67,6 +67,19 @@ public enum ImportShortcuts {
             "selectNextPane:": "Select Next Pane",
             "selectPreviousPane:": "Select Previous Pane",
             "selectTabByNumber:#9": "Select Last Tab",
+            "closeOtherTabs:": "Close Other Tabs",
+            "closeTabsToTheRight:": "Close Tabs to the Right",
+            "reopenClosedTab:": "Reopen Closed Tab",
+            "copyFilePath:": "Copy Path",
+            "copyRelativeFilePath:": "Copy Relative Path",
+            "revealInFinder:": "Reveal in Finder",
+            "toggleZoomPane:": "Maximize Pane",
+            "gitCommit:": "Commit…",
+            "gitPush:": "Push…",
+            "gitRollback:": "Rollback…",
+            "gitUpdate:": "Update Project",
+            "gitFetch:": "Fetch",
+            "showBranches:": "Branches…",
         ]
         for position in ["bottom", "right", "left", "top"] {
             titles["setTerminalPosition:" + position] = "Terminal Position › " + position.capitalized
@@ -78,7 +91,7 @@ public enum ImportShortcuts {
     /// Commands that act on the terminal, where a key the other app keeps to its terminal means the same here.
     static let terminalCommands: Set<String> = [
         "newTab:", "splitRight:", "splitDown:", "renameTab:", "closeTab:", "clearBuffer:", "showNextTab:", "showPreviousTab:",
-        "selectNextPane:", "selectPreviousPane:", "toggleEditorFocus:", "toggleTerminalCollapsed:",
+        "selectNextPane:", "selectPreviousPane:", "toggleEditorFocus:", "toggleTerminalCollapsed:", "toggleZoomPane:",
     ]
 
     // MARK: keys no import takes

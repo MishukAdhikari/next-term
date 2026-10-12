@@ -1,0 +1,4 @@
+# cmux's own Ghostty config (cmux writes its Settings here): read after Ghostty's, so it wins.
+font-size = 14
+macos-option-as-alt = left
+command = /bin/zsh -c 'export GITHUB_TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJmaXh0dXJlIjoic2VjcmV0In0.bm90LWEtcmVhbC1zaWduYXR1cmU; exec zsh'

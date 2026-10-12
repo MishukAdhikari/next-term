@@ -195,6 +195,7 @@ final class GitWriter {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-git-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let handle = try? FileHandle(forWritingTo: url) else { return Result(status: 1, output: "Could not start git.") }
+        DescriptorSweep.closeOnExec(handle.fileDescriptor) // git's copy only, never a tab's shell's
         defer { try? FileManager.default.removeItem(at: url) }
         process.standardOutput = handle
         process.standardError = handle
@@ -372,11 +373,17 @@ final class GitCommandsWindowController: NSWindowController {
 /// ("Undo"). It goes by itself; a notice with a button stays longer.
 final class GitToast {
     private static var current: NSPanel?
+    private static var shown: GitNotice.Shown?
     private static var action: (() -> Void)?
     private static var hide: DispatchWorkItem?
+    /// How many notices have come up. Work whose notice comes late (after the branches are read again) notes it as it
+    /// begins, and passes it as `begun`: an Undo that came up meanwhile stays (GitNotice.replaces).
+    private(set) static var count = 0
 
-    static func show(_ text: String, in window: NSWindow?, button: String? = nil, isError: Bool = false, action: (() -> Void)? = nil) {
+    static func show(_ text: String, in window: NSWindow?, button: String? = nil, isError: Bool = false, begun: Int? = nil,
+                     action: (() -> Void)? = nil) {
         guard let window else { return }
+        guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
         dismiss()
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 12.5, weight: .medium)
@@ -413,6 +420,8 @@ final class GitToast {
         window.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         current = panel
+        count += 1
+        shown = GitNotice.Shown(number: count, hasButton: button != nil)
         self.action = action
         NSAccessibility.post(element: panel, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
@@ -425,6 +434,7 @@ final class GitToast {
         hide?.cancel()
         if let current { current.parent?.removeChildWindow(current); current.orderOut(nil) }
         current = nil
+        shown = nil
         action = nil
     }
 

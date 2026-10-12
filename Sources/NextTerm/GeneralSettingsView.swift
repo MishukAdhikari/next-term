@@ -1,19 +1,23 @@
 import AppKit
 import NextTermCore
 
-/// Settings › General: what a launch that names no folder or file shows, and whether a quit with project windows
-/// open asks about reopening them. Each choice is saved as it changes and read at the next launch, reopen or quit
-/// (LaunchSettings).
+/// Settings › General: what a launch that names no folder or file shows, whether a quit with a terminal window open asks
+/// about resuming, and whether a restore brings scrollback back. Each control saves only its own choice, as it changes,
+/// and it is read at the next launch, reopen or quit (LaunchSettings): "At launch" counts as chosen only once the user
+/// chose it.
 final class GeneralSettingsView: NSView {
     /// A radio button for each choice, in LaunchOpens' order, beside "At launch:".
     let opens: [NSButton] = LaunchOpens.allCases.map { NSButton(radioButtonWithTitle: $0.title, target: nil, action: nil) }
     /// The radio buttons, which VoiceOver reads as one group named as its visible label, "At launch".
     let opensGroup = NSStackView()
     /// Beside "At quit:".
-    let askToReopen = NSButton(checkboxWithTitle: "Ask whether to reopen projects when quitting", target: nil, action: nil)
+    let askToResume = NSButton(checkboxWithTitle: "Ask whether to resume when quitting", target: nil, action: nil)
+    /// Beside "Sessions:".
+    let keepScrollback = NSButton(checkboxWithTitle: "Keep scrollback", target: nil, action: nil)
     /// The labels in the 110 pt column on the left, as in the other tabs.
     let launchLabel = NSTextField(labelWithString: "At launch:")
     let quitLabel = NSTextField(labelWithString: "At quit:")
+    let sessionsLabel = NSTextField(labelWithString: "Sessions:")
     /// Where the choices are kept: the defaults the launch and the quit read them from.
     private let defaults: UserDefaults = AppDelegate.shared?.launchDefaults ?? .standard
 
@@ -31,12 +35,14 @@ final class GeneralSettingsView: NSView {
         opensGroup.setAccessibilityElement(true)
         opensGroup.setAccessibilityRole(.radioGroup)
         opensGroup.setAccessibilityLabel("At launch")
-        askToReopen.target = self
-        askToReopen.action = #selector(askToReopenChanged)
+        askToResume.target = self
+        askToResume.action = #selector(askToResumeChanged)
+        keepScrollback.target = self
+        keepScrollback.action = #selector(keepScrollbackChanged)
 
         // No wider than the widest control above them, which the column never gets narrower than: a note squeezed in a
         // narrow window would wrap to a line its height leaves out.
-        let noteWidth: CGFloat = (opens + [askToReopen]).map(\.fittingSize.width).max() ?? 290
+        let noteWidth: CGFloat = (opens + [askToResume, keepScrollback]).map(\.fittingSize.width).max() ?? 290
         func note(_ text: String) -> NSTextField {
             let note = NSTextField(wrappingLabelWithString: text)
             note.textColor = .secondaryLabelColor
@@ -44,11 +50,13 @@ final class GeneralSettingsView: NSView {
             note.preferredMaxLayoutWidth = noteWidth
             return note
         }
-        let opensNote = note("A folder or file named at launch, from nxtrm or a drop on the Dock icon, always opens directly. With every window closed, a click on the Dock icon shows the Welcome window or, with Reopen chosen, opens only the most recent project.")
-        let askNote = note("Asks only when project windows are open. Unsaved files and running work are always asked about.")
+        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project.")
+        let askNote = note("Asks only when a terminal window is open. Unsaved files and running work are always asked about.")
+        let scrollbackNote = note("Brings shell output back when windows resume after a quit or an update. It is kept in private files, with secrets masked on a best-effort basis, until Next Term next opens.")
         // VoiceOver reads each note with the controls it is about.
         for radio in opens { radio.setAccessibilityHelp(opensNote.stringValue) }
-        askToReopen.setAccessibilityHelp(askNote.stringValue)
+        askToResume.setAccessibilityHelp(askNote.stringValue)
+        keepScrollback.setAccessibilityHelp(scrollbackNote.stringValue)
         // A label in the 110 pt column on the left, as in the other tabs, and its controls beside it: on the first line's
         // baseline, for the radio buttons' two lines.
         func row(_ label: NSTextField, _ views: [NSView]) -> NSStackView {
@@ -69,12 +77,15 @@ final class GeneralSettingsView: NSView {
         }
         let launchRow = row(launchLabel, [opensGroup])
         let opensNoteRow = row(blank(), [opensNote])
-        let quitRow = row(quitLabel, [askToReopen])
-        let stack = NSStackView(views: [launchRow, opensNoteRow, quitRow, row(blank(), [askNote])])
+        let quitRow = row(quitLabel, [askToResume])
+        let askNoteRow = row(blank(), [askNote])
+        let sessionsRow = row(sessionsLabel, [keepScrollback])
+        let stack = NSStackView(views: [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, row(blank(), [scrollbackNote])])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.setCustomSpacing(20, after: opensNoteRow)
+        stack.setCustomSpacing(20, after: askNoteRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -83,9 +94,13 @@ final class GeneralSettingsView: NSView {
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
         ])
         refresh()
+        // An import or its Undo can change what reopens at launch.
+        NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: ImportCoordinator.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func importChanged() { refresh() }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -102,7 +117,8 @@ final class GeneralSettingsView: NSView {
         for choice in LaunchOpens.allCases {
             radio(choice).state = choice == settings.opens ? .on : .off
         }
-        askToReopen.state = settings.askToReopenOnQuit ? .on : .off
+        askToResume.state = settings.askToReopenOnQuit ? .on : .off
+        keepScrollback.state = settings.keepScrollback ? .on : .off
     }
 
     @objc private func opensChanged(_ sender: NSButton) {
@@ -110,13 +126,19 @@ final class GeneralSettingsView: NSView {
         guard choices.indices.contains(sender.tag) else { return }
         var settings = LaunchSettings(defaults: defaults)
         settings.opens = choices[sender.tag]
-        settings.save(to: defaults)
+        settings.save(.opens, to: defaults)
         for radio in opens { radio.state = radio === sender ? .on : .off }
     }
 
-    @objc private func askToReopenChanged() {
+    @objc private func askToResumeChanged() {
         var settings = LaunchSettings(defaults: defaults)
-        settings.askToReopenOnQuit = askToReopen.state == .on
-        settings.save(to: defaults)
+        settings.askToReopenOnQuit = askToResume.state == .on
+        settings.save(.askToReopenOnQuit, to: defaults)
+    }
+
+    @objc private func keepScrollbackChanged() {
+        var settings = LaunchSettings(defaults: defaults)
+        settings.keepScrollback = keepScrollback.state == .on
+        settings.save(.keepScrollback, to: defaults)
     }
 }

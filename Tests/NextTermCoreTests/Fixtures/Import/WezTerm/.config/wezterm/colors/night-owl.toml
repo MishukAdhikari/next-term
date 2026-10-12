@@ -1,0 +1,11 @@
+# A colour scheme file in WezTerm's TOML form.
+[metadata]
+name = "Night Owl"
+
+[colors]
+foreground = "#ffffff"
+background = "#011627"
+cursor_bg = "#80a4c2"
+selection_bg = "#1d3b53"
+ansi = ["#000000", "#ef5350", "#22da6e", "#addb67", "#82aaff", "#c792ea", "#21c7a8", "#ffffff"]
+brights = ["#575656", "#ef5350", "#22da6e", "#ffeb95", "#82aaff", "#c792ea", "#7fdbca", "#ffffff"]

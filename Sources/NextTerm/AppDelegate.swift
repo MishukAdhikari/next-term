@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
+    /// The editor's font size, which terminals use too while they have no size of their own.
     var fontSize: CGFloat {
         get {
             let saved = UserDefaults.standard.double(forKey: "fontSize")
@@ -21,6 +22,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         set { UserDefaults.standard.set(Double(newValue), forKey: "fontSize") }
     }
+
+    /// The terminal's own font size (Settings › Terminal), or nil while terminals use the editor's: saved only
+    /// once it is set, so nothing changes for anyone until then.
+    var terminalOwnFontSize: CGFloat? {
+        get {
+            let saved = UserDefaults.standard.double(forKey: "terminalFontSize")
+            return saved > 0 ? CGFloat(saved) : nil
+        }
+        set {
+            if let newValue { UserDefaults.standard.set(Double(newValue), forKey: "terminalFontSize") }
+            else { UserDefaults.standard.removeObject(forKey: "terminalFontSize") }
+        }
+    }
+
+    /// The size terminals use: their own, else the editor's.
+    var terminalFontSize: CGFloat { terminalOwnFontSize ?? fontSize }
 
     var sidebarVisible: Bool {
         get { UserDefaults.standard.object(forKey: "sidebarVisible") as? Bool ?? true }
@@ -213,11 +230,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         claudeTabs.first { $0.value.value === tab }?.key
     }
 
-    /// The open projects, so a `claude` started in another terminal inside one finds Next Term too.
+    /// The open projects, so a `claude` started in another terminal inside one finds Next Term too, and a kept remote
+    /// tab waiting for its project's window reattaches once it opens.
     func projectsChanged() {
         ClaudeIDEServer.shared.updateWorkspaces(controllers.compactMap(\.project))
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
         updateCopilotFolders()
+        RemoteConnection.projectsChanged()
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -287,6 +306,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         applyBlame(announce: currentLineBlame)
     }
 
+    /// Current Line Blame on or off, as the menu sets it, without a word about a file that has none (an import).
+    func setCurrentLineBlame(_ on: Bool) {
+        currentLineBlame = on
+        applyBlame(announce: false)
+    }
+
     /// Turning blame on says so when the file in front has none (outside git, too large).
     private func applyBlame(announce: Bool) {
         controllers.forEach { $0.editorArea.applyBlame(announce: announce && $0.window?.isKeyWindow == true) }
@@ -313,14 +338,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: lifecycle
 
-    /// Where a launch reads Settings › General and the flag "Relaunch Now" leaves. The update that keeps sessions
-    /// passes its test harness's own suite here.
-    let launchDefaults = UserDefaults.standard
+    /// Where a launch reads Settings › General, and where the projects open at quit are kept: the user's defaults, or the
+    /// relaunch harness's own suite (`SelfTest.keptDefaults`).
+    let launchDefaults = SelfTest.keptDefaults ?? .standard
     /// Kept remote tabs (tmux, herdr) wait for the first terminal window: they never open one of their own while the
     /// Welcome window is up.
     private(set) var remoteRestorePending = false
     /// A folder or file came through `application(_:open:)`. Read once, as the launch finishes: the launch named one.
     private var openedAtLaunch = false
+    /// What `application(_:open:)` names, by when it comes (R32): held until the launch hook has built the restored
+    /// windows, then opened in front of them as `nxtrm` opens it until the launch has shown what it shows.
+    private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
@@ -328,6 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
         Task { @MainActor in await SecretsStore.shared.load() }
         RemotePoller.shared.start() // status of remote tabs, from their hosts
+        followAgentSpinner()
         // Claude Code's IDE link, before the first tab so every tab can use it.
         if shareWithClaude { startClaudeLink() }
         if shareWithCopilot { startCopilotLink() } // Copilot CLI's, in CopilotIDE.swift
@@ -344,24 +373,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         BackgroundFetcher.shared.start()
         // Write the shell integration before the first shell starts. Without it tabs fall back to process polling.
         if AppSupport.zshIntegrationDirectory == nil { NSLog("Next Term: could not install zsh integration") }
+        #if DEBUG
+        // The relaunch harness's shells read its own zsh config, from the first tab the restore opens.
+        if SelfTest.mode == .relaunchHarness { SelfTestRestore.prepareShells() }
+        #endif
+        // The launch hook (KTD14): the sessions folder taken, unless another Next Term holds it, and what the last update,
+        // quit or crash left brought back, as Settings › General and the restore step say. Its windows are built by the
+        // time it returns, before the self-test branch and `--open-request`, so a request launch keeps the quit's session
+        // too and opens in front of it (R32). From here on the session is saved, and at the quit.
+        let restore = MainActor.assumeIsolated { SessionRestore.shared.launch(settings: LaunchSettings(defaults: launchDefaults)) }
+        let named = requests.restored()
         NSApp.activate(ignoringOtherApps: true)
         // `nxtrm` in a terminal, while Next Term runs.
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(commandLineRequest(_:)),
                                                             name: .init(CommandLineOpen.notificationName), object: nil,
                                                             suspensionBehavior: .deliverImmediately)
+        #if DEBUG
+        // A step of the relaunch harness: a launch as the app's own, in the harness's folder and defaults, with no update
+        // check, no `nxtrm` link and no clean-up in Application Support. SelfTestRestore drives the rest.
+        if SelfTest.mode == .relaunchHarness {
+            // A step launched as `nxtrm` launches the app opens what it names, as the app's own launch does.
+            let command = Self.openRequest(in: CommandLine.arguments)
+            if let command { handle(command) }
+            open(named, asRequest: true)
+            let kind: LaunchKind = command != nil || openedAtLaunch ? .request : .normal
+            openAtLaunch(kind: kind, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
+            requests.shown()
+            restoreRemoteTabsOnceAWindowOpens()
+            return SelfTestRestore.run(restore: restore)
+        }
+        #endif
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
-            openAtLaunch(kind: .normal, settings: LaunchSettings(), mayOfferImport: false)
+            openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
+            requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
             return
         }
-        // `nxtrm` started us: what it asked for opens, and the launch shows nothing more. A folder dropped on the app,
-        // `open -a "Next Term" dir` and Finder's Open With usually arrive before this and open themselves.
+        // `nxtrm` started us: what it asked for opens, in front of what the restore brought back, and the launch shows
+        // nothing more. So does a folder dropped on the app, `open -a "Next Term" dir` and Finder's Open With: those that
+        // arrived before the hook open now, and those that arrive before the launch has shown what it shows open as they
+        // come, each as `nxtrm` opens it (`application(_:open:)`).
         let command = Self.openRequest(in: CommandLine.arguments)
-        // First, so the flag "Relaunch Now" leaves never outlives the launch after it.
-        let kind = Self.takeLaunchKind(request: command != nil || openedAtLaunch, defaults: launchDefaults, now: Date())
+        let kind: LaunchKind = command != nil || openedAtLaunch ? .request : .normal
         // `nxtrm` in other terminals: linked where that needs no password, else offered once with one.
         CommandLineTool.registerQuietly()
         MainActor.assumeIsolated { Updater.shared.start() }
@@ -370,8 +426,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }
+        open(named, asRequest: true)
         let show = { [self] in
-            openAtLaunch(kind: kind)
+            openAtLaunch(kind: kind, restore: restore)
+            requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
         }
         // A launch to open a document can get it just after this: a turn later, its window is open, and the launch
@@ -386,28 +444,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return try? JSONDecoder().decode(OpenCommand.self, from: Data(arguments[flag + 1].utf8))
     }
 
-    /// The relaunch after "Relaunch Now" (the flag `Updater.flagRelaunch` left, 0 to 15 minutes old), else a launch
-    /// that named a folder or file, else a normal one. The flag is taken either way. Until the update that keeps
-    /// sessions, whose launch hook tells its relaunch.
-    static func takeLaunchKind(request: Bool, defaults: UserDefaults, now: Date) -> LaunchKind {
-        let flagged = defaults.object(forKey: Updater.relaunchFlagKey) as? Date
-        defaults.removeObject(forKey: Updater.relaunchFlagKey)
-        if LaunchDecision.isUpdateRelaunch(flaggedAt: flagged, now: now) { return .updateRelaunch }
-        return request ? .request : .normal
-    }
-
     /// What a launch shows, and a Dock click with no window (LaunchDecision): the projects to reopen, the Welcome
     /// window, or on the first run "Coming from another app?" and then the Welcome window. Nothing more once a
-    /// terminal window is open. Settings › General is read each time, so a change applies from the next one.
-    private func openAtLaunch(kind: LaunchKind) {
+    /// terminal window is open: one the launch hook restored, or one a request opened. Settings › General is read each
+    /// time, so a change applies from the next one.
+    private func openAtLaunch(kind: LaunchKind, restore: LaunchRestoreResult = .notRun) {
         let settings = LaunchSettings(defaults: launchDefaults)
         let offered = UserDefaults.standard.bool(forKey: "importOffered")
-        openAtLaunch(kind: kind, settings: settings, mayOfferImport: !offered && recentProjects.isEmpty)
+        openAtLaunch(kind: kind, restore: restore, settings: settings, mayOfferImport: !offered && recentProjects.isEmpty)
     }
 
-    private func openAtLaunch(kind: LaunchKind, settings: LaunchSettings, mayOfferImport: Bool) {
-        // Nothing restores yet: the update that keeps sessions fills in `restore`.
-        let input = LaunchInput(kind: kind, restore: .notRun, terminalWindowOpen: !controllers.isEmpty, settings: settings,
+    private func openAtLaunch(kind: LaunchKind, restore: LaunchRestoreResult, settings: LaunchSettings, mayOfferImport: Bool) {
+        let input = LaunchInput(kind: kind, restore: restore, terminalWindowOpen: !controllers.isEmpty, settings: settings,
                                 sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
         switch LaunchDecision.opening(input, exists: isFolder) {
         case .nothing: break
@@ -426,8 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func restoreRemoteTabs() {
         remoteRestorePending = false
         // A turn later: the window may have closed by then, and the Welcome window come back, so the tabs wait for the
-        // next one rather than open a window of their own. Closed while the restore reads the login shell, in the first
-        // seconds after launch, they still open one, until the update that keeps sessions holds them.
+        // next one rather than open a window of their own. Each waits for its own project's window (RemoteConnection).
         DispatchQueue.main.async { [self] in
             if controllers.isEmpty { remoteRestorePending = true } else { RemoteConnection.restoreTabs() }
         }
@@ -525,12 +572,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         CommandLineTool.install(from: NSApp.keyWindow)
     }
 
-    /// The project windows open when Next Term last quit: a launch reopens them when Settings › General says so, and
-    /// the relaunch after "Relaunch Now" does whatever it says. Written at every quit, so changing the setting later
-    /// works.
+    /// The project windows open when Next Term last quit: a launch whose restore built no window reopens them when
+    /// Settings › General says so, each with one fresh shell. Written at every quit, so changing the setting later works.
     private var sessionProjects: [String] {
-        get { UserDefaults.standard.stringArray(forKey: "sessionProjects") ?? [] }
-        set { UserDefaults.standard.set(newValue, forKey: "sessionProjects") }
+        get { launchDefaults.stringArray(forKey: "sessionProjects") ?? [] }
+        set { launchDefaults.set(newValue, forKey: "sessionProjects") }
     }
 
     private func isFolder(_ path: String) -> Bool {
@@ -582,82 +628,146 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     /// Set while a quit asks its questions. They are app-modal, and main-queue work still runs under them (a download
-    /// that ends, an MCP call): a second quit then is cancelled, and "Relaunch Now" is not offered (`Updater`).
+    /// that ends, an MCP call): a second quit then is cancelled, and the update sheet is not offered (`Updater`).
     var askingToQuit = false
+    /// Why the quit that went ahead happens, read as it went ahead: the quit's last save and the install go by it.
+    private var terminatingFor: QuitReason?
+    /// The update consent the quit went ahead under, read as it went ahead: the update's intent and its relaunch.
+    private var terminatingUpdate: UpdateConsent?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A second quit while the first asks: cancelled, and the first's answers, its quit consent among them, stay its own.
         guard !askingToQuit else { return .terminateCancel }
         askingToQuit = true
         defer { askingToQuit = false }
-        guard askBeforeQuitting() else { return .terminateCancel }
+        // The quit consent comes only from a press in this quit's questions (R30): none is left from a quit cancelled
+        // before, and a cancel clears what this one gave. The update consent is Updater's, cleared when this quit is
+        // cancelled.
+        MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+        // Why it quits is read once, before the questions: a download that ends under them never turns an update quit into
+        // a user quit.
+        let update = MainActor.assumeIsolated { Updater.shared.validConsent }
+        let reason = quitReason
+        guard let asking = askBeforeQuitting(update: update, reason: reason) else {
+            MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+            return .terminateCancel
+        }
+        let now = MainActor.assumeIsolated { Updater.shared.validConsent }
+        guard case .goAhead(let ending) = QuitPolicy.ending(reason: reason, consentBefore: update, consentNow: now) else {
+            // Another version was staged while it asked: the consent covered the one before, so the sheet asks again.
+            MainActor.assumeIsolated { SessionRestore.shared.quitConsent = false }
+            DispatchQueue.main.async { MainActor.assumeIsolated { Updater.shared.offerStaged() } }
+            return .terminateCancel
+        }
+        MainActor.assumeIsolated { SessionRestore.shared.quitConsent = asking.quitConsent }
         isTerminating = true
+        terminatingFor = ending
+        terminatingUpdate = update
         // A skill change part-way finishes, and records its Undo, before Next Term quits.
         SkillsStore.waitForChanges()
         return .terminateNow
     }
 
     /// The quit's questions (QuitPolicy), one at a time: the save-changes and "Quitting stops…" alerts whenever they
-    /// apply, as always, with the reopen question on one of them, or else on its own. False when one cancels the
-    /// quit. The reopen answer is saved only once the quit goes ahead.
-    private func askBeforeQuitting() -> Bool {
+    /// apply, as always, with the resume question on one of them, or else the plain quit dialog on its own. Under an
+    /// update consent: the unsaved-files question alone, with no checkbox, and when the plan got worse than the one the
+    /// consent covers, no question at all but the update sheet again (R16). Nil when the quit is cancelled. The answer is
+    /// saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
+    private func askBeforeQuitting(update consent: UpdateConsent?, reason: QuitReason) -> QuitAsking? {
         let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
         let projects = openProjects
         let settings = LaunchSettings(defaults: launchDefaults)
         let sheetAttached = NSApp.windows.contains { $0.attachedSheet != nil }
         let busyCount = controllers.flatMap(\.busyTabs).count
-        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, projectWindows: projects.count,
-                              sheetAttached: sheetAttached, reason: quitReason, settings: settings)
+        // The update quit plans again, to compare with the plan its consent covers (KTD2).
+        let update: UpdateQuit? = consent.map { (consent: UpdateConsent) -> UpdateQuit in
+            UpdateQuit(consent: consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
+        }
+        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, terminalWindows: controllers.count,
+                              sheetAttached: sheetAttached, reason: reason, settings: settings, update: update)
         let questions: [QuitQuestion] = QuitPolicy.questions(input)
-        guard !questions.isEmpty else { return true }
+        var asking = QuitAsking()
+        guard !questions.isEmpty else { return asking }
+        if questions == [.updateSheet], let update {
+            // Worse than what the user agreed to: this quit is cancelled, and the sheet shows again once it has returned.
+            DispatchQueue.main.async { MainActor.assumeIsolated { UpdateKeepSessions.shared.showAgain(update) } }
+            return nil
+        }
         // A quit from the Dock while Next Term is behind another app: its first question shows in front.
         NSApp.activate(ignoringOtherApps: true)
-        var answer: QuitAnswer?
-        var busyCheckbox: Bool?
+        var plannedBusy: QuitQuestion?
         for question in questions {
             switch question {
             case .saveChanges(let checkbox):
                 let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
-                let reopen = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-                switch alert.runModal() {
-                case .alertFirstButtonReturn:
-                    guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return false }
-                case .alertThirdButtonReturn:
+                let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                // Save, Cancel, Don’t Save, as they were added. The box is read once a button is pressed (QuitAsking.ask).
+                let dialog = QuitAlertDialog(alert, presses: [.save, .cancel, .goOn], box: box)
+                switch asking.ask(question, on: dialog) {
+                case .save:
+                    guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return nil }
+                case .goOn:
                     break
-                default:
-                    return false
+                case .cancel:
+                    return nil
                 }
-                if let reopen { answer = .checkbox(checked: reopen.state == .on) }
-            case .busy(let checkbox):
-                busyCheckbox = checkbox // asked below, once the busy tabs are read again
-            case .reopen(let returnKeyReopens):
-                let prompt = QuitReopenPrompt(projects: projects, returnKeyReopens: returnKeyReopens)
-                guard let reopen = prompt.run() else { return false }
-                answer = reopen
+            case .busy:
+                plannedBusy = question // asked below, once the busy tabs are read again
+            case .quit(let checkbox):
+                guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
+            case .updateSheet:
+                return nil
             }
         }
-        // Read again, as today: a tab that turned busy under a question before still gets "Quitting stops…". Only the
-        // alert the policy chose carries the checkbox, so the question is never asked twice; when that alert no longer
-        // applies, nothing is asked about reopening and the setting stays as it is.
-        let busy = controllers.flatMap(\.busyTabs)
-        if !busy.isEmpty {
-            let alert = Self.quitStopsAlert(busy)
-            let reopen = busyCheckbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-            guard alert.runModal() == .alertFirstButtonReturn else { return false }
-            if let reopen { answer = .checkbox(checked: reopen.state == .on) }
+        if let update {
+            // The update path asks nothing about busy tabs: the sheet showed what stops. A tab that turned busy under the
+            // unsaved-files question makes the plan worse: the sheet again, never "Quitting stops…".
+            let now = UpdateQuit(consent: update.consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
+            guard UpdateFlow.worse(now.current, than: now.consent) == nil else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { UpdateKeepSessions.shared.showAgain(now) } }
+                return nil
+            }
+            return asking
         }
-        if let answer { QuitPolicy.settings(after: answer, from: settings).save(to: launchDefaults) }
-        return true
+        // Read again, as today: a tab that turned busy under a question before still gets "Quitting stops…". Only the
+        // alert the policy chose carries the checkbox, so the question is never asked twice; when no tab is busy any more
+        // and that alert was to carry it, the plain dialog asks instead (AE22, QuitPolicy.lastQuestion).
+        let busy = controllers.flatMap(\.busyTabs)
+        switch QuitPolicy.lastQuestion(planned: plannedBusy, busyTabs: busy.count) {
+        case .busy(let checkbox):
+            let alert = Self.quitStopsAlert(busy)
+            let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+            let dialog = QuitAlertDialog(alert, presses: [.goOn, .cancel], box: box)
+            guard asking.ask(.busy(resumeCheckbox: checkbox), on: dialog) == .goOn else { return nil }
+        case .quit(let checkbox):
+            guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
+        case .saveChanges, .updateSheet, nil:
+            break
+        }
+        asking.settings(from: settings)?.save(to: launchDefaults)
+        return asking
     }
 
-    /// Why this quit happens: the self-test, "Relaunch Now", a logout, restart or shutdown (the quit Apple event), or
-    /// else the user.
-    private var quitReason: QuitReason {
-        if SelfTest.isRequested { return .selfTest }
-        if MainActor.assumeIsolated({ Updater.shared.relaunching }) { return .updateRelaunch }
-        return QuitReopenPrompt.reason(of: NSAppleEventManager.shared().currentAppleEvent)
+    /// The plain quit dialog, "Quit Next Term?", its answer put into `asking`. False when it was cancelled.
+    private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking) -> Bool {
+        let prompt = QuitReopenPrompt(projects: projects, checked: checked)
+        return asking.ask(.quit(resumeCheckbox: checked), on: prompt.dialog) == .goOn
     }
 
-    /// The windows' projects, each once, in window order: what the reopen question names.
+    /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, a valid update consent (the update
+    /// sheet's "Update Now", or "Wait for Them" at its countdown's end), a logout, restart or shutdown (the quit Apple
+    /// event), or else the user. The relaunch harness checks it.
+    var quitReason: QuitReason {
+        var harness: QuitReason?
+        #if DEBUG
+        harness = SelfTestRestore.quitReason
+        #endif
+        let consent = MainActor.assumeIsolated { Updater.shared.validConsent != nil }
+        let code = QuitReopenPrompt.reasonCode(of: NSAppleEventManager.shared().currentAppleEvent)
+        return QuitReason.of(plainSelfTest: SelfTest.mode == .plain, harness: harness, updateConsent: consent, appleEventReason: code)
+    }
+
+    /// The windows' projects, each once, in window order: what the resume checkbox's tooltip names.
     private var openProjects: [String] {
         var seen = Set<String>()
         return controllers.compactMap(\.project).filter { seen.insert($0).inserted }
@@ -676,27 +786,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return alert
     }
 
-    /// "Quit Next Term?", with what quitting stops: Quit, Cancel.
+    /// "Quit Next Term?", with what quitting stops: Quit, Cancel. Quit is not the default, so Return quits nothing (R29);
+    /// NSAlert gives Cancel ⎋.
     static func quitStopsAlert(_ busy: [TerminalTab]) -> NSAlert {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Quit Next Term?"
-        alert.informativeText = "Quitting stops " + TerminalWindowController.stopList(busy)
-        alert.addButton(withTitle: "Quit")
+        alert.informativeText = TerminalWindowController.stopText("Quitting stops", busy)
+        alert.addButton(withTitle: "Quit").keyEquivalent = ""
         alert.addButton(withTitle: "Cancel")
         return alert
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        MCPControlServer.shared.stop()
+        // Each MCP call in flight hears that Next Term quits, or that it restarts for the update (KTD17).
+        var restart: UpdateConsent?
+        if (terminatingFor ?? quitReason) == .updateRelaunch {
+            restart = terminatingUpdate ?? MainActor.assumeIsolated { Updater.shared.validConsent }
+        }
+        MCPRestoredTabs.drainAtQuit(update: restart)
         ClaudeIDEServer.shared.stop() // removes the lock file
         GeminiIDEServer.shared.stop()
         CopilotIDEServer.shared.stop()
-        MainActor.assumeIsolated { Updater.shared.installStagedUpdateOnQuit() }
-        if !SelfTest.isRequested { sessionProjects = controllers.compactMap(\.project) }
+        // The quit's last save (KTD18): the update's, under its consent, or what Settings › General says now, with the quit's
+        // answer saved; scrollback only while "Keep scrollback" is on.
+        let reason = terminatingFor ?? quitReason
+        let settings = LaunchSettings(defaults: launchDefaults)
+        let update = terminatingUpdate
+        MainActor.assumeIsolated {
+            let sessions = SessionRestore.shared
+            var finished = SessionRestore.Finished()
+            var intent = QuitIntent.ordinary(reason: reason, settings: settings, consent: sessions.quitConsent)
+            if reason == .updateRelaunch, let consent = update ?? Updater.shared.validConsent {
+                intent = QuitIntent.forUpdate(consent, from: Updater.shared.current?.description ?? "")
+                // The open decisions the restart drops get a definite answer now.
+                UpdateHolds.shared.cancelAll()
+            }
+            if let intent { finished = sessions.finishAtQuit(intent, keepScrollback: settings.keepScrollback) }
+            #if DEBUG
+            // The relaunch harness reads the quit's last save as it left the sessions folder, before the install.
+            if SelfTest.mode == .relaunchHarness { SelfTestRestore.quitSaved() }
+            #endif
+            // A logout, restart or shutdown installs nothing: it could end the install part-way. It waits for the next quit.
+            // Only the update's quit starts the new version; any other installs it alone (R17).
+            let relaunch = intent?.relaunches ?? false
+            if reason.installsStagedUpdate { Updater.shared.installStagedUpdateOnQuit(sessions: finished, relaunch: relaunch) }
+        }
+        if SelfTest.mode != .plain { sessionProjects = controllers.compactMap(\.project) }
         RemoteConnection.saveTabs(controllers)
-        for controller in controllers { for tab in controller.tabs { tab.terminate() } }
+        // Every tab from one snapshot taken before any signal; what outlives the hangup gets SIGTERM after one
+        // shared second at most (no wait at all when nothing does), tabs closed just before included.
+        let waiting = TerminalTab.terminate(controllers.flatMap(\.tabs), finishLater: false)
         RemoteConnection.shutdown() // the master connections; sessions kept by tmux or herdr stay on their hosts
+        TabHangup.finishAtQuit(waiting)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -712,18 +854,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @discardableResult
     func openWindow(directory: String?, project: String? = nil) -> TerminalWindowController {
         let controller = TerminalWindowController(directory: directory, project: project)
-        controller.onClose = { [weak self] closed, welcome in
-            // Defer: the window is still mid-close in this call.
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.controllers.removeAll { $0 === closed }
-                self.updateBadge()
-                self.projectsChanged()
-                // Closing the last project (or the last window's last tab) leaves the Welcome window, with
-                // recent projects, like an IDE.
-                if welcome && self.controllers.isEmpty && !self.isTerminating { self.showWelcome(nil) }
-            }
-        }
+        controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         welcome?.close()
         // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
         // is in full screen, and never below the minimum.
@@ -743,6 +874,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         return controller
+    }
+
+    /// A window the restore built, placed and filled (SessionRestore): shown as it is, with no cascade and no first tab.
+    func openWindow(restored controller: TerminalWindowController) {
+        controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
+        welcome?.close()
+        controllers.append(controller)
+        if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
+        projectsChanged()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// A terminal window closed.
+    private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
+        // Defer: the window is still mid-close in this call.
+        DispatchQueue.main.async { [self] in
+            controllers.removeAll { $0 === closed }
+            updateBadge()
+            projectsChanged()
+            // Closing the last project (or the last window's last tab) leaves the Welcome window, with
+            // recent projects, like an IDE.
+            if welcome && controllers.isEmpty && !isTerminating { showWelcome(nil) }
+        }
     }
 
     @objc func newWindow(_ sender: Any?) {
@@ -770,6 +925,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
+    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
+    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
+    func copiesIgnoredFiles(for main: String) -> Bool {
+        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    }
+
+    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+        choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
+        choices[canonicalPath(main)] = on
+        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+    }
+
     // MARK: projects
 
     private var recent: RecentProjects {
@@ -791,13 +959,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return added
     }
 
-    /// Undo of an import: the list exactly as it was.
+    /// Sets the list as given (Undo of an import gives today’s list less what the import added).
     func setRecentProjects(_ paths: [String]) {
         recent = RecentProjects(paths)
     }
 
+    /// A worktree removed or forgotten (GitActions.runRemoval): it leaves the list, with any project inside it, as its
+    /// folder is gone. `places` spells the folder each way it may have been kept (as git and as the kernel spell it).
+    func forgetRecentProjects(under places: [String]) {
+        var list = recent
+        for project in list.paths where places.contains(where: { project == $0 || project.hasPrefix($0 + "/") }) { list.remove(project) }
+        if list.paths != recent.paths { recent = list }
+    }
+
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
-    enum ProjectTarget: String { case ask, thisWindow, newWindow }
+    typealias ProjectTarget = ProjectOpening.Setting
 
     var projectTarget: ProjectTarget {
         get { ProjectTarget(rawValue: UserDefaults.standard.string(forKey: "openProjectsIn") ?? "") ?? .ask }
@@ -808,21 +984,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// For the self-test.
     var welcomeController: WelcomeWindowController? { welcome }
 
-    /// ⌘O: choose a folder to open as a project.
+    /// File › Open Project… (⌘O): the Welcome window, as at the first launch: your projects with a search, their agents'
+    /// sessions and your servers, and Open… for a folder not listed. A project chosen there opens as if from the window
+    /// you asked in (`welcomeOrigin`). Asked again with the Welcome window in front, it is that Open….
     @objc func openProjectPanel(_ sender: Any?) {
+        if let window = welcome?.window, window.isVisible {
+            if let sheet = window.attachedSheet { return sheet.makeKeyAndOrderFront(nil) } // the panel is up already
+            if window.isKeyWindow { return chooseProjectFolder(sender) }
+        }
+        showWelcome(sender)
+    }
+
+    /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
+    /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
+    @objc func chooseProjectFolder(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let from = NSApp.keyWindow?.windowController as? TerminalWindowController
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
+
+    /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen
+    /// on the Welcome window opens (`openProject`'s “this window”). Nil when it was shown with none in front.
+    var welcomeOrigin: TerminalWindowController? {
+        guard let origin = welcomeOriginController, controllers.contains(where: { $0 === origin }), origin.window?.isVisible == true else { return nil }
+        return origin
+    }
+    private weak var welcomeOriginController: TerminalWindowController?
 
     @objc func openRecentProject(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
@@ -838,7 +1035,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Opens a folder as a project. Reuses an untouched window; otherwise this window or a new one,
-    /// as the user chooses (and may remember), like an IDE.
+    /// as the user chooses (and may remember), like an IDE. A window the restore brought back is neither: while it holds
+    /// what came back, the folder opens in a window of its own (ProjectOpening.placement).
     func openProject(at url: URL, from controller: TerminalWindowController?) {
         let path = canonicalPath(url.path)
         var isDir: ObjCBool = false
@@ -855,16 +1053,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             open.window?.makeKeyAndOrderFront(nil)
             return
         }
-        guard let target = controller ?? controllers.last(where: { $0.window?.isVisible == true }) else {
+        let target = controller ?? controllers.last(where: { $0.window?.isVisible == true })
+        let from = target.map { (target: TerminalWindowController) -> ProjectOpening.Target in
+            ProjectOpening.Target(pristine: target.isPristine, holdsRestore: target.holdsRestore)
+        }
+        var choice = projectTarget
+        let placement = ProjectOpening.placement(from: from, setting: choice)
+        guard let target, placement != .newWindow else {
             openWindow(directory: path, project: path)
             return
         }
-        if target.isPristine {
+        if placement == .adopt {
             target.adoptProject(path)
             target.window?.makeKeyAndOrderFront(nil)
             return
         }
-        var choice = projectTarget
         if choice == .ask {
             let alert = NSAlert()
             alert.messageText = "Where do you want to open “\(url.lastPathComponent)”?"
@@ -892,7 +1095,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = target.project == nil ? "Replace the tabs in this window?" : "Replace the project in this window?"
-            alert.informativeText = "This stops " + TerminalWindowController.stopList(busy)
+            alert.informativeText = TerminalWindowController.stopText("This stops", busy)
             alert.addButton(withTitle: "Replace")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -906,10 +1109,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Read as the launch finishes: it named something, even when every item below is skipped. It then goes on
         // as a normal launch, without the first run's import offer.
         openedAtLaunch = true
+        switch requests.arrive(urls) {
+        case .held: break // until the restore has built its windows
+        case .asRequest: open(urls, asRequest: true)
+        case .asProject: open(urls, asRequest: false)
+        }
+    }
+
+    /// Opens what `application(_:open:)` named. `asRequest`: the launch's own request (R32), which opens as `nxtrm` does,
+    /// in front, each folder in its own window, its project's, an unused one or a new one, never in place of a window the
+    /// restore brought back. Otherwise a folder opens as Open Project does (`openProject`): an unused key window is taken
+    /// over and a used one may be replaced, as "Open Projects In" says, but one the restore brought back is neither.
+    private func open(_ urls: [URL], asRequest: Bool) {
         for url in urls {
             var isDir: ObjCBool = false
             guard url.isFileURL, FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
-            if isDir.boolValue {
+            if isDir.boolValue && asRequest {
+                openFolder(url.path, newWindow: false)
+            } else if isDir.boolValue {
                 openProject(at: url, from: NSApp.keyWindow?.windowController as? TerminalWindowController)
             } else {
                 openFile(url.path, line: nil, column: 1, newWindow: false) // Finder's Open With
@@ -918,6 +1135,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func showWelcome(_ sender: Any?) {
+        // Asked again from the Welcome window itself, it keeps the window it came from.
+        if !(welcome?.window?.isKeyWindow ?? false) { welcomeOriginController = NSApp.keyWindow?.windowController as? TerminalWindowController }
         if welcome == nil { welcome = WelcomeWindowController() }
         welcome?.showWindow(nil)
         welcome?.window?.makeKeyAndOrderFront(nil)
@@ -1044,6 +1263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
+        if item.action == #selector(setAgentSpinner(_:)) { item.state = item.representedObject as? String == AgentSpinner.current.rawValue ? .on : .off }
         if item.action == #selector(setLineHeight(_:)), let value = item.representedObject as? Double {
             item.state = abs(CGFloat(value) - editorLineHeight) < 0.001 ? .on : .off
         }
@@ -1053,16 +1273,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    /// View › Agent Spinner: Spinning, Still or Off, for every window at once.
+    @objc func setAgentSpinner(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let choice = AgentSpinner(rawValue: raw) else { return }
+        AgentSpinner.current = choice
+    }
+
+    /// The tabs' marks and titles drawn again when Agent Spinner (or Reduce Motion) changes.
+    private func followAgentSpinner() {
+        AgentSpinner.followSystemMotion()
+        NotificationCenter.default.addObserver(forName: AgentSpinner.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.controllers.forEach { $0.refresh() } }
+        }
+    }
+
     // MARK: font size
 
-    @objc func increaseFontSize(_ sender: Any?) { setFontSize(fontSize + 1) }
-    @objc func decreaseFontSize(_ sender: Any?) { setFontSize(fontSize - 1) }
-    @objc func resetFontSize(_ sender: Any?) { setFontSize(Theme.defaultFontSize) }
+    // ⌘+, ⌘- and ⌘0 change the size of what has the keyboard: a terminal's own size while a terminal has the
+    // keyboard and a size of its own, else the editor's (which terminals without their own follow).
+    @objc func increaseFontSize(_ sender: Any?) { changeFontSize(by: 1) }
+    @objc func decreaseFontSize(_ sender: Any?) { changeFontSize(by: -1) }
+    @objc func resetFontSize(_ sender: Any?) { changeFontSize(by: nil) }
 
+    /// nil: back to the default size.
+    private func changeFontSize(by step: CGFloat?) {
+        if let own = terminalOwnFontSize, NSApp.keyWindow?.firstResponder is NextTermView {
+            setTerminalFontSize(step.map { own + $0 } ?? Theme.defaultFontSize)
+        } else {
+            setFontSize(step.map { fontSize + $0 } ?? Theme.defaultFontSize)
+        }
+    }
+
+    /// The editor's size, in every editor, and in every terminal that has no size of its own.
     func setFontSize(_ size: CGFloat) {
-        let clamped = min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
-        fontSize = clamped
-        controllers.forEach { $0.applyFontSize(clamped) }
+        fontSize = Self.clampedFontSize(size)
+        controllers.forEach { $0.applyFontSizes() }
+    }
+
+    /// The terminal's own size in every terminal (nil: terminals use the editor's size again).
+    func setTerminalFontSize(_ size: CGFloat?) {
+        terminalOwnFontSize = size.map(Self.clampedFontSize)
+        controllers.forEach { $0.applyFontSizes() }
+    }
+
+    static func clampedFontSize(_ size: CGFloat) -> CGFloat {
+        min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
     }
 
     // MARK: dock badge and notifications
@@ -1212,11 +1467,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: menu
 
+    @objc func showAcknowledgements(_ sender: Any?) {
+        MainActor.assumeIsolated { AcknowledgementsWindowController.show() }
+    }
+
     private func buildMenu() -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(main, "Next Term")
         app.addItem(withTitle: "About Next Term", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        item(app, "Acknowledgements", #selector(showAcknowledgements(_:)), "", target: self)
         app.addItem(.separator())
         item(app, "Settings…", #selector(showSettings(_:)), ",", target: self)
         item(app, "Check for Updates…", #selector(checkForUpdates(_:)), "", target: self)
@@ -1325,11 +1585,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
-        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "", target: DiffLayoutMenu.shared) // checked: one column
-        item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "", target: self)
-        item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "", target: self)
+        // ⌃⌘ as Git Diff's ⌃⌘G: U for Unified. The blame toggles are A for Annotate (Xcode's Authors key) and L for Line.
+        item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "u", [.command, .control], target: DiffLayoutMenu.shared) // checked: one column
+        item(view, "Annotate with Git Blame", #selector(toggleBlameAnnotations(_:)), "a", [.command, .shift, .control], target: self)
+        item(view, "Current Line Blame", #selector(toggleCurrentLineBlame(_:)), "l", [.command, .shift, .control], target: self)
         view.addItem(.separator())
-        item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "", target: self)
+        // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
+        item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
@@ -1338,6 +1600,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             entry.representedObject = Double(value)
         }
         view.addItem(withTitle: "Line Height", action: nil, keyEquivalent: "").submenu = heights
+        // How a terminal tab shows its agent working; also in Settings › Notifications.
+        let spinner = NSMenu(title: "Agent Spinner")
+        for choice in AgentSpinner.allCases {
+            item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
+        }
+        view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
@@ -1362,16 +1630,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
+        // The branch popup at its Worktrees: where each is listed, opened, unlocked and removed.
+        item(git, "Worktrees…", #selector(TerminalWindowController.showWorktrees(_:)), "")
         git.addItem(.separator())
-        item(git, "Fetch", #selector(TerminalWindowController.gitFetch(_:)), "")
-        item(git, "Update Project", #selector(TerminalWindowController.gitUpdate(_:)), "")
-        item(git, "Commit…", #selector(TerminalWindowController.gitCommit(_:)), "")
-        item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "")
-        item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "")
+        // Fetch is ⌘R, as in the branch popup (the same fetch of every remote). Update Project can change files without
+        // asking (it fast-forwards), so it takes three keys, U for Update. Commit… is Tower's and Sourcetree's ⇧⌘C, New Branch… Fork's
+        // and Sourcetree's ⇧⌘B; Push… is ⌥⌘P, P beside Branches… and Git Log (⇧⌘P is Push in some apps, Pull or the
+        // command palette in others).
+        item(git, "Fetch", #selector(TerminalWindowController.gitFetch(_:)), "r")
+        item(git, "Update Project", #selector(TerminalWindowController.gitUpdate(_:)), "u", [.command, .option])
+        item(git, "Commit…", #selector(TerminalWindowController.gitCommit(_:)), "c", [.command, .shift])
+        item(git, "Push…", #selector(TerminalWindowController.gitPush(_:)), "p", [.command, .option])
+        item(git, "New Branch…", #selector(TerminalWindowController.gitNewBranch(_:)), "b", [.command, .shift])
+        git.addItem(.separator())
+        // ⌥⌘Z, the JetBrains IDEs' Rollback: the file's uncommitted changes back to the last commit, with Undo.
+        item(git, "Rollback…", #selector(TerminalWindowController.gitRollback(_:)), "z", [.command, .option])
         git.addItem(.separator())
         item(git, "Git Log", #selector(TerminalWindowController.showGitLog(_:)), "l", [.command, .option])
         item(git, "Git Diff", #selector(TerminalWindowController.showGitDiff(_:)), "g", [.command, .control])
         item(git, "Git Commands", #selector(TerminalWindowController.showGitCommands(_:)), "")
+
+        // Settings › Notifications, in the menu bar: each choice with its checkmark.
+        MainActor.assumeIsolated { NotificationsMenu.shared.fill(submenu(main, "Notifications")) }
 
         let window = submenu(main, "Window")
         item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")

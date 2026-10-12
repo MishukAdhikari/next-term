@@ -164,11 +164,10 @@ public enum ImportTerminalApp {
             return plan
         }
         if let font = profile.font {
-            var notes = ["sets the editor too: Next Term has one size for both"]
-            if font.size.rounded() < 8 || font.size.rounded() > 32 { notes.insert("Next Term's sizes go from 8 to 32", at: 0) }
+            let note = font.size.rounded() < 8 || font.size.rounded() > 32 ? "Next Term's sizes go from 8 to 32" : nil
             let shown = SecretGuard.looksSecret(font.name) ? "" : " " + font.name
-            plan.settings.append(PlannedSetting(.fontSize(clamping: font.size), source: "Font\(shown) \(ImportITerm2.formatted(font.size))",
-                                                note: notes.joined(separator: "; ")))
+            plan.settings.append(PlannedSetting(.terminalFontSize(clamping: font.size), source: "Font\(shown) \(ImportITerm2.formatted(font.size))",
+                                                note: note))
             let row = ImportFonts.row(.terminal, list: font.name, source: "Font", fonts: fonts)
             plan.settings += [row.setting].compactMap { $0 }
             plan.skipped += row.skipped

@@ -47,6 +47,9 @@ public struct GitSnapshot: Sendable {
     public var renamedFrom: [String: String] = [:]
     /// Untracked or ignored folders git reports as a whole ("node_modules/").
     public var wholeFolders: [String: GitChange] = [:]
+    /// Changed entries that are submodules (status's `sub` field starts with S): their changes live in their own
+    /// repository.
+    public var submodules: Set<String> = []
     /// Strongest change below each folder (ignored entries do not count).
     public var folderChanges: [String: GitChange] = [:]
     public var folderStats: [String: LineStats] = [:]
@@ -126,6 +129,7 @@ public struct GitSnapshot: Sendable {
                 guard f.count == 9 else { continue }
                 snapshot.files[String(f[8])] = ordinaryChange(String(f[1]))
                 snapshot.codes[String(f[8])] = String(f[1])
+                if f[2].hasPrefix("S") { snapshot.submodules.insert(String(f[8])) }
             case "2":
                 // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
                 let f = record.split(separator: " ", maxSplits: 9, omittingEmptySubsequences: false)
@@ -133,6 +137,7 @@ public struct GitSnapshot: Sendable {
                 let xy = String(f[1])
                 snapshot.files[String(f[9])] = xy.contains("C") ? .added : .renamed
                 snapshot.codes[String(f[9])] = xy
+                if f[2].hasPrefix("S") { snapshot.submodules.insert(String(f[9])) }
                 if i < records.count { snapshot.renamedFrom[String(f[9])] = records[i] }
                 i += 1 // the original path
             case "u":
@@ -233,6 +238,31 @@ public struct GitSnapshot: Sendable {
 /// Runs git. Read-only commands only, with `--no-optional-locks` so a refresh never takes the index
 /// lock out from under the user's own git commands.
 public enum GitRunner {
+    /// How many git commands have run in `folder` (their `-C`) or below it since launch: for the self-test's
+    /// checks that a writer in an ignored folder, or a closed window, runs no git.
+    public static func runs(in folder: String) -> Int { runCounts.total(in: folder) }
+
+    private static let runCounts = RunCounts()
+
+    private final class RunCounts: @unchecked Sendable {
+        private let lock = NSLock()
+        private var counts: [String: Int] = [:]
+
+        func add(_ folder: String) {
+            lock.lock()
+            counts[folder, default: 0] += 1
+            lock.unlock()
+        }
+
+        func total(in folder: String) -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return counts.reduce(0) { sum, entry in
+                entry.key == folder || entry.key.hasPrefix(folder + "/") ? sum + entry.value : sum
+            }
+        }
+    }
+
     /// A real git binary. Never the /usr/bin/git stub when no developer tools are installed: running it
     /// would pop up the "install command line developer tools" dialog.
     public static func locateGit(fileManager: FileManager = .default) -> String? {
@@ -469,6 +499,7 @@ public enum GitRunner {
     /// `environment` is added last, over the defaults. `input` is the standard input, from a file too.
     static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval,
                     acceptedStatus: Set<Int32> = [0], environment: [String: String] = [:], input: Data? = nil) -> Data? {
+        if let flag = arguments.firstIndex(of: "-C"), flag + 1 < arguments.count { runCounts.add(arguments[flag + 1]) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -488,12 +519,15 @@ public enum GitRunner {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-out-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let output = try? FileHandle(forWritingTo: outputURL) else { return nil }
+        // git gets its own copy as its standard output; a tab's shell starting meanwhile must not get one too.
+        DescriptorSweep.closeOnExec(output.fileDescriptor)
         defer { try? FileManager.default.removeItem(at: outputURL) }
         let inputURL = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-in-\(UUID().uuidString)")
         var inputFile: FileHandle?
         if let input {
             guard FileManager.default.createFile(atPath: inputURL.path, contents: input, attributes: [.posixPermissions: 0o600]),
                   let handle = try? FileHandle(forReadingFrom: inputURL) else { return nil }
+            DescriptorSweep.closeOnExec(handle.fileDescriptor)
             inputFile = handle
         }
         defer { if input != nil { try? FileManager.default.removeItem(at: inputURL) } }

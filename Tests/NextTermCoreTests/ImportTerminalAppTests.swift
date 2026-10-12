@@ -75,7 +75,7 @@ import Testing
         let palette = TerminalPalette(name: "Terminal, profile Homebrew", ansi: ansi, foreground: 0x808080, background: 0x000000,
                                       selection: 0x808080)
         #expect(plan.settings == [
-            PlannedSetting(.fontSize(14), source: "Font Menlo-Regular 14", note: "sets the editor too: Next Term has one size for both"),
+            PlannedSetting(.terminalFontSize(14), source: "Font Menlo-Regular 14"),
             PlannedSetting(.terminalFontFamily("Menlo"), source: "Font Menlo-Regular"),
             PlannedSetting(.optionAsMeta(true), source: "Use Option as Meta key"),
             PlannedSetting(.terminalPalette(palette), source: "profile Homebrew colours", note: "5 of 20 colours; the others stay Next Term's"),
