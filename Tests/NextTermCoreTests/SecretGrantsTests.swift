@@ -59,6 +59,22 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         #expect(late.expire(at: start.advanced(by: .seconds(121))).count == 1 && late.grants.isEmpty)
     }
 
+    /// One "Allow once" starts one command. Identical requests that took its panel over wait on the same answer: the
+    /// first caller uses it, and a second use is refused. The lasting approvals reach each caller, as their grant would.
+    @Test func allowOnceIsUsedOnce() {
+        var once = SecretApprovalUse(.once)
+        let uses = [once.take(), once.take(), once.take()]
+        #expect(uses == [true, false, false])
+        var remote = SecretApprovalUse(.remote)
+        let remoteUses = [remote.take(), remote.take()]
+        #expect(remoteUses == [true, false])
+        for approval in [SecretAudit.Approval.fifteenMinutes, .untilLock] {
+            var lasting = SecretApprovalUse(approval)
+            let lastingUses = [lasting.take(), lasting.take()]
+            #expect(lastingUses == [true, true], "\(approval)")
+        }
+    }
+
     @Test func whatEndsAGrant() {
         func book() -> SecretGrantBook {
             var book = SecretGrantBook()

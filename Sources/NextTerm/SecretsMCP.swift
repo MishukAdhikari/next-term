@@ -438,6 +438,9 @@ enum SecretsMCP {
             return ["status": Status.refused.rawValue, "note": "The tab's shell did not start nxtrm within 30 seconds."]
         case .unanswered:
             return ["status": Status.declined.rawValue, "note": "Nobody answered in Next Term, so \(nothing)."]
+        case .usedAlready:
+            return ["status": Status.refused.rawValue,
+                    "note": "The user chose Allow once, which starts one command, and an identical call used it, so \(nothing) here."]
         }
     }
 

@@ -173,6 +173,29 @@ public struct SecretGrant: Identifiable, Sendable {
     }
 }
 
+/// One Allow, as the callers waiting on its panel use it: the request's own caller first, then each identical request
+/// that took the panel over, in turn. "Allow once", and a remote approval, which offers only that, starts one command:
+/// the first caller uses it, and each later one is refused as used already. The lasting approvals reach every caller,
+/// as the grant they make would answer each of them.
+public struct SecretApprovalUse: Sendable {
+    public let approval: SecretAudit.Approval
+    public private(set) var isUsed = false
+
+    public init(_ approval: SecretAudit.Approval) {
+        self.approval = approval
+    }
+
+    /// "Allow once" and a remote approval.
+    public var isSingleUse: Bool { approval == .once || approval == .remote }
+
+    /// Takes a use for the next caller: true when it gets the keys. A single-use approval is spent by the first.
+    public mutating func take() -> Bool {
+        if isSingleUse, isUsed { return false }
+        isUsed = true
+        return true
+    }
+}
+
 /// The grants in force. The app keeps each one's values by its id.
 public struct SecretGrantBook: Sendable {
     public private(set) var grants: [SecretGrant] = []

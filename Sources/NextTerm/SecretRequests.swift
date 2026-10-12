@@ -9,7 +9,8 @@ import NextTermCore
 /// - A request the limits refuse gets its reason at once: the hour pause, a stopped asker, a declined request
 ///   paused for 10 minutes, a reached count.
 /// - An identical request (the same binding as one waiting, or as a pending card) takes over that panel or card. It
-///   does not count and does not queue. Otherwise up to 5 wait, and more get `busy`.
+///   does not count and does not queue. Otherwise up to 5 wait, and more get `busy`. "Allow once" there still starts one
+///   command: the first caller uses it, and the others hear it was used already.
 /// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes" and
 ///   "Allow this command until the Mac locks" keep copies of exactly those keys' values in a grant.
 /// - Grants end on a lock, a sleep, the session resigning, Revoke, a key's change, the hour pause, and for
@@ -87,6 +88,8 @@ final class SecretRequests {
         case notStarted
         /// Nobody answered: the panel or window waited 30 minutes, the Mac locked, or a ticket's wrapper left.
         case unanswered
+        /// "Allow once" starts one command, and an identical request that waited on the same panel used it.
+        case usedAlready
     }
 
     /// What a request asks for: to use keys (the panel's Allow), to save the agent's value (store_secret's panel), or
@@ -480,7 +483,7 @@ final class SecretRequests {
         limits.record(outcome, asker: request.asker, binding: request.binding, at: now())
         let replies = request.replies
         request.replies.removeAll()
-        if let decision { for waiting in replies { waiting.reply(decision) } }
+        if let decision { answer(replies, with: decision, for: request) }
         request.panel?.finish()
         request.panel = nil
         request.requestWindow?.finish()
@@ -490,6 +493,24 @@ final class SecretRequests {
         showNext()
         refreshWaitingLine()
         changedNow()
+    }
+
+    /// Answers each caller waiting on one request, in turn. An Allow is used as `SecretApprovalUse` says: "Allow once"
+    /// by the first caller alone, here, before any command starts; each later caller hears it was used already.
+    private func answer(_ replies: [(id: UUID, reply: (Decision) -> Void)], with decision: Decision, for request: Request) {
+        guard case .allowed(_, let how) = decision else {
+            for waiting in replies { waiting.reply(decision) }
+            return
+        }
+        var use = SecretApprovalUse(how)
+        for waiting in replies {
+            if use.take() {
+                waiting.reply(decision)
+            } else {
+                audit(.refused, request, approval: how, outcome: "its Allow once was used by an identical request")
+                waiting.reply(.usedAlready)
+            }
+        }
     }
 
     /// Keeps an ended request's panel until its window closes.

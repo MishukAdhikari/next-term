@@ -40,6 +40,9 @@ extension SelfTest {
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
         await secretsPanelChecks(base)
+        #if DEBUG
+        await secretsAllowOnceChecks()
+        #endif
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
