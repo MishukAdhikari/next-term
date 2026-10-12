@@ -186,6 +186,56 @@ final class LoginKeychain: PasswordStore {
     }
 }
 
+/// This Mac's record of the vaults Next Term made: one login-keychain item of Next Term's service, outside Secrets'
+/// folder, with the vaults' bindings in its generic attribute. It is read as an attribute, never as data, so it needs
+/// no keychain password after an update, as the keychain keyring's load check doesn't.
+final class LoginKeychainRecord: VaultRecord {
+    static let account = "vault bindings"
+
+    let service: String
+    let account: String
+
+    init(service: String = LoginKeychain.service, account: String = LoginKeychainRecord.account) {
+        self.service = service
+        self.account = account
+    }
+
+    private var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    func read() throws -> Data? {
+        var request = query
+        request[kSecReturnAttributes as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw Self.failure(status) }
+        let attributes = result as? [String: Any]
+        return attributes?[kSecAttrGeneric as String] as? Data ?? Data()
+    }
+
+    func write(_ data: Data) throws {
+        let change = [kSecAttrGeneric as String: data]
+        var status = SecItemUpdate(query as CFDictionary, change as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = query
+            item[kSecAttrGeneric as String] = data
+            item[kSecAttrLabel as String] = "Next Term Secrets"
+            item[kSecValueData as String] = Data()
+            status = SecItemAdd(item as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw Self.failure(status) }
+    }
+
+    /// A refused prompt is the user's cancel; any other failure, a record out of reach just now. Neither says the vault
+    /// was tampered with.
+    static func failure(_ status: OSStatus) -> SecretVault.Failure {
+        LoginKeychain.refusals.contains(status) ? .cancelled : .keyUnavailable
+    }
+}
+
 /// A `PasswordStore` in memory: the self-test's, which counts its reads and writes.
 final class MemoryPasswordStore: PasswordStore {
     private var data: Data?

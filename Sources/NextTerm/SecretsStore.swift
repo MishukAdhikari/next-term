@@ -10,9 +10,12 @@ import Security
 ///   MCP socket starts, so the first MCP answer is already masked.
 /// - `load()` runs the keyring's load check off the main thread, which needs no Touch ID, and sets `protection`.
 /// - `perform(_:reason:facts:)` asks for presence, then on its own queue takes the vault's lock, unlocks, makes the
-///   change, writes, drops the vault key and writes the audit line. Cancel or failure changes no key.
-/// - In the self-test it works on a temporary folder with a software keyring and a stand-in presence check that
-///   passes at once and counts its calls. The real vault, `mask.key` and the login keychain are never touched.
+///   change, writes, drops the vault key and writes the audit line. Cancel or failure changes no key. A vault that
+///   this Mac's record of the vaults Next Term made (`record`, a login-keychain item) doesn't list is tampered, however
+///   well its file checks out, so no value is sealed into it or released from it.
+/// - In the self-test it works on a temporary folder with a software keyring, a record in memory and a stand-in
+///   presence check that passes at once and counts its calls. The real vault, `mask.key` and the login keychain are
+///   never touched.
 @MainActor
 final class SecretsStore {
     /// Posted after the index, the protection or the last uses changed.
@@ -154,6 +157,8 @@ final class SecretsStore {
     let presence: PresenceCheck
     private let newKeyring: () throws -> VaultKeyring
     private let keyring: (SecretVault.Index) -> VaultKeyring
+    /// This Mac's record of the vaults Next Term made: a vault it doesn't list is tampered, so nothing is sealed into it.
+    let record: VaultRecord
     private let queue = DispatchQueue(label: "NextTerm.secrets")
 
     /// The names, what each is for, flags and dates, read with no key.
@@ -167,11 +172,12 @@ final class SecretsStore {
     private var observers: [NSObjectProtocol] = []
 
     init(folder: SecretFolder, presence: PresenceCheck, newKeyring: @escaping () throws -> VaultKeyring,
-         keyring: @escaping (SecretVault.Index) -> VaultKeyring) {
+         keyring: @escaping (SecretVault.Index) -> VaultKeyring, record: VaultRecord) {
         self.folder = folder
         self.presence = presence
         self.newKeyring = newKeyring
         self.keyring = keyring
+        self.record = record
     }
 
     // MARK: the stores
@@ -179,15 +185,21 @@ final class SecretsStore {
     private static func appStore() -> SecretsStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return SecretsStore(folder: SecretFolder(applicationSupport: support), presence: UserPresence.shared,
-                            newKeyring: makeKeyring, keyring: appKeyring)
+                            newKeyring: makeKeyring, keyring: appKeyring, record: appRecord())
     }
 
-    /// The self-test's: a temporary folder, one software keyring, and a presence check that passes and counts.
+    /// The self-test's: a temporary folder, one software keyring, a record in memory, and a presence check that passes
+    /// and counts.
     private static func selfTestStore() -> SecretsStore {
         let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-secrets-\(getpid())", isDirectory: true)
         let keyring = SoftwareKeyring(kind: .secureEnclave)
         return SecretsStore(folder: SecretFolder(applicationSupport: base), presence: StandInPresence(),
-                            newKeyring: { keyring }, keyring: { _ in keyring })
+                            newKeyring: { keyring }, keyring: { _ in keyring }, record: MemoryVaultRecord())
+    }
+
+    /// The app's record of the vaults it made: its login-keychain item.
+    nonisolated static func appRecord() -> VaultRecord {
+        LoginKeychainRecord()
     }
 
     /// The keyring a new vault gets: the Secure Enclave where there is one, else the login keychain. A debug build
@@ -354,8 +366,12 @@ final class SecretsStore {
         let folder = folder
         let keyring = keyring
         let newKeyring = newKeyring
+        let record = record
         let result = await onQueue { () -> Result<Work, Error> in
-            Result { try Self.work(action, facts: facts, folder: folder, keyring: keyring, newKeyring: newKeyring, token: token) }
+            Result {
+                try Self.work(action, facts: facts, folder: folder, keyring: keyring, newKeyring: newKeyring, record: record,
+                              token: token)
+            }
         }
         if isKeychain { setWaitingForKeychain(false) }
         switch result {
@@ -415,11 +431,11 @@ final class SecretsStore {
     /// Under the vault's lock: unlock (or make the vault, for the first add), the change, the write; then the audit line.
     nonisolated private static func work(_ action: Action, facts: Facts, folder: SecretFolder,
                                          keyring: (SecretVault.Index) -> VaultKeyring, newKeyring: () throws -> VaultKeyring,
-                                         token: AnyObject) throws -> Work {
+                                         record: VaultRecord, token: AnyObject) throws -> Work {
         var values: [String: SecretBytes] = [:]
         var earlier: SecretVault.Origin?
         var work = try unlocked(makes: action.isAdd, firstName: action.names.first, folder: folder, keyring: keyring,
-                                newKeyring: newKeyring, token: token) { vault, maskKey in
+                                newKeyring: newKeyring, record: record, token: token) { vault, maskKey in
             try apply(action, to: vault, maskKey: maskKey, values: &values, earlier: &earlier)
         }
         work.values = values
@@ -432,10 +448,12 @@ final class SecretsStore {
     }
 
     /// The vault unlocked under its lock (or made, when `makes` and there is none), `change` run on it, and what it
-    /// returns written; the vault key dropped after. A missing `mask.key` is made again, with new marks.
+    /// returns written; the vault key dropped after. A missing `mask.key` is made again, with new marks. A vault the
+    /// record doesn't list is tampered: whatever its file says, it was not made here, so nothing is sealed into it or
+    /// released from it. A vault made here is listed before its file is written.
     nonisolated private static func unlocked(makes: Bool, firstName: String?, folder: SecretFolder,
                                              keyring: (SecretVault.Index) -> VaultKeyring, newKeyring: () throws -> VaultKeyring,
-                                             token: AnyObject,
+                                             record: VaultRecord, token: AnyObject,
                                              change: (SecretVault, SymmetricKey?) throws -> Data?) throws -> Work {
         try folder.ensure()
         var vault: SecretVault?
@@ -459,6 +477,12 @@ final class SecretsStore {
                 if let current {
                     let index = try SecretVault.index(from: current)
                     let unlocked = try SecretVault.unlock(current, keyring: keyring(index), context: token)
+                    do {
+                        try unlocked.bind(to: record)
+                    } catch {
+                        unlocked.wipe()
+                        throw error
+                    }
                     vault = unlocked
                     return unlocked
                 }
@@ -473,10 +497,12 @@ final class SecretsStore {
                 } catch {
                     throw Failure.keyring
                 }
+                vault = made.vault // wiped after, whatever fails next
+                // Listed before any of its files is written: a vault.json this Mac's record doesn't list is never made.
+                try made.vault.record(in: record)
                 let maskData = made.maskKey.withUnsafeBytes { Data($0) }
                 try folder.write(SecretFolder.maskKeyName, data: maskData)
                 maskKey = SymmetricKey(data: maskData)
-                vault = made.vault
                 return made.vault
             }
             // A missing mask.key is made again, with new marks for every entry, in a write of its own before the action.
@@ -593,10 +619,13 @@ final class SecretsStore {
         let folder = folder
         let keyring = keyring
         let newKeyring = newKeyring
+        let record = record
         let box = UncheckedBox(change)
         let result = await onQueue { () -> Result<Work, Error> in
-            Result { try Self.unlocked(makes: makes, firstName: names.first, folder: folder, keyring: keyring, newKeyring: newKeyring, token: token,
-                                       change: box.value) }
+            Result {
+                try Self.unlocked(makes: makes, firstName: names.first, folder: folder, keyring: keyring, newKeyring: newKeyring,
+                                  record: record, token: token, change: box.value)
+            }
         }
         if isKeychain { setWaitingForKeychain(false) }
         switch result {

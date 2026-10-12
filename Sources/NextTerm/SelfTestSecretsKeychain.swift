@@ -6,12 +6,14 @@ import Security
 
 /// The keychain keyring's items, over an in-memory keychain: never the login keychain.
 extension SelfTest {
-    /// A store over its own temporary folder whose vaults use the keychain keyring, with its items in `keychain`.
-    static func secretsKeychainStore(_ base: URL, _ name: String, keychain: MemoryKeychain) -> (SecretsStore, StandInPresence) {
+    /// A store over its own temporary folder whose vaults use the keychain keyring, with its items in `keychain`, and
+    /// `record` as its record of the vaults it made (one in memory of its own unless given).
+    static func secretsKeychainStore(_ base: URL, _ name: String, keychain: MemoryKeychain,
+                                     record: VaultRecord = MemoryVaultRecord()) -> (SecretsStore, StandInPresence) {
         let presence = StandInPresence()
         let folder = SecretFolder(applicationSupport: base.appendingPathComponent(name, isDirectory: true))
         let store = SecretsStore(folder: folder, presence: presence, newKeyring: { try KeychainKeyring.make(items: keychain.item) },
-                                 keyring: { KeychainKeyring(publicKey: $0.publicKey, items: keychain.item) })
+                                 keyring: { KeychainKeyring(publicKey: $0.publicKey, items: keychain.item) }, record: record)
         return (store, presence)
     }
 
@@ -107,13 +109,16 @@ extension SelfTest {
             return check(false, "secrets: the vault with its key in the shared item is planted")
         }
         let maskKey = made.maskKey.withUnsafeBytes { Data($0) }
+        // Listed in the stores' record of the vaults made here, so these checks are of the keychain items alone.
+        let record = MemoryVaultRecord()
+        try? made.vault.record(in: record)
         made.vault.wipe()
         let own = LoginKeychain.vaultKeyAccount(publicKey: key.publicKey())
         let shared = LoginKeychain.sharedVaultKeyAccount
         func planted(_ name: String, account: String, key: Data) async -> (SecretsStore, MemoryKeychain) {
             let keychain = MemoryKeychain()
             try? keychain.item(account).add(key)
-            let (store, _) = secretsKeychainStore(base, name, keychain: keychain)
+            let (store, _) = secretsKeychainStore(base, name, keychain: keychain, record: record)
             try? store.folder.ensure()
             try? store.folder.write(SecretFolder.maskKeyName, data: maskKey)
             try? store.folder.write(SecretFolder.vaultName, data: file)
@@ -243,7 +248,8 @@ extension SelfTest {
         for (n, (failure, after, name)) in cases.enumerated() {
             let stub = SelfTestFailingKeyring(key, failure: failure)
             let folder = SecretFolder(applicationSupport: base.appendingPathComponent("keyring-failure-\(n)", isDirectory: true))
-            let store = SecretsStore(folder: folder, presence: StandInPresence(), newKeyring: { key }, keyring: { _ in stub })
+            let store = SecretsStore(folder: folder, presence: StandInPresence(), newKeyring: { key }, keyring: { _ in stub },
+                                     record: MemoryVaultRecord())
             _ = try? await store.perform(.add(name: "STUB_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                               value: SecretBytes(utf8: secretsValue("stub-keyring"))))
             let before = store.protection

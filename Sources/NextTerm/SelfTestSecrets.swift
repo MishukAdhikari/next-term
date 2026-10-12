@@ -56,11 +56,13 @@ extension SelfTest {
         return Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec) + TimeInterval(info.st_mtimespec.tv_nsec) / 1e9)
     }
 
-    /// A store over its own temporary folder, with its own keyring and presence check.
+    /// A store over its own temporary folder, with its own keyring, record in memory and presence check.
     static func secretsStore(_ base: URL, _ name: String, keyring: VaultKeyring) -> (SecretsStore, StandInPresence) {
         let presence = StandInPresence()
         let folder = SecretFolder(applicationSupport: base.appendingPathComponent(name, isDirectory: true))
-        return (SecretsStore(folder: folder, presence: presence, newKeyring: { keyring }, keyring: { _ in keyring }), presence)
+        let store = SecretsStore(folder: folder, presence: presence, newKeyring: { keyring }, keyring: { _ in keyring },
+                                 record: MemoryVaultRecord())
+        return (store, presence)
     }
 
     /// `file` with the body's first entry changed by `edit` and the old MAC kept: a hand that changed the file.
@@ -146,6 +148,7 @@ extension SelfTest {
         _ = try? await store.perform(.delete(name: "STRIPE_KEY"))
 
         await secretsTamperChecks(base)
+        await secretsRecordChecks(base)
         await secretsStartOverChecks(base)
         await secretsRemarkChecks(base)
         await secretsKeychainChecks(base)

@@ -15,6 +15,8 @@ import Darwin
 //   holds the id, the name, the write-only flag and the origin, so changing any of them in the file breaks the seal.
 // - The index (names, what each key is for, flags, dates) is authenticated with HMAC-SHA256 over the body's exact
 //   bytes as stored. Verification never encodes again, so a change in Foundation's encoder never breaks a vault.
+// - These checks are keyed by the vault key the file wraps, so a whole vault.json built elsewhere passes them. This
+//   Mac's record of the vaults Next Term made, outside the file (SecretVaultRecord.swift), catches that one.
 //
 // No value ever goes into an error, a description or a log: errors carry names only.
 
