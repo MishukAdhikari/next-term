@@ -366,3 +366,70 @@ extension ProjectServicesTests {
         expectNoSecret(project.services())
     }
 }
+
+// MARK: - Local servers
+
+extension ProjectServicesTests {
+    @Test func aDefaultPortSaysSo() throws {
+        let project = FixtureProject(["pyproject.toml": "[project]\nname = \"api\"\ndependencies = [\"fastapi\"]\n"])
+        let fastAPI = try row(project.services(), "fastapi.local")
+        #expect(fastAPI.link.title == "Open FastAPI Docs" && fastAPI.link.badge == ":8000")
+        #expect(fastAPI.tooltip == """
+        Open FastAPI Docs at localhost:8000 (default port), if it is running
+        From pyproject.toml: fastapi
+        """)
+        #expect(fastAPI.isLocal && fastAPI.link.source == nil)
+    }
+
+    @Test func aPortComesFromTheFilesInOrder() throws {
+        let django = FixtureProject(["manage.py": "\n", "requirements.txt": "django\n",
+                                     "Procfile": "web: python manage.py runserver 0.0.0.0:8001\n"])
+        let row1 = try row(django.services(), "django.local")
+        #expect(row1.link.url.absoluteString == "http://127.0.0.1:8001")
+        #expect(row1.link.tooltip == "Open Django at 127.0.0.1:8001 (from Procfile's web process)")
+        let vite = FixtureProject(["package.json": packageJSON(["vite"], scripts: ["dev": "vite --port 6000"]),
+                                   "vite.config.ts": "export default defineConfig({ server: { https: true, port: 5180 } })\n"])
+        let row2 = try row(vite.services(), "vite.local")
+        #expect(row2.link.url.absoluteString == "https://localhost:5180")
+        #expect(row2.link.tooltip == "Open Vite at localhost:5180 (from vite.config.ts)")
+        let flask = FixtureProject(["requirements.txt": "flask\n", ".env": "FLASK_RUN_PORT=${PORT}\n"])
+        #expect(try row(flask.services(), "flask.local").link.tooltip
+            == "Open Flask at 127.0.0.1:5000 (default port; macOS AirPlay Receiver also listens on 5000)")
+    }
+
+    @Test func aPortAloneNamesNothing() {
+        let project = FixtureProject(["compose.yaml": composeFile("api", "example/api:1", ["8000:8000"]),
+                                      "Procfile": "web: gunicorn app:app --port 3000\n"])
+        #expect(project.services().rows.isEmpty)
+    }
+
+    @Test func ddevOpensItsSiteAndMailpit() throws {
+        let project = FixtureProject([".ddev/config.yaml": "name: shop\ntype: laravel\nmailpit_https_port: \"8126\"\n"])
+        let ddev = try row(project.services(), "ddev.local")
+        #expect(urls(ddev) == ["https://shop.ddev.site", "https://shop.ddev.site:8126"])
+        #expect(ddev.links.map(\.title) == ["Open DDEV Site", "Open DDEV Mailpit"])
+        #expect(ddev.link.tooltip == "Open DDEV Site at shop.ddev.site")
+        let tld = FixtureProject([".ddev/config.yaml": "name: shop\nproject_tld: site.example\nrouter_https_port: 8443\n"])
+        #expect(urls(try row(tld.services(), "ddev.local")) == ["https://shop.site.example:8443", "https://shop.site.example:8026"])
+    }
+
+    @Test func aTestSiteIsHerdsOrValets() throws {
+        let valet = FixtureProject([".env": "APP_URL=http://shop.test\n"])
+        let site = try row(valet.services(), "herd.local")
+        #expect(site.name == "Valet" && urls(site) == ["http://shop.test"])
+        #expect(site.link.tooltip == "Open Valet Site at shop.test (from .env)")
+        #expect(try row(valet.services(herd: true), "herd.local").name == "Herd")
+        let userinfo = FixtureProject([".env": "APP_URL=http://admin:NOT-A-PASSWORD@shop.test\n"])
+        #expect(userinfo.services(herd: true).rows.isEmpty)
+        expectNoSecret(userinfo.services(herd: true))
+    }
+
+    /// The database row's Herd badge opens the site already, so the services list does not repeat it.
+    @Test func aDatabaseRowsHerdIsNotListedAgain() {
+        let project = FixtureProject(["artisan": "\n", ".env": "APP_URL=https://shop.test\nDB_CONNECTION=mysql\nDB_HOST=127.0.0.1\n"])
+        let databases = project.scan(herd: true)
+        #expect(databases.databases.contains { (db: DetectedDatabase) -> Bool in db.providers.contains(.herd) })
+        #expect(!project.services(herd: true).rows.contains { (row: ServiceRow) -> Bool in row.entryID == "herd" })
+        #expect(project.services(herd: false).rows.map(\.id) == ["herd.local"])
+    }
+}

@@ -153,3 +153,63 @@ extension ServiceCatalogTests {
                   not: ["requirements.txt": "langchain\n"]),
     ]
 }
+
+/// A `package.json` with these dependencies and scripts.
+func packageJSON(_ dependencies: [String], scripts: [String: String] = [:]) -> String {
+    let deps = dependencies.map { (name: String) -> String in "\"\(name)\": \"^1.0.0\"" }.joined(separator: ", ")
+    let lines = scripts.keys.sorted().map { (name: String) -> String in "\"\(name)\": \"\(scripts[name] ?? "")\"" }
+    return "{\"dependencies\": {\(deps)}, \"scripts\": {\(lines.joined(separator: ", "))}}"
+}
+
+extension ServiceCatalogTests {
+    static let localServers: [EntryCase] = [
+        EntryCase("vite", ["package.json": packageJSON(["vite"], scripts: ["dev": "vite --port 5174"])],
+                  name: "Vite", badge: ":5174", url: "http://localhost:5174",
+                  not: ["package.json": packageJSON(["vitest"])]),
+        EntryCase("fastapi", ["requirements.txt": "fastapi[standard]>=0.115\n"],
+                  name: "FastAPI", badge: ":8000", url: "http://localhost:8000/docs",
+                  not: ["requirements.txt": "fastapi-utils\n"]),
+        EntryCase("nextjs", ["package.json": packageJSON(["next"], scripts: ["dev": "next dev -p 3100"])],
+                  name: "Next.js", badge: ":3100", url: "http://localhost:3100",
+                  not: ["package.json": packageJSON(["next-auth"])]),
+        EntryCase("flask", ["requirements.txt": "Flask==3.1\n", ".flaskenv": "FLASK_RUN_PORT=5050\n"],
+                  name: "Flask", badge: ":5050", url: "http://127.0.0.1:5050",
+                  not: ["requirements.txt": "flask-cors\n"]),
+        EntryCase("storybook", ["package.json": packageJSON(["storybook"], scripts: ["storybook": "storybook dev -p 6007"])],
+                  name: "Storybook", badge: ":6007", url: "http://localhost:6007",
+                  not: ["package.json": packageJSON(["@storybook/addon-docs"])]),
+        EntryCase("django", ["manage.py": "#!/usr/bin/env python\n", "requirements.txt": "Django>=5.2\n"],
+                  name: "Django", badge: ":8000", url: "http://127.0.0.1:8000",
+                  not: ["requirements.txt": "django\n"]),
+        EntryCase("jupyter", ["requirements.txt": "jupyterlab\n", "analysis.ipynb": "{}\n"],
+                  name: "Jupyter", badge: ":8888", url: "http://localhost:8888/lab",
+                  not: ["requirements.txt": "jupyterlab\n"]),
+        EntryCase("astro", ["package.json": packageJSON(["astro"]), "astro.config.mjs": "export default { server: { port: 4400 } }\n"],
+                  name: "Astro", badge: ":4400", url: "http://localhost:4400",
+                  not: ["package.json": packageJSON(["astro-icon"])]),
+        EntryCase("streamlit", [".streamlit/config.toml": "[server]\nport = 8600\n"],
+                  name: "Streamlit", badge: ":8600", url: "http://localhost:8600",
+                  not: ["requirements.txt": "streamlit-aggrid\n"]),
+        EntryCase("nuxt", ["package.json": packageJSON(["nuxt"])],
+                  name: "Nuxt", badge: ":3000", url: "http://localhost:3000",
+                  not: ["package.json": packageJSON(["nuxt-icon"])]),
+        EntryCase("gradio", ["requirements.txt": "gradio\n"],
+                  name: "Gradio", badge: ":7860", url: "http://127.0.0.1:7860",
+                  not: ["requirements.txt": "gradio-client\n"]),
+        EntryCase("chainlit", ["requirements.txt": "chainlit\n", "chainlit.md": "# Welcome\n"],
+                  name: "Chainlit", badge: ":8000", url: "http://localhost:8000",
+                  not: ["requirements.txt": "chainlit\n"]),
+        EntryCase("rails", ["Gemfile": "source \"https://rubygems.org\"\ngem \"rails\", \"~> 8.0\"\n"],
+                  name: "Rails", badge: ":3000", url: "http://localhost:3000",
+                  not: ["Gemfile": "gem \"railties\"\n"]),
+        EntryCase("phoenix", ["mix.exs": "defp deps do\n  [{:phoenix, \"~> 1.8\"}]\nend\n"],
+                  name: "Phoenix", badge: ":4000", url: "http://localhost:4000",
+                  not: ["mix.exs": "defp deps do\n  [{:phoenix_html, \"~> 4.0\"}]\nend\n"]),
+        EntryCase("herd", ["herd.yml": "name: shop\nsecured: true\n"],
+                  name: "Herd", badge: "Site", url: "https://shop.test",
+                  not: [".env": "APP_URL=http://localhost:8000\n"]),
+        EntryCase("ddev", [".ddev/config.yaml": "name: shop\ntype: laravel\n"],
+                  name: "DDEV", badge: "Site", url: "https://shop.ddev.site",
+                  not: [".ddev/README.txt": "Not a config\n"]),
+    ]
+}
