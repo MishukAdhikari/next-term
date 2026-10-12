@@ -919,6 +919,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
+    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
+    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
+    func copiesIgnoredFiles(for main: String) -> Bool {
+        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    }
+
+    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+        choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
+        choices[canonicalPath(main)] = on
+        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+    }
+
     // MARK: projects
 
     private var recent: RecentProjects {

@@ -277,6 +277,69 @@ extension SelfTest {
         GitToast.dismiss()
         window.makeKeyAndOrderFront(nil)
 
+        // AE12: Copy ignored files too. node_modules with its .bin link, vendor and .env are cloned; the log, public/hot,
+        // a link out of the checkout and a worktree nested in .claude/worktrees are left out; the checkout's changes
+        // stay as they were; the box is remembered for the repository.
+        let savedCopies = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")
+        let exclude = repo + "/.git/info/exclude"
+        let excludeBefore = read(exclude) ?? ""
+        write(exclude, excludeBefore + "vendor/\nnode_modules/\npublic/hot\npublic/storage\n.claude/worktrees/\n") // every worktree reads it
+        write(repo + "/node_modules/vite/bin/vite.js", "#!/usr/bin/env node\n")
+        try? fm.createDirectory(atPath: repo + "/node_modules/.bin", withIntermediateDirectories: true)
+        try? fm.createSymbolicLink(atPath: repo + "/node_modules/.bin/vite", withDestinationPath: "../vite/bin/vite.js")
+        write(repo + "/vendor/autoload.php", "<?php\n")
+        write(repo + "/public/hot", "http://localhost:5173\n")
+        try? fm.createSymbolicLink(atPath: repo + "/public/storage", withDestinationPath: repo + "/storage/app/public")
+        let nested = repo + "/.claude/worktrees/agent-x"
+        sh(repo, "worktree", "add", "-q", "-b", "agent-x", nested)
+        made.append(nested)
+        sh(repo, "branch", "fix/copied")
+        _ = await wait(15) { holder.sidebar.git.snapshot?.wholeFolders["vendor"] == .ignored && holder.sidebar.git.snapshot?.wholeFolders["node_modules"] == .ignored }
+        if let actions = await actions() {
+            actions.openInNewWorktree(.branch("fix/copied"))
+            if let named = await sheet() {
+                check(named.copyTitle == "Copy ignored files too: node_modules/, vendor/, .env…" && !named.copiesIgnored,
+                      "worktrees: the sheet offers to copy the ignored files, naming node_modules/, vendor/ and .env, unticked at first (AE12)",
+                      named.copyTitle ?? "no box")
+                if named.copyEnabled {
+                    named.toggleCopy()
+                    check(named.footnote.contains("also gets clones of what xCloud’s git ignores, .env and keys included"),
+                          "worktrees: ticked, the footnote says what the new folder gets (AE12)", named.footnote)
+                    named.pressCreate()
+                    let path = code + "/xCloud-wt-copied"
+                    _ = await wait(30) { worktreeWindow(path) != nil }
+                    made.append(path)
+                    let link = try? fm.destinationOfSymbolicLink(atPath: path + "/node_modules/.bin/vite")
+                    let absent = ["debug.log", "public/hot", "public/storage", ".claude/worktrees/agent-x"].filter { name in
+                        var info = stat()
+                        return lstat(path + "/" + name, &info) == 0
+                    }
+                    check(link == "../vite/bin/vite.js" && read(path + "/vendor/autoload.php") == "<?php\n" && read(path + "/.env") == "SECRET=1\n" && absent.isEmpty,
+                          "worktrees: node_modules (its .bin link kept), vendor and .env are cloned; the log, public/hot, the link out and the nested worktree are not (AE12)",
+                          "link \(link ?? "none"), present: \(absent)")
+                    check(sh(repo, "diff", "--stat") == changes, "worktrees: the checkout's changes are as they were (AE12)")
+                    _ = await wait(5) { GitToast.text?.contains("ignored item") == true }
+                    check(GitToast.text?.contains("left out") == true && GitToast.text?.contains("php artisan storage:link") == true,
+                          "worktrees: the notice counts what was copied and left out, and names storage:link (AE12)", GitToast.text ?? "no notice")
+                    worktreeWindow(path)?.window?.performClose(nil)
+                    window.makeKeyAndOrderFront(nil)
+                    // Remembered: the next sheet in this repository has it ticked.
+                    actions.openInNewWorktree(.branch("fix/7050-pr"))
+                    if let next = await sheet() {
+                        check(next.copiesIgnored, "worktrees: the box is remembered for the repository (AE12)")
+                        next.pressCancel()
+                    }
+                } else {
+                    note("worktrees: AE12 copies skipped, the scratch folder's disk can't clone")
+                }
+            }
+        }
+        if let savedCopies { UserDefaults.standard.set(savedCopies, forKey: "worktreeCopiesIgnored") } else { UserDefaults.standard.removeObject(forKey: "worktreeCopiesIgnored") }
+        write(exclude, excludeBefore)
+        for name in ["node_modules", "vendor", "public"] { try? fm.removeItem(atPath: repo + "/" + name) }
+        GitToast.dismiss()
+        window.makeKeyAndOrderFront(nil)
+
         // AE8: a post-checkout hook exits 1 after the folder is made: its window opens, with the hook's words over it.
         write(hooks + "/post-checkout", "#!/bin/sh\necho hook says no\nexit 1\n")
         chmod(hooks + "/post-checkout", 0o755)
