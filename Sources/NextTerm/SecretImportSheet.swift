@@ -8,6 +8,8 @@ import NextTermCore
 @MainActor
 final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     static let refusal = "Turn on “Let agents control Next Term” first. Servers get their keys through it."
+    static let placeRefusal = "Move Next Term to Applications and open it from there first, so the servers' command keeps working. "
+        + "It is running from a disk image or a temporary copy, which won't be there later."
     static let gitWarning = "This file is shared through git: the change reaches everyone who pulls, and they need Next Term. "
         + "Git history keeps the old key."
     static let commentNote = "Comments inside this server's entry are lost when it is rewritten."
@@ -26,6 +28,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         var agentControl = true
         var running: Set<String> = []
         var lockWait: TimeInterval = 5
+        /// The command moved entries start (`nxtrmCommand()`); nil when no path to it lasts, and the import refuses.
+        var nxtrm: [String]?
     }
 
     /// One row the user can tick: a group of identical values.
@@ -136,7 +140,7 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         NSLayoutConstraint.activate(constraints)
     }
 
-    /// Shows the sheet on `parent` and starts the scan; with agent control off, only the refusal.
+    /// Shows the sheet on `parent` and starts the scan; with agent control off, or no lasting `nxtrm` path, only a refusal.
     func begin(on parent: NSWindow) {
         guard let window else { return }
         parent.beginSheet(window, completionHandler: nil)
@@ -145,12 +149,9 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
 
     /// The scan, off the main thread.
     func start() {
-        guard setup.agentControl else {
-            headerLabel.stringValue = Self.refusal
-            headerLabel.setAccessibilityLabel("Warning: \(Self.refusal)")
-            statusLabel.isHidden = true
-            return
-        }
+        guard setup.agentControl else { return refuse(Self.refusal) }
+        // The configs keep the command after Next Term quits: never one in a disk image or a translocated copy.
+        guard setup.nxtrm != nil else { return refuse(Self.placeRefusal) }
         let count = setup.projects.count
         headerLabel.stringValue = "Looked in your agents' settings and in the \(count) \(count == 1 ? "project" : "projects") open in Next Term."
         statusLabel.stringValue = "Looking…"
@@ -162,6 +163,13 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             guard !Task.isCancelled else { return }
             await MainActor.run { self.show(found) }
         }
+    }
+
+    /// Only `text`, in the header: no scan, and nothing to move.
+    private func refuse(_ text: String) {
+        headerLabel.stringValue = text
+        headerLabel.setAccessibilityLabel("Warning: \(text)")
+        statusLabel.isHidden = true
     }
 
     /// The rows: one per group of identical values, unticked; then what can't move, and what uses Secrets already.
@@ -318,7 +326,7 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     /// Plan (off the main thread: it reads each file again), one Touch ID (the keys saved, the kept values sealed), the
     /// backups, then each file written.
     func move(_ moves: [SecretImport.Move]) {
-        let nxtrm = Self.nxtrmCommand()
+        guard let nxtrm = setup.nxtrm else { return }
         setBusy(true)
         let setup = setup
         Task { @MainActor in
@@ -425,15 +433,18 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     }
 
     /// The command a wrapped entry starts: the `nxtrm` link Next Term made on PATH (launches repoint it), else the
-    /// script in the running app, else this binary with `--cli`.
-    static func nxtrmCommand() -> [String] {
-        if CommandLineTool.isInstalled { return [CommandLineTool.installPath] }
+    /// script in the running app, else this binary with `--cli`; the app's own paths only when it is where it stays
+    /// (`CommandLineTool.isInStableLocation`, as MCP registration asks). Nil when no path lasts (`SecretImport.wrapperCommand`).
+    static func nxtrmCommand() -> [String]? {
+        let script = CommandLineTool.script?.path
+        var links: [(path: String, target: String)] = []
+        if CommandLineTool.isInstalled, let script { links.append((CommandLineTool.installPath, script)) }
         if let made = UserDefaults.standard.string(forKey: CommandLineTool.linkedKey), case .link(let target) = CommandLineTool.entry(at: made),
            CommandLineTool.isOurs(target) {
-            return [made]
+            links.append((made, target))
         }
-        if let script = CommandLineTool.script?.path { return [script] }
-        return [Bundle.main.executablePath ?? CommandLine.arguments[0], "--cli"]
+        let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
+        return SecretImport.wrapperCommand(links: links, script: script, executable: executable, appLasts: CommandLineTool.isInStableLocation)
     }
 }
 

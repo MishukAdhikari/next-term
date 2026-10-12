@@ -815,6 +815,27 @@ public enum SecretImport {
         }
     }
 
+    // MARK: the wrapper's command
+
+    /// A path an agent's config can keep: absolute, and not in a disk image (`/Volumes/`) or in a copy macOS moved
+    /// aside to run it (App Translocation), which are gone after an eject or a relaunch.
+    public static func lasts(_ path: String) -> Bool {
+        path.hasPrefix("/") && !path.hasPrefix("/Volumes/") && !path.contains("/AppTranslocation/")
+    }
+
+    /// The command a wrapped entry starts, from the first place that still works after a relaunch: a link on PATH
+    /// (`links`, the installed one first) into an app that is there and lasts, then the running app's own `nxtrm`
+    /// script, then its binary with `--cli`, these two only when the app itself lasts (`appLasts`: not translocated,
+    /// not on a disk image or a read-only volume). Nil when none does: the import refuses, as MCP registration does.
+    public static func wrapperCommand(links: [(path: String, target: String)], script: String?, executable: String?, appLasts: Bool,
+                                      exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String]? {
+        for link in links where lasts(link.path) && lasts(link.target) && exists(link.target) { return [link.path] }
+        guard appLasts else { return nil }
+        if let script, lasts(script) { return [script] }
+        if let executable, lasts(executable) { return [executable, "--cli"] }
+        return nil
+    }
+
     // MARK: plans
 
     /// One key to move: its name in Secrets and the findings it replaces.

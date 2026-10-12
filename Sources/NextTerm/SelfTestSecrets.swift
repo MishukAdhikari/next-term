@@ -1553,6 +1553,7 @@ extension SelfTest {
         setup.home = home.path
         setup.agentControl = false
         setup.lockWait = 0.5
+        setup.nxtrm = SecretImportSheet.nxtrmCommand()
         SecretsView.importSetup = { setup }
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window else {
@@ -1569,8 +1570,23 @@ extension SelfTest {
         refused?.closeSheet()
         _ = await wait(5) { view.importSheet == nil }
 
-        // On: one group for the token in two files, unticked; ticked and moved after the confirm and one Touch ID.
+        // Run from a disk image or a translocated copy (no lasting nxtrm path): the refusal to move it first, and nothing else.
+        check(setup.nxtrm != nil, "secrets: this run has an nxtrm command the import may write", "\(Bundle.main.bundlePath)")
+        let lasting = setup.nxtrm
         setup.agentControl = true
+        setup.nxtrm = nil
+        SecretsView.importSetup = { setup }
+        view.importKeys()
+        let unplaced = view.importSheet
+        check(unplaced?.headerLabel.stringValue == SecretImportSheet.placeRefusal && unplaced?.groupRows.isEmpty == true
+              && unplaced?.moveButton.isEnabled == false && read(cursor) == cursorText,
+              "secrets: from a copy whose path won't last, the import says to move Next Term to Applications and moves nothing",
+              unplaced?.headerLabel.stringValue ?? "no sheet")
+        unplaced?.closeSheet()
+        _ = await wait(5) { view.importSheet == nil }
+        setup.nxtrm = lasting
+
+        // On: one group for the token in two files, unticked; ticked and moved after the confirm and one Touch ID.
         SecretsView.importSetup = { setup }
         view.importKeys()
         guard let sheet = view.importSheet else { return check(false, "secrets: Import from MCP Configs… opens its sheet") }

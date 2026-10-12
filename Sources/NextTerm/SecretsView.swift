@@ -15,6 +15,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         setup.projects = AppDelegate.shared.controllers.compactMap(\.project).filter { seen.insert($0).inserted }
         setup.agentControl = SecretsView.agentControlIsOn()
         setup.running = SecretsView.runningApps()
+        setup.nxtrm = SecretImportSheet.nxtrmCommand()
         return setup
     }
 
