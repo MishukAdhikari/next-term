@@ -1128,6 +1128,12 @@ extension SelfTest {
               && !typed.contains(secretsUnwrapped(command)),
               "secrets: run_with_secrets opens a tab and types only the ticket line, in the self-test form", String(screen(tab).suffix(300)))
         check(tab.map { MCPControl.controller(of: $0)?.activeTab !== $0 } == true, "secrets: the new tab does not take the keyboard")
+        // Its title names the program and the key, and it counts as driven by MCP. Asked from outside Next Term's tabs,
+        // it has no opened_by (the late ticket below is asked from a tab).
+        let isDriven = tab.map { MCPControl.isDriven($0) } ?? false
+        check(tab?.userTitle == "printf · with TOOL_KEY" && isDriven && tab?.openedBy == nil,
+              "secrets: the new tab's title names the program and the key, it counts as driven by MCP, and it has no opened_by",
+              "\(tab?.userTitle ?? "no title"), driven \(isDriven), opened by \(tab?.openedBy?.uuidString ?? "none")")
         let panel = requests.showing?.panel
         let title = panel?.window?.title ?? ""
         check(title == "A program outside Next Term's tabs asks to run printf with TOOL_KEY"
@@ -1143,8 +1149,12 @@ extension SelfTest {
               secretsJSON(started))
         if let tab {
             _ = await wait(10) { !tab.status.running }
-            tab.view.send(txt: "if [ -z \"${K+x}\" ]; then echo NO\"\"K; fi; echo HIST$(fc -ln -9 | grep -c 'w[c] -c')\r")
-            let clean = await wait(10) { screen(tab).contains("NOK") && screen(tab).contains("HIST0") }
+            // zsh's fc lists the lines before the one running it. The bracket in each pattern keeps this line's own
+            // text from matching: none of the last nine holds the command, and the last one is the ticket line.
+            let ticketPattern = "[-]-ticket " + (ticket?.id ?? "none")
+            let history = "echo HIST$(fc -ln -9 | grep -c 'w[c] -c')LAST$(fc -ln -1 | grep -c '\(ticketPattern)')"
+            tab.view.send(txt: "if [ -z \"${K+x}\" ]; then echo NO\"\"K; fi; \(history)\r")
+            let clean = await wait(10) { screen(tab).contains("NOK") && secretsUnwrapped(screen(tab)).contains("HIST0LAST1") }
             check(clean, "secrets: the tab's shell has no K after the run, and its history holds only the ticket line", String(screen(tab).suffix(200)))
         }
         // A used ticket can't be used again.
@@ -1189,14 +1199,17 @@ extension SelfTest {
               "secrets: after the .env changes, the same call shows the panel again, with its warning")
         requests.showing?.panel?.declineButton.performClick(nil)
         let declined = await changed.value
-        check(declined["status"] as? String == "declined" && declined["tab_id"] != nil,
+        // Its tab, by the answer's tab_id, is still open and shows the wrapper's line, so the agent can read why.
+        let declinedTab = app.controllers.flatMap(\.tabs).first { $0.id.uuidString.lowercased() == declined["tab_id"] as? String }
+        let saysWhy = await wait(10) { secretsUnwrapped(screen(declinedTab)).contains("nxtrm:NextTermdeclined") }
+        check(declined["status"] as? String == "declined" && declinedTab?.exited == false && saysWhy,
               "secrets: a declined run answers declined and names the tab, which stays open", secretsJSON(declined))
         try? FileManager.default.removeItem(at: folder.appendingPathComponent(".env"))
         requests.revokeAll()
 
         await secretsRunTabChecks(c, folder: folder, base: base, opened: &opened)
         await secretsRunRefusalChecks(folder: folder, value: value, arguments: arguments, before: tabIDs())
-        await secretsTicketChecks(folder: folder, arguments: arguments, opened: &opened)
+        await secretsTicketChecks(c, folder: folder, arguments: arguments, opened: &opened)
     }
 
     /// tab_id: the tab's environment warns before Allow, the command runs in directory, and the tabs that are refused.
@@ -1297,7 +1310,8 @@ extension SelfTest {
     }
 
     /// Tickets: one redeemed from outside its tab is refused; one not redeemed in time ends.
-    static func secretsTicketChecks(folder: URL, arguments: [String: Any], opened: inout [TerminalTab]) async {
+    static func secretsTicketChecks(_ c: TerminalWindowController, folder: URL, arguments: [String: Any],
+                                    opened: inout [TerminalTab]) async {
         let requests = SecretRequests.shared
         let before = Set(AppDelegate.shared.controllers.flatMap(\.tabs).map(\.id))
         let call = secretsStart("run_with_secrets", arguments)
@@ -1309,13 +1323,23 @@ extension SelfTest {
         requests.redeem(ticket: id, peerTab: nil, request: asked) { outside = $0 }
         check(outside?.status == .refused && requests.tickets[id] != nil,
               "secrets: a ticket redeemed from outside its tab is refused, and its own tab can still redeem it")
+        // From another of Next Term's tabs, in the same turn, so still before the ticket's own wrapper.
+        let ticketTab = requests.tickets[id]?.tabID
+        let otherTab = AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id != ticketTab }
+        var fromOther: SecretRun.Answer?
+        if let otherTab, ticketTab != nil { requests.redeem(ticket: id, peerTab: otherTab, request: asked) { fromOther = $0 } }
+        check(fromOther?.status == .refused && requests.tickets[id] != nil,
+              "secrets: a ticket redeemed from another of Next Term's tabs is refused, and its own tab can still redeem it")
         _ = await wait(15) { requests.showing?.panel != nil }
         requests.showing?.panel?.declineButton.performClick(nil)
         _ = await call.value
         requests.resetForSelfTest()
 
+        // Asked from a tab of Next Term's (its shell's pid stands for an agent there): the new tab's opened_by is that tab.
+        let asker = c.activeTab
         SecretRequests.ticketWindow = .milliseconds(150)
-        let late = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path])
+        let late = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path],
+                                     pid: asker?.view.process.shellPid)
         check(late["status"] as? String == "refused" && late["note"] as? String == "The tab's shell did not start nxtrm within 30 seconds.",
               "secrets: a ticket not redeemed in time ends refused", secretsJSON(late))
         SecretRequests.ticketWindow = .seconds(30)
@@ -1328,6 +1352,8 @@ extension SelfTest {
         _ = await wait(10) { expired() }
         check(lateTab != nil && expired(), "secrets: its wrapper, starting late, gets expired",
               lateTab.map { String($0.screenTail().joined(separator: "\n").suffix(200)) } ?? "no tab with the answer's tab_id")
+        check(asker != nil && lateTab?.openedBy == asker?.id, "secrets: a tab run_with_secrets opens for an agent in a tab has that tab as its opened_by",
+              "opened by \(lateTab?.openedBy?.uuidString ?? "none"), asked from \(asker?.id.uuidString ?? "no tab")")
     }
 
     /// Text as it reads on the screen whatever the window's width: without line breaks or spaces, since a line longer
