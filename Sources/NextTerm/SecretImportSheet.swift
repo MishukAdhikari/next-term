@@ -345,7 +345,7 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     /// backups, then each file written.
     func move(_ moves: [SecretImport.Move]) {
         guard let nxtrm = setup.nxtrm else { return }
-        setBusy(true)
+        setBusy(true, Self.readingLine)
         let setup = setup
         Task { @MainActor in
             let planned = await Task.detached { SecretImport.plan(moves, nxtrm: nxtrm) }.value
@@ -362,11 +362,13 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             var kept: [String: [SecretBytes]] = [:]
             for edit in edits { for backup in edit.backups { kept[backup.id] = backup.keptValues } }
             do {
+                self.statusLabel.stringValue = Self.touchIDLine
                 let boxes = try await SecretsStore.shared.performImport(keys, kept: kept, reason: SecretReason.moveOut(keys.count))
                 for index in edits.indices {
                     for backup in edits[index].backups { edits[index].seal(backup.id, box: boxes[backup.id]) }
                 }
                 try SecretsStore.shared.saveBackups(edits.flatMap(\.backups))
+                self.statusLabel.stringValue = Self.writingLine
                 let written = await Task.detached { () -> [String: SecretImport.Applied] in
                     var results: [String: SecretImport.Applied] = [:]
                     for edit in edits {
@@ -382,11 +384,9 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
                 self.setBusy(false)
                 self.showResults(edits: edits, moved: keys.map(\.name))
             } catch SecretsStore.Failure.cancelled {
-                self.setBusy(false)
-                self.statusLabel.stringValue = "Not approved."
+                self.setBusy(false, "Not approved.")
             } catch {
-                self.setBusy(false)
-                self.statusLabel.stringValue = (error as? LocalizedError)?.errorDescription ?? "Next Term couldn’t move the keys."
+                self.setBusy(false, (error as? LocalizedError)?.errorDescription ?? "Next Term couldn’t move the keys.")
             }
         }
     }
@@ -398,8 +398,10 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         return String("\(first.source.client.name) MCP server “\(first.location.server)”\(more)".prefix(SecretVault.maxPurposeLength))
     }
 
-    /// Each row's file result, and the summary.
+    /// Each row's file result, and the summary, which says it all: the line above the rows goes, so it never still
+    /// waits for a Touch ID that was never asked (every file left as it was) or that is over.
     private func showResults(edits: [SecretImport.FileEdit], moved: [String]) {
+        statusLabel.isHidden = true
         for row in groupRows where row.box.state == .on {
             let lines = Set(row.group.findings.map(\.source.path)).sorted().map { path -> String in
                 "\(Self.file(path)): \(Self.text(results[path]))"
@@ -435,10 +437,18 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         }
     }
 
-    private func setBusy(_ busy: Bool) {
+    static let readingLine = "Reading the files again…"
+    static let touchIDLine = "Waiting for Touch ID or your password…"
+    static let writingLine = "Writing the files…"
+
+    /// Busy: Move and Close are off. `status`, when given, is the line above the rows; otherwise it stays as it is.
+    private func setBusy(_ busy: Bool, _ status: String? = nil) {
         isBusy = busy
         closeButton.isEnabled = !busy
-        statusLabel.stringValue = busy ? "Waiting for Touch ID or your password…" : statusLabel.stringValue
+        if let status {
+            statusLabel.stringValue = status
+            statusLabel.isHidden = false
+        }
         refreshMove()
     }
 
