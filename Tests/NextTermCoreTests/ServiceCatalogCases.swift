@@ -58,3 +58,33 @@ extension ServiceCatalogTests {
                   not: [".env": "FIREWORKS_MODEL=llama\n"]),
     ]
 }
+
+/// A Compose file that runs one service of this image, publishing `ports` ("6334:6333").
+func composeFile(_ service: String, _ image: String, _ ports: [String] = []) -> String {
+    var text = "services:\n  \(service):\n    image: \(image)\n"
+    if !ports.isEmpty { text += "    ports:\n" + ports.map { (port: String) -> String in "      - \"\(port)\"\n" }.joined() }
+    return text
+}
+
+extension ServiceCatalogTests {
+    static let vectorStores: [EntryCase] = [
+        EntryCase("qdrant", ["compose.yaml": composeFile("qdrant", "qdrant/qdrant:v1.15.0", ["6334:6333"])],
+                  name: "Qdrant", badge: ":6334", url: "http://localhost:6334/dashboard",
+                  not: ["requirements.txt": "qdrant-client\n"]),
+        EntryCase("weaviate", [".env": "WEAVIATE_URL=shop-vectors.c0.europe-west3.gcp.weaviate.cloud\n"],
+                  name: "Weaviate", badge: "Console", url: "https://console.weaviate.cloud",
+                  not: [".env": "WEAVIATE_URL=http://localhost:8080\n", "requirements.txt": "weaviate-client\n"]),
+        EntryCase("lancedb", [".env": "LANCEDB_URI=db://shop-vectors\n"],
+                  name: "LanceDB Cloud", badge: "Cloud", url: "https://cloud.lancedb.com",
+                  not: [".env": "LANCEDB_URI=./data/lancedb\n"]),
+        EntryCase("chroma", ["compose.yaml": composeFile("chroma", "chromadb/chroma:1.0.0", ["8001:8000"])],
+                  name: "Chroma", badge: ":8001", url: "http://localhost:8001/docs",
+                  not: ["requirements.txt": "chromadb\n"]),
+        EntryCase("pinecone", [".env": "PINECONE_API_KEY=pc-NOT-A-KEY\n"],
+                  name: "Pinecone", badge: "Console", url: "https://app.pinecone.io/organizations/-/projects/-/indexes",
+                  not: [".env": "PINECONE_INDEX=shop\n"]),
+        EntryCase("milvus", [".env": "MILVUS_URI=https://in03-abc.serverless.gcp-us-west1.cloud.zilliz.com\n"],
+                  name: "Zilliz Cloud", badge: "Cloud", url: "https://cloud.zilliz.com",
+                  not: [".env": "MILVUS_URI=./milvus.db\n", "requirements.txt": "pymilvus\n"]),
+    ]
+}

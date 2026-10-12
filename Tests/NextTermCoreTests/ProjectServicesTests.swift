@@ -129,3 +129,94 @@ import Testing
         expectNoSecret(scan)
     }
 }
+
+// MARK: - Vector stores
+
+extension ProjectServicesTests {
+    @Test func aComposeServiceInAURLOpensItsPublishedPort() throws {
+        let project = FixtureProject([".env": "QDRANT_URL=http://qdrant:6333\n",
+                                      "requirements.txt": "qdrant-client\n",
+                                      "compose.yaml": composeFile("qdrant", "qdrant/qdrant:v1.15.0", ["6334:6333"])])
+        let scan = project.services()
+        #expect(scan.rows.map(\.id) == ["qdrant.local"])
+        let qdrant = try row(scan, "qdrant.local")
+        #expect(urls(qdrant) == ["http://localhost:6334/dashboard"])
+        #expect(qdrant.link.badge == ":6334" && qdrant.link.source == "compose.yaml")
+        #expect(qdrant.link.tooltip == "Open Qdrant Dashboard at localhost:6334 (from compose.yaml)")
+        #expect(qdrant.tooltip.hasPrefix("Open Qdrant Dashboard at localhost:6334 (from compose.yaml), if it is running\n"))
+        #expect(qdrant.sources == [ServiceSource(file: ".env", names: ["QDRANT_URL"]),
+                                   ServiceSource(file: "compose.yaml", names: ["qdrant/qdrant"]),
+                                   ServiceSource(file: "requirements.txt", names: ["qdrant-client"])])
+        #expect(qdrant.detail == "vector store · compose.yaml")
+        expectNoSecret(scan)
+    }
+
+    @Test func aCloudURLOpensItsDashboardWithoutItsQuery() throws {
+        let value = "https://abc-123.eu-central-1-0.aws.cloud.qdrant.io:6333?api_key=NOT-A-KEY"
+        let project = FixtureProject([".env": "QDRANT_URL=\(value)\nPINECONE_API_KEY=pc-NOT-A-KEY\n"])
+        let scan = project.services()
+        #expect(scan.rows.map(\.id) == ["qdrant.cloud", "pinecone.cloud"])
+        let qdrant = try row(scan, "qdrant.cloud")
+        #expect(qdrant.name == "Qdrant" && qdrant.link.badge == "Dashboard")
+        #expect(urls(qdrant) == ["https://abc-123.eu-central-1-0.aws.cloud.qdrant.io:6333/dashboard", "https://cloud.qdrant.io"])
+        #expect(qdrant.links.map(\.title) == ["Open Qdrant Dashboard", "Open Qdrant Console"])
+        let pinecone = try row(scan, "pinecone.cloud")
+        #expect(urls(pinecone) == ["https://app.pinecone.io/organizations/-/projects/-/indexes"])
+        expectNoSecret(scan)
+    }
+
+    @Test func aStoreOnThisMacAndInTheCloudGivesTwoRows() throws {
+        let project = FixtureProject([".env.local": "QDRANT_URL=https://abc-123.cloud.qdrant.io\n",
+                                      "compose.yaml": composeFile("qdrant", "qdrant/qdrant", ["6334:6333"])])
+        let scan = project.services()
+        #expect(scan.rows.map(\.name) == ["Qdrant", "Qdrant Cloud"])
+        let local = try row(scan, "qdrant.local")
+        #expect(urls(local) == ["http://localhost:6334/dashboard"])
+        #expect(local.sources == [ServiceSource(file: "compose.yaml", names: ["qdrant/qdrant"])])
+        let cloud = try row(scan, "qdrant.cloud")
+        #expect(cloud.link.url.absoluteString == "https://abc-123.cloud.qdrant.io:6333/dashboard")
+        #expect(cloud.link.title == "Open Qdrant Cloud Dashboard")
+        #expect(cloud.sources == [ServiceSource(file: ".env.local", names: ["QDRANT_URL"])])
+    }
+
+    /// The project said where its server is, in a form no link may use: no vendor page stands in, but Compose still
+    /// runs one here.
+    @Test func aRefusedURLFallsBackOnlyToCompose() throws {
+        let alone = FixtureProject([".env": "QDRANT_URL=${QDRANT_HOST}\n", "requirements.txt": "qdrant-client\n"])
+        #expect(alone.services().rows.isEmpty)
+        let composed = FixtureProject([".env": "QDRANT_URL=https://${QDRANT_HOST}\n",
+                                       "compose.yaml": composeFile("qdrant", "qdrant/qdrant", ["6333:6333"])])
+        let qdrant = try row(composed.services(), "qdrant.local")
+        #expect(urls(qdrant) == ["http://localhost:6333/dashboard"])
+        #expect(!qdrant.tooltip.contains("QDRANT_HOST"))
+    }
+
+    @Test func chromaTakesItsHostAndPortKeys() throws {
+        let local = FixtureProject([".env": "CHROMA_HOST=localhost\nCHROMA_PORT=8100\n"])
+        let chroma = try row(local.services(), "chroma.local")
+        #expect(urls(chroma) == ["http://localhost:8100/docs"])
+        #expect(chroma.link.tooltip == "Open Chroma API Docs at localhost:8100 (from .env)")
+        let cloud = FixtureProject([".env": "CHROMA_HOST=api.trychroma.com\n"])
+        #expect(try row(cloud.services(), "chroma.cloud").link.url.absoluteString == "https://www.trychroma.com/dashboard")
+    }
+
+    @Test func milvusOnThisMacOpensItsWebUIAndAttu() throws {
+        let compose = """
+        services:
+          standalone:
+            image: milvusdb/milvus:v2.6.0
+            ports:
+              - "19530:19530"
+              - "9092:9091"
+          attu:
+            image: zilliz/attu:v2.6
+            ports:
+              - "8000:3000"
+        """
+        let milvus = try row(FixtureProject(["compose.yaml": compose]).services(), "milvus.local")
+        #expect(urls(milvus) == ["http://localhost:9092/webui", "http://localhost:8000"])
+        #expect(milvus.links.map(\.title) == ["Open Milvus WebUI", "Open Milvus Attu"])
+        let lite = FixtureProject([".env": "MILVUS_URI=./milvus_demo.db\n", "requirements.txt": "pymilvus\n"])
+        #expect(lite.services().rows.isEmpty)
+    }
+}
