@@ -165,9 +165,10 @@ final class MCPControlServer: @unchecked Sendable {
     }
 
     /// Writes the answer line; the connection closes as its call ends. Stored keys' values are masked in it one last
-    /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included).
+    /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included), in its JSON's strings too, where
+    /// a value's quotes and line breaks are escaped.
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
-        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer.text), isError: answer.isError)
+        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError)
         let data = MCPServer.encodeAnswer(masked)
         data.withUnsafeBytes { raw in
             var offset = 0

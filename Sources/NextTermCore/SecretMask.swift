@@ -278,6 +278,37 @@ public final class SecretMask: @unchecked Sendable {
         }
     }
 
+    /// A whole answer's text, as the MCP socket writes it, masked as `mask(_:)` masks it. When it is JSON with an escape
+    /// in it, each string is masked first, as `mask(fields:)` does, and only when one changes is it written again as
+    /// `MCPServer.json` writes it: an escaped `"`, `\` or line break would hide a value from the pass over the text.
+    public func mask(answer text: String) -> String {
+        guard !isEmpty, text.utf8.count >= shortest else { return text }
+        return mask(maskedStrings(ofJSON: text) ?? text)
+    }
+
+    /// `text`'s JSON with its strings masked, written again; nil when it is not JSON, has no escape (then the pass over
+    /// the text sees every string as it is) or has nothing to mask.
+    func maskedStrings(ofJSON text: String) -> String? {
+        let bytes = text.utf8
+        guard bytes.contains(0x5C), let first = bytes.first(where: { $0 > 0x20 }), first == 0x7B || first == 0x5B,
+              let parsed = try? JSONSerialization.jsonObject(with: Data(bytes)) else { return nil }
+        var count = 0
+        let masked = maskStrings(parsed, count: &count)
+        return count > 0 ? MCPServer.json(masked) : nil
+    }
+
+    private func maskStrings(_ value: Any, count: inout Int) -> Any {
+        switch value {
+        case let text as String:
+            let result = masked(text)
+            count += result.count
+            return result.text
+        case let object as [String: Any]: return object.mapValues { maskStrings($0, count: &count) }
+        case let list as [Any]: return list.map { maskStrings($0, count: &count) }
+        default: return value
+        }
+    }
+
     /// `bytes` with each range (relative to its start) made "•••".
     static func replacing(_ ranges: [Range<Int>], in bytes: ArraySlice<UInt8>) -> String {
         let dots = Array(MCPRedaction.mask.utf8)

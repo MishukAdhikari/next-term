@@ -185,4 +185,31 @@ private let key40 = "Zq8pLmW2vXn4Rt7yKb1sQe5uHj3oAc6dFg9iTw0e" // 40 characters,
         #expect(!MCPServer.json(masked).contains("Rk7v"))
         #expect(SecretMask.empty.mask(fields: fields)["update_wait"] as? String == "update_pending")
     }
+
+    /// A whole answer as the MCP socket writes it (get_skill's SKILL.md, say): when it is JSON, each string in it is masked
+    /// before the text is, so a value whose `"`, `\` or line breaks the JSON escapes is masked too. Text that is not JSON,
+    /// and JSON with nothing to mask, come back as they were.
+    @Test func anAnswersJSONStringsAreMaskedThoughEscaped() {
+        let account = #"{"client_email":"bot@example.test","private_key":"Rk7vQp2xLm9n"}"#
+        let pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nWz4cTb8hRk7vQp2x\n-----END PRIVATE KEY-----\n"
+        let m = mask([account, pem, stored])
+        let skill: [String: Any] = ["name": "deploy", "text": "Use \(account) and\n\(pem)then go.", "lines": [7, "x \(stored)"] as [Any]]
+        let answer = MCPServer.json(skill)
+        #expect(answer.contains(#"\"client_email\""#) && answer.contains(#"KEY-----\nMIIE"#)) // escaped in the JSON
+        #expect(m.mask(answer).contains("client_email") && m.mask(answer).contains("MIIE")) // so the text pass misses them
+        let masked = m.mask(answer: answer)
+        #expect(!masked.contains("client_email") && !masked.contains("PRIVATE KEY") && !masked.contains(stored))
+        let object = (try? JSONSerialization.jsonObject(with: Data(masked.utf8))) as? [String: Any]
+        #expect(object?["text"] as? String == "Use ••• and\n•••then go.")
+        #expect(object?["name"] as? String == "deploy" && (object?["lines"] as? [Any])?.first as? Int == 7)
+        // A slash another writer escapes.
+        let slashed = "Rk7v/Qp2x/Lm9n/Wz4c"
+        #expect(mask([slashed]).mask(answer: #"{"t": "a Rk7v\/Qp2x\/Lm9n\/Wz4c b"}"#).contains("a ••• b"))
+        // Nothing to mask in its strings: the answer as it was, byte for byte. Plain text gets the text pass.
+        let clean = "{\"b\": 1,\n  \"a\": \"x\\ty\"}"
+        #expect(m.mask(answer: clean) == clean)
+        #expect(m.mask(answer: "printed \(stored) here") == "printed ••• here")
+        #expect(m.mask(answer: "{not json \\ \(stored)") == "{not json \\ •••")
+        #expect(SecretMask.empty.mask(answer: answer) == answer)
+    }
 }

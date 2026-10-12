@@ -315,10 +315,15 @@ extension SelfTest {
         let maskData = made.maskKey.withUnsafeBytes { Data($0) }
         let file = try? made.vault.add(name: "MASK_PROBE", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                        value: SecretBytes(utf8: value), maskKey: SymmetricKey(data: maskData))
+        // A value whose quotes an answer's JSON escapes, so the pass over its text alone misses it.
+        let quotedToken = secretsValue("ntjson")
+        let quoted = #"{"client":""# + quotedToken + #""}"#
+        let withQuoted = try? made.vault.add(name: "MASK_QUOTED", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                             value: SecretBytes(utf8: quoted), maskKey: SymmetricKey(data: maskData))
         made.vault.wipe()
         try? store.folder.ensure()
         try? store.folder.write(SecretFolder.maskKeyName, data: maskData)
-        if let file { try? store.folder.write(SecretFolder.vaultName, data: file) }
+        if let file = withQuoted ?? file { try? store.folder.write(SecretFolder.vaultName, data: file) }
         let agreements = keyring.agreementCount
         store.loadMarks()
         check(!SecretMask.current.isEmpty && presence.calls == 0 && keyring.agreementCount == agreements,
@@ -363,6 +368,7 @@ extension SelfTest {
         MCPControl.fieldMasks = true
         check(titled && unmaskedFields.text.contains("•••") && !unmaskedFields.text.contains(value),
               "secrets: with the field masks off, the last pass over each answer still masks the title")
+        await secretsSkillAnswerCheck(client, base: base, quoted: quoted, token: quotedToken)
         _ = await wait(10) { !tab.status.running }
 
         // A title report (CSI 21 t) never types the title back.
@@ -381,6 +387,23 @@ extension SelfTest {
         let gemini = GeminiIDEServer.masked([["path": base.appendingPathComponent("notes.txt").path, "selectedText": "copy \(value) here"]])
         check(gemini.first?["selectedText"] as? String == "copy ••• here", "secrets: the selection Gemini CLI and Qwen Code are told of is masked too",
               "\(gemini.first?["selectedText"] ?? "")")
+    }
+
+    /// get_skill gives a SKILL.md whole, with no field mask: a stored value in it whose quotes the answer's JSON escapes
+    /// is still masked, by the last pass over each answer's strings. The skill is in a home folder of its own.
+    static func secretsSkillAnswerCheck(_ client: SecretsMCPClient, base: URL, quoted: String, token: String) async {
+        let home = base.appendingPathComponent("skills-home").path
+        let folder = (home as NSString).appendingPathComponent(".agents/skills/nt-mask-probe")
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        try? "---\nname: nt-mask-probe\ndescription: The masking probe.\n---\nDeploy with \(quoted) as the account.\n"
+            .write(toFile: folder + "/SKILL.md", atomically: true, encoding: .utf8)
+        let savedHome = SkillsStore.home
+        SkillsStore.home = home
+        let got = await client.call("get_skill", ["name": "nt-mask-probe"])
+        SkillsStore.home = savedHome
+        check(!got.isError && got.text.contains("Deploy with ••• as the account") && !got.text.contains(token),
+              "secrets: get_skill masks a stored value in a skill's text, though its quotes are escaped in the answer",
+              String(got.text.suffix(200)))
     }
 }
 
