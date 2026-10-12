@@ -173,12 +173,21 @@ extension SelfTest {
         }
         check(fetched, "git keys: ⌘R fetches, as Git › Fetch", (GitToast.text ?? "no notice") + "; before: " + beforeFetch + "; after: " + keyRoute("gitFetch:"))
 
-        // ⌥⌘U: Update Project, already up to date.
+        // ⌥⌘U: Update Project, already up to date. Pressed twice, quickly, it fetches once: the second press finds the first's
+        // claim (TerminalWindowController.gitAsking), which no sheet would stop, as an update that is up to date asks nothing.
         GitToast.dismiss()
         let head = run(repo, "rev-parse", "HEAD")
+        func logged(_ title: String, since: Date) -> Int { GitCommandLog.shared.entries.filter { $0.title == title && $0.start >= since }.count }
+        let pressedU = Date()
+        pressKey(window, code: 32, [.command, .option])
+        let claimedU = c.gitAsking.contains(#selector(TerminalWindowController.gitUpdate(_:)))
         pressKey(window, code: 32, [.command, .option])
         let updated = await wait(15) { GitToast.text == "Already up to date" }
         check(updated && run(repo, "rev-parse", "HEAD") == head, "git keys: ⌥⌘U updates the project", (GitToast.text ?? "no notice") + "; " + keyRoute("gitUpdate:"))
+        let fetchedTwice = await wait(2) { logged("Update Project", since: pressedU) > 1 }
+        check(claimedU && !fetchedTwice && logged("Update Project", since: pressedU) == 1 && c.gitAsking.isEmpty,
+              "git keys: ⌥⌘U pressed twice, quickly, fetches once, and the key works again after",
+              "claimed \(claimedU), \(logged("Update Project", since: pressedU)) fetches, still claimed: \(c.gitAsking.count)")
         GitToast.dismiss()
 
         // ⇧⌘C: the commit sheet, listing what there is to commit. While it is up, ⌥⌘P asks nothing, then or after.
@@ -203,20 +212,28 @@ extension SelfTest {
         // ⌥⌘P: Push… asks first; Cancel sends nothing. Pressed twice before its question is up (both presses pass the
         // menu's check, as no sheet is up yet), it asks once.
         _ = await wait(5) { window.attachedSheet == nil }
+        let pressedP = Date()
         pressKey(window, code: 35, [.command, .option])
+        let claimedP = c.gitAsking.contains(#selector(TerminalWindowController.gitPush(_:)))
         pressKey(window, code: 35, [.command, .option])
         let asked = await wait(10) { sheetText().contains("Push “\(start)” to keys/\(start)?") }
         check(asked, "git keys: ⌥⌘P asks before it pushes", sheetText() + "; " + keyRoute("gitPush:"))
+        let givenBack = c.gitAsking.isEmpty // its question is up: the sheet keeps the key off from here
         if asked { _ = await press("Cancel") }
         let askedTwice = await wait(2) { window.attachedSheet != nil }
-        check(!askedTwice, "git keys: ⌥⌘P pressed twice, quickly, asks once", sheetText())
+        check(claimedP && givenBack && !askedTwice && logged("Outgoing commits", since: pressedP) == 1,
+              "git keys: ⌥⌘P pressed twice, quickly, asks once, however quickly it is answered",
+              "claimed \(claimedP), given back \(givenBack), \(logged("Outgoing commits", since: pressedP)) reads; " + sheetText())
         if askedTwice { _ = await press("Cancel") }
 
         // ⇧⌘B: New Branch… asks for the name, once for two quick presses; Cancel leaves the branch as it was.
         _ = await wait(5) { window.attachedSheet == nil }
         pressKey(window, code: 11, [.command, .shift])
+        let claimedB = c.gitAsking.contains(#selector(TerminalWindowController.gitNewBranch(_:)))
         pressKey(window, code: 11, [.command, .shift])
         let named = await wait(10) { sheetText().contains("Next Term switches to it.") }
+        check(claimedB && c.gitAsking.isEmpty, "git keys: ⇧⌘B holds its key from the press until its sheet is up",
+              "claimed \(claimedB), still claimed: \(c.gitAsking.count)")
         check(named, "git keys: ⇧⌘B asks for the new branch's name", sheetText() + "; " + keyRoute("gitNewBranch:"))
         if named { _ = await press("Cancel") }
         let namedTwice = await wait(2) { window.attachedSheet != nil }

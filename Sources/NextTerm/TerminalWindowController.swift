@@ -950,8 +950,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(showWorktrees(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
                                       #selector(gitPush(_:)), #selector(gitNewBranch(_:))]
-        // Off while a sheet is over the window (the commit sheet, a question one of them asked): a key pressed twice, or
-        // held, asks nothing twice.
+        // Off while a sheet is over the window (the commit sheet, a question one of them asked). Before the sheet is up, a
+        // second press of the same command does nothing (gitAsking).
         if let action = item.action, gitActions.contains(action) { return gitFolder != nil && window?.attachedSheet == nil }
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
@@ -2066,11 +2066,40 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
+    /// Update Project, Commit…, Push… and New Branch…, each from its key until its question or sheet is up, or it ends
+    /// without one. Each reads first (Update Project fetches, Commit… reads what is staged, Push… its outgoing commits),
+    /// and until a sheet is up the same key passes validateMenuItem again: that press does nothing, however quickly the
+    /// first question is answered. Two different commands pressed together are held apart only where each asks
+    /// (GitActions.sheetIsUp).
+    private(set) var gitAsking: Set<Selector> = []
+
+    private func withGitAsking(_ command: Selector, _ body: @escaping (GitActions) -> Void) {
+        guard !gitAsking.contains(command) else { return }
+        // Without git the read never calls back, so nothing would give the claim back.
+        guard let folder = gitFolder, GitWriter.git != nil else { return NSSound.beep() }
+        gitAsking.insert(command)
+        final class Claim { var given = false }
+        let claim = Claim()
+        let settle: () -> Void = { [weak self] in
+            guard !claim.given else { return } // once: a late call must not take a newer press's claim
+            claim.given = true
+            self?.gitAsking.remove(command)
+        }
+        // Never held for good, should a step not call back: a fetch or a read longer than this lets the key work again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: settle)
+        branchPopup.prepare(for: self, directory: folder, snapshot: sidebar.git.snapshot) { [weak self] in
+            guard let self else { return settle() }
+            var actions = GitActions(self.branchPopup)
+            actions.settle = settle
+            body(actions)
+        }
+    }
+
     @objc func gitFetch(_ sender: Any?) { withGit { $0.fetch() } }
-    @objc func gitUpdate(_ sender: Any?) { withGit { $0.updateProject() } }
-    @objc func gitCommit(_ sender: Any?) { withGit { $0.commit() } }
-    @objc func gitPush(_ sender: Any?) { withGit { $0.push() } }
-    @objc func gitNewBranch(_ sender: Any?) { withGit { $0.askNewBranch(base: nil) } }
+    @objc func gitUpdate(_ sender: Any?) { withGitAsking(#selector(gitUpdate(_:))) { $0.updateProject() } }
+    @objc func gitCommit(_ sender: Any?) { withGitAsking(#selector(gitCommit(_:))) { $0.commit() } }
+    @objc func gitPush(_ sender: Any?) { withGitAsking(#selector(gitPush(_:))) { $0.push() } }
+    @objc func gitNewBranch(_ sender: Any?) { withGitAsking(#selector(gitNewBranch(_:))) { $0.askNewBranch(base: nil) } }
     @objc func showGitCommands(_ sender: Any?) { GitCommandsWindowController.shared.present() }
 
     /// ⌥⌘L: the commit history of the project's repository, in an editor tab.
