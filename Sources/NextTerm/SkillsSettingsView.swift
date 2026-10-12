@@ -1,10 +1,11 @@
 import AppKit
 import NextTermCore
 
-/// Settings › Skills: every personal skill on this Mac, and what Claude Code, Codex and Command Code
+/// Settings › Skills › Personal: every personal skill on this Mac, and what Claude Code, Codex and Command Code
 /// each load for it. Copies of one skill that drifted apart, or that an agent ignores, are marked, and
-/// Unify turns them into one shared copy every agent sees (with Undo). Read-only until the user acts.
-final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+/// Unify turns them into one shared copy every agent sees (with Undo). Read-only until the user acts. A project's
+/// skills are Settings › Skills › Project's (ProjectSkillsView).
+final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
     private let filter = NSPopUpButton()
     private let summary = NSTextField(labelWithString: "")
@@ -20,9 +21,6 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let checkOnOpen = NSButton(checkboxWithTitle: "Check for updates once a day, and when Window › Skills opens", target: nil, action: nil)
     private var inventory: SkillInventory?
     private var rows: [SkillRow] = []
-    /// The project whose skills are shown, read-only (nil: the personal skills). Kept by path, so a
-    /// project that closes can never be confused with another.
-    private var project: String?
     private var review: SkillsReviewSheet?
     /// Counts reloads, so a slow scan never overwrites a newer one.
     private var generation = 0
@@ -63,8 +61,6 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         intro.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
 
         filter.addItems(withTitles: ["All skills", "Needs attention"])
-        filter.menu?.delegate = self
-        // A long project name must not widen Settings: the popup truncates, the open menu shows it all.
         filter.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
         filter.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         (filter.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingMiddle
@@ -156,12 +152,12 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     /// Reads the folders off the main thread (it reads every SKILL.md, and hashes copies to compare),
-    /// only while the view is on screen.
+    /// only while the view is on screen (not while Settings › Skills shows Project).
     func reload() {
-        guard window != nil else { return }
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return }
         generation += 1
         let mine = generation
-        let home = project ?? SkillsStore.home
+        let home = SkillsStore.home
         Task {
             let inventory = await Task.detached { SkillInventory.scan(home: home) }.value
             guard mine == generation else { return }
@@ -177,13 +173,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         let needsAttention = filter.indexOfSelectedItem == 1
         rows = inventory.rows.filter { !needsAttention || Self.needsAttention($0) }
         let problems = inventory.rows.filter(Self.needsAttention).count
-        if let project {
-            summary.stringValue = "\(inventory.rows.count) skills in \(SkillStep.short(project)), read-only"
-            summary.toolTip = "Shown as they are: Next Term never changes a project."
-        } else {
-            summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention"
-            summary.toolTip = nil
-        }
+        summary.stringValue = "\(inventory.rows.count) skills · \(problems) need attention"
         table.reloadData()
         if let kept, let index = rows.firstIndex(where: { $0.name == kept }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -191,8 +181,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         updateButtons()
     }
 
-    /// The inventory shown is the personal one (not a project's): only then may anything be changed.
-    private var showsPersonal: Bool { project == nil && inventory?.home == SkillsStore.home }
+    /// The inventory shown is of the home the library reads now (the self-test swaps it): only then may anything be changed.
+    private var showsPersonal: Bool { inventory?.home == SkillsStore.home }
 
     /// Copies that differ, duplicates an agent ignores, links to nothing, or a skill an agent skips.
     static func needsAttention(_ row: SkillRow) -> Bool {
@@ -204,35 +194,8 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     @objc private func filterChanged() {
-        project = filter.selectedItem?.representedObject as? String
-        inventory = nil
-        updateButtons()
-        reload()
-    }
-
-    /// The filter lists the projects open right now, each time it opens (by path: two projects may
-    /// share a folder name). When the chosen one has closed, the filter goes back to all skills.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        while menu.numberOfItems > 2 { menu.removeItem(at: 2) }
-        let projects = Array(Set(SkillsInstaller.openProjects)).sorted()
-        if !projects.isEmpty { menu.addItem(.separator()) }
-        let names = projects.map { ($0 as NSString).lastPathComponent }
-        for path in projects {
-            let name = (path as NSString).lastPathComponent
-            let title = names.filter { $0 == name }.count > 1 ? "Project: \(name) (\(SkillStep.short(path)))" : "Project: " + name
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.representedObject = path
-            item.toolTip = path
-            menu.addItem(item)
-            if path == project { filter.select(item) }
-        }
-        if let project, !projects.contains(project) {
-            self.project = nil
-            filter.selectItem(at: 0)
-            inventory = nil
-            updateButtons()
-            reload()
-        }
+        guard let inventory else { return reload() }
+        show(inventory)
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -249,7 +212,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         case "state":
             cell.stringValue = Self.stateText(row)
             cell.textColor = Self.needsAttention(row) ? .systemOrange : .secondaryLabelColor
-            if project == nil, let state = SkillsInstaller.updates[row.name] {
+            if let state = SkillsInstaller.updates[row.name] {
                 switch state {
                 case .available:
                     cell.stringValue = "Update available"
@@ -293,8 +256,6 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     static func stateText(_ row: SkillRow) -> String {
-        // Next Term's own (BuiltInSkill): Settings › Editor turns it off, and a new app brings its text up to date.
-        if row.name == BuiltInSkill.name, row.health == .ok, isBuiltIn(row) { return "Built in" }
         switch row.health {
         case .broken: return "Broken link"
         case .drifted: return "\(row.distinctCopies.count) copies differ"
@@ -304,11 +265,6 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             if needsAttention(row) { return "Ignored copy" }
             return row.copies.first?.root.kind == .shared ? "Shared" : "One copy"
         }
-    }
-
-    /// The skill's shared copy is the one Next Term wrote (it carries its mark).
-    static func isBuiltIn(_ row: SkillRow) -> Bool {
-        row.copies.contains { $0.root.kind == .shared && FileManager.default.fileExists(atPath: ($0.path as NSString).appendingPathComponent(".next-term-built-in")) }
     }
 
     private var selectedRow: SkillRow? { rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil }

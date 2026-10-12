@@ -683,7 +683,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(importTab)
         let skillsTab = NSTabViewItem(identifier: "skills")
         skillsTab.label = "Skills"
-        skillsTab.view = SkillsSettingsView()
+        skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
@@ -912,7 +912,7 @@ final class EditorSettingsView: NSView {
     private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
-    /// AppDelegate.agentsOfferTabs: the next-term-tabs skill and the offer in the MCP instructions.
+    /// AppDelegate.agentsOfferTabs: the next-term-tabs skill in Next Term's skill library and the offer in the MCP instructions.
     let offerTabs = NSButton(checkboxWithTitle: "Agents offer to run parallel work in tabs (the next-term-tabs skill)", target: nil, action: nil)
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
@@ -971,7 +971,7 @@ final class EditorSettingsView: NSView {
         control.action = #selector(controlChanged)
         offerTabs.target = self
         offerTabs.action = #selector(offerTabsChanged)
-        offerTabs.toolTip = "When you ask an agent in a tab for work in parallel, or for another agent's help, it offers to run each task in a tab of its own that you can watch and answer, and opens them only after your yes. Next Term keeps its skill in ~/.agents/skills (linked for Claude Code and Qwen Code); off sends it to the Trash."
+        offerTabs.toolTip = "When you ask an agent in a tab for work in parallel, or for another agent's help, it offers to run each task in a tab of its own that you can watch and answer, and opens them only after your yes. Agents read its next-term-tabs skill from Next Term over MCP (get_skill); nothing is written in their folders, and off takes it out."
         controlStatus.textColor = .secondaryLabelColor
         controlStatus.font = .systemFont(ofSize: 11)
         controlStatus.preferredMaxLayoutWidth = 400

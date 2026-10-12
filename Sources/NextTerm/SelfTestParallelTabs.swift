@@ -3,8 +3,8 @@ import NextTermCore
 
 /// Parallel work in tabs, Next Term's part: a tab an agent opens with new_tab knows which tab opened it (list_tabs'
 /// opened_by, and its tooltip), the worker's own row tells its agent to open no tabs; settings_get and settings_set know
-/// agents_offer_tabs and agent_spinner, and Settings › Editor's box follows. The skill itself is the app's alone: the
-/// self-test never writes to the user's agent folders (BuiltInSkillTests write one in a home of their own).
+/// agents_offer_tabs and agent_spinner, and Settings › Editor's box follows; Next Term's skill library over MCP gives
+/// the project's skills and Next Term's own next-term-tabs while the switch is on, in a home of the self-test's own.
 extension SelfTest {
     static func parallelTabsChecks(_ c: TerminalWindowController, proj: URL) async {
         let lead = c.addTab(directory: proj.path, select: false)
@@ -47,6 +47,33 @@ extension SelfTest {
             app.agentsOfferTabs = offerBefore
             AgentSpinner.current = spinnerBefore
         }
+        // The skill library, in a home of the self-test's own: the project's skill, and Next Term's own while it is on.
+        // The home beside the project, never around it: the library never reads a home folder or one above it as a project's.
+        let savedHome = SkillsStore.home, home = proj.deletingLastPathComponent().path + "/selftest-skills-home-\(getpid())"
+        let local = proj.path + "/.agents/skills/selftest-local"
+        try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: local, withIntermediateDirectories: true)
+        try? "---\nname: selftest-local\ndescription: A project skill.\n---\n\nSteps.\n".write(toFile: local + "/SKILL.md", atomically: true, encoding: .utf8)
+        SkillsStore.home = home
+        defer {
+            SkillsStore.home = savedHome
+            try? FileManager.default.removeItem(atPath: home)
+            try? FileManager.default.removeItem(atPath: proj.path + "/.agents")
+        }
+        func library(_ tool: String, _ arguments: [String: Any]) async -> MCPServer.CallResult {
+            var result = MCPServer.CallResult(text: "", isError: false)
+            MCPControl.call(tool, arguments, caller: nil) { result = $0 }
+            _ = await wait(10) { !result.text.isEmpty }
+            return result
+        }
+        let skills = await library("list_skills", ["project": proj.path])
+        let ours = await library("get_skill", ["name": "next-term-tabs"]), mine = await library("get_skill", ["name": "/selftest-local", "project": proj.path])
+        check(skills.text.contains("\"selftest-local\"") && skills.text.contains("\"project\"") && mine.text.contains("A project skill.")
+              && (offerBefore ? ours.text.contains("name: next-term-tabs") && skills.text.contains("next-term-tabs") : ours.isError)
+              && !FileManager.default.fileExists(atPath: home + "/.agents/skills/next-term-tabs"),
+              "parallel tabs: list_skills and get_skill give the project's skills and Next Term's own while it is on, writing nothing",
+              String((skills.text + " " + ours.text + " " + mine.text).prefix(600)))
+
         let editor = EditorSettingsView()
         var set = MCPServer.CallResult(text: "", isError: false)
         MCPControl.call("settings_set", ["values": ["agents_offer_tabs": !offerBefore, "agent_spinner": "still"]], caller: nil,
@@ -59,5 +86,8 @@ extension SelfTest {
         _ = await wait(10) { !got.text.isEmpty }
         check(got.text.contains("agents_offer_tabs") && got.text.contains("agent_spinner") && got.text.contains("notify_commands"),
               "parallel tabs: settings_get lists them", String(got.text.prefix(300)))
+        let after = await library("get_skill", ["name": "next-term-tabs"])
+        check(offerBefore ? after.isError : after.text.contains("name: next-term-tabs"),
+              "parallel tabs: the switch takes Next Term's own skill out of the library (and puts it back)", String(after.text.prefix(200)))
     }
 }

@@ -1,7 +1,8 @@
 import AppKit
 import NextTermCore
 
-/// The Skills library's MCP tools. list_skills only reads. install_skill and remove_skill are requests:
+/// The Skills library's MCP tools. list_skills and get_skill only read: the skills of the asking agent's project, the
+/// user's and Next Term's own, as that agent finds them (SkillLibrary). install_skill and remove_skill are requests:
 /// the user sees each in an AgentApprovalWindow and decides; nothing is fetched or written on an agent's
 /// say alone. One request is open at a time (others get `busy`). After the user declines, the asker
 /// (its tab, or every caller outside Next Term's tabs) is told "declined" for ten minutes, or until
@@ -66,10 +67,20 @@ enum SkillsMCP {
     /// Downloads a source for review (the self-test's stands in for GitHub).
     static var fetch: (SkillSource) async throws -> SkillsInstaller.Fetched = { try await SkillsInstaller.fetch($0) }
 
-    static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval = .askOnMac,
-                     connection: String? = nil, requester: String? = nil, reply: @escaping Reply) {
+    static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, callerPID: pid_t? = nil,
+                     approval: MCPApproval = .askOnMac, connection: String? = nil, requester: String? = nil, reply: @escaping Reply) {
         switch tool {
-        case "list_skills": Task { reply(MCPControl.ok(await listSkills())) }
+        case "list_skills", "get_skill":
+            let start: String?
+            switch libraryStart(arguments["project"], caller: caller) {
+            case .success(let folder): start = folder
+            case .failure(let refusal): return reply(MCPControl.fail(refusal.text))
+            }
+            Task {
+                let reader = SkillLibrary.Reader(program: await Task.detached { agent(above: callerPID) }.value)
+                if tool == "list_skills" { return reply(MCPControl.ok(await listSkills(from: start, reader: reader))) }
+                reply(await getSkill(arguments, from: start, reader: reader))
+            }
         default:
             let asker = MCPWriteControl.asker(connection: connection, requester: requester, caller: caller)
             let who = Who(approval: approval, asker: asker, requester: requester ?? describe(caller))
@@ -88,22 +99,59 @@ enum SkillsMCP {
 
     // MARK: listing
 
-    static func listSkills() async -> [String: Any] {
+    /// Where the asking agent works, for its project's skills: the folder given (an open project or a folder in one),
+    /// or its tab's folder, or its window's project. nil: no project (a remote caller that names none).
+    static func libraryStart(_ raw: Any?, caller: TerminalTab?) -> Result<String?, MCPToolError> {
+        let open = AppDelegate.shared.controllers.compactMap(\.project)
+        if let text = (raw as? String)?.trimmingCharacters(in: .whitespaces), !text.isEmpty {
+            let projects = MCPProjects(open: open, preferred: nil)
+            let real = canonicalPath((text as NSString).expandingTildeInPath)
+            if text.hasPrefix("/") || text.hasPrefix("~") {
+                guard projects.root(holding: real) != nil else {
+                    return .failure(.init("Not in an open project: \(text). Open projects: \(open.isEmpty ? "none" : open.joined(separator: ", "))."))
+                }
+                return .success(real)
+            }
+            return projects.project(text).map { Optional($0) }
+        }
+        guard let caller, caller.remote == nil else { return .success(nil) }
+        return .success(caller.directory.isEmpty ? MCPControl.controller(of: caller)?.project : caller.directory)
+    }
+
+    /// The agent the bridge (`nxtrm mcp`) at `pid` runs under: the nearest process above it that is an agent, by its
+    /// program's name (CommandKind's list). nil when none is (an editor, an agent Next Term doesn't know).
+    nonisolated static func agent(above pid: pid_t?) -> String? {
+        var current = pid ?? 0
+        for _ in 0..<12 {
+            guard current > 1, let path = ProcessInspector.executablePath(of: current) else { return nil }
+            let argv = ProcessInspector.arguments(of: current, keeping: [])?.arguments ?? []
+            if let name = CommandClassifier.agentName(executable: path, arguments: argv) { return name }
+            guard let up = ProcessInspector.parent(of: current), up != current else { return nil }
+            current = up
+        }
+        return nil
+    }
+
+    static func listSkills(from start: String?, reader: SkillLibrary.Reader) async -> [String: Any] {
         let inventory = await SkillsStore.scan()
+        let home = SkillsStore.home, app: AppDelegate = AppDelegate.shared, nextTerm = app.agentControl && app.agentsOfferTabs
+        let entries = await Task.detached { SkillLibrary.entries(from: start, home: home, nextTerm: nextTerm, reader: reader) }.value
         let tracked = Dictionary(await SkillsInstaller.tracked().map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         let recorded = Set(SkillsInstaller.records().map(\.name))
-        let skills: [[String: Any]] = inventory.rows.map { row in
+        var rows = Dictionary(inventory.rows.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        // What Settings › Skills knows of one of the user's skills: which of its three agents loads it, where it came
+        // from, an update.
+        func personal(_ row: SkillRow, into item: inout [String: Any]) {
             var agents: [String: String] = [:]
             for agent in SkillAgent.allCases {
                 let load = row.load(for: agent)
                 agents[agent.rawValue] = load.skippedBecause != nil ? "skipped" : load.used == nil ? "none" : load.switchedOff ? "off" : "loads"
             }
-            var item: [String: Any] = ["name": row.name, "agents": agents]
-            if let description = row.distinctCopies.first?.frontMatter?.description { item["description"] = String(description.prefix(300)) }
-            if row.name == BuiltInSkill.name, SkillsSettingsView.isBuiltIn(row) {
-                item["source"] = "built into Next Term (Settings › Editor › Agents offer to run parallel work in tabs; settings_set agents_offer_tabs)"
-                item["installed_by"] = "next-term"
-            } else if let source = tracked[row.name] {
+            item["agents"] = agents
+            if item["description"] == nil, let description = row.distinctCopies.first?.frontMatter?.description {
+                item["description"] = String(description.prefix(300))
+            }
+            if let source = tracked[row.name] {
                 item["source"] = source.source.shortName + (source.path.isEmpty ? "" : "/" + source.path)
                 item["installed_by"] = recorded.contains(row.name) ? "next-term" : "npx skills"
             }
@@ -113,9 +161,73 @@ enum SkillsMCP {
             default: break
             }
             if row.health != .ok { item["state"] = SkillsSettingsView.stateText(row) }
+        }
+        var skills: [[String: Any]] = entries.map { entry in
+            var item = describe(entry, reader: reader)
+            if entry.copy.scope == .personal, let row = rows[entry.name] { personal(row, into: &item) }
+            if entry.copy.scope == .nextTerm {
+                item["source"] = "built into Next Term (Settings › Editor › Agents offer to run parallel work in tabs; settings_set agents_offer_tabs)"
+            }
+            rows[entry.name] = nil
             return item
         }
-        return ["skills": skills]
+        // The user's skills the library can't read (a broken link, a SKILL.md too large), as Settings › Skills shows them.
+        for row in inventory.rows where rows[row.name] != nil {
+            var item: [String: Any] = ["name": row.name, "scope": SkillLibrary.Scope.personal.rawValue]
+            personal(row, into: &item)
+            skills.append(item)
+        }
+        var result: [String: Any] = ["skills": skills]
+        if let start { result["project"] = start }
+        if let program = reader.program {
+            result["agent"] = program
+            result["note"] = "In the order \(program) ranks them. native: \(program) loads that skill itself, so use it as you do; get_skill gives any other's instructions when it fits the task."
+        } else {
+            result["note"] = "Nearest scope first. get_skill gives a skill's instructions when it fits the task."
+        }
+        return result
+    }
+
+    /// A skill as list_skills and get_skill say it.
+    static func describe(_ entry: SkillLibrary.Entry, reader: SkillLibrary.Reader) -> [String: Any] {
+        var item: [String: Any] = ["name": entry.name, "scope": entry.copy.scope.rawValue, "place": entry.copy.place]
+        if !entry.copy.description.isEmpty { item["description"] = String(entry.copy.description.prefix(300)) }
+        if reader.program != nil { item["native"] = entry.native }
+        if !entry.others.isEmpty { item["also"] = entry.others.map { $0.place } }
+        return item
+    }
+
+    static func getSkill(_ arguments: [String: Any], from start: String?, reader: SkillLibrary.Reader) async -> MCPServer.CallResult {
+        // "/name" and "$name", as agents type them, are the name.
+        guard var name = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty else {
+            return MCPControl.fail("Give the skill's name, as list_skills gives it.")
+        }
+        if name.hasPrefix("/") || name.hasPrefix("$") { name.removeFirst() }
+        var scope: SkillLibrary.Scope?
+        if let raw = arguments["scope"] as? String, !raw.isEmpty {
+            guard let known = SkillLibrary.Scope(rawValue: raw) else { return MCPControl.fail("scope is project, personal or next-term.") }
+            scope = known
+        }
+        let home = SkillsStore.home, app: AppDelegate = AppDelegate.shared, nextTerm = app.agentControl && app.agentsOfferTabs
+        let found = await Task.detached { [name, scope] in
+            SkillLibrary.skill(name, scope: scope, from: start, home: home, nextTerm: nextTerm, reader: reader)
+        }.value
+        guard let found else {
+            return MCPControl.fail("No skill called \(name)\(scope.map { " in the \($0.rawValue) scope" } ?? "") here; list_skills shows them.")
+        }
+        var item = describe(found.entry, reader: reader)
+        item["scope"] = found.copy.scope.rawValue
+        item["place"] = found.copy.place
+        if found.copy != found.entry.copy {
+            item["native"] = nil
+            item["also"] = ([found.entry.copy] + found.entry.others).filter { $0 != found.copy }.map(\.place)
+        }
+        if let folder = found.copy.folder {
+            item["folder"] = folder
+            if !found.files.isEmpty { item["files"] = found.files } // relative to folder: read them when SKILL.md points to them
+        }
+        item["text"] = found.text
+        return MCPControl.ok(item)
     }
 
     // MARK: requests

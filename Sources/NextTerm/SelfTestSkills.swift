@@ -94,6 +94,7 @@ extension SelfTest {
 
         await installChecks(home: home)
         await mcpChecks(home: home)
+        await projectSkillsChecks(home: home)
     }
 
     /// Agents asking through MCP: nothing happens without the user, one request at a time, a declined
