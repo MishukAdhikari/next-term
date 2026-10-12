@@ -90,13 +90,15 @@ final class SecureEnclaveKeyring: VaultKeyring {
 
 // MARK: the login keychain
 
-/// One generic password item: the keychain keyring's private key, or the recovery key a copy of the vault key in the
+/// One generic password item: a keychain vault's private key, or the recovery key a copy of the vault key in the
 /// login keychain would be wrapped under. The self-test passes an in-memory store, so the keyring's rules are tested
 /// without the login keychain.
 protocol PasswordStore: AnyObject {
     /// The item's data. Called only after a presence check: macOS may ask for the login password first.
     func read() throws -> Data?
-    func write(_ data: Data) throws
+    /// Adds the item. One that is there already is an error and is never written over: it may be the only key that
+    /// opens a vault.
+    func add(_ data: Data) throws
     func delete() throws
     /// Whether the item is there: its attributes only, never its data.
     func exists() -> Bool
@@ -106,8 +108,17 @@ protocol PasswordStore: AnyObject {
 /// attributes such as `ThisDeviceOnly` don't apply to it.
 final class LoginKeychain: PasswordStore {
     static let service = "Next Term Secrets"
-    static let vaultKeyAccount = "vault key"
+    /// The one item earlier builds kept every keychain vault's key in. Read only to move the current vault's key to an
+    /// item of its own; never written.
+    static let sharedVaultKeyAccount = "vault key"
     static let recoveryAccount = "vault key recovery"
+
+    /// A keychain vault's own item: named after its public key, so a new vault (after Start Over) never touches the
+    /// item of the vault it replaced.
+    static func vaultKeyAccount(publicKey: Data) -> String {
+        let hash = SHA256.hash(data: publicKey).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return sharedVaultKeyAccount + " " + hash
+    }
 
     let service: String
     let account: String
@@ -139,16 +150,11 @@ final class LoginKeychain: PasswordStore {
         return result as? Data
     }
 
-    func write(_ data: Data) throws {
+    func add(_ data: Data) throws {
         var item = query
         item[kSecValueData as String] = data
         item[kSecAttrLabel as String] = "Next Term Secrets"
         let status = SecItemAdd(item as CFDictionary, nil)
-        if status == errSecDuplicateItem {
-            let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-            guard update == errSecSuccess else { throw Failure(status: update) }
-            return
-        }
         guard status == errSecSuccess else { throw Failure(status: status) }
     }
 
@@ -170,6 +176,7 @@ final class LoginKeychain: PasswordStore {
 final class MemoryPasswordStore: PasswordStore {
     private var data: Data?
     private(set) var reads = 0
+    /// The adds that wrote the item.
     private(set) var writes = 0
     private let lock = NSLock()
 
@@ -180,9 +187,10 @@ final class MemoryPasswordStore: PasswordStore {
         return data
     }
 
-    func write(_ data: Data) throws {
+    func add(_ data: Data) throws {
         lock.lock()
         defer { lock.unlock() }
+        guard self.data == nil else { throw LoginKeychain.Failure(status: errSecDuplicateItem) }
         writes += 1
         self.data = data
     }
@@ -200,29 +208,65 @@ final class MemoryPasswordStore: PasswordStore {
     }
 }
 
+/// In-memory items by account: the self-test's login keychain.
+final class MemoryKeychain {
+    private var items: [String: MemoryPasswordStore] = [:]
+    private let lock = NSLock()
+
+    /// The account's item, empty until something is added to it.
+    func item(_ account: String) -> PasswordStore { store(account) }
+
+    func store(_ account: String) -> MemoryPasswordStore {
+        lock.lock()
+        defer { lock.unlock() }
+        if let found = items[account] { return found }
+        let made = MemoryPasswordStore()
+        items[account] = made
+        return made
+    }
+
+    /// The accounts whose item is there, sorted.
+    var accounts: [String] { all.filter { $0.value.exists() }.map(\.key).sorted() }
+    var reads: Int { all.values.reduce(0) { $0 + $1.reads } }
+    var writes: Int { all.values.reduce(0) { $0 + $1.writes } }
+
+    private var all: [String: MemoryPasswordStore] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+}
+
 /// On a Mac without a Secure Enclave: a software P256 key kept in the login keychain, read only after Next Term's own
 /// presence check passed, never at launch. The gate is Next Term's code, not hardware, so Settings says "less
-/// protected".
+/// protected". Each vault's key is an item of its own, named after the vault's public key.
 final class KeychainKeyring: VaultKeyring {
+    /// The item of one account: the login keychain's, or the self-test's in memory.
+    typealias Items = (String) -> PasswordStore
+
     let kind = VaultKeyringKind.keychain
     let keyBlob: Data? = nil
-    private let store: PasswordStore
+    private let items: Items
+    /// The public key of the vault this keyring opens, which names its item.
+    private let vaultPublicKey: Data
     /// The key made here, until the vault holding its public key is written.
     private var made: SoftwareKeyring?
     /// Runs on the thread that reads the item, just before: macOS may ask for the login password then.
     var willRead: (() -> Void)?
 
-    init(store: PasswordStore) {
-        self.store = store
+    /// The keyring of an existing vault, whose public key the vault records.
+    init(publicKey: Data, items: @escaping Items) {
+        self.vaultPublicKey = publicKey
+        self.items = items
     }
 
-    /// A new software key, written to the store once.
-    static func make(store: PasswordStore) throws -> KeychainKeyring {
+    /// A new software key, added to an item of its own. An item that is there already is an error, never written over.
+    static func make(items: @escaping Items) throws -> KeychainKeyring {
         let key = SoftwareKeyring(kind: .keychain)
         var raw = key.rawRepresentation
         defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
-        try store.write(raw)
-        let keyring = KeychainKeyring(store: store)
+        try items(LoginKeychain.vaultKeyAccount(publicKey: key.publicKey())).add(raw)
+        let keyring = KeychainKeyring(publicKey: key.publicKey(), items: items)
         keyring.made = key
         return keyring
     }
@@ -232,18 +276,41 @@ final class KeychainKeyring: VaultKeyring {
         return made.publicKey()
     }
 
-    /// The item is there. Its data is never read for this.
+    /// The vault's item is there, or the shared item of earlier builds. Their data is never read for this.
     func check(publicKey: Data) -> Bool {
-        store.exists()
+        let own = items(LoginKeychain.vaultKeyAccount(publicKey: publicKey))
+        return own.exists() || items(LoginKeychain.sharedVaultKeyAccount).exists()
     }
 
     func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
         guard context != nil else { throw SecretVault.Failure.cancelled }
         if let made { return try made.sharedSecret(with: ephemeral, context: context) }
         willRead?()
-        guard var raw = try? store.read() else { throw SecretVault.Failure.cantOpen }
+        let own = items(LoginKeychain.vaultKeyAccount(publicKey: vaultPublicKey))
+        if let key = try Self.key(in: own) { return try key.sharedSecret(with: ephemeral, context: context) }
+        // A vault from an earlier build, whose key is in the one shared item: that item opens this vault only when its
+        // key is this vault's, and the key is then added to the vault's own item. The shared item is left as it is.
+        guard let key = try Self.key(in: items(LoginKeychain.sharedVaultKeyAccount)), key.publicKey() == vaultPublicKey else {
+            throw SecretVault.Failure.cantOpen
+        }
+        var raw = key.rawRepresentation
+        defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
+        try? own.add(raw)
+        return try key.sharedSecret(with: ephemeral, context: context)
+    }
+
+    /// The key an item holds, or nil when the item is not there. An item that can't be read is not passed over for
+    /// another.
+    private static func key(in item: PasswordStore) throws -> SoftwareKeyring? {
+        let read: Data?
+        do {
+            read = try item.read()
+        } catch {
+            throw SecretVault.Failure.cantOpen
+        }
+        guard var raw = read else { return nil }
         defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
         guard let key = try? SoftwareKeyring(kind: .keychain, rawRepresentation: raw) else { throw SecretVault.Failure.cantOpen }
-        return try key.sharedSecret(with: ephemeral, context: context)
+        return key
     }
 }

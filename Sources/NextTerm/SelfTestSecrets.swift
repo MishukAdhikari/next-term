@@ -226,31 +226,31 @@ extension SelfTest {
               "\(String(describing: failure)), \(key?.count ?? 0) bytes")
     }
 
-    /// The keychain keyring's rules over an in-memory store: never the login keychain.
+    /// The keychain keyring's rules over an in-memory keychain: never the login keychain.
     static func secretsKeychainChecks(_ base: URL) async {
-        let memory = MemoryPasswordStore()
-        let presence = StandInPresence()
-        let folder = SecretFolder(applicationSupport: base.appendingPathComponent("keychain", isDirectory: true))
-        let store = SecretsStore(folder: folder, presence: presence, newKeyring: { try KeychainKeyring.make(store: memory) },
-                                 keyring: { _ in KeychainKeyring(store: memory) })
+        let keychain = MemoryKeychain()
+        let (store, presence) = secretsKeychainStore(base, "keychain", keychain: keychain)
         let value = "keychain-selftest-0123456789abcdef"
         _ = try? await store.perform(.add(name: "KEYCHAIN_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                           value: SecretBytes(utf8: value)))
-        check(memory.writes == 1 && memory.reads == 0 && store.protection == .lessProtected,
-              "secrets: the keychain keyring writes its item once, at the first add", "\(memory.writes) writes, \(memory.reads) reads")
+        let own = store.index.map { LoginKeychain.vaultKeyAccount(publicKey: $0.publicKey) }
+        check(keychain.writes == 1 && keychain.reads == 0 && keychain.accounts == own.map { [$0] } && store.protection == .lessProtected,
+              "secrets: the keychain keyring writes its item once, at the first add, under the vault's own account",
+              "\(keychain.writes) writes, \(keychain.reads) reads, \(keychain.accounts.joined(separator: ", "))")
         presence.approves = false
         _ = try? await store.perform(.reveal(name: "KEYCHAIN_KEY"))
         presence.approves = true
-        check(memory.reads == 0, "secrets: a cancelled presence check reads nothing from the keychain", "\(memory.reads) reads")
+        check(keychain.reads == 0, "secrets: a cancelled presence check reads nothing from the keychain", "\(keychain.reads) reads")
         let revealed = try? await store.perform(.reveal(name: "KEYCHAIN_KEY"))
-        check(revealed?["KEYCHAIN_KEY"] == SecretBytes(utf8: value) && memory.reads == 1,
-              "secrets: after the presence check the keychain keyring reads its item and opens the vault", "\(memory.reads) reads")
+        check(revealed?["KEYCHAIN_KEY"] == SecretBytes(utf8: value) && keychain.reads == 1,
+              "secrets: after the presence check the keychain keyring reads its item and opens the vault", "\(keychain.reads) reads")
         await store.load()
-        check(memory.reads == 1 && store.protection == .lessProtected, "secrets: the keychain keyring's load check never reads the item",
-              "\(memory.reads) reads")
-        try? memory.delete()
+        check(keychain.reads == 1 && store.protection == .lessProtected, "secrets: the keychain keyring's load check never reads the item",
+              "\(keychain.reads) reads")
+        if let own { try? keychain.item(own).delete() }
         await store.load()
         check(store.protection == .cantOpen, "secrets: a deleted keychain item gives can't open at load()", "\(store.protection)")
+        await secretsKeychainItemChecks(base)
     }
 
     /// Lock events come through `handleLockEvent(_:)`; the distributed lock notification is never posted.
