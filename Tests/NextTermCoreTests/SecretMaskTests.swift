@@ -138,9 +138,10 @@ private let key40 = "Zq8pLmW2vXn4Rt7yKb1sQe5uHj3oAc6dFg9iTw0e" // 40 characters,
         #expect(!masked.contains(stored.prefix(9)) && !masked.contains(stored.dropFirst(9)))
     }
 
-    /// AE11's second half through the saved scrollback itself (`ScrollbackText.saved`), with the stored keys' mask in place
-    /// of `SecretMask.current`: a value a wrap split, on rows the terminal flagged; the same rows read without wrap flags,
-    /// as behind the alternate screen (`maskAcrossRows`); and the value's base64, whole and split by a wrap.
+    /// Scrollback saved for an update masks a stored value, checked through `ScrollbackText.saved` itself with the
+    /// stored keys' mask in place of `SecretMask.current`: a value a wrap split, on rows the terminal flagged; the same
+    /// rows read without wrap flags, as behind the alternate screen (`maskAcrossRows`); and the value's base64, whole
+    /// and split by a wrap.
     @Test func theSavedScrollbackMasksAStoredValue() {
         let m = mask([stored])
         func saved(_ rows: [ScrollbackText.Row]) -> String {
