@@ -52,8 +52,8 @@ def escape(text):
     return out
 
 # The pause after each thing sent is for zsh's output to come: ZSH_TEST_SLOW lengthens them all (2 for twice as
-# long). Only ever longer: an answer meant to come late still comes late. Twice as long on CI didn't steady its
-# engine checks (2026-10-12), so CI retries the run instead and keeps this at 1.
+# long). Never between a Tab key and its answer: the engine waits only 150 ms for it (`answered` sends both at once),
+# and a longer pause there made CI's engine checks fail more, not less (2026-10-12).
 SLOW = float(os.environ.get("ZSH_TEST_SLOW", "1"))
 
 def frame(kind, ident, fields=()):
