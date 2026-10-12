@@ -331,6 +331,9 @@ final class KeychainKeyring: VaultKeyring {
         self.made = nil
     }
 
+    /// The item of the vault this keyring opens, named after its public key.
+    var ownItem: PasswordStore { items(LoginKeychain.vaultKeyAccount(publicKey: vaultPublicKey)) }
+
     /// The vault's item is there, or the shared item of earlier builds. Their data is never read for this. A keychain
     /// that wouldn't say (locked and its unlock cancelled) passes: only an item that is surely gone fails the check.
     func check(publicKey: Data) -> Bool {
@@ -342,7 +345,7 @@ final class KeychainKeyring: VaultKeyring {
         guard context != nil else { throw SecretVault.Failure.cancelled }
         if let made { return try made.sharedSecret(with: ephemeral, context: context) }
         willRead?()
-        let own = items(LoginKeychain.vaultKeyAccount(publicKey: vaultPublicKey))
+        let own = ownItem
         if let key = try Self.key(in: own) { return try key.sharedSecret(with: ephemeral, context: context) }
         // A vault from an earlier build, whose key is in the one shared item: that item opens this vault only when its
         // key is this vault's, and the key is then added to the vault's own item. The shared item is left as it is.

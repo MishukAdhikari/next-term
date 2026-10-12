@@ -234,7 +234,8 @@ extension SelfTest {
         _ = try? await store.perform(.add(name: "KEYCHAIN_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                           value: SecretBytes(utf8: value)))
         let own = store.index.map { LoginKeychain.vaultKeyAccount(publicKey: $0.publicKey) }
-        check(keychain.writes == 1 && keychain.reads == 0 && keychain.accounts == own.map { [$0] } && store.protection == .lessProtected,
+        let ownOnly: Bool = keychain.accounts == own.map { [$0] }
+        check(keychain.writes == 1 && keychain.reads == 0 && ownOnly && store.protection == .lessProtected,
               "secrets: the keychain keyring writes its item once, at the first add, under the vault's own account",
               "\(keychain.writes) writes, \(keychain.reads) reads, \(keychain.accounts.joined(separator: ", "))")
         presence.approves = false

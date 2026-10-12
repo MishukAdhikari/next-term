@@ -194,7 +194,7 @@ final class SecretsStore {
     /// alone reads `NEXTTERM_SECRETS_KEYRING=keychain`, to make a "less protected" vault where a Secure Enclave is, for
     /// a hand check.
     nonisolated static func makeKeyring() throws -> VaultKeyring {
-        let keychain = { try KeychainKeyring.make(items: { LoginKeychain(account: $0) }) }
+        let keychain = { try KeychainKeyring.make(items: loginItem) }
         #if DEBUG
         if ProcessInfo.processInfo.environment["NEXTTERM_SECRETS_KEYRING"] == "keychain" { return try keychain() }
         #endif
@@ -205,8 +205,13 @@ final class SecretsStore {
     nonisolated static func appKeyring(for index: SecretVault.Index) -> VaultKeyring {
         switch index.keyring {
         case .secureEnclave: return SecureEnclaveKeyring(blob: index.keyBlob ?? Data())
-        case .keychain: return KeychainKeyring(publicKey: index.publicKey, items: { LoginKeychain(account: $0) })
+        case .keychain: return KeychainKeyring(publicKey: index.publicKey, items: loginItem)
         }
+    }
+
+    /// The login keychain's item of Next Term's service by account: what the app's keychain keyrings use.
+    nonisolated static func loginItem(_ account: String) -> PasswordStore {
+        LoginKeychain(account: account)
     }
 
     // MARK: launch

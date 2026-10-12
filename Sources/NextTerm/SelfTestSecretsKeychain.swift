@@ -30,8 +30,9 @@ extension SelfTest {
         let kept = try? store.startOver()
         _ = try? await store.perform(.add(name: "SECOND_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                           value: SecretBytes(utf8: secretsValue("second-keychain"))))
-        let made = store.index.map { $0.publicKey != old.publicKey } ?? false
-        check(made && oldKey != nil && (try? oldItem.read()) == oldKey && keychain.accounts.count == 2,
+        let made: Bool = store.index.map { $0.publicKey != old.publicKey } ?? false
+        let oldKept: Bool = oldKey != nil && (try? oldItem.read()) == oldKey
+        check(made && oldKept && keychain.accounts.count == 2,
               "secrets: Add after Start Over gives the new keychain vault an item of its own and leaves the kept vault's",
               keychain.accounts.joined(separator: ", "))
         var opened: SecretBytes?
@@ -46,7 +47,8 @@ extension SelfTest {
         let taken = MemoryPasswordStore()
         try? taken.add(Data("there before".utf8))
         let overwrote = (try? KeychainKeyring.make(items: { _ in taken })) != nil
-        check(!overwrote && (try? taken.read()) == Data("there before".utf8) && taken.writes == 1,
+        let untouched: Bool = (try? taken.read()) == Data("there before".utf8)
+        check(!overwrote && untouched && taken.writes == 1,
               "secrets: a new keychain key is never written over an item that is there", "\(taken.writes) writes")
 
         // A first Add that fails after its key was made (here, a value with a line break) leaves no item behind.
@@ -63,11 +65,36 @@ extension SelfTest {
         _ = try? await unmade.perform(.add(name: "GOOD_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                            value: SecretBytes(utf8: secretsValue("after-failed-add"))))
         let madeOne: Bool = unmade.index != nil && fresh.accounts.count == 1
-        check(refused == .vault(.badValue("BAD_KEY")) && left.isEmpty && madeOne,
+        let badValue: Bool = refused == .vault(.badValue("BAD_KEY"))
+        check(badValue && left.isEmpty && madeOne,
               "secrets: a first keychain Add that fails leaves no item behind, and the next Add makes one",
               "\(String(describing: refused)), left \(left.joined(separator: ", ")), then \(fresh.accounts.count)")
+        secretsAppKeyringChecks()
         await secretsSharedItemChecks(base)
         await secretsKeychainPromptChecks(base)
+    }
+
+    /// The app's own keyrings, checked with no keychain call: a keychain vault's keyring uses the login keychain's item
+    /// of Next Term's service named after the vault's key, the item a new keychain key goes to is one of those, and a
+    /// Secure Enclave vault's keyring is the Secure Enclave's.
+    static func secretsAppKeyringChecks() {
+        guard let keychainVault = try? SecretVault.create(keyring: SoftwareKeyring(kind: .keychain)),
+              let enclaveVault = try? SecretVault.create(keyring: SoftwareKeyring(kind: .secureEnclave)) else {
+            return check(false, "secrets: the vaults for the app keyring checks are made")
+        }
+        let index = keychainVault.vault.index
+        let enclaveIndex = enclaveVault.vault.index
+        keychainVault.vault.wipe()
+        enclaveVault.vault.wipe()
+        let item = (SecretsStore.appKeyring(for: index) as? KeychainKeyring)?.ownItem as? LoginKeychain
+        let own = LoginKeychain.vaultKeyAccount(publicKey: index.publicKey)
+        let named: Bool = item?.service == LoginKeychain.service && item?.account == own
+        let added = SecretsStore.loginItem(own) as? LoginKeychain
+        let routed: Bool = added?.service == LoginKeychain.service && added?.account == own
+        let enclave: Bool = SecretsStore.appKeyring(for: enclaveIndex) is SecureEnclaveKeyring
+        check(named && routed && enclave,
+              "secrets: the app's keyrings use Next Term's login-keychain item named after each vault's key, or the Secure Enclave",
+              "\(item?.account ?? "no item"), \(added?.account ?? "no item"), enclave \(enclave)")
     }
 
     /// A vault made when every keychain vault kept its key in one shared item.
@@ -113,7 +140,8 @@ extension SelfTest {
             do { try await other.perform(.reveal(name: "SHARED_KEY")) } catch { failure = error as? SecretsStore.Failure }
             let copiedNowhere: Bool = otherKeychain.accounts == [account]
             let marked: Bool = before == .lessProtected && other.protection == .cantOpen
-            check(failure == .vault(.cantOpen) && copiedNowhere && marked,
+            let cantOpen: Bool = failure == .vault(.cantOpen)
+            check(cantOpen && copiedNowhere && marked,
                   "secrets: another vault's key in the \(which) keychain item opens nothing, is copied nowhere, and marks Secrets can't open",
                   "\(String(describing: failure)), \(before) then \(other.protection), \(otherKeychain.accounts.joined(separator: ", "))")
         }
@@ -150,7 +178,8 @@ extension SelfTest {
         let failed = await reveal()
         let text = failed.failure?.errorDescription ?? ""
         let neutral: Bool = !text.isEmpty && !text.contains("another Mac")
-        check(failed.failure == .vault(.keyUnavailable) && neutral && store.protection == .lessProtected,
+        let unavailable: Bool = failed.failure == .vault(.keyUnavailable)
+        check(unavailable && neutral && store.protection == .lessProtected,
               "secrets: another failed keychain read is a key out of reach just now, never another Mac's, and Secrets stays usable",
               "\(String(describing: failed.failure)), \(store.protection)")
         item.readFailure = nil
@@ -220,7 +249,8 @@ extension SelfTest {
             let before = store.protection
             var got: SecretsStore.Failure?
             do { try await store.perform(.reveal(name: "STUB_KEY")) } catch { got = error as? SecretsStore.Failure }
-            check(before == .secureEnclave && got == .vault(failure) && store.protection == after, "secrets: \(name)",
+            let failed: Bool = got == .vault(failure)
+            check(before == .secureEnclave && failed && store.protection == after, "secrets: \(name)",
                   "\(before) then \(store.protection), \(String(describing: got))")
         }
         let errors: [(Error, SecretVault.Failure)] = [
