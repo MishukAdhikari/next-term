@@ -559,6 +559,26 @@ extension ProjectServicesTests {
         #expect(!project.services(herd: true).rows.contains { (row: ServiceRow) -> Bool in row.entryID == "herd" })
         #expect(project.services(herd: false).rows.map(\.id) == ["herd.local"])
     }
+
+    /// The self-test's Laravel site on a Mac without Herd: Valet's row opens the site, and an `APP_URL` with a user and
+    /// a password names no site, so the row goes, and neither shows anywhere.
+    @Test func aLaravelSiteWithoutHerdIsValetsUntilItsURLHoldsAPassword() throws {
+        func laravel(_ appURL: String) -> [String: String] {
+            ["artisan": "#!/usr/bin/env php\n",
+             ".env": "APP_NAME=Shop\nAPP_URL=\(appURL)\nDB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_DATABASE=shop\n"]
+        }
+        let site = FixtureProject(laravel("https://shop.test"))
+        let valet = try row(site.services(herd: false), "herd.local")
+        #expect(valet.name == "Valet" && urls(valet) == ["https://shop.test"] && valet.link.badge == "Site")
+        #expect(valet.link.tooltip == "Open Valet Site at shop.test (from .env)")
+        let userinfo = FixtureProject(laravel("http://admin:NOT-A-PASSWORD@shop.test"))
+        #expect(userinfo.services(herd: false).rows.isEmpty)
+        expectNoSecret(userinfo.services(herd: false))
+        // The MySQL row stays, with nothing of the URL's: the self-test's sweep reads it.
+        let databases = userinfo.scan(herd: false)
+        #expect(databases.databases.count == 1 && databases.databases.first?.providers.isEmpty == true)
+        #expect(!visibleText(databases).contains("NOT-A-") && !visibleText(databases).contains("admin"))
+    }
 }
 
 // MARK: - Backends

@@ -112,9 +112,10 @@ private enum LinkFixtures {
 /// provider badges ("Neon", "Vercel") each open their own page, and a click on one leaves the selection as it was; the
 /// pointer's tip over a badge is its page. The Services group sits below Databases, open the first time, its rows in
 /// order; a badge, ⌘↓, a double-click, Open Service Page's key and the ⋯ menu's first item open the same page; closed
-/// in one project it stays closed there; a changed compose.yaml shows within one refresh; a port alone names nothing.
-/// No made-up key value reaches a row, tooltip, label, badge or menu. Nothing opens: ServiceLinks records each page.
-/// Clicks and keys are made from CGEvents, as a hand's arrive, and need the app in front. Run alone with
+/// in one project it stays closed there; a changed compose.yaml shows in one scan; a port alone names nothing. No
+/// made-up key value reaches a row, tooltip, label, badge or menu, and list_tabs gives agents a served address without
+/// its token. Nothing opens: ServiceLinks records each page. Clicks and keys are made from CGEvents, as a hand's arrive,
+/// and need the app in front; a menu a click opens is closed at once and fails its check. Run alone with
 /// NEXTTERM_SELFTEST_ONLY=services.
 extension SelfTest {
     static func serviceChecks(_ c: TerminalWindowController) async {
@@ -150,13 +151,20 @@ extension SelfTest {
         await agentProjectChecks(w, agent)
         await phpSiteChecks(w, herd: herd, ddev: ddev)
         await portAloneChecks(w, api)
+        await servedURLChecks(w, api)
 
         ServiceLinks.recordsOnly = false
         ServiceLinks.opened = []
         shortcuts.bindings = savedBindings
         shortcuts.apply()
+        // As SelfTestGitRefresh closes its window: a refused Close Project still closes it, so the checks after these
+        // start with the windows they had, and the folder goes only once nothing watches it.
+        func gone() -> Bool { !AppDelegate.shared.controllers.contains { $0 === w } }
         w.closeProject(nil)
-        _ = await wait(5) { !AppDelegate.shared.controllers.contains { $0 === w } }
+        if await wait(5, gone) == false {
+            w.window?.close()
+            if await wait(5, gone) == false { note("links: the services window did not close") }
+        }
         c.window?.makeKeyAndOrderFront(nil)
         try? fm.removeItem(at: base)
     }
@@ -230,16 +238,36 @@ extension SelfTest {
     /// Whether the clicks below came from CGEvents as asked, or (noted once) as AppKit's own events at the same place.
     private static var linkClicksNoted = false
 
+    /// The menus the clicks below opened since the last look, by their first item's title. A click on a badge opens
+    /// none (R4); each one that opens is closed at once, so a click that wrongly opens one (a double-click that reached a
+    /// database row) fails its check instead of leaving the run waiting in the menu.
+    private static var clickMenus: [String] = []
+
+    private static func takeClickMenus() -> [String] {
+        defer { clickMenus = [] }
+        return clickMenus
+    }
+
     /// A click as a hand makes one, from CGEvents at `point` in `view`: AppKit hit-tests it in the window as it would a
     /// real click, so one on a badge reaches the badge and one beside it the row. The mouse-up waits in the queue, where
     /// the view's tracking loop takes it. `count` 2 is a double-click's second click. False when the mouse-up was left
-    /// over: the click never arrived.
+    /// over: the click never arrived. A menu it opens is noted in `clickMenus` and closed.
     @discardableResult
     private static func linkClick(_ view: NSView, at point: NSPoint, count: Int = 1) -> Bool {
         guard let down = linkMouseEvent(.leftMouseDown, view, point, count),
               let up = linkMouseEvent(.leftMouseUp, view, point, count) else { return false }
+        var menus: [String] = []
+        let center = NotificationCenter.default
+        let watch = center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { (note: Notification) in
+            guard let menu = note.object as? NSMenu, menu !== NSApp.mainMenu else { return }
+            menus.append(menu.items.first?.title ?? "an empty menu")
+            // Inside the menu's own tracking loop, which runs the common modes.
+            menu.perform(#selector(NSMenu.cancelTrackingWithoutAnimation), with: nil, afterDelay: 0, inModes: [.common])
+        }
         NSApp.postEvent(up, atStart: false)
         NSApp.sendEvent(down)
+        center.removeObserver(watch)
+        clickMenus += menus
         var tracked = true
         while let left = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantPast, inMode: .default, dequeue: true) {
             if left.type == .leftMouseUp { tracked = false }
@@ -426,20 +454,33 @@ extension SelfTest {
             outline.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             let before = outline.selectedRowIndexes
             _ = takeOpened()
+            _ = takeClickMenus()
             let arrived = linkClick(neon)
             let opened = takeOpened()
-            check(opened == [neonPage] && outline.selectedRowIndexes == before,
-                  "links: a click on “Neon” opens the Neon project, and leaves the selection as it was",
-                  "opened \(opened), selected \(Array(outline.selectedRowIndexes)), arrived \(arrived), on top \(isOnTop(neon))")
-            linkClick(neon)
-            linkClick(neon, at: NSPoint(x: neon.bounds.midX, y: neon.bounds.midY), count: 2)
-            let doubled = takeOpened()
-            check(doubled == [neonPage], "links: a double-click on a badge opens its page once", "\(doubled)")
+            let menus = takeClickMenus()
+            let onBadge = opened == [neonPage] && outline.selectedRowIndexes == before && menus.isEmpty
+            check(onBadge, "links: a click on “Neon” opens the Neon project, and leaves the selection as it was, with no menu",
+                  "opened \(opened), selected \(Array(outline.selectedRowIndexes)), menus \(menus), arrived \(arrived), "
+                      + "on top \(isOnTop(neon))")
+            // Only when the click stayed on the badge: one that reached the row makes this a double-click on a Postgres
+            // row, which shows the row's menu.
+            if onBadge {
+                linkClick(neon)
+                linkClick(neon, at: NSPoint(x: neon.bounds.midX, y: neon.bounds.midY), count: 2)
+                let doubled = takeOpened()
+                let doubleMenus = takeClickMenus()
+                check(doubled == [neonPage] && doubleMenus.isEmpty && outline.selectedRowIndexes == before,
+                      "links: a double-click on a badge opens its page once, with no menu", "\(doubled), menus \(doubleMenus)")
+            } else {
+                note("links: the double-click on “Neon” is skipped, as the single click did not stay on the badge")
+            }
             let storage = vercel.link?.url.absoluteString ?? "no page"
             linkClick(vercel)
             let byVercel = takeOpened()
-            check(byVercel == [storage] && outline.selectedRowIndexes == before, "links: a click on “Vercel” opens its own page",
-                  "\(byVercel), selected \(Array(outline.selectedRowIndexes))")
+            let vercelMenus = takeClickMenus()
+            check(byVercel == [storage] && outline.selectedRowIndexes == before && vercelMenus.isEmpty,
+                  "links: a click on “Vercel” opens its own page, with no menu",
+                  "\(byVercel), selected \(Array(outline.selectedRowIndexes)), menus \(vercelMenus)")
         }
 
         let menu = sidebarMenu(sidebar, row: shown.row)
@@ -456,6 +497,14 @@ extension SelfTest {
         if let first = menu.items.first, let action = first.action { NSApp.sendAction(action, to: first.target, from: first) }
         let byMenu = takeOpened()
         check(byMenu == [neonPage], "links: the menu's first item opens the Neon project", "\(byMenu)")
+        let more = databaseRowView(sidebar)?.cell.onMenu?() ?? NSMenu()
+        let moreTitles = more.items.prefix(2).map(\.title)
+        let moreKey = more.items.first.flatMap(KeyboardShortcuts.chord(of:))?.display ?? "none"
+        if let first = more.items.first, let action = first.action { NSApp.sendAction(action, to: first.target, from: first) }
+        let byMore = takeOpened()
+        check(moreTitles == ["Open Neon Console", "Open Vercel Storage"] && moreKey == openServicePageKey.display && byMore == [neonPage],
+              "links: the row's ⋯ menu starts with the same two pages, its first showing the key and opening the Neon project",
+              moreTitles.joined(separator: ", ") + ", key \(moreKey), opened \(byMore)")
         if let window = w.window, await front(w, "Open Service Page's key on a database row") {
             outline.selectRowIndexes(IndexSet(integer: shown.row), byExtendingSelection: false)
             window.makeFirstResponder(outline)
@@ -526,6 +575,7 @@ extension SelfTest {
         check(badge.accessibilityRole() == .link && qdrant.cell.accessibilityLabel() == row.accessibilityLabel,
               "links: VoiceOver reads Qdrant's row by name and kind, and its badge as a link", qdrant.cell.accessibilityLabel() ?? "none")
         await serviceOpens(w, "Qdrant", page)
+        await cloudAndDocsPages(w)
         await serviceMenuChecks(w, names, project: project)
         checkNoLinkSecret(sidebar, ["NOT-A-"], "links: no key value in the RAG project's rows, tips, badges, pages or menus")
         await servicesShot(sidebar)
@@ -541,11 +591,14 @@ extension SelfTest {
             outline.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             let before = outline.selectedRowIndexes
             _ = takeOpened()
+            _ = takeClickMenus()
             let arrived = linkClick(badge)
             let byBadge = takeOpened()
-            check(byBadge == [page] && outline.selectedRowIndexes == before,
-                  "links: a click on \(name)'s badge opens \(page), and leaves the selection as it was",
-                  "opened \(byBadge), selected \(Array(outline.selectedRowIndexes)), arrived \(arrived), on top \(isOnTop(badge))")
+            let menus = takeClickMenus()
+            check(byBadge == [page] && outline.selectedRowIndexes == before && menus.isEmpty,
+                  "links: a click on \(name)'s badge opens \(page), and leaves the selection as it was, with no menu",
+                  "opened \(byBadge), selected \(Array(outline.selectedRowIndexes)), menus \(menus), arrived \(arrived), "
+                      + "on top \(isOnTop(badge))")
             outline.selectRowIndexes(IndexSet(integer: shown.row), byExtendingSelection: false)
             window.makeFirstResponder(outline)
             linkKey(code: 125, [.command], arrow: true)
@@ -555,7 +608,9 @@ extension SelfTest {
             linkClick(outline, at: point)
             linkClick(outline, at: point, count: 2)
             let byDoubleClick = takeOpened()
-            check(byDoubleClick == [page], "links: a double-click on \(name)'s row opens it once", "\(byDoubleClick)")
+            let rowMenus = takeClickMenus()
+            check(byDoubleClick == [page] && rowMenus.isEmpty, "links: a double-click on \(name)'s row opens it once",
+                  "\(byDoubleClick), menus \(rowMenus)")
             window.makeFirstResponder(outline)
             linkKey(code: 35, [.command, .option, .control])
             let byPageKey = takeOpened()
@@ -571,6 +626,29 @@ extension SelfTest {
         check(byMenu == [page] && first?.title == shown.item.row.link.title && key == openServicePageKey.display,
               "links: the ⋯ menu's first item, “\(first?.title ?? "none")”, opens \(name)'s page, showing Open Service Page's key",
               "opened \(byMenu), key \(key)")
+    }
+
+    /// The RAG project's other pages (AE1): LangSmith opens smith.langchain.com, and FastAPI its docs on the default port,
+    /// from their rows' links and from a click on each badge.
+    private static func cloudAndDocsPages(_ w: TerminalWindowController) async {
+        let sidebar = w.sidebar
+        let names = ["LangSmith", "FastAPI"]
+        let pages = ["https://smith.langchain.com", "http://localhost:8000/docs"]
+        let links = names.map { (name: String) -> String in
+            sidebar.servicesGroup.items.first { (item: ServiceItem) -> Bool in item.row.name == name }?.row.link.url.absoluteString ?? "none"
+        }
+        check(links == pages, "links: LangSmith opens smith.langchain.com, and FastAPI its docs on :8000", links.joined(separator: ", "))
+        guard await front(w, "a click on LangSmith's and FastAPI's badges") else { return }
+        _ = takeOpened()
+        _ = takeClickMenus()
+        var clicked: [String] = []
+        for name in names {
+            if let badge = serviceRowView(sidebar, name)?.cell.badge.badges.first { linkClick(badge) }
+            clicked += takeOpened()
+        }
+        let menus = takeClickMenus()
+        check(clicked == pages && menus.isEmpty, "links: a click on LangSmith's badge, then FastAPI's, opens those pages",
+              "\(clicked), menus \(menus)")
     }
 }
 
@@ -617,9 +695,9 @@ extension SelfTest {
         check(revealed, "links: Reveal Source File selects compose.yaml in the tree", selected)
     }
 
-    /// A changed compose.yaml moves Qdrant to its new port within one refresh of the sidebar's scan. The group closed in
-    /// this project stays closed after a rescan and a visit to `other`, where it opens; it goes when the files that named
-    /// its services do.
+    /// A changed compose.yaml moves Qdrant to its new port in one scan of the sidebar's gated refresh. The group closed in
+    /// this project stays closed after a rescan that changes its rows (one that changes nothing draws nothing) and a visit
+    /// to `other`, where it opens; it goes when the files that named its services do.
     private static func servicesRefreshChecks(_ w: TerminalWindowController, _ project: URL, other: URL) async {
         let sidebar = w.sidebar
         let outline = sidebar.outline
@@ -631,21 +709,29 @@ extension SelfTest {
             group.items.first { (item: ServiceItem) -> Bool in item.row.name == "Qdrant" }?.row.link.url.absoluteString ?? "none"
         }
         let compose = project.appendingPathComponent("compose.yaml")
+        func setPort(_ port: String) {
+            try? LinkFixtures.compose("qdrant", "qdrant/qdrant:v1.15.0", port).write(to: compose, atomically: true, encoding: .utf8)
+        }
+        // The last scan's gate is over: the change below sets off one gated scan, at most 5 s after the last plus 1 s
+        // to settle.
+        await pause(1.5)
+        _ = await wait(6) { scanSettled(sidebar) }
         let scans = sidebar.databaseScanToken
         let changed = Date()
-        try? LinkFixtures.compose("qdrant", "qdrant/qdrant:v1.15.0", "6335:6333").write(to: compose, atomically: true, encoding: .utf8)
+        setPort("6335:6333")
         let moved = await wait(10) { qdrantPage() == "http://localhost:6335/dashboard" }
         let took = Date().timeIntervalSince(changed)
         let ran = sidebar.databaseScanToken - scans
         let word = serviceRowView(sidebar, "Qdrant")?.cell.badge.text ?? "none"
-        check(moved && word == ":6335" && ran <= 2 && took < 8, "links: a changed compose.yaml moves Qdrant to its new port within one refresh",
+        check(moved && word == ":6335" && ran == 1 && took < 7, "links: a changed compose.yaml moves Qdrant to its new port in one scan",
               "\(qdrantPage()), badge \(word), \(ran) scans in " + String(format: "%.1f s", took))
 
+        // Closed, then a scan that changes its rows, so the group is drawn again while closed.
         outline.collapseItem(group)
-        sidebar.scanDatabases()
-        _ = await wait(10) { scanSettled(sidebar) }
+        setPort("6334:6333")
+        let redrawn = await wait(10) { qdrantPage() == "http://localhost:6334/dashboard" }
         await pause(0.5)
-        let closedAfterScan = !outline.isItemExpanded(group)
+        let closedAfterScan = redrawn && !outline.isItemExpanded(group)
         let away = await showProject(sidebar, other)
         let openThere = await wait(10) { !group.items.isEmpty && outline.isItemExpanded(group) }
         let back = await showProject(sidebar, project)
@@ -653,9 +739,10 @@ extension SelfTest {
         await pause(0.5)
         let stillClosed = listedAgain && !outline.isItemExpanded(group)
         check(away && back && closedAfterScan && openThere && stillClosed,
-              "links: the Services group closed in one project stays closed there, after a rescan and a visit to another where it opens",
-              "after the rescan \(closedAfterScan ? "closed" : "open"), in the other project \(openThere ? "open" : "closed"), "
-                  + "back \(stillClosed ? "closed" : "open")")
+              "links: the Services group closed in one project stays closed there, after a rescan that changes its rows and a visit "
+                  + "to another where it opens",
+              "after the rescan \(closedAfterScan ? "closed" : redrawn ? "open" : "not seen"), "
+                  + "in the other project \(openThere ? "open" : "closed"), back \(stillClosed ? "closed" : "open")")
         outline.expandItem(group)
 
         for name in ["pyproject.toml", ".env", "compose.yaml"] {
@@ -758,14 +845,16 @@ extension SelfTest {
 // MARK: - PHP sites, and a port that names nothing
 
 extension SelfTest {
-    /// A Laravel site, with Herd here (herdChecks). A DDEV project lists DDEV, opening its site, with Mailpit on its own
-    /// port as its menu's second page, which only the first of shows Open Service Page's key.
+    /// A Laravel site: with Herd here, the database row's badge (herdChecks); without, Valet's row (valetChecks). Either
+    /// way an APP_URL with a user and password is refused, unseen. A DDEV project lists DDEV, opening its site, with
+    /// Mailpit on its own port as its menu's second page, which only the first of shows Open Service Page's key.
     private static func phpSiteChecks(_ w: TerminalWindowController, herd: URL, ddev: URL) async {
         let sidebar = w.sidebar
         if Databases.herdIsInstalled {
             await herdChecks(w, herd)
         } else {
-            note("links: Herd is not installed here; the Herd badge's checks are skipped")
+            note("links: Herd is not installed here; its badge's checks are skipped, and the site is checked as Valet's")
+            await valetChecks(w, herd)
         }
         guard await showProject(sidebar, ddev) else {
             return check(false, "links: the DDEV project's files are read", "\(sidebar.databaseScanStats)")
@@ -818,6 +907,37 @@ extension SelfTest {
         checkNoLinkSecret(sidebar, ["NOT-A-", "admin"], "links: neither the APP_URL's user nor its password shows anywhere")
     }
 
+    /// The same Laravel site on a Mac without Herd: Valet's row opens https://shop.test, its tip naming .env. An APP_URL
+    /// with a user and password names no site, so the row goes, and neither the user nor the password shows anywhere.
+    private static func valetChecks(_ w: TerminalWindowController, _ project: URL) async {
+        let sidebar = w.sidebar
+        let group = sidebar.servicesGroup
+        guard await showProject(sidebar, project) else {
+            return check(false, "links: the Laravel site's files are read", "\(sidebar.databaseScanStats)")
+        }
+        let listed = await wait(10) { serviceNames(sidebar) == ["Valet"] }
+        let shown = serviceRowView(sidebar, "Valet")
+        let badge = shown?.cell.badge.badges.first
+        let page = badge?.link?.url.absoluteString ?? "none"
+        let tip = badge.map { (valet: LinkBadge) -> String in tipAt(sidebar, valet) } ?? "no badge"
+        let word = shown?.cell.badge.text ?? "none"
+        check(listed && page == "https://shop.test" && tip == "Open Valet Site at shop.test (from .env)" && word == "Site",
+              "links: without Herd, the Laravel site's .test APP_URL lists Valet, whose “Site” opens it",
+              serviceNames(sidebar).joined(separator: ", ") + "; \(word) \(page); \(tip)")
+        if listed, let badge, await front(w, "a click on Valet's badge") {
+            _ = takeOpened()
+            linkClick(badge)
+            let opened = takeOpened()
+            check(opened == ["https://shop.test"], "links: a click on Valet's “Site” opens https://shop.test", "\(opened)")
+        }
+        let env = LinkFixtures.laravel(appURL: "http://admin:NOT-A-PASSWORD@shop.test")
+        try? env.write(to: project.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        let refused = await wait(10) { group.items.isEmpty && sidebar.outline.row(forItem: group) < 0 }
+        check(refused, "links: without Herd, an APP_URL with a user and password names no site, and Valet's row goes",
+              serviceNames(sidebar).joined(separator: ", "))
+        checkNoLinkSecret(sidebar, ["NOT-A-", "admin"], "links: without Herd, neither the APP_URL's user nor its password shows anywhere")
+    }
+
     /// A Compose service that publishes a port, and nothing that names what it runs, makes no Services row.
     private static func portAloneChecks(_ w: TerminalWindowController, _ project: URL) async {
         let sidebar = w.sidebar
@@ -828,6 +948,52 @@ extension SelfTest {
         let group = sidebar.servicesGroup
         check(group.items.isEmpty && sidebar.outline.row(forItem: group) < 0, "links: a Compose port alone names no service",
               serviceNames(sidebar).joined(separator: ", "))
+    }
+}
+
+// MARK: - A served address's token, as agents see it
+
+extension SelfTest {
+    /// AE11 (R17): a tab whose command printed Jupyter's address with its token. `list_tabs`, called through `nxtrm mcp`
+    /// as an agent calls it, reports `served_url` without the query, and nowhere in its answer is the token; the tab's
+    /// tooltip leaves it out too. The tab keeps the address as printed, which File › Open Served URL opens (not opened
+    /// here). The command line holds neither "token=" nor the token, so either one in the answer is the address's.
+    private static func servedURLChecks(_ w: TerminalWindowController, _ project: URL) async {
+        let server = MCPControlServer.shared
+        guard server.isRunning, let mcp = MCPTestClient(socket: server.path) else {
+            return check(false, "served URL: `nxtrm mcp` starts, for list_tabs")
+        }
+        defer { mcp.close() }
+        let tab = w.addTab(directory: project.path)
+        defer { w.remove(tab) }
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "served URL: the tab's shell starts") }
+        tab.view.send(txt: "printf '    http://localhost:%s/lab?%s=NOT-A-%s\\n' 8888 token TOKEN; sleep 15\r")
+        let printed = "http://localhost:8888/lab?token=NOT-A-TOKEN"
+        let seen = await wait(8) { tab.servedURL?.absoluteString == printed }
+        check(seen && tab.title.hasSuffix(" · :8888"), "served URL: the tab keeps Jupyter's address as printed, for File › Open Served URL",
+              (tab.servedURL?.absoluteString ?? "none") + "; " + tab.title)
+        guard seen else { return }
+        let hello: [String: Any] = ["protocolVersion": "2025-06-18", "capabilities": [String: Any](),
+                                    "clientInfo": ["name": "selftest", "version": "1"]]
+        _ = await mcp.call(1, "initialize", hello)
+        let reply = await mcp.call(2, "tools/call", ["name": "list_tabs", "arguments": [String: Any]()])
+        let result = reply?["result"] as? [String: Any]
+        let text = ((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+        let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+        let tabs = (json?["windows"] as? [[String: Any]] ?? []).flatMap { (window: [String: Any]) -> [[String: Any]] in
+            window["tabs"] as? [[String: Any]] ?? []
+        }
+        let id = tab.id.uuidString.lowercased()
+        let listed = tabs.first { (info: [String: Any]) -> Bool in info["id"] as? String == id }
+        let served = listed?["served_url"] as? String ?? "none"
+        let leaks = ["NOT-A-TOKEN", "token="].filter { (secret: String) -> Bool in text.contains(secret) }
+        check(served == "http://localhost:8888/lab" && leaks.isEmpty, "served URL: list_tabs gives agents the address without its token",
+              "served_url \(served), found \(leaks)" + (text.isEmpty ? ", no answer" : ""))
+        let tip = tab.tooltip
+        check(tip.contains("Serving http://localhost:8888/lab") && !tip.contains("NOT-A-TOKEN") && !tip.contains("token="),
+              "served URL: the tab's tooltip leaves the token out", tip.replacingOccurrences(of: "\n", with: " | "))
+        tab.view.send(txt: "\u{3}") // the sleep
+        _ = await wait(5) { !tab.status.running }
     }
 }
 #endif
