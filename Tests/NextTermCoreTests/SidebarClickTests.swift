@@ -54,6 +54,12 @@ import Testing
         }
     }
 
+    /// A Services row opens its page from its badge, a double-click or ⌘↓, never from a plain click on the row.
+    @Test func aClickOnAServiceRowOnlySelectsIt() {
+        #expect(Self.click { $0.kind = .service } == .selectOnly)
+        #expect(Self.click { $0.kind = .service; $0.clickCount = 2 } == .selectOnly)
+    }
+
     @Test func onlyWhatTheEditorOrAViewerShowsCheaplyOpensOnAClick() {
         let project = FixtureProject()
         let max = SidebarClick.singleClickMaxSize

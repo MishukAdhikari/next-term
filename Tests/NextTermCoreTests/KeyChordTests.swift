@@ -93,10 +93,15 @@ import Testing
         // The keys the other apps use where the sidebar has them free; the rest wait for one.
         let keyed = ["sidebar.reveal", "sidebar.newFile", "sidebar.newFolder", "sidebar.copyPath", "sidebar.copyRelativePath"]
         #expect(keyed.compactMap { chord($0)?.display } == ["⌥⌘R", "⌥⌘N", "⇧⌘N", "⌥⌘C", "⌥⇧⌘C"])
-        let unkeyed = ["sidebar.openTab", "sidebar.openProject", "sidebar.insertPath", "sidebar.refresh", "sidebar.openInTablePlus",
-                       "sidebar.openInVercel", "sidebar.copyName", "sidebar.revealSource", "sidebar.forkSession", "sidebar.copyResumeCommand",
-                       "sidebar.continueLatest"]
+        let unkeyed = ["sidebar.openTab", "sidebar.openProject", "sidebar.insertPath", "sidebar.refresh", "sidebar.openServicePage",
+                       "sidebar.openInTablePlus", "sidebar.openInVercel", "sidebar.copyName", "sidebar.revealSource", "sidebar.forkSession",
+                       "sidebar.copyResumeCommand", "sidebar.continueLatest"]
         #expect(unkeyed.allSatisfy { id in KeyBindings.partCommands.contains { $0.id == id } && chord(id) == nil })
+        // A row's page links come first in its menu, so Open Service Page comes before the hand-offs in Settings.
+        let ids = KeyBindings.partCommands.map(\.id)
+        let page = ids.firstIndex(of: "sidebar.openServicePage")
+        #expect(page != nil && page.map { ids[$0 + 1] } == "sidebar.openInTablePlus")
+        #expect(KeyBindings.partCommands.first { $0.id == "sidebar.openServicePage" }?.title == "Open Service Page")
         #expect((keyed + unkeyed).allSatisfy { KeyBindings.scope(of: $0) == .part(.sidebar) })
         // Reveal in Finder shares ⌥⌘R with Rename Tab, a terminal command; New File can't have New Window's ⌘N.
         let menus: [String: KeyChord?] = ["renameTab:": KeyChord(key: "r", command: true, option: true), "newWindow:": KeyChord(key: "n", command: true)]

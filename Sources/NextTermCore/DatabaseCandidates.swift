@@ -25,11 +25,19 @@ struct Candidate {
         self.keys = keys
         self.file = file
         let host = url.host?.lowercased() ?? ""
+        let place = DatabaseEnvironment.classify(host: url.host, socket: url.socket)
+        let isLocal = place == .local
         if let provider = DatabaseProvider.from(host: url.host, user: url.user) { providers.append(provider) }
-        if url.scheme == "prisma+postgres", !providers.contains(.prismaPostgres) { providers.append(.prismaPostgres) }
+        // Vercel's Blob, KV and legacy Postgres hosts; the Postgres ones are Neon's too.
+        if host.hasSuffix(".vercel-storage.com") { providers.append(.vercel) }
+        if context.hasFlyConfig, providers.isEmpty, DatabaseProvider.isFlyPrivate(host) { providers.append(.fly) }
+        // `prisma dev` serves this scheme on this Mac, reached from a container too (`host.docker.internal`, a
+        // Compose service): only a remote host is Prisma's cloud.
+        if url.scheme == "prisma+postgres", place == .remote, !providers.contains(.prismaPostgres) {
+            providers.append(.prismaPostgres)
+        }
         pooled = host.contains("-pooler.") || host.contains(".pooler.") || host.hasPrefix("pooler.")
             || url.parameters.contains { $0.key.lowercased() == "pgbouncer" && $0.value == "true" }
-        let isLocal = DatabaseEnvironment.classify(host: url.host, socket: url.socket) == .local
         if context.herdInstalled, isLocal, [.mysql, .mariadb, .postgres].contains(engine),
            (url.socket ?? "").contains("/Herd/") || context.appURLHost?.lowercased().hasSuffix(".test") == true {
             providers.append(.herd)
@@ -82,7 +90,8 @@ struct Candidate {
     }
 
     /// Same database, whichever key or file named it: engine, host, port, database and user. Neon's
-    /// pooler host and Supabase's pooler user name the same database as their direct forms.
+    /// pooler host (on Vercel's legacy Postgres hosts too) and Supabase's pooler user name the same database as their
+    /// direct forms.
     var mergeKey: String {
         if !isConnection { return "shape|\(engine.rawValue)|\(file)|\(keys.first ?? "")" }
         if engine == .sqlite { return "sqlite|\(filePath ?? "")" }
@@ -97,7 +106,8 @@ struct Candidate {
             host = "supabase:" + user[user.index(after: dot)...]
             user = String(user[..<dot])
             port = ""
-        } else if host.hasSuffix(".neon.tech"), let first = host.split(separator: ".").first, first.hasSuffix("-pooler") {
+        } else if host.hasSuffix(".neon.tech") || host.hasSuffix(".postgres.vercel-storage.com"),
+                  let first = host.split(separator: ".").first, first.hasSuffix("-pooler") {
             host = String(first.dropLast(7)) + host.dropFirst(first.count)
         }
         let engineName = engine == .mariadb ? "mysql" : engine.rawValue
@@ -172,9 +182,10 @@ extension Databases {
     static let sqliteExtensions: Set<String> = ["sqlite", "sqlite3", "db", "db3"]
 
     /// Whether a change FSEvents reports in `folder` can change what `scan(root:)` finds, so the sidebar scans again
-    /// only for those: the project's own folder (env files, ORM configs, artisan), `.vercel` (the project link), and
-    /// the folders the SQLite search lists, three deep at most and never hidden, a dependency or a build folder.
-    /// Laravel's storage/framework, written on every request, is left out too.
+    /// only for those: the project's own folder (env files, ORM configs, artisan), `.vercel` (the project link), the
+    /// folders the services' readers look in, hidden ones too (`ServiceCatalog.watchedFolders`: `supabase/.temp`,
+    /// `.ddev`), and the folders the SQLite search lists, three deep at most and never hidden, a dependency or a build
+    /// folder. Laravel's storage/framework, written on every request, is left out too.
     public static func scanMayChange(after folder: String, root: String) -> Bool {
         let path = folder.count > 1 && folder.hasSuffix("/") ? String(folder.dropLast()) : folder
         let root = root.count > 1 && root.hasSuffix("/") ? String(root.dropLast()) : root
@@ -182,6 +193,7 @@ extension Databases {
         guard path.hasPrefix(root + "/") else { return false }
         let names = path.dropFirst(root.count + 1).split(separator: "/").map(String.init)
         if names == [".vercel"] { return true }
+        if ServiceCatalog.watchedFolders.contains(names.joined(separator: "/")) { return true }
         guard names.count <= 3 else { return false }
         if zip(names, names.dropFirst()).contains(where: { $0 == "storage" && $1 == "framework" }) { return false }
         return !names.contains { $0.hasPrefix(".") || skippedFolders.contains($0) }

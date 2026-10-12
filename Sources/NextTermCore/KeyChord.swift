@@ -143,6 +143,8 @@ public struct KeyBindings: Equatable, Sendable {
         PartCommand(id: "sidebar.copyRelativePath", title: "Copy Relative Path", part: .sidebar,
                     chord: KeyChord(key: "c", command: true, shift: true, option: true)),
         PartCommand(id: "sidebar.refresh", title: "Refresh", part: .sidebar, chord: nil),
+        // A row's page in the browser ("Open Neon Console"): the first of its menu's links, so one key opens one page.
+        PartCommand(id: "sidebar.openServicePage", title: "Open Service Page", part: .sidebar, chord: nil),
         PartCommand(id: "sidebar.openInTablePlus", title: "Open in TablePlus", part: .sidebar, chord: nil),
         PartCommand(id: "sidebar.openInVercel", title: "Open in Vercel", part: .sidebar, chord: nil),
         PartCommand(id: "sidebar.copyName", title: "Copy Connection Name", part: .sidebar, chord: nil),

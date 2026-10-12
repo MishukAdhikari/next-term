@@ -87,7 +87,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
   found by reading them, without running project code; local or remote by host, passwords masked. SQLite
   files open in a read-only viewer; other connections open in TablePlus when it is installed (libSQL
-  aside), and local and development ones (Docker, OrbStack) in `mysql` or `psql` in a new tab.
+  aside), and local and development ones (Docker, OrbStack) in `mysql` or `psql` in a new tab. Each
+  provider badge (Neon, Supabase, Vercel, Herd and others) opens that provider's page in the browser.
+- **Services.** Below Databases, a Services group lists what else a project's files name: AI model
+  providers, vector stores, tracing and evals, agent frameworks, local dev servers, backends and hosting.
+  Each row's badge opens its page: a local server on the port the project sets, or the most specific
+  dashboard page its files name. Keys are read by name only, and nothing is fetched to find a service.
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
   uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
