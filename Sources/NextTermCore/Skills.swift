@@ -430,7 +430,7 @@ public struct SkillInventory: Sendable {
             guard exists, isFolder.boolValue, let skillFile else {
                 return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: true, frontMatter: nil, contentHash: nil)
             }
-            let text = (try? String(contentsOfFile: skillFile, encoding: .utf8)) ?? ""
+            let text = SkillLibrary.readText(skillFile, in: real) ?? ""
             let names = SkillPackage.names(folder: real)
             let claudePlugin = names.claude ?? (names.isClaudePlugin ? name : nil)
             return SkillCopy(root: root, path: path, realPath: real, isLink: isLink, broken: false, frontMatter: SkillFrontMatter.parse(text),

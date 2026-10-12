@@ -97,6 +97,34 @@ import Testing
         #expect(overview.entry("deploy", for: .codex)?.copy.place == ".agents/skills" && overview.entry("deploy", for: .codex)?.native == true)
     }
 
+    /// A cloned repository's skill folder is anyone's: a SKILL.md that links out of its folder, to a secrets file, to a
+    /// device or a FIFO, or that is too large, is never read (and never hangs the read).
+    @Test func aSkillsFileIsReadOnlyInsideItsFolder() throws {
+        let repo = try folder("repo"), home = try folder("home")
+        defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }
+        let fm = FileManager.default, skills = repo + "/.claude/skills"
+        try fm.createDirectory(atPath: repo + "/.git", withIntermediateDirectories: true)
+        try "---\nname: dotenv\ndescription: x\n---\nAPI_KEY=sk-live-0123456789\n".write(toFile: repo + "/.env", atomically: true, encoding: .utf8)
+        try "---\nname: outside\ndescription: x\n---\n".write(toFile: home + "/note.md", atomically: true, encoding: .utf8)
+        func make(_ name: String, link target: String? = nil, file: (String, String)? = nil) throws {
+            try fm.createDirectory(atPath: skills + "/" + name, withIntermediateDirectories: true)
+            if let file { try file.1.write(toFile: skills + "/" + name + "/" + file.0, atomically: true, encoding: .utf8) }
+            if let target { try fm.createSymbolicLink(atPath: skills + "/" + name + "/SKILL.md", withDestinationPath: target) }
+        }
+        try make("dotenv", link: "../../../.env")
+        try make("zero", link: "/dev/zero")
+        try make("outside", link: home + "/note.md")
+        try make("keyed", link: "id.pem", file: ("id.pem", "---\nname: keyed\ndescription: x\n---\n"))
+        try make("inside", link: "real.md", file: ("real.md", "---\nname: inside\ndescription: Read.\n---\n"))
+        try make("big", file: ("SKILL.md", "---\nname: big\ndescription: x\n---\n" + String(repeating: "a", count: 300 * 1024)))
+        try make("fifo")
+        #expect(mkfifo(skills + "/fifo/SKILL.md", 0o644) == 0)
+        let entries = SkillLibrary.entries(from: repo, home: home, nextTerm: false)
+        #expect(entries.map(\.name) == ["inside"] && entries.first?.copy.description == "Read.")
+        #expect(SkillLibrary.skill("dotenv", from: repo, home: home, nextTerm: false) == nil)
+        #expect(SkillLibrary.readText(skills + "/zero/SKILL.md", in: skills + "/zero") == nil)
+    }
+
     @Test func getSkillGivesTheTextAndFilesAndTheSwitchTakesItsOwnOut() throws {
         let (home, repo, package) = try fixture()
         defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }

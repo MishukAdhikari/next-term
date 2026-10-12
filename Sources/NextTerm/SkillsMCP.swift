@@ -149,7 +149,7 @@ enum SkillsMCP {
             }
             item["agents"] = agents
             if item["description"] == nil, let description = row.distinctCopies.first?.frontMatter?.description {
-                item["description"] = String(description.prefix(300))
+                item["description"] = shortened(description)
             }
             if let source = tracked[row.name] {
                 item["source"] = source.source.shortName + (source.path.isEmpty ? "" : "/" + source.path)
@@ -191,11 +191,15 @@ enum SkillsMCP {
     /// A skill as list_skills and get_skill say it.
     static func describe(_ entry: SkillLibrary.Entry, reader: SkillLibrary.Reader) -> [String: Any] {
         var item: [String: Any] = ["name": entry.name, "scope": entry.copy.scope.rawValue, "place": entry.copy.place]
-        if !entry.copy.description.isEmpty { item["description"] = String(entry.copy.description.prefix(300)) }
+        if !entry.copy.description.isEmpty { item["description"] = shortened(entry.copy.description) }
         if reader.program != nil { item["native"] = entry.native }
         if !entry.others.isEmpty { item["also"] = entry.others.map { $0.place } }
         return item
     }
+
+    /// A description as list_skills gives it: credentials masked first (MCPRedaction), then cut to 300 characters, so a
+    /// value cut in two is never left showing.
+    static func shortened(_ description: String) -> String { String(MCPRedaction.redact(description).text.prefix(300)) }
 
     static func getSkill(_ arguments: [String: Any], from start: String?, reader: SkillLibrary.Reader) async -> MCPServer.CallResult {
         // "/name" and "$name", as agents type them, are the name.
@@ -226,7 +230,8 @@ enum SkillsMCP {
             item["folder"] = folder
             if !found.files.isEmpty { item["files"] = found.files } // relative to folder: read them when SKILL.md points to them
         }
-        item["text"] = found.text
+        // Masked as read_file masks a project's files: a skill is a file anyone may have put in the project.
+        item["text"] = MCPRedaction.redact(found.text).text
         return MCPControl.ok(item)
     }
 
