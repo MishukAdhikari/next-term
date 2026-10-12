@@ -74,7 +74,7 @@ func expectNoSecret(_ scan: ServiceScan, sourceLocation: SourceLocation = #_sour
 
 /// The catalog's own rules, and one made-up project per entry: the row it names, and one it must not name.
 @Suite struct ServiceCatalogTests {
-    static let cases: [EntryCase] = aiModels + vectorStores
+    static let cases: [EntryCase] = aiModels + vectorStores + tracing
 
     @Test(arguments: ServiceCatalogTests.cases)
     func eachEntryNamesItsRow(_ entry: EntryCase) throws {

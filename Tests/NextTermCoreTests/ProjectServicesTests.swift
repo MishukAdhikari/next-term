@@ -220,3 +220,103 @@ extension ProjectServicesTests {
         #expect(lite.services().rows.isEmpty)
     }
 }
+
+// MARK: - Tracing
+
+extension ProjectServicesTests {
+    @Test func langSmithOpensItsRegionsSiteAndNamesTheProject() throws {
+        let project = FixtureProject([".env": """
+        LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com
+        LANGSMITH_API_KEY=lsv2-NOT-A-KEY
+        LANGSMITH_PROJECT=support-bot
+        """])
+        let langsmith = try row(project.services(), "langsmith.cloud")
+        #expect(urls(langsmith) == ["https://eu.smith.langchain.com"])
+        #expect(langsmith.notes == ["Project: support-bot"])
+        #expect(langsmith.tooltip == """
+        Open LangSmith Projects at eu.smith.langchain.com
+        Project: support-bot
+        From .env: LANGSMITH_API_KEY, LANGSMITH_ENDPOINT
+        """)
+        expectNoSecret(project.services())
+    }
+
+    /// The project placed its server where no link may go: no vendor page stands in. Compose still runs one here.
+    @Test func aRefusedServerLeavesNoVendorPage() throws {
+        let remote = FixtureProject([".env": "LANGFUSE_HOST=http://langfuse.example.com\nLANGFUSE_SECRET_KEY=NOT-A-KEY\n",
+                                     "requirements.txt": "langfuse\n"])
+        #expect(remote.services().rows.isEmpty)
+        let composed = FixtureProject([".env": "LANGFUSE_HOST=http://langfuse.example.com\n",
+                                       "compose.yaml": composeFile("langfuse-web", "docker.langfuse.com/langfuse/langfuse:4",
+                                                                   ["3000:3000"])])
+        let langfuse = try row(composed.services(), "langfuse.local")
+        #expect(urls(langfuse) == ["http://localhost:3000"])
+        let endpoint = FixtureProject([".env": "LANGSMITH_ENDPOINT=${LANGSMITH_HOST}\nLANGSMITH_TRACING=true\n"])
+        #expect(endpoint.services().rows.isEmpty)
+    }
+
+    @Test func aLocalLangfuseOpensTheAddressTheProjectGives() throws {
+        let project = FixtureProject([".env": """
+        LANGFUSE_HOST=http://localhost:3030
+        LANGFUSE_SECRET_KEY=sk-lf-NOT-A-KEY
+        LANGFUSE_PUBLIC_KEY=pk-lf-NOT-A-KEY
+        """, "compose.yaml": composeFile("langfuse-web", "langfuse/langfuse:3", ["3030:3000"])])
+        let scan = project.services()
+        #expect(scan.rows.map(\.id) == ["langfuse.local"])
+        let langfuse = try row(scan, "langfuse.local")
+        #expect(urls(langfuse) == ["http://localhost:3030"])
+        #expect(langfuse.link.badge == ":3030" && langfuse.link.title == "Open Langfuse Projects")
+        #expect(!String(describing: project.scan().facts).contains("LANGFUSE_PUBLIC_KEY"), "its value is never read")
+        expectNoSecret(scan)
+    }
+
+    @Test func mlflowOpensItsServerExperimentOrItsLocalUI() throws {
+        let server = FixtureProject([".env": "MLFLOW_TRACKING_URI=https://mlflow.example.com\nMLFLOW_EXPERIMENT_ID=7\n"])
+        let remote = try row(server.services(), "mlflow.cloud")
+        #expect(urls(remote) == ["https://mlflow.example.com/#/experiments/7"])
+        #expect(remote.link.tooltip == "Open MLflow Experiment at mlflow.example.com")
+        let databricks = FixtureProject([".env": "MLFLOW_TRACKING_URI=https://dbc-1234.cloud.databricks.com\nMLFLOW_EXPERIMENT_ID=42\n"])
+        #expect(try row(databricks.services(), "mlflow.cloud").link.url.absoluteString
+            == "https://dbc-1234.cloud.databricks.com/ml/experiments/42")
+        let store = FixtureProject([".env": "MLFLOW_TRACKING_URI=file:///tmp/mlruns\n"])
+        let local = try row(store.services(), "mlflow.local")
+        #expect(urls(local) == ["http://127.0.0.1:5000"])
+        #expect(local.link.tooltip
+            == "Open MLflow Experiments at 127.0.0.1:5000 (default port; macOS AirPlay Receiver also listens on 5000)")
+        let script = FixtureProject(["Makefile": "ui:\n\tmlflow ui --port 5050\n"])
+        #expect(try row(script.services(), "mlflow.local").link.tooltip
+            == "Open MLflow Experiments at 127.0.0.1:5050 (from Makefile's ui target)")
+    }
+
+    @Test func braintrustEncodesItsProjectsName() throws {
+        let project = FixtureProject([".env": """
+        BRAINTRUST_API_KEY=NOT-A-KEY
+        BRAINTRUST_ORG_NAME=acme
+        BRAINTRUST_DEFAULT_PROJECT="My App"
+        BRAINTRUST_APP_URL=https://braintrust.example.com
+        """])
+        let braintrust = try row(project.services(), "braintrust.cloud")
+        #expect(urls(braintrust) == ["https://braintrust.example.com/app/acme/p/My%20App/logs"])
+        let dots = FixtureProject([".env": "BRAINTRUST_API_KEY=NOT-A-KEY\nBRAINTRUST_ORG_NAME=acme\nBRAINTRUST_DEFAULT_PROJECT=..\n"])
+        #expect(try row(dots.services(), "braintrust.cloud").link.url.absoluteString == "https://www.braintrust.dev/app")
+    }
+
+    @Test func weaveFindsItsAppAsWandbDoes() throws {
+        let project = FixtureProject([".env": "WANDB_BASE_URL=https://api.ml.example.com\nWANDB_ENTITY=acme\nWANDB_PROJECT=bot\n"])
+        #expect(try row(project.services(), "wandb-weave.cloud").link.url.absoluteString
+            == "https://app.ml.example.com/acme/bot/weave")
+        let home = FixtureProject(["requirements.txt": "weave\n"])
+        #expect(try row(home.services(), "wandb-weave.cloud").link.url.absoluteString == "https://wandb.ai/home")
+    }
+
+    @Test func phoenixAndHeliconeFollowTheirEndpoints() throws {
+        let cloud = FixtureProject([".env": "PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com/s/acme/v1/traces\n"])
+        #expect(try row(cloud.services(), "arize-phoenix.cloud").link.url.absoluteString == "https://app.phoenix.arize.com")
+        let port = FixtureProject([".env.phoenix": "PHOENIX_PORT=6100\n"])
+        #expect(try row(port.services(), "arize-phoenix.local").link.url.absoluteString == "http://localhost:6100/projects")
+        let eu = FixtureProject([".env": "ANTHROPIC_BASE_URL=https://eu.helicone.ai/anthropic\n"])
+        let scan = eu.services()
+        #expect(scan.rows.map(\.id) == ["helicone.cloud"])
+        #expect(try row(scan, "helicone.cloud").link.url.absoluteString == "https://eu.helicone.ai/requests")
+    }
+}

@@ -88,3 +88,36 @@ extension ServiceCatalogTests {
                   not: [".env": "MILVUS_URI=./milvus.db\n", "requirements.txt": "pymilvus\n"]),
     ]
 }
+
+extension ServiceCatalogTests {
+    static let tracing: [EntryCase] = [
+        EntryCase("langsmith", [".env": "LANGSMITH_TRACING=true\nLANGSMITH_API_KEY=lsv2-NOT-A-KEY\n"],
+                  name: "LangSmith", badge: "Projects", url: "https://smith.langchain.com",
+                  not: ["requirements.txt": "langsmith\n"]),
+        EntryCase("litellm", ["compose.yaml": composeFile("proxy", "ghcr.io/berriai/litellm:main-stable", ["4001:4000"])],
+                  name: "LiteLLM", badge: ":4001", url: "http://localhost:4001/ui",
+                  not: ["requirements.txt": "litellm\n"]),
+        EntryCase("langfuse", [".env": "LANGFUSE_SECRET_KEY=sk-lf-NOT-A-KEY\n"],
+                  name: "Langfuse", badge: "Projects", url: "https://cloud.langfuse.com",
+                  not: [".env": "LANGFUSE_HOST=http://langfuse.example.com\n", "requirements.txt": "langfuse\n"]),
+        EntryCase("mlflow", ["requirements.txt": "mlflow\n", "mlruns/0/meta.yaml": "name: Default\n"],
+                  name: "MLflow", badge: ":5000", url: "http://127.0.0.1:5000",
+                  not: ["requirements.txt": "mlflow\n"]),
+        EntryCase("braintrust", [".env": "BRAINTRUST_ORG_NAME=acme\nBRAINTRUST_DEFAULT_PROJECT=\"My App\"\n",
+                                 "package.json": #"{"dependencies": {"braintrust": "^0.4.0"}}"#],
+                  name: "Braintrust", badge: "Logs", url: "https://www.braintrust.dev/app/acme/p/My%20App/logs",
+                  not: [".env": "BRAINTRUST_ORG_NAME=acme\n"]),
+        EntryCase("opik", ["requirements.txt": "opik\n"],
+                  name: "Opik", badge: "Projects", url: "https://www.comet.com/opik/",
+                  not: ["requirements.txt": "opik-optimizer\n"]),
+        EntryCase("wandb-weave", [".env": "WANDB_API_KEY=NOT-A-KEY\nWANDB_ENTITY=acme\nWANDB_PROJECT=shop-bot\n"],
+                  name: "W&B Weave", badge: "Weave", url: "https://wandb.ai/acme/shop-bot/weave",
+                  not: [".env": "WANDB_MODE=offline\n"]),
+        EntryCase("arize-phoenix", ["requirements.txt": "arize-phoenix\n"],
+                  name: "Arize Phoenix", badge: ":6006", url: "http://localhost:6006/projects",
+                  not: ["requirements.txt": "phoenix-utils\n"]),
+        EntryCase("helicone", [".env": "OPENAI_BASE_URL=https://oai.helicone.ai/v1\n"],
+                  name: "Helicone", badge: "Requests", url: "https://us.helicone.ai/requests",
+                  not: [".env": "OPENAI_BASE_URL=https://helicone.example.com/v1\n"]),
+    ]
+}
