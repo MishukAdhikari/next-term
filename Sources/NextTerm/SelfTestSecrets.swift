@@ -434,7 +434,11 @@ extension SelfTest {
                                programTitle: String? = nil, words: String? = nil, folder: String = NSTemporaryDirectory()) -> SecretRequests.Request {
         let keys = names.map { SecretRequests.Key(name: $0, envName: $0) }
         let map = Dictionary(uniqueKeysWithValues: keys.map { ($0.name, $0.envName) })
-        let binding = SecretBinding(source: source, asker: asker, program: command.first ?? "", command: command, keys: map, folder: folder)
+        // The binding's program as the product fills it: a wrapper's is the agent's above it ("codex" for Codex, "" for
+        // none), run_with_secrets' is its command line's first word.
+        let agentProgram = agent.map { ($0.split(separator: " ").first.map(String.init) ?? $0).lowercased() } ?? ""
+        let bound = source == .wrapper ? agentProgram : SecretRun.programName(ofCommand: command.first ?? "")
+        let binding = SecretBinding(source: source, asker: asker, program: bound, command: command, keys: map, folder: folder)
         var facts = SecretRequests.AskedBy()
         facts.agent = agent
         facts.checkedNxtrm = checked && source == .wrapper
@@ -446,7 +450,7 @@ extension SelfTest {
         facts.arguments = ["NextTerm", "--cli", "secret", "run"] + names + ["--"] + command
         let shown = source == .wrapper ? command.map(SecretApprovalPanel.escaped).joined(separator: " ") : command.joined(separator: " ")
         let argv = source == .wrapper ? command : ["/bin/sh", "-c"] + command
-        // The program as each names it: a wrapper by its argv's first word, run_with_secrets by its command line's.
+        // The program its panel names: a wrapper's argv's first word, run_with_secrets' command line's.
         let program = source == .wrapper ? ((command.first ?? "") as NSString).lastPathComponent
             : SecretRun.programName(ofCommand: command.first ?? "")
         return SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: argv, folder: folder, warnings: [],
@@ -640,14 +644,24 @@ final class SecretsWrapperRun: @unchecked Sendable {
     private(set) var stderr = Data()
     private var launched = false
 
+    /// What a careless parent leaves a program it starts: SIGPIPE, SIGINT and SIGTERM ignored, and fd 7 open. `Process`
+    /// starts every child clean, so only this `/bin/sh` step shows whether the wrapper's own resets before `execve` work.
+    static let carelessParent = "trap '' PIPE INT TERM; exec 7</dev/null"
+
+    /// The wrapper's own argv before the arguments after `secret run`: its path, then six.
+    static let ownArguments = 7
+
     /// `padding`: that many more arguments ("a") at the end of the wrapper's argv. `/bin/sh` adds them as it execs the
     /// wrapper, since `Process` raises an Objective-C exception, which Swift can't catch, past 4,096 arguments.
-    init(_ arguments: [String], environment: [String: String] = [:], wait: Int = 20, directory: URL? = nil, padding: Int = 0) {
+    /// `careless`: the wrapper starts as `carelessParent` leaves it.
+    init(_ arguments: [String], environment: [String: String] = [:], wait: Int = 20, directory: URL? = nil, padding: Int = 0,
+         careless: Bool = false) {
         let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
         let own = ["--cli", "--self-test-secret-wrapper", SelfTest.mcpSocketPath, String(wait), "secret", "run"] + arguments
-        if padding > 0 {
+        if padding > 0 || careless {
+            let exec = "exec \"$@\"" + (padding > 0 ? " $(/usr/bin/jot -b a \(padding))" : "")
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
-            process.arguments = ["-c", "exec \"$@\" $(/usr/bin/jot -b a \(padding))", "sh", executable] + own
+            process.arguments = ["-c", (careless ? Self.carelessParent + "; " : "") + exec, "sh", executable] + own
         } else {
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = own
@@ -674,7 +688,8 @@ final class SecretsWrapperRun: @unchecked Sendable {
     func finish(within seconds: Double = 40) async -> Int32? {
         guard launched else { return nil }
         guard await SelfTest.wait(seconds, { !self.process.isRunning }) else {
-            process.terminate()
+            // SIGKILL: a careless one ignores the SIGTERM of terminate().
+            kill(process.processIdentifier, SIGKILL)
             return nil
         }
         stdout = output.fileHandleForReading.readDataToEndOfFile()
@@ -711,13 +726,13 @@ extension SelfTest {
             ((try? String(contentsOf: out.appendingPathComponent(name), encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        // Allowed: the child gets the key (it writes only its length), not OTHER_KEY, only fds 0 to 2, SIGPIPE at its default.
-        // macOS's ps has no "ignored" column: perl, started by it, reads SIGPIPE as it inherited it ("IGNORE" when ignored).
+        // Allowed: the child gets the key (it writes only its length), not OTHER_KEY, only fds 0 to 2, and SIGPIPE, SIGINT and
+        // SIGTERM at their defaults, though the wrapper started with fd 7 open and those ignored.
+        await secretsCarelessParentCheck(in: out)
         let script = "printf %s \"$K\" | wc -c | tr -d ' ' > len; if [ -z \"${OTHER_KEY+x}\" ]; then echo gone > other; fi; "
-            + "for n in 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 255; do if [ -e /dev/fd/$n ]; then echo $n >> fds; fi; done; "
-            + #"/usr/bin/perl -e 'print defined $SIG{PIPE} ? $SIG{PIPE} : "DEFAULT"' > sigpipe"#
+            + secretsDescriptorsAndSignals(prefix: "")
         let allowed = SecretsWrapperRun(["WRAP_KEY=K", "--", "/bin/sh", "-c", script], environment: ["OTHER_KEY": "exported-in-the-parent"],
-                                        directory: out)
+                                        directory: out, careless: true)
         let started = allowed.start()
         let shown = await wait(15) { requests.showing?.panel != nil }
         let panel = requests.showing?.panel
@@ -729,8 +744,9 @@ extension SelfTest {
               "secrets: after Allow the command runs with the key in its environment, and nothing goes to stdout",
               "exit \(String(describing: allowedExit)), len \(read("len")), \(allowed.errorText)")
         check(read("other") == "gone", "secrets: a stored key's name exported in the parent is gone in the command")
-        check(read("fds").isEmpty && read("sigpipe") == "DEFAULT",
-              "secrets: the command has only fds 0 to 2, and SIGPIPE at its default", "fds [\(read("fds"))], SIGPIPE \(read("sigpipe"))")
+        check(read("fds").isEmpty && read("signals") == "DEFAULT DEFAULT DEFAULT",
+              "secrets: the command has only fds 0 to 2, and SIGPIPE, SIGINT and SIGTERM at their defaults, from a careless parent",
+              "fds [\(read("fds"))], PIPE INT TERM \(read("signals"))")
         check(!String(decoding: store.folder.readAudit(), as: UTF8.self).contains(value), "secrets: the audit log holds no value")
 
         // Declined: exit 1 and its line.
@@ -761,7 +777,7 @@ extension SelfTest {
         _ = await wait(5) { requests.showing?.gone == true }
         let card = requests.showing
         check(awayExit == 1 && away.errorText == "nxtrm: WRAP_KEY is waiting for your approval in Next Term. Allow it there, then restart this command."
-              && card?.panel?.durationChoice[.once]?.isEnabled == false,
+              && away.stdout.isEmpty && card?.panel?.durationChoice[.once]?.isEnabled == false,
               "secrets: with no answer in time the wrapper says so, and the panel becomes a pending card", away.errorText)
         let again = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true", "away"], wait: 10)
         _ = again.start()
@@ -771,7 +787,7 @@ extension SelfTest {
         card?.panel?.declineButton.performClick(nil)
         _ = await again.finish()
 
-        // Refused, with no panel: a program that is not nxtrm, a lying argv, and argv over the caps.
+        // Refused, with no panel: a program that is not nxtrm, a lying argv, and argv over the caps. Each for its own reason.
         let nc = Process()
         nc.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
         nc.arguments = ["-U", SelfTest.mcpSocketPath]
@@ -779,28 +795,113 @@ extension SelfTest {
         nc.standardInput = ncIn
         nc.standardOutput = ncOut
         nc.standardError = FileHandle.nullDevice
+        let beforeNc = secretsAudit(store).count
         if (try? nc.run()) != nil {
-            ncIn.fileHandleForWriting.write(Data(#"{"tool":"secret_run","arguments":{}}"#.utf8 + [0x0A]))
-            try? ncIn.fileHandleForWriting.close()
+            // An nc that is already gone is no SIGPIPE, and no exception, for Next Term.
+            let writer = ncIn.fileHandleForWriting
+            _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+            try? writer.write(contentsOf: Data(#"{"tool":"secret_run","arguments":{}}"#.utf8 + [0x0A]))
+            try? writer.close()
             _ = await wait(10) { !nc.isRunning }
             if nc.isRunning { nc.terminate() }
             let said = String(decoding: ncOut.fileHandleForReading.availableData, as: UTF8.self)
             check(said.contains("\"refused\"") && requests.showing == nil, "secrets: a program that is not nxtrm gets refused at the socket, and no panel shows",
                   said)
-            check(secretsAudit(store).last.map { $0.event == .refused } == true, "secrets: the refusal is in the audit log")
+            let ncReason = await secretsRefusalReason(store, after: beforeNc)
+            check(ncReason == "the program at the socket is not Next Term's own nxtrm", "secrets: the refusal is in the audit log", ncReason)
         }
         let claimed = (try? JSONEncoder().encode([Bundle.main.executablePath ?? "", "--cli", "secret", "run", "WRAP_KEY", "--", "/usr/bin/true"]))
             .map { String(decoding: $0, as: UTF8.self) } ?? "[]"
         let liar = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"], environment: ["NEXTTERM_SELFTEST_ARGV_FULL": claimed])
+        let beforeLiar = secretsAudit(store).count
         _ = liar.start()
         let liarExit = await liar.finish()
-        check(liarExit == 1 && liar.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
-              "secrets: a wrapper whose argv is not the one it sent is refused, with no panel", liar.errorText)
-        let many = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"], padding: 4097)
-        _ = many.start()
-        let manyExit = await many.finish()
-        check(manyExit == 1 && many.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
-              "secrets: a wrapper with 4,097 arguments after -- is refused, with no panel", many.errorText)
+        let liarReason = await secretsRefusalReason(store, after: beforeLiar)
+        let liarRefused = liarExit == 1 && liar.errorText == "nxtrm: Next Term refused this request."
+        check(liarRefused && liar.stdout.isEmpty && liarReason == "its arguments are not nxtrm secret run's" && requests.showing == nil,
+              "secrets: a wrapper whose argv is not the one it sent is refused for that, with no panel and nothing on stdout",
+              "\(liar.errorText) (\(liarReason))")
+        await secretsArgumentCapChecks(requests: requests, store: store)
+    }
+
+    /// The probe a wrapped command runs in its folder: the descriptors open above 2, one a line, into `<prefix>fds`, and
+    /// how SIGPIPE, SIGINT and SIGTERM stand ("DEFAULT" or "IGNORE" each) into `<prefix>signals`. macOS's ps has no
+    /// column for ignored signals; perl, with no PERL5OPT, reads each as it inherited it.
+    static func secretsDescriptorsAndSignals(prefix: String) -> String {
+        let descriptors = "for n in 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 255; do "
+            + "if [ -e /dev/fd/$n ]; then echo $n >> \(prefix)fds; fi; done; "
+        let signals = #"PERL5OPT= /usr/bin/perl -e 'print join " ", map { defined $SIG{$_} ? $SIG{$_} : "DEFAULT" } qw(PIPE INT TERM)'"#
+        return descriptors + signals + " > \(prefix)signals"
+    }
+
+    /// The control for the allowed wrapper's check: the careless parent alone, with no wrapper between it and the probe,
+    /// leaves fd 7 open and the three signals ignored. Without it, a pass there could mean the parent was never careless.
+    static func secretsCarelessParentCheck(in folder: URL) async {
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/bin/sh")
+        probe.arguments = ["-c", SecretsWrapperRun.carelessParent + "; exec \"$@\"", "sh",
+                           "/bin/sh", "-c", secretsDescriptorsAndSignals(prefix: "control-")]
+        probe.currentDirectoryURL = folder
+        probe.standardInput = FileHandle.nullDevice
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        let ran = (try? probe.run()) != nil
+        var ended = false
+        if ran { ended = await wait(10) { !probe.isRunning } }
+        if ran, !ended { kill(probe.processIdentifier, SIGKILL) }
+        func read(_ name: String) -> String {
+            let text = (try? String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8)) ?? ""
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let fds = read("control-fds"), signals = read("control-signals")
+        check(ended && fds == "7" && signals == "IGNORE IGNORE IGNORE",
+              "secrets: the careless parent the wrapper starts from leaves fd 7 open and SIGPIPE, SIGINT and SIGTERM ignored",
+              "ran \(ran), fds [\(fds)], PIPE INT TERM \(signals)")
+    }
+
+    /// The outcome of the first `refused` audit line after the log's first `before` lines, once the main thread wrote it
+    /// (the socket queues it there after its answer): "no refused line" when none comes within `seconds`.
+    static func secretsRefusalReason(_ store: SecretsStore, after before: Int, within seconds: Double = 5) async -> String {
+        func found() -> SecretAudit.Line? {
+            let lines = secretsAudit(store)
+            // A log that rotated in between starts over.
+            let fresh = lines.count >= before ? lines.dropFirst(before) : lines[...]
+            return fresh.first { $0.event == .refused }
+        }
+        _ = await wait(seconds) { found() != nil }
+        guard let line = found() else { return "no refused line" }
+        return line.outcome ?? "no reason"
+    }
+
+    /// `ProcessInspector.fullCommandLine`'s cap on a wrapper's whole argv, its own path included.
+    static let secretsArgumentCap = 4096
+
+    /// A wrapper's argv at the cap, and one over it, padded by `/bin/sh` as it execs. Both ask for NOT_STORED, which shows
+    /// no panel: at the cap the app reads the argv and answers that the name is not stored (exit 2); one over, it refuses
+    /// before it reads the names, for the caps.
+    static func secretsArgumentCapChecks(requests: SecretRequests, store: SecretsStore) async {
+        let arguments = ["NOT_STORED", "--", "/usr/bin/true"]
+        let padding = secretsArgumentCap - SecretsWrapperRun.ownArguments - arguments.count
+
+        let atCap = SecretsWrapperRun(arguments, padding: padding)
+        let beforeAtCap = secretsAudit(store).count
+        _ = atCap.start()
+        let atCapExit = await atCap.finish()
+        let atCapReason = await secretsRefusalReason(store, after: beforeAtCap, within: 1)
+        let atCapAnswered = atCapExit == 2 && atCap.errorText.contains("no key named NOT_STORED")
+        check(atCapAnswered && atCap.stdout.isEmpty && atCapReason == "no refused line" && requests.showing == nil,
+              "secrets: a wrapper with 4,096 arguments in all, its own path included, gets past the caps (a name not stored: exit 2)",
+              "exit \(String(describing: atCapExit)), \(atCap.errorText) (\(atCapReason))")
+
+        let over = SecretsWrapperRun(arguments, padding: padding + 1)
+        let beforeOver = secretsAudit(store).count
+        _ = over.start()
+        let overExit = await over.finish()
+        let overReason = await secretsRefusalReason(store, after: beforeOver)
+        let overRefused = overExit == 1 && over.errorText == "nxtrm: Next Term refused this request."
+        check(overRefused && over.stdout.isEmpty && overReason == "its arguments are over the caps or can't be read" && requests.showing == nil,
+              "secrets: a wrapper with 4,097 arguments in all is refused for the caps, with no panel and nothing on stdout",
+              "exit \(String(describing: overExit)), \(over.errorText) (\(overReason))")
     }
 }
 
@@ -1291,9 +1392,12 @@ extension SelfTest {
         request.panel?.allowButton.performClick(nil)
         _ = await wait(10) { !requests.grants.isEmpty }
         view.reload()
-        let listed = view.allowedRows.count == 1 && SecretsView.grantText(requests.grants[0]).contains("SHOWN_KEY")
+        // A wrapper's grant is named for the agent above it.
+        let row = requests.grants.first.map { SecretsView.grantText($0) } ?? "no grant"
+        let listed = view.allowedRows.count == 1 && row.hasPrefix("Codex: SHOWN_KEY for true in ")
         view.allowedRows.first?.revoke.performClick(nil)
-        check(listed && requests.grants.isEmpty && view.allowedRows.isEmpty, "secrets: Allowed now lists a grant, and Revoke ends it")
+        check(listed && requests.grants.isEmpty && view.allowedRows.isEmpty, "secrets: Allowed now lists a grant, named for its agent, and Revoke ends it",
+              row)
 
         // With agent control off and a key stored, the line says what that means.
         SecretsView.agentControlIsOn = { false }
