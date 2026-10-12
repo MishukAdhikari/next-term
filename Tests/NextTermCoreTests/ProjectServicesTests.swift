@@ -508,3 +508,47 @@ extension ProjectServicesTests {
         #expect(local.services().rows.isEmpty)
     }
 }
+
+// MARK: - Hosting
+
+extension ProjectServicesTests {
+    @Test func cloudflareOpensItsAccountPickerAndEachBinding() throws {
+        let wrangler = """
+        {
+          // made up
+          "name": "shop",
+          "d1_databases": [{"binding": "DB", "database_name": "shop-db", "database_id": "0f2b6c1e-4a5d-4c3b-9e8f-1a2b3c4d5e6f"}],
+          "r2_buckets": [{"binding": "ASSETS", "bucket_name": "shop-assets"}]
+        }
+        """
+        let cloudflare = try row(FixtureProject(["wrangler.jsonc": wrangler]).services(), "cloudflare.cloud")
+        #expect(urls(cloudflare) == [
+            "https://dash.cloudflare.com/?to=/:account/workers-and-pages",
+            "https://dash.cloudflare.com/?to=/:account/workers/d1/databases/0f2b6c1e-4a5d-4c3b-9e8f-1a2b3c4d5e6f",
+            "https://dash.cloudflare.com/?to=/:account/r2/default/buckets/shop-assets",
+        ])
+        #expect(cloudflare.links.map(\.title)
+            == ["Open Cloudflare Dashboard", "Open Cloudflare D1 shop-db", "Open Cloudflare R2 shop-assets"])
+        #expect(Set(cloudflare.links.map(\.id)).count == 3)
+    }
+
+    @Test func railwayOpensTheServiceInItsEnvironment() throws {
+        let project = "11111111-2222-4333-8444-555555555555"
+        let service = "66666666-7777-4888-9999-aaaaaaaaaaaa"
+        let environment = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+        let ids = "RAILWAY_PROJECT_ID=\(project)\nRAILWAY_SERVICE_ID=\(service)\nRAILWAY_ENVIRONMENT_ID=\(environment)\n"
+        let railway = try row(FixtureProject([".env": ids]).services(), "railway.cloud")
+        #expect(railway.link.url.absoluteString
+            == "https://railway.com/project/\(project)/service/\(service)?environmentId=\(environment)")
+        #expect(railway.link.badge == "Project")
+        let alone = try row(FixtureProject([".env": "RAILWAY_PROJECT_ID=\(project)\n"]).services(), "railway.cloud")
+        #expect(alone.link.url.absoluteString == "https://railway.com/project/\(project)")
+    }
+
+    @Test func flyOpensTheAppItsConfigNames() throws {
+        let bad = FixtureProject(["fly.toml": "app = \"Shop_API\"\n"])
+        #expect(try row(bad.services(), "fly.cloud").link.url.absoluteString == "https://fly.io/dashboard")
+        let named = FixtureProject(["fly.toml": "app = \"shop-api\"\n"])
+        #expect(try row(named.services(), "fly.cloud").link.tooltip == "Open Fly.io App: app shop-api")
+    }
+}

@@ -354,7 +354,11 @@ public struct ServiceEntry: Sendable, Hashable, Identifiable {
 
 /// The services Next Term can name from a project's files, and what the fact readers must be asked for to name them.
 public enum ServiceCatalog {
-    public static let all: [ServiceEntry] = aiModels + vectorStores + tracing + agents + localServers + backends
+    /// Every entry, kind by kind in the order the Services section lists them.
+    public static let all: [ServiceEntry] = {
+        let kinds: [[ServiceEntry]] = [aiModels, vectorStores, tracing, agents, localServers, backends, hosting]
+        return kinds.flatMap { (entries: [ServiceEntry]) -> [ServiceEntry] in entries }
+    }()
 
     /// Every key whose value an entry reads, with its role: what `ProjectFacts.read` takes as `valueKeys`.
     public static let valueKeys: [String: KeyRole] = {

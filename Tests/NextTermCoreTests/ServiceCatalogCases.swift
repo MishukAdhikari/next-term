@@ -230,3 +230,24 @@ extension ServiceCatalogTests {
                   not: [".env.local": "CONVEX_DEPLOYMENT=local:shop-dev\n"]),
     ]
 }
+
+extension ServiceCatalogTests {
+    static let hosting: [EntryCase] = [
+        EntryCase("vercel", [".vercel/project.json": #"{"projectId": "prj_abc123", "orgId": "team_abc123", "projectName": "shop-web"}"#],
+                  name: "Vercel", badge: "Dashboard", url: "https://vercel.com/dashboard",
+                  not: [".vercel/README.txt": "Not a project link\n"]),
+        EntryCase("cloudflare", ["wrangler.toml": "name = \"shop\"\naccount_id = \"0123456789abcdef0123456789abcdef\"\n"],
+                  name: "Cloudflare", badge: "Dashboard",
+                  url: "https://dash.cloudflare.com/0123456789abcdef0123456789abcdef/workers-and-pages",
+                  not: ["wrangler.example.toml": "name = \"shop\"\n"]),
+        EntryCase("fly", ["fly.toml": "app = \"shop-api\"\nprimary_region = \"ams\"\n"],
+                  name: "Fly.io", badge: "App", url: "https://fly.io/apps/shop-api",
+                  not: ["fly.example.toml": "app = \"shop-api\"\n"]),
+        EntryCase("railway", ["railway.json": #"{"build": {"builder": "NIXPACKS"}}"#],
+                  name: "Railway", badge: "Dashboard", url: "https://railway.com/dashboard",
+                  not: [".env": "RAILWAY_TOKEN=NOT-A-TOKEN\n"]),
+        EntryCase("render", ["render.yaml": "services:\n  - type: web\n    name: shop\n"],
+                  name: "Render", badge: "Dashboard", url: "https://dashboard.render.com",
+                  not: [".env": "RENDER_API_KEY=NOT-A-KEY\n"]),
+    ]
+}
