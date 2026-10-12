@@ -1412,15 +1412,17 @@ extension CompletionSession {
 
 extension TerminalTab {
     #if DEBUG
-    /// The self-test's stand-in for the user's zsh config folder, for the tabs it opens.
+    /// A check's own zsh config folder, for the tabs it opens; nil gives them the self-test's (SelfTest.shellConfigFolder).
     nonisolated(unsafe) static var testUserZDOTDIR: String?
     #endif
 
-    /// Where the user's own zsh config is (the integration's .zshenv hands over to it).
+    /// Where the user's own zsh config is (the integration's .zshenv hands over to it). In a self-test, the test's own,
+    /// never the user's (SelfTest.shellConfigFolder), unless a check gives its tab another one.
     static func userZDOTDIR(_ env: [String: String]) -> String {
+        var isolated = SelfTest.shellConfigFolder
         #if DEBUG
-        if let testUserZDOTDIR { return testUserZDOTDIR }
+        if let testUserZDOTDIR { isolated = testUserZDOTDIR }
         #endif
-        return env["ZDOTDIR"] ?? ""
+        return IsolatedShellConfig.userConfigFolder(environment: env, isolated: isolated)
     }
 }

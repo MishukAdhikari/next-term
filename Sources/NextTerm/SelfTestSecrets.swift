@@ -30,16 +30,6 @@ extension SelfTest {
                 try? FileManager.default.removeItem(at: storeBase)
             }
         }
-        #if DEBUG
-        // Every zsh tab this part opens, by any route (run_with_secrets' among them), reads a config of the part's own
-        // and never the user's: the lines it types stay out of the user's history file, and no theme or plugin of
-        // theirs changes what its checks read on the screen. Other parts' tabs are as they were.
-        let savedZDOTDIR = TerminalTab.testUserZDOTDIR
-        let zsh = base.appendingPathComponent("zsh", isDirectory: true)
-        IsolatedShellConfig.prepare(zsh)
-        TerminalTab.testUserZDOTDIR = savedZDOTDIR ?? zsh.path
-        defer { TerminalTab.testUserZDOTDIR = savedZDOTDIR }
-        #endif
         let realFolder = SecretFolder(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let realBefore = secretsFolderDate(realFolder.url)
         let savedMask = SecretMask.current
@@ -1164,10 +1154,9 @@ extension SelfTest {
         let reuseExit = await reuse.finish()
         check(SecretRun.isTicket(ticketID) && reuseExit == 1 && reuse.errorText.contains("expired or was used already") && requests.showing == nil,
               "secrets: a used ticket gets expired", reuse.errorText)
-        #if DEBUG
-        // The shell read this part's own zsh config, never the user's: its ZDOTDIR, as zsh has it once started.
+        // The shell read the self-test's own zsh config, never the user's: its ZDOTDIR, as zsh has it once started.
         if let tab {
-            let own = TerminalTab.testUserZDOTDIR ?? ""
+            let own = SelfTest.shellConfigFolder ?? ""
             if await wait(10, { !tab.status.running }) {
                 tab.view.send(txt: "[[ ${ZDOTDIR-} == \(ShellQuote.quote(own)) ]] && echo ZD\"\"OWN || echo ZD\"\"OTHER=${ZDOTDIR-unset}\r")
                 let answered = await wait(10) { screen(tab).contains("ZDOWN") || screen(tab).contains("ZDOTHER=") }
@@ -1178,7 +1167,6 @@ extension SelfTest {
                 note("secrets: the zsh config of the tab run_with_secrets opened was not asked: its shell stayed busy")
             }
         }
-        #endif
 
         // "Allow for 15 minutes": the same call starts with no panel, until the folder's .env changes.
         let again = secretsStart("run_with_secrets", arguments)
