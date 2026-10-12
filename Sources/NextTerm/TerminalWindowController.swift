@@ -4,6 +4,13 @@ import NextTermCore
 
 /// Window that handles Ctrl-Tab / Ctrl-Shift-Tab before the terminal sees it.
 final class TerminalWindow: NSWindow {
+    /// The terminal window in front, shown and not in the Dock: the main or key one when it is one, else the frontmost
+    /// (behind Settings or a panel).
+    static var front: TerminalWindow? {
+        let candidates = [NSApp.mainWindow, NSApp.keyWindow] + NSApp.orderedWindows
+        return candidates.lazy.compactMap { $0 as? TerminalWindow }.first { $0.isVisible && !$0.isMiniaturized }
+    }
+
     var onControlTab: ((_ backwards: Bool) -> Void)?
     /// A key down for a terminal, before the terminal gets it (Tab completion); true: taken.
     var onTerminalKey: ((NSEvent, NextTermView) -> Bool)?
@@ -2114,8 +2121,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         clear(tab)
     }
 
-    /// Wipes a terminal's screen and scrollback locally; at a prompt, asks the shell to redraw it.
+    /// Wipes a terminal's screen and scrollback locally; at a prompt, asks the shell to redraw it. The tab is the pane
+    /// with the keyboard: a split tab's other panes are left as they are. A full-screen program (herdr, tmux, screen,
+    /// vim, less: the alternate screen) draws its own screen, its panes and all, so wiping it here would blank every
+    /// pane it shows until it drew them again: there ⌘K is the program's own Ctrl+L, which it gives the pane it has in
+    /// front, and only that pane clears (its shell at a prompt; a program in it redraws).
     func clear(_ tab: TerminalTab) {
+        if tab.view.getTerminal().isCurrentBufferAlternate { return tab.view.send(txt: "\u{0c}") }
         tab.view.feed(text: "\u{1b}[H\u{1b}[2J\u{1b}[3J")
         if !tab.status.running { tab.view.send(txt: "\u{0c}") }
     }

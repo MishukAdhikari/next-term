@@ -117,6 +117,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Settings › Editor › "Agents offer to run parallel work in tabs" (MCP: agents_offer_tabs): Next Term's next-term-tabs
+    /// skill (BuiltInSkill) in its skill library over MCP (list_skills, get_skill), and the offer first in the MCP
+    /// instructions an agent in a tab gets (MCPBridge). On by default; nothing is written in the agents' folders, so off
+    /// takes both out at once.
+    static let offerTabsKey = "agentsOfferTabs"
+    static let offerTabsChanged = Notification.Name("NextTermAgentsOfferTabsChanged")
+    var agentsOfferTabs: Bool {
+        get { UserDefaults.standard.object(forKey: Self.offerTabsKey) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.offerTabsKey)
+            NotificationCenter.default.post(name: Self.offerTabsChanged, object: nil)
+        }
+    }
+
     func startAgentControl() {
         SecretsStore.marksLoadedBeforeSocket = SecretsStore.marksLoaded
         MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)

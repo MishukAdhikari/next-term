@@ -683,7 +683,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(importTab)
         let skillsTab = NSTabViewItem(identifier: "skills")
         skillsTab.label = "Skills"
-        skillsTab.view = SkillsSettingsView()
+        skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
         // Secrets is last: after Skills, and after Remote Access once that tab is in.
         let secretsTab = NSTabViewItem(identifier: "secrets")
@@ -917,6 +917,8 @@ final class EditorSettingsView: NSView {
     private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
+    /// AppDelegate.agentsOfferTabs: the next-term-tabs skill in Next Term's skill library and the offer in the MCP instructions.
+    let offerTabs = NSButton(checkboxWithTitle: "Agents offer to run parallel work in tabs (the next-term-tabs skill)", target: nil, action: nil)
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
     private let fontFamily = FontFamilyPopup()
@@ -930,6 +932,8 @@ final class EditorSettingsView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         fontFamily.onChange = { family in AppDelegate.shared.setEditorFontFamily(family) }
+        // agents_offer_tabs changed by an agent over MCP (settings_set): the box follows.
+        NotificationCenter.default.addObserver(self, selector: #selector(offerTabsFollow), name: AppDelegate.offerTabsChanged, object: nil)
         for frequency in FetchFrequency.allCases {
             backgroundFetch.addItem(withTitle: frequency.title)
             backgroundFetch.lastItem?.representedObject = frequency.rawValue
@@ -970,6 +974,9 @@ final class EditorSettingsView: NSView {
         copilot.toolTip = "Copilot CLI connects when it starts in a tab’s folder or an open project. Its proposed edits open as diffs to accept or reject."
         control.target = self
         control.action = #selector(controlChanged)
+        offerTabs.target = self
+        offerTabs.action = #selector(offerTabsChanged)
+        offerTabs.toolTip = "When you ask an agent in a tab for work in parallel, or for another agent's help, it offers to run each task in a tab of its own that you can watch and answer, and opens them only after your yes. Agents read its next-term-tabs skill from Next Term over MCP (get_skill); nothing is written in their folders, and off takes it out."
         controlStatus.textColor = .secondaryLabelColor
         controlStatus.font = .systemFont(ofSize: 11)
         controlStatus.preferredMaxLayoutWidth = 400
@@ -1008,6 +1015,7 @@ final class EditorSettingsView: NSView {
             row("Agents:", [claude]),
             row("", [copilot]),
             row("", [control]),
+            row("", [offerTabs]),
             row("", [controlStatus]),
             note,
         ])
@@ -1047,6 +1055,8 @@ final class EditorSettingsView: NSView {
         claude.state = app.shareWithClaude ? .on : .off
         copilot.state = app.shareWithCopilot ? .on : .off
         control.state = app.agentControl ? .on : .off
+        offerTabs.state = app.agentsOfferTabs ? .on : .off
+        offerTabs.isEnabled = app.agentControl // it needs the tab tools
         let status = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
             : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
             : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
@@ -1096,6 +1106,13 @@ final class EditorSettingsView: NSView {
 
     @objc private func controlChanged() {
         AppDelegate.shared.agentControl = control.state == .on
+        refresh()
+    }
+
+    @objc private func offerTabsFollow() { offerTabs.state = AppDelegate.shared.agentsOfferTabs ? .on : .off }
+
+    @objc private func offerTabsChanged() {
+        AppDelegate.shared.agentsOfferTabs = offerTabs.state == .on
         refresh()
     }
 

@@ -21,11 +21,13 @@ import Testing
     }
 
     /// Claude Code keeps a server's instructions up to 2,048 characters and cuts the rest, so every sentence must fit in
-    /// them, the secret tools' at the end included.
+    /// them, the secret tools' at the end included, and with the parallel-tabs offer in front too.
     @Test func theInstructionsFitInTwoThousandAndFortyEightCharacters() {
-        let count = MCPServer.instructions.utf16.count
-        #expect(count <= 2048, "\(count) characters")
-        #expect(MCPServer.instructions.hasSuffix("store_secret saves a key you already hold."))
+        for offering in [false, true] {
+            let said = MCPServer.instructions(offeringTabs: offering)
+            #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, offering tabs: \(offering)")
+            #expect(said.hasSuffix("store_secret saves a key you already hold."))
+        }
     }
 
     /// A 2026-07-28 client first asks `server/discover` (Claude Code 2.1.295 does); "method not found" sends it

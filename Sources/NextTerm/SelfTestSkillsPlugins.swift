@@ -283,7 +283,7 @@ extension SelfTest {
         let keyed = fileState(settings)
         let row = SkillsStore.inventory().rows.first { $0.name == "demo-plugin" }
         let (cell, tip) = row.map { SkillsSettingsView.cellText($0, agent: .claudeCode) } ?? ("none", nil)
-        let listed = await SkillsMCP.listSkills()
+        let listed = await SkillsMCP.listSkills(from: nil, reader: .init(program: nil))
         let items = listed["skills"] as? [[String: Any]] ?? []
         let agents = items.first { $0["name"] as? String == "demo-plugin" }?["agents"] as? [String: String]
         let offTip = "Claude Code's settings turn its plugin off (“demo-plugin@skills-dir”: false), so Claude Code loads nothing from it."
