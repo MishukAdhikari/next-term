@@ -3,7 +3,8 @@ import Foundation
 
 /// The calls the MCP socket is serving, so the quit can answer each one (KTD17's drain): a call waiting on its tool, a call
 /// posted to the main thread that has not run yet, and a request still being read. Every answer is written by the call's
-/// own serve thread, which alone closes its connection, so no descriptor is closed under another thread's read.
+/// own serve thread, which alone closes its connection, so no descriptor is closed under another thread's read. A call
+/// that answers itself (`nxtrm secret run`'s request, SecretSocket) is left be.
 public final class MCPCalls: @unchecked Sendable {
     /// What a call asked, once its request was read.
     public struct Request {
@@ -23,6 +24,7 @@ public final class MCPCalls: @unchecked Sendable {
         private var request: Request?
         private var started = false
         private var closed = false
+        private var answersItself = false
         private var result: MCPServer.CallResult?
         /// Signalled once the call has its answer: the tool's, or the drain's.
         public let answered = DispatchSemaphore(value: 0)
@@ -62,11 +64,20 @@ public final class MCPCalls: @unchecked Sendable {
             if first { answered.signal() }
         }
 
-        /// The quit's answer, unless the tool answered first. A request still being read stops being read, so its serve
-        /// thread writes the answer at once.
+        /// It answers itself from here. False when the quit answered it first.
+        fileprivate func takesOwnAnswer() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard result == nil else { return false }
+            answersItself = true
+            return true
+        }
+
+        /// The quit's answer, unless the tool answered first or the call answers itself. A request still being read stops
+        /// being read, so its serve thread writes the answer at once.
         fileprivate func drain(_ answer: (Request?, Bool) -> MCPServer.CallResult) {
             lock.lock()
-            guard result == nil else { return lock.unlock() }
+            guard result == nil, !answersItself else { return lock.unlock() }
             result = answer(request, started)
             if request == nil && !closed { shutdown(fd, SHUT_RD) }
             lock.unlock()
@@ -101,6 +112,19 @@ public final class MCPCalls: @unchecked Sendable {
         lock.unlock()
         if let answer { call.drain(answer) }
         return call
+    }
+
+    /// The call's request is `nxtrm secret run`'s, which answers itself on its connection (SecretSocket). From here the
+    /// drain neither answers it nor stops its reading, which the wrapper's wait would take for the wrapper leaving, and
+    /// doesn't wait for it: its answer comes from the main thread, which the quit holds. Its connection still closes as
+    /// it ends. False when the quit answered the call first: then nothing more is written to it.
+    public func answersItself(_ call: Call) -> Bool {
+        guard call.takesOwnAnswer() else { return false }
+        lock.lock()
+        let known = calls.removeValue(forKey: ObjectIdentifier(call)) != nil
+        lock.unlock()
+        if known { open.leave() }
+        return true
     }
 
     /// The call's answer is written: its connection closes.

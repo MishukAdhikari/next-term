@@ -636,6 +636,71 @@ import Testing
         #expect(done.wait(timeout: .now() + 2) == .success)
     }
 
+    /// `nxtrm secret run`'s request answers itself on its connection (SecretSocket): the drain gives it no answer, never
+    /// stops its reading (which the wrapper's wait would read as the wrapper leaving), and doesn't wait for it, since its
+    /// answer comes from the main thread the quit holds. Its connection closes once, as its call ends.
+    @Test func aCallThatAnswersItselfIsLeftBeByTheDrain() throws {
+        let calls = MCPCalls()
+        let pair = try socketPair()
+        defer { Darwin.close(pair.caller) }
+        let call = calls.begin(pair.served)
+        #expect(calls.answersItself(call))
+        let started = Date()
+        calls.drain(wait: 5, answer: Self.drained)
+        #expect(Date().timeIntervalSince(started) < 1, "the drain doesn't wait for it")
+        #expect(call.answer == nil)
+        var byte: UInt8 = 0
+        let peeked = recv(pair.served, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+        let peekError = errno
+        #expect(peeked < 0 && peekError == EAGAIN, "still open for reading: the wrapper hasn't left")
+        _ = write(pair.caller, "x", 1)
+        #expect(recv(pair.served, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 1)
+        calls.end(call)
+        let flags = fcntl(pair.served, F_GETFD)
+        let flagsError = errno
+        #expect(flags < 0 && flagsError == EBADF, "closed as its call ended")
+        // A second end closes nothing: not a descriptor another connection was given since.
+        let reused = try socketPair()
+        defer { [reused.served, reused.caller].forEach { Darwin.close($0) } }
+        calls.end(call)
+        #expect(fcntl(reused.served, F_GETFD) >= 0 && fcntl(reused.caller, F_GETFD) >= 0)
+    }
+
+    /// A call the drain answered before its request was read as `nxtrm secret run`'s can't answer itself: nothing more
+    /// is written to it, and the wrapper reads the closed connection.
+    @Test func aCallTheDrainAnsweredFirstCantAnswerItself() throws {
+        let calls = MCPCalls()
+        let pair = try socketPair()
+        defer { Darwin.close(pair.caller) }
+        let call = calls.begin(pair.served)
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            calls.drain(wait: 5, answer: MCPRestartTests.drained)
+            done.signal()
+        }.start()
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(!calls.answersItself(call))
+        #expect(call.answer?.text == "drained unread false")
+        calls.end(call)
+        #expect(done.wait(timeout: .now() + 2) == .success)
+        // One that begins while a drain waits is answered at once, so it can't either.
+        let late = try socketPair()
+        defer { Darwin.close(late.caller) }
+        let other = try socketPair()
+        defer { Darwin.close(other.caller) }
+        let open = calls.begin(other.served)
+        Thread {
+            calls.drain(wait: 5, answer: MCPRestartTests.drained)
+            done.signal()
+        }.start()
+        Thread.sleep(forTimeInterval: 0.2)
+        let lateCall = calls.begin(late.served)
+        #expect(!calls.answersItself(lateCall))
+        calls.end(lateCall)
+        calls.end(open)
+        #expect(done.wait(timeout: .now() + 2) == .success)
+    }
+
     // MARK: the socket
 
     /// KTD17: a process the app starts (a tab's shell, and what runs on in it after the quit) never holds the app's

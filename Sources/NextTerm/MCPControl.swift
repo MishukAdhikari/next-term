@@ -103,16 +103,23 @@ final class MCPControlServer: @unchecked Sendable {
             ended = buffer[0..<count].contains(0x0A)
             line.append(contentsOf: buffer[0..<count])
         }
-        if let drained = call.answer { return send(drained, on: fd) }
-        if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
-        guard let end = line.firstIndex(of: 0x0A),
-              let request = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
-              let tool = request["tool"] as? String else { return }
-        let arguments = request["arguments"] as? [String: Any] ?? [:]
-        // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool. Its connection
+        let request = ended ? Self.request(in: line) : nil
+        // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool. The quit's drain leaves it be,
+        // and one the quit answered first gets nothing written: the wrapper reads the closed connection. Its connection
         // closes as the call ends, as every other one does.
-        if tool == SecretSocket.tool { return SecretSocket.handle(fd: fd, arguments: arguments, peer: peer, auditToken: token) }
-        if call.asked(MCPCalls.Request(tool: tool, arguments: arguments)) {
+        if let request, request.tool == SecretSocket.tool {
+            guard calls.answersItself(call) else { return }
+            return SecretSocket.handle(fd: fd, arguments: request.arguments, peer: peer, auditToken: token)
+        }
+        if let drained = call.answer {
+            // A wrapper the quit found before its line came is no MCP caller either: no MCP answer goes to it.
+            if request == nil, SecretSocket.isWrapper(pid: peer) { return }
+            return send(drained, on: fd)
+        }
+        if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
+        guard let request else { return }
+        let tool = request.tool, arguments = request.arguments
+        if call.asked(request) {
             DispatchQueue.main.async {
                 guard call.starts() else { return } // the quit answered it first
                 MCPControl.call(tool, arguments, caller: peer) { result in call.finish(result) }
@@ -120,6 +127,14 @@ final class MCPControlServer: @unchecked Sendable {
             call.answered.wait()
         }
         send(call.answer ?? MCPServer.CallResult(text: "No answer", isError: true), on: fd)
+    }
+
+    /// The tool and arguments of a whole request line, or nil.
+    private static func request(in line: Data) -> MCPCalls.Request? {
+        guard let end = line.firstIndex(of: 0x0A),
+              let object = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
+              let tool = object["tool"] as? String else { return nil }
+        return MCPCalls.Request(tool: tool, arguments: object["arguments"] as? [String: Any] ?? [:])
     }
 
     /// As Next Term quits (KTD17): it takes no new connection, answers every call it is serving with `answer`, calls posted

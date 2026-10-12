@@ -65,6 +65,12 @@ enum SecretSocket {
         return arguments[5] == "secret" && arguments[6] == "run"
     }
 
+    /// Whether the process at a connection is a wrapper, by its whole argv as the kernel has it.
+    static func isWrapper(pid: pid_t?) -> Bool {
+        guard let pid, let full = ProcessInspector.fullCommandLine(of: pid) else { return false }
+        return isWrapper(full.arguments, selfTest: SelfTest.isRequested)
+    }
+
     // MARK: asking, on the main thread
 
     /// Holds the answer the main thread decides, for the serve thread waiting on the socket.
