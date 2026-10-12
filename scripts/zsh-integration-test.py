@@ -51,6 +51,10 @@ def escape(text):
         out += bytes([byte]) if 0x21 <= byte <= 0x7E and byte not in b"\\;" else b"\\x%02x" % byte
     return out
 
+# The pause after each thing sent is for zsh's output to come: a CI runner, slower and busier, gets twice as long
+# (ZSH_TEST_SLOW sets it). Only ever longer: an answer meant to come late still comes late.
+SLOW = float(os.environ.get("ZSH_TEST_SLOW", "2" if os.environ.get("CI") else "1"))
+
 def frame(kind, ident, fields=()):
     payload = b";".join(escape(f) for f in fields)
     return PREFIX + kind.encode() + b"%06d" % ident + b"%06d" % len(payload) + payload
@@ -106,7 +110,7 @@ class Shell:
     def send(self, data, wait=0.0):
         os.write(self.fd, data if isinstance(data, bytes) else data.encode())
         if wait:
-            self.read_for(wait)
+            self.read_for(wait * SLOW)
 
     def text(self, since=0):
         return self.buf[since:].decode("utf-8", "replace")
