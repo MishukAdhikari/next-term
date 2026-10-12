@@ -605,7 +605,9 @@ enum SelfTest {
         case "rollback": return await rollbackChecks(c)
         case "held": return await heldWorktreeChecks(c)
         case "worktrees": return await worktreeChecks(c)
-        case "notifications": return notificationsMenuChecks()
+        case "notifications":
+            notificationsMenuChecks()
+            return agentSpinnerChecks()
         default: break
         }
         #endif
@@ -931,6 +933,7 @@ enum SelfTest {
         await linkChecks(c)
         await notificationChecks(c)
         notificationsMenuChecks()
+        agentSpinnerChecks()
         await skillsChecks()
         await mcpWriteChecks(c, proj: proj)
         await restoreMCPChecks(proj: proj)
