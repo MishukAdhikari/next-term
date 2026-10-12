@@ -365,8 +365,10 @@ def engine_checks(label, user_zdotdir, zsh="/bin/zsh"):
     tab_key(sh, 3, 0.05)
     if sh.wait_mark("tab", start, 5):
         sh.send(frame("a", 3, ["n"]), 0.5)
-    check(drawn(sh, start, "ls /System/") and sh.wait_mark("done", start, 0.1) is None,
-          f"[{label}] a `native` answer runs zsh's own Tab", repr(sh.line(start)))
+    # Its own Tab's `done` only: the step before's can come late on a slow machine.
+    own = sh.wait_mark("done", start, 0.1, lambda fields: fields[:1] == ["000003"])
+    check(drawn(sh, start, "ls /System/") and own is None,
+          f"[{label}] a `native` answer runs zsh's own Tab", f"{sh.line(start)!r} {own}")
     sh.send("\x03", 0.4)
 
     # A scripted open: one `line` mark at once; typing reports the word; take replaces it; a stale take does nothing.
