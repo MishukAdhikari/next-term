@@ -4,6 +4,13 @@ import NextTermCore
 
 /// Window that handles Ctrl-Tab / Ctrl-Shift-Tab before the terminal sees it.
 final class TerminalWindow: NSWindow {
+    /// The terminal window in front, shown and not in the Dock: the main or key one when it is one, else the frontmost
+    /// (behind Settings or a panel).
+    static var front: TerminalWindow? {
+        let candidates = [NSApp.mainWindow, NSApp.keyWindow] + NSApp.orderedWindows
+        return candidates.lazy.compactMap { $0 as? TerminalWindow }.first { $0.isVisible && !$0.isMiniaturized }
+    }
+
     var onControlTab: ((_ backwards: Bool) -> Void)?
     /// A key down for a terminal, before the terminal gets it (Tab completion); true: taken.
     var onTerminalKey: ((NSEvent, NextTermView) -> Bool)?

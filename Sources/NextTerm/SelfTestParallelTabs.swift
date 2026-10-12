@@ -48,7 +48,9 @@ extension SelfTest {
             AgentSpinner.current = spinnerBefore
         }
         // The skill library, in a home of the self-test's own: the project's skill, and Next Term's own while it is on.
-        let savedHome = SkillsStore.home, home = proj.path + "/.selftest-skills-home", local = proj.path + "/.agents/skills/selftest-local"
+        // The home beside the project, never around it: the library never reads a home folder or one above it as a project's.
+        let savedHome = SkillsStore.home, home = proj.deletingLastPathComponent().path + "/selftest-skills-home-\(getpid())"
+        let local = proj.path + "/.agents/skills/selftest-local"
         try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: local, withIntermediateDirectories: true)
         try? "---\nname: selftest-local\ndescription: A project skill.\n---\n\nSteps.\n".write(toFile: local + "/SKILL.md", atomically: true, encoding: .utf8)

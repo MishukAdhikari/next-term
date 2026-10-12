@@ -79,6 +79,24 @@ import Testing
         #expect(entry("next-term-tabs", "claude")?.native == false)
     }
 
+    /// Settings › Skills › Project and list_skills come from one engine: what Settings shows for an agent is what
+    /// list_skills gives it.
+    @Test func theOverviewIsWhatEachAgentIsTold() throws {
+        let (home, repo, package) = try fixture()
+        defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }
+        try FileManager.default.createDirectory(atPath: repo + "/.agents/skills", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: repo + "/.agents/skills/deploy", withDestinationPath: "../../.claude/skills/deploy")
+        let overview = SkillLibrary.overview(project: package, home: home, nextTerm: true)
+        for agent in SkillAgent.allCases {
+            #expect(overview.byAgent[agent] == SkillLibrary.entries(from: package, home: home, nextTerm: true, reader: .init(program: agent.rawValue)))
+        }
+        // The project's skills only, A to Z; a link and its folder are one copy.
+        #expect(overview.skills.map(\.name) == ["deploy", "lint"] && overview.skills[0].copies.count == 1 && overview.personal == 3)
+        // Claude Code has no copy of its own in ~/.claude/skills: the project's. Codex reads the project's link first.
+        #expect(overview.entry("deploy", for: .claudeCode)?.copy.place == ".claude/skills")
+        #expect(overview.entry("deploy", for: .codex)?.copy.place == ".agents/skills" && overview.entry("deploy", for: .codex)?.native == true)
+    }
+
     @Test func getSkillGivesTheTextAndFilesAndTheSwitchTakesItsOwnOut() throws {
         let (home, repo, package) = try fixture()
         defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }

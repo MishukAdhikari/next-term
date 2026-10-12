@@ -34,7 +34,7 @@ public enum SkillLibrary {
         /// "~/.agents/skills", "Next Term".
         public let place: String
         /// The skill folder it is in (".claude/skills"); nil for Next Term's own.
-        let kind: String?
+        public let kind: String?
     }
 
     /// A skill as the asking agent gets it: the copy its rule picks, whether it loads that name itself, and where
@@ -85,7 +85,8 @@ public enum SkillLibrary {
         /// The folders in the order this agent ranks them: its own first.
         func order(_ own: [String]) -> [String] { own + SkillLibrary.folders.filter { !own.contains($0) } }
 
-        func reads(_ copy: Copy) -> Bool {
+        /// It reads that copy's folder itself.
+        public func reads(_ copy: Copy) -> Bool {
             guard let kind = copy.kind else { return false }
             return (copy.scope == .project ? project : personal).contains(kind)
         }
@@ -105,28 +106,45 @@ public enum SkillLibrary {
         return chain
     }
 
+    /// Every copy there is for an agent working in `start`, read once: the project's by folder, nearest first, the
+    /// user's, and Next Term's own. `rank` orders them for each agent.
+    public struct Found: Sendable {
+        let levels: [[Copy]]
+        let personal: [Copy]
+        let own: [Copy]
+    }
+
+    public static func gather(from start: String?, home: String, nextTerm: Bool) -> Found {
+        let chain = start.map { projectFolders(from: $0, home: home) } ?? []
+        let top = chain.last
+        let levels = chain.map { folder in
+            let relative = folder == top ? "" : String(folder.dropFirst((top?.count ?? 0) + 1)) + "/"
+            return folders.flatMap { kind in read(folder + "/" + kind, scope: .project, kind: kind, place: relative + kind) }
+        }
+        let personal = folders.flatMap { kind in read(home + "/" + kind, scope: .personal, kind: kind, place: "~/" + kind) }
+        let own = nextTerm ? [Copy(name: BuiltInSkill.name, description: BuiltInSkill.description, scope: .nextTerm, folder: nil,
+                                   place: "Next Term", kind: nil)] : []
+        return Found(levels: levels, personal: personal, own: own)
+    }
+
     /// Every skill for an agent working in `start` (nil: no project), one entry a name, in the order its rule ranks
     /// them. `nextTerm`: Next Term's own are offered (Settings › Editor › Agents offer to run parallel work in tabs).
     public static func entries(from start: String?, home: String, nextTerm: Bool, reader: Reader = Reader(program: nil)) -> [Entry] {
-        let chain = start.map { projectFolders(from: $0, home: home) } ?? []
-        let top = chain.last
-        var project: [Copy] = []
-        for folder in chain {
-            let relative = folder == top ? "" : String(folder.dropFirst((top?.count ?? 0) + 1)) + "/"
-            for kind in reader.order(reader.project) {
-                project += read(folder + "/" + kind, scope: .project, kind: kind, place: relative + kind)
-            }
+        rank(gather(from: start, home: home, nextTerm: nextTerm), reader: reader)
+    }
+
+    /// The copies found, as `reader` gets them: in each folder its own skill folders first, the project's before the
+    /// user's (the user's first for Claude Code), Next Term's last; one entry a name.
+    public static func rank(_ found: Found, reader: Reader) -> [Entry] {
+        func ordered(_ copies: [Copy], _ own: [String]) -> [Copy] {
+            let order = reader.order(own)
+            return copies.enumerated().sorted { a, b in
+                (order.firstIndex(of: a.element.kind ?? "") ?? order.count, a.offset) < (order.firstIndex(of: b.element.kind ?? "") ?? order.count, b.offset)
+            }.map(\.element)
         }
-        var personal: [Copy] = []
-        for kind in reader.order(reader.personal) {
-            personal += read(home + "/" + kind, scope: .personal, kind: kind, place: "~/" + kind)
-        }
-        var own: [Copy] = []
-        if nextTerm {
-            own.append(Copy(name: BuiltInSkill.name, description: BuiltInSkill.description, scope: .nextTerm, folder: nil,
-                            place: "Next Term", kind: nil))
-        }
-        let ranked = (reader.personalFirst ? personal + project : project + personal) + own
+        let project = found.levels.flatMap { ordered($0, reader.project) }
+        let personal = ordered(found.personal, reader.personal)
+        let ranked = (reader.personalFirst ? personal + project : project + personal) + found.own
         var byName: [String: [Copy]] = [:], names: [String] = []
         for copy in ranked {
             if byName[copy.name] == nil { names.append(copy.name) }
@@ -144,6 +162,38 @@ public enum SkillLibrary {
             var others = distinct
             return Entry(copy: others.remove(at: used), native: true, others: others)
         }
+    }
+
+    /// A project's skills as Settings › Skills shows them: each name with a copy in the project, A to Z, with those
+    /// copies (nearest first, a link and its folder once), and what each of the three agents gets here, ranked as
+    /// list_skills ranks them for it.
+    public struct Overview: Sendable {
+        public struct Skill: Equatable, Sendable {
+            public let name: String
+            public let description: String
+            public let copies: [Copy]
+        }
+        public let skills: [Skill]
+        public let byAgent: [SkillAgent: [Entry]]
+        /// How many of the user's own skills there are (each name once).
+        public let personal: Int
+
+        public func entry(_ name: String, for agent: SkillAgent) -> Entry? { byAgent[agent]?.first { $0.name == name } }
+    }
+
+    public static func overview(project: String, home: String, nextTerm: Bool) -> Overview {
+        let found = gather(from: project, home: home, nextTerm: nextTerm)
+        var byAgent: [SkillAgent: [Entry]] = [:]
+        for agent in SkillAgent.allCases { byAgent[agent] = rank(found, reader: Reader(program: agent.rawValue)) }
+        var copies: [String: [Copy]] = [:], seen = Set<String>()
+        for copy in found.levels.joined() where seen.insert(canonicalPath(copy.folder ?? copy.place)).inserted {
+            copies[copy.name, default: []].append(copy)
+        }
+        let skills = copies.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { name in
+            let list = copies[name] ?? []
+            return Overview.Skill(name: name, description: list.first { !$0.description.isEmpty }?.description ?? "", copies: list)
+        }
+        return Overview(skills: skills, byAgent: byAgent, personal: Set(found.personal.map(\.name)).count)
     }
 
     /// Two copies are one folder (one reached through a link).
