@@ -363,6 +363,7 @@ extension SelfTest {
         let waited = await client.call("wait_for_tab", ["tab_id": id, "timeout_seconds": 5])
         check(printed && read.text.contains("•••") && !read.text.contains(value) && !waited.text.contains(value) && waited.text.contains("•••"),
               "secrets: read_tab and wait_for_tab show ••• where a tab printed a stored key", String(read.text.suffix(200)))
+        await secretsWrappedTailCheck(tab, client: client, value: value)
 
         // A program sets the tab's title to the value (OSC 0), while its command runs.
         tab.view.send(txt: "printf '\\e]0;%s\\a' \"$K\"; sleep 6\r")
@@ -404,6 +405,25 @@ extension SelfTest {
         let gemini = GeminiIDEServer.masked([["path": base.appendingPathComponent("notes.txt").path, "selectedText": "copy \(value) here"]])
         check(gemini.first?["selectedText"] as? String == "copy ••• here", "secrets: the selection Gemini CLI and Qwen Code are told of is masked too",
               "\(gemini.first?["selectedText"] ?? "")")
+    }
+
+    /// read_tab with a window that starts on the second row of a key a wrap split: the row above is masked with it, so
+    /// no part of the key's tail shows. The key starts 8 columns before the right edge, and `lines` is counted so the
+    /// window's first row is the one the wrap continued onto.
+    static func secretsWrappedTailCheck(_ tab: TerminalTab, client: SecretsMCPClient, value: String) async {
+        let tail = String(value.dropFirst(8))
+        tab.view.send(txt: "printf '%*s%s\\n' $((COLUMNS - 8)) '' \"$K\"; printf 'after\\n'\r")
+        let shown = await wait(10) { tab.screenTail().contains("after") && !tab.status.running }
+        let rows = tab.screenTail(60)
+        guard shown, let second = rows.lastIndex(where: { $0.hasPrefix(tail) }) else {
+            return check(false, "secrets: a key a wrap split shows on two rows", rows.suffix(4).joined(separator: " | "))
+        }
+        let read = await client.call("read_tab", ["tab_id": tab.id.uuidString.lowercased(), "lines": rows.count - second])
+        let characters = Array(tail)
+        let pieces = (0...(characters.count - 6)).map { String(characters[$0..<$0 + 6]) }
+        check(read.text.contains("•••") && !pieces.contains { read.text.contains($0) },
+              "secrets: read_tab whose window starts on the second row of a key a wrap split shows ••• and none of its tail",
+              String(read.text.suffix(200)))
     }
 
     /// get_skill gives a SKILL.md whole, with no field mask: a stored value in it whose quotes the answer's JSON escapes

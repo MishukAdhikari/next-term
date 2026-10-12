@@ -247,7 +247,11 @@ enum MCPControl {
     /// self-test turns this off to check the last pass in `send`.
     static var fieldMasks = true
     static func field(_ text: String) -> String { fieldMasks ? SecretMask.current.mask(text) : text }
-    static func fieldRows(_ rows: [String]) -> [String] { fieldMasks ? SecretMask.current.mask(rows: rows) : rows }
+    /// A tab's last `count` rows, masked over whole lines: a key a wrap split above the window is masked in the part the
+    /// window shows (`TerminalTab.screenTail(_:masked:)`).
+    static func fieldTail(_ tab: TerminalTab, _ count: Int = AgentScreen.scannedLines) -> [String] {
+        fieldMasks ? tab.screenTail(count, masked: SecretMask.current) : tab.screenTail(count)
+    }
     /// A tab's restored details (MCPRestoredTabs), masked: their note can quote a command line or a resume's screen, saved
     /// before a key in it was stored.
     static func restoredFields(_ tab: TerminalTab) -> [String: Any] {
@@ -409,7 +413,7 @@ enum MCPControl {
         var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
         info.merge(questionInfo(tab)) { $1 }
         info.merge(restoredFields(tab)) { $1 }
-        info["screen"] = fieldRows(tab.screenTail(min(2000, max(1, lines)))).joined(separator: "\n")
+        info["screen"] = fieldTail(tab, min(2000, max(1, lines))).joined(separator: "\n")
         return ok(info)
     }
 
@@ -424,7 +428,7 @@ enum MCPControl {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
             info.merge(questionInfo(tab)) { $1 }
             info.merge(restoredFields(tab)) { $1 }
-            info["screen"] = fieldRows(tab.screenTail(40)).joined(separator: "\n")
+            info["screen"] = fieldTail(tab, 40).joined(separator: "\n")
             return reply(ok(info))
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitFor(tab, until: deadline, sawWork: saw, reply: reply) }
@@ -643,7 +647,7 @@ enum MCPControl {
     static func questionInfo(_ tab: TerminalTab) -> [String: Any] {
         guard let question = tab.status.question, let id = questionID(tab) else { return [:] }
         var info: [String: Any] = ["question": field(question), "question_id": id]
-        if let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question { info["choices"] = menu.choices.map(field) }
+        if let menu = AgentScreen.menu(screenLines: fieldTail(tab)), menu.question == field(question) { info["choices"] = menu.choices.map(field) }
         return info
     }
 
