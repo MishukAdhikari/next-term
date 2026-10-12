@@ -16,7 +16,8 @@ import Darwin
 // - The index (names, what each key is for, flags, dates) is authenticated with HMAC-SHA256 over the body's exact
 //   bytes as stored. Verification never encodes again, so a change in Foundation's encoder never breaks a vault.
 // - These checks are keyed by the vault key the file wraps, so a whole vault.json built elsewhere passes them. This
-//   Mac's record of the vaults Next Term made, outside the file (SecretVaultRecord.swift), catches that one.
+//   Mac's record of the vaults Next Term made, outside the file (SecretVaultRecord.swift), catches that one when its
+//   maker wrote files only; one that can also add login-keychain items can forge the record.
 //
 // No value ever goes into an error, a description or a log: errors carry names only.
 
@@ -263,6 +264,9 @@ public final class SecretVault {
         case tampered
         /// The keyring can't open the vault: another Mac's key, a reset Secure Enclave, a missing keychain item.
         case cantOpen
+        /// This Mac has no record of the vaults Next Term made (none made yet, or the login keychain lost it), so the
+        /// vault can't be told from one planted here and nothing is released. Its file may be as Next Term wrote it.
+        case unlisted
         /// The user did not approve.
         case cancelled
         /// The keyring couldn't reach its key just now (the keychain couldn't be read, LocalAuthentication wasn't
@@ -289,6 +293,8 @@ public final class SecretVault {
                 return "Secrets’ file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
             case .cantOpen:
                 return "These keys were saved on another Mac, or this Mac’s Secure Enclave was reset, so they can’t be opened here."
+            case .unlisted:
+                return "Next Term’s list of the vaults it made on this Mac is missing from the login keychain, so it can’t tell these keys are its own, and no key is released. Start Over to make a new vault."
             case .cancelled: return "Not approved."
             case .keyUnavailable: return "Next Term couldn’t reach the key that guards Secrets just now, so nothing changed. Try again."
             case .locked: return "Secrets is locked."

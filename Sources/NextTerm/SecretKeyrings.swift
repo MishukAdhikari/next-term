@@ -110,11 +110,11 @@ protocol PasswordStore: AnyObject {
 }
 
 /// A generic password in the login keychain, by `SecItem` calls. The login keychain is a file, so data-protection
-/// attributes such as `ThisDeviceOnly` don't apply to it.
+/// attributes such as `ThisDeviceOnly` don't apply to it. Every call names the login keychain (`LoginKeychain.login`).
 final class LoginKeychain: PasswordStore {
     static let service = "Next Term Secrets"
-    /// The one item earlier builds kept every keychain vault's key in. Read only to move the current vault's key to an
-    /// item of its own; never written.
+    /// The one item pre-release builds kept every keychain vault's key in, and the start of each vault's own item's
+    /// name. Never read or written: the vaults whose key it held are listed in no record, so none can be used.
     static let sharedVaultKeyAccount = "vault key"
     static let recoveryAccount = "vault key recovery"
     /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now: the user did not approve this
@@ -153,8 +153,13 @@ final class LoginKeychain: PasswordStore {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
 
+    /// The item's search, change and delete, in the login keychain alone. Nil when it couldn't be opened.
+    var searchQuery: [String: Any]? { Self.searching(query) }
+    /// The item's add, to the login keychain. Nil when it couldn't be opened.
+    var addQuery: [String: Any]? { Self.adding(query) }
+
     func read() throws -> Data? {
-        var request = query
+        guard var request = searchQuery else { throw Failure(status: Self.notOpened) }
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -165,7 +170,7 @@ final class LoginKeychain: PasswordStore {
     }
 
     func add(_ data: Data) throws {
-        var item = query
+        guard var item = addQuery else { throw Failure(status: Self.notOpened) }
         item[kSecValueData as String] = data
         item[kSecAttrLabel as String] = "Next Term Secrets"
         let status = SecItemAdd(item as CFDictionary, nil)
@@ -173,12 +178,13 @@ final class LoginKeychain: PasswordStore {
     }
 
     func delete() throws {
-        let status = SecItemDelete(query as CFDictionary)
+        guard let search = searchQuery else { throw Failure(status: Self.notOpened) }
+        let status = SecItemDelete(search as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure(status: status) }
     }
 
     func exists() -> Bool? {
-        var request = query
+        guard var request = searchQuery else { return nil }
         request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -186,9 +192,57 @@ final class LoginKeychain: PasswordStore {
     }
 }
 
+// MARK: the login keychain, by name
+
+/// `SecKeychainOpen` is deprecated with the rest of the file-based keychain's own calls, but `kSecMatchSearchList` and
+/// `kSecUseKeychain`, which are not, take only its references. It is called through a protocol, so the build warns of
+/// nothing.
+private protocol KeychainOpening {
+    func open(_ path: String) -> SecKeychain?
+}
+
+private struct KeychainOpener: KeychainOpening {
+    @available(macOS, deprecated: 10.10)
+    func open(_ path: String) -> SecKeychain? {
+        var keychain: SecKeychain?
+        guard SecKeychainOpen(path, &keychain) == errSecSuccess else { return nil }
+        return keychain
+    }
+}
+
+extension LoginKeychain {
+    /// The user's login keychain file.
+    static let loginPath = NSHomeDirectory() + "/Library/Keychains/login.keychain-db"
+    /// A reference to it, made once; opening it reads nothing. Nil if it couldn't be made.
+    static let login: SecKeychain? = (KeychainOpener() as KeychainOpening).open(loginPath)
+    /// What a call fails with when the login keychain couldn't be opened: the other keychains are never tried instead.
+    static let notOpened = errSecNoSuchKeychain
+
+    /// `base` for a search, a change or a delete in the login keychain alone: an item of the same name in a keychain put
+    /// ahead of it in the search list is never found. Nil when it couldn't be opened.
+    static func searching(_ base: [String: Any]) -> [String: Any]? {
+        guard let login else { return nil }
+        var query = base
+        query[kSecMatchSearchList as String] = [login]
+        return query
+    }
+
+    /// `base` for an add to the login keychain, never to the default keychain, which any program of the user's can
+    /// change. Nil when it couldn't be opened.
+    static func adding(_ base: [String: Any]) -> [String: Any]? {
+        guard let login else { return nil }
+        var item = base
+        item[kSecUseKeychain as String] = login
+        return item
+    }
+}
+
 /// This Mac's record of the vaults Next Term made: one login-keychain item of Next Term's service, outside Secrets'
 /// folder, with the vaults' bindings in its generic attribute. It is read as an attribute, never as data, so it needs
-/// no keychain password after an update, as the keychain keyring's load check doesn't.
+/// no keychain password after an update, as the keychain keyring's load check doesn't. Every call names the login
+/// keychain, so a keychain put ahead of it in the search list can't stand in for it. A program of the user's that can
+/// add login-keychain items can still make the item where Next Term hasn't, or perhaps change it: see
+/// SecretVaultRecord.swift.
 final class LoginKeychainRecord: VaultRecord {
     static let account = "vault bindings"
 
@@ -204,8 +258,13 @@ final class LoginKeychainRecord: VaultRecord {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
 
+    /// The record's search and change, in the login keychain alone. Nil when it couldn't be opened.
+    var searchQuery: [String: Any]? { LoginKeychain.searching(query) }
+    /// The record's add, to the login keychain. Nil when it couldn't be opened.
+    var addQuery: [String: Any]? { LoginKeychain.adding(query) }
+
     func read() throws -> Data? {
-        var request = query
+        guard var request = searchQuery else { throw Self.failure(LoginKeychain.notOpened) }
         request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -217,10 +276,10 @@ final class LoginKeychainRecord: VaultRecord {
     }
 
     func write(_ data: Data) throws {
+        guard let search = searchQuery, var item = addQuery else { throw Self.failure(LoginKeychain.notOpened) }
         let change = [kSecAttrGeneric as String: data]
-        var status = SecItemUpdate(query as CFDictionary, change as CFDictionary)
+        var status = SecItemUpdate(search as CFDictionary, change as CFDictionary)
         if status == errSecItemNotFound {
-            var item = query
             item[kSecAttrGeneric as String] = data
             item[kSecAttrLabel as String] = "Next Term Secrets"
             item[kSecValueData as String] = Data()
@@ -384,27 +443,18 @@ final class KeychainKeyring: VaultKeyring {
     /// The item of the vault this keyring opens, named after its public key.
     var ownItem: PasswordStore { items(LoginKeychain.vaultKeyAccount(publicKey: vaultPublicKey)) }
 
-    /// The vault's item is there, or the shared item of earlier builds. Their data is never read for this. A keychain
-    /// that wouldn't say (locked and its unlock cancelled) passes: only an item that is surely gone fails the check.
+    /// The vault's own item is there. Its data is never read for this. A keychain that wouldn't say (locked and its
+    /// unlock cancelled) passes: only an item that is surely gone fails the check. The shared item of pre-release builds
+    /// counts for nothing: the vaults whose key it held are listed in no record.
     func check(publicKey: Data) -> Bool {
-        guard items(LoginKeychain.vaultKeyAccount(publicKey: publicKey)).exists() == false else { return true }
-        return items(LoginKeychain.sharedVaultKeyAccount).exists() != false
+        items(LoginKeychain.vaultKeyAccount(publicKey: publicKey)).exists() != false
     }
 
     func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
         guard context != nil else { throw SecretVault.Failure.cancelled }
         if let made { return try made.sharedSecret(with: ephemeral, context: context) }
         willRead?()
-        let own = ownItem
-        if let key = try Self.key(in: own) { return try key.sharedSecret(with: ephemeral, context: context) }
-        // A vault from an earlier build, whose key is in the one shared item: that item opens this vault only when its
-        // key is this vault's, and the key is then added to the vault's own item. The shared item is left as it is.
-        guard let key = try Self.key(in: items(LoginKeychain.sharedVaultKeyAccount)), key.publicKey() == vaultPublicKey else {
-            throw SecretVault.Failure.cantOpen
-        }
-        var raw = key.rawRepresentation
-        defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
-        try? own.add(raw)
+        guard let key = try Self.key(in: ownItem) else { throw SecretVault.Failure.cantOpen }
         return try key.sharedSecret(with: ephemeral, context: context)
     }
 

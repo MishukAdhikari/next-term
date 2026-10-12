@@ -178,7 +178,7 @@ enum SecretSocket {
             }
         case .failed(let failure):
             switch failure {
-            case .vault(.cantOpen), .vault(.tampered): return SecretRun.Answer(status: .cantOpen, names: request.names)
+            case .vault(.cantOpen), .vault(.tampered), .vault(.unlisted): return SecretRun.Answer(status: .cantOpen, names: request.names)
             case .vault(.noSuchKey(let name)): return SecretRun.Answer(status: .unknown, name: name, names: request.names)
             default: return SecretRun.Answer(status: .refused, names: request.names)
             }

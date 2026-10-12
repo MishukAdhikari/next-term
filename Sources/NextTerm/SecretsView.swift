@@ -32,6 +32,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         + "that opens Secrets is in your login keychain."
     static let cantOpenLine = "These keys were saved on another Mac, or this Mac's Secure Enclave was reset, so they can't be opened here."
     static let tamperedLine = "Secrets' file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
+    static let unlistedLine = "Next Term's list of the vaults it made on this Mac is missing from the login keychain, so it can't tell these "
+        + "keys are its own, and no key is released. Start Over to make a new vault."
     static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
     static let writeOnlyLine = "Write-only: Next Term never shows this key again. Replace it to change it."
@@ -222,7 +224,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         if let selected, let row = entries.firstIndex(where: { $0.name == selected }) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
-        statusLabel.stringValue = Self.statusText(store.protection, waitingForKeychain: store.isWaitingForKeychain)
+        statusLabel.stringValue = Self.statusText(store.protection, waitingForKeychain: store.isWaitingForKeychain,
+                                                  unlisted: store.isUnlisted)
         let broken = store.protection == .cantOpen || store.protection == .tampered
         statusLabel.textColor = broken ? .systemOrange : .labelColor
         statusLabel.setAccessibilityLabel(broken ? "Warning: \(statusLabel.stringValue)" : nil)
@@ -237,7 +240,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         reloadPaused()
     }
 
-    static func statusText(_ protection: SecretsStore.Protection, waitingForKeychain: Bool) -> String {
+    /// `unlisted`: a refused vault is one this Mac has no record of, not one whose file changed.
+    static func statusText(_ protection: SecretsStore.Protection, waitingForKeychain: Bool, unlisted: Bool = false) -> String {
         let line: String
         switch protection {
         case .none: line = SecureEnclaveKeyring.isAvailable ? secureEnclaveLine : lessProtectedLine
@@ -245,7 +249,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case .secureEnclaveWithRecovery: line = recoveryLine
         case .lessProtected: line = lessProtectedLine
         case .cantOpen: line = cantOpenLine
-        case .tampered: line = tamperedLine
+        case .tampered: line = unlisted ? unlistedLine : tamperedLine
         }
         return waitingForKeychain ? line + " Waiting for the keychain…" : line
     }

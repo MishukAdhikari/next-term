@@ -428,7 +428,7 @@ enum SecretsMCP {
             return refusalAnswer(refusal)
         case .failed(let failure):
             switch failure {
-            case .vault(.cantOpen), .vault(.tampered): return ["status": Status.cantOpen.rawValue, "note": cantOpenNote]
+            case .vault(.cantOpen), .vault(.tampered), .vault(.unlisted): return ["status": Status.cantOpen.rawValue, "note": cantOpenNote]
             case .vault(.noSuchKey(let name)):
                 return ["status": Status.unknown.rawValue, "note": "No key named \(name). request_secret asks the user to add it."]
             default:

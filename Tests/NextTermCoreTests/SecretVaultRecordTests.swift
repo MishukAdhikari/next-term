@@ -88,14 +88,39 @@ private let typed = "sk-typed-after-the-swap-0123456789abcdef"
         #expect(try SecretVault.open(entry, key: key) == SecretBytes(utf8: typed))
     }
 
-    /// A vault.json planted where Next Term never made a vault, or a record that is not a list of bindings: refused.
+    /// A record that lists other vaults, or is not a list of bindings: the vault is refused as tampered.
     @Test func aVaultNoRecordListsIsRefused() throws {
         let f = try RecordedVault()
-        for contents in [nil, Data(), Data(repeating: 7, count: 31), Data(repeating: 7, count: 32)] {
+        for contents in [Data(), Data(repeating: 7, count: 31), Data(repeating: 7, count: 32)] {
             let record = MemoryVaultRecord(contents)
-            #expect(throws: SecretVault.Failure.tampered, "\(String(describing: contents?.count))") { try f.vault.bind(to: record) }
+            #expect(throws: SecretVault.Failure.tampered, "\(contents.count)") { try f.vault.bind(to: record) }
             #expect(record.writes == 0)
         }
+    }
+
+    /// No record at all (none made yet, or the login keychain lost it): refused too, but as unlisted, whose text says
+    /// the record is missing. Restoring vault.json would not help, so it never says to.
+    @Test func aVaultWithNoRecordIsRefusedAsUnlisted() throws {
+        let f = try RecordedVault()
+        let record = MemoryVaultRecord()
+        #expect(throws: SecretVault.Failure.unlisted) { try f.vault.bind(to: record) }
+        #expect(record.writes == 0)
+        let text = try #require(SecretVault.Failure.unlisted.errorDescription)
+        #expect(text != SecretVault.Failure.tampered.errorDescription)
+        #expect(text.contains("login keychain") && !text.contains("restore the file"))
+    }
+
+    /// The record is trusted as it reads: one that lists a vault built elsewhere binds it. So it is kept where a program
+    /// that only writes files can't write it; a program that can add login-keychain items can still forge it.
+    @Test func aRecordThatListsAVaultBindsItWhoeverWroteIt() throws {
+        let f = try RecordedVault()
+        let theirs = SoftwareKeyring(kind: .secureEnclave)
+        let key = SymmetricKey(size: .bits256)
+        let planted = try rebuilt(f.vault, key: key, publicKey: theirs.publicKey(), keyBlob: Data("their blob".utf8))
+        let opened = try SecretVault.unlock(planted, keyring: theirs, context: nil)
+        let forged = MemoryVaultRecord(SecretVault.binding(of: key))
+        try opened.bind(to: forged)
+        #expect(throws: SecretVault.Failure.tampered) { try opened.bind(to: f.record) }
     }
 
     /// Start Over then Add makes a second vault: both stay recorded, so a kept or restored vault still opens.

@@ -9,6 +9,11 @@ import Foundation
 // key commits to a binding, which tells nothing of the key, and the record lists the bindings of the vaults Next Term made
 // on this Mac. Before anything is sealed into a vault or released from it, its binding must be listed: one that isn't
 // was not made by Next Term here, so it is tampered.
+//
+// The record is trusted as it reads, so the app keeps it where a program that only writes files can't: an item in the
+// login keychain, its searches and adds pinned to that keychain. A program of the user's that can add login-keychain
+// items can still forge it, by making the item where Next Term hasn't yet or, if macOS lets it with no prompt, by
+// changing or replacing it. That program is not stopped here.
 
 /// Where this Mac keeps the bindings of the vaults Next Term made, outside Secrets' folder. The app keeps them in an item
 /// of its own in the login keychain; `MemoryVaultRecord` serves the tests and the self-test.
@@ -74,13 +79,13 @@ extension SecretVault {
     }
 
     /// Before anything is sealed into this vault or released from it: throws `tampered` unless the record lists it, so a
-    /// vault.json Next Term didn't make on this Mac (planted where none was made, or built around a vault key of someone
-    /// else's) gets no value and gives none. A record that can't be read throws its own failure.
+    /// vault.json Next Term didn't make on this Mac (built around a vault key of someone else's) gets no value and gives
+    /// none. No record at all throws `unlisted`: refused the same, but its text says the record is missing, since
+    /// restoring the file wouldn't help. A record that can't be read throws its own failure.
     public func bind(to record: VaultRecord) throws {
         let own = try binding()
-        guard let data = try record.read(), let listed = Self.bindings(in: data), listed.contains(own) else {
-            throw Failure.tampered
-        }
+        guard let data = try record.read() else { throw Failure.unlisted }
+        guard let listed = Self.bindings(in: data), listed.contains(own) else { throw Failure.tampered }
     }
 
     /// Lists this vault, just made, in the record, before its vault.json is written. The vaults made before stay listed,

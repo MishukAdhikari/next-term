@@ -4,7 +4,8 @@ import NextTermCore
 import Security
 
 /// This Mac's record of the vaults Next Term made, over records in memory: never the login keychain. A whole vault.json
-/// built elsewhere passes every check inside the file; the record is what refuses it.
+/// built elsewhere passes every check inside the file; the record is what refuses it, when its maker wrote files only.
+/// One that can also add login-keychain items can forge the record, which these checks don't cover.
 extension SelfTest {
     static func secretsRecordChecks(_ base: URL) async {
         await secretsReplacedVaultChecks(base)
@@ -13,6 +14,7 @@ extension SelfTest {
         await secretsRecordKeepsChecks(base)
         await secretsRecordFailureChecks(base)
         secretsAppRecordChecks()
+        await secretsRecordStateChecks(base)
     }
 
     /// The action's failure, or nil when it went through.
@@ -98,7 +100,8 @@ extension SelfTest {
     }
 
     /// A vault.json planted where Next Term never made one, its vault key wrapped under this Mac's own key (wrapping needs
-    /// only the public key): the record lists nothing, so the first Add is refused and the file is left as it was.
+    /// only the public key), by a program that wrote the file and left the login keychain alone: there is no record, so
+    /// the first Add is refused as unlisted and the file is left as it was.
     static func secretsPlantedVaultChecks(_ base: URL) async {
         let keyring = SoftwareKeyring(kind: .secureEnclave)
         let (store, presence) = secretsStore(base, "record-planted", keyring: keyring)
@@ -111,10 +114,10 @@ extension SelfTest {
         try? store.folder.ensure()
         try? store.folder.write(SecretFolder.vaultName, data: planted)
         let (failures, unchanged) = await secretsWritesInto(store, planted: planted, name: "PLANTED_KEY")
-        let expected: [SecretsStore.Failure?] = [.vault(.tampered), .vault(.tampered)]
+        let expected: [SecretsStore.Failure?] = [.vault(.unlisted), .vault(.unlisted)]
         let refused: Bool = failures == expected
         check(refused && unchanged && presence.calls == 2,
-              "secrets: a vault.json planted where none was made, wrapped under this Mac's own key, is refused as tampered at the first Add",
+              "secrets: a vault.json planted where none was made, with no record written, is refused as unlisted at the first Add",
               "\(failures), unchanged \(unchanged), \(presence.calls) presence checks")
     }
 

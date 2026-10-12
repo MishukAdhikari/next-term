@@ -12,7 +12,8 @@ import Security
 /// - `perform(_:reason:facts:)` asks for presence, then on its own queue takes the vault's lock, unlocks, makes the
 ///   change, writes, drops the vault key and writes the audit line. Cancel or failure changes no key. A vault that
 ///   this Mac's record of the vaults Next Term made (`record`, a login-keychain item) doesn't list is tampered, however
-///   well its file checks out, so no value is sealed into it or released from it.
+///   well its file checks out, so no value is sealed into it or released from it. With no record at all it is refused
+///   the same, as unlisted, with its own text. A program that can add login-keychain items can forge the record.
 /// - In the self-test it works on a temporary folder with a software keyring, a record in memory and a stand-in
 ///   presence check that passes at once and counts its calls. The real vault, `mask.key` and the login keychain are
 ///   never touched.
@@ -166,8 +167,12 @@ final class SecretsStore {
     private(set) var protection: Protection = .none
     /// For each name, its newest `use` line.
     private(set) var lastUse: [String: SecretAudit.Line] = [:]
-    /// True while a keychain vault's key is read: macOS may ask for the login password ("Waiting for the keychain…").
+    /// True while an action uses the login keychain, which every one does: an unlock reads the record, a first add
+    /// writes it, and a keychain vault's key is read. macOS may ask for the login password ("Waiting for the keychain…").
     private(set) var isWaitingForKeychain = false
+    /// With `protection` `.tampered`: the vault was refused because this Mac has no record of the vaults Next Term made,
+    /// not because its file changed, so Settings says that instead of the tamper text.
+    private(set) var isUnlisted = false
     private var indexDate: Date?
     private var observers: [NSObjectProtocol] = []
 
@@ -273,6 +278,7 @@ final class SecretsStore {
         }
         index = found.0
         protection = found.1
+        isUnlisted = false
         lastUse = SecretAudit.lastUse(in: found.2)
         indexDate = folder.modificationDate(of: SecretFolder.vaultName)
         publishMarks()
@@ -297,6 +303,7 @@ final class SecretsStore {
             // Gone: another copy started over.
             index = nil
             protection = .none
+            isUnlisted = false
             NotificationCenter.default.post(name: Self.changed, object: self)
             NotificationCenter.default.post(name: Self.startedOver, object: self)
             return
@@ -307,6 +314,7 @@ final class SecretsStore {
             if protection == .none { protection = Self.protection(of: read) }
         } else {
             protection = .tampered
+            isUnlisted = false
         }
         publishMarks()
         NotificationCenter.default.post(name: Self.changed, object: self)
@@ -350,10 +358,9 @@ final class SecretsStore {
     @discardableResult
     func perform(_ action: Action, reason: String? = nil, facts: Facts = Facts()) async throws -> [String: SecretBytes] {
         reloadIfChanged()
-        if protection == .tampered { throw Failure.vault(.tampered) }
+        if protection == .tampered { throw Failure.vault(isUnlisted ? .unlisted : .tampered) }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !action.isAdd { throw Failure.vault(.noSuchKey(action.names.first ?? "")) }
-        let isKeychain = index?.keyring == .keychain
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
         let token: AnyObject
         do {
@@ -362,7 +369,7 @@ final class SecretsStore {
             throw failure == .cancelled ? Failure.cancelled : Failure.unavailable
         }
         defer { presence.finish(token) }
-        if isKeychain { setWaitingForKeychain(true) }
+        setWaitingForKeychain(true) // the record, at least, is in the login keychain
         let folder = folder
         let keyring = keyring
         let newKeyring = newKeyring
@@ -373,7 +380,7 @@ final class SecretsStore {
                               token: token)
             }
         }
-        if isKeychain { setWaitingForKeychain(false) }
+        setWaitingForKeychain(false)
         switch result {
         case .success(let work):
             if let changed = work.index { index = changed }
@@ -390,9 +397,9 @@ final class SecretsStore {
         }
     }
 
-    /// What a failed perform says, and what it leaves: a tampered vault is noted, with a `tamper` line, and a vault its
-    /// keyring can't open on this Mac (its item gone or holding another key, a blob or key agreement that fails) is
-    /// noted as one at once, as the load check would, so Settings shows Start Over. A keyring's cancel (such as Cancel
+    /// What a failed perform says, and what it leaves: a tampered or unlisted vault is noted, with a `tamper` line, and a
+    /// vault its keyring can't open on this Mac (its item gone or holding another key, a blob or key agreement that fails)
+    /// is noted as one at once, as the load check would, so Settings shows Start Over. A keyring's cancel (such as Cancel
     /// at macOS's keychain prompt) is the user's, as at the presence check; it and a key the keyring couldn't reach
     /// just then (`keyUnavailable`) leave Secrets as it was, for the next try.
     private func handle(_ error: Error, action: Action, facts: Facts) -> Failure {
@@ -403,10 +410,12 @@ final class SecretsStore {
         case is Failure: failure = error as? Failure ?? .keyring
         default: failure = .keyring
         }
-        if failure == .vault(.tampered) {
+        if failure == .vault(.tampered) || failure == .vault(.unlisted) {
             protection = .tampered
+            isUnlisted = failure == .vault(.unlisted)
+            let outcome = isUnlisted ? "refused: no record of this Mac's vaults" : "refused"
             let line = SecretAudit.Line(event: .tamper, names: action.names, who: facts.who, command: facts.command,
-                                        folder: facts.folder, outcome: "refused")
+                                        folder: facts.folder, outcome: outcome)
             try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
             NotificationCenter.default.post(name: Self.changed, object: self)
         } else if failure == .vault(.cantOpen), index != nil, protection != .cantOpen {
@@ -450,7 +459,8 @@ final class SecretsStore {
     /// The vault unlocked under its lock (or made, when `makes` and there is none), `change` run on it, and what it
     /// returns written; the vault key dropped after. A missing `mask.key` is made again, with new marks. A vault the
     /// record doesn't list is tampered: whatever its file says, it was not made here, so nothing is sealed into it or
-    /// released from it. A vault made here is listed before its file is written.
+    /// released from it. A vault made here is listed once its first action checked out, before its vault.json is
+    /// written, so a first add that fails (a bad value) lists nothing.
     nonisolated private static func unlocked(makes: Bool, firstName: String?, folder: SecretFolder,
                                              keyring: (SecretVault.Index) -> VaultKeyring, newKeyring: () throws -> VaultKeyring,
                                              record: VaultRecord, token: AnyObject,
@@ -464,6 +474,8 @@ final class SecretsStore {
             // The keyring a first add made: the keychain item it added is deleted when its vault wasn't written.
             var madeKeyring: VaultKeyring?
             defer { discardUnwritten(madeKeyring, folder: folder) }
+            // The vault a first add made, until it is listed in the record.
+            var unlisted: SecretVault?
             if let data = try folder.read(SecretFolder.maskKeyName, cap: 64), data.count == SecretVault.maskKeyLength {
                 maskKey = SymmetricKey(data: data)
             }
@@ -498,8 +510,7 @@ final class SecretsStore {
                     throw Failure.keyring
                 }
                 vault = made.vault // wiped after, whatever fails next
-                // Listed before any of its files is written: a vault.json this Mac's record doesn't list is never made.
-                try made.vault.record(in: record)
+                unlisted = made.vault
                 let maskData = made.maskKey.withUnsafeBytes { Data($0) }
                 try folder.write(SecretFolder.maskKeyName, data: maskData)
                 maskKey = SymmetricKey(data: maskData)
@@ -521,7 +532,13 @@ final class SecretsStore {
             }
             _ = try folder.update { current in
                 let open = try opened(current) // the first add sets maskKey here
-                return try change(open, maskKey)
+                let data = try change(open, maskKey)
+                // Listed before its vault.json is written: a vault.json this Mac's record doesn't list is never made.
+                if let made = unlisted, data != nil {
+                    try made.record(in: record)
+                    unlisted = nil
+                }
+                return data
             }
         }
         work.index = vault?.index
@@ -603,11 +620,10 @@ final class SecretsStore {
     private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
                      line: @escaping () -> SecretAudit.Line) async throws {
         reloadIfChanged()
-        if protection == .tampered { throw Failure.vault(.tampered) }
+        if protection == .tampered { throw Failure.vault(isUnlisted ? .unlisted : .tampered) }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !makes { throw Failure.vault(.noSuchKey(names.first ?? "")) }
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
-        let isKeychain = index?.keyring == .keychain
         let token: AnyObject
         do {
             token = try await presence.confirm(reason: reason, accessControl: control)
@@ -615,7 +631,7 @@ final class SecretsStore {
             throw failure == .cancelled ? Failure.cancelled : Failure.unavailable
         }
         defer { presence.finish(token) }
-        if isKeychain { setWaitingForKeychain(true) }
+        setWaitingForKeychain(true) // the record, at least, is in the login keychain
         let folder = folder
         let keyring = keyring
         let newKeyring = newKeyring
@@ -627,7 +643,7 @@ final class SecretsStore {
                                   record: record, token: token, change: box.value)
             }
         }
-        if isKeychain { setWaitingForKeychain(false) }
+        setWaitingForKeychain(false)
         switch result {
         case .success(let work):
             if let changed = work.index { index = changed }
@@ -731,6 +747,7 @@ final class SecretsStore {
         try folder.ensure()
         index = nil
         protection = .none
+        isUnlisted = false
         lastUse = [:]
         indexDate = nil
         publishMarks()

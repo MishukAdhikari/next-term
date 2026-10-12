@@ -18,8 +18,8 @@ extension SelfTest {
     }
 
     /// Each keychain vault keeps its key in an item of its own: Start Over and the next Add leave the kept vault's
-    /// item as it was, so the kept folder still opens; a key is never written over an item that is there; and a vault
-    /// whose key is still in the one item earlier builds shared opens with it only when that key is the vault's.
+    /// item as it was, so the kept folder still opens; a key is never written over an item that is there; and the one
+    /// item earlier builds shared is never read.
     static func secretsKeychainItemChecks(_ base: URL) async {
         let keychain = MemoryKeychain()
         let (store, _) = secretsKeychainStore(base, "keychain-items", keychain: keychain)
@@ -99,7 +99,9 @@ extension SelfTest {
               "\(item?.account ?? "no item"), \(added?.account ?? "no item"), enclave \(enclave)")
     }
 
-    /// A vault made when every keychain vault kept its key in one shared item.
+    /// A vault made by pre-release builds, when every keychain vault kept its key in one shared item: listed nowhere, so
+    /// it could never be used again. Its key is copied nowhere, and the load check finds it can't open, with no Touch ID.
+    /// Another vault's key in the vault's own item opens nothing either.
     static func secretsSharedItemChecks(_ base: URL) async {
         let key = SoftwareKeyring(kind: .keychain)
         let value = secretsValue("shared-keychain")
@@ -109,13 +111,13 @@ extension SelfTest {
             return check(false, "secrets: the vault with its key in the shared item is planted")
         }
         let maskKey = made.maskKey.withUnsafeBytes { Data($0) }
-        // Listed in the stores' record of the vaults made here, so these checks are of the keychain items alone.
-        let record = MemoryVaultRecord()
-        try? made.vault.record(in: record)
+        // A record that lists the vault, for the check of the vault's own item alone.
+        let listing = MemoryVaultRecord()
+        try? made.vault.record(in: listing)
         made.vault.wipe()
         let own = LoginKeychain.vaultKeyAccount(publicKey: key.publicKey())
         let shared = LoginKeychain.sharedVaultKeyAccount
-        func planted(_ name: String, account: String, key: Data) async -> (SecretsStore, MemoryKeychain) {
+        func planted(_ name: String, account: String, key: Data, record: VaultRecord) async -> (SecretsStore, MemoryKeychain) {
             let keychain = MemoryKeychain()
             try? keychain.item(account).add(key)
             let (store, _) = secretsKeychainStore(base, name, keychain: keychain, record: record)
@@ -126,30 +128,31 @@ extension SelfTest {
             return (store, keychain)
         }
 
-        let (store, keychain) = await planted("keychain-shared", account: shared, key: key.rawRepresentation)
-        let revealed = try? await store.perform(.reveal(name: "SHARED_KEY"))
-        let opened: Bool = revealed?["SHARED_KEY"] == SecretBytes(utf8: value)
-        let copied: Bool = (try? keychain.item(own).read()) == key.rawRepresentation
-        let kept: Bool = (try? keychain.item(shared).read()) == key.rawRepresentation
-        check(opened && copied && kept,
-              "secrets: a vault whose key is in the shared keychain item opens, and its key is copied to an item of its own",
-              keychain.accounts.joined(separator: ", "))
+        // As a real install has it: the record lists no vault of the shared item's.
+        let (store, keychain) = await planted("keychain-shared", account: shared, key: key.rawRepresentation,
+                                              record: MemoryVaultRecord())
+        let found = store.protection
+        var refused: SecretsStore.Failure?
+        do { try await store.perform(.reveal(name: "SHARED_KEY")) } catch { refused = error as? SecretsStore.Failure }
+        let copiedNowhere: Bool = keychain.accounts == [shared] && keychain.reads == 0
+        let cantOpen: Bool = found == .cantOpen && refused == .vault(.cantOpen)
+        check(cantOpen && copiedNowhere,
+              "secrets: a vault whose key is only in the shared keychain item of earlier builds can't open, found at load, and its key is copied nowhere",
+              "\(found), \(String(describing: refused)), \(keychain.accounts.joined(separator: ", ")), \(keychain.reads) reads")
 
-        // Another vault's key, in the shared item or in the vault's own: the load check passes on the item, and the first
-        // use, which finds the key isn't this vault's, marks Secrets can't open, so Settings shows Start Over.
+        // Another vault's key in the vault's own item: the load check passes on the item, and the first use, which finds
+        // the key isn't this vault's, marks Secrets can't open, so Settings shows Start Over.
         let otherKey = SoftwareKeyring(kind: .keychain).rawRepresentation
-        for (account, which, folder) in [(shared, "shared", "keychain-other-shared"), (own, "vault's own", "keychain-other-own")] {
-            let (other, otherKeychain) = await planted(folder, account: account, key: otherKey)
-            let before = other.protection
-            var failure: SecretsStore.Failure?
-            do { try await other.perform(.reveal(name: "SHARED_KEY")) } catch { failure = error as? SecretsStore.Failure }
-            let copiedNowhere: Bool = otherKeychain.accounts == [account]
-            let marked: Bool = before == .lessProtected && other.protection == .cantOpen
-            let cantOpen: Bool = failure == .vault(.cantOpen)
-            check(cantOpen && copiedNowhere && marked,
-                  "secrets: another vault's key in the \(which) keychain item opens nothing, is copied nowhere, and marks Secrets can't open",
-                  "\(String(describing: failure)), \(before) then \(other.protection), \(otherKeychain.accounts.joined(separator: ", "))")
-        }
+        let (other, otherKeychain) = await planted("keychain-other-own", account: own, key: otherKey, record: listing)
+        let before = other.protection
+        var failure: SecretsStore.Failure?
+        do { try await other.perform(.reveal(name: "SHARED_KEY")) } catch { failure = error as? SecretsStore.Failure }
+        let copiedElsewhere: Bool = otherKeychain.accounts != [own]
+        let marked: Bool = before == .lessProtected && other.protection == .cantOpen
+        let opensNothing: Bool = failure == .vault(.cantOpen)
+        check(opensNothing && !copiedElsewhere && marked,
+              "secrets: another vault's key in the vault's own keychain item opens nothing, is copied nowhere, and marks Secrets can't open",
+              "\(String(describing: failure)), \(before) then \(other.protection), \(otherKeychain.accounts.joined(separator: ", "))")
     }
 
     /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now, is a cancel, which leaves Secrets
