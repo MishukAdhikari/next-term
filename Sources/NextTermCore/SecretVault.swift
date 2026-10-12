@@ -181,7 +181,8 @@ public protocol VaultKeyring: AnyObject {
     func check(publicKey: Data) -> Bool
     /// The shared secret with `ephemeral`. `context` is the presence the app evaluated (an `LAContext`); on the Secure
     /// Enclave this is the step the hardware gates. Throws `SecretVault.Failure.cancelled` when the user did not
-    /// approve, and `cantOpen` (or any other error) when the key can't be opened.
+    /// approve, `keyUnavailable` when the key couldn't be reached just now, and `cantOpen` (or any other error) when the
+    /// key can't be opened.
     func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret
 }
 
@@ -262,6 +263,9 @@ public final class SecretVault {
         case cantOpen
         /// The user did not approve.
         case cancelled
+        /// The keyring couldn't reach its key just now (the keychain couldn't be read, LocalAuthentication wasn't
+        /// ready): the next try may work, so it never marks the vault as one that can't open.
+        case keyUnavailable
         /// The vault key was dropped (`wipe()`).
         case locked
         /// `vault.json` is over its size cap.
@@ -284,6 +288,7 @@ public final class SecretVault {
             case .cantOpen:
                 return "These keys were saved on another Mac, or this Mac’s Secure Enclave was reset, so they can’t be opened here."
             case .cancelled: return "Not approved."
+            case .keyUnavailable: return "Next Term couldn’t reach the key that guards Secrets just now, so nothing changed. Try again."
             case .locked: return "Secrets is locked."
             case .tooLarge: return "Secrets’ file is too large to read."
             case .changed: return "Secrets’ file changed while it was being saved, so nothing was saved. Try again."

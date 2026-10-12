@@ -37,6 +37,25 @@ private func entries(_ body: inout [String: Any], _ change: (inout [[String: Any
     body["entries"] = list
 }
 
+/// A keyring whose key agreement always fails with `failure`.
+private final class FailingKeyring: VaultKeyring {
+    let kind = VaultKeyringKind.keychain
+    let keyBlob: Data? = nil
+    let inner: SoftwareKeyring
+    let failure: SecretVault.Failure
+
+    init(_ inner: SoftwareKeyring, failure: SecretVault.Failure) {
+        self.inner = inner
+        self.failure = failure
+    }
+
+    func publicKey() throws -> Data { inner.publicKey() }
+    func check(publicKey: Data) -> Bool { true }
+    func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
+        throw failure
+    }
+}
+
 private func hex(_ key: SymmetricKey) -> String { key.withUnsafeBytes { Data($0) }.map { String(format: "%02x", $0) }.joined() }
 private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
 
@@ -171,19 +190,20 @@ private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0)
     }
 
     @Test func aCancelledKeyringIsCancelled() throws {
-        final class Refusing: VaultKeyring {
-            let kind = VaultKeyringKind.keychain
-            let keyBlob: Data? = nil
-            let inner: SoftwareKeyring
-            init(_ inner: SoftwareKeyring) { self.inner = inner }
-            func publicKey() throws -> Data { inner.publicKey() }
-            func check(publicKey: Data) -> Bool { true }
-            func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
-                throw SecretVault.Failure.cancelled
-            }
-        }
         let f = try VaultFixture()
-        #expect(throws: SecretVault.Failure.cancelled) { _ = try SecretVault.unlock(f.file, keyring: Refusing(f.keyring), context: nil) }
+        let refusing = FailingKeyring(f.keyring, failure: .cancelled)
+        #expect(throws: SecretVault.Failure.cancelled) { _ = try SecretVault.unlock(f.file, keyring: refusing, context: nil) }
+    }
+
+    /// A key the keyring can't reach just now (a keychain read that failed, LocalAuthentication not ready) is a failure
+    /// of its own, which the next try may pass: never `cantOpen`, and its text never says the keys are another Mac's.
+    @Test func aKeyThatCantBeReachedJustNowIsNotCantOpen() throws {
+        let f = try VaultFixture()
+        let unreachable = FailingKeyring(f.keyring, failure: .keyUnavailable)
+        #expect(throws: SecretVault.Failure.keyUnavailable) { _ = try SecretVault.unlock(f.file, keyring: unreachable, context: nil) }
+        let text = SecretVault.Failure.keyUnavailable.errorDescription ?? ""
+        #expect(text.contains("Try again"))
+        #expect(!text.contains("another Mac"))
     }
 
     @Test func createMakesAFreshMaskKey() throws {

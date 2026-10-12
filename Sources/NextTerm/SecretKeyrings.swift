@@ -63,13 +63,13 @@ final class SecureEnclaveKeyring: VaultKeyring {
         do {
             key = try open(context: context)
         } catch {
-            throw Self.isCancel(error) ? SecretVault.Failure.cancelled : SecretVault.Failure.cantOpen
+            throw Self.failure(error)
         }
         do {
             let secret = try key.sharedSecretFromKeyAgreement(with: ephemeral)
             return VaultKeyringSecret(secret: secret, publicKey: key.publicKey.x963Representation)
         } catch {
-            throw Self.isCancel(error) ? SecretVault.Failure.cancelled : SecretVault.Failure.cantOpen
+            throw Self.failure(error)
         }
     }
 
@@ -83,8 +83,12 @@ final class SecureEnclaveKeyring: VaultKeyring {
         return context
     }
 
-    private static func isCancel(_ error: Error) -> Bool {
-        UserPresence.failure(error) == .cancelled && error is LAError
+    /// What a failed open or key agreement means. An `LAError` that is a cancel is the user's, and any other `LAError`
+    /// is LocalAuthentication's, which the next try may pass: neither marks Secrets can't open. A CryptoKit or Security
+    /// error is a key that doesn't open on this Mac (another Mac's blob, a reset Secure Enclave), which does.
+    static func failure(_ error: Error) -> SecretVault.Failure {
+        guard error is LAError else { return .cantOpen }
+        return UserPresence.failure(error) == .cancelled ? .cancelled : .keyUnavailable
     }
 }
 
@@ -316,13 +320,14 @@ final class KeychainKeyring: VaultKeyring {
     }
 
     /// The key an item holds, or nil when the item is not there. An item that can't be read is not passed over for
-    /// another: a read the user refused is `cancelled`, which changes nothing; any other failure is `cantOpen`.
+    /// another. A read the user refused is `cancelled`, and any other failed read `keyUnavailable`: the next try may
+    /// work, so neither marks Secrets can't open. Data that is no key is `cantOpen`, which does.
     private static func key(in item: PasswordStore) throws -> SoftwareKeyring? {
         let read: Data?
         do {
             read = try item.read()
         } catch {
-            throw isRefused(error) ? SecretVault.Failure.cancelled : SecretVault.Failure.cantOpen
+            throw isRefused(error) ? SecretVault.Failure.cancelled : SecretVault.Failure.keyUnavailable
         }
         guard var raw = read else { return nil }
         defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }

@@ -1,4 +1,6 @@
 import AppKit
+import CryptoKit
+import LocalAuthentication
 import NextTermCore
 import Security
 
@@ -62,9 +64,10 @@ extension SelfTest {
         let maskKey = made.maskKey.withUnsafeBytes { Data($0) }
         made.vault.wipe()
         let own = LoginKeychain.vaultKeyAccount(publicKey: key.publicKey())
-        func planted(_ name: String, shared: Data) async -> (SecretsStore, MemoryKeychain) {
+        let shared = LoginKeychain.sharedVaultKeyAccount
+        func planted(_ name: String, account: String, key: Data) async -> (SecretsStore, MemoryKeychain) {
             let keychain = MemoryKeychain()
-            try? keychain.item(LoginKeychain.sharedVaultKeyAccount).add(shared)
+            try? keychain.item(account).add(key)
             let (store, _) = secretsKeychainStore(base, name, keychain: keychain)
             try? store.folder.ensure()
             try? store.folder.write(SecretFolder.maskKeyName, data: maskKey)
@@ -73,24 +76,34 @@ extension SelfTest {
             return (store, keychain)
         }
 
-        let (store, keychain) = await planted("keychain-shared", shared: key.rawRepresentation)
+        let (store, keychain) = await planted("keychain-shared", account: shared, key: key.rawRepresentation)
         let revealed = try? await store.perform(.reveal(name: "SHARED_KEY"))
-        let shared = try? keychain.item(LoginKeychain.sharedVaultKeyAccount).read()
-        check(revealed?["SHARED_KEY"] == SecretBytes(utf8: value) && (try? keychain.item(own).read()) == key.rawRepresentation
-                && shared == key.rawRepresentation,
+        let opened: Bool = revealed?["SHARED_KEY"] == SecretBytes(utf8: value)
+        let copied: Bool = (try? keychain.item(own).read()) == key.rawRepresentation
+        let kept: Bool = (try? keychain.item(shared).read()) == key.rawRepresentation
+        check(opened && copied && kept,
               "secrets: a vault whose key is in the shared keychain item opens, and its key is copied to an item of its own",
               keychain.accounts.joined(separator: ", "))
 
-        let (other, otherKeychain) = await planted("keychain-shared-other", shared: SoftwareKeyring(kind: .keychain).rawRepresentation)
-        var failure: SecretsStore.Failure?
-        do { try await other.perform(.reveal(name: "SHARED_KEY")) } catch { failure = error as? SecretsStore.Failure }
-        check(failure == .vault(.cantOpen) && otherKeychain.accounts == [LoginKeychain.sharedVaultKeyAccount],
-              "secrets: another vault's key in the shared keychain item opens nothing and is copied nowhere",
-              "\(String(describing: failure)), \(otherKeychain.accounts.joined(separator: ", "))")
+        // Another vault's key, in the shared item or in the vault's own: the load check passes on the item, and the first
+        // use, which finds the key isn't this vault's, marks Secrets can't open, so Settings shows Start Over.
+        let otherKey = SoftwareKeyring(kind: .keychain).rawRepresentation
+        for (account, which, folder) in [(shared, "shared", "keychain-other-shared"), (own, "vault's own", "keychain-other-own")] {
+            let (other, otherKeychain) = await planted(folder, account: account, key: otherKey)
+            let before = other.protection
+            var failure: SecretsStore.Failure?
+            do { try await other.perform(.reveal(name: "SHARED_KEY")) } catch { failure = error as? SecretsStore.Failure }
+            let copiedNowhere: Bool = otherKeychain.accounts == [account]
+            let marked: Bool = before == .lessProtected && other.protection == .cantOpen
+            check(failure == .vault(.cantOpen) && copiedNowhere && marked,
+                  "secrets: another vault's key in the \(which) keychain item opens nothing, is copied nowhere, and marks Secrets can't open",
+                  "\(String(describing: failure)), \(before) then \(other.protection), \(otherKeychain.accounts.joined(separator: ", "))")
+        }
     }
 
-    /// Cancel or Deny at macOS's keychain prompt is a cancel, which leaves Secrets usable. A failed open that the load
-    /// check still passes leaves it usable too; only one the load check fails as well says Secrets can't open.
+    /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now, is a cancel, which leaves Secrets
+    /// usable. Another failed read is a key out of reach just now, which leaves it usable too, and never says the keys
+    /// are another Mac's. An item that is gone says Secrets can't open.
     static func secretsKeychainPromptChecks(_ base: URL) async {
         let keychain = MemoryKeychain()
         let (store, _) = secretsKeychainStore(base, "keychain-prompt", keychain: keychain)
@@ -106,17 +119,21 @@ extension SelfTest {
                 return (nil, error as? SecretsStore.Failure)
             }
         }
-        for (status, button) in [(errSecUserCanceled, "Cancel"), (errSecAuthFailed, "Deny")] {
+        let refusals = [(errSecUserCanceled, "Cancel at the keychain prompt"), (errSecAuthFailed, "Deny at the keychain prompt"),
+                        (errSecInteractionNotAllowed, "a keychain that can't ask just now")]
+        for (status, what) in refusals {
             item.readFailure = status
             let refused = await reveal()
             check(refused.failure == .cancelled && store.protection == .lessProtected,
-                  "secrets: \(button) at the keychain prompt is a cancel, and Secrets stays usable",
+                  "secrets: \(what) is a cancel, and Secrets stays usable",
                   "\(String(describing: refused.failure)), \(store.protection)")
         }
         item.readFailure = errSecNotAvailable
         let failed = await reveal()
-        check(failed.failure == .vault(.cantOpen) && store.protection == .lessProtected,
-              "secrets: a keychain read that fails while the vault's item is there doesn't mark Secrets can't open",
+        let text = failed.failure?.errorDescription ?? ""
+        let neutral: Bool = !text.isEmpty && !text.contains("another Mac")
+        check(failed.failure == .vault(.keyUnavailable) && neutral && store.protection == .lessProtected,
+              "secrets: another failed keychain read is a key out of reach just now, never another Mac's, and Secrets stays usable",
               "\(String(describing: failed.failure)), \(store.protection)")
         item.readFailure = nil
         let opened = await reveal()
@@ -125,6 +142,64 @@ extension SelfTest {
         try? item.delete()
         let gone = await reveal()
         check(gone.failure == .vault(.cantOpen) && store.protection == .cantOpen,
-              "secrets: a keychain item that is gone, which the load check finds too, marks Secrets can't open", "\(store.protection)")
+              "secrets: a keychain item that is gone marks Secrets can't open at the first use", "\(store.protection)")
+        await secretsKeyringFailureChecks(base)
+    }
+}
+
+/// A keyring whose load check passes but whose key agreement fails with `failure`: a key that turns out not to open
+/// only at the first use, as a Secure Enclave key can.
+final class SelfTestFailingKeyring: VaultKeyring {
+    let kind = VaultKeyringKind.secureEnclave
+    let keyBlob: Data? = nil
+    private let inner: SoftwareKeyring
+    private let failure: SecretVault.Failure
+
+    init(_ inner: SoftwareKeyring, failure: SecretVault.Failure) {
+        self.inner = inner
+        self.failure = failure
+    }
+
+    func publicKey() throws -> Data { inner.publicKey() }
+    func check(publicKey: Data) -> Bool { true }
+    func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
+        throw failure
+    }
+}
+
+extension SelfTest {
+    /// A key that turns out not to open at the first use, though the load check passed, marks Secrets can't open, so
+    /// Settings shows Start Over; a key out of reach just now leaves Secrets usable. And how the Secure Enclave
+    /// keyring reads an error.
+    static func secretsKeyringFailureChecks(_ base: URL) async {
+        let key = SoftwareKeyring(kind: .secureEnclave)
+        let cases: [(SecretVault.Failure, SecretsStore.Protection, String)] = [
+            (.cantOpen, .cantOpen, "a key that turns out not to open at the first use marks Secrets can't open"),
+            (.keyUnavailable, .secureEnclave, "a key out of reach just now leaves Secrets usable"),
+        ]
+        for (n, (failure, after, name)) in cases.enumerated() {
+            let stub = SelfTestFailingKeyring(key, failure: failure)
+            let folder = SecretFolder(applicationSupport: base.appendingPathComponent("keyring-failure-\(n)", isDirectory: true))
+            let store = SecretsStore(folder: folder, presence: StandInPresence(), newKeyring: { key }, keyring: { _ in stub })
+            _ = try? await store.perform(.add(name: "STUB_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                              value: SecretBytes(utf8: secretsValue("stub-keyring"))))
+            let before = store.protection
+            var got: SecretsStore.Failure?
+            do { try await store.perform(.reveal(name: "STUB_KEY")) } catch { got = error as? SecretsStore.Failure }
+            check(before == .secureEnclave && got == .vault(failure) && store.protection == after, "secrets: \(name)",
+                  "\(before) then \(store.protection), \(String(describing: got))")
+        }
+        let errors: [(Error, SecretVault.Failure)] = [
+            (LAError(.userCancel), .cancelled),
+            (LAError(.notInteractive), .cancelled),
+            (LAError(.biometryLockout), .keyUnavailable),
+            (LAError(.invalidContext), .keyUnavailable),
+            (CryptoKitError.incorrectParameterSize, .cantOpen),
+            (NSError(domain: NSOSStatusErrorDomain, code: Int(errSecDecode)), .cantOpen),
+        ]
+        let read = errors.map { SecureEnclaveKeyring.failure($0.0) }
+        check(read == errors.map(\.1),
+              "secrets: a Secure Enclave cancel is Not approved, another LocalAuthentication error a key out of reach just now, and a CryptoKit or Security error a key that can't open",
+              "\(read)")
     }
 }
