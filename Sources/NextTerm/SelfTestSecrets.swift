@@ -446,9 +446,11 @@ extension SelfTest {
         facts.arguments = ["NextTerm", "--cli", "secret", "run"] + names + ["--"] + command
         let shown = source == .wrapper ? command.map(SecretApprovalPanel.escaped).joined(separator: " ") : command.joined(separator: " ")
         let argv = source == .wrapper ? command : ["/bin/sh", "-c"] + command
+        // The program as each names it: a wrapper by its argv's first word, run_with_secrets by its command line's.
+        let program = source == .wrapper ? ((command.first ?? "") as NSString).lastPathComponent
+            : SecretRun.programName(ofCommand: command.first ?? "")
         return SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: argv, folder: folder, warnings: [],
-                                      agentWords: words, askedBy: facts, program: ((command.first ?? "") as NSString).lastPathComponent,
-                                      isRemote: remote != nil)
+                                      agentWords: words, askedBy: facts, program: program, isRemote: remote != nil)
     }
 
     static func secretsAllowed(_ decision: SecretRequests.Decision?) -> (values: [String: SecretBytes], how: SecretAudit.Approval)? {
@@ -529,10 +531,11 @@ extension SelfTest {
         afterLock.panel?.declineButton.performClick(nil)
 
         // Two identical wrappers wait on one panel: the first leaving leaves the second waiting, and it gets the answer.
-        let first = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        // Their own asker: the card just declined pauses its own request for 10 minutes, so it would refuse them.
+        let first = secretsRequest(asker: "wrapper:selftest-twins", command: command, tab: "tab 3")
         let firstWaits = requests.ask(first) { _ in }
         let secondAnswers = SecretsAnswers()
-        let second = secretsRequest(asker: "wrapper:selftest-a", command: command, tab: "tab 3")
+        let second = secretsRequest(asker: "wrapper:selftest-twins", command: command, tab: "tab 3")
         requests.ask(second) { secondAnswers.take($0) }
         if let firstWaits { requests.wrapperLeft(firstWaits) }
         check(!first.gone && first.panel?.durationChoice[.once]?.isEnabled == true && secondAnswers.all.isEmpty,
@@ -635,22 +638,41 @@ final class SecretsWrapperRun: @unchecked Sendable {
     private let errors = Pipe()
     private(set) var stdout = Data()
     private(set) var stderr = Data()
+    private var launched = false
 
-    init(_ arguments: [String], environment: [String: String] = [:], wait: Int = 20, directory: URL? = nil) {
-        process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+    /// `padding`: that many more arguments ("a") at the end of the wrapper's argv. `/bin/sh` adds them as it execs the
+    /// wrapper, since `Process` raises an Objective-C exception, which Swift can't catch, past 4,096 arguments.
+    init(_ arguments: [String], environment: [String: String] = [:], wait: Int = 20, directory: URL? = nil, padding: Int = 0) {
+        let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
+        let own = ["--cli", "--self-test-secret-wrapper", SelfTest.mcpSocketPath, String(wait), "secret", "run"] + arguments
+        if padding > 0 {
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", "exec \"$@\" $(/usr/bin/jot -b a \(padding))", "sh", executable] + own
+        } else {
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = own
+        }
         process.currentDirectoryURL = directory
-        process.arguments = ["--cli", "--self-test-secret-wrapper", SelfTest.mcpSocketPath, String(wait), "secret", "run"] + arguments
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
         process.standardOutput = output
         process.standardError = errors
         process.standardInput = FileHandle.nullDevice
     }
 
-    func start() -> Bool { (try? process.run()) != nil }
+    func start() -> Bool {
+        launched = (try? process.run()) != nil
+        if !launched {
+            // Nothing else would close the pipes' writing ends, and a read would wait for them for ever.
+            try? output.fileHandleForWriting.close()
+            try? errors.fileHandleForWriting.close()
+        }
+        return launched
+    }
 
-    /// Waits for it to end, without blocking the main thread.
+    /// Waits for it to end, without blocking the main thread. Nil when it never started, or did not end in time.
     @MainActor
     func finish(within seconds: Double = 40) async -> Int32? {
+        guard launched else { return nil }
         guard await SelfTest.wait(seconds, { !self.process.isRunning }) else {
             process.terminate()
             return nil
@@ -690,9 +712,10 @@ extension SelfTest {
         }
 
         // Allowed: the child gets the key (it writes only its length), not OTHER_KEY, only fds 0 to 2, SIGPIPE at its default.
+        // macOS's ps has no "ignored" column: perl, started by it, reads SIGPIPE as it inherited it ("IGNORE" when ignored).
         let script = "printf %s \"$K\" | wc -c | tr -d ' ' > len; if [ -z \"${OTHER_KEY+x}\" ]; then echo gone > other; fi; "
             + "for n in 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 255; do if [ -e /dev/fd/$n ]; then echo $n >> fds; fi; done; "
-            + "ps -o ignored= -p $$ > ignored"
+            + #"/usr/bin/perl -e 'print defined $SIG{PIPE} ? $SIG{PIPE} : "DEFAULT"' > sigpipe"#
         let allowed = SecretsWrapperRun(["WRAP_KEY=K", "--", "/bin/sh", "-c", script], environment: ["OTHER_KEY": "exported-in-the-parent"],
                                         directory: out)
         let started = allowed.start()
@@ -702,13 +725,12 @@ extension SelfTest {
         check(started && shown && title.contains("asks to start sh with WRAP_KEY"), "secrets: nxtrm secret run shows the panel", title)
         panel?.allowButton.performClick(nil)
         let allowedExit = await allowed.finish()
-        let ignored = UInt64(read("ignored"), radix: 16) ?? UInt64.max
         check(allowedExit == 0 && read("len") == String(value.utf8.count) && allowed.stdout.isEmpty,
               "secrets: after Allow the command runs with the key in its environment, and nothing goes to stdout",
               "exit \(String(describing: allowedExit)), len \(read("len")), \(allowed.errorText)")
         check(read("other") == "gone", "secrets: a stored key's name exported in the parent is gone in the command")
-        check(read("fds").isEmpty && ignored & (1 << 12) == 0,
-              "secrets: the command has only fds 0 to 2, and SIGPIPE at its default", "fds [\(read("fds"))], ignored \(read("ignored"))")
+        check(read("fds").isEmpty && read("sigpipe") == "DEFAULT",
+              "secrets: the command has only fds 0 to 2, and SIGPIPE at its default", "fds [\(read("fds"))], SIGPIPE \(read("sigpipe"))")
         check(!String(decoding: store.folder.readAudit(), as: UTF8.self).contains(value), "secrets: the audit log holds no value")
 
         // Declined: exit 1 and its line.
@@ -774,7 +796,7 @@ extension SelfTest {
         let liarExit = await liar.finish()
         check(liarExit == 1 && liar.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
               "secrets: a wrapper whose argv is not the one it sent is refused, with no panel", liar.errorText)
-        let many = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"] + Array(repeating: "a", count: 4097))
+        let many = SecretsWrapperRun(["WRAP_KEY", "--", "/usr/bin/true"], padding: 4097)
         _ = many.start()
         let manyExit = await many.finish()
         check(manyExit == 1 && many.errorText == "nxtrm: Next Term refused this request." && requests.showing == nil,
