@@ -208,8 +208,10 @@ enum SecretSocket {
             case .vault(.noSuchKey(let name)): return SecretRun.Answer(status: .unknown, name: name, names: request.names)
             default: return SecretRun.Answer(status: .refused, names: request.names)
             }
-        case .notStarted, .usedAlready:
+        case .notStarted:
             return SecretRun.Answer(status: .expired, names: request.names)
+        case .usedAlready:
+            return SecretRun.Answer(status: .usedAlready, names: request.names)
         case .saved, .unanswered:
             return SecretRun.Answer(status: .refused, names: request.names)
         }

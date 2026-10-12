@@ -293,6 +293,8 @@ public enum SecretRun {
     /// The app's answers, by status.
     public enum Status: String, Codable, Sendable {
         case allowed, declined, paused, stopped, declining, busy, limited, expired
+        /// "Allow once" starts one command, and an identical one waiting on the same panel used it.
+        case usedAlready = "used_already"
         case cantOpen = "cant_open"
         case refused
         case valueInCommand = "value_in_command"
@@ -359,6 +361,8 @@ public enum SecretRun {
         case .busy: return ("nxtrm: too many key requests are waiting in Next Term. Answer them, then restart this command.", 1)
         case .limited: return ("nxtrm: this command has asked too often. Resume it in Settings › Secrets, or restart Next Term.", 1)
         case .expired: return ("nxtrm: this run’s approval expired or was used already, so no key was given.", 1)
+        case .usedAlready:
+            return ("nxtrm: an identical command used this Allow once, so no key was given. Restart this command to ask again.", 1)
         case .cantOpen: return ("nxtrm: Next Term can’t open Secrets on this Mac. Open Settings › Secrets.", 1)
         case .refused: return ("nxtrm: Next Term refused this request.", 1)
         case .valueInCommand: return ("nxtrm: the command holds a stored key’s value. Use the key’s name instead.", 2)

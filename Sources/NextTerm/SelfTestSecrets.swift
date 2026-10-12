@@ -764,6 +764,9 @@ extension SelfTest {
         let declinedExit = await declined.finish()
         check(declinedExit == 1 && declined.errorText == "nxtrm: Next Term declined WRAP_KEY for true." && declined.stdout.isEmpty,
               "secrets: a declined wrapper exits 1 with its line", declined.errorText)
+        #if DEBUG
+        await secretsWrapperTwinsChecks(out)
+        #endif
 
         // An unknown name, and an argument holding a stored value: exit 2, no panel.
         let unknown = SecretsWrapperRun(["NOT_STORED", "--", "/usr/bin/true"])
@@ -1174,6 +1177,10 @@ extension SelfTest {
                 note("secrets: the zsh config of the tab run_with_secrets opened was not asked: its shell stayed busy")
             }
         }
+
+        #if DEBUG
+        await secretsRunTwiceChecks(arguments: arguments, value: value, opened: &opened)
+        #endif
 
         // "Allow for 15 minutes": the same call starts with no panel, until the folder's .env changes.
         let again = secretsStart("run_with_secrets", arguments)

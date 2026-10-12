@@ -72,6 +72,95 @@ extension SelfTest {
         requests.resetForSelfTest()
     }
 
+    /// Two identical `nxtrm secret run` wrappers on one panel, the second having taken it over: "Allow once" starts one,
+    /// and the other ends with its own line and exit 1; "Allow for 15 minutes" starts both; and when the first left
+    /// before Allow, the one still waiting runs. Each run adds its word to `runs` in `out`.
+    static func secretsWrapperTwinsChecks(_ out: URL) async {
+        let requests = SecretRequests.shared
+        func ran(_ word: String) -> Int {
+            let text = (try? String(contentsOf: out.appendingPathComponent("runs"), encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").filter { $0 == word }.count
+        }
+        func twins(_ word: String) -> (SecretsWrapperRun, SecretsWrapperRun) {
+            let arguments = ["WRAP_KEY=K", "--", "/bin/sh", "-c", "echo \(word) >> runs"]
+            return (SecretsWrapperRun(arguments, directory: out), SecretsWrapperRun(arguments, directory: out))
+        }
+        // The first's panel up, then the second on it.
+        func onOnePanel(_ first: SecretsWrapperRun, _ second: SecretsWrapperRun) async -> SecretRequests.Request? {
+            guard first.start(), await wait(15, { requests.showing?.panel != nil }), let request = requests.showing else { return nil }
+            guard second.start(), await wait(15, { request.callers == 2 }) else { return nil }
+            return request
+        }
+
+        let (first, second) = twins("once")
+        let once = await onOnePanel(first, second)
+        once?.panel?.durationChoice[.once]?.performClick(nil)
+        once?.panel?.allowButton.performClick(nil)
+        let firstExit = await first.finish()
+        let secondExit = await second.finish()
+        let usedLine = "nxtrm: an identical command used this Allow once, so no key was given. Restart this command to ask again."
+        check(once != nil && firstExit == 0 && secondExit == 1 && second.errorText == usedLine && ran("once") == 1,
+              "secrets: one Allow once starts one of two identical wrappers, and the other says an identical command used it",
+              "exits \(String(describing: firstExit)) and \(String(describing: secondExit)), ran \(ran("once")), \(second.errorText)")
+
+        let (third, fourth) = twins("lasting")
+        let lasting = await onOnePanel(third, fourth)
+        lasting?.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)
+        lasting?.panel?.allowButton.performClick(nil)
+        let thirdExit = await third.finish()
+        let fourthExit = await fourth.finish()
+        check(lasting != nil && thirdExit == 0 && fourthExit == 0 && ran("lasting") == 2,
+              "secrets: Allow for 15 minutes starts both identical wrappers waiting on its panel",
+              "exits \(String(describing: thirdExit)) and \(String(describing: fourthExit)), ran \(ran("lasting"))")
+        requests.revokeAll()
+
+        let (gone, staying) = twins("left")
+        let left = await onOnePanel(gone, staying)
+        if left != nil { kill(gone.process.processIdentifier, SIGKILL) }
+        let heard = await wait(10) { left?.callers == 1 }
+        left?.panel?.durationChoice[.once]?.performClick(nil)
+        left?.panel?.allowButton.performClick(nil)
+        _ = await gone.finish()
+        let stayingExit = await staying.finish()
+        let oneUse = requests.book.grants.contains { $0.kind == .oneUse }
+        check(left != nil && heard && stayingExit == 0 && ran("left") == 1 && !oneUse,
+              "secrets: when the first of two identical wrappers left before Allow once, the one still waiting runs",
+              "heard \(heard), exit \(String(describing: stayingExit)), ran \(ran("left")), one-use grant \(oneUse)")
+        requests.resetForSelfTest()
+    }
+
+    /// Two run_with_secrets calls with the same command and folder, each through its own tab, ticket, redeem and
+    /// wrapper: the second takes the first's panel over, and one "Allow once" starts the command in one tab only. The
+    /// other call answers refused, saying an identical call used it, and its tab shows the wrapper's line.
+    static func secretsRunTwiceChecks(arguments: [String: Any], value: String, opened: inout [TerminalTab]) async {
+        let requests = SecretRequests.shared
+        let app = AppDelegate.shared!
+        let before = Set(app.controllers.flatMap(\.tabs).map(\.id))
+        func screen(_ tab: TerminalTab) -> String { tab.screenTail().joined(separator: "\n") }
+        let length = String(value.utf8.count)
+        func ran(_ tab: TerminalTab) -> Bool { screen(tab).contains("\(length)LEN") || screen(tab).contains("\(length)\nLEN") }
+        let first = secretsStart("run_with_secrets", arguments)
+        let second = secretsStart("run_with_secrets", arguments)
+        let onOnePanel = await wait(20) { requests.queue.count == 1 && requests.showing?.callers == 2 }
+        requests.showing?.panel?.durationChoice[.once]?.performClick(nil)
+        requests.showing?.panel?.allowButton.performClick(nil)
+        let firstAnswer = await first.value
+        let secondAnswer = await second.value
+        let tabs = app.controllers.flatMap(\.tabs).filter { !before.contains($0.id) }
+        opened += tabs
+        let statuses = [firstAnswer, secondAnswer].map { $0["status"] as? String ?? "" }.sorted()
+        let note = [firstAnswer, secondAnswer].first { $0["status"] as? String == "refused" }?["note"] as? String ?? ""
+        let oneRan = await wait(15) { tabs.filter(ran).count == 1 }
+        let words = secretsUnwrapped("nxtrm: an identical command used this Allow once")
+        let said = await wait(10) { tabs.contains { secretsUnwrapped(screen($0)).contains(words) } }
+        _ = await wait(2) { false } // a second run would show by now
+        check(onOnePanel && statuses == ["refused", "started"] && note.contains("an identical call used it") && oneRan
+              && tabs.filter(ran).count == 1 && said,
+              "secrets: of two identical run_with_secrets calls on one panel, one Allow once runs the command in one tab only, "
+                  + "and the other call answers refused and its tab says why",
+              "on one panel \(onOnePanel), \(secretsJSON(firstAnswer)) \(secretsJSON(secondAnswer)), ran in \(tabs.filter(ran).count), said \(said)")
+    }
+
     /// A grant's values go the moment it ends on its own or is used, with no request after it (review finding 9).
     static func secretsGrantEndChecks(_ store: SecretsStore) async {
         let requests = SecretRequests.shared
@@ -114,6 +203,7 @@ extension SelfTest {
         check(oneUse && secretsAllowed(restartAnswers.last)?.how == .grant && gone && usedLine,
               "secrets: a one-use grant and its values go the moment it is used, with a grant-end line",
               "made \(oneUse), gone \(gone), line \(usedLine)")
+
     }
 }
 #endif

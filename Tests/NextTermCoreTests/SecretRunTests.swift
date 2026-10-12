@@ -58,6 +58,8 @@ import Testing
             (.answer(.busy, name: nil, until: nil), "nxtrm: too many key requests are waiting in Next Term. Answer them, then restart this command.", 1),
             (.answer(.limited, name: nil, until: nil), "nxtrm: this command has asked too often. Resume it in Settings › Secrets, or restart Next Term.", 1),
             (.answer(.expired, name: nil, until: nil), "nxtrm: this run’s approval expired or was used already, so no key was given.", 1),
+            (.answer(.usedAlready, name: nil, until: nil),
+             "nxtrm: an identical command used this Allow once, so no key was given. Restart this command to ask again.", 1),
             (.answer(.cantOpen, name: nil, until: nil), "nxtrm: Next Term can’t open Secrets on this Mac. Open Settings › Secrets.", 1),
             (.answer(.refused, name: nil, until: nil), "nxtrm: Next Term refused this request.", 1),
             (.answer(.valueInCommand, name: nil, until: nil), "nxtrm: the command holds a stored key’s value. Use the key’s name instead.", 2),
@@ -89,6 +91,9 @@ import Testing
         let refused = SecretRun.Answer(status: .declined, note: "declined")
         let decoded = try #require(SecretRun.Answer.decode(refused.line().dropLast()))
         #expect(decoded.status == .declined && decoded.environment == nil)
+        let used = SecretRun.Answer(status: .usedAlready, names: ["A"]).line()
+        #expect(String(decoding: used, as: UTF8.self).contains(#""status":"used_already""#))
+        #expect(SecretRun.Answer.decode(used.dropLast())?.status == .usedAlready)
     }
 }
 

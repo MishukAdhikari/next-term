@@ -152,6 +152,10 @@ final class SecretRequests {
 
         var asker: String { binding.asker }
         var isWrapper: Bool { binding.source == .wrapper }
+        #if DEBUG
+        /// The self-test's: how many callers wait on it, its own and each that took it over.
+        var callers: Int { replies.count }
+        #endif
         var names: [String] { keys.map(\.name) }
         var isUse: Bool {
             if case .use = kind { return true }
