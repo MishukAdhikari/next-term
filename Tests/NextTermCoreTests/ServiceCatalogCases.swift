@@ -213,3 +213,20 @@ extension ServiceCatalogTests {
                   not: [".ddev/README.txt": "Not a config\n"]),
     ]
 }
+
+extension ServiceCatalogTests {
+    static let backends: [EntryCase] = [
+        EntryCase("supabase", [".env.local": "NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\n"],
+                  name: "Supabase", badge: "Dashboard", url: "https://supabase.com/dashboard/project/abcdefghijklmnopqrst",
+                  not: [".env": "SUPABASE_URL=http://127.0.0.1:54321\n"]),
+        EntryCase("firebase", [".firebaserc": #"{"projects": {"default": "shop-prod"}}"#],
+                  name: "Firebase", badge: "Console", url: "https://console.firebase.google.com/project/shop-prod/overview",
+                  not: [".env": "FIREBASE_TOKEN=NOT-A-TOKEN\n"]),
+        EntryCase("upstash", [".env": "UPSTASH_REDIS_REST_URL=https://wise-cat-12345.upstash.io\n"],
+                  name: "Upstash", badge: "Console", url: "https://console.upstash.com/redis",
+                  not: [".env": "REDIS_URL=redis://localhost:6379\n"]),
+        EntryCase("convex", [".env.local": "CONVEX_DEPLOYMENT=dev:happy-otter-123 # team: acme, project: shop\n"],
+                  name: "Convex", badge: "Dashboard", url: "https://dashboard.convex.dev/d/happy-otter-123",
+                  not: [".env.local": "CONVEX_DEPLOYMENT=local:shop-dev\n"]),
+    ]
+}

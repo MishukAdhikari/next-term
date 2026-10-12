@@ -433,3 +433,78 @@ extension ProjectServicesTests {
         #expect(project.services(herd: false).rows.map(\.id) == ["herd.local"])
     }
 }
+
+// MARK: - Backends
+
+extension ProjectServicesTests {
+    /// A database row that carries Supabase shows its page; the services list does not repeat it.
+    @Test func aDatabaseRowsProviderIsNotListedAgain() throws {
+        let files: [String: String] = [
+            ".env.local": "NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\n",
+            "package.json": packageJSON(["@supabase/supabase-js"]),
+        ]
+        let alone = FixtureProject(files)
+        let supabase = try row(alone.services(), "supabase.cloud")
+        #expect(supabase.link.tooltip == "Open Supabase Dashboard: project abcdefghijklmnopqrst")
+        #expect(supabase.link.source == ".env.local")
+        var withDatabase = files
+        withDatabase[".env"] = "DATABASE_URL=postgres://app:NOT-A-PASSWORD@db.abcdefghijklmnopqrst.supabase.co:5432/postgres\n"
+        let project = FixtureProject(withDatabase)
+        #expect(project.scan().databases.first?.providers == [.supabase])
+        #expect(project.services().rows.isEmpty)
+        expectNoSecret(project.services())
+    }
+
+    /// The local stack opens Studio, unless its database row shows Studio already; `config.toml`'s `project_id` is a
+    /// local name, never a ref.
+    @Test func theLocalStackOpensStudioUnlessItsDatabaseRowDoes() throws {
+        let bare = FixtureProject(["package.json": packageJSON(["@supabase/supabase-js"]),
+                                   "supabase/config.toml": "project_id = \"shop\"\n\n[studio]\nport = 54423\n"])
+        let local = try row(bare.services(), "supabase.local")
+        #expect(urls(local) == ["http://127.0.0.1:54423", "http://127.0.0.1:54324"])
+        #expect(local.links.map(\.title) == ["Open Supabase Studio", "Open Supabase Email"])
+        #expect(local.link.tooltip == "Open Supabase Studio at 127.0.0.1:54423 (from supabase/config.toml)")
+        #expect(!local.tooltip.contains("shop"))
+        let withDatabase = FixtureProject(["supabase/config.toml": "project_id = \"shop\"\n\n[db]\nport = 54322\n"])
+        #expect(withDatabase.scan().databases.first?.providers == [.supabase])
+        #expect(withDatabase.services().rows.isEmpty)
+        let cloud = FixtureProject(["package.json": packageJSON(["@supabase/supabase-js"])])
+        #expect(try row(cloud.services(), "supabase.cloud").link.url.absoluteString
+            == "https://supabase.com/dashboard/project/_")
+    }
+
+    @Test func oneUpstashRowHasAPageForEachProduct() throws {
+        let project = FixtureProject([".env": """
+        UPSTASH_REDIS_REST_URL=https://wise-cat-12345.upstash.io
+        UPSTASH_REDIS_REST_TOKEN=NOT-A-TOKEN
+        UPSTASH_VECTOR_REST_URL=https://shop-vectors-12345-us1-vector.upstash.io
+        UPSTASH_VECTOR_REST_TOKEN=NOT-A-TOKEN
+        """])
+        let scan = project.services()
+        #expect(scan.rows.map(\.id) == ["upstash.cloud"])
+        let upstash = try row(scan, "upstash.cloud")
+        #expect(upstash.links.map(\.title) == ["Open Upstash Redis", "Open Upstash Vector"])
+        #expect(urls(upstash) == ["https://console.upstash.com/redis", "https://console.upstash.com/vector"])
+        let vector = try row(FixtureProject([".env": "UPSTASH_VECTOR_REST_URL=https://v.upstash.io\n"]).services(),
+                             "upstash.cloud")
+        #expect(urls(vector) == ["https://console.upstash.com/vector"])
+        expectNoSecret(scan)
+    }
+
+    @Test func firebaseOpensItsEmulatorUIBesideTheConsole() throws {
+        let project = FixtureProject([".firebaserc": #"{"projects": {"default": "shop-prod"}}"#,
+                                      "firebase.json": #"{"emulators": {"ui": {"enabled": true, "port": 4100}}}"#])
+        let firebase = try row(project.services(), "firebase.cloud")
+        #expect(urls(firebase) == ["https://console.firebase.google.com/project/shop-prod/overview", "http://127.0.0.1:4100"])
+        #expect(firebase.links.map(\.title) == ["Open Firebase Console", "Open Firebase Emulator UI"])
+        #expect(!firebase.isLocal)
+    }
+
+    @Test func convexOpensTheDeploymentItsURLNames() throws {
+        let project = FixtureProject([".env.local": "VITE_CONVEX_URL=https://happy-otter-123.convex.cloud\n"])
+        #expect(try row(project.services(), "convex.cloud").link.url.absoluteString
+            == "https://dashboard.convex.dev/d/happy-otter-123")
+        let local = FixtureProject([".env.local": "CONVEX_DEPLOYMENT=anonymous:shop\nVITE_CONVEX_URL=http://127.0.0.1:3210\n"])
+        #expect(local.services().rows.isEmpty)
+    }
+}
