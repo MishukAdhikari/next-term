@@ -2,8 +2,8 @@ import Foundation
 
 // Start commands: a script, task, process, target or recipe that runs a tool the catalog knows, and the port it names.
 // A script line can hold a secret inline (`OPENAI_API_KEY=… next dev`, a database URL with its password, a Makefile's
-// `export TOKEN=…`), so only the file, the script's name, the start words and the port are kept; the line is dropped
-// as soon as it is read.
+// `export TOKEN=…`), so only the file, the script's name, the start words, the port and a `--studio-url`'s origin
+// are kept; the line is dropped as soon as it is read.
 
 extension ProjectFacts {
     /// `Procfile`, `Procfile.dev`, `Makefile` and `justfile`. `package.json`'s scripts and `pyproject.toml`'s tasks
@@ -76,7 +76,9 @@ extension ProjectFacts {
 
     /// The tools a command line runs, by the catalog's start words, each with the port it names. The line is cut
     /// into commands at `&&`, `||`, `;`, `|`, `&`, quotes and parentheses, and a word is matched whole, or as the last
-    /// part of a path (`bin/rails`, `./node_modules/.bin/next`). Nothing of the line is kept but what is returned.
+    /// part of a path (`bin/rails`, `./node_modules/.bin/next`). A word that ends in `=` is a variable the tool reads
+    /// (`GRADIO_SERVER_PORT=`), matched at the start of a word, and its value is the port. Nothing of the line is
+    /// kept but what is returned.
     static func startCommands(in line: String, file: String, script: String, words: [String]) -> [StartCommand] {
         let wordLists = words.map { (word: String) -> [Substring] in word.split(separator: " ") }
         let scriptName = plainText(script) ?? ""
@@ -87,12 +89,21 @@ extension ProjectFacts {
             let before = tokens[..<hit.start]
             let after = tokens[(hit.start + hit.words.count)...]
             let word = hit.words.joined(separator: " ")
+            if isVariable(word) {
+                let port = ComposeFile.portNumber(tokens[hit.start].dropFirst(word.count))
+                found.append(StartCommand(file: file, script: scriptName, word: word, port: port))
+                continue
+            }
             let runserver: Bool = hit.words.last == "runserver"
             let flagged: Int? = flagPort(after, names: ["--port", "-p", "--server.port"])
             let served: Int? = runserver ? serverPort(after) : nil
             let port: Int? = flagged ?? served ?? leadingPort(before)
             let uiPort: Int? = flagPort(after, names: ["--ui-port"])
-            found.append(StartCommand(file: file, script: scriptName, word: word, port: port, uiPort: uiPort))
+            let studio = flagValue(after, name: "--studio-url").flatMap { (value: Substring) -> SafeWebLink.Origin? in
+                SafeWebLink.address(of: String(value))
+            }
+            found.append(StartCommand(file: file, script: scriptName, word: word, port: port, uiPort: uiPort,
+                                      studio: studio))
         }
         return found
     }
@@ -112,9 +123,25 @@ extension ProjectFacts {
         return nil
     }
 
-    /// A token is a word as written, or as the last part of a path.
+    /// A token is a word as written, or as the last part of a path; a variable, as the start of an assignment.
     static func tokenIs(_ token: Substring, _ word: Substring) -> Bool {
-        token == word || token.split(separator: "/").last == word
+        if isVariable(word) { return token.hasPrefix(word) }
+        return token == word || token.split(separator: "/").last == word
+    }
+
+    /// `GRADIO_SERVER_PORT=`: a start word that names a variable the tool reads, not a command.
+    static func isVariable<Text: StringProtocol>(_ word: Text) -> Bool {
+        word.hasSuffix("=")
+    }
+
+    /// `--name value` or `--name=value`, for the first time the command gives it.
+    static func flagValue(_ tokens: ArraySlice<Substring>, name: String) -> Substring? {
+        for index in tokens.indices {
+            let token = tokens[index]
+            if token == name, index + 1 < tokens.endIndex { return tokens[index + 1] }
+            if token.hasPrefix(name + "=") { return token.dropFirst(name.count + 1) }
+        }
+        return nil
     }
 
     /// `--port N` or `--port=N`, for the first of `names` the command gives.

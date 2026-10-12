@@ -79,7 +79,8 @@ extension ServiceCatalog {
 // MARK: - Gradio, Chainlit, Rails, Phoenix
 
 extension ServiceCatalog {
-    static let gradioPort = LocalPort("127.0.0.1", [.start(["gradio"])], default: 7860)
+    /// `gradio app.py`, or `GRADIO_SERVER_PORT=N` before whatever runs the app (`python app.py`).
+    static let gradioPort = LocalPort("127.0.0.1", [.start(["gradio", "GRADIO_SERVER_PORT="])], default: 7860)
     static let gradio = server("gradio", "Gradio", rank: 11, signals: [.dependency(.pypi, "gradio")], port: gradioPort)
 
     static let chainlitPort = LocalPort("localhost", [.start(["chainlit run"])], default: 8000)

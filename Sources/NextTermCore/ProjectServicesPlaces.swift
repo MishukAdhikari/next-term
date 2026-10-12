@@ -183,8 +183,9 @@ extension LinkDraft {
         } else {
             tooltip = title
         }
+        // The row's id, then the page: the same page in another place is another link (`qdrant.local.dashboard`).
         let suffix: String = item == nil ? "" : ".\(index)"
-        return ServiceLink(id: entry.id + "." + template.id + suffix, badge: badge, title: title, tooltip: tooltip,
-                           url: url, source: source)
+        let id = entry.id + "." + place.rawValue + "." + template.id + suffix
+        return ServiceLink(id: id, badge: badge, title: title, tooltip: tooltip, url: url, source: source)
     }
 }

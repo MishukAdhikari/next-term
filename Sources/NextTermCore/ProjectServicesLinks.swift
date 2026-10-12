@@ -82,36 +82,40 @@ extension ServiceReader {
         }
     }
 
-    /// Its SDK's base URL names another host, so the SDK talks to that host's provider, not this one.
+    /// Its SDK's base URL, the value in effect, names another host, so the SDK talks to that host's provider, not
+    /// this one.
     func isRouted(_ entry: ServiceEntry) -> Bool {
         let own = entry.signals.compactMap { (signal: Signal) -> HostMatch? in
             if case .host(let match) = signal { return match }
             return nil
         }
         for key in entry.routes {
-            guard let origin = facts.values(key).compactMap(\.origin).first else { continue }
+            guard let origin = inEffect(key)?.origin else { continue }
             return !own.contains { (match: HostMatch) -> Bool in match.matches(origin.host) }
         }
         return false
     }
 
     /// A key that names this entry's server holds a value no link may use (it names another value, holds a user or
-    /// password, or is plain `http` to a remote host): the project said where its server is, so no vendor default
-    /// and no default port stands in for it.
+    /// password, is plain `http` to a remote host, or has another scheme): the project said where its server is, so
+    /// no vendor default and no default port stands in for it.
     func isRefused(_ entry: ServiceEntry) -> Bool {
         for template in entry.links {
             guard case .configured(let rule) = template.target else { continue }
             let any = OriginRule(rule.keys, mapping: rule.mapping, portKeys: rule.portKeys, localPort: rule.localPort,
                                  remotePort: rule.remotePort)
-            for key in rule.keys where isRefused(key, any) { return true }
+            for key in rule.keys where isRefused(key, any, stores: entry.storeSchemes(key)) { return true }
         }
         return false
     }
 
-    func isRefused(_ key: String, _ rule: OriginRule) -> Bool {
+    /// Whether a key's values are written and none is one a link may use. A value that names no web server counts
+    /// only as a store the entry keeps on this Mac (MLflow's `file:`): any other scheme (`databricks://`, `ftp://`)
+    /// names a server no link reaches.
+    func isRefused(_ key: String, _ rule: OriginRule, stores: Set<String> = []) -> Bool {
         let values = facts.values(key)
         let usable = values.contains { (fact: ServiceFact) -> Bool in
-            if case .scheme = fact.value { return true }
+            if case .scheme(let scheme) = fact.value { return stores.contains(scheme) }
             return resolve(fact, rule) != nil
         }
         return !usable && (facts.refused.contains(key) || !values.isEmpty)
@@ -178,10 +182,10 @@ extension ServiceReader {
             target = (url, .local, true, spec.host + ":\(found.port)", found.from, found.file)
         case .studio(let spec, let rule):
             guard let found = localPort(spec, refused: refused),
-                  let server = SafeWebLink.Origin(scheme: "http", host: spec.host, port: found.port) else { return nil }
-            let site = studioSite(rule)
+                  let server = SafeWebLink.Origin(scheme: "http", host: spec.host, port: found.port),
+                  let site = studioSite(spec, rule) else { return nil }
             let baseURL = SafeWebLink.QueryItem("baseUrl", .origin(server))
-            let url = SafeWebLink.make(scheme: "https", host: site, path: [.fixed("/studio/")], query: [baseURL])
+            let url = site.link(path: [.fixed("/studio/")], query: [baseURL])
             target = (url, .local, true, spec.host + ":\(found.port)", found.from, found.file)
         case .site(let rule):
             guard let site = self.site(rule, pieces: &pieces) else { return nil }
@@ -200,32 +204,46 @@ extension ServiceReader {
         origin.host + (origin.port.map { (port: Int) -> String in ":\(port)" } ?? "")
     }
 
-    /// The LangSmith site a project's endpoint names (`eu.smith.langchain.com`), else LangSmith's own.
-    func studioSite(_ rule: OriginRule) -> String {
-        for key in rule.keys {
-            for fact in facts.values(key) {
-                guard let origin = fact.origin.map({ (origin: SafeWebLink.Origin) -> SafeWebLink.Origin in
-                    Self.mapped(origin, rule.mapping)
-                }) else { continue }
-                let hosted: Bool = origin.scheme == "https" && HostMatch.domain("smith.langchain.com").matches(origin.host)
-                if hosted, origin.port == nil { return origin.host }
-            }
+    /// Where Studio's page is: the `--studio-url` a start command gives; else the LangSmith the project's endpoint
+    /// names, a region's site (`eu.smith.langchain.com`) or a server of its own; else LangSmith's. Nil when either
+    /// is written in a form no link may use: the project's Studio is not LangSmith's, so that is not opened instead.
+    func studioSite(_ spec: LocalPort, _ rule: OriginRule) -> SafeWebLink.Origin? {
+        let words = Set(spec.sources.flatMap { (source: PortSource) -> [String] in
+            if case .start(let list) = source { return list }
+            return []
+        })
+        let named = facts.startCommands.first { (command: StartCommand) -> Bool in
+            words.contains(command.word) && command.studio != nil
         }
-        return "smith.langchain.com"
+        if let studio = named?.studio { return studio.mayOpen ? studio : nil }
+        if let found = resolve(rule) { return found.origin }
+        if rule.keys.contains(where: { (key: String) -> Bool in isRefused(key, rule) }) { return nil }
+        return SafeWebLink.Origin(scheme: "https", host: "smith.langchain.com", port: nil)
     }
 
     /// A site a local dev environment serves: its name and top-level domain as host labels, `https` unless the
-    /// files say it is not secured, and its port unless it is the scheme's own.
+    /// files say it is not secured, and its port unless it is the scheme's own. A domain the files write that is not
+    /// host labels gives no site: the default does not stand in for it.
     func site(_ rule: SiteRule, pieces: inout PieceReader) -> SafeWebLink.Origin? {
         guard let name = pieces.take(rule.names, .slug) else { return nil }
         let peeking = pieces
         let tld = rule.tld.lazy.compactMap { (ref: FactRef) -> String? in peeking.peek(ref) }.first ?? rule.defaultTLD
+        let host = name + "." + tld.lowercased()
+        guard Self.isDomain(host) else { return nil }
         let https: Bool = rule.httpsWhen.map { (fact: NamedFact) -> Bool in facts.named(fact) == "true" } ?? true
         let port = rule.port.flatMap { (fact: NamedFact) -> Int? in facts.port(fact) } ?? rule.defaultPort
         let ownPort: Bool = port == (https ? 443 : 80)
-        return SafeWebLink.Origin(scheme: https ? "https" : "http", host: name + "." + tld.lowercased(),
-                                  port: ownPort ? nil : port)
+        return SafeWebLink.Origin(scheme: https ? "https" : "http", host: host, port: ownPort ? nil : port)
     }
+
+    /// Host labels joined by dots, each of lower-case letters and digits with `-` only inside: `shop.ddev.site`.
+    static func isDomain(_ host: String) -> Bool {
+        host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { (label: Substring) -> Bool in
+            label.wholeMatch(of: domainLabel) != nil
+        }
+    }
+
+    private static let domainLabel = #/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?/#
 }
 
 // MARK: - Facts in links

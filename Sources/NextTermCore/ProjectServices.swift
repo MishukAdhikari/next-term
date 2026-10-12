@@ -109,16 +109,23 @@ public enum ProjectServices {
         return ServiceScan(rows: rows)
     }
 
-    /// `<service>.<place>` for each provider a database row carries: on this Mac for a local or container row.
+    /// `<service>.<place>` for each provider a database row carries: on this Mac for a local or container row. Vercel
+    /// on a database row is the team's storage, a page of its own, so the Vercel hosting row, which opens the
+    /// project's dashboard, stays.
     static func shownByDatabases(_ databases: [DetectedDatabase]) -> Set<String> {
         var shown = Set<String>()
         for database in databases {
             let local: Bool = database.environment == .local || database.environment == .development
             let place: ServicePlace = local ? .local : .cloud
-            for provider in database.providers { shown.insert(provider.serviceID + "." + place.rawValue) }
+            for provider in database.providers where !storageOnly.contains(provider) {
+                shown.insert(provider.serviceID + "." + place.rawValue)
+            }
         }
         return shown
     }
+
+    /// Providers whose badge on a database row opens their storage, not the service the catalog lists.
+    static let storageOnly: Set<DatabaseProvider> = [.vercel]
 
     /// Kind, then rank, then this Mac before the cloud.
     static func order(_ row: ServiceRow) -> [Int] {

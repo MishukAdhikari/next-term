@@ -26,7 +26,7 @@ func printed(_ facts: ProjectFacts) -> String {
     ]
 
     static let startWords = ["next dev", "langgraph dev", "uvicorn", "manage.py runserver", "temporal server start-dev",
-                             "streamlit run", "rails server", "mlflow server"]
+                             "streamlit run", "rails server", "mlflow server", "GRADIO_SERVER_PORT="]
 
     func read(_ project: FixtureProject, markers: [String] = []) -> ProjectFacts {
         ProjectFacts.read(root: project.root, valueKeys: Self.valueKeys, startWords: Self.startWords, markerFiles: markers)
@@ -154,6 +154,19 @@ func printed(_ facts: ProjectFacts) -> String {
         project.write(".env", "CHROMA_HOST=localhost\n")
         let link = read(project).value("CHROMA_HOST")?.origin?.link(path: [.fixed("/api/v2/heartbeat")])
         #expect(link?.absoluteString == "http://localhost/api/v2/heartbeat")
+    }
+
+    /// A URL written with no scheme is a server's address too: plain `http` on this Mac, where a local server answers
+    /// it (a local Qdrant serves no TLS), else `https`. A scheme written is kept.
+    @Test func aURLWithNoSchemeIsPlainHTTPOnlyOnThisMac() {
+        func origin(_ value: String) -> String? { ProjectFacts.urlValue(value).flatMap(originText) }
+        #expect(origin("localhost:6333") == "http://localhost:6333")
+        #expect(origin("127.0.0.1:5000/") == "http://127.0.0.1:5000")
+        #expect(origin("0.0.0.0:8000") == "http://localhost:8000")
+        #expect(origin("shop.test") == "http://shop.test")
+        #expect(origin("abc-123.weaviate.cloud") == "https://abc-123.weaviate.cloud")
+        #expect(origin("https://localhost:6333") == "https://localhost:6333")
+        #expect(origin("http://localhost:6333") == "http://localhost:6333")
     }
 
     func originText(_ value: ServiceFact.Value) -> String? {
@@ -465,6 +478,26 @@ func printed(_ facts: ProjectFacts) -> String {
         #expect(command("next build && next start -p 4000").isEmpty)
         #expect(command("echo next dev is not run here").count == 1) // words in a line count; the catalog picks them
         #expect(command("nextdev -p 1").isEmpty)
+        // A start word that ends in `=` is a variable the tool reads, whatever runs it; its value is the port.
+        #expect(command("GRADIO_SERVER_PORT=7861 python app.py").map(\.word) == ["GRADIO_SERVER_PORT="])
+        #expect(command("GRADIO_SERVER_PORT=7861 python app.py").map(\.port) == [7861])
+        #expect(command("export GRADIO_SERVER_PORT=7862; python app.py").map(\.port) == [7862])
+        #expect(command("GRADIO_SERVER_PORT=$PORT python app.py").map(\.port) == [nil])
+        #expect(command("MY_GRADIO_SERVER_PORT=7863 python app.py").isEmpty)
+    }
+
+    /// `langgraph dev --studio-url` names where Studio's page is: its origin only, never a path, query or user.
+    @Test func aStudioURLFromAStartCommand() throws {
+        let studio = command("langgraph dev --port 2100 --studio-url https://studio.example.com/x?token=NOT-A-KEY")
+        #expect(studio.map(\.port) == [2100])
+        #expect(studio.first?.studio?.string == "https://studio.example.com")
+        #expect(command("langgraph dev --studio-url=https://eu.smith.langchain.com").first?.studio?.string
+            == "https://eu.smith.langchain.com")
+        #expect(command("langgraph dev --studio-url https://u:NOT-A-PASSWORD@studio.example.com").first?.studio == nil)
+        #expect(command("langgraph dev --studio-url $STUDIO").first?.studio == nil)
+        #expect(command("langgraph dev").first?.studio == nil)
+        let text = String(describing: studio) + String(reflecting: studio)
+        #expect(!text.contains("NOT-A-KEY") && !text.contains("/x"))
     }
 
     @Test func aSecretOnAScriptLineLeavesNoTrace() {

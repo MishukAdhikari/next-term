@@ -87,6 +87,8 @@ func expectNoSecret(_ scan: ServiceScan, sourceLocation: SourceLocation = #_sour
         #expect(row.name == entry.name)
         #expect(row.link.badge == entry.badge)
         #expect(row.link.url.absoluteString == entry.url)
+        let ids = scan.rows.flatMap { (row: ServiceRow) -> [String] in row.links.map(\.id) }
+        #expect(Set(ids).count == ids.count, "\(ids)")
         expectNoSecret(scan)
         let other = FixtureProject(entry.not).services()
         #expect(!other.rows.contains { (row: ServiceRow) -> Bool in row.entryID == entry.entry }, "\(other.rows.map(\.id))")

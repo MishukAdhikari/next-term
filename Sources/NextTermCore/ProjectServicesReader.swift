@@ -70,16 +70,22 @@ struct ServiceReader {
         }
     }
 
-    /// The URL and host values the catalog reads whose host matches: a provider's own, so its cloud.
+    /// The URL and host values the catalog reads whose host matches: a provider's own, so its cloud. Only a value in
+    /// effect counts: one a more preferred env file overrides names nothing.
     func hostHits(_ match: HostMatch) -> [ServiceHit] {
         var found: [ServiceHit] = []
         for key in ServiceCatalog.hostKeys {
-            for fact in facts.values(key) {
-                guard let host = fact.origin?.host, match.matches(host) else { continue }
-                found.append(ServiceHit(file: fact.file, name: key, place: .cloud))
-            }
+            guard let fact = inEffect(key), let host = fact.origin?.host, match.matches(host) else { continue }
+            found.append(ServiceHit(file: fact.file, name: key, place: .cloud))
         }
         return found
+    }
+
+    /// A key's value as a tool started in development reads it: the most preferred env file that names the key
+    /// decides. Nil when that file's value is not one the readers kept (it names another value, or is empty).
+    func inEffect(_ key: String) -> ServiceFact? {
+        guard let file = facts.envFiles(naming: key).first else { return nil }
+        return facts.values(key).first { (fact: ServiceFact) -> Bool in fact.file == file }
     }
 
     /// A key that names a server: where its value says it runs. A value that is not a server's address (a store's

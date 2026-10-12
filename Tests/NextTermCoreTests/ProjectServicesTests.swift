@@ -30,7 +30,25 @@ import Testing
         #expect(titles == ["Open OpenAI Platform", "Open OpenAI API Keys", "Open OpenAI Usage"])
         #expect(urls(openAI) == ["https://platform.openai.com/", "https://platform.openai.com/settings/organization/api-keys",
                                  "https://platform.openai.com/usage"])
-        #expect(openAI.link.id == "openai.platform" && openAI.link.source == nil)
+        #expect(openAI.link.id == "openai.cloud.platform" && openAI.link.source == nil)
+        expectNoSecret(scan)
+    }
+
+    /// A fresh clone has only `.env.example`: its key names name services, its values are never read, and each row
+    /// says where its names came from.
+    @Test func aFreshCloneListsServicesFromTheExample() throws {
+        let project = FixtureProject([".env.example": """
+        OPENAI_API_KEY=sk-test-NOT-A-KEY
+        LANGSMITH_TRACING=true
+        LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com
+        QDRANT_URL=https://abc-123.cloud.qdrant.io
+        """])
+        let scan = project.services()
+        #expect(scan.rows.map(\.id) == ["openai.cloud", "langsmith.cloud"])
+        #expect(try row(scan, "openai.cloud").tooltip.hasSuffix("\nFrom .env.example: OPENAI_API_KEY"))
+        let langsmith = try row(scan, "langsmith.cloud")
+        #expect(langsmith.tooltip.hasSuffix("\nFrom .env.example: LANGSMITH_TRACING, LANGSMITH_ENDPOINT"))
+        #expect(urls(langsmith) == ["https://smith.langchain.com"], "the example's endpoint is a placeholder, never read")
         expectNoSecret(scan)
     }
 
@@ -60,12 +78,38 @@ import Testing
     @Test func theSDKsOwnHostKeepsItsProvider() {
         let project = FixtureProject([".env": "OPENAI_BASE_URL=https://api.openai.com/v1\nOPENAI_API_KEY=NOT-A-KEY\n"])
         #expect(project.services().rows.map(\.id) == ["openai.cloud"])
+        expectNoSecret(project.services())
     }
 
     @Test func aBaseURLThatNamesAnotherValueRoutesNothing() {
         // Unresolved, so where it points is not known: the SDK's own provider stays.
         let project = FixtureProject([".env": "ANTHROPIC_BASE_URL=${PROXY_URL}\nANTHROPIC_API_KEY=NOT-A-KEY\n"])
         #expect(project.services().rows.map(\.id) == ["anthropic.cloud"])
+        expectNoSecret(project.services())
+    }
+
+    /// Only the value in effect names a provider: `.env.local` overrides `.env`, so the value it hides names nothing.
+    @Test func anOverriddenBaseURLNamesNothing() {
+        let openAI = FixtureProject([".env": "OPENAI_BASE_URL=https://openrouter.ai/api/v1\nOPENAI_API_KEY=NOT-A-KEY\n",
+                                     ".env.local": "OPENAI_BASE_URL=https://api.openai.com/v1\n"])
+        #expect(openAI.services().rows.map(\.id) == ["openai.cloud"])
+        let openRouter = FixtureProject([".env": "OPENAI_BASE_URL=https://api.openai.com/v1\nOPENAI_API_KEY=NOT-A-KEY\n",
+                                         ".env.local": "OPENAI_BASE_URL=https://openrouter.ai/api/v1\n"])
+        #expect(openRouter.services().rows.map(\.id) == ["openrouter.cloud"])
+        let unknown = FixtureProject([".env": "OPENAI_BASE_URL=https://openrouter.ai/api/v1\nOPENAI_API_KEY=NOT-A-KEY\n",
+                                      ".env.local": "OPENAI_BASE_URL=${PROXY_URL}\n"])
+        #expect(unknown.services().rows.map(\.id) == ["openai.cloud"], "where the SDK goes is not known")
+        expectNoSecret(unknown.services())
+    }
+
+    /// Helicone's provider gateways log a request and send it on to the SDK's own provider, with the provider's key: the
+    /// provider stays, beside Helicone.
+    @Test func aGatewayThatForwardsKeepsTheProvider() {
+        let openAI = FixtureProject([".env": "OPENAI_BASE_URL=https://oai.helicone.ai/v1\nOPENAI_API_KEY=NOT-A-KEY\n"])
+        #expect(openAI.services().rows.map(\.id) == ["openai.cloud", "helicone.cloud"])
+        let anthropic = FixtureProject([".env": "ANTHROPIC_BASE_URL=https://anthropic.helicone.ai\nANTHROPIC_API_KEY=NOT-A-KEY\n"])
+        #expect(anthropic.services().rows.map(\.id) == ["anthropic.cloud", "helicone.cloud"])
+        expectNoSecret(anthropic.services())
     }
 
     @Test func googlesKeyNamesAIStudioOnlyBesideAGeminiDependency() throws {
@@ -88,6 +132,8 @@ import Testing
         #expect(try row(bad.services(), "aws-bedrock.cloud").link.url.absoluteString == "https://console.aws.amazon.com/bedrock/")
         let host = FixtureProject([".env": "ANTHROPIC_BEDROCK_BASE_URL=https://bedrock-runtime.eu-west-1.amazonaws.com\n"])
         #expect(host.services().rows.isEmpty, "a base URL key the catalog does not read names nothing")
+        expectNoSecret(gov.services())
+        expectNoSecret(bad.services())
     }
 
     @Test func vertexWithoutAProjectOpensModelGarden() throws {
@@ -106,12 +152,14 @@ import Testing
         #expect(azure.notes == ["Resource: shop-ai"])
         #expect(azure.link.url.absoluteString == "https://ai.azure.com/")
         #expect(azure.tooltip.contains("Resource: shop-ai"))
+        expectNoSecret(project.services())
     }
 
     @Test func replicateWithoutAModelOpensTheTokens() throws {
         let project = FixtureProject([".env": "REPLICATE_API_TOKEN=r8_NOT-A-TOKEN\n"])
         let replicate = try row(project.services(), "replicate.cloud")
         #expect(replicate.link.url.absoluteString == "https://replicate.com/account/api-tokens")
+        expectNoSecret(project.services())
     }
 
     @Test func aiModelsAreInTheirRankOrder() {
@@ -177,6 +225,9 @@ extension ProjectServicesTests {
         #expect(cloud.link.url.absoluteString == "https://abc-123.cloud.qdrant.io:6333/dashboard")
         #expect(cloud.link.title == "Open Qdrant Cloud Dashboard")
         #expect(cloud.sources == [ServiceSource(file: ".env.local", names: ["QDRANT_URL"])])
+        // The same page in each place is still a link of its own: a link's id names its row's place.
+        #expect(local.links.map(\.id) == ["qdrant.local.dashboard"])
+        #expect(cloud.links.map(\.id) == ["qdrant.cloud.dashboard", "qdrant.cloud.console"])
     }
 
     /// The project said where its server is, in a form no link may use: no vendor page stands in, but Compose still
@@ -189,6 +240,14 @@ extension ProjectServicesTests {
         let qdrant = try row(composed.services(), "qdrant.local")
         #expect(urls(qdrant) == ["http://localhost:6333/dashboard"])
         #expect(!qdrant.tooltip.contains("QDRANT_HOST"))
+    }
+
+    /// A URL written with no scheme to this Mac is plain `http`, as a local Qdrant serves it.
+    @Test func aURLWithNoSchemeOnThisMacIsPlainHTTP() throws {
+        let project = FixtureProject([".env": "QDRANT_URL=localhost:6333\n"])
+        let qdrant = try row(project.services(), "qdrant.local")
+        #expect(urls(qdrant) == ["http://localhost:6333/dashboard"])
+        #expect(qdrant.link.tooltip == "Open Qdrant Dashboard at localhost:6333 (from .env)")
     }
 
     @Test func chromaTakesItsHostAndPortKeys() throws {
@@ -253,6 +312,11 @@ extension ProjectServicesTests {
         #expect(urls(langfuse) == ["http://localhost:3000"])
         let endpoint = FixtureProject([".env": "LANGSMITH_ENDPOINT=${LANGSMITH_HOST}\nLANGSMITH_TRACING=true\n"])
         #expect(endpoint.services().rows.isEmpty)
+        // Another scheme names a server too, one no link may reach: no vendor page either.
+        let ftp = FixtureProject([".env": "LANGFUSE_HOST=ftp://langfuse.example.com\nLANGFUSE_SECRET_KEY=NOT-A-KEY\n"])
+        #expect(ftp.services().rows.isEmpty)
+        expectNoSecret(ftp.services())
+        expectNoSecret(composed.services())
     }
 
     @Test func aLocalLangfuseOpensTheAddressTheProjectGives() throws {
@@ -286,6 +350,21 @@ extension ProjectServicesTests {
         let script = FixtureProject(["Makefile": "ui:\n\tmlflow ui --port 5050\n"])
         #expect(try row(script.services(), "mlflow.local").link.tooltip
             == "Open MLflow Experiments at 127.0.0.1:5050 (from Makefile's ui target)")
+        let sqlite = FixtureProject([".env": "MLFLOW_TRACKING_URI=sqlite:///mlflow.db\n"])
+        #expect(urls(try row(sqlite.services(), "mlflow.local")) == ["http://127.0.0.1:5000"])
+    }
+
+    /// A Databricks profile keeps its workspace outside the project: tracking goes there, so no page here, and no
+    /// local UI on its default port. A script that runs one here still opens it.
+    @Test func mlflowOnADatabricksProfileOpensNothingHere() throws {
+        let profile = FixtureProject([".env": "MLFLOW_TRACKING_URI=databricks://my-profile\n",
+                                      "requirements.txt": "mlflow\n"])
+        #expect(profile.services().rows.isEmpty)
+        let bare = FixtureProject([".env": "MLFLOW_TRACKING_URI=databricks\n", "requirements.txt": "mlflow\n"])
+        #expect(bare.services().rows.isEmpty)
+        let script = FixtureProject([".env": "MLFLOW_TRACKING_URI=databricks://my-profile\n",
+                                     "Makefile": "ui:\n\tmlflow ui --port 5050\n"])
+        #expect(urls(try row(script.services(), "mlflow.local")) == ["http://127.0.0.1:5050"])
     }
 
     @Test func braintrustEncodesItsProjectsName() throws {
@@ -299,6 +378,8 @@ extension ProjectServicesTests {
         #expect(urls(braintrust) == ["https://braintrust.example.com/app/acme/p/My%20App/logs"])
         let dots = FixtureProject([".env": "BRAINTRUST_API_KEY=NOT-A-KEY\nBRAINTRUST_ORG_NAME=acme\nBRAINTRUST_DEFAULT_PROJECT=..\n"])
         #expect(try row(dots.services(), "braintrust.cloud").link.url.absoluteString == "https://www.braintrust.dev/app")
+        expectNoSecret(project.services())
+        expectNoSecret(dots.services())
     }
 
     @Test func weaveFindsItsAppAsWandbDoes() throws {
@@ -310,10 +391,16 @@ extension ProjectServicesTests {
     }
 
     @Test func phoenixAndHeliconeFollowTheirEndpoints() throws {
+        // The space is in the endpoint's path, which is never kept: the cloud's home, named so.
         let cloud = FixtureProject([".env": "PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com/s/acme/v1/traces\n"])
-        #expect(try row(cloud.services(), "arize-phoenix.cloud").link.url.absoluteString == "https://app.phoenix.arize.com")
+        let home = try row(cloud.services(), "arize-phoenix.cloud").link
+        #expect(home.url.absoluteString == "https://app.phoenix.arize.com")
+        #expect(home.title == "Open Arize Phoenix Home" && home.badge == "Cloud")
         let port = FixtureProject([".env.phoenix": "PHOENIX_PORT=6100\n"])
         #expect(try row(port.services(), "arize-phoenix.local").link.url.absoluteString == "http://localhost:6100/projects")
+        // A start command's port comes before the key the server reads.
+        let both = FixtureProject([".env.phoenix": "PHOENIX_PORT=6100\n", "Procfile": "phoenix: phoenix serve --port 6200\n"])
+        #expect(try row(both.services(), "arize-phoenix.local").link.url.absoluteString == "http://localhost:6200/projects")
         let eu = FixtureProject([".env": "ANTHROPIC_BASE_URL=https://eu.helicone.ai/anthropic\n"])
         let scan = eu.services()
         #expect(scan.rows.map(\.id) == ["helicone.cloud"])
@@ -333,6 +420,30 @@ extension ProjectServicesTests {
         #expect(langGraph.link.badge == "Studio")
         #expect(langGraph.link.tooltip == "Open LangGraph Studio at 127.0.0.1:2100 (from Makefile's dev target)")
         #expect(langGraph.links.map(\.title) == ["Open LangGraph Studio", "Open LangGraph API Docs"])
+    }
+
+    /// Studio is a page of the LangSmith the project uses: its region's, a server of its own, or the one a script's
+    /// `--studio-url` names. After an endpoint no link may use, no LangSmith page stands in: the row opens the dev
+    /// server's own API docs.
+    @Test func studioOpensOnTheProjectsOwnLangSmith() throws {
+        let selfHosted = FixtureProject(["langgraph.json": "{}\n",
+                                         ".env": "LANGSMITH_ENDPOINT=https://langsmith.corp.example/api/v1\n"])
+        #expect(try row(selfHosted.services(), "langgraph.local").link.url.absoluteString
+            == "https://langsmith.corp.example/studio/?baseUrl=http://127.0.0.1:2024")
+        let refused = FixtureProject(["langgraph.json": "{}\n", ".env": "LANGSMITH_ENDPOINT=http://langsmith.corp.example\n"])
+        let docs = try row(refused.services(), "langgraph.local")
+        #expect(urls(docs) == ["http://127.0.0.1:2024/docs"])
+        #expect(docs.link.badge == ":2024" && docs.link.title == "Open LangGraph API Docs")
+        #expect(!serviceText(refused.services()).contains("smith.langchain.com"))
+        let unresolved = FixtureProject(["langgraph.json": "{}\n", ".env": "LANGCHAIN_ENDPOINT=${LANGSMITH_HOST}\n"])
+        #expect(urls(try row(unresolved.services(), "langgraph.local")) == ["http://127.0.0.1:2024/docs"])
+        let script = FixtureProject(["langgraph.json": "{}\n",
+                                     "Makefile": "dev:\n\tlanggraph dev --port 2100 --studio-url https://studio.corp.example\n",
+                                     ".env": "LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com\n"])
+        let studio = try row(script.services(), "langgraph.local")
+        #expect(urls(studio) == ["https://studio.corp.example/studio/?baseUrl=http://127.0.0.1:2100",
+                                 "http://127.0.0.1:2100/docs"])
+        expectNoSecret(script.services())
     }
 
     @Test func temporalOpensItsDevUIOrItsCloudNamespace() throws {
@@ -397,6 +508,17 @@ extension ProjectServicesTests {
             == "Open Flask at 127.0.0.1:5000 (default port; macOS AirPlay Receiver also listens on 5000)")
     }
 
+    /// Gradio reads its port from `GRADIO_SERVER_PORT`, whatever command runs the app.
+    @Test func gradioTakesThePortItsVariableGives() throws {
+        let project = FixtureProject(["requirements.txt": "gradio\n",
+                                      "Procfile": "web: GRADIO_SERVER_PORT=7861 python app.py\n"])
+        let gradio = try row(project.services(), "gradio.local")
+        #expect(urls(gradio) == ["http://127.0.0.1:7861"])
+        #expect(gradio.link.tooltip == "Open Gradio at 127.0.0.1:7861 (from Procfile's web process)")
+        let alone = FixtureProject(["Procfile": "web: GRADIO_SERVER_PORT=7861 python app.py\n"])
+        #expect(alone.services().rows.isEmpty, "a port names no tool")
+    }
+
     @Test func aPortAloneNamesNothing() {
         let project = FixtureProject(["compose.yaml": composeFile("api", "example/api:1", ["8000:8000"]),
                                       "Procfile": "web: gunicorn app:app --port 3000\n"])
@@ -411,6 +533,11 @@ extension ProjectServicesTests {
         #expect(ddev.link.tooltip == "Open DDEV Site at shop.ddev.site")
         let tld = FixtureProject([".ddev/config.yaml": "name: shop\nproject_tld: site.example\nrouter_https_port: 8443\n"])
         #expect(urls(try row(tld.services(), "ddev.local")) == ["https://shop.site.example:8443", "https://shop.site.example:8026"])
+        // The TLD is checked as a link's host is: one no host may hold gives no link, so no row.
+        for bad in ["ddev_site", "xn--p1ai", "-site", "site..example"] {
+            let project = FixtureProject([".ddev/config.yaml": "name: shop\nproject_tld: \(bad)\n"])
+            #expect(project.services().rows.isEmpty, "\(bad)")
+        }
     }
 
     @Test func aTestSiteIsHerdsOrValets() throws {

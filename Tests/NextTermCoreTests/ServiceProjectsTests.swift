@@ -95,7 +95,24 @@ import Testing
         #expect(database.links.first?.url.absoluteString == "https://supabase.com/dashboard/project/abcdefghijklmnopqrst")
         let scan = project.services()
         #expect(!scan.rows.contains { (row: ServiceRow) -> Bool in row.entryID == "supabase" })
-        #expect(summary(scan).prefix(3) == ["Anthropic Console", "Next.js :3100", "Upstash Console"])
+        #expect(summary(scan) == ["Anthropic Console", "Next.js :3100", "Upstash Console", "Vercel Dashboard"])
+        expectNoSecret(scan)
+    }
+
+    /// `vercel env pull` writes the database's URL to `.env.local`, so its row carries Vercel too. That badge opens the
+    /// team's storage, not the project: the Vercel hosting row stays, with its project's name. Only Supabase leaves.
+    @Test func aVercelLinkedJSAppWithItsSupabaseDatabase() throws {
+        var files = Self.jsApp
+        let url = "DATABASE_URL=postgres://app:NOT-A-PASSWORD@db.abcdefghijklmnopqrst.supabase.co:5432/postgres"
+        files[".env.local"] = (files[".env.local"] ?? "") + "\n" + url + "\n"
+        let project = FixtureProject(files)
+        let database = try #require(project.scan().databases.first)
+        #expect(database.providers == [.supabase, .vercel])
+        let scan = project.services()
+        #expect(summary(scan) == ["Anthropic Console", "Next.js :3100", "Upstash Console", "Vercel Dashboard"])
+        let vercel = try row(scan, "Vercel")
+        #expect(vercel.link.url.absoluteString == "https://vercel.com/dashboard")
+        #expect(vercel.tooltip.contains("Project: shop-web"))
         expectNoSecret(scan)
     }
 }

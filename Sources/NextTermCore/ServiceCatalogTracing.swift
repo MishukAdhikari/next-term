@@ -70,7 +70,8 @@ extension ServiceCatalog {
 
 extension ServiceCatalog {
     /// A tracking server opens at the experiment `MLFLOW_EXPERIMENT_ID` names, on Databricks under `/ml`. A tracking
-    /// URI that names a store (`file:`, `sqlite:`) is no server: the row opens `mlflow ui` on this Mac.
+    /// URI that names a store on this Mac (`file:`, `sqlite:`) is no server: the row opens `mlflow ui` here. A
+    /// Databricks profile (`databricks://<profile>`) keeps its workspace outside the project, so it opens nothing.
     static let mlflowServer = OriginRule(["MLFLOW_TRACKING_URI"])
     static let databricksServer = OriginRule(["MLFLOW_TRACKING_URI"], hosts: [
         .domain("cloud.databricks.com"), .domain("azuredatabricks.net"), .domain("gcp.databricks.com"),
@@ -79,6 +80,7 @@ extension ServiceCatalog {
     static let mlflowUI = LocalPort("127.0.0.1", [.start(["mlflow ui", "mlflow server"])], default: 5000)
     static let mlflowSignals: [Signal] = [
         .origin("MLFLOW_TRACKING_URI", nil),
+        .scheme("MLFLOW_TRACKING_URI", "file"), .scheme("MLFLOW_TRACKING_URI", "sqlite"),
         .all([.dependency(.pypi, "mlflow"), .any([.file("mlruns/", .local), .file("mlflow.db", .local)])]),
         .start("mlflow ui"), .start("mlflow server"),
     ]
@@ -170,18 +172,18 @@ extension ServiceCatalog {
 
     /// The client's base URL, then the collector's; Phoenix on this Mac answers on 6006. `PHOENIX_HOST` is where a
     /// server listens, not where a client sends, so it is never a link's host. Phoenix Cloud's space is in the
-    /// endpoint's path, which is never kept, so its link is the cloud's own home.
+    /// endpoint's path, which is never kept, so its link is the cloud's own home, named so.
     static let phoenixKeys = ["PHOENIX_ENDPOINT", "PHOENIX_COLLECTOR_ENDPOINT"]
     static let phoenixCloud = OriginRule(phoenixKeys, hosts: [.domain("phoenix.arize.com")])
     static let phoenixServer = OriginRule(phoenixKeys, localPort: 6006)
     static let phoenixPort = LocalPort("localhost", [.compose("arizephoenix/phoenix", target: 6006),
-                                                     .env("PHOENIX_PORT"), .start(["phoenix serve"])], default: 6006)
+                                                     .start(["phoenix serve"]), .env("PHOENIX_PORT")], default: 6006)
     static let phoenixSignals: [Signal] = [
         .origin("PHOENIX_ENDPOINT", nil), .origin("PHOENIX_COLLECTOR_ENDPOINT", nil), .image("arizephoenix/phoenix"),
         .file(".env.phoenix", .local), .dependency(.pypi, "arize-phoenix"), .dependency(.pypi, "arize-phoenix-otel"),
     ]
     static let phoenixLinks: [LinkTemplate] = [
-        LinkTemplate("projects", "Projects", .configured(phoenixCloud)),
+        LinkTemplate("home", "Home", .configured(phoenixCloud), badge: "Cloud"),
         LinkTemplate("projects", "Projects", .configured(phoenixServer), path: [.text("/projects")]),
         LinkTemplate("projects", "Projects", .local(phoenixPort), path: [.text("/projects")]),
     ]

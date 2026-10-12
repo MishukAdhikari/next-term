@@ -94,17 +94,21 @@ public struct StartCommand: Sendable, Equatable {
     /// The catalog's start words it matched, as the catalog wrote them.
     public let word: String
     /// From `--port N`, `--port=N`, `-p N`, `runserver [addr:]N`, `--server.port N`, or a leading `PORT=N` or
-    /// `GRADIO_SERVER_PORT=N`.
+    /// `GRADIO_SERVER_PORT=N`; for a start word that is a variable (`GRADIO_SERVER_PORT=`), its value.
     public let port: Int?
     /// From `--ui-port N` (Temporal's dev server).
     public let uiPort: Int?
+    /// From `--studio-url URL` (`langgraph dev`): the origin only, as `SafeWebLink.address(of:)` reads it.
+    public let studio: SafeWebLink.Origin?
 
-    public init(file: String, script: String, word: String, port: Int?, uiPort: Int? = nil) {
+    public init(file: String, script: String, word: String, port: Int?, uiPort: Int? = nil,
+                studio: SafeWebLink.Origin? = nil) {
         self.file = file
         self.script = script
         self.word = word
         self.port = port
         self.uiPort = uiPort
+        self.studio = studio
     }
 }
 
@@ -360,13 +364,21 @@ extension ProjectFacts {
         }
     }
 
-    /// A URL as its server's origin. One that names no web server keeps its scheme alone (`db://shop` gives `db`, and
-    /// `file:` a store, not a server), and only when the colon ends the value or a `/` follows it: text before a colon
-    /// is otherwise a user name or a token (`admin:…@host`, `sk-…:…`), never a scheme. A value with a user or
-    /// password is dropped whole, whatever its scheme.
+    /// A URL as its server's origin. One written with no scheme is plain `http` on this Mac, as a local server answers
+    /// (`localhost:6333`), and `https` elsewhere. One that names no web server keeps its scheme alone (`db://shop`
+    /// gives `db`, and `file:` a store, not a server), and only when the colon ends the value or a `/` follows it:
+    /// text before a colon is otherwise a user name or a token (`admin:…@host`, `sk-…:…`), never a scheme. A value
+    /// with a user or password is dropped whole, whatever its scheme.
     static func urlValue(_ text: String) -> ServiceFact.Value? {
         guard !hasUserInfo(text) else { return nil }
-        if let origin = SafeWebLink.address(of: text) { return .origin(origin) }
+        if let origin = SafeWebLink.address(of: text) {
+            let local: Bool = SafeWebLink.mayOpen(scheme: "http", host: origin.host)
+            guard SafeWebLink.schemeWritten(in: text) == nil, local,
+                  let plain = SafeWebLink.Origin(scheme: "http", host: origin.host, port: origin.port) else {
+                return .origin(origin)
+            }
+            return .origin(plain)
+        }
         guard let scheme = SafeWebLink.schemeWritten(in: text) else { return nil }
         let rest = text.dropFirst(scheme.count + 1)
         let isScheme: Bool = rest.isEmpty || rest.hasPrefix("/")

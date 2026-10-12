@@ -11,7 +11,8 @@ extension ServiceCatalog {
     // MARK: LangGraph, Temporal, Google ADK
 
     /// `langgraph dev` serves on 127.0.0.1:2024 and is opened in LangGraph Studio, a hosted page on LangSmith's site
-    /// (the region's, when the project's LangSmith endpoint names one) that reaches back to it.
+    /// (the one a script's `--studio-url` or the project's LangSmith endpoint names) that reaches back to it. When
+    /// that site is written in a form no link may use, the row opens the server's own API docs instead.
     static let langGraphServer = LocalPort("127.0.0.1", [.start(["langgraph dev"])], default: 2024)
     static let langGraphSignals: [Signal] = [
         .file("langgraph.json", .local), .start("langgraph dev"),
@@ -19,6 +20,7 @@ extension ServiceCatalog {
     ]
     static let langGraphLinks: [LinkTemplate] = [
         LinkTemplate("studio", "Studio", .studio(langGraphServer, langsmithEndpoint)),
+        LinkTemplate("docs", "API Docs", .local(langGraphServer), path: [.text("/docs")]),
         LinkTemplate("docs", "API Docs", .local(langGraphServer), path: [.text("/docs")], extra: true),
     ]
     static let langGraph = ServiceEntry("langgraph", "LangGraph", kind: .agent, rank: 1, place: .local,

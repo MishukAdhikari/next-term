@@ -517,6 +517,14 @@ extension ServiceEntry {
         return words
     }
 
+    /// The schemes whose value names a store of this entry's own on this Mac, not a server: MLflow's `file:`.
+    func storeSchemes(_ key: String) -> Set<String> {
+        Set(allSignals.compactMap { (signal: Signal) -> String? in
+            if case .scheme(let named, let scheme) = signal, named == key { return scheme }
+            return nil
+        })
+    }
+
     var markerFiles: [String] {
         allSignals.compactMap { (signal: Signal) -> String? in
             if case .file(let file, _) = signal { return file }

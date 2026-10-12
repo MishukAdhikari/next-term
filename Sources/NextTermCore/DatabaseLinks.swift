@@ -4,7 +4,7 @@ import Foundation
 /// Built only from hosts, ports, names and ids a project's files hold, each checked by `SafeWebLink`, so it holds no
 /// secret and may be printed, compared and shown.
 public struct ServiceLink: Sendable, Hashable {
-    /// Stable: the service, then the page (`neon.console`).
+    /// Stable: the service, then the page (`neon.console`); a Services row's adds its place (`qdrant.local.dashboard`).
     public let id: String
     /// The badge's words: "Neon", "Dashboard", ":5173".
     public let badge: String

@@ -2,7 +2,8 @@ import Foundation
 
 // AI model providers, most used first (last month's downloads of each one's own SDK). Each is named by its API key's
 // name, its SDK, or its API host in a base-URL value, and opens its console, where the keys and the usage are. A key's
-// name says which provider; its value is never read.
+// name says which provider; its value is never read. A gateway that logs a request and sends it on to the provider,
+// with the provider's own key (Helicone's `oai.` and `anthropic.` hosts), counts as the provider's host.
 
 extension ServiceCatalog {
     static let aiModels: [ServiceEntry] = [openAI, anthropic, googleAIStudio, huggingFace, mistral, groq, openRouter,
@@ -16,7 +17,7 @@ extension ServiceCatalog {
         .key("OPENAI_API_KEY"),
         .dependency(.pypi, "openai"), .dependency(.pypi, "langchain-openai"),
         .dependency(.npm, "openai"), .dependency(.npm, "@ai-sdk/openai"), openAIAgents,
-        .host(.domain("api.openai.com")),
+        .host(.domain("api.openai.com")), .host(.domain("oai.helicone.ai")),
     ]
     static let openAILinks: [LinkTemplate] = [
         .web("platform", "Platform", "platform.openai.com", "/"),
@@ -31,7 +32,7 @@ extension ServiceCatalog {
     static let anthropicSignals: [Signal] = [
         .key("ANTHROPIC_API_KEY"), .key("ANTHROPIC_AUTH_TOKEN"),
         .dependency(.pypi, "anthropic"), .dependency(.npm, "@anthropic-ai/sdk"), .dependency(.npm, "@ai-sdk/anthropic"),
-        .host(.domain("api.anthropic.com")),
+        .host(.domain("api.anthropic.com")), .host(.domain("anthropic.helicone.ai")),
     ]
     static let anthropicLinks: [LinkTemplate] = [
         .web("console", "Console", "platform.claude.com", "/"),
