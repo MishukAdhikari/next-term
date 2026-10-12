@@ -1044,7 +1044,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             }
             return
         }
-        if clicked is DatabasesGroup {
+        if let group = clicked as? DatabasesGroup {
+            // Its Vercel badge's page first, as on a database row (KTD1).
+            addServicePages(DatabaseLinks.groupBadges(vercelProject: group.vercelProject).compactMap(\.link), to: menu)
             add(menu, "Refresh Databases", #selector(refreshDatabasesFromMenu), "sidebar.refresh")
             return
         }

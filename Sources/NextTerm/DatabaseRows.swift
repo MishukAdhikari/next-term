@@ -89,7 +89,7 @@ enum DatabaseText {
     }
 }
 
-/// A small outlined label: "Neon · Vercel", "Herd".
+/// A small outlined label: an agent session's "running". A database row's badges are links (LinkBadge).
 final class BadgeView: NSView {
     var text = "" { didSet { invalidateIntrinsicContentSize(); needsDisplay = true; isHidden = text.isEmpty } }
     private let font = NSFont.systemFont(ofSize: 10, weight: .medium)

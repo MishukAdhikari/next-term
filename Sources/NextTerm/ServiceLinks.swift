@@ -31,8 +31,9 @@ extension ProjectSidebarView {
             let item = menu.addItem(withTitle: link.title, action: #selector(openServicePageFromMenu(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = link
-            item.toolTip = link.tooltip
             if index == 0 { KeyboardShortcuts.show("sidebar.openServicePage", on: item) }
+            // A key without ⌘ or ⌃ is named in the tooltip ("Open Service Page (↩)", show): the page stays under it.
+            item.toolTip = [item.toolTip, link.tooltip].compactMap { $0 }.joined(separator: "\n")
         }
         if !links.isEmpty { menu.addItem(.separator()) }
     }

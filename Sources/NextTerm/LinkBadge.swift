@@ -16,6 +16,9 @@ final class LinkBadge: NSButton {
         bezelStyle = .regularSquare
         isBordered = false
         title = ""
+        // The rows keep the keyboard, so ⌘↓ and the arrows still answer after a click on a badge (with Keyboard
+        // navigation on, a click would focus it). The menu's Open Service Page is the keyboard's way to the page.
+        refusesFirstResponder = true
         target = self
         action = #selector(clicked)
     }
@@ -77,8 +80,15 @@ final class LinkBadge: NSButton {
     }
 
     @objc private func clicked() {
-        guard let link else { return }
+        guard let link, !Self.isRepeatClick(NSApp.currentEvent) else { return }
         ServiceLinks.open(link.url, from: window)
+    }
+
+    /// The second click of a double-click, from the rows' habit of double-clicking: the page opens once. Only a mouse
+    /// event has a click count; VoiceOver's press has none.
+    private static func isRepeatClick(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseUp || event.type == .leftMouseDown else { return false }
+        return event.clickCount > 1
     }
 
     override func isAccessibilityElement() -> Bool { !word.isEmpty }
