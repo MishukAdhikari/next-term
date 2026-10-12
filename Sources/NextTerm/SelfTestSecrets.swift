@@ -8,7 +8,17 @@ import UserNotifications
 /// `Secrets.noindex`, `mask.key`, socket, login keychain and clipboard are never touched, and lock events are injected,
 /// never posted.
 extension SelfTest {
+    /// A debug build's: a release build has no wrapper self-test form, so there the part would fail its wrapper checks
+    /// and could only type a ticket line for the real socket.
     static func secretsChecks(_ c: TerminalWindowController, proj: URL) async {
+        #if DEBUG
+        await secretsDebugBuildChecks(c, proj: proj)
+        #else
+        note("secrets: skipped in a release build, which has no wrapper self-test form; scripts/selftest.sh's debug build runs them")
+        #endif
+    }
+
+    private static func secretsDebugBuildChecks(_ c: TerminalWindowController, proj: URL) async {
         let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-secrets-checks-\(getpid())", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         defer {
