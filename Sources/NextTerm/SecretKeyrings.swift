@@ -178,12 +178,28 @@ final class MemoryPasswordStore: PasswordStore {
     private(set) var reads = 0
     /// The adds that wrote the item.
     private(set) var writes = 0
+    private var failure: OSStatus?
     private let lock = NSLock()
+
+    /// The status every read fails with, as the login keychain's do when the user cancels its prompt. Nil: reads work.
+    var readFailure: OSStatus? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return failure
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            failure = newValue
+        }
+    }
 
     func read() throws -> Data? {
         lock.lock()
         defer { lock.unlock() }
         reads += 1
+        if let failure { throw LoginKeychain.Failure(status: failure) }
         return data
     }
 
@@ -300,17 +316,25 @@ final class KeychainKeyring: VaultKeyring {
     }
 
     /// The key an item holds, or nil when the item is not there. An item that can't be read is not passed over for
-    /// another.
+    /// another: a read the user refused is `cancelled`, which changes nothing; any other failure is `cantOpen`.
     private static func key(in item: PasswordStore) throws -> SoftwareKeyring? {
         let read: Data?
         do {
             read = try item.read()
         } catch {
-            throw SecretVault.Failure.cantOpen
+            throw isRefused(error) ? SecretVault.Failure.cancelled : SecretVault.Failure.cantOpen
         }
         guard var raw = read else { return nil }
         defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
         guard let key = try? SoftwareKeyring(kind: .keychain, rawRepresentation: raw) else { throw SecretVault.Failure.cantOpen }
         return key
+    }
+
+    /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now: the user did not approve this
+    /// time, and the next try may ask again.
+    static func isRefused(_ error: Error) -> Bool {
+        guard let failure = error as? LoginKeychain.Failure else { return false }
+        let refusals: [OSStatus] = [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed]
+        return refusals.contains(failure.status)
     }
 }

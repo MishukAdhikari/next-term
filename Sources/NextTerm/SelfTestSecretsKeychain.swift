@@ -47,6 +47,7 @@ extension SelfTest {
         check(!overwrote && (try? taken.read()) == Data("there before".utf8) && taken.writes == 1,
               "secrets: a new keychain key is never written over an item that is there", "\(taken.writes) writes")
         await secretsSharedItemChecks(base)
+        await secretsKeychainPromptChecks(base)
     }
 
     /// A vault made when every keychain vault kept its key in one shared item.
@@ -86,5 +87,44 @@ extension SelfTest {
         check(failure == .vault(.cantOpen) && otherKeychain.accounts == [LoginKeychain.sharedVaultKeyAccount],
               "secrets: another vault's key in the shared keychain item opens nothing and is copied nowhere",
               "\(String(describing: failure)), \(otherKeychain.accounts.joined(separator: ", "))")
+    }
+
+    /// Cancel or Deny at macOS's keychain prompt is a cancel, which leaves Secrets usable. A failed open that the load
+    /// check still passes leaves it usable too; only one the load check fails as well says Secrets can't open.
+    static func secretsKeychainPromptChecks(_ base: URL) async {
+        let keychain = MemoryKeychain()
+        let (store, _) = secretsKeychainStore(base, "keychain-prompt", keychain: keychain)
+        let value = secretsValue("prompt-keychain")
+        _ = try? await store.perform(.add(name: "PROMPT_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                                          value: SecretBytes(utf8: value)))
+        guard let index = store.index else { return check(false, "secrets: the keychain vault for the prompt checks is made") }
+        let item = keychain.store(LoginKeychain.vaultKeyAccount(publicKey: index.publicKey))
+        func reveal() async -> (values: [String: SecretBytes]?, failure: SecretsStore.Failure?) {
+            do {
+                return (try await store.perform(.reveal(name: "PROMPT_KEY")), nil)
+            } catch {
+                return (nil, error as? SecretsStore.Failure)
+            }
+        }
+        for (status, button) in [(errSecUserCanceled, "Cancel"), (errSecAuthFailed, "Deny")] {
+            item.readFailure = status
+            let refused = await reveal()
+            check(refused.failure == .cancelled && store.protection == .lessProtected,
+                  "secrets: \(button) at the keychain prompt is a cancel, and Secrets stays usable",
+                  "\(String(describing: refused.failure)), \(store.protection)")
+        }
+        item.readFailure = errSecNotAvailable
+        let failed = await reveal()
+        check(failed.failure == .vault(.cantOpen) && store.protection == .lessProtected,
+              "secrets: a keychain read that fails while the vault's item is there doesn't mark Secrets can't open",
+              "\(String(describing: failed.failure)), \(store.protection)")
+        item.readFailure = nil
+        let opened = await reveal()
+        check(opened.values?["PROMPT_KEY"] == SecretBytes(utf8: value),
+              "secrets: the next approval opens the vault after a refused keychain read", "\(String(describing: opened.failure))")
+        try? item.delete()
+        let gone = await reveal()
+        check(gone.failure == .vault(.cantOpen) && store.protection == .cantOpen,
+              "secrets: a keychain item that is gone, which the load check finds too, marks Secrets can't open", "\(store.protection)")
     }
 }

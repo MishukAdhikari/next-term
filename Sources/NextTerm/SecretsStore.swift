@@ -365,16 +365,18 @@ final class SecretsStore {
             return work.values
         case .failure(let error):
             reloadIfChanged() // new marks for a mask.key made again stay, even when the action failed
-            throw handle(error, action: action, facts: facts)
+            let failure = handle(error, action: action, facts: facts)
+            if failure == .vault(.cantOpen) { await noteCantOpen() }
+            throw failure
         }
     }
 
-    /// What a failed perform says, and what it leaves: a tampered vault or one that can't open is noted, with a
-    /// `tamper` line for the first.
+    /// What a failed perform says, and what it leaves: a tampered vault is noted, with a `tamper` line. A keyring's
+    /// cancel (such as Cancel at macOS's keychain prompt) is the user's, as at the presence check.
     private func handle(_ error: Error, action: Action, facts: Facts) -> Failure {
         let failure: Failure
         switch error {
-        case let vault as SecretVault.Failure: failure = .vault(vault)
+        case let vault as SecretVault.Failure: failure = vault == .cancelled ? .cancelled : .vault(vault)
         case let folder as SecretFolder.Failure: failure = folder == .notPrivate ? .vault(.tampered) : .folder(folder)
         case is Failure: failure = error as? Failure ?? .keyring
         default: failure = .keyring
@@ -385,11 +387,20 @@ final class SecretsStore {
                                         folder: facts.folder, outcome: "refused")
             try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
             NotificationCenter.default.post(name: Self.changed, object: self)
-        } else if failure == .vault(.cantOpen) {
-            protection = .cantOpen
-            NotificationCenter.default.post(name: Self.changed, object: self)
         }
         return failure
+    }
+
+    /// A vault that didn't open is noted as one that can't open only when the load check, which needs no Touch ID,
+    /// fails too. A failure the check passes (a keychain that couldn't be read just then, a Secure Enclave error that
+    /// isn't a cancel) is left for the next try, so it never shuts Secrets for the rest of the session.
+    private func noteCantOpen() async {
+        guard let index, protection != .cantOpen else { return }
+        let keyring = keyring
+        let opens = await onQueue { keyring(index).check(publicKey: index.publicKey) }
+        guard !opens else { return }
+        protection = .cantOpen
+        NotificationCenter.default.post(name: Self.changed, object: self)
     }
 
     private func setWaitingForKeychain(_ waiting: Bool) {
@@ -581,7 +592,9 @@ final class SecretsStore {
             NotificationCenter.default.post(name: Self.changed, object: self)
         case .failure(let error):
             reloadIfChanged()
-            throw handle(error, action: .use(names: names), facts: Facts())
+            let failure = handle(error, action: .use(names: names), facts: Facts())
+            if failure == .vault(.cantOpen) { await noteCantOpen() }
+            throw failure
         }
     }
 
