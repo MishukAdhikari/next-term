@@ -17,6 +17,19 @@ public enum ServiceKind: Int, Sendable, Hashable, CaseIterable, Comparable {
         }
     }
 
+    /// The group's tooltip lists the kinds found: "AI models, vector stores, tracing and evals".
+    public var plural: String {
+        switch self {
+        case .aiModel: return "AI models"
+        case .vectorStore: return "vector stores"
+        case .tracing: return "tracing and evals"
+        case .agent: return "agents"
+        case .localServer: return "local servers"
+        case .backend: return "backends"
+        case .hosting: return "hosting"
+        }
+    }
+
     public static func < (lhs: ServiceKind, rhs: ServiceKind) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 

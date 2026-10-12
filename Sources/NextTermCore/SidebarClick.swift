@@ -9,8 +9,8 @@ public enum SidebarClick {
 
     public enum Outcome: Equatable, Sendable { case open, selectOnly }
 
-    /// What the clicked row is.
-    public enum Row: Equatable, Sendable { case file, folder, root, deleted, database, other }
+    /// What the clicked row is. A Services row (`service`) opens its page from its badge, a double-click or ⌘↓.
+    public enum Row: Equatable, Sendable { case file, folder, root, deleted, database, service, other }
 
     /// A click as the outline reports it when it sends its action, on mouse-up.
     public struct Click: Equatable, Sendable {

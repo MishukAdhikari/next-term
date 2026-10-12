@@ -48,10 +48,27 @@ public struct ServiceRow: Sendable, Equatable, Identifiable, CustomStringConvert
     /// The badge's link, and the one Open and a double-click open.
     public var link: ServiceLink { links[0] }
 
+    /// The row's badge, one, opening the main link (":6334", "Console"). A service with more pages (Upstash's Redis
+    /// and Vector) lists the others in the row's menu.
+    public var badges: [ServiceBadge] { [ServiceBadge(word: link.badge, link: link)] }
+
+    /// The file the row names, relative to the project: the one that gave the badge's link its address, id or port,
+    /// else the first that named the service. Reveal Source File selects it.
+    public var sourceFile: String? {
+        let file = link.source ?? sources.first?.file
+        return file?.isEmpty == false ? file : nil
+    }
+
     /// The dimmed text after the name: its kind and the file that named it, "vector store · compose.yaml".
     public var detail: String {
-        let file = link.source ?? sources.first?.file ?? ""
-        return file.isEmpty ? kind.title : kind.title + " · " + file
+        guard let file = sourceFile else { return kind.title }
+        return kind.title + " · " + file
+    }
+
+    /// What VoiceOver reads for the row: "Qdrant, vector store, on this Mac". The badge reads its own page, as a link.
+    public var accessibilityLabel: String {
+        let parts: [String] = [name, kind.title] + (isLocal ? ["on this Mac"] : [])
+        return parts.joined(separator: ", ")
     }
 
     /// The page the badge opens (and, for a tool on this Mac, that it must be running), the notes, then what named
@@ -81,6 +98,20 @@ public struct ServiceScan: Sendable, Equatable, CustomStringConvertible, CustomD
     }
 
     public var isEmpty: Bool { rows.isEmpty }
+
+    /// The kinds the rows are, each once, in the section's order.
+    public var kinds: [ServiceKind] {
+        var seen: [ServiceKind] = []
+        for row in rows where !seen.contains(row.kind) { seen.append(row.kind) }
+        return seen
+    }
+
+    /// The group row's tooltip: the kinds found, and that keys are read by name only.
+    public var tooltip: String {
+        let found = kinds.map(\.plural).joined(separator: ", ")
+        let first = "Services this project’s files name, found offline: " + found + "."
+        return first + "\nKeys are read by name only. A badge opens its page in your browser."
+    }
 
     public var description: String {
         "ServiceScan(rows: [" + rows.map(\.id).joined(separator: ", ") + "])"
