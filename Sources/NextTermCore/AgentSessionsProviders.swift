@@ -311,10 +311,12 @@ extension AgentSessions {
         return open
     }
 
-    /// The session an OpenCode tab's title names, among those written in its folder since the agent started.
+    /// The session an OpenCode tab's title names among its folder's (`OpencodeSessions.shown`): the one its line
+    /// resumed while the title is that one's, else the only one with the title, written since the agent started.
     private static func shownSession(of tab: RunningAgent, home: String) -> String? {
         guard tab.agent == .opencode, let title = tab.shownTitle else { return nil }
-        return OpencodeSessions(home: home).shown(title: title, in: tab.directory, since: tab.startedAt)
+        let named = tab.agent.resumedID(in: tab.commandLine)
+        return OpencodeSessions(home: home).shown(title: title, in: tab.directory, since: tab.startedAt, named: named)
     }
 
     /// The session a tab whose agent named none is in: the newest its folder has had since the agent

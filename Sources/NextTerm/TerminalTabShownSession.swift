@@ -8,6 +8,14 @@ import NextTermCore
 extension TerminalTab {
     private static let shownLookups = DispatchQueue(label: "nextterm.opencode-shown", qos: .utility)
 
+    /// The home whose OpenCode stores the lookup reads: the user's, and in a self-test never theirs. The relaunch
+    /// harness has its own (RestorePlanning.agentHome); any other self-test reads the sessions list's (SessionStore.home).
+    private static var shownHome: String {
+        let home = RestorePlanning.agentHome
+        guard SelfTest.isRequested, home == NSHomeDirectory() else { return home }
+        return SessionStore.home
+    }
+
     /// When the OpenCode in front started, by the wall clock (as the session list has it), while a local one runs.
     private var opencodeStart: Date? {
         guard remote == nil, !exited, status.running, status.kind == .agent, let since = status.runningSince else { return nil }
@@ -17,20 +25,23 @@ extension TerminalTab {
     }
 
     /// Looks the tab's title up when it changed, or when a lookup that found nothing is due again
-    /// (OpencodeShownSession.retryAfter), and keeps the id found.
+    /// (OpencodeShownSession.retryDelay, a few times at most), and keeps the id found.
     func matchShownSession() {
         guard let start = opencodeStart, let ask = shownSession.ask(title: programTitle, start: start, at: Self.now) else { return }
         // OpenCode records the folder it runs in, which leads the tab's foreground group (`cd web && opencode`).
         let pgid = tcgetpgrp(view.process.childfd)
         let folder = (pgid > 0 ? ProcessInspector.currentDirectory(of: pgid) : nil) ?? currentDirectory()
-        let home = RestorePlanning.agentHome
+        // The session the line resumed (`opencode -s <id>`) is the one shown while the title is its own.
+        let line = status.expandedCommand.isEmpty ? status.command : status.command + " ; " + status.expandedCommand
+        let named = AgentKind.opencode.resumedID(in: line)
+        let home = Self.shownHome
         Self.shownLookups.async { [weak self] in
-            let id = OpencodeShownSession.lookUp(ask, in: folder, home: home)
+            let id = OpencodeShownSession.lookUp(ask, named: named, in: folder, home: home)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.shownSession.found(id, for: ask)
-                guard id == nil else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + OpencodeShownSession.retryAfter) { [weak self] in
+                guard let wait = self.shownSession.retryDelay(for: ask) else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                     self?.matchShownSession()
                 }
             }

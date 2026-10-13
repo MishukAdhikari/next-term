@@ -504,7 +504,8 @@ extension AgentEvidence {
             nameSession(&evidence, typed: typed?.arguments, argv: argv, children: input.childSessionIDs)
         }
         // OpenCode keeps no record of the session it has open, and its line names none after `opencode -c`, or the one
-        // it started on after a switch inside it. Its title names the one it shows, and the tab kept that id.
+        // it started on after a switch inside it. Its title names the one it shows, and the tab kept that id: the line's
+        // own while the title is that session's (OpencodeSessions.shown), so another id here is a switch inside OpenCode.
         if agent == .opencode, let shown = input.shownSession, agent.isSessionID(shown),
            evidence.sessionID?.lowercased() != shown.lowercased() {
             evidence.sessionID = shown

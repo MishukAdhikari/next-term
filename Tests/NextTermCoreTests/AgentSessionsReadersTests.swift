@@ -408,25 +408,40 @@ import Testing
             opencodeSession("ses_long", "A very long title that OpenCode cut at forty characters", updated: 40, start: start),
             opencodeSession("ses_more", "Fix the login tests too", updated: 50, start: start),
             opencodeSession("ses_quiet", "Tidy the docs", updated: -60, start: start),
+            opencodeSession("ses_history", "History cleanup", updated: 60, start: start),
         ]
-        func shown(_ title: String, _ list: [AgentSession]? = nil) -> String? {
-            OpencodeSessions.shown(title: title, in: list ?? sessions, since: start)
+        func shown(_ title: String, _ list: [AgentSession]? = nil, named: String? = nil) -> String? {
+            OpencodeSessions.shown(title: title, in: list ?? sessions, since: start, named: named)
         }
         #expect(shown("OC | Fix the login test") == "ses_login")
-        // Past 40 characters OpenCode shows the first 37 and "…" (an older build "..."): the start of one title.
+        // Past 40 characters OpenCode shows the first 37 (UTF-16 units) and "…" (an older build "..."): the start of one title.
         #expect(shown("OC | A very long title that OpenCode cut a…") == "ses_long")
         #expect(shown("OC | A very long title that OpenCode cut a...") == "ses_long")
-        // The start of two titles names neither.
+        // A title that ends so before 37 units is whole: OpenCode cut nothing.
         #expect(shown("OC | Fix the login test…") == nil)
+        #expect(shown("OC | Hi...") == nil && shown("OC | Hi…") == nil && shown("OC | Hi\u{FFFD}…") == nil)
+        // The first 37 units of two titles name neither.
+        let cutTwins = sessions + [opencodeSession("ses_kept", "A very long title that OpenCode cut and kept going", updated: 70, start: start)]
+        #expect(shown("OC | A very long title that OpenCode cut a…", cutTwins) == nil)
+        // JavaScript cuts by UTF-16 unit: a cut through an emoji leaves half of it, which the terminal reads as U+FFFD.
+        let head = "Teach the release notes to show one "
+        #expect(head.utf16.count == 36)
+        let emoji = opencodeSession("ses_emoji", head + "\u{1F389} in every heading", updated: 80, start: start)
+        #expect(shown("OC | " + head + "\u{FFFD}…", sessions + [emoji]) == "ses_emoji")
         // Spaces count as the session list shows the title.
         #expect(shown("  OC | Fix  the login\ttest ") == "ses_login")
-        // Two sessions with one title: neither.
+        // Two sessions with one title: neither, written since the agent started or not. OpenCode may show the older one
+        // while another tab writes the newer.
         let twins = sessions + [opencodeSession("ses_twin", "Fix the login test", updated: 70, start: start)]
         #expect(shown("OC | Fix the login test", twins) == nil)
+        let tidied = sessions + [opencodeSession("ses_tidied", "Tidy the docs", updated: 90, start: start)]
+        #expect(shown("OC | Tidy the docs", tidied) == nil)
         // A session nothing wrote to since the agent started is not the one it shows.
         #expect(shown("OC | Tidy the docs") == nil)
-        // OpenCode's home screen, a session with no title yet, a plugin's page and other programs' titles.
-        for title in ["OpenCode", "OC | ", "OC | …", "OC | ...", "vim notes.txt", "Fix the login test", "OC|Fix the login test"] {
+        // OpenCode's home screen, a session with no title yet, a plugin's page ("OC | <plugin>", no session's title)
+        // and other programs' titles.
+        for title in ["OpenCode", "OC | ", "OC | …", "OC | ...", "OC | todo-board", "vim notes.txt", "Fix the login test",
+                      "OC|Fix the login test"] {
             #expect(shown(title) == nil, "\(title)")
         }
         // Only an id in OpenCode's shape, and only OpenCode's sessions.
@@ -435,6 +450,31 @@ import Testing
         #expect(shown("OC | Odd one", [odd]) == nil && shown("OC | Odd one", [gemini]) == nil)
         // One session listed twice is one match.
         #expect(shown("OC | Fix the login test", sessions + [sessions[0]]) == "ses_login")
+    }
+
+    /// `opencode -s <id>` names the session its line resumed: while the title is that session's, it is the one shown,
+    /// written since the agent started or not, whatever other session has its title. Another title is a switch.
+    @Test func opencodesShownSessionKeepsTheOneItsLineNamed() {
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        let sessions: [AgentSession] = [
+            opencodeSession("ses_a", "Fix the login test", updated: -86000, start: start),
+            opencodeSession("ses_router", "Fix the router", updated: 200, start: start),
+        ]
+        // Another tab began a session with the same title since.
+        let twin = sessions + [opencodeSession("ses_b", "Fix the login test", updated: 30, start: start)]
+        func shown(_ title: String, _ list: [AgentSession], named: String?) -> String? {
+            OpencodeSessions.shown(title: title, in: list, since: start, named: named)
+        }
+        let login = "OC | Fix the login test"
+        #expect(shown(login, sessions, named: "ses_a") == "ses_a")
+        #expect(shown(login, twin, named: "ses_a") == "ses_a")
+        #expect(shown(login, twin, named: "SES_A") == nil) // OpenCode's ids hold both cases: another spelling is another id
+        #expect(shown(login, twin, named: nil) == nil) // `opencode -c`: either could be the one shown
+        // A switch inside OpenCode: the title is another session's.
+        #expect(shown("OC | Fix the router", twin, named: "ses_a") == "ses_router")
+        // A line's id out of OpenCode's shape, or one no session has, names nothing here.
+        #expect(shown(login, twin, named: "ses_a; rm -rf ~") == nil)
+        #expect(shown(login, sessions, named: "ses_gone") == nil)
     }
 
     @Test func opencodesShownSessionIsReadFromItsStore() throws {
@@ -448,12 +488,20 @@ import Testing
             + row("ses_else", "Fix the router", updated: 210_000)
         try database(home + "/.local/share/opencode/opencode.db", Self.opencode2Tables + rows)
         let reader = OpencodeSessions(home: home)
+        let since = Date(timeIntervalSince1970: 100)
+        #expect(reader.shown(title: "OC | Fix the router", in: project, since: since) == "ses_else")
+        #expect(reader.shown(title: "OC | Fix the router", in: project, since: Date(timeIntervalSince1970: 300)) == nil)
+        // ses_old has the same title as ses_mine. Only ses_mine was written since the agent started at 100 s, but the
+        // agent may show ses_old, idle, while another tab writes ses_mine: the title names neither.
         let title = "OC | Fix the login test"
-        // ses_old has the same title, but nothing wrote to it since the agent started at 100 s.
-        #expect(reader.shown(title: title, in: project, since: Date(timeIntervalSince1970: 100)) == "ses_mine")
-        #expect(reader.shown(title: title, in: project, since: Date(timeIntervalSince1970: 10)) == nil)
-        #expect(reader.shown(title: title, in: project + "/api", since: Date(timeIntervalSince1970: 100)) == nil)
-        #expect(OpencodeSessions(home: home + "/nowhere").shown(title: title, in: project, since: Date(timeIntervalSince1970: 100)) == nil)
+        #expect(reader.shown(title: title, in: project, since: since) == nil)
+        // The session the line names, while the title is its own.
+        #expect(reader.shown(title: title, in: project, since: since, named: "ses_old") == "ses_old")
+        #expect(reader.shown(title: title, in: project, since: since, named: "ses_mine") == "ses_mine")
+        #expect(OpencodeShownSession.lookUp(OpencodeShownSession.Ask(title: title, start: since), named: "ses_old",
+                                            in: project, home: home) == "ses_old")
+        #expect(reader.shown(title: "OC | Fix the router", in: project + "/api", since: since) == nil)
+        #expect(OpencodeSessions(home: home + "/nowhere").shown(title: "OC | Fix the router", in: project, since: since) == nil)
     }
 
     /// The tab's side: the store is read once per title, off the main thread, and the save reads only what was kept.
@@ -487,14 +535,45 @@ import Testing
         // Nothing found: looked up again only after a pause, as OpenCode writes to the session once it works in it.
         kept.found(nil, for: second)
         #expect(kept.id(title: router, start: start) == nil)
+        #expect(kept.retryDelay(for: second) == OpencodeShownSession.retryAfter)
+        #expect(kept.retryDelay(for: first) == nil) // a lookup the title moved on from waits for nothing
         #expect(ask(router, at: 502 + OpencodeShownSession.retryAfter - 1) == nil)
         let again = try #require(ask(router, at: 502 + OpencodeShownSession.retryAfter))
         kept.found("ses_router", for: again)
         #expect(kept.id(title: router, start: start) == "ses_router")
+        #expect(kept.retryDelay(for: again) == nil)
         // The agent started again with the same title: looked up again, and the earlier start's id is not this one's.
         let later = start.addingTimeInterval(600)
         #expect(kept.id(title: router, start: later) == nil)
         #expect(ask(router, at: 900, started: later) == Ask(title: router, start: later))
+    }
+
+    /// A title nothing matches is looked up again after a pause that doubles each time, `lookupsPerTitle` times at most:
+    /// an idle tab on an older session, or a title two sessions share, stops reading the store.
+    @Test func aTitleNothingMatchesIsLookedUpAFewTimes() {
+        var kept = OpencodeShownSession()
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        let login = "OC | Fix the login test"
+        func ask(_ title: String, at now: TimeInterval) -> OpencodeShownSession.Ask? {
+            kept.ask(title: title, start: start, at: now)
+        }
+        var now: TimeInterval = 100
+        var lookups = 0
+        var waits: [TimeInterval] = []
+        while let asked = ask(login, at: now) {
+            lookups += 1
+            kept.found(nil, for: asked)
+            guard let wait = kept.retryDelay(for: asked) else { break }
+            waits.append(wait)
+            #expect(ask(login, at: now + wait - 1) == nil)
+            now += wait
+        }
+        #expect(lookups == OpencodeShownSession.lookupsPerTitle)
+        #expect(waits == [20, 40, 80, 160, 320])
+        // Nothing more for that title however long it stays; a new title is looked up, and the first again after it.
+        #expect(ask(login, at: now + 100_000) == nil)
+        #expect(ask("OC | Fix the router", at: now + 100_001) != nil)
+        #expect(ask(login, at: now + 100_002) != nil)
     }
 
     @Test func twoOpencodeTabsInOneFolderEachHaveTheSessionTheyShow() throws {
@@ -527,6 +606,28 @@ import Testing
         #expect(AgentSessions.openSessions(switched, home: home) == ["opencode:ses_b": "A"])
         let resumed = [tab("A", at: 0, showing: "OpenCode", line: "opencode -s ses_a")]
         #expect(AgentSessions.openSessions(resumed, home: home) == ["opencode:ses_a": "A"])
+    }
+
+    /// Tab A resumed yesterday's session by its id and nothing was typed since; tab B began a session that OpenCode
+    /// titled the same. A's line names the session A shows: B's is never marked open in A.
+    @Test func anOpencodeTabKeepsItsLinesSessionWhenAnotherHasItsTitle() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let start = (Date().timeIntervalSince1970 - 600).rounded()
+        func row(_ id: String, created: Double, updated: Double) -> String {
+            let times = "\(Int(created * 1000)), \(Int(updated * 1000))"
+            return "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, 'Fix the login test', '2.0.3', NULL, NULL, \(times), NULL, NULL);"
+        }
+        let rows = row("ses_a", created: start - 86400, updated: start - 86000) + row("ses_b", created: start + 30, updated: start + 60)
+        try database(home + "/.local/share/opencode/opencode.db", Self.opencode2Tables + rows)
+        let tabA = RunningAgent(key: "A", agent: .opencode, directory: project, commandLine: "opencode -s ses_a",
+                                startedAt: Date(timeIntervalSince1970: start), shownTitle: "OC | Fix the login test")
+        let tabB = RunningAgent(key: "B", agent: .opencode, directory: project, commandLine: "opencode",
+                                startedAt: Date(timeIntervalSince1970: start + 20), shownTitle: "OC | Fix the login test")
+        let open = AgentSessions.openSessions([tabA, tabB], home: home)
+        #expect(open["opencode:ses_a"] == "A")
+        #expect(open["opencode:ses_b"] != "A")
     }
 
     // MARK: Cursor Agent
