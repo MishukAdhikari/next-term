@@ -316,6 +316,57 @@ extension SelfTest {
               "MCP writes: settings_set changes the font size once approved, showing the change", grown.shown)
         app.setFontSize(savedFont)
 
+        // Keys as Next Term has them now, and Settings at a tab, for the next-term-setup skill.
+        let shortcuts = KeyboardShortcuts.shared
+        let keysListed = await client.call("list_shortcuts", ["query": "new tab"])
+        let rows = (json(keysListed.text)?["commands"] as? [[String: Any]]) ?? []
+        let newTabKey = shortcuts.commands.first { ($0.item?.title ?? $0.title) == "New Tab" }.flatMap { shortcuts.chord(for: $0.id)?.display }
+        let onlyAsked = rows.allSatisfy { row in
+            let words = ((row["command"] as? String ?? "") + " " + (row["where"] as? String ?? "")).lowercased()
+            return words.contains("new") && words.contains("tab")
+        }
+        check(json(keysListed.text)?["shortcut_set"] as? String == shortcuts.preset.name && newTabKey != nil && onlyAsked
+              && rows.contains { $0["command"] as? String == "New Tab" && $0["key"] as? String == newTabKey },
+              "MCP writes: list_shortcuts gives the live key of what a query names, and only that", keysListed.text.prefix(300).description)
+        let positions = await client.call("list_shortcuts", ["query": "terminal position"])
+        let placed = (json(positions.text)?["commands"] as? [[String: Any]]) ?? []
+        check(!placed.isEmpty && placed.allSatisfy { ($0["where"] as? String ?? "").hasPrefix("View › Terminal Position › ") }
+              && rows.contains { $0["where"] as? String == "File › New Tab" },
+              "MCP writes: list_shortcuts says where each command is, its menu's path and its own title", positions.text.prefix(300).description)
+        let byKey = await client.call("list_shortcuts", ["query": newTabKey ?? "⌘T"])
+        check((json(byKey.text)?["commands"] as? [[String: Any]])?.contains { $0["command"] as? String == "New Tab" } == true,
+              "MCP writes: list_shortcuts finds a command by its key", byKey.text.prefix(200).description)
+        let settingsOpen = await client.call("show_settings", ["tab": "keys"])
+        let onKeys = await wait(5) { app.openSettings?.shownTab == "keys" }
+        let wrongTab = await client.call("show_settings", ["tab": "colours"])
+        check(!settingsOpen.isError && onKeys && wrongTab.isError && MCPWriteControl.pending == nil && app.openSettings?.window?.isKeyWindow != true,
+              "MCP writes: show_settings opens Settings at Keyboard Shortcuts without asking or taking the keyboard, and refuses a tab it doesn't have",
+              settingsOpen.text)
+        app.openSettings?.close()
+
+        // new_tab: a worktree inside a project's folder opens in a window of its own, and the prompt is typed quoted for the
+        // shell, so nothing in it runs (next-term-worktrees' hand-off).
+        if let git = GitRunner.locateGit() {
+            let base = canonicalPath(NSTemporaryDirectory()) + "/nt-newtab-\(getpid())"
+            let repo = base + "/app", nested = repo + "/.claude/worktrees/side"
+            try? FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
+            for args in [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "start"], ["worktree", "add", "-q", "-b", "side", nested]] {
+                gitOutput(git, repo, args)
+            }
+            let main = app.openFolder(repo, newWindow: true, forAgent: true)
+            let opened = await client.call("new_tab", ["directory": nested, "command": "printf '[%s]\\n'", "prompt": "$(echo RAN) it's", "hand_off": true])
+            let id = json(opened.text)?["id"] as? String
+            let tab = app.controllers.flatMap(\.tabs).first { $0.id.uuidString.lowercased() == id }
+            let owner = app.controllers.first { controller in controller.tabs.contains { $0 === tab } }
+            let printed = await wait(10) { tab?.screenTail(8).contains { $0.contains("[$(echo RAN) it's]") } == true }
+            check(owner?.project == canonicalPath(nested) && owner !== main && printed && tab?.screenTail(8).contains { $0.contains("[RAN") } == false,
+                  "MCP writes: new_tab opens a worktree inside a project in its own window, and types the prompt quoted so nothing in it runs",
+                  "\(owner?.project ?? "no window") | " + (tab?.screenTail(4).joined(separator: " / ") ?? opened.text))
+            for controller in [owner, main] where controller?.hasClosed == false { controller?.window?.close() }
+            gitOutput(git, repo, ["worktree", "remove", "--force", nested])
+            try? FileManager.default.removeItem(atPath: base)
+        }
+
         // Decline and Stop Asking: that asker is refused without a window until Next Term quits, its
         // proposals and the writing of a proposal it had accepted too.
         let proposing = Task { await client.call("propose_edit", ["path": notes, "content": "accepted before the stop\n"]) }

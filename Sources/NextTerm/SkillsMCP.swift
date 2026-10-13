@@ -134,7 +134,7 @@ enum SkillsMCP {
 
     static func listSkills(from start: String?, reader: SkillLibrary.Reader) async -> [String: Any] {
         let inventory = await SkillsStore.scan()
-        let home = SkillsStore.home, app: AppDelegate = AppDelegate.shared, nextTerm = app.agentControl && app.agentsOfferTabs
+        let home = SkillsStore.home, app: AppDelegate = AppDelegate.shared, nextTerm = app.builtInSkills
         let entries = await Task.detached { SkillLibrary.entries(from: start, home: home, nextTerm: nextTerm, reader: reader) }.value
         let tracked = Dictionary(await SkillsInstaller.tracked().map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         let recorded = Set(SkillsInstaller.records().map(\.name))
@@ -166,7 +166,9 @@ enum SkillsMCP {
             var item = describe(entry, reader: reader)
             if entry.copy.scope == .personal, let row = rows[entry.name] { personal(row, into: &item) }
             if entry.copy.scope == .nextTerm {
-                item["source"] = "built into Next Term (Settings › Editor › Agents offer to run parallel work in tabs; settings_set agents_offer_tabs)"
+                item["source"] = BuiltInSkill.named(entry.name)?.offersTabs == true
+                    ? "built into Next Term (Settings › Editor › Agents offer to run parallel work in tabs; settings_set agents_offer_tabs)"
+                    : "built into Next Term (there while agents may control Next Term)"
             }
             rows[entry.name] = nil
             return item
@@ -212,7 +214,7 @@ enum SkillsMCP {
             guard let known = SkillLibrary.Scope(rawValue: raw) else { return MCPControl.fail("scope is project, personal or next-term.") }
             scope = known
         }
-        let home = SkillsStore.home, app: AppDelegate = AppDelegate.shared, nextTerm = app.agentControl && app.agentsOfferTabs
+        let home = SkillsStore.home, app: AppDelegate = AppDelegate.shared, nextTerm = app.builtInSkills
         let found = await Task.detached { [name, scope] in
             SkillLibrary.skill(name, scope: scope, from: start, home: home, nextTerm: nextTerm, reader: reader)
         }.value

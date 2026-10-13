@@ -22,14 +22,16 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
     private let empty = NSStackView()
     var onShowPersonal: (() -> Void)?
 
-    /// One row: a skill of the project, or Next Term's own.
+    /// One row: a skill of the project, or one of Next Term's own, by name.
     enum Row: Equatable {
         case skill(SkillLibrary.Overview.Skill)
-        case builtIn
+        case builtIn(String)
 
         var name: String {
-            if case .skill(let skill) = self { return skill.name }
-            return BuiltInSkill.name
+            switch self {
+            case .skill(let skill): return skill.name
+            case .builtIn(let name): return name
+            }
         }
     }
 
@@ -196,7 +198,7 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
         generation += 1
         let mine = generation, home = SkillsStore.home
         let app: AppDelegate = AppDelegate.shared
-        let nextTerm = app.agentControl && app.agentsOfferTabs
+        let nextTerm = app.builtInSkills
         Task {
             let (overview, differ) = await Task.detached { () -> (SkillLibrary.Overview, [String: Bool]) in
                 let overview = SkillLibrary.overview(project: project, home: home, nextTerm: nextTerm)
@@ -239,7 +241,7 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
         let kept = selected?.name
         self.overview = overview
         self.differ = differ
-        rows = overview.skills.map(Row.skill) + [.builtIn]
+        rows = overview.skills.map(Row.skill) + BuiltInSkill.all.map { Row.builtIn($0.name) }
         let count = overview.skills.count, name = project.map(Self.title) ?? ""
         summary.stringValue = "\(count) \(count == 1 ? "skill" : "skills") · read-only"
         summary.toolTip = Self.totals(overview, reachable: AppDelegate.shared.agentControl)
@@ -274,13 +276,15 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
     static func cell(_ row: Row, column: String, overview: SkillLibrary.Overview?, differ: [String: Bool],
                      agentControl: Bool, offerTabs: Bool) -> (text: String, tip: String?, color: NSColor) {
         switch (row, column) {
-        case (.builtIn, "name"): return (BuiltInSkill.name, BuiltInSkill.description, .labelColor)
+        case (.builtIn(let name), "name"): return (name, BuiltInSkill.named(name)?.description, .labelColor)
         case (.builtIn, "where"):
             return ("Next Term", "Agents get it from Next Term over MCP (get_skill). Nothing is written in their folders.", .secondaryLabelColor)
-        case (.builtIn, _):
+        case (.builtIn(let name), _):
             if !agentControl { return ("—", "Agents can't reach Next Term: agent control is off.", .tertiaryLabelColor) }
-            if !offerTabs { return ("off", "Off in Settings › Editor › Agents offer to run parallel work in tabs.", .tertiaryLabelColor) }
-            return ("via Next Term", "In a Next Term tab, the offer leads its MCP instructions and get_skill gives the rules.", .secondaryLabelColor)
+            if !offerTabs, BuiltInSkill.named(name)?.offersTabs == true {
+                return ("off", "Off in Settings › Editor › Agents offer to run parallel work in tabs.", .tertiaryLabelColor)
+            }
+            return ("via Next Term", "In a Next Term tab, its MCP instructions say when to read it, and get_skill gives the rules.", .secondaryLabelColor)
         case (.skill(let skill), "name"): return (skill.name, skill.description.isEmpty ? nil : skill.description, .labelColor)
         case (.skill(let skill), "where"): return whereText(skill, differ: differ[skill.name])
         case (.skill(let skill), _):
@@ -361,7 +365,7 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     private func updateButtons() {
         let row = selected
-        openButton.title = row == .builtIn ? "View Instructions" : "Open SKILL.md"
+        if case .builtIn? = row { openButton.title = "View Instructions" } else { openButton.title = "Open SKILL.md" }
         openButton.isEnabled = row != nil
         if case .skill? = row { revealButton.isEnabled = true } else { revealButton.isEnabled = false }
     }
@@ -370,7 +374,7 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
     /// Term's own skill.
     @objc private func openSelected() {
         switch selected {
-        case .builtIn?: viewInstructions()
+        case .builtIn(let name)?: viewInstructions(name)
         case .skill(let skill)?: open(skill.copies.first?.folder)
         case nil: break
         }
@@ -388,14 +392,16 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
         NSWorkspace.shared.activateFileViewerSelecting(skill.copies.compactMap(\.folder).map { URL(fileURLWithPath: $0) })
     }
 
-    /// Next Term's own skill, as agents get it: there is no file to open.
-    func viewInstructions() {
+    /// One of Next Term's own skills, as agents get it: there is no file to open.
+    func viewInstructions(_ name: String) {
+        guard let skill = BuiltInSkill.named(name) else { return }
         let alert = NSAlert()
-        alert.messageText = BuiltInSkill.name
-        alert.informativeText = "Next Term's own skill, as agents in its tabs get it over MCP (get_skill). Nothing is written in their folders. Settings › Editor › Agents offer to run parallel work in tabs turns it off."
+        alert.messageText = skill.name
+        alert.informativeText = "Next Term's own skill, as agents in its tabs get it over MCP (get_skill). Nothing is written in their folders. "
+            + (skill.offersTabs ? "Settings › Editor › Agents offer to run parallel work in tabs turns it off." : "It is there while agents may control Next Term.")
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
         let text = NSTextView(frame: scroll.bounds)
-        text.string = BuiltInSkill.text
+        text.string = skill.text
         text.isEditable = false
         text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         text.autoresizingMask = [.width]
@@ -420,9 +426,9 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
             menu.addItem(item)
         }
         switch rows[table.clickedRow] {
-        case .builtIn:
+        case .builtIn(let name):
             add("View Instructions", #selector(openSelected))
-            add("Turn Off in Settings › Editor…", #selector(showEditor))
+            if BuiltInSkill.named(name)?.offersTabs == true { add("Turn Off in Settings › Editor…", #selector(showEditor)) }
         case .skill(let skill):
             add("Open SKILL.md", #selector(openSelected))
             add("Show in Finder", #selector(reveal))

@@ -641,7 +641,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, parallel (with scrollback), skills, notifications, services or secrets), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services or secrets), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -655,6 +655,7 @@ enum SelfTest {
             return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
+        case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
         case "notifications":
             notificationsMenuChecks()
             return agentSpinnerChecks()
