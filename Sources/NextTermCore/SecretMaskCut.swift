@@ -1,6 +1,11 @@
 import Foundation
 
 extension SecretMask {
+    /// The bytes to ask a host for (`head -c`) when its text is cut at `maxBytes` by `maskedPrefix`: `longest` past the
+    /// cut, so a stored value that starts before the cut comes whole and is left out whole, and one more to tell that the
+    /// text was cut.
+    public func bytesToRead(forCutAt maxBytes: Int) -> Int { maxBytes + longest + 1 }
+
     /// `text` masked, then cut to at most `maxBytes` UTF-8 bytes, with `cut` when anything was left out. Masking comes
     /// first: a cut through a stored value leaves the value out whole, and never splits a character. Text a host already
     /// cut (`head -c`) should run `longest` bytes past `maxBytes`, so a value that starts before the cut is there whole.

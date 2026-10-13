@@ -246,7 +246,7 @@ enum RemoteMCP {
         // The diff is masked before it is cut: the host sends the longest stored form's bytes past the cut, so a value
         // that starts before it is there whole, and is left out whole (SecretMask.maskedPrefix).
         let mask = SecretMask.current
-        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? limit + mask.longest + 1 : 0)
+        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? mask.bytesToRead(forCutAt: limit) : 0)
         RemoteConnection.run(found, script: script, timeout: 50) { output in
             guard let changes = RemoteChanges.parse(output.output) else {
                 if output.status == 3 || output.status == 4 { return reply(fail("\(directory) on \(found.name): \(output.problem)")) }

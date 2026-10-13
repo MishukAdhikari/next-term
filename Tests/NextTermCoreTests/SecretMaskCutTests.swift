@@ -54,6 +54,24 @@ private func showsPart(of value: String, in text: String) -> Bool {
         #expect(whole.text == head + "•••\n+NEXT=1\n" && !whole.cut)
     }
 
+    /// host_changes asks the host for `bytesToRead(forCutAt:)` bytes (`head -c`), then cuts with `maskedPrefix`. Each
+    /// cut through a stored value leaves it out whole, because the host sent all of it: asking for one byte past the
+    /// cut only, the host's own cut split the value, and the part before the agent's cut showed.
+    @Test func aHostSendsAllOfAValueAcrossTheCut() {
+        let m = storedMask([stored])
+        let head = "diff --git a/.env b/.env\n+DB_PASSWORD="
+        let text = head + stored + "\n+NEXT=1\n"
+        let start = head.utf8.count
+        for limit in start...(start + stored.utf8.count) {
+            let sent = String(decoding: Array(text.utf8.prefix(m.bytesToRead(forCutAt: limit))), as: UTF8.self)
+            let cut = m.maskedPrefix(sent, maxBytes: limit)
+            #expect(cut.cut && !showsPart(of: stored, in: cut.text), "\(limit): \(cut.text)")
+        }
+        let short = String(decoding: Array(text.utf8.prefix(start + 11)), as: UTF8.self)
+        #expect(showsPart(of: stored, in: m.maskedPrefix(short, maxBytes: start + 10).text)) // the host's cut alone
+        #expect(SecretMask.empty.bytesToRead(forCutAt: 1000) == 1001)
+    }
+
     /// A cut never splits a character, with or without marks.
     @Test func aCutNeverSplitsACharacter() {
         let text = "é" + String(repeating: "ü", count: 10)
