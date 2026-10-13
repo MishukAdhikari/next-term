@@ -365,6 +365,7 @@ extension SelfTest {
               "secrets: read_tab and wait_for_tab show ••• where a tab printed a stored key", String(read.text.suffix(200)))
         await secretsWrappedTailCheck(tab, client: client, value: value)
         await secretsHardWrappedTailCheck(tab, client: client, value: value)
+        await secretsIndentedTailCheck(tab, client: client, value: value)
         await secretsWrappedWaitCheck(tab, client: client, value: value)
         await secretsWrappedChoiceCheck(c, base: base, client: client, value: value, valueFile: valueFile)
 
@@ -445,6 +446,32 @@ extension SelfTest {
         check(read.text.contains("•••") && !pieces.contains { read.text.contains($0) },
               "secrets: read_tab whose window starts on the second row of a key a newline split shows ••• and none of its tail",
               String(read.text.suffix(200)))
+    }
+
+    /// As `secretsHardWrappedTailCheck`, with the key's two rows drawn as agent UIs draw a tool's output: indented as
+    /// Claude Code indents it ("  ⎿  ", then "     "), and in a box ("│ … │"). The edges between the two parts are left
+    /// out of the match, so the window starting on the second row shows none of the key's tail.
+    static func secretsIndentedTailCheck(_ tab: TerminalTab, client: SecretsMCPClient, value: String) async {
+        let tail = String(value.dropFirst(8))
+        let characters = Array(tail)
+        let pieces = (0...(characters.count - 6)).map { String(characters[$0..<$0 + 6]) }
+        let shapes = [(name: "indented", first: "  ⎿  ", next: "     ", close: ""),
+                      (name: "boxed", first: "│ ", next: "│ ", close: " │")]
+        for shape in shapes {
+            let mark = "after-\(shape.name)"
+            let rowsArguments = "'\(shape.first)' \"$K\" '\(shape.close)' '\(shape.next)' \"${K#????????}\" '\(shape.close)'"
+            tab.view.send(txt: "printf '%s%.8s%s\\n%s%s%s\\n' \(rowsArguments); printf '\(mark)\\n'\r")
+            let shown = await wait(10) { tab.screenTail().contains(mark) && !tab.status.running }
+            let rows = tab.screenTail(60)
+            guard shown, let second = rows.lastIndex(of: shape.next + tail + shape.close) else {
+                check(false, "secrets: a key split over two \(shape.name) rows shows on two rows", rows.suffix(4).joined(separator: " | "))
+                continue
+            }
+            let read = await client.call("read_tab", ["tab_id": tab.id.uuidString.lowercased(), "lines": rows.count - second])
+            check(read.text.contains("•••") && !pieces.contains { read.text.contains($0) },
+                  "secrets: read_tab whose window starts on the second of a key's two \(shape.name) rows shows ••• and none of its tail",
+                  String(read.text.suffix(200)))
+        }
     }
 
     /// wait_for_tab reads the last 40 rows. Keys a wrap split fill them, two rows each, and the same rows with one more

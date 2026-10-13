@@ -14,7 +14,7 @@ import Foundation
 ///   come from `mask.key` by HKDF.
 /// - **Matching** runs over the text's UTF-8 bytes: the head at each position, then the HMAC only where a head matches.
 ///   Each match becomes "•••"; overlapping matches merge. Rows are matched as one run, so a key split by a wrap is
-///   masked in both rows.
+///   masked in both rows, an agent UI's indent or border between them too (`mask(rows:)`).
 ///
 /// Limits, said in the docs: a value under 12 characters, and a value changed before it is printed (split, reversed,
 /// hex, inside a longer base64 run), are missed. Someone with the folder, `mask.key` included, can test guesses of a
@@ -249,30 +249,6 @@ public final class SecretMask: @unchecked Sendable {
         let (found, bytes) = copy.withUTF8 { buffer in (ranges(in: buffer), Array(buffer)) }
         guard !found.isEmpty else { return (text, 0) }
         return (Self.replacing(found, in: bytes[...]), found.count)
-    }
-
-    /// Rows of a screen, matched as one run with the line breaks taken out, and the masked parts mapped back to each
-    /// row by UTF-8 offset: a key a wrap split is masked in both rows.
-    public func mask(rows: [String]) -> [String] {
-        guard !isEmpty, !rows.isEmpty else { return rows }
-        var joined: [UInt8] = []
-        var starts: [Int] = []
-        for row in rows {
-            starts.append(joined.count)
-            joined.append(contentsOf: row.utf8)
-        }
-        let found = joined.withUnsafeBufferPointer { ranges(in: $0) }
-        guard !found.isEmpty else { return rows }
-        return rows.indices.map { index -> String in
-            let start = starts[index]
-            let end = index + 1 < starts.count ? starts[index + 1] : joined.count
-            let inRow = found.compactMap { range -> Range<Int>? in
-                let lower = max(range.lowerBound, start)
-                let upper = min(range.upperBound, end)
-                return lower < upper ? (lower - start)..<(upper - start) : nil
-            }
-            return inRow.isEmpty ? rows[index] : Self.replacing(inRow, in: joined[start..<end])
-        }
     }
 
     /// An answer's fields with each string in them masked as `mask(_:)` masks it, in nested objects and lists too, and the
