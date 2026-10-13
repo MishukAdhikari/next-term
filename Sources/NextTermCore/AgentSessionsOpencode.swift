@@ -2,14 +2,14 @@ import Foundation
 
 /// OpenCode: SQLite stores, wherever `OpencodePaths.databases` finds them (`~/.local/share/opencode/opencode.db` by
 /// default, since v1.2; `XDG_DATA_HOME`, `OPENCODE_DB` and channel builds move or add one). Its session table is
-/// `session`, renamed `session_v2` by OpenCode 2, which leaves the old one beside it; the newer is read when it is
-/// there. It has the folder each session was started in (`directory`), `title` (OpenCode 2 may leave it empty),
-/// `time_created` and `time_updated` (ms), `model` (JSON with its `id`), `parent_id` for a sub-agent's and
-/// `time_archived` for an archived one, neither listed. Until the agent names a session its title is empty or
-/// "New session - <time>", so the first prompt (the first text part of its first user message) stands in; with no
-/// prompt either, the session is empty. The newer runner keeps a session's messages in `session_message` instead
-/// (`type`, `seq`, and `data` with the `text`). Several stores holding one session give its newest row. Resume with
-/// `opencode --session <id>` in the same folder.
+/// `session`, and `session_v2` from OpenCode 2, which leaves the old one beside it (a 1.x build run again writes there);
+/// both are read, the newer table's row winning a tie. It has the folder each session was started in (`directory`),
+/// `title` (OpenCode 2 may leave it empty), `time_created` and `time_updated` (ms), `model` (JSON with its `id`),
+/// `parent_id` for a sub-agent's and `time_archived` for an archived one, neither listed. Until the agent names a
+/// session its title is empty or "New session - <time>", so the first prompt (the first text part of its first user
+/// message) stands in; with no prompt either, the session is empty. The newer runner keeps a session's messages in
+/// `session_message` instead (`type`, `seq`, and `data` with the `text`). Several stores holding one session give its
+/// newest row. Resume with `opencode --session <id>` in the same folder.
 struct OpencodeSessions: AgentSessionProvider {
     let home: String
     /// The variables that move OpenCode's store (`OpencodePaths.variables`).
@@ -29,39 +29,48 @@ struct OpencodeSessions: AgentSessionProvider {
         var failure: Error?
         var read = false
         for path in OpencodePaths.databases(home: home, environment: environment) {
-            let found: [AgentSession]
             do {
-                found = try Self.sessions(path, in: folder, subfolders: subfolders, since: since)
+                Self.merge(try Self.sessions(path, in: folder, subfolders: subfolders, since: since), into: &newest)
+                read = true
             } catch {
                 failure = failure ?? error
-                continue
-            }
-            read = true
-            for session in found {
-                if let kept = newest[session.id], kept.updatedAt >= session.updatedAt { continue }
-                newest[session.id] = session
             }
         }
         if !read, let failure { throw failure }
-        return newest.values.sorted { (a: AgentSession, b: AgentSession) -> Bool in
-            a.updatedAt != b.updatedAt ? a.updatedAt > b.updatedAt : a.id < b.id
-        }
+        return Self.newestFirst(newest)
     }
 
-    /// One store's sessions, the newest 200 written.
+    /// The most rows one store gives.
+    static let rowLimit = 200
+
+    /// One store's sessions, the newest `rowLimit` written: OpenCode 2's table and the old one beside it, or the old
+    /// one alone. Throws when the table OpenCode writes (`session_v2` when it is there) lacks a column it needs; an old
+    /// table beside it that lacks one is left out.
     static func sessions(_ path: String, in folder: String, subfolders: Bool, since: Date?) throws -> [AgentSession] {
         let db = try AgentStoreDatabase(path)
-        let table = db.columns("session_v2").isEmpty ? "session" : "session_v2"
-        let columns = db.columns(table)
-        guard ["id", "directory", "time_updated"].allSatisfy(columns.contains) else {
+        let current = db.columns("session_v2").isEmpty ? "session" : "session_v2"
+        guard let found = rows(db, table: current, in: folder, subfolders: subfolders, since: since) else {
             throw AgentSessions.ReadError("the session table changed")
         }
+        var newest: [String: AgentSession] = [:]
+        merge(found, into: &newest)
+        if current == "session_v2", let old = rows(db, table: "session", in: folder, subfolders: subfolders, since: since) {
+            merge(old, into: &newest)
+        }
+        return Array(newestFirst(newest).prefix(rowLimit))
+    }
+
+    /// `table`'s sessions in `folder`, the newest `rowLimit` written; nil when it lacks `id`, `directory` or
+    /// `time_updated` (or is not there).
+    static func rows(_ db: AgentStoreDatabase, table: String, in folder: String, subfolders: Bool, since: Date?) -> [AgentSession]? {
+        let columns = db.columns(table)
+        guard ["id", "directory", "time_updated"].allSatisfy(columns.contains) else { return nil }
         func column(_ name: String) -> String { columns.contains(name) ? name : "NULL" }
         var filters = ["(directory = ?1 OR (?2 = 1 AND substr(directory, 1, length(?1) + 1) = ?1 || '/'))", "time_updated >= ?3"]
         if columns.contains("parent_id") { filters.append("parent_id IS NULL") }
         if columns.contains("time_archived") { filters.append("time_archived IS NULL") }
         let picked = "SELECT id, directory, \(column("title")), \(column("time_created")), time_updated, \(column("model"))"
-        let sql = picked + " FROM \(table) WHERE " + filters.joined(separator: " AND ") + " ORDER BY time_updated DESC LIMIT 200"
+        let sql = picked + " FROM \(table) WHERE " + filters.joined(separator: " AND ") + " ORDER BY time_updated DESC LIMIT \(rowLimit)"
         let after = since.map { Int($0.timeIntervalSince1970 * 1000) } ?? 0
         return db.rows(sql, [folder, subfolders ? 1 : 0, after]).compactMap { row -> AgentSession? in
             guard let id = row[0], let directory = row[1] else { return nil }
@@ -75,6 +84,21 @@ struct OpencodeSessions: AgentSessionProvider {
             return AgentSession(agent: .opencode, id: id, cwd: directory, title: AgentSessions.clean(title), named: false,
                                 createdAt: created, updatedAt: updated, gitBranch: nil, model: row[5].flatMap(modelName),
                                 isRunning: false)
+        }
+    }
+
+    /// `sessions` into `kept` by id: a row replaces the kept one only when written later, so a tie keeps the first read.
+    static func merge(_ sessions: [AgentSession], into kept: inout [String: AgentSession]) {
+        for session in sessions {
+            if let have = kept[session.id], have.updatedAt >= session.updatedAt { continue }
+            kept[session.id] = session
+        }
+    }
+
+    /// Newest written first; a tie by id.
+    static func newestFirst(_ kept: [String: AgentSession]) -> [AgentSession] {
+        kept.values.sorted { (a: AgentSession, b: AgentSession) -> Bool in
+            a.updatedAt != b.updatedAt ? a.updatedAt > b.updatedAt : a.id < b.id
         }
     }
 

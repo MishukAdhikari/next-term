@@ -6,8 +6,8 @@ import Foundation
 /// nothing on disk, and a relative name is taken in the data folder), else `opencode.db` in the data folder, or
 /// `opencode-<channel>.db` beside it for a build of another channel unless `OPENCODE_DISABLE_CHANNEL_DB` is 1 or true.
 ///
-/// What decides is the user's login shell, read by its probe (`shellEnvironment`): a Finder-launched app's own
-/// environment lacks what .zshrc sets. Every function also takes the environment, for tests.
+/// What decides is the user's login shell, read by its probe (`shell`): a Finder-launched app's own environment lacks
+/// what .zshrc sets. Every function also takes the environment, for tests.
 public enum OpencodePaths {
     /// The variables that move OpenCode's folders or pick its database, in the order the login shell's probe reads them.
     public static let variables = ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "OPENCODE_DB", "OPENCODE_DISABLE_CHANNEL_DB"]
@@ -15,29 +15,82 @@ public enum OpencodePaths {
     /// At most this many channel databases are read beside the main one.
     static let channelLimit = 4
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var shell: [String: String] = [:]
+    /// What the user's login shell sets, as Next Term knows it: the last launch's values until this launch's probe has
+    /// run (a restore at launch reads OpenCode's store before it has), then the probe's.
+    public static let shell = Shell()
 
-    /// `variables` as the user's login shell sets them, from `shellValues`: set once when its probe finishes, empty
-    /// until then (so the defaults apply in the first seconds after launch).
-    public static var shellEnvironment: [String: String] {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return shell
-        }
-        set {
-            lock.lock()
-            shell = newValue
-            lock.unlock()
-        }
-    }
+    /// `variables` as the user's login shell sets them (`shell`): empty when no probe ever ran.
+    public static var shellEnvironment: [String: String] { shell.environment }
 
     /// The environment that decides for the stores in `home`: the login shell's for the user's own home, none for any
     /// other (a test's or the self-test's made-up home, which must never lead to the user's real store).
-    public static func environment(home: String) -> [String: String] {
+    public static func environment(home: String, shell: Shell = OpencodePaths.shell) -> [String: String] {
         let own = (NSHomeDirectory() as NSString).standardizingPath
-        return (home as NSString).standardizingPath == own ? shellEnvironment : [:]
+        return (home as NSString).standardizingPath == own ? shell.environment : [:]
+    }
+
+    /// The login shell's values of `variables`, from any thread. Its probe takes up to 5 seconds after launch, so the
+    /// values it found are kept in the app's defaults and stand in, at the next launch, until it has run again.
+    public final class Shell: @unchecked Sendable {
+        /// The key the probe's values are kept under, a dictionary of strings.
+        public static let defaultsKey = "OpencodeShellEnvironment"
+
+        private let lock = NSLock()
+        private var values: [String: String] = [:]
+        private var probedYet = false
+        private var recalled = false
+
+        public init() {}
+
+        /// The values that decide now: the probe's once it has run, before that the last launch's, else none.
+        public var environment: [String: String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+
+        /// Takes the last launch's values from `defaults`, checked as the probe's are, unless the probe has run. Only
+        /// the first call reads.
+        public func recall(from defaults: UserDefaults) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !recalled, !probedYet else { return }
+            recalled = true
+            let kept = defaults.dictionary(forKey: Self.defaultsKey) ?? [:]
+            values = OpencodePaths.shellValues(kept.compactMapValues { $0 as? String })
+        }
+
+        /// The probe's values (`printed`, as `shellValues` takes them): they decide from now on, and are kept in
+        /// `defaults` for the next launch (none kept when the shell sets none).
+        public func probed(_ printed: [String: String], keepIn defaults: UserDefaults) {
+            let found = OpencodePaths.shellValues(printed)
+            lock.lock()
+            values = found
+            probedYet = true
+            lock.unlock()
+            if found.isEmpty {
+                defaults.removeObject(forKey: Self.defaultsKey)
+            } else {
+                defaults.set(found, forKey: Self.defaultsKey)
+            }
+        }
+    }
+
+    /// The login-shell probe's steps for `variables`, after its own: each printed with printenv on its own, then
+    /// `marker` (as XDG_STATE_HOME is), so a line break inside a value can't fake another's.
+    public static func probeCommand(marker: String) -> String {
+        variables.map { (name: String) -> String in "; /usr/bin/printenv \(name); /usr/bin/printf %s \(marker)" }.joined()
+    }
+
+    /// The probe's output from the first of `variables` on, split at its marker, as printed values by name: a part
+    /// counts only when the marker after it was printed (a shell cut short, or what it prints after the last marker,
+    /// is no value).
+    public static func printed(_ parts: [String]) -> [String: String] {
+        var printed: [String: String] = [:]
+        for (index, name) in variables.enumerated() where index + 1 < parts.count {
+            printed[name] = parts[index]
+        }
+        return printed
     }
 
     /// What the probe printed for each of `variables` (printenv's value and its newline) as the environment kept:

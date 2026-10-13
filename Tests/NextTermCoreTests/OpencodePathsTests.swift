@@ -121,11 +121,98 @@ import Testing
     @Test func theShellsVariablesDecideOnlyForTheUsersOwnHome() throws {
         let other = try folder()
         defer { try? FileManager.default.removeItem(atPath: other) }
-        let before = OpencodePaths.shellEnvironment
-        defer { OpencodePaths.shellEnvironment = before }
-        OpencodePaths.shellEnvironment = ["XDG_DATA_HOME": "/nt-made-up/data"]
-        #expect(OpencodePaths.environment(home: NSHomeDirectory()) == ["XDG_DATA_HOME": "/nt-made-up/data"])
-        #expect(OpencodePaths.environment(home: NSHomeDirectory() + "/") == ["XDG_DATA_HOME": "/nt-made-up/data"])
-        #expect(OpencodePaths.environment(home: other).isEmpty) // a test's or the self-test's own home
+        let (defaults, name) = try TestDefaults.make("opencode-home")
+        defer { TestDefaults.remove(defaults, name) }
+        let shell = OpencodePaths.Shell()
+        shell.probed(["XDG_DATA_HOME": "/nt-made-up/data\n"], keepIn: defaults)
+        #expect(OpencodePaths.environment(home: NSHomeDirectory(), shell: shell) == ["XDG_DATA_HOME": "/nt-made-up/data"])
+        #expect(OpencodePaths.environment(home: NSHomeDirectory() + "/", shell: shell) == ["XDG_DATA_HOME": "/nt-made-up/data"])
+        #expect(OpencodePaths.environment(home: other, shell: shell).isEmpty) // a test's or the self-test's own home
+    }
+
+    // MARK: The probe
+
+    /// What the login shell prints for the probe's command: its environment listing and XDG_STATE_HOME between markers,
+    /// then `probeCommand`'s steps as a shell runs them (printenv prints nothing for a variable that is not set).
+    func output(_ environment: [String: String], marker: String) -> String {
+        var printed = marker + "PATH=/bin\n" + marker + "/nt-made-up/state\n" + marker
+        for step in OpencodePaths.probeCommand(marker: marker).components(separatedBy: "; ").dropFirst() {
+            if step == "/usr/bin/printf %s " + marker {
+                printed += marker
+            } else if step.hasPrefix("/usr/bin/printenv ") {
+                printed += environment[String(step.dropFirst("/usr/bin/printenv ".count))].map { $0 + "\n" } ?? ""
+            } else {
+                Issue.record("a step the probe does not take: \(step)")
+            }
+        }
+        return printed
+    }
+
+    @Test func eachVariableTheProbePrintsIsReadBack() {
+        let marker = "__NT_0123456789ABCDEF__"
+        let set = ["XDG_DATA_HOME": "/Volumes/Data/xdg", "OPENCODE_DB": "custom.db", "OPENCODE_DISABLE_CHANNEL_DB": "1"]
+        let parts = output(set, marker: marker).components(separatedBy: marker)
+        // Its parts after the environment listing and XDG_STATE_HOME, as the probe hands them over.
+        let printed = OpencodePaths.printed(Array(parts.dropFirst(3)))
+        #expect(OpencodePaths.shellValues(printed) == set)
+        #expect(printed["XDG_CONFIG_HOME"] == "") // not set
+        let every = ["XDG_DATA_HOME": "/d", "XDG_CONFIG_HOME": "/c", "OPENCODE_DB": "/o.db", "OPENCODE_DISABLE_CHANNEL_DB": "true"]
+        let all = output(every, marker: marker).components(separatedBy: marker)
+        #expect(OpencodePaths.shellValues(OpencodePaths.printed(Array(all.dropFirst(3)))) == every)
+    }
+
+    @Test func aProbeCutShortKeepsOnlyWhatAMarkerClosed() {
+        let marker = "__NT_FEDCBA9876543210__"
+        let every = ["XDG_DATA_HOME": "/d", "XDG_CONFIG_HOME": "/c", "OPENCODE_DB": "/o.db", "OPENCODE_DISABLE_CHANNEL_DB": "1"]
+        let whole = output(every, marker: marker)
+        // Stopped while printing the last value: that value has no marker after it.
+        let cut = String(whole.dropLast(marker.count + 1))
+        let read = OpencodePaths.shellValues(OpencodePaths.printed(Array(cut.components(separatedBy: marker).dropFirst(3))))
+        #expect(read == ["XDG_DATA_HOME": "/d", "XDG_CONFIG_HOME": "/c", "OPENCODE_DB": "/o.db"])
+        // What a shell prints after the last marker (a logout message) is no value.
+        let trailing = (whole + "logout\n").components(separatedBy: marker)
+        #expect(OpencodePaths.shellValues(OpencodePaths.printed(Array(trailing.dropFirst(3)))) == every)
+        #expect(OpencodePaths.printed([]).isEmpty && OpencodePaths.printed(["/d\n"]).isEmpty)
+    }
+
+    // MARK: The last launch's values
+
+    @Test func theLastLaunchsValuesStandInUntilTheProbeHasRun() throws {
+        let (defaults, name) = try TestDefaults.make("opencode-shell")
+        defer { TestDefaults.remove(defaults, name) }
+        let first = OpencodePaths.Shell()
+        first.recall(from: defaults)
+        #expect(first.environment.isEmpty) // nothing kept yet: the defaults apply
+        first.probed(["XDG_DATA_HOME": "/Volumes/Data/xdg\n", "OPENCODE_DB": "a.db\nFAKE=1\n"], keepIn: defaults)
+        #expect(first.environment == ["XDG_DATA_HOME": "/Volumes/Data/xdg"])
+
+        // The next launch restores before its probe has run, and reads where the last one found the store.
+        let next = OpencodePaths.Shell()
+        next.recall(from: defaults)
+        #expect(next.environment == ["XDG_DATA_HOME": "/Volumes/Data/xdg"])
+        // Its probe decides from then on, and is kept in turn; a later recall changes nothing.
+        next.probed(["OPENCODE_DB": "/nt-made-up/x.db\n"], keepIn: defaults)
+        next.recall(from: defaults)
+        #expect(next.environment == ["OPENCODE_DB": "/nt-made-up/x.db"])
+        let third = OpencodePaths.Shell()
+        third.recall(from: defaults)
+        #expect(third.environment == ["OPENCODE_DB": "/nt-made-up/x.db"])
+        // A shell that sets none of them leaves nothing kept.
+        third.probed([:], keepIn: defaults)
+        #expect(defaults.object(forKey: OpencodePaths.Shell.defaultsKey) == nil)
+    }
+
+    @Test func keptValuesAreCheckedAsTheProbesAre() throws {
+        let (defaults, name) = try TestDefaults.make("opencode-kept")
+        defer { TestDefaults.remove(defaults, name) }
+        let kept: [String: Any] = ["XDG_DATA_HOME": "/a\n/b", "PATH": "/bin", "OPENCODE_DB": "/x.db", "XDG_CONFIG_HOME": 3]
+        defaults.set(kept, forKey: OpencodePaths.Shell.defaultsKey)
+        let shell = OpencodePaths.Shell()
+        shell.recall(from: defaults)
+        #expect(shell.environment == ["OPENCODE_DB": "/x.db"])
+        defaults.set("not a dictionary", forKey: OpencodePaths.Shell.defaultsKey)
+        let other = OpencodePaths.Shell()
+        other.recall(from: defaults)
+        #expect(other.environment.isEmpty)
     }
 }
