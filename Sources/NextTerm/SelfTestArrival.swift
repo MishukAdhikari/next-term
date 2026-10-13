@@ -9,6 +9,7 @@ extension SelfTest {
     static func arrivalChecks(_ first: TerminalWindowController, proj: URL) async {
         let app: AppDelegate = AppDelegate.shared
         let modeBefore = app.agentArrival
+        app.agentArrival = .focus // the default; the rest of the self-test runs with it off
         UserKeys.ignoredForTest = true // the self-test's own keys would hold every window back
         let other = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-arrival-\(getpid())")
         try? FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
