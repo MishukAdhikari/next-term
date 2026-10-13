@@ -1299,6 +1299,7 @@ enum SelfTest {
         // window closes: the same project, every session listed.
         welcome.sessionQuery = "loop fix"
         app.showWelcome(nil)
+        welcome.select(project: project) // a show starts on the other project used last (the Welcome switcher)
         check(await wait(5) { welcome.sessionQuery.isEmpty && welcome.shownSessionTitles.count == 3 },
               "the Welcome window shown again empties the sessions search, and lists every session",
               "“\(welcome.sessionQuery)”, \(welcome.shownSessionTitles.count) shown, project \(welcome.selectedProject ?? "none")")
