@@ -100,6 +100,21 @@ import Testing
         #expect(CommandClassifier.programName("pnpm dlx create-vite@latest app") == "create-vite")
         #expect(CommandClassifier.programName("pnpm install") == "pnpm" && CommandClassifier.kind(of: "yarn dlx cowsay@1 hi") == .command)
         #expect(CommandClassifier.programName("npm exec opencode-ai") == "npm") // npm's exec is not read as a runner
+        // bun's `x` is bunx, and npx's `-p` names the package, not the program.
+        #expect(CommandClassifier.agentName("bun x opencode-ai@latest") == "opencode")
+        #expect(CommandClassifier.programName("bun x.ts") == "bun" && CommandClassifier.kind(of: "bun run dev") == .command)
+        #expect(CommandClassifier.programLine("npx -p opencode-ai opencode -c") == "opencode -c")
+        #expect(CommandClassifier.programLine("npx --package opencode-ai opencode serve") == "opencode serve")
+    }
+
+    /// Only an `@` after the package's last `/` starts a version: one before it is a URL's, whose credential never
+    /// becomes the program's name.
+    @Test func aPackageURLsCredentialIsNeverTheProgram() {
+        #expect(CommandClassifier.programName("npx https://user:TOKEN@example.com/org/tool") == "tool")
+        #expect(CommandClassifier.programLine("npx git+https://user:TOKEN@example.com/org/tool.git --help") == "tool.git --help")
+        #expect(CommandClassifier.programName("bunx https://user:TOKEN@example.com/org/tool@1.0") == "tool")
+        #expect(CommandClassifier.programName("npx @opencode/cli@2.0.26") == "opencode")
+        #expect(CommandClassifier.programName("npx @scope") == "@scope")
     }
 
     @Test func itsServersAreCommands() {
@@ -113,6 +128,31 @@ import Testing
         #expect(CommandClassifier.kind(of: "node /usr/local/lib/node_modules/opencode-ai/bin/opencode serve") == .command)
         // Another agent's word for a subcommand is that agent's own.
         #expect(CommandClassifier.kind(of: "claude web") == .agent)
+    }
+
+    /// Any option the table says takes a value takes the next word, as OpenCode's parser does, so a server started
+    /// with an option before its subcommand is still a command, and a value named like a subcommand starts none.
+    @Test func aServerAfterAnOptionsValueIsACommand() {
+        let servers = [
+            "opencode --port 4096 serve", "opencode --hostname 0.0.0.0 web", "opencode -m x/y serve", "opencode --model x/y acp",
+            "opencode --agent build web", "opencode -s ses_1 serve", "opencode --session ses_1 web", "opencode --prompt hi serve",
+            "opencode --cors http://localhost:5173 web", "opencode --mdns-domain opencode.local serve", "opencode --replay-limit 200 web",
+            "opencode --mini --port=4096 serve", "npx opencode-ai@latest --port 4096 serve", "npx -p opencode-ai opencode serve",
+        ]
+        for line in servers {
+            #expect(CommandClassifier.kind(of: line) == .command, "\(line)")
+            #expect(CommandClassifier.agentName(line) == nil, "\(line)")
+        }
+        let tuis = ["opencode -m serve", "opencode --agent web", "opencode --port 4096", "opencode run serve", "opencode -m --port 4096"]
+        for line in tuis {
+            #expect(CommandClassifier.kind(of: line) == .agent, "\(line)")
+        }
+        let argv = ["opencode", "--port", "4096", "serve"]
+        #expect(CommandClassifier.kind(of: ForegroundProcess(isShell: false, name: "opencode", arguments: argv)) == .command)
+        #expect(CommandClassifier.runsServer(executable: "/opt/homebrew/bin/opencode", arguments: argv))
+        let node = ["node", "/usr/local/lib/node_modules/opencode-ai/bin/opencode", "--hostname", "0.0.0.0", "web"]
+        #expect(CommandClassifier.runsServer(executable: "/usr/local/bin/node", arguments: node))
+        #expect(!CommandClassifier.runsServer(executable: "/opt/homebrew/bin/opencode", arguments: ["opencode", "-m", "serve"]))
     }
 
     @Test func itsProcessesAreNamedOpencode() {

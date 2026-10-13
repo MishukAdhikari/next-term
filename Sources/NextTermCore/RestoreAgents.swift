@@ -210,13 +210,15 @@ extension SessionSnapshot.Agent {
 
     /// The agent's own arguments in a typed line, and whether its program is the first word there (no assignment,
     /// wrapper or option before it). A name the agent shares with other programs (`cmd`) counts here, as the process
-    /// has shown it runs from the agent's own install.
+    /// has shown it runs from the agent's own install. The program is named as the classifier names it: a package
+    /// runner's word without its version (`npx opencode-ai@latest`), and an agent's other name as its own (`opencode2`).
     public func arguments(inLine line: String) -> (arguments: [String], plain: Bool)? {
         for segment in CommandClassifier.segments(line) {
             let words = AgentKind.words(segment)
-            guard let index = CommandClassifier.programIndex(words) else { continue }
+            guard let program = CommandClassifier.program(in: words) else { continue }
+            let index = program.index
             let run = Array(words[index...])
-            let name = CommandClassifier.baseName(run[0])
+            let name = program.name
             if cli.programs.contains(name) || cli.installedNames.contains(name) { return (Array(run.dropFirst()), index == 0) }
             if let script = Self.scriptIndex(argv: run, executable: ""), Self.scriptAgent(run[script]) == self {
                 return (Array(run[(script + 1)...]), index == 0)

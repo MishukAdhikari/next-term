@@ -69,6 +69,30 @@ import Testing
         #expect(RestoreAgent(process: node) == nil)
     }
 
+    /// A package runner leads the tab (npx, not OpenCode), so the typed line alone names the agent: its program is read
+    /// there as the classifier names it, and the session it typed is put back. The line is rebuilt from the program, as
+    /// `npx @anthropic-ai/claude-code`'s is; argv, which the runner hides, gives no options.
+    @Test func aPackageRunnersStartPutsBackTheSessionItTyped() {
+        let id = Self.sampleID(.opencode)
+        let lines = ["npx opencode-ai@latest -s \(id) --port 4096", "bunx opencode-ai --session \(id)", "pnpm dlx opencode-ai -s \(id)",
+                     "npx @opencode/cli@2.0.26 -s \(id)", "opencode2 -s \(id)", "yarn dlx opencode-ai@1.19.0 --session=\(id)"]
+        for line in lines {
+            let evidence = AgentEvidence.capture(AgentEvidence.Capture(typedLine: line, home: "/Users/x"))
+            #expect(evidence?.agent == .opencode && evidence?.sessionID == id && evidence?.source == .guess, "\(line)")
+            #expect(evidence?.putBack(id: evidence?.sessionID) == PutBack(line: "opencode -s \(id)", namesSession: true, leftOff: []),
+                    "\(line)")
+        }
+        let opencode = RestoreAgent.opencode
+        #expect(opencode.arguments(inLine: "npx opencode-ai@latest -s \(id) --port 4096")?.arguments == ["-s", id, "--port", "4096"])
+        #expect(opencode.arguments(inLine: "npx opencode-ai@latest")?.plain == false)
+        #expect(opencode.arguments(inLine: "opencode2 -c")?.plain == true)
+        #expect(opencode.confirmedOptions(inLine: "npx opencode-ai@latest --auto") == [SessionSnapshot.LaunchOption(["--auto"])])
+        #expect(opencode.arguments(inLine: "npx create-vite@latest opencode") == nil)
+        // The same for every agent a runner starts with a version.
+        #expect(RestoreAgent.claude.arguments(inLine: "npx @anthropic-ai/claude-code@latest --resume x")?.arguments == ["--resume", "x"])
+        #expect(RestoreAgent.claude.arguments(inLine: "npx opencode-ai -s \(id)") == nil)
+    }
+
     @Test func envUnsetIsReadAsAnOption() {
         #expect(CommandClassifier.parse("env -u CLAUDE_CODE_RESUME_PROMPT claude --resume x").name == "claude")
         #expect(CommandClassifier.parse("/usr/bin/env -u A -u B /opt/bin/codex resume x").name == "codex")

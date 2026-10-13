@@ -48,10 +48,10 @@ public enum CommandClassifier {
         "claude.exe": "claude", "opencode-ai": "opencode", "opencode2": "opencode", "opencode.exe": "opencode",
     ]
     /// Wrappers whose word is a package to fetch and run, `name@version` or `@scope/name@version`: `npx opencode-ai@latest`.
-    /// `dlx` stands for pnpm's and yarn's (`dlxManagers`).
+    /// `dlx` stands for a package manager's own (`dlxManagers`).
     static let packageRunners: Set<String> = ["npx", "bunx", "pnpx", "dlx"]
-    /// Package managers whose `dlx` runs a package as `npx` does: `pnpm dlx opencode-ai`.
-    static let dlxManagers: Set<String> = ["pnpm", "yarn"]
+    /// Package managers, with the subcommand that runs a package as `npx` does: `pnpm dlx opencode-ai`, `bun x opencode-ai`.
+    static let dlxManagers: [String: String] = ["pnpm": "dlx", "yarn": "dlx", "bun": "x"]
     /// Packages whose program is not their last word: OpenCode 2's `@opencode/cli` runs as `opencode`.
     static let packagePrograms: [String: String] = ["@opencode/cli": "opencode"]
     /// OpenCode's servers: a headless server, a web server, and ACP over stdio for an editor. Each runs as a command, as
@@ -77,8 +77,9 @@ public enum CommandClassifier {
         "sudo", "doas", "npx", "bunx", "pnpx", "uvx", "pipx", "exec", "nohup", "time", "env", "command", "builtin",
         "noglob", "nocorrect", "nice", "caffeinate", "arch", "timeout", "gtimeout",
     ]
-    /// A wrapper's options whose value is the next word: `env -u NAME claude` runs claude, as a resume does.
-    static let wrapperValueOptions: [String: Set<String>] = ["env": ["-u", "--unset", "-C", "--chdir"]]
+    /// A wrapper's options whose value is the next word: `env -u NAME claude` runs claude, as a resume does, and
+    /// `npx -p opencode-ai opencode` runs opencode, the package's program.
+    static let wrapperValueOptions: [String: Set<String>] = ["env": ["-u", "--unset", "-C", "--chdir"], "npx": ["-p", "--package"]]
     /// Commands that set things up for the real one: `cd x && make` is about `make`.
     static let setup: Set<String> = ["cd", "pushd", "popd", "export", "source", ".", "set", "unset", "alias", "nvm", "eval", "clear"]
 
@@ -127,8 +128,9 @@ public enum CommandClassifier {
     }
 
     /// Where the program is among a simple command's words, past options, assignments and wrappers, the value a wrapper's
-    /// option takes (`env -u NAME`), and pnpm's or yarn's `dlx`; and its name. A package runner's word names its package's
-    /// program (`packageProgram`), and an agent's other name the one Next Term knows it by (`knownName`).
+    /// option takes (`env -u NAME`, `npx -p opencode-ai`), and a package manager's `dlx` or `x`; and its name. A package
+    /// runner's word names its package's program (`packageProgram`), and an agent's other name the one Next Term knows it
+    /// by (`knownName`).
     public static func program(in words: [String]) -> (index: Int, name: String)? {
         var wrapper = ""
         var skipNext = false
@@ -148,7 +150,7 @@ public enum CommandClassifier {
                 wrapper = base
                 continue
             }
-            if dlxManagers.contains(base), index + 1 < words.count, words[index + 1] == "dlx" {
+            if let run = dlxManagers[base], index + 1 < words.count, words[index + 1] == run {
                 wrapper = "dlx"
                 skipNext = true
                 continue
@@ -161,9 +163,15 @@ public enum CommandClassifier {
 
     /// The program a package runner's word runs: the package's, without its version (`opencode-ai@latest` is
     /// opencode-ai, `@anthropic-ai/claude-code@2.1.280` claude-code), by `packagePrograms` or the package's last word.
+    /// Only an `@` after the last `/` starts a version: one before it is a URL's (`https://user:token@host/org/tool`),
+    /// whose credential must never become the program's name.
     static func packageProgram(_ word: String) -> String {
         let unquoted = Substring(word.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")))
-        let package: Substring = unquoted.dropFirst().lastIndex(of: "@").map { unquoted[..<$0] } ?? unquoted
+        let lastPart = unquoted[(unquoted.lastIndex(of: "/") ?? unquoted.startIndex)...]
+        let version = lastPart.lastIndex(of: "@").flatMap { (at: Substring.Index) -> Substring.Index? in
+            at == unquoted.startIndex ? nil : at
+        }
+        let package: Substring = version.map { unquoted[..<$0] } ?? unquoted
         return packagePrograms[String(package)] ?? baseName(String(package))
     }
 
@@ -172,21 +180,20 @@ public enum CommandClassifier {
         otherNames[name] ?? name
     }
 
-    /// OpenCode's words start one of its servers (`opencode serve`, `opencode --log-level DEBUG web`): its first word that
-    /// is no option, past `--log-level`'s value, the one global option that takes one.
+    /// OpenCode's words start one of its servers (`opencode serve`, `opencode --port 4096 web`): its first word that is no
+    /// option and no option's value, read with OpenCode's table (AgentCLI.opencode), as its own parser gives each option
+    /// that takes a value the next word. A command the table knows comes first (`opencode run serve`): no server.
     static func isServer(_ name: String, args: [String]) -> Bool {
         guard knownName(name) == "opencode" else { return false }
-        var valueNext = false
-        for word in args {
-            if valueNext {
-                valueNext = false
+        for piece in AgentCLI.opencode.read(args).pieces {
+            switch piece {
+            case .word(let word):
+                return opencodeServers.contains(word)
+            case .known(let option, _, _):
+                if !AgentCLI.isOption(option) { return false }
+            case .unknown:
                 continue
             }
-            if word.hasPrefix("-") {
-                valueNext = word == "--log-level"
-                continue
-            }
-            return opencodeServers.contains(word)
         }
         return false
     }
