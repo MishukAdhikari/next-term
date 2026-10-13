@@ -398,7 +398,9 @@ extension NamedValueCutTests {
         let redacted = MCPRedaction.redact(line, mask: .empty).text
         #expect(!showsPart(of: value, in: redacted), "\(redacted)") // the whole line hides it
         let length = line.utf16.count
-        for offset in stride(from: 1, to: length, by: 29) {
+        // Every 29th place, and either side of the value's end: a cut on a closing quote keeps all of the value.
+        let end = line.range(of: value)!.upperBound.utf16Offset(in: line)
+        for offset in Array(stride(from: 1, to: length, by: 29)) + [end - 1, end, end + 1] where offset < length {
             let at = String.Index(utf16Offset: offset, in: line)
             let back = MCPRedaction.cleanCut(line, at: at, forward: false, mask: .empty)
             let left = MCPRedaction.redact(String(line[..<back]), mask: .empty).text
@@ -426,6 +428,49 @@ extension NamedValueCutTests {
         let match = String.Index(utf16Offset: 400, in: line)..<String.Index(utf16Offset: 410, in: line)
         let snippet = MCPRedaction.snippet(line, window: window, match: match, mask: .empty).text
         #expect(snippet == "…" + String(line[window]) + "…")
+    }
+
+    /// read_file's cut at 2,000 characters on a long quoted value's closing quote kept all of the value and left out
+    /// the quote the pattern needs to mask it, so the value showed whole. Cut on the quote, one before it or one past
+    /// it, in double, single or back quotes, the line shows none of the value.
+    @Test(arguments: ["\"", "'", "`"])
+    func readFileCutOnAClosingQuoteShowsNoneOfTheValue(_ quote: String) throws {
+        let f = try ProjectFixture()
+        let filler = String(repeating: "lorem ipsum ", count: 58) + "sit " // 700 characters
+        let name = "password = " + quote
+        // The closing quote at 1,999, 2,000 or 2,001: the cut keeps it, falls on it, or falls one before it.
+        for length in [1287, 1288, 1289] {
+            let value = hexValue(length)
+            let line = filler + name + value + quote + " end"
+            #expect(MCPRedaction.redact(line, mask: .empty).text == filler + name + "•••" + quote + " end")
+            try f.write("api/long-\(length).txt", line + "\n")
+            let result = json(MCPProjectTools.readFile(["path": "long-\(length).txt", "project": "api"], in: f.both, mask: .empty))
+            let text = try #require(result["text"] as? String)
+            #expect(!showsPart(of: value, in: text), "\(length): \(text.suffix(80))")
+            let kept = length < 1288 ? name + "•••" + quote : name
+            #expect(text == filler + kept + "…", "\(length): \(text.suffix(80))")
+            #expect(result["long_lines_cut"] as? Int == 1)
+        }
+    }
+
+    /// A cut on a quoted value's closing quote is in the value for the text before it, which holds all of the value
+    /// and not the quote: it goes back to just after the opening quote. A cut past the quote, or one that keeps the
+    /// text after the quote, is not. A bare value's end is not either: the text before a cut there holds the whole
+    /// value, which its name masks.
+    @Test func aQuotedValuesClosingQuoteIsInTheValue() {
+        for quote in ["\"", "'", "`"] {
+            let line = "let password = " + quote + "0f1e2d3c4b5a6978" + quote + " end"
+            let values = MCPRedaction.NamedValues(line, mask: .empty)
+            let open = line.index(line.startIndex, offsetBy: 16) // just after the opening quote
+            let close = line.index(open, offsetBy: 16)
+            #expect(values.cuts(close, keepingAfter: false) && values.clean(close, keepingAfter: false) == open, "\(quote)")
+            #expect(!values.cuts(line.index(after: close), keepingAfter: false), "\(quote)")
+            #expect(!values.cuts(close, keepingAfter: true) && values.cuts(line.index(before: close), keepingAfter: true))
+        }
+        let bare = "API_TOKEN=0f1e2d3c4b5a6978  "
+        let values = MCPRedaction.NamedValues(bare, mask: .empty)
+        let end = bare.index(bare.startIndex, offsetBy: 26)
+        #expect(!values.cuts(end, keepingAfter: false) && values.cuts(bare.index(before: end), keepingAfter: false))
     }
 }
 

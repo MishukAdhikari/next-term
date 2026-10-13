@@ -148,6 +148,11 @@ extension NamedValueBytesTests {
             for place in [line.index(after: start.lowerBound), line.index(before: start.upperBound)] {
                 #expect(values.cuts(place, keepingAfter: false) && values.cuts(place, keepingAfter: true), "\(line.debugDescription)")
             }
+            // At the probe's ends a cut keeps all of it: one at its end is in the value (a closing quote the pattern
+            // needs is left out) or keeps text that masks it; one at its start is in the value, its name left out.
+            let before = MCPRedaction.redact(String(line[..<start.upperBound]), maskingRun: { _ in nil }, mask: mask).text
+            #expect(values.cuts(start.upperBound, keepingAfter: false) || !before.contains(probe), "\(line.debugDescription)")
+            #expect(values.cuts(start.lowerBound, keepingAfter: true), "\(line.debugDescription)")
         }
         #expect(masked > 300, "\(masked)")
     }

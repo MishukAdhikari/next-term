@@ -2,10 +2,12 @@ import Foundation
 
 extension NamedValueBytes {
     /// A value `quotedValue` or `bareValue` masks for its name, in UTF-8 offsets: where the match starts (the name; a bare
-    /// value's line start) and the value alone.
+    /// value's line start), the value alone, and where the text the pattern needs to mask it ends: past a quoted value's
+    /// closing quote, at a bare value's end (spaces or the text's end may follow).
     struct Found: Equatable {
         let start: Int
         let value: Range<Int>
+        let end: Int
     }
 
     /// Every value the two patterns mask for its name, and maybe a few more, never fewer: each place a match could start
@@ -28,7 +30,7 @@ extension NamedValueBytes {
             let start = index
             while index < count, Self.isName(bytes[index]) { index += 1 }
             if let value = quotedValue(after: index, next: &next), MCPRedaction.isSecretName(text(start..<index)) {
-                found.append(Found(start: start, value: value))
+                found.append(Found(start: start, value: value, end: value.upperBound + 1))
             }
         }
         return found
@@ -58,7 +60,9 @@ extension NamedValueBytes {
         var found: [Found] = []
         var lineStart = 0
         while lineStart < count {
-            if let value = bareValue(lineStart: lineStart) { found.append(Found(start: lineStart, value: value)) }
+            if let value = bareValue(lineStart: lineStart) {
+                found.append(Found(start: lineStart, value: value, end: value.upperBound))
+            }
             var at = lineStart
             while at < count, lineEnd(at) == 0 { at += 1 }
             guard at < count else { break }

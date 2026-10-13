@@ -8,8 +8,8 @@ extension MCPRedaction {
     /// ••• the patterns see.
     struct NamedValues {
         let line: String
-        /// Inside a value: a cut there that keeps the text before it shows the value's start. UTF-8 offsets, sorted,
-        /// apart.
+        /// Inside a value, or on a quoted value's closing quote: a cut there that keeps the text before it shows the
+        /// value's start, or all of it without the quote the pattern needs to mask it. UTF-8 offsets, sorted, apart.
         private let keepingBefore: [Range<Int>]
         /// From just past where a value's match starts (its name, or a bare value's line start) to the value's end: a cut
         /// there that keeps the text after it shows the value, or its end, with a part of its name that may be no
@@ -26,7 +26,7 @@ extension MCPRedaction {
                 }
                 return opaque.withUnsafeBufferPointer { NamedValueBytes(bytes: $0).namedValues() }
             }
-            keepingBefore = Self.apart(found.map { $0.value.lowerBound + 1..<$0.value.upperBound })
+            keepingBefore = Self.apart(found.map { $0.value.lowerBound + 1..<$0.end })
             keepingAfter = Self.apart(found.map { $0.start + 1..<$0.value.upperBound })
         }
 
