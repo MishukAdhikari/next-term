@@ -1,23 +1,36 @@
 import AppKit
 import NextTermCore
 
-/// The way in: your projects on the left (search, open, a new terminal), and your servers under them; on
-/// the right the chosen project with every agent's saved sessions for it, newest first, each one a click
-/// from running again in a tab in the right folder.
+/// The way in, and a project switcher: your projects and servers on the left in one list, open projects first, driven
+/// from its search field (open, a new terminal); on the right the chosen project with every agent's saved sessions for
+/// it, newest first, each one a click from running again in a tab in the right folder, or the chosen server.
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSSearchFieldDelegate, NSMenuItemValidation {
     private let search = NSSearchField()
     private var openTip: ShortcutToolTip?
-    /// The saved hosts, each a click from a tab on it, and Connect to Server… for another.
-    private let serversLabel = NSTextField(labelWithString: "")
-    private let serverList = NSStackView()
+    /// Connect to Server…, the sheet for a server not listed.
     private let connectButton = NSButton(title: "Connect to Server…", target: nil, action: nil)
     private var connectTip: ShortcutToolTip?
-    private var servers: [RemoteHost] = []
-    /// More are in the sheet behind Connect to Server…: the projects keep the room.
-    static let serverLimit = 3
     private let projectsTable = NSTableView()
-    /// Open…, the panel to choose a folder: Return's button while no project is chosen (`updateReturnKey`).
+    /// The projects and the saved servers, in that one table.
+    private lazy var switcher = WelcomeSwitcherList(table: projectsTable)
+    /// Everything there is to list, before the search narrows it.
+    private var list = SwitcherList(projects: [], servers: [])
+    /// The saved hosts, the one connected to last first: what a server's row connects to.
+    private var hosts: [RemoteHost] = []
+    /// A closed linked worktree's title ("xCloud ▸ 7027-sso"), by path, once read from git's files.
+    private var titles: [String: String] = [:]
+    /// The right pane while a server is selected.
+    private let serverPane = WelcomeServerPane()
+    private let hintLine = SwitcherHintLine()
+    /// Over the list when the search finds nothing.
+    private let noMatch = NSTextField(wrappingLabelWithString: "")
+    /// Tells the rows while ⌘ is held, as long as the window is key.
+    private var modifierMonitor: Any?
+    private var observers: [NSObjectProtocol] = []
+    /// The projects search's count VoiceOver hears once typing settles.
+    private var listAnnouncement: DispatchWorkItem?
+    /// Open…, the panel to choose a folder. Never Return's: Return acts on the selection only.
     private let openPanelButton = NSButton(title: "Open…", target: nil, action: nil)
     private let sessionsTable = NSTableView()
     private let projectName = NSTextField(labelWithString: "")
@@ -36,8 +49,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let forkButton = NSButton(title: "Fork", target: nil, action: nil)
     private let detailPane = NSView()
 
-    private var allProjects: [String] = []
-    private var projects: [String] = []
     private var sessions: [AgentSession] = []
     private var shownSessions: [AgentSession] = []
     /// The sessions the search leaves, before the agent filter: what the filter's counts count.
@@ -72,18 +83,35 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         super.init(window: window)
         window.delegate = self
         window.keyEquivalentHandler = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
+        window.cancelHandler = { [weak self] in self?.cancel() ?? false }
         build()
         window.center()
+        // While it shows, the list follows the windows (a project opened, closed, or in a window more), the history
+        // (⌘⌫, Clear Menu) and the keys the jumps and the hint line name.
+        let center = NotificationCenter.default
+        let history = center.addObserver(forName: ProjectHistoryRecorder.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.listChanged() }
+        }
+        let keys = center.addObserver(forName: KeyboardShortcuts.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.listChanged() }
+        }
+        observers = [history, keys]
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        if let modifierMonitor { NSEvent.removeMonitor(modifierMonitor) }
+    }
 
     override func showWindow(_ sender: Any?) {
         // Shown again after a close (this controller lives as long as the app), it lists every session, as for
         // another project. Shown while up, or brought back from the Dock, it keeps what was typed.
         if let window, !window.isVisible, !window.isMiniaturized { resetSessionSearch() }
-        reloadProjects()
-        reloadServers()
+        // Each show starts the selection afresh: shown from a project window, on the other open project used last, so
+        // the key that showed it, then Return, switches back.
+        reloadProjects(selection: .start)
         super.showWindow(sender)
         window?.makeFirstResponder(projectsTable)
     }
@@ -106,16 +134,19 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let versionLabel = NSTextField(labelWithString: version.map { "Version \($0)" } ?? "Development build")
         versionLabel.font = .systemFont(ofSize: 11)
         versionLabel.textColor = Theme.textDim
-        search.placeholderString = "Search projects"
+        search.placeholderString = "Search projects and servers"
         search.delegate = self
         search.sendsSearchStringImmediately = true
         search.target = self
         search.action = #selector(searchChanged)
-        let projectsLabel = Self.heading("Projects")
-        configure(projectsTable, rowHeight: 44, action: #selector(projectClicked), double: #selector(openSelectedProject))
-        // A click below the rows keeps the chosen project, and Return's button with it.
-        projectsTable.allowsEmptySelection = false
+        switcher.onSelect = { [weak self] in self?.showSelection() }
+        switcher.onActivate = { [weak self] in self?.activateSelection(newWindow: false) }
+        switcher.onForget = { [weak self] index in self?.forget(at: index) }
         let projectsScroll = Self.scroll(projectsTable)
+        noMatch.font = .systemFont(ofSize: 12)
+        noMatch.textColor = Theme.textDim
+        noMatch.maximumNumberOfLines = 3
+        noMatch.isHidden = true
         let open = openPanelButton
         open.target = NSApp.delegate
         open.action = #selector(AppDelegate.chooseProjectFolder(_:))
@@ -124,15 +155,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
         let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
         terminal.bezelStyle = .rounded
-        serversLabel.attributedStringValue = Self.headingText("Servers")
-        serverList.orientation = .vertical
-        serverList.alignment = .leading
-        serverList.spacing = 0
         connectButton.bezelStyle = .rounded
         connectButton.target = NSApp.delegate
         connectButton.action = #selector(AppDelegate.newRemoteTab(_:))
         connectTip = ShortcutToolTip(connectButton, "Open a tab on one of your servers, over ssh", #selector(AppDelegate.newRemoteTab(_:)))
-        for view in [icon, name, versionLabel, search, projectsLabel, projectsScroll, serversLabel, serverList, connectButton, open, terminal] as [NSView] {
+        for view in [icon, name, versionLabel, search, projectsScroll, noMatch, hintLine, connectButton, open, terminal] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             left.addSubview(view)
         }
@@ -185,7 +212,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             detailPane.addSubview(view)
         }
 
-        for view in [left, detailPane] {
+        serverPane.connectButton.target = self
+        serverPane.connectButton.action = #selector(openSelectedProject)
+        serverPane.isHidden = true
+        for view in [left, detailPane, serverPane] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -206,17 +236,17 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             search.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 18),
             search.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
             search.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -16),
-            projectsLabel.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 16),
-            projectsLabel.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 20),
-            projectsScroll.topAnchor.constraint(equalTo: projectsLabel.bottomAnchor, constant: 6),
+            // The PROJECTS heading is the list's first row, standing where its label stood.
+            projectsScroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 10),
             projectsScroll.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6),
             projectsScroll.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
-            projectsScroll.bottomAnchor.constraint(equalTo: serversLabel.topAnchor, constant: -14),
-            serversLabel.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 20),
-            serverList.topAnchor.constraint(equalTo: serversLabel.bottomAnchor, constant: 4),
-            serverList.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6),
-            serverList.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
-            connectButton.topAnchor.constraint(equalTo: serverList.bottomAnchor, constant: 6),
+            projectsScroll.bottomAnchor.constraint(equalTo: hintLine.topAnchor, constant: -8),
+            noMatch.topAnchor.constraint(equalTo: projectsScroll.topAnchor, constant: 12),
+            noMatch.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6 + SwitcherRowStyle.nameX),
+            noMatch.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor, constant: -20),
+            hintLine.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 20),
+            hintLine.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor, constant: -16),
+            connectButton.topAnchor.constraint(equalTo: hintLine.bottomAnchor, constant: 10),
             connectButton.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
             open.topAnchor.constraint(equalTo: connectButton.bottomAnchor, constant: 8),
             open.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
@@ -228,6 +258,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             detailPane.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             detailPane.leadingAnchor.constraint(equalTo: left.trailingAnchor),
             detailPane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            serverPane.topAnchor.constraint(equalTo: detailPane.topAnchor),
+            serverPane.bottomAnchor.constraint(equalTo: detailPane.bottomAnchor),
+            serverPane.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor),
+            serverPane.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor),
 
             projectName.topAnchor.constraint(equalTo: detailPane.topAnchor, constant: 40),
             projectName.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor, constant: 28),
@@ -286,109 +320,214 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         return scroll
     }
 
-    /// A small heading in capitals, letterspaced so the caps don't crowd.
-    private static func headingText(_ text: String) -> NSAttributedString {
+    /// A small heading in capitals, letterspaced so the caps don't crowd: 0.8 pt on 11 pt, 7.3 percent, added to the
+    /// font's own tracking (`.kern` would set the pairs' kerning instead, and 0 there turns kerning off).
+    static func headingText(_ text: String) -> NSAttributedString {
         NSAttributedString(string: text.uppercased(), attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: Theme.textDim, .kern: 0.8,
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: Theme.textDim, .tracking: 0.8,
         ])
-    }
-
-    private static func heading(_ text: String) -> NSTextField {
-        let label = NSTextField(labelWithString: "")
-        label.attributedStringValue = headingText(text)
-        return label
     }
 
     // MARK: projects
 
     /// For the self-test.
-    var shownProjects: [String] { projects }
+    var shownProjects: [String] { switcher.shown.projects.map(\.path) }
     var shownSessionTitles: [String] { shownSessions.map(\.title) }
 
-    /// The recent and open projects, read again: when the window shows, and when the recent ones change under it.
-    func reloadProjects() {
-        let open = AppDelegate.shared.controllers.compactMap(\.project)
-        var seen = Set<String>()
-        allProjects = (AppDelegate.shared.recentProjects + open).filter { seen.insert($0).inserted }
-        DispatchQueue.global(qos: .userInitiated).async { [allProjects] in
-            var found: [String: String] = [:]
-            for path in allProjects { found[path] = SessionStore.branch(of: path) }
+    /// Where the selection goes when the list is read again.
+    enum Selection {
+        /// Where a show starts it (`SwitcherSelection.initial`), or with text in the search, on the best match.
+        case start
+        /// On the same project or server while it is still listed, else on the row that took its place.
+        case keep
+    }
+
+    /// The projects and servers, read again, keeping the selection: when the window comes to the front, and while it
+    /// shows whenever the windows, the history, Recent Projects or the saved hosts change.
+    func reloadProjects() { reloadProjects(selection: .keep) }
+
+    private func reloadProjects(selection: Selection) {
+        buildList()
+        applySearch(selection, reloadSessions: selection == .start)
+        readBranchesAndTitles()
+    }
+
+    /// For the self-test: these projects listed, closed, instead of the open and used ones, and no server.
+    func list(projects paths: [String]) {
+        list = SwitcherList.build(open: [], history: [], recents: paths, servers: [])
+        hosts = []
+        applySearch(.keep)
+    }
+
+    /// What there is to list: the open projects (as many windows each as the history's recorder last counted, and the
+    /// newest time one was in front), then the ones used before, newest first, then Recent Projects' with no recorded
+    /// use, then the saved servers.
+    private func buildList() {
+        let recorder = ProjectHistoryRecorder.shared
+        let open: [SwitcherList.Window] = openWindows(recorder.windowCounts)
+        let history: [ProjectHistory.Entry] = recorder.history.existing()
+        let recents: [String] = AppDelegate.shared.recentProjects
+        hosts = Self.savedHosts()
+        let servers: [SwitcherServer] = hosts.map { (host: RemoteHost) -> SwitcherServer in SwitcherServer(host) }
+        list = SwitcherList.build(open: open, history: history, recents: recents, servers: servers, titles: titles)
+    }
+
+    /// A window for each one `counts` has on a project, in the order of the windows, each with its project's title and
+    /// the newest time one of its windows was in front.
+    private func openWindows(_ counts: [String: Int]) -> [SwitcherList.Window] {
+        let controllers: [TerminalWindowController] = AppDelegate.shared.controllers.filter { !$0.hasClosed }
+        var windows: [SwitcherList.Window] = []
+        var listed: Set<String> = []
+        for controller in controllers {
+            guard let path = controller.project, let count = counts[path], listed.insert(path).inserted else { continue }
+            let same: [TerminalWindowController] = controllers.filter { $0.project == path }
+            let lastKey: Date = same.map(\.lastKey).max() ?? .distantPast
+            let window = SwitcherList.Window(path: path, title: controller.projectTitle, lastKey: lastKey)
+            windows.append(contentsOf: Array(repeating: window, count: count))
+        }
+        return windows
+    }
+
+    /// The saved hosts, the one connected to last first.
+    private static func savedHosts() -> [RemoteHost] {
+        let last: String? = UserDefaults.standard.string(forKey: "lastRemoteHost")
+        var hosts: [RemoteHost] = RemoteHosts.all
+        if let index = hosts.firstIndex(where: { $0.id == last }) { hosts.insert(hosts.remove(at: index), at: 0) }
+        return hosts
+    }
+
+    /// Each listed project's branch, and a linked worktree's title, read off the main thread from git's files; then
+    /// the list shows them, the search finds the branches, and the selection stays.
+    private func readBranchesAndTitles() {
+        let paths: [String] = list.projects.map(\.path)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var branches: [String: String] = [:]
+            var titles: [String: String] = [:]
+            for path in paths {
+                branches[path] = SessionStore.branch(of: path)
+                titles[path] = WelcomeSwitcherList.title(ofProject: path)
+            }
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.branches = found
-                self.projectsTable.reloadData()
-                self.reselect()
+                self?.read(paths, branches: branches, titles: titles)
             }
         }
-        applySearch()
     }
 
-    /// Return opens the chosen project, or with none chosen (none listed yet, or none matching the search), the Open…
-    /// panel: never a button that is off. Outside the sessions search (where it resumes, `handleKeyEquivalent`) it never
-    /// resumes a session: a double-click on it or the Resume button does that. Set each time the project shown changes.
-    private func updateReturnKey() {
-        let none = current == nil
-        openPanelButton.keyEquivalent = none ? "\r" : ""
-        openButton.keyEquivalent = none ? "" : "\r"
-    }
-
-    /// For the self-test: these projects listed instead of the recent and open ones.
-    func list(projects paths: [String]) {
-        allProjects = paths
-        applySearch()
+    private func read(_ paths: [String], branches found: [String: String], titles named: [String: String]) {
+        var renamed = false
+        for path in paths {
+            branches[path] = found[path]
+            if titles[path] != named[path] { renamed = true }
+            titles[path] = named[path]
+        }
+        if renamed { buildList() }
+        applySearch(.keep)
     }
 
     /// For the self-test: the search field holding `text`, as if typed.
     func searchProjects(_ text: String) {
         search.stringValue = text
-        applySearch()
+        searchChanged()
     }
 
-    @objc private func searchChanged() { applySearch() }
+    /// The search text the list was last narrowed by.
+    private var appliedQuery = ""
+
+    @objc private func searchChanged() {
+        // Its action and its text-change notice both come for each key: the list is narrowed once.
+        guard search.stringValue != appliedQuery else { return }
+        applySearch(.start)
+        announceListCount()
+    }
 
     func controlTextDidChange(_ obj: Notification) {
         // Two search fields, one delegate: the sessions search must never rerun the projects search.
-        if (obj.object as? NSSearchField) === sessionSearch { sessionSearchChanged() } else { applySearch() }
+        if (obj.object as? NSSearchField) === sessionSearch { sessionSearchChanged() } else { searchChanged() }
     }
 
-    private func applySearch() {
-        let previous = current
-        let words = SearchWords(search.stringValue)
-        projects = words.isEmpty ? allProjects : allProjects.filter(words.matches)
-        projectsTable.reloadData()
-        let row = previous.flatMap { projects.firstIndex(of: $0) } ?? (projects.isEmpty ? -1 : 0)
-        if row >= 0 { projectsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
-        showProject()
+    /// The list as the search narrows it now, over every project and every saved server.
+    private func applySearch(_ selection: Selection, reloadSessions: Bool = false) {
+        let query: String = search.stringValue
+        appliedQuery = query
+        let kept: SwitcherEntry.ID? = switcher.selectedEntry?.id
+        let keptIndex: Int? = switcher.selectedIndex
+        let lastPick: String? = UserDefaults.standard.string(forKey: SwitcherSelection.lastPickKey)
+        let home: String = NSHomeDirectory()
+        let shown: SwitcherShown = SwitcherSearch.filter(list, query: query, home: home, branches: branches,
+                                                         lastPick: lastPick)
+        let origin: String? = AppDelegate.shared.welcomeOrigin?.project
+        let start: Int? = SwitcherSelection.afterSearch(shown, query: query, origin: origin, lastPick: lastPick)
+        var index: Int? = start
+        if selection == .keep, kept != nil || keptIndex != nil {
+            let count: Int = shown.entries.count
+            let same: Int? = kept.flatMap { (id: SwitcherEntry.ID) -> Int? in shown.index(of: id) }
+            let near: Int? = keptIndex.map { (row: Int) -> Int in min(row, count - 1) }
+            index = same ?? (count > 0 ? near : nil)
+        }
+        let searching: Bool = !SearchWords(query).isEmpty
+        var folders: [String: String] = [:]
+        for host in hosts { folders[host.id] = host.directory }
+        switcher.show(shown, openCount: list.openCount, searching: searching, branches: branches, keys: switcherKeys,
+                      folders: folders)
+        switcher.select(index)
+        let none: Bool = searching && shown.isEmpty
+        noMatch.stringValue = none ? SwitcherSearch.noMatch(query) : ""
+        noMatch.isHidden = !none
+        showSelection(reloadSessions: reloadSessions)
     }
 
-    /// The project shown on the right (kept here: a table reload must not lose it).
+    /// The jumps' and Close's keys as the menus have them now, so a rebinding carries over.
+    private var switcherKeys: SwitcherKeys {
+        let shortcuts = KeyboardShortcuts.shared
+        let jumps: [KeyChord?] = SwitcherKeys.jumpCommands.map { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
+        return SwitcherKeys(jumps: jumps, close: shortcuts.chord(for: SwitcherKeys.closeCommand))
+    }
+
+    /// The project shown on the right (kept here: its sessions are read for it).
     private var current: String?
     var selectedProject: String? { current }
 
-    private func reselect() {
-        if let current, let row = projects.firstIndex(of: current), projectsTable.selectedRow != row {
-            projectsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        }
-    }
-
-    @objc private func projectClicked() { showProject() }
-
     func select(project: String) {
-        guard let row = projects.firstIndex(of: project) else { return }
-        projectsTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        showProject()
+        guard let index = switcher.shown.index(of: .project(project)) else { return }
+        switcher.select(index)
+        showSelection()
     }
 
-    private func showProject() {
+    /// The right pane for the selection: a project with its sessions, a server, or nothing chosen. A project's
+    /// sessions are read again when another one is chosen, or with `reloadSessions` (the window shown again).
+    private func showSelection(reloadSessions: Bool = false) {
+        let entry: SwitcherEntry? = switcher.selectedEntry
+        let host: RemoteHost? = entry?.server.flatMap { (server: SwitcherServer) -> RemoteHost? in
+            hosts.first { (host: RemoteHost) -> Bool in host.id == server.id }
+        }
+        if let host { serverPane.show(host) }
+        serverPane.isHidden = host == nil
+        detailPane.isHidden = host != nil
+        showProject(entry?.project, reloadSessions: reloadSessions)
+        updateReturnKey()
+        updateHint()
+    }
+
+    /// Return acts on the selection only, through the right pane's button: Go to Window or Open Project, or Connect.
+    /// With nothing selected (nothing listed, or nothing matching) no button has it, and Return does nothing. Outside
+    /// the sessions search (where it resumes, `handleKeyEquivalent`) it never resumes a session.
+    private func updateReturnKey() {
+        let entry: SwitcherEntry? = switcher.selectedEntry
+        openButton.keyEquivalent = entry?.project != nil ? "\r" : ""
+        serverPane.connectButton.keyEquivalent = entry?.server != nil ? "\r" : ""
+    }
+
+    private func showProject(_ project: SwitcherProject?, reloadSessions: Bool) {
         let previous = current
-        current = projects[safe: projectsTable.selectedRow]
+        current = project?.path
         if current != previous { resetSessionSearch() }
         sessionSearch.isEnabled = current != nil
-        updateReturnKey()
-        guard let project = current else {
-            projectName.stringValue = allProjects.isEmpty ? "No projects yet" : "No project matches"
-            projectPath.stringValue = allProjects.isEmpty ? "Open a folder to start; it will be listed here." : ""
+        guard let project else {
+            projectName.stringValue = list.projects.isEmpty ? "No projects yet" : "No project matches"
+            projectPath.stringValue = list.projects.isEmpty ? "Open a folder to start; it will be listed here." : ""
+            projectPath.toolTip = nil
             openButton.isEnabled = false
+            openButton.title = "Open Project"
             sessions = []
             sessionsLoading = false
             sessionProblems = [:]
@@ -396,20 +535,22 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             return
         }
         openButton.isEnabled = true
-        projectName.stringValue = (project as NSString).lastPathComponent
-        var path = RecentProjects.abbreviate(project)
-        if let branch = branches[project] ?? SessionStore.branch(of: project) { path += "   ⎇ " + branch }
-        projectPath.stringValue = path
-        projectPath.toolTip = project
-        sessions = cache[project] ?? []
+        openButton.title = project.isOpen ? "Go to Window" : "Open Project"
+        openButton.toolTip = project.isOpen ? "Bring its window to the front, the one you were in last" : nil
+        projectName.stringValue = project.title
+        projectPath.attributedStringValue = pathLine(project.path)
+        projectPath.toolTip = project.path
+        guard current != previous || reloadSessions else { return }
+        let path: String = project.path
+        sessions = cache[path] ?? []
         sessionTabs = SessionTabs()
-        sessionsLoading = cache[project] == nil
+        sessionsLoading = cache[path] == nil
         sessionProblems = [:]
         applyFilter()
-        SessionStore.load(project) { [weak self] listing, tabs in
+        SessionStore.load(path) { [weak self] listing, tabs in
             guard let self else { return }
-            self.cache[project] = listing.sessions
-            guard self.selectedProject == project else { return }
+            self.cache[path] = listing.sessions
+            guard self.selectedProject == path else { return }
             self.sessions = listing.sessions
             self.sessionTabs = tabs
             self.sessionsLoading = false
@@ -418,47 +559,268 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
-    @objc func openSelectedProject() {
-        guard let project = selectedProject else { return }
-        AppDelegate.shared.openProject(at: URL(fileURLWithPath: project), from: AppDelegate.shared.welcomeOrigin)
+    /// "~/Code/shop", then its branch after the app's gap, as the list marks a branch.
+    private func pathLine(_ path: String) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 12)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.textDim]
+        let line = NSMutableAttributedString(string: RecentProjects.abbreviate(path), attributes: attributes)
+        if let branch = branches[path] ?? SessionStore.branch(of: path) {
+            line.append(Typography.gap(14, font: font))
+            line.append(SwitcherRowStyle.branch(branch, font: font, symbolSize: 11, color: Theme.textDim))
+        }
+        return Typography.truncating(line, .byTruncatingMiddle)
+    }
+
+    /// Return, a double-click, the right pane's button: the selection.
+    @objc func openSelectedProject() { activateSelection(newWindow: false) }
+
+    private func activateSelection(newWindow: Bool) {
+        guard let entry = switcher.selectedEntry else { return }
+        activate(entry, newWindow: newWindow)
+    }
+
+    /// An open project: its window comes forward and this one closes. A closed one opens as Open Project does, by the
+    /// "Open projects in" setting. `newWindow` (⌘↩): in a new window without asking, a second one on an open project.
+    /// A server: a window with a tab on it, remembered so the next show starts on it.
+    private func activate(_ entry: SwitcherEntry, newWindow: Bool) {
+        switch entry {
+        case .project(let project):
+            // For projects the list's order already starts on the one used last: only a server is remembered.
+            UserDefaults.standard.removeObject(forKey: SwitcherSelection.lastPickKey)
+            if newWindow {
+                AppDelegate.shared.openFolder(project.path, newWindow: true)
+            } else if project.isOpen, let window = frontWindow(of: project.path) {
+                // Its window in front last: Open Project would bring the first one made.
+                window.makeKeyAndOrderFront(nil)
+                close()
+            } else {
+                let url = URL(fileURLWithPath: project.path)
+                AppDelegate.shared.openProject(at: url, from: AppDelegate.shared.welcomeOrigin)
+            }
+        case .server(let server):
+            guard let host = hosts.first(where: { (host: RemoteHost) -> Bool in host.id == server.id }) else { return }
+            UserDefaults.standard.set(host.id, forKey: SwitcherSelection.lastPickKey)
+            AppDelegate.shared.connect(to: host)
+        }
+    }
+
+    /// The window on `path` that was in front last.
+    private func frontWindow(of path: String) -> NSWindow? {
+        let controllers: [TerminalWindowController] = AppDelegate.shared.controllers
+        let windows: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+            controller.project == path && !controller.hasClosed
+        }
+        let newest: TerminalWindowController? = windows.max { (a: TerminalWindowController, b: TerminalWindowController) -> Bool in
+            a.lastKey < b.lastKey
+        }
+        return newest?.window
+    }
+
+    /// ⌘⌫ or Remove from List on a closed project: it leaves this list and File › Open Recent.
+    private func forget(at index: Int) {
+        guard let project = switcher.shown.projects[safe: index], !project.isOpen else { return }
+        ProjectHistoryRecorder.shared.forget(project.path)
+        // While the window shows, the recorder and Recent Projects tell it as they change.
+        if window?.isVisible != true { reloadProjects() }
     }
 
     @objc private func newTerminal() {
         AppDelegate.shared.newWindow(nil)
     }
 
+    // MARK: the switcher's keys
+
+    /// ↓ ↑ (⌃N ⌃P), the page keys, Return and Esc in the projects search move and act on the list while the search
+    /// keeps the keyboard. Return and Esc are the switcher's even when they do nothing: with no selection, or Esc on an
+    /// empty search with no other window to go back to.
+    private func projectsSearchCommand(_ selector: Selector) -> Bool {
+        let name: String = NSStringFromSelector(selector)
+        if let action = escapeOrSearchAction(name) {
+            perform(action)
+            return true
+        }
+        return name == "insertNewline:" || name == "cancelOperation:"
+    }
+
+    /// Esc where no field took it, the list having the keyboard: as in the projects search. In the sessions search it
+    /// is left as it was.
+    private func cancel() -> Bool {
+        guard keyboardFocus != .sessions else { return false }
+        if let action = escapeOrSearchAction("cancelOperation:") { perform(action) }
+        return true
+    }
+
+    /// What the projects search's command `selector` does to the list now.
+    private func escapeOrSearchAction(_ selector: String) -> SwitcherAction? {
+        let empty: Bool = search.stringValue.isEmpty
+        let selection: SwitcherEntry? = switcher.selectedEntry
+        return SwitcherKeys.action(selector: selector, searchEmpty: empty, selection: selection, otherWindows: otherWindowsOpen)
+    }
+
+    private func perform(_ action: SwitcherAction) {
+        switch action {
+        case .move(let step):
+            move(by: step)
+        case .page(let pages):
+            move(by: pages * switcher.pageSize)
+        case .activate(let newWindow):
+            activateSelection(newWindow: newWindow)
+        case .jump(let row):
+            guard let project = switcher.shown.projects[safe: row] else { return }
+            activate(.project(project), newWindow: false)
+        case .clearSearch:
+            (search.currentEditor() as? NSTextView)?.string = ""
+            search.stringValue = ""
+            searchChanged()
+        case .close:
+            close()
+        case .forget:
+            guard let index = switcher.selectedIndex else { return }
+            forget(at: index)
+        }
+    }
+
+    private func move(by step: Int) {
+        let count: Int = switcher.shown.entries.count
+        guard let index = SwitcherSelection.moved(switcher.selectedIndex, by: step, count: count) else { return }
+        switcher.select(index)
+        showSelection()
+    }
+
+    /// Where the keyboard is: the projects search or the list, the sessions search or theirs, or elsewhere.
+    private var keyboardFocus: SwitcherKeys.Focus {
+        guard let responder = window?.firstResponder else { return .elsewhere }
+        let inSearch: Bool = search.currentEditor().map { (editor: NSText) -> Bool in editor === responder } ?? false
+        if responder === projectsTable || inSearch { return .projects }
+        let inSessions: Bool = sessionSearch.currentEditor().map { (editor: NSText) -> Bool in editor === responder } ?? false
+        if responder === sessionsTable || inSessions { return .sessions }
+        return .elsewhere
+    }
+
+    /// Another Next Term window is open, shown or minimized (a terminal window, Settings): Esc may close this one
+    /// without leaving Next Term with no window at all.
+    private var otherWindowsOpen: Bool {
+        NSApp.windows.contains { (other: NSWindow) -> Bool in
+            guard other !== window, !other.isSheet, !(other is NSPanel) else { return false }
+            guard other.styleMask.contains(.titled) else { return false }
+            return other.isVisible || other.isMiniaturized
+        }
+    }
+
+    /// The hint line under the list, for the selection now.
+    private func updateHint() {
+        let shortcuts = KeyboardShortcuts.shared
+        let keys: [KeyChord?] = SwitcherWaysIn.commands.map { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
+        let waysIn = SwitcherWaysIn(open: keys[0], connect: keys[1], newTerminal: keys[2])
+        let selection: SwitcherEntry? = switcher.selectedEntry
+        let empty: Bool = search.stringValue.isEmpty
+        let parts: [String] = SwitcherHint.parts(selection: selection, searchEmpty: empty, otherWindows: otherWindowsOpen,
+                                                 waysIn: waysIn)
+        hintLine.show(parts)
+    }
+
+    /// For the self-test.
+    var hintParts: [String] { hintLine.parts }
+    var noMatchText: String? { noMatch.isHidden ? nil : noMatch.stringValue }
+    var selectedEntry: SwitcherEntry? { switcher.selectedEntry }
+    var returnButtonTitle: String? {
+        guard let entry = switcher.selectedEntry else { return nil }
+        return entry.server != nil ? serverPane.connectButton.title : openButton.title
+    }
+
+    /// What VoiceOver hears once typing settles in the projects search: "3 projects, 1 server".
+    var listCountText: String {
+        let shown: SwitcherShown = switcher.shown
+        guard !shown.isEmpty else { return "No project or server matches" }
+        var parts: [String] = []
+        if !shown.projects.isEmpty { parts.append(Self.counted(shown.projects.count, "project")) }
+        if !shown.servers.isEmpty { parts.append(Self.counted(shown.servers.count, "server")) }
+        return parts.joined(separator: ", ")
+    }
+
+    private static func counted(_ count: Int, _ noun: String) -> String {
+        count == 1 ? "1 " + noun : "\(count) \(noun)s"
+    }
+
+    /// For the self-test: what VoiceOver was last told of the list.
+    private(set) var announcedListCount: String?
+
+    private func announceListCount() {
+        listAnnouncement?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let window = self.window, window.isVisible else { return }
+            let text: String = self.listCountText
+            self.announcedListCount = text
+            NSAccessibility.post(element: window, notification: .announcementRequested,
+                                 userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        }
+        listAnnouncement = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.announceDelay, execute: work)
+    }
+
+    // MARK: window
+
+    /// Back in front, the list is read again: windows may have opened, closed or come forward behind it.
+    func windowDidBecomeKey(_ notification: Notification) {
+        reloadProjects()
+        watchModifiers(true)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        watchModifiers(false)
+    }
+
+    /// The list follows what it lists while the window shows; hidden, the next show reads it.
+    private func listChanged() {
+        guard window?.isVisible == true else { return }
+        reloadProjects()
+    }
+
+    /// ⌘ held while the window is key shows the jump keys in the first nine projects' rows. A local monitor: the
+    /// search's field editor has the keyboard, and the window would not be told.
+    private func watchModifiers(_ on: Bool) {
+        if on, modifierMonitor == nil {
+            modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                self?.modifiersChanged(event.modifierFlags)
+                return event
+            }
+            modifiersChanged(NSEvent.modifierFlags)
+        } else if !on {
+            if let modifierMonitor { NSEvent.removeMonitor(modifierMonitor) }
+            modifierMonitor = nil
+            switcher.showJumps(false)
+        }
+    }
+
+    private func modifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        guard window?.isKeyWindow == true else { return switcher.showJumps(false) }
+        switcher.showJumps(flags.intersection(.deviceIndependentFlagsMask).contains(.command))
+    }
+
     // MARK: servers
 
     /// For the self-test.
-    var shownServers: [String] { servers.map(\.name) }
+    var shownServers: [String] { switcher.shown.servers.map(\.name) }
     var connectServerButton: NSButton { connectButton }
-    func serverEntry(at index: Int) -> NSButton? { serverList.arrangedSubviews[safe: index] as? NSButton }
+    var serverPaneShown: Bool { !serverPane.isHidden }
+    var serverPaneLines: [String] { serverPane.shownLines }
 
-    /// The saved hosts, the one connected to last first. With none, only Connect to Server… shows.
-    private func reloadServers() {
-        let last = UserDefaults.standard.string(forKey: "lastRemoteHost")
-        var hosts = RemoteHosts.all
-        if let index = hosts.firstIndex(where: { $0.id == last }) { hosts.insert(hosts.remove(at: index), at: 0) }
-        servers = Array(hosts.prefix(Self.serverLimit))
-        serverList.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (index, host) in servers.enumerated() {
-            let entry = ServerEntryButton(host: host)
-            entry.tag = index
-            entry.target = self
-            entry.action = #selector(serverClicked(_:))
-            serverList.addArrangedSubview(entry)
-            entry.widthAnchor.constraint(equalTo: serverList.widthAnchor).isActive = true
-        }
-        serversLabel.isHidden = servers.isEmpty
+    /// For the self-test: a button whose click connects to the listed server at `index`, as its row's Return does.
+    func serverEntry(at index: Int) -> NSButton? {
+        guard let server = switcher.shown.servers[safe: index] else { return nil }
+        let button = NSButton(title: server.name, target: self, action: #selector(serverEntryClicked(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier(server.id)
+        return button
     }
 
-    @objc private func serverClicked(_ sender: NSButton) {
-        guard let host = servers[safe: sender.tag] else { return }
-        AppDelegate.shared.connect(to: host)
+    @objc private func serverEntryClicked(_ sender: NSButton) {
+        let id: String? = sender.identifier?.rawValue
+        guard let server = switcher.shown.servers.first(where: { (server: SwitcherServer) -> Bool in server.id == id }) else { return }
+        activate(.server(server), newWindow: false)
     }
 
     /// The sheet behind Connect to Server… can save or remove hosts.
-    func windowDidEndSheet(_ notification: Notification) { reloadServers() }
+    func windowDidEndSheet(_ notification: Notification) { reloadProjects() }
 
     // MARK: sessions
 
@@ -597,6 +959,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// while it is on (and nothing else: never Open Project); Esc empties the search, and on an empty one does
     /// what it did before.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if control === search { return projectsSearchCommand(selector) }
         guard control === sessionSearch else { return false }
         switch selector {
         case #selector(NSResponder.moveDown(_:)): moveSessionSelection(by: 1)
@@ -629,8 +992,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         return window?.firstResponder === editor
     }
 
-    /// Two keys the window takes before its buttons and the menus do: Find… (⌘F) goes to the sessions search while
-    /// a project's sessions show, and Return in that search resumes (Open Project holds Return everywhere else).
+    /// The keys the window takes before its buttons and the menus do: Find… (⌘F) goes to the sessions search while
+    /// a project's sessions show, and Return in that search resumes (the right pane's button holds Return everywhere
+    /// else). Then the switcher's, while this window has the keyboard: ⌘1 to ⌘9 (Select Tab 1 to 9's keys) and ⌘W
+    /// (Close Tab's) anywhere in it; ⌘↩, ⌘⌫ (on an empty search only) and ⌃N ⌃P in the projects search or the list.
     private func handleKeyEquivalent(_ event: NSEvent) -> Bool {
         let chord = KeyboardShortcuts.chord(from: event)
         if let chord, chord == Self.findChord { return focusSessionSearch() }
@@ -638,7 +1003,13 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             resumeFromSearch()
             return true
         }
-        return false
+        guard let chord, let window, window.isKeyWindow, window.attachedSheet == nil else { return false }
+        let keys: SwitcherKeys = switcherKeys
+        let action: SwitcherAction? = keys.action(chord: chord, focus: keyboardFocus, searchEmpty: search.stringValue.isEmpty,
+                                                  selection: switcher.selectedEntry, projects: switcher.shown.projects.count)
+        guard let action else { return false }
+        perform(action)
+        return true
     }
 
     /// Find…'s key now (⌘F, unless it was given another).
@@ -727,155 +1098,35 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     // MARK: tables
 
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        tableView === projectsTable ? projects.count : shownSessions.count
-    }
+    // The sessions'; the projects and servers have their own (`WelcomeSwitcherList`).
+    func numberOfRows(in tableView: NSTableView) -> Int { shownSessions.count }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { GoToFileRowView() }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if tableView === sessionsTable {
-            let cell = tableView.makeView(withIdentifier: SessionCell.identifier, owner: self) as? SessionCell ?? SessionCell()
-            cell.show(shownSessions[row], project: selectedProject, inTab: sessionTabs.tab(of: shownSessions[row]) != nil)
-            return cell
-        }
-        let cell = tableView.makeView(withIdentifier: ProjectCell.identifier, owner: self) as? ProjectCell ?? ProjectCell()
-        let path = projects[row]
-        cell.show(path: path, branch: branches[path], isOpen: AppDelegate.shared.controllers.contains { $0.project == path })
+        let cell = tableView.makeView(withIdentifier: SessionCell.identifier, owner: self) as? SessionCell ?? SessionCell()
+        cell.show(shownSessions[row], project: selectedProject, inTab: sessionTabs.tab(of: shownSessions[row]) != nil)
         return cell
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        if (notification.object as? NSTableView) === projectsTable { showProject() }
         if (notification.object as? NSTableView) === sessionsTable { updateSessionButtons() }
     }
 }
 
 /// The Welcome window, which lets its controller take a key before its buttons and the menus do
-/// (`WelcomeWindowController.handleKeyEquivalent`).
+/// (`WelcomeWindowController.handleKeyEquivalent`), and Esc that no field took.
 final class WelcomeWindow: NSWindow {
     var keyEquivalentHandler: ((NSEvent) -> Bool)?
+    var cancelHandler: (() -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if keyEquivalentHandler?(event) == true { return true }
         return super.performKeyEquivalent(with: event)
     }
-}
 
-/// A saved host on the Welcome window: a server, its name and where it points, lined up with the projects
-/// above. A click opens a tab on it.
-final class ServerEntryButton: NSButton {
-    private var hovering = false { didSet { needsDisplay = true } }
-
-    init(host: RemoteHost) {
-        super.init(frame: .zero)
-        title = ""
-        isBordered = false
-        bezelStyle = .regularSquare
-        let icon = NSImageView(image: NSImage(systemSymbolName: "server.rack", accessibilityDescription: nil) ?? NSImage())
-        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
-        icon.contentTintColor = Theme.textDim
-        let name = NSTextField(labelWithString: host.name)
-        name.font = .systemFont(ofSize: 13, weight: .medium)
-        name.textColor = Theme.text
-        Typography.singleLine(name, truncation: .byTruncatingMiddle)
-        let destination = NSTextField(labelWithString: host.destination)
-        destination.font = .systemFont(ofSize: 11)
-        destination.textColor = Theme.textDim
-        Typography.singleLine(destination, truncation: .byTruncatingMiddle)
-        destination.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for view in [icon, name, destination] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.setAccessibilityElement(false) // the button says it all
-            addSubview(view)
-        }
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 28),
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            name.centerYAnchor.constraint(equalTo: centerYAnchor),
-            destination.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 8),
-            destination.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
-            destination.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
-        ])
-        toolTip = "Open a tab on \(host.name) (\(host.destination)), in \(host.directory)"
-        setAccessibilityLabel("\(host.name), \(host.destination)")
-        setAccessibilityHelp("Opens a tab on this server")
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    /// The labels inside take no clicks: anywhere on the row is the button.
-    override func hitTest(_ point: NSPoint) -> NSView? { !isHidden && frame.contains(point) ? self : nil }
-
-    private var rowShape: NSBezierPath { NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5) }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard hovering || isHighlighted else { return }
-        Theme.tabHover.setFill()
-        rowShape.fill()
-    }
-
-    // With the keyboard (Full Keyboard Access), the ring goes round the row.
-    override func drawFocusRingMask() { rowShape.fill() }
-    override var focusRingMaskBounds: NSRect { bounds }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
-}
-
-/// A project in the Welcome list: its name, its folder (home as ~), and its branch.
-final class ProjectCell: NSTableCellView {
-    static let identifier = NSUserInterfaceItemIdentifier("ProjectCell")
-    private let name = NSTextField(labelWithString: "")
-    private let path = NSTextField(labelWithString: "")
-    private let branch = NSTextField(labelWithString: "")
-
-    init() {
-        super.init(frame: .zero)
-        identifier = Self.identifier
-        Typography.singleLine(name, truncation: .byTruncatingMiddle)
-        Typography.singleLine(path, truncation: .byTruncatingMiddle)
-        Typography.singleLine(branch, truncation: .byTruncatingTail)
-        name.font = .systemFont(ofSize: 13, weight: .medium)
-        name.textColor = Theme.text
-        path.font = .systemFont(ofSize: 11)
-        path.textColor = Theme.textDim
-        branch.font = .systemFont(ofSize: 11)
-        branch.textColor = Theme.textDim
-        branch.alignment = .right
-        branch.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for view in [name, path, branch] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(view)
-        }
-        NSLayoutConstraint.activate([
-            name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            name.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: branch.leadingAnchor, constant: -8),
-            branch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            branch.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
-            branch.widthAnchor.constraint(lessThanOrEqualToConstant: 110),
-            path.leadingAnchor.constraint(equalTo: name.leadingAnchor),
-            path.topAnchor.constraint(equalTo: centerYAnchor, constant: 2),
-            path.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    func show(path folder: String, branch head: String?, isOpen: Bool) {
-        name.stringValue = (folder as NSString).lastPathComponent + (isOpen ? "  ·  open" : "")
-        path.stringValue = RecentProjects.abbreviate((folder as NSString).deletingLastPathComponent)
-        branch.stringValue = head.map { "⎇ " + $0 } ?? ""
-        toolTip = folder
-        setAccessibilityLabel((folder as NSString).lastPathComponent + (head.map { ", branch \($0)" } ?? ""))
+    override func cancelOperation(_ sender: Any?) {
+        if cancelHandler?() == true { return }
+        super.cancelOperation(sender)
     }
 }
