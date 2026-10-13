@@ -180,6 +180,7 @@ extension SelfTest {
     /// it does a real key's, through the app: the key window's key equivalents first (the Welcome window's own, then the
     /// menus'), then the window's first responder. It is pressed only while `window` is the key window, since AppKit
     /// gives it to whichever window is (⌘W meant for the Welcome window would close a tab elsewhere). False when it is
+
     /// not, with a failed check, or a note when Next Term is not the app in front; nothing is pressed then.
     @discardableResult
     fileprivate static func switcherKey(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], to window: NSWindow) -> Bool {
@@ -989,10 +990,16 @@ extension SelfTest {
         let recentsBefore: [String] = app.recentProjects
         typeKeys(window, "zz")
         _ = await wait(2) { search.stringValue == "zz" }
+        // ⌘⌫ with text typed is the field's (delete to the line's start): the window must leave it alone and forget
+        // nothing. A ⌘⌫ made in this process never runs the field's command (AppKit runs it for none, Next Term or not,
+        // while Delete, ⌥⌫ and ⌃H made the same way do), so the field's own command checks that the search lets it through.
         guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
-        let cleared: Bool = await wait(2) { search.stringValue.isEmpty }
+        await pause(0.3)
         let kept: Bool = recorder.history.paths == historyBefore && app.recentProjects == recentsBefore
-        check(cleared && kept, "Welcome: ⌘⌫ with text typed deletes the text and forgets no project",
+        let editor: NSTextView? = search.currentEditor() as? NSTextView
+        editor?.doCommand(by: #selector(NSResponder.deleteToBeginningOfLine(_:)))
+        let cleared: Bool = await wait(2) { search.stringValue.isEmpty }
+        check(cleared && kept, "Welcome: ⌘⌫ with text typed forgets no project, and the search deletes to the line's start",
               "“\(search.stringValue)”, history kept \(recorder.history.paths == historyBefore), recents kept \(app.recentProjects == recentsBefore)")
 
         let docs: String = fixtures.path("docs")
@@ -1196,6 +1203,30 @@ extension SelfTest {
         }
         let solid: Bool = window.alphaValue == 1 && window.backgroundColor == Theme.background
         return children && !overlay && !material && solid
+    }
+
+    /// NEXTTERM_SELFTEST_ONLY=welcome: the Welcome window's own checks, on a scratch folder, for its own failures
+    /// without the whole run.
+    static func welcomePartChecks() async {
+        let app = AppDelegate.shared!
+        let restore = keepSwitcherDefaults()
+        let folder: String = canonicalPath(NSTemporaryDirectory()) + "/nt-welcome-part-\(getpid())"
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let controller: TerminalWindowController = app.openFolder(folder, newWindow: true)
+        _ = await wait(5) { controller.window?.isVisible == true }
+        await openProjectChecks(app, from: controller)
+        app.showWelcome(nil)
+        if let welcome = app.welcomeController {
+            welcome.select(project: folder)
+            welcomeReturnKeyChecks(welcome, project: folder)
+            welcome.close()
+        } else {
+            check(false, "Welcome: the Welcome window shows")
+        }
+        await closeSwitcherWindow(controller)
+        restore()
+        try? FileManager.default.removeItem(atPath: folder)
+        await welcomeSwitcherChecks()
     }
 }
 #endif
