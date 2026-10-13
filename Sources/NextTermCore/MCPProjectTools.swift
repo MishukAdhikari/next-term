@@ -353,7 +353,7 @@ public enum MCPProjectTools {
             let all = found.sorted { $0.relativePath < $1.relativePath }.flatMap(\.matches)
             var redactions = 0
             let shown: [[String: Any]] = all.prefix(limit).map { match in
-                let preview = MCPRedaction.redact(snippet(match, mask: mask), mask: mask)
+                let preview = snippet(match, mask: mask)
                 redactions += preview.count
                 return ["path": match.relativePath, "line": match.line, "column": match.range.location + 1, "text": preview.text]
             }
@@ -368,19 +368,17 @@ public enum MCPProjectTools {
         }
     }
 
-    /// A match's line, cut around the match when it is long, with leading indentation dropped. Each edge is moved out
-    /// past anything redact masks across it (`MCPRedaction.cleanCut`), so the snippet never shows part of a value.
-    static func snippet(_ match: SearchMatch, mask: SecretMask = .current) -> String {
+    /// A match's line, redacted, cut around the match when it is long, with leading indentation dropped; and how many
+    /// values it masked. An edge across anything redact masks moves in, toward the match, and ••• stands for what it
+    /// left out (`MCPRedaction.snippet`), so the snippet never shows part of a value and never grows past 300 characters.
+    static func snippet(_ match: SearchMatch, mask: SecretMask = .current) -> (text: String, count: Int) {
         let line = match.lineText
         let ns = line as NSString
-        guard ns.length > 300 else { return line.trimmingCharacters(in: .whitespaces) }
+        guard ns.length > 300 else { return MCPRedaction.redact(line.trimmingCharacters(in: .whitespaces), mask: mask) }
         let start = max(0, match.range.location - 100)
         let range = ns.rangeOfComposedCharacterSequences(for: NSRange(location: start, length: min(300, ns.length - start)))
-        guard let window = Range(range, in: line) else { return "" }
-        let lower = MCPRedaction.cleanCut(line, at: window.lowerBound, forward: false, mask: mask)
-        let upper = MCPRedaction.cleanCut(line, at: window.upperBound, forward: true, mask: mask)
-        return (lower > line.startIndex ? "…" : "") + line[lower..<upper].trimmingCharacters(in: .whitespaces)
-            + (upper < line.endIndex ? "…" : "")
+        guard let window = Range(range, in: line), let found = Range(match.range, in: line) else { return ("", 0) }
+        return MCPRedaction.snippet(line, window: window, match: found, mask: mask)
     }
 
     // MARK: git

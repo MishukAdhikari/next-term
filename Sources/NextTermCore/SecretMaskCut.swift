@@ -52,3 +52,65 @@ extension MCPRedaction {
         return cut
     }
 }
+
+extension MCPRedaction {
+    /// `line[window]` redacted, for a search result, with how many values it masked. An edge that would show part of
+    /// what `redact` masks moves in, toward `match`, to the nearest clean place (`cutsAMask`), and ••• stands for what it
+    /// left out: a run across an edge (an inlined image or font) is never read whole, so the snippet stays within its
+    /// window and costs a few small redactions however long the run. A window with no clean place at the match or its
+    /// far edge is all masked, and is ••• alone.
+    static func snippet(_ line: String, window: Range<String.Index>, match: Range<String.Index>,
+                        mask secrets: SecretMask) -> (text: String, count: Int) {
+        let reach = reach(secrets)
+        func cuts(_ index: String.Index) -> Bool { cutsAMask(line, at: index, reach: reach, mask: secrets) }
+        let matchStart = min(max(match.lowerBound, window.lowerBound), window.upperBound)
+        let matchEnd = min(max(match.upperBound, matchStart), window.upperBound)
+        var lower = window.lowerBound
+        var upper = window.upperBound
+        let movesLower = cuts(lower)
+        let movesUpper = cuts(upper)
+        if movesLower {
+            var cutting = lower
+            var clean: String.Index?
+            for place in [matchStart, matchEnd, upper] where place > cutting {
+                if cuts(place) { cutting = place } else { clean = place; break }
+            }
+            guard let clean else {
+                return ("…" + mask + (window.upperBound < line.endIndex ? "…" : ""), 1)
+            }
+            lower = nearestClean(line, from: cutting, to: clean, cuts: cuts)
+        }
+        if movesUpper {
+            var cutting = upper
+            var clean = lower // clean: where a cut was found clean above, or the window's own clean edge
+            for place in [matchEnd, matchStart] where place < cutting && place > lower {
+                if cuts(place) { cutting = place } else { clean = place; break }
+            }
+            upper = nearestClean(line, from: cutting, to: clean, cuts: cuts)
+        }
+        let lead = lower > line.startIndex ? "…" : ""
+        let trail = upper < line.endIndex ? "…" : ""
+        guard lower < upper else { return (lead + mask + trail, 1) }
+        var body = line[lower..<upper]
+        func isSpace(_ character: Character) -> Bool { character.unicodeScalars.allSatisfy(CharacterSet.whitespaces.contains) }
+        if !movesLower { body = body.drop(while: isSpace) }
+        if !movesUpper { while let last = body.last, isSpace(last) { body = body.dropLast() } }
+        let redacted = redact(String(body), mask: secrets)
+        let moved = (movesLower ? 1 : 0) + (movesUpper ? 1 : 0)
+        let text = lead + (movesLower ? mask : "") + redacted.text + (movesUpper ? mask : "") + trail
+        return (text, redacted.count + moved)
+    }
+
+    /// A clean place between `cutting`, where a cut shows part of a mask, and `clean`, where none does: the span halved
+    /// until they are one character apart, so the place found is next to the mask it leaves out.
+    static func nearestClean(_ line: String, from cutting: String.Index, to clean: String.Index,
+                             cuts: (String.Index) -> Bool) -> String.Index {
+        var bad = cutting
+        var good = clean
+        while abs(line.distance(from: bad, to: good)) > 1 {
+            let middle = line.index(bad, offsetBy: line.distance(from: bad, to: good) / 2)
+            if cuts(middle) { bad = middle } else { good = middle }
+        }
+        return good
+    }
+}

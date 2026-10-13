@@ -13,6 +13,19 @@ private func storedMask(_ values: [String]) -> SecretMask {
 private let stored = "Rk7vQp2xLm9nWz4cTb8hYq3s"
 private let other = "Hd5tGw8kPz2mXc6vNb4j"
 
+/// A base64 run that looks random, the same on every run: an inlined image or font in a bundle.
+private func base64Run(_ count: Int) -> String {
+    let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+    var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+    var run = ""
+    run.reserveCapacity(count)
+    for _ in 0..<count {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        run.append(alphabet[Int(state >> 58)])
+    }
+    return run
+}
+
 /// Whether `text` shows any 5 characters in a row of `value`.
 private func showsPart(of value: String, in text: String) -> Bool {
     let characters = Array(value)
@@ -93,5 +106,41 @@ private func showsPart(of value: String, in text: String) -> Bool {
                                                 mask: storedMask([stored, other]))
         let plainText = try #require((json(plain)["matches"] as? [[String: Any]])?.first?["text"] as? String)
         #expect(plainText.hasPrefix("…") && plainText.hasSuffix("…") && plainText.count <= 302, "\(plainText.count)")
+    }
+
+    /// A long run across a snippet's edge (an inlined image or font) is left out, and ••• stands for it: the edge moves
+    /// in, toward the match, so the snippet stays within its 300 characters. Moving the edge out grew the snippet to
+    /// the whole run, and a run of a million characters, too long for the patterns, came back unmasked.
+    @Test func aLongRunAcrossAnEdgeKeepsTheSnippetShortAndMasked() throws {
+        let f = try ProjectFixture()
+        let run = base64Run(1_000_000)
+        let head = "const x = 'needle'; const img = \"data:image/png;base64,"
+        try f.write("api/bundle.js", head + run + "\";\n")
+        let result = MCPProjectTools.findInFiles(["query": "needle", "glob": "bundle.js", "project": "api"], in: f.both, git: nil,
+                                                 mask: storedMask([stored]))
+        let found = try #require((json(result)["matches"] as? [[String: Any]])?.first)
+        let text = try #require(found["text"] as? String)
+        #expect(text.count <= 310, "\(text.count)")
+        #expect(text == head + "•••…" && !showsPart(of: String(run.prefix(600)), in: text), "\(text.prefix(300))")
+        #expect(json(result)["redacted"] as? Int == 1)
+
+        // A match inside the run: the whole window is the run, so the snippet is ••• alone.
+        let inside = String(run.dropFirst(500_000).prefix(12))
+        let deep = MCPProjectTools.findInFiles(["query": inside, "case_sensitive": true, "glob": "bundle.js", "project": "api"],
+                                               in: f.both, git: nil, mask: storedMask([stored]))
+        let deepText = try #require((json(deep)["matches"] as? [[String: Any]])?.first?["text"] as? String)
+        #expect(deepText == "…•••…", "\(deepText.prefix(300))")
+    }
+
+    /// A run that ends before the match: the snippet starts where it ends, with ••• for it, and keeps the match.
+    @Test func aRunEndingBeforeTheMatchLeavesTheMatchInTheSnippet() throws {
+        let f = try ProjectFixture()
+        let run = base64Run(5000)
+        try f.write("api/inline.css", "src: url(" + run + ") needle " + String(repeating: "format ", count: 60) + "\n")
+        let result = MCPProjectTools.findInFiles(["query": "needle", "glob": "inline.css", "project": "api"], in: f.both, git: nil,
+                                                 mask: .empty)
+        let text = try #require((json(result)["matches"] as? [[String: Any]])?.first?["text"] as? String)
+        #expect(text.hasPrefix("…•••") && text.contains(") needle format") && text.count <= 310, "\(text.prefix(300))")
+        #expect(!showsPart(of: String(run.suffix(200)), in: text), "\(text.prefix(300))")
     }
 }
