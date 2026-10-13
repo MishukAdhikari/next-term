@@ -508,6 +508,62 @@ import Testing
         }
     }
 
+    // MARK: the three ways in
+
+    @Test func theThreeWaysInKeepOneOrderAndSayWhatTheyOpen() {
+        let ways: [SwitcherWayIn] = SwitcherWayIn.allCases
+        #expect(ways == [.open, .connect, .newTerminal])
+        check(ways.map(\.title), ["Open…", "Connect to Server…", "New Terminal"])
+        check(ways.map(\.symbol), ["folder", "server.rack", "terminal"])
+        // What each one's tooltip says, before the key the menus give it.
+        let help: [String] = ways.map(\.help)
+        check(help, ["Open a folder as a project", "Open a tab on one of your servers, over ssh", "Open a window with a shell"])
+        // The menu commands whose keys they show, in the same order.
+        check(ways.map(\.command), SwitcherWaysIn.commands)
+        check(ways.map(\.hintLabel), ["open…", "connect to server…", "new terminal"])
+    }
+
+    @Test func aFirstLaunchCardSaysWhatItOpensInOneSentence() {
+        let sentences: [String] = SwitcherWayIn.allCases.map(\.sentence)
+        check(sentences, [
+            "A folder or a git repository, with its files, branches and agent sessions.",
+            "A terminal on your server over ssh, from a saved host or a new one.",
+            "A shell in your home folder, no project needed.",
+        ])
+        let lines: [String] = sentences + SwitcherWayIn.allCases.map(\.title) + [SwitcherText.emptyList]
+        for line in lines {
+            #expect(!line.contains("..."), "\(line)")
+            #expect(!line.contains("  "), "\(line)")
+            #expect(!line.contains("\"") && !line.contains("'"), "\(line)")
+        }
+        #expect(SwitcherText.emptyList == "Projects you open are listed here.")
+    }
+
+    @Test func eachWayInShowsTheKeyItsMenuCommandHasNow() {
+        let standard = SwitcherWaysIn.standard
+        let keys: [String?] = SwitcherWayIn.allCases.map { (way: SwitcherWayIn) -> String? in standard.key(for: way)?.display }
+        let shown: [String] = keys.map { (key: String?) -> String in key ?? "none" }
+        check(shown, ["⌘O", "⌥⌘T", "⌘N"])
+        // Rebound or removed in Settings: the row follows, or shows no key.
+        let rebound = SwitcherWaysIn(open: KeyChord(key: "o", command: true, shift: true), connect: nil, newTerminal: nil)
+        #expect(rebound.key(for: .open)?.display == "⇧⌘O")
+        #expect(rebound.key(for: .connect) == nil)
+        #expect(rebound.key(for: .newTerminal) == nil)
+        // Read by each one's menu command.
+        let read = SwitcherWaysIn { (id: String) -> KeyChord? in id == "newWindow:" ? self.command("n") : nil }
+        #expect(read.open == nil && read.connect == nil)
+        #expect(read.newTerminal == command("n"))
+    }
+
+    @Test func theCardsShowOnlyWhenThereIsNothingToList() {
+        let none = SwitcherList(projects: [], servers: [])
+        #expect(SwitcherWaysIn.showsCards(none))
+        let oneServer = SwitcherList(projects: [], servers: [server("staging")])
+        #expect(!SwitcherWaysIn.showsCards(oneServer))
+        let oneProject = SwitcherList(projects: [project("/Users/sam/Code/shop")], servers: [])
+        #expect(!SwitcherWaysIn.showsCards(oneProject))
+    }
+
     // MARK: what the heading and a row say
 
     @Test func theHeadingCountsTheOpenProjects() {

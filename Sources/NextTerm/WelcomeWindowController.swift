@@ -2,15 +2,21 @@ import AppKit
 import NextTermCore
 
 /// The way in, and a project switcher: your projects and servers on the left in one list, open projects first, driven
-/// from its search field (open, a new terminal); on the right the chosen project with every agent's saved sessions for
-/// it, newest first, each one a click from running again in a tab in the right folder, or the chosen server.
+/// from its search field, with the three ways in at its foot (Open…, Connect to Server…, New Terminal); on the right the
+/// chosen project with every agent's saved sessions for it, newest first, each one a click from running again in a tab
+/// in the right folder, or the chosen server, or on a launch with nothing to list the three ways in as cards.
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSSearchFieldDelegate, NSMenuItemValidation {
     private let search = NSSearchField()
-    private var openTip: ShortcutToolTip?
-    /// Connect to Server…, the sheet for a server not listed.
-    private let connectButton = NSButton(title: "Connect to Server…", target: nil, action: nil)
-    private var connectTip: ShortcutToolTip?
+    /// Open…, Connect to Server… and New Terminal, at the foot of the list's column: three rows alike, none of them
+    /// Return's, in one order whatever was used last.
+    private let waysInRows = WaysInRows()
+    /// The right pane with nothing to list: the three as cards.
+    private let waysInCards = WaysInCards()
+    /// "At launch:" at the foot of the right pane, the setting Settings › General shows too.
+    private let atLaunch = AtLaunchFooter(defaults: AppDelegate.shared?.launchDefaults ?? .standard)
+    /// Under the PROJECTS heading with nothing to list: "Projects you open are listed here."
+    private let emptyList = NSTextField(wrappingLabelWithString: SwitcherText.emptyList)
     private let projectsTable = NSTableView()
     /// The projects and the saved servers, in that one table.
     private lazy var switcher = WelcomeSwitcherList(table: projectsTable)
@@ -36,8 +42,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var observers: [NSObjectProtocol] = []
     /// The projects search's count VoiceOver hears once typing settles.
     private var listAnnouncement: DispatchWorkItem?
-    /// Open…, the panel to choose a folder. Never Return's: Return acts on the selection only.
-    private let openPanelButton = NSButton(title: "Open…", target: nil, action: nil)
     private let sessionsTable = NSTableView()
     private let projectName = NSTextField(labelWithString: "")
     private let projectPath = NSTextField(labelWithString: "")
@@ -127,7 +131,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func build() {
         guard let content = window?.contentView else { return }
 
-        // Left: the app, search, projects, and the two ways to start.
+        // Left: the app, search, projects and servers, and the three ways in.
         let left = NSView()
         left.wantsLayer = true
         left.layer?.backgroundColor = Theme.bar.cgColor
@@ -153,19 +157,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         noMatch.textColor = Theme.textDim
         noMatch.maximumNumberOfLines = 3
         noMatch.isHidden = true
-        let open = openPanelButton
-        open.target = NSApp.delegate
-        open.action = #selector(AppDelegate.chooseProjectFolder(_:))
-        open.bezelStyle = .rounded
-        // Open Project…'s key, which is Open… here (`AppDelegate.openProjectPanel`).
-        openTip = ShortcutToolTip(open, "Open a folder as a project", #selector(AppDelegate.openProjectPanel(_:)))
-        let terminal = NSButton(title: "New Terminal", target: self, action: #selector(newTerminal))
-        terminal.bezelStyle = .rounded
-        connectButton.bezelStyle = .rounded
-        connectButton.target = NSApp.delegate
-        connectButton.action = #selector(AppDelegate.newRemoteTab(_:))
-        connectTip = ShortcutToolTip(connectButton, "Open a tab on one of your servers, over ssh", #selector(AppDelegate.newRemoteTab(_:)))
-        for view in [icon, name, versionLabel, search, projectsScroll, noMatch, hintLine, connectButton, open, terminal] as [NSView] {
+        emptyList.font = .systemFont(ofSize: 12)
+        emptyList.textColor = Theme.textDim
+        emptyList.maximumNumberOfLines = 3
+        emptyList.isHidden = true
+        for view in [icon, name, versionLabel, search, projectsScroll, noMatch, emptyList, hintLine, waysInRows] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             left.addSubview(view)
         }
@@ -221,7 +217,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         serverPane.connectButton.target = self
         serverPane.connectButton.action = #selector(openSelectedProject)
         serverPane.isHidden = true
-        for view in [left, detailPane, serverPane] {
+        waysInCards.isHidden = true
+        // The cards take the right pane's place; the footer stays under whichever pane shows.
+        for view in [left, detailPane, serverPane, waysInCards, atLaunch] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -250,15 +248,17 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             noMatch.topAnchor.constraint(equalTo: projectsScroll.topAnchor, constant: 12),
             noMatch.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6 + SwitcherRowStyle.nameX),
             noMatch.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor, constant: -20),
+            // Under the PROJECTS heading, where the first project's name would start.
+            emptyList.topAnchor.constraint(equalTo: projectsScroll.topAnchor, constant: WelcomeSwitcherList.headingRowHeight + 6),
+            emptyList.leadingAnchor.constraint(equalTo: noMatch.leadingAnchor),
+            emptyList.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor, constant: -20),
             hintLine.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 20),
             hintLine.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor, constant: -16),
-            connectButton.topAnchor.constraint(equalTo: hintLine.bottomAnchor, constant: 10),
-            connectButton.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
-            open.topAnchor.constraint(equalTo: connectButton.bottomAnchor, constant: 8),
-            open.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 16),
-            open.bottomAnchor.constraint(equalTo: left.bottomAnchor, constant: -16),
-            terminal.leadingAnchor.constraint(equalTo: open.trailingAnchor, constant: 8),
-            terminal.centerYAnchor.constraint(equalTo: open.centerYAnchor),
+            // The rows sit 6 pt inside the column, as the list does, so their titles start where the names do.
+            hintLine.bottomAnchor.constraint(equalTo: waysInRows.topAnchor, constant: -8),
+            waysInRows.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 6),
+            waysInRows.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
+            waysInRows.bottomAnchor.constraint(equalTo: left.bottomAnchor, constant: -10),
 
             detailPane.topAnchor.constraint(equalTo: content.topAnchor),
             detailPane.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -268,6 +268,14 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             serverPane.bottomAnchor.constraint(equalTo: detailPane.bottomAnchor),
             serverPane.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor),
             serverPane.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor),
+            waysInCards.topAnchor.constraint(equalTo: detailPane.topAnchor),
+            waysInCards.bottomAnchor.constraint(equalTo: atLaunch.topAnchor, constant: -12),
+            waysInCards.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor),
+            waysInCards.trailingAnchor.constraint(equalTo: detailPane.trailingAnchor),
+            // Bottom left, where the project's name starts, level with Resume at the bottom right.
+            atLaunch.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor, constant: 28),
+            atLaunch.centerYAnchor.constraint(equalTo: resumeButton.centerYAnchor),
+            atLaunch.trailingAnchor.constraint(lessThanOrEqualTo: forkButton.leadingAnchor, constant: -16),
 
             projectName.topAnchor.constraint(equalTo: detailPane.topAnchor, constant: 40),
             projectName.leadingAnchor.constraint(equalTo: detailPane.leadingAnchor, constant: 28),
@@ -505,6 +513,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let none: Bool = searching && shown.isEmpty
         noMatch.stringValue = none ? SwitcherSearch.noMatch(query) : ""
         noMatch.isHidden = !none
+        emptyList.isHidden = searching || !list.isEmpty
         showSelection(reloadSessions: reloadSessions)
     }
 
@@ -525,16 +534,19 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         showSelection()
     }
 
-    /// The right pane for the selection: a project with its sessions, a server, or nothing chosen. A project's
-    /// sessions are read again when another one is chosen, or with `reloadSessions` (the window shown again).
+    /// The right pane for the selection: a project with its sessions, a server, or nothing chosen; with nothing at all
+    /// to list, the three ways in as cards, whatever is typed. A project's sessions are read again when another one is
+    /// chosen, or with `reloadSessions` (the window shown again).
     private func showSelection(reloadSessions: Bool = false) {
         let entry: SwitcherEntry? = switcher.selectedEntry
         let host: RemoteHost? = entry?.server.flatMap { (server: SwitcherServer) -> RemoteHost? in
             hosts.first { (host: RemoteHost) -> Bool in host.id == server.id }
         }
         if let host { serverPane.show(host) }
-        serverPane.isHidden = host == nil
-        detailPane.isHidden = host != nil
+        let cards: Bool = SwitcherWaysIn.showsCards(list)
+        waysInCards.isHidden = !cards
+        serverPane.isHidden = host == nil || cards
+        detailPane.isHidden = host != nil || cards
         showProject(entry?.project, reloadSessions: reloadSessions)
         updateReturnKey()
         updateHint()
@@ -664,10 +676,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         if window?.isVisible != true { reloadProjects() }
     }
 
-    @objc private func newTerminal() {
-        AppDelegate.shared.newWindow(nil)
-    }
-
     // MARK: the switcher's keys
 
     /// ↓ ↑ (⌃N ⌃P), the page keys, Return and Esc in the projects search move and act on the list while the search
@@ -747,11 +755,13 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
-    /// The hint line under the list, for the selection now.
+    /// The hint line under the list, for the selection now, and the keys the three ways in show, as the menus have them
+    /// now: a rebinding in Settings carries over, and one removed shows no key.
     private func updateHint() {
         let shortcuts = KeyboardShortcuts.shared
-        let keys: [KeyChord?] = SwitcherWaysIn.commands.map { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
-        let waysIn = SwitcherWaysIn(open: keys[0], connect: keys[1], newTerminal: keys[2])
+        let waysIn = SwitcherWaysIn { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
+        waysInRows.show(waysIn)
+        waysInCards.show(waysIn)
         let selection: SwitcherEntry? = switcher.selectedEntry
         let empty: Bool = search.stringValue.isEmpty
         let parts: [String] = SwitcherHint.parts(selection: selection, searchEmpty: empty, otherWindows: otherWindowsOpen,
@@ -762,6 +772,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// For the self-test.
     var hintParts: [String] { hintLine.parts }
     var noMatchText: String? { noMatch.isHidden ? nil : noMatch.stringValue }
+    var emptyListText: String? { emptyList.isHidden ? nil : emptyList.stringValue }
+    /// Open…, Connect to Server… and New Terminal: the rows at the foot of the list, and the first launch's cards.
+    var wayInRows: [WayInRow] { waysInRows.rows }
+    var wayInCards: [WayInCard] { waysInCards.cards }
+    var cardsShown: Bool { !waysInCards.isHidden }
+    var atLaunchFooter: AtLaunchFooter { atLaunch }
     var selectedEntry: SwitcherEntry? { switcher.selectedEntry }
     var returnButtonTitle: String? {
         guard let entry = switcher.selectedEntry else { return nil }
@@ -803,6 +819,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Back in front, the list is read again: windows may have opened, closed or come forward behind it.
     func windowDidBecomeKey(_ notification: Notification) {
         reloadProjects()
+        // A quit's resume question can have set it since.
+        atLaunch.refresh()
         watchModifiers(true)
     }
 
@@ -841,7 +859,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// For the self-test.
     var shownServers: [String] { switcher.shown.servers.map(\.name) }
-    var connectServerButton: NSButton { connectButton }
+    /// Connect to Server…'s row: the sheet for a server not listed.
+    var connectServerButton: NSButton { waysInRows.row(.connect) }
     var serverPaneShown: Bool { !serverPane.isHidden }
     var serverPaneLines: [String] { serverPane.shownLines }
 

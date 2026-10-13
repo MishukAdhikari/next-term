@@ -543,13 +543,94 @@ public struct SwitcherWaysIn: Equatable, Sendable {
         self.newTerminal = newTerminal
     }
 
+    /// Each one's key read by its menu command's id, as `chord` gives it now.
+    public init(chord: (String) -> KeyChord?) {
+        self.init(open: chord(SwitcherWayIn.open.command), connect: chord(SwitcherWayIn.connect.command),
+                  newTerminal: chord(SwitcherWayIn.newTerminal.command))
+    }
+
     /// File › Open Project…, New Remote Tab… and New Window, by command id, in the three's order.
-    public static let commands: [String] = ["openProjectPanel:", "newRemoteTab:", "newWindow:"]
+    public static let commands: [String] = SwitcherWayIn.allCases.map { (way: SwitcherWayIn) -> String in way.command }
 
     /// The menus' default keys: ⌘O, ⌥⌘T and ⌘N.
     public static let standard = SwitcherWaysIn(open: KeyChord(key: "o", command: true),
                                                 connect: KeyChord(key: "t", command: true, option: true),
                                                 newTerminal: KeyChord(key: "n", command: true))
+
+    /// The key `way` has now; nil when its command has none.
+    public func key(for way: SwitcherWayIn) -> KeyChord? {
+        switch way {
+        case .open: return open
+        case .connect: return connect
+        case .newTerminal: return newTerminal
+        }
+    }
+
+    /// With nothing at all to list, a first launch, the right pane shows the three ways in as cards, whatever is typed:
+    /// a search there can find nothing, and the cards are what there is to do.
+    public static func showsCards(_ list: SwitcherList) -> Bool { list.isEmpty }
+}
+
+/// The three ways in, for three kinds of user: Open… for one who works in a project, Connect to Server… for one who
+/// works on a server, New Terminal for one who wants a shell now. Always all three, in this order, none of them the
+/// default and none moved by habit.
+public enum SwitcherWayIn: CaseIterable, Sendable {
+    case open, connect, newTerminal
+
+    /// The row's and the card's title.
+    public var title: String {
+        switch self {
+        case .open: return "Open…"
+        case .connect: return "Connect to Server…"
+        case .newTerminal: return "New Terminal"
+        }
+    }
+
+    /// The SF Symbol in the row's gutter and on the card: the app's one server mark, a folder and a terminal.
+    public var symbol: String {
+        switch self {
+        case .open: return "folder"
+        case .connect: return "server.rack"
+        case .newTerminal: return "terminal"
+        }
+    }
+
+    /// The tooltip's words, which the key the menus give it follows: "Open a window with a shell (⌘N)".
+    public var help: String {
+        switch self {
+        case .open: return "Open a folder as a project"
+        case .connect: return "Open a tab on one of your servers, over ssh"
+        case .newTerminal: return "Open a window with a shell"
+        }
+    }
+
+    /// What its first-launch card says it opens, in one sentence.
+    public var sentence: String {
+        switch self {
+        case .open: return "A folder or a git repository, with its files, branches and agent sessions."
+        case .connect: return "A terminal on your server over ssh, from a saved host or a new one."
+        case .newTerminal: return "A shell in your home folder, no project needed."
+        }
+    }
+
+    /// After its key in the hint line: "⌘O open…".
+    public var hintLabel: String {
+        switch self {
+        case .open: return "open…"
+        case .connect: return "connect to server…"
+        case .newTerminal: return "new terminal"
+        }
+    }
+
+    /// The menu command whose key it shows, by id: File › Open Project… (which is Open… on the Welcome window), New
+    /// Remote Tab… and New Window.
+    public var command: String {
+        switch self {
+        case .open: return "openProjectPanel:"
+        case .connect: return "newRemoteTab:"
+        case .newTerminal: return "newWindow:"
+        }
+    }
 }
 
 /// The hint line under the list: what the keys do for the selection. Its parts are plain strings; the window sets
@@ -569,10 +650,8 @@ public enum SwitcherHint {
         case .server?:
             parts.append(enter + " connect")
         case nil:
-            let keys: [KeyChord?] = [waysIn.open, waysIn.connect, waysIn.newTerminal]
-            let labels: [String] = ["open…", "connect to server…", "new terminal"]
-            for (key, label) in zip(keys, labels) {
-                if let key { parts.append(key.display + " " + label) }
+            for way in SwitcherWayIn.allCases {
+                if let key = waysIn.key(for: way) { parts.append(key.display + " " + way.hintLabel) }
             }
         }
         if searchEmpty && otherWindows { parts.append("esc close") }
@@ -583,6 +662,9 @@ public enum SwitcherHint {
 /// What the PROJECTS heading and a project's row say, on screen and to VoiceOver. The row says open with a dot only;
 /// VoiceOver hears the word.
 public enum SwitcherText {
+    /// The list's one line on a first launch, with nothing to list.
+    public static let emptyList = "Projects you open are listed here."
+
     /// Beside the heading: "3 open"; nothing with none open.
     public static func openCount(_ count: Int) -> String? {
         count > 0 ? "\(count) open" : nil

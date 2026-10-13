@@ -94,8 +94,9 @@ final class GeneralSettingsView: NSView {
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
         ])
         refresh()
-        // An import or its Undo can change what reopens at launch.
+        // An import or its Undo can change what reopens at launch, and so can the Welcome window's At launch pop-up.
         NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: ImportCoordinator.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: LaunchSettings.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -128,6 +129,7 @@ final class GeneralSettingsView: NSView {
         settings.opens = choices[sender.tag]
         settings.save(.opens, to: defaults)
         for radio in opens { radio.state = radio === sender ? .on : .off }
+        NotificationCenter.default.post(name: LaunchSettings.changed, object: self)
     }
 
     @objc private func askToResumeChanged() {
@@ -141,4 +143,9 @@ final class GeneralSettingsView: NSView {
         settings.keepScrollback = keepScrollback.state == .on
         settings.save(.keepScrollback, to: defaults)
     }
+}
+
+extension LaunchSettings {
+    /// "At launch" was chosen here or in the Welcome window's footer: the other shows it at once.
+    static let changed = Notification.Name("NextTermLaunchSettingsChanged")
 }
