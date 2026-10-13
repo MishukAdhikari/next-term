@@ -321,6 +321,20 @@ extension SelfTest {
         prefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + "Q7"
     }
 
+    /// Closes a check's tabs without asking, as close_tab force does: a wrapper or a fake agent may still run
+    /// in one, and asking would leave a "Close tab?" sheet up for the checks that come after. None may be left.
+    static func closeSecretsTabs(_ tabs: [TerminalTab], _ what: String) {
+        var windows: [NSWindow] = []
+        for tab in tabs {
+            guard let c = MCPControl.controller(of: tab) else { continue }
+            if let window = c.window { windows.append(window) }
+            c.remove(tab)
+        }
+        let asking = windows.filter { $0.attachedSheet != nil }
+        check(asking.isEmpty, "secrets: closing the \(what) tabs leaves no sheet up",
+              asking.map(sheetText).joined(separator: "; "))
+    }
+
     /// Stored keys are masked in what agents read and in notifications, from the marks alone, with no unlock.
     static func secretsMaskingChecks(_ c: TerminalWindowController, base: URL) async {
         let app = AppDelegate.shared!
@@ -353,7 +367,7 @@ extension SelfTest {
         let valueFile = base.appendingPathComponent("value.txt")
         try? value.write(to: valueFile, atomically: true, encoding: .utf8)
         let tab = c.addTab(directory: base.path, select: false)
-        defer { c.requestClose(tab) }
+        defer { closeSecretsTabs([tab], "masking") }
         guard await wait(20, { tab.status.integrated }),
               let client = SecretsMCPClient(socket: MCPControlServer.shared.path) else {
             return check(false, "secrets: a tab and an MCP bridge for the masking checks")
@@ -522,7 +536,7 @@ extension SelfTest {
         """.write(to: agent, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agent.path)
         let tab = c.addTab(directory: base.path, select: false)
-        defer { c.requestClose(tab) }
+        defer { closeSecretsTabs([tab], "choices") }
         guard await wait(20, { tab.status.integrated }) else { return check(false, "secrets: a tab for the choices check") }
         tab.view.send(txt: "PATH=\(ShellQuote.quote(bin.path)):$PATH claude\r")
         let asked = await wait(15) { tab.status.question == "Do you want to use the stored key?" }
@@ -1194,7 +1208,7 @@ extension SelfTest {
         let file = base.appendingPathComponent("deploy.txt")
         try? value.write(to: file, atomically: true, encoding: .utf8)
         let tab = c.addTab(directory: base.path, select: false)
-        defer { c.requestClose(tab) }
+        defer { closeSecretsTabs([tab], "store_secret") }
         if await wait(20, { tab.status.integrated }) {
             tab.view.send(txt: "cat \(ShellQuote.quote(file.path)); echo\r")
             _ = await wait(10) { tab.screenTail().joined().contains(value) }
@@ -1230,7 +1244,7 @@ extension SelfTest {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var opened: [TerminalTab] = []
         defer {
-            for tab in opened { MCPControl.controller(of: tab)?.requestClose(tab) }
+            closeSecretsTabs(opened, "run_with_secrets")
             try? FileManager.default.removeItem(at: folder)
         }
         func newTabs(since before: Set<UUID>) -> [TerminalTab] {
@@ -1822,7 +1836,7 @@ extension SelfTest {
         let before = Set(app.controllers.flatMap(\.tabs).map(\.id))
         defer {
             requests.resetForSelfTest()
-            for tab in app.controllers.flatMap(\.tabs) where !before.contains(tab.id) { MCPControl.controller(of: tab)?.requestClose(tab) }
+            closeSecretsTabs(app.controllers.flatMap(\.tabs).filter { !before.contains($0.id) }, "remote")
             try? FileManager.default.removeItem(at: folder)
         }
         let value = secretsValue("remote")
