@@ -125,6 +125,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         // Each show starts the selection afresh: shown from a project window, on the other open project used last, so
         // the key that showed it, then Return, switches back.
         reloadProjects(selection: .start)
+        // The same project selected as before the close: its sessions are read again, as they may have changed since.
+        if closed { showSelection(reloadSessions: true) }
         if closed || upElsewhere { place() }
         super.showWindow(sender)
         focusSearch()
@@ -1059,6 +1061,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         countAnnouncement?.cancel()
         countAnnouncement = nil
         sessionSearch.stringValue = ""
+        applyFilter() // the list follows the emptied search at once, whether or not the sessions are read again
     }
 
     /// How many the search leaves, as VoiceOver says it.
