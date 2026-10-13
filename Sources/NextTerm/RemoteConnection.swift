@@ -215,12 +215,15 @@ enum RemoteConnection {
         var output: String
         var error: String
         var timedOut = false
+        /// The error output reached its limit: its end is a cut.
+        var errorCut = false
 
-        /// ssh's last words, for a person: the remote error, or why ssh gave up.
+        /// ssh's last words, for a person or an agent: the remote error, or why ssh gave up. The error is masked before
+        /// it is cut to its last 600 characters, as an answer's own mask could not match a stored value cut in two.
         var problem: String {
             if timedOut { return "The host did not answer in time." }
-            let text = error.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { return String(text.suffix(600)) }
+            let text = SecretMask.current.maskedTail(error, characters: 600, endIsACut: errorCut)
+            if !text.isEmpty { return text }
             return "ssh ended with status \(status)."
         }
     }
@@ -268,10 +271,11 @@ enum RemoteConnection {
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
             var errorData = Data()
+            let errorLimit = 64 * 1024
             let group = DispatchGroup()
             group.enter()
             DispatchQueue.global(qos: .utility).async {
-                errorData = read(err.fileHandleForReading, limit: 64 * 1024, process: process)
+                errorData = read(err.fileHandleForReading, limit: errorLimit, process: process)
                 group.leave()
             }
             // What a host prints is bounded: a diff is cut on the host, and nothing else is large.
@@ -280,12 +284,14 @@ enum RemoteConnection {
             process.waitUntilExit()
             deadline.cancel()
             var result = Output(status: process.terminationStatus, output: String(decoding: outputData, as: UTF8.self),
-                                error: String(decoding: errorData, as: UTF8.self), timedOut: timedOut)
+                                error: String(decoding: errorData, as: UTF8.self), timedOut: timedOut,
+                                errorCut: errorData.count >= errorLimit)
             DispatchQueue.main.async {
                 // sshd allows MaxSessions (10 by default) sessions on one connection: every tab is one.
                 if result.error.contains("refused by peer") || result.error.contains("administratively prohibited") {
                     refused[path] = TerminalTab.now
                     result.error = refusedNote(host)
+                    result.errorCut = false
                 }
                 completion(result)
             }

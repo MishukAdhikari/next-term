@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// "Agent Sessions" at the top of the project tree: the newest few sessions any agent kept for the folder,
-/// and "More…" (the whole list, ⌥⌘O) when there are others. Shown only when the folder has some.
+/// and "More…" (the whole list, with Resume Agent Session…'s key) when there are others. Shown only when the folder has some.
 final class SessionsGroup {
     /// How many sessions the tree shows.
     static let shown = 5
@@ -145,13 +145,31 @@ final class SessionRowCellView: NSTableCellView {
 
     func configureMore(_ group: SessionsGroup) {
         icon.image = nil
-        name.attributedStringValue = NSAttributedString(string: "More…", attributes: [
-            .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: Theme.textDim,
-        ])
+        let key = Self.resumeKey
+        let text = NSMutableAttributedString(string: "More…", attributes: [.font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: Theme.textDim])
+        if let key {
+            // The command's key, as a menu shows it, so the list is one key away anywhere.
+            text.append(Typography.gap(7, font: .systemFont(ofSize: 11.5)))
+            text.append(NSAttributedString(string: key, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: Theme.textDim.withAlphaComponent(0.7)]))
+        }
+        name.attributedStringValue = text
         badge.text = ""
         more.isHidden = true
-        tipText = "All \(group.all.count) sessions, to filter and resume (⌥⌘O)"
-        setAccessibilityLabel("More sessions, \(group.all.count) in all")
+        tipText = "All \(group.all.count) sessions, to filter and resume: Agents › Resume Agent Session…" + (key.map { " (\($0))" } ?? "")
+        setAccessibilityLabel("More sessions, \(group.all.count) in all" + (key.map { ", Resume Agent Session, \($0)" } ?? ""))
+    }
+
+    /// Agents › Resume Agent Session…'s key as the menu has it now ("⌥⌘O"; Settings › Keyboard Shortcuts can change it),
+    /// or nil when it has none.
+    static var resumeKey: String? {
+        func find(_ menu: NSMenu?) -> NSMenuItem? {
+            for item in menu?.items ?? [] {
+                if item.action == #selector(TerminalWindowController.resumeSession(_:)) { return item }
+                if let found = find(item.submenu) { return found }
+            }
+            return nil
+        }
+        return find(NSApp.mainMenu).flatMap(KeyboardShortcuts.chord(of:))?.display
     }
 
     /// What the row shows, for the self-test.

@@ -300,6 +300,77 @@ func json(_ result: MCPServer.CallResult) -> [String: Any] {
     }
 }
 
+/// Next Term's Secrets folders, `Secrets.noindex` and the old ones Start Over keeps, are never read or written.
+@Suite struct MCPVaultFolderTests {
+    @Test func theSecretsFoldersAreRefusedByRealPath() throws {
+        let f = try ProjectFixture()
+        try f.write("Next Term/Secrets.noindex/vault.json", "{\"needle\": 1}\n")
+        try f.write("Next Term/Secrets-2026-10-09.old.noindex/vault.json", "needle\n")
+        try f.write("Next Term/Secrets-2026-10-09-2.old.noindex/vault.json", "needle\n")
+        try f.write("Next Term/notes.txt", "needle\n")
+        let support = f.base + "/Next Term"
+        let vault = support + "/Secrets.noindex"
+        for path in [vault + "/vault.json", vault, support + "/Secrets-2026-10-09.old.noindex/vault.json",
+                     support + "/Secrets-2026-10-09-2.old.noindex/vault.json"] {
+            #expect(MCPProjects.vaultReason(path) != nil, "\(path)")
+        }
+        #expect(MCPProjects.vaultReason(vault) == "is Next Term’s Secrets folder")
+        for path in [support + "/notes.txt", f.a + "/src/app.txt", "/x/secrets.txt", "/x/sessions-0a.noindex/scrollback"] {
+            #expect(MCPProjects.vaultReason(path) == nil, "\(path)")
+        }
+        // A project opened at Next Term/, or at the vault folder itself.
+        let atSupport = MCPProjects(open: [support], preferred: nil)
+        #expect(atSupport.file("Secrets.noindex/vault.json", project: nil).failureText?.contains("Secrets folder") == true)
+        #expect(atSupport.file("Secrets-2026-10-09-2.old.noindex/vault.json", project: nil).failureText?.contains("Secrets folder") == true)
+        #expect(atSupport.file("notes.txt", project: nil).isSuccess)
+        let atVault = MCPProjects(open: [vault], preferred: nil)
+        #expect(atVault.file("vault.json", project: nil).failureText?.contains("Secrets folder") == true)
+        #expect(atVault.file("new.json", project: nil, mustExist: false, writing: true).failureText?.contains("Not written") == true)
+        #expect(MCPProjectTools.readFile(["path": vault + "/vault.json"], in: atSupport).text.contains("Not read"))
+        // A harmless name in another open project that links into it.
+        try FileManager.default.createSymbolicLink(atPath: f.a + "/vault-link.json", withDestinationPath: vault + "/vault.json")
+        let both = MCPProjects(open: [f.a, support], preferred: nil)
+        #expect(both.file("vault-link.json", project: "api").failureText?.contains("Secrets folder") == true)
+        // find_in_files skips each walked vault file, and the link into one.
+        let found = json(MCPProjectTools.findInFiles(["query": "needle"], in: atSupport, git: nil))
+        #expect((found["matches"] as? [[String: Any]])?.compactMap { $0["path"] as? String } == ["notes.txt"])
+        #expect(found["secret_files_skipped"] as? Int == 3)
+        let linked = json(MCPProjectTools.findInFiles(["query": "needle", "project": "api"], in: both, git: nil))
+        let linkedPaths = (linked["matches"] as? [[String: Any]])?.compactMap { $0["path"] as? String } ?? []
+        #expect(linkedPaths == ["src/needle.swift"])
+    }
+
+    @Test func getDiffRefusesAVaultPath() throws {
+        guard let git = GitRunner.locateGit() else { return } // no git on this machine
+        let f = try ProjectFixture()
+        let repo = f.base + "/repo"
+        func sh(_ args: String...) throws {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: git)
+            p.arguments = ["-C", repo, "-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            p.waitUntilExit()
+            #expect(p.terminationStatus == 0, "git \(args.joined(separator: " "))")
+        }
+        try f.write("repo/Secrets.noindex/vault.json", "{\"body\": \"old\"}\n")
+        try f.write("repo/readme.txt", "one\n")
+        try sh("init")
+        try sh("add", "-A")
+        try sh("commit", "-m", "first")
+        try f.write("repo/Secrets.noindex/vault.json", "{\"body\": \"sealed-new\"}\n")
+        try f.write("repo/readme.txt", "two\n")
+        let projects = MCPProjects(open: [repo], preferred: nil)
+        let all = json(MCPProjectTools.getDiff([:], in: projects, git: git))
+        #expect(!(all["diff"] as? String ?? "").contains("sealed-new") && (all["diff"] as? String ?? "").contains("+two"))
+        let leftOut = (all["left_out"] as? [[String: Any]])?.first
+        #expect(leftOut?["path"] as? String == "Secrets.noindex/vault.json")
+        #expect((leftOut?["reason"] as? String)?.contains("Secrets folder") == true)
+        #expect(MCPProjectTools.getDiff(["path": "Secrets.noindex/vault.json"], in: projects, git: git).text.contains("Not read"))
+    }
+}
+
 extension Result {
     var isFailure: Bool { if case .failure = self { return true } else { return false } }
     var isSuccess: Bool { !isFailure }
