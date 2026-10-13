@@ -1413,6 +1413,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             content.title = "\(program.isEmpty ? "The agent" : program) needs your decision"
             content.subtitle = [title, shownPlace].compactMap { $0 }.joined(separator: " — ")
             content.body = question
+        } else if let message = notice.message {
+            // A program's own words, under its name, as a decision's question is: an agent's that came as its turn ended
+            // ride on its finish, which then reads as they would alone (the same notification is not posted twice).
+            content.title = program.isEmpty ? title : program
+            let under = program.isEmpty ? [shownPlace] : [title, shownPlace]
+            content.subtitle = under.compactMap { $0 }.joined(separator: " — ")
+            content.body = message
         } else {
             content.title = title
             content.subtitle = shownPlace ?? ""
@@ -1424,16 +1431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case .failed:
                 content.body = "\(program.isEmpty ? "Command" : program) failed" + (tab.status.exitCode.map { " (exit \($0))" } ?? "")
             case .attention:
-                guard let message = notice.message else {
-                    content.body = "\(program.isEmpty ? "The terminal" : program) needs your attention"
-                    break
-                }
-                // A program's own words, under its name, as a decision's question is.
-                if !program.isEmpty {
-                    content.title = program
-                    content.subtitle = [title, shownPlace].compactMap { $0 }.joined(separator: " — ")
-                }
-                content.body = message
+                content.body = "\(program.isEmpty ? "The terminal" : program) needs your attention"
             case .idle, .working:
                 return
             }

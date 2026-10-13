@@ -122,7 +122,7 @@ import Testing
         s.setVisible(true)
         s.commandStarted("make", at: 0)
         s.commandFinished(exitCode: 2, at: 60)
-        s.bell()
+        s.bell(at: 60)
         #expect(s.state == .idle)
         #expect(s.takeNotice() == nil)
     }
@@ -185,7 +185,7 @@ import Testing
     @Test func attentionOutranksAndSurvivesDone() {
         var s = TabStatus()
         s.commandStarted("make", at: 0)
-        s.bell()
+        s.bell(at: 0.5)
         #expect(s.state == .attention)
         s.commandFinished(exitCode: 0, at: 1)
         #expect(s.state == .attention)
@@ -295,14 +295,14 @@ import Testing
 
     @Test func bellLoopNotifiesOnce() {
         var s = TabStatus()
-        s.bell()
+        s.bell(at: 0)
         let notice = s.takeNotice()
         #expect(notice?.state == .attention && notice?.fromProgram == true && notice?.topic == .programAlert)
-        for _ in 0..<500 { s.bell() }
+        for _ in 0..<500 { s.bell(at: 0) }
         #expect(s.takeNotice() == nil)
         s.setVisible(true)
         s.setVisible(false)
-        s.bell()
+        s.bell(at: 0)
         #expect(s.takeNotice()?.state == .attention)
     }
 
@@ -456,12 +456,12 @@ import Testing
 
     @Test func aProgramsNoticeCarriesItsWords() {
         var s = TabStatus()
-        s.bell(notice: ProgramNotice(title: "Fix the login test", body: "Session error"))
+        s.bell(notice: ProgramNotice(title: "Fix the login test", body: "Session error"), at: 0)
         let notice = s.takeNotice()
         #expect(notice?.message == "Session error" && notice?.fromProgram == true && notice?.topic == .programAlert)
         s.setVisible(true)
         s.setVisible(false)
-        s.bell()
+        s.bell(at: 1)
         let bare = s.takeNotice()
         #expect(bare?.state == .attention && bare?.message == nil)
     }
@@ -473,8 +473,143 @@ import Testing
         s.observe(agentScreen: .working, at: 1)
         s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10)
         #expect(s.takeNotice()?.topic == .decision)
-        s.bell(notice: ProgramNotice(title: nil, body: "Permission needs input"))
+        s.bell(notice: ProgramNotice(title: nil, body: "Permission needs input"), at: 11)
         #expect(s.takeNotice() == nil && s.question == "Permission required: Shell command ($ npm test)")
+        s.tick(at: 14)
+        #expect(s.takeNotice() == nil)
+    }
+
+    /// An OpenCode tab whose screen Next Term reads: started at 0, working from 1.
+    private func readOpencode() -> TabStatus {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        return s
+    }
+
+    @Test func anAgentsWordsBeforeItsQuestionGiveWayToTheDecision() {
+        // OpenCode sends "Permission needs input" as it asks, before Next Term's next look at its screen: one notice.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Permission needs input"), at: 10)
+        #expect(s.takeNotice() == nil && s.state == .working) // the screen gives the mark
+        s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10.4)
+        #expect(s.takeNotice()?.topic == .decision)
+        for now: TimeInterval in [11, 12.5, 15, 25] { s.tick(at: now) }
+        #expect(s.takeNotice() == nil && s.state == .attention)
+    }
+
+    @Test func anAgentsWordsBeforeItsFinishAreTheFinishs() {
+        // "Session error" as the turn ends: one notice, the finish's, in the agent's words. The mark is done, not amber.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: "Fix the login test", body: "Session error"), at: 20)
+        s.tick(at: 20.25)
+        #expect(s.takeNotice() == nil && s.state == .working)
+        s.observe(agentScreen: .ready, at: 20.5)
+        s.tick(at: 21)
+        #expect(s.takeNotice() == nil)
+        s.tick(at: 21.5)
+        let finish = s.takeNotice()
+        #expect(finish?.topic == .agentFinished && finish?.message == "Session error" && finish?.duration == 19.5)
+        s.tick(at: 23)
+        #expect(s.takeNotice() == nil && s.state == .done && s.question == nil)
+        // A late look at the screen: the words wait for the stop that is settling.
+        var late = readOpencode()
+        late.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 20)
+        late.observe(agentScreen: .ready, at: 21.9)
+        late.tick(at: 22.25)
+        #expect(late.takeNotice() == nil)
+        late.tick(at: 23)
+        #expect(late.takeNotice()?.message == "Session error" && late.state == .done)
+    }
+
+    @Test func aShortTurnsWordsGoOutOnTheirOwn() {
+        // A turn too short for a finish notice: the agent's own notice goes out once the stop has settled. Still no amber.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 3)
+        s.observe(agentScreen: .ready, at: 3.3)
+        s.tick(at: 4.5)
+        let words = s.takeNotice()
+        #expect(words?.topic == .programAlert && words?.message == "Session error" && s.state == .done)
+    }
+
+    @Test func wordsTheScreenIsLateForStayWithTheTurn() {
+        // The screen still shows work when the wait is over: the words go out alone, and the finish that follows takes them
+        // too (the app drops it, the same words again). The next turn's finish has none.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 20)
+        s.tick(at: 21.75)
+        #expect(s.takeNotice() == nil)
+        s.tick(at: 22)
+        #expect(s.takeNotice()?.message == "Session error")
+        s.observe(agentScreen: .ready, at: 23)
+        s.tick(at: 24)
+        #expect(s.takeNotice()?.message == "Session error")
+        s.observe(agentScreen: .working, at: 30)
+        s.observe(agentScreen: .ready, at: 50)
+        s.tick(at: 51)
+        let next = s.takeNotice()
+        #expect(next?.topic == .agentFinished && next?.message == nil)
+    }
+
+    @Test func wordsAsTheStopSettlesOrAfterItAreNoAmber() {
+        // The screen showed the stop first: the words still go with its notice while it settles.
+        var s = readOpencode()
+        s.observe(agentScreen: .ready, at: 20)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 20.3)
+        s.tick(at: 21)
+        let finish = s.takeNotice()
+        #expect(finish?.topic == .agentFinished && finish?.message == "Session done" && s.state == .done)
+        // After a finish that went out, the words go out alone (the app drops them, so soon after its own), and the mark
+        // stays done.
+        s.observe(agentScreen: .working, at: 30)
+        s.observe(agentScreen: .ready, at: 40)
+        s.tick(at: 41)
+        #expect(s.takeNotice()?.topic == .agentFinished)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 41.2)
+        s.tick(at: 43.25)
+        #expect(s.takeNotice()?.topic == .programAlert && s.state == .done)
+    }
+
+    @Test func anAgentsWordsNotifyOnceUntilSeenOrItWorksAgain() {
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 10)
+        s.bell(notice: ProgramNotice(title: nil, body: "Model stopped responding"), at: 10.1)
+        s.tick(at: 12)
+        #expect(s.takeNotice()?.message == "Session error")
+        for now in stride(from: 12.25, to: 20, by: 0.25) {
+            s.bell(notice: ProgramNotice(title: nil, body: "again"), at: now)
+            s.tick(at: now)
+        }
+        #expect(s.takeNotice() == nil)
+        s.setVisible(true)
+        s.setVisible(false)
+        s.bell(notice: ProgramNotice(title: nil, body: "again"), at: 30)
+        s.tick(at: 32)
+        #expect(s.takeNotice()?.message == "again")
+    }
+
+    @Test func anAgentsWordsWhileSeenOrBeforeItsScreenIsRead() {
+        // Seen: nothing, and words held when the tab is looked at go too.
+        var s = readOpencode()
+        s.setVisible(true)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 5)
+        s.tick(at: 8)
+        #expect(s.takeNotice() == nil)
+        s.setVisible(false)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 10)
+        s.setVisible(true)
+        s.setVisible(false)
+        s.tick(at: 13)
+        #expect(s.takeNotice() == nil)
+        // Before its screen has shown a hint, the agent's words are a program's notice as before: at once, and amber.
+        var early = TabStatus()
+        early.commandStarted("opencode", at: 0)
+        early.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 1)
+        #expect(early.takeNotice()?.message == "Session error" && early.state == .attention)
+        // A bell with no words keeps its way in a tab whose screen is read (AgentScreenTests): at once, and amber.
+        var rang = readOpencode()
+        rang.bell(at: 10)
+        #expect(rang.takeNotice()?.topic == .programAlert && rang.state == .attention)
     }
 }
 

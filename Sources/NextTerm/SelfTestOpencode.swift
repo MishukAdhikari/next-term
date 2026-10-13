@@ -258,19 +258,33 @@ extension SelfTest {
 }
 
 #if DEBUG
-/// OpenCode's own notifications. A new tab asks OpenTUI programs for OSC 777 (a value the user set is kept: the Core
-/// tests pin that). A stand-in `opencode` in a background tab sends OSC 777 as OpenTUI writes it, with a title and
-/// without, ended with ST: its words are the notification's body, under the program's name. Then it asks for a
-/// permission and, right after the decision notice, sends its own "Permission needs input": nothing more is posted.
-/// Next Term stands as not in front, since a program's notification shows only from another app.
+/// OpenCode's own notifications, in the order OpenCode sends them: its OSC 777 as it stops or asks, before Next Term's
+/// next look at its screen. A new tab asks OpenTUI programs for OSC 777, and keeps a value the user set. A stand-in
+/// `opencode` in a background tab draws OpenCode's working footer, then sends OSC 777 as OpenTUI writes it (with a title
+/// and without, ended with ST) and draws its footer alone: the words are the turn's notification, under the program's
+/// name, and the tab ends done, not amber. Its "Permission needs input" before its permission prompt gives way to the
+/// decision notice, and one after it adds nothing. Next Term stands as not in front, since a program's words alone show
+/// only from another app.
 extension SelfTest {
     static let opencodeNoticeStandIn = #"""
     #!/bin/sh
+    working() { printf '\033[2J\033[H%s\n\n%s\n' '  ┃  run true' '   ■■⬝⬝⬝⬝ esc interrupt                              ctrl+p commands'; }
+    ready() { printf '\033[2J\033[H%s\n\n%s\n' '  ┃  run true' '   ~/stand-in                                         ctrl+p commands'; }
+    printf '\033[?1049h\033]2;OC | Stand-in\007'
+    working
+    sleep 6
     printf '\033]777;notify;Stand-in session;Session error\033\\'
+    ready
     read a
+    working
+    sleep 1
     printf '\033]777;notify;Session done;\033\\'
+    ready
     read b
-    printf '\033[?1049h\033]2;OC | Stand-in\007\033[2J\033[H'
+    working
+    sleep 1
+    printf '\033]777;notify;Stand-in session;Permission needs input\033\\'
+    printf '\033[2J\033[H'
     printf '%s\n' '  ┃' '  ┃  △ Permission required' '  ┃    # Shell command' '  ┃' '  ┃  $ true' '  ┃' '  ┃'
     printf '%s\n' '  ┃   Allow once   Allow always   Reject          ⇆ select  enter confirm' '  ┃'
     read c
@@ -297,31 +311,46 @@ extension SelfTest {
             { request in request.content.title == "opencode" && request.content.body == body }
         }
         let shown: () -> String = { mine().suffix(3).map { "\($0.content.title) | \($0.content.body)" }.joined(separator: " || ") }
+        /// Nothing more is posted for the tab in `seconds`.
+        func quiet(for seconds: Double) async -> Bool {
+            let count = mine().count
+            let more = await wait(seconds) { mine().count > count }
+            return !more
+        }
 
+        // A turn long enough for a finish notice: the words it sent as it stopped are that notice, and nothing else.
         tab.view.send(txt: "PATH=\(folder.path):$PATH opencode\r")
-        let titled = await wait(6) { mine().contains(where: says("Session error")) }
-        check(titled, "OpenCode notices: a titled OSC 777 shows its words, under the program's name", shown())
-        tab.status.setVisible(true) // seen: the next notice is news again
-        tab.status.setVisible(false)
-        tab.view.send(txt: "\r")
-        let untitled = await wait(6) { mine().contains(where: says("Session done")) }
-        check(untitled, "OpenCode notices: one with no title shows its words too", shown())
+        let titled = await wait(14) { mine().contains(where: says("Session error")) }
+        let finishOnly = await quiet(for: 2.5) && mine().count == 1
+        check(titled && finishOnly, "OpenCode notices: a titled OSC 777 as the turn ends is its one notification, in its words", shown())
+        check(tab.status.state == .done, "OpenCode notices: the tab ends done, not amber", tab.status.state.rawValue)
 
+        // A short turn: its words go alone once the stop has settled. Next Term's notice above is forgotten, as if 10
+        // seconds had gone (the rule itself is checked last).
+        app.ownNoticeAt[tab.id] = nil
+        tab.view.send(txt: "\r")
+        let untitled = await wait(8) { mine().contains(where: says("Session done")) }
+        check(untitled && tab.status.state == .done, "OpenCode notices: one with no title shows its words too, with no amber",
+              "\(shown()), \(tab.status.state.rawValue)")
+
+        // "Permission needs input" just before the prompt shows: the decision notice alone.
+        app.ownNoticeAt[tab.id] = nil
+        let before = mine().count
         tab.view.send(txt: "\r")
         let asked = "Permission required: Shell command ($ true)"
         let decided = await wait(10) { mine().last?.content.body == asked }
-        check(decided, "OpenCode notices: the stand-in's permission prompt posts the decision notice", shown())
-        let before = mine().count
+        let decisionOnly = await quiet(for: 3) && mine().count == before + 1
+        check(decided && decisionOnly, "OpenCode notices: its own notice just before its question gives way to the decision", shown())
         tab.view.send(txt: "\r")
-        _ = await wait(2) { mine().count > before }
-        check(mine().count == before && mine().last?.content.body == asked,
+        let after = await quiet(for: 3)
+        check(after && mine().last?.content.body == asked,
               "OpenCode notices: its own notice right after the decision posts nothing more, and the decision stays", shown())
 
         // The rule itself: a program's notice within 10 seconds of Next Term's own for the tab is dropped; later, not.
         let words = TabNotice(state: .attention, command: "opencode", program: "opencode", kind: .agent, stillRunning: true,
                               duration: .infinity, fromProgram: true, message: "Permission needs input")
         app.post(words, tab: tab, in: c, appActive: false)
-        check(mine().count == before, "OpenCode notices: a program's notice soon after Next Term's own is dropped", shown())
+        check(mine().count == before + 1, "OpenCode notices: a program's notice soon after Next Term's own is dropped", shown())
         app.ownNoticeAt[tab.id] = ProcessInfo.processInfo.systemUptime - 11
         app.post(words, tab: tab, in: c, appActive: false)
         check(mine().last.map(says("Permission needs input")) == true, "OpenCode notices: 11 seconds after it, the program's shows", shown())
@@ -330,17 +359,31 @@ extension SelfTest {
         _ = await wait(4) { !tab.status.running }
     }
 
-    /// A new tab's environment asks OpenTUI programs for OSC 777.
+    /// A new tab's environment asks OpenTUI programs for OSC 777, unless the environment Next Term started with set
+    /// another value: that one is kept.
     static func opencodeProtocolCheck(_ c: TerminalWindowController) async {
+        let name = ProgramNotice.protocolVariable
+        let inherited = ProcessInfo.processInfo.environment[name]
+        await protocolPrinted(inherited ?? ProgramNotice.protocolValue, c, "a new tab has \(name)=")
+        // The user's own value, as if Next Term had started with it (put back as it was right after the tab starts).
+        let own = inherited == "osc9" ? "osc9-stand-in" : "osc9"
+        setenv(name, own, 1)
+        await protocolPrinted(own, c, "one started with it set keeps the user's ", restore: {
+            if let inherited { setenv(name, inherited, 1) } else { unsetenv(name) }
+        })
+    }
+
+    /// A background tab prints the variable, which is `expected`. `restore` runs once its shell has started.
+    static func protocolPrinted(_ expected: String, _ c: TerminalWindowController, _ what: String,
+                                restore: () -> Void = {}) async {
         let tab = c.addTab(directory: nil, select: false)
         defer { c.remove(tab) }
-        guard await wait(20, { tab.status.integrated }) else { return check(false, "OpenCode notices: the protocol tab starts its shell") }
-        let inherited = ProcessInfo.processInfo.environment[ProgramNotice.protocolVariable]
-        let expected = inherited ?? ProgramNotice.protocolValue
+        let started = await wait(20) { tab.status.integrated }
+        restore()
+        guard started else { return check(false, "OpenCode notices: the protocol tab starts its shell") }
         tab.view.send(txt: "printenv \(ProgramNotice.protocolVariable)\r")
         let printed = await wait(6) { tab.screenTail(6).contains { $0.trimmingCharacters(in: .whitespaces) == expected } }
-        check(printed, "OpenCode notices: a new tab has \(ProgramNotice.protocolVariable)=\(expected)",
-              tab.screenTail(4).joined(separator: " | "))
+        check(printed, "OpenCode notices: \(what)\(expected)", tab.screenTail(4).joined(separator: " | "))
     }
 }
 #endif

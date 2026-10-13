@@ -1195,7 +1195,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     private func attention(_ notice: ProgramNotice? = nil) {
-        status.bell(notice: notice)
+        status.bell(notice: notice, at: Self.now)
         delegate?.tabDidChange(self)
     }
 

@@ -362,7 +362,7 @@ private func screenActivity(_ lines: [String]) -> AgentActivity {
         rang.commandStarted("claude", at: 0)
         rang.observe(agentScreen: .working, at: 0)
         rang.observe(agentScreen: .idle, at: 10)
-        rang.bell()
+        rang.bell(at: 10)
         #expect(rang.takeNotice()?.topic == .programAlert)
         rang.tick(at: 11)
         #expect(rang.takeNotice()?.topic == .agentFinished)
