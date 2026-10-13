@@ -9,17 +9,10 @@ enum UserKeys {
     static func pressed() { last = ProcessInfo.processInfo.systemUptime }
 
     /// Seconds since the last key.
-    static var since: TimeInterval {
-        #if DEBUG
-        if ignoredForTest { return .infinity }
-        #endif
-        return ProcessInfo.processInfo.systemUptime - last
-    }
+    static var since: TimeInterval { ignoredForTest ? .infinity : ProcessInfo.processInfo.systemUptime - last }
 
-    #if DEBUG
-    /// For the self-test, whose own keys would hold every window back.
+    /// For the self-test, whose own keys would hold every window back (in a release build too, which runs it).
     nonisolated(unsafe) static var ignoredForTest = false
-    #endif
 }
 
 extension TerminalWindowController {
