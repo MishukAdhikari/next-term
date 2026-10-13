@@ -220,9 +220,9 @@ public enum SecretImport {
     static let tooManyReason = "it lists more than 1,000 keys or servers, more than Next Term shows"
 
     /// Every finding in `sources`. `inGitWorkTree` and `isOpen` (a bundle identifier's app is running) are the
-    /// caller's; values stay in memory. `stop` (by default, the task is cancelled) is asked between files, and between a
-    /// file's servers: true ends the scan with what it found in the files before. The file it stopped in is not listed,
-    /// since part of it was not read.
+    /// caller's; values stay in memory. `stop` (by default, the task is cancelled) is asked between files, between a
+    /// file's servers, and in a long value: true ends the scan with what it found in the files before. The file it
+    /// stopped in is not listed, since part of it was not read.
     public static func scan(_ sources: [Source], read: (String) -> Data? = readFile, inGitWorkTree: (String) -> Bool = { _ in false },
                             isOpen: (String) -> Bool = { _ in false }, stop: () -> Bool = { Task.isCancelled }) -> Scan {
         var scan = Scan()
@@ -677,6 +677,12 @@ public enum SecretImport {
         }
 
         static let bare = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-".unicodeScalars)
+        /// How many keys down from the top of the file a string in a value is followed, so the path each one keeps is
+        /// short. Codex reads an env variable four keys down (`mcp_servers.NAME.env.KEY`); an env with a key deeper
+        /// than this is one it never reads.
+        static let maxPath = 64
+        /// How many values `leaves` reads between two asks to stop, so a small value never asks.
+        static let stopEvery = 1_024
         /// What ends a bare value (a number, a date, true), as `TOMLOutline` reads one.
         static let valueEnds: Set<Unicode.Scalar> = [",", "]", "}", "#", "\n", "\r"]
 
@@ -688,36 +694,65 @@ public enum SecretImport {
             let multiLine: Bool
         }
 
+        /// The strings `leaves` found in a value.
+        struct Leaves {
+            var found: [Leaf] = []
+            /// A key in the value is more than `maxPath` keys down from the top: an env Codex never reads. Its strings
+            /// are not listed; the rest of the value's are.
+            var tooDeep = false
+            /// `stop` said to stop before the value's end, so `found` is not all it holds.
+            var stopped = false
+        }
+
         /// Every string in the value at `start`, with its path below the value's key: the value itself when it is one, or
         /// each string of an inline table, in inline tables in it too, under its keys (dotted ones too). Strings in arrays
-        /// are passed over. Followed with a list of what is still open, not by recursion (see `JSONC.parseValue`). Nil
-        /// when it can't be followed.
-        func leaves(at start: String.Index) -> [Leaf]? {
-            var found: [Leaf] = []
-            // Each array or inline table still open: what closes it, its path, and whether it is in an array.
-            var open: [(close: Unicode.Scalar, path: [String], inArray: Bool)] = []
+        /// are passed over. `above` is how many keys down the value is, its key's and its table's: a string more than
+        /// `maxPath` keys down in all is not listed, and the value is `tooDeep`. Followed with a list of what is still
+        /// open, not by recursion (see `JSONC.parseValue`), and with one path kept in place: each element cuts it back
+        /// to its table's and adds its own key. Copied whole for each element, a dotted key 250,000 keys long with
+        /// 125,000 keys beside it in its value took about 3×10^10 copies. `stop` is asked every `stopEvery` values;
+        /// true ends the reading, `stopped`. Nil when it can't be followed.
+        func leaves(at start: String.Index, above: Int = 0, stop: () -> Bool = { false }) -> Leaves? {
+            var leaves = Leaves()
+            // Each array or inline table still open: what closes it, how many keys down it is, and whether it is in an
+            // array.
+            var open: [(close: Unicode.Scalar, depth: Int, inArray: Bool)] = []
             var i = start
+            // How many keys down the value at `i` is, below the value's key; `path` holds the first of them, as many as
+            // can be listed.
+            let room = Self.maxPath - above
+            var depth = 0
             var path: [String] = []
+            var values = 0
             while true {
+                values += 1
+                if values % Self.stopEvery == 0, stop() {
+                    leaves.stopped = true
+                    return leaves
+                }
                 // At a value.
                 guard i < scalars.endIndex else { return nil }
+                if depth > room { leaves.tooDeep = true }
                 let c = scalars[i]
                 let inArray = open.last.map { $0.close == "]" || $0.inArray } ?? false
                 if c == "{" || c == "[" {
                     guard open.count < JSONC.maxDepth else { return nil }
-                    open.append((c == "{" ? "}" : "]", path, inArray))
+                    open.append((c == "{" ? "}" : "]", depth, inArray))
                     i = scalars.index(after: i)
                 } else {
                     if c == "\"" || c == "'" {
                         guard let string = anyString(at: i) else { return nil }
-                        if !inArray { found.append(Leaf(path: path, range: string.range, value: string.value, multiLine: string.multiLine)) }
+                        if !inArray, depth <= room {
+                            let leaf = Leaf(path: path, range: string.range, value: string.value, multiLine: string.multiLine)
+                            leaves.found.append(leaf)
+                        }
                         i = string.range.upperBound
                     } else {
                         let from = i
                         while i < scalars.endIndex, !Self.valueEnds.contains(scalars[i]) { i = scalars.index(after: i) }
                         guard i > from else { return nil }
                     }
-                    guard let last = open.last else { return found }
+                    guard let last = open.last else { return leaves }
                     guard separator(&i, close: last.close) else { return nil }
                 }
                 // Past each table or array this closes, and what that closes in turn.
@@ -727,17 +762,20 @@ public enum SecretImport {
                     guard scalars[i] == last.close else { break }
                     i = scalars.index(after: i)
                     open.removeLast()
-                    guard let outer = open.last else { return found }
+                    guard let outer = open.last else { return leaves }
                     guard separator(&i, close: outer.close) else { return nil }
                 }
                 guard let last = open.last else { return nil }
-                path = last.path
+                // Back to the path of the table or array this element is in.
+                depth = last.depth
+                if path.count > depth { path.removeSubrange(depth...) }
                 // An element of an inline table starts with its key.
                 if last.close == "}" {
                     guard let key = key(at: &i), i < scalars.endIndex, scalars[i] == "=" else { return nil }
                     i = scalars.index(after: i)
                     skipSpace(&i)
-                    path += key
+                    depth += key.count
+                    path += key.prefix(max(0, room - path.count))
                 }
             }
         }
@@ -924,11 +962,13 @@ public enum SecretImport {
     }
 
     /// Servers written another way (dotted keys, inline, env keys dotted in the server's table): listed with what to
-    /// write by hand.
+    /// write by hand. Each key is told from its first three keys, so a long table header is not put together again for
+    /// each key under it.
     static func tomlOddServers(_ outline: TOMLOutline) -> Set<String> {
         var names = Set<String>()
         for key in outline.keys {
-            let full = key.table + key.path
+            var full = Array(key.table.prefix(3))
+            full += key.path.prefix(3 - full.count)
             guard full.count >= 2, full[0] == "mcp_servers" else { continue }
             let dottedEnv = key.path.count > 1 && key.path[0] == "env"
             let inTable = key.table == Array(full.prefix(2)) && !dottedEnv
@@ -944,8 +984,8 @@ public enum SecretImport {
     }
 
     /// The entries of a read outline: a plan reads them from the outline it edits, so the file is read once. `stop` is
-    /// asked before each server: true ends the reading with the entries read so far (a cancelled scan drops them). Nil
-    /// when a value that could hold a server's env can't be followed.
+    /// asked before each server, and every so often in a long value: true ends the reading with the entries read so far
+    /// (a cancelled scan drops them). Nil when a value that could hold a server's env can't be followed.
     static func tomlEntries(_ outline: TOMLOutline, stop: () -> Bool = { false }) -> [Entry]? {
         let text = outline.text
         let reader = TOMLReader(outline)
@@ -987,7 +1027,11 @@ public enum SecretImport {
             if let env = inline.first, reader.members(at: env.value) == nil { entry.notMovable = entry.notMovable ?? envShapeReason }
             if table.envHeaders.contains(where: \.isArray) { entry.notMovable = envShapeReason }
             if odd.contains(table.name) { entry.notMovable = oddShapeReason(table.name) }
-            guard let variables = envValues(inline + dotted + table.envKeys, reader: reader) else { return nil }
+            guard let env = envValues(inline + dotted + table.envKeys, reader: reader, stop: stop) else { return nil }
+            if env.stopped { return entries }
+            // A key deeper than any Codex writes: an env it never reads.
+            if env.tooDeep { entry.notMovable = entry.notMovable ?? envShapeReason }
+            let variables = env.variables
             let names = variables.map(\.variable)
             // A variable named twice, or the env written twice (inline, dotted or as a table, or a table twice): Codex
             // refuses the file, or which one it reads is unsure.
@@ -1003,11 +1047,17 @@ public enum SecretImport {
         // movable, with the server's first table, or as a server of its own when it has none.
         var loose: [String: [(variable: String, leaf: TOMLReader.Leaf)]] = [:]
         for key in layout.loose {
-            let full = key.table + key.path
             // Only a key that is a server, its env or one of its variables can hold one (`mcp_servers = {…}` too).
-            guard full.count <= 2 || full.count <= 4 && full[2] == "env" else { continue }
-            guard let variables = envValues([key], reader: reader) else { return nil }
-            for variable in variables { loose[variable.server, default: []].append((variable.variable, variable.leaf)) }
+            // Told by its length first, so a long table header is not put together again for each key under it.
+            guard key.table.count + key.path.count <= 4 else { continue }
+            let full = key.table + key.path
+            guard full.count <= 2 || full[2] == "env" else { continue }
+            // A key too deep in it changes nothing here: these servers don't move anyway.
+            guard let env = envValues([key], reader: reader, stop: stop) else { return nil }
+            if env.stopped { return entries }
+            for variable in env.variables {
+                loose[variable.server, default: []].append((variable.variable, variable.leaf))
+            }
         }
         var first: [String: Int] = [:]
         for (index, entry) in entries.enumerated() where first[entry.location.server] == nil { first[entry.location.server] = index }
@@ -1028,19 +1078,38 @@ public enum SecretImport {
 
     static let envShapeReason = "its env is written in a shape Next Term can't edit"
 
+    /// The env variables some keys write, as `envValues` read them.
+    struct EnvValues {
+        var variables: [(server: String, variable: String, leaf: TOMLReader.Leaf)] = []
+        /// A key in them is more than `TOMLReader.maxPath` keys down: an env Codex never reads.
+        var tooDeep = false
+        /// `stop` said to stop in a value, so `variables` is not all the keys write.
+        var stopped = false
+    }
+
     /// The env variables `keys` write, as Codex reads them: each string at `mcp_servers.SERVER.env.NAME`, however the key
-    /// and its value spell that path. Nil when a value can't be followed.
-    static func envValues(_ keys: [TOMLOutline.Key], reader: TOMLReader) -> [(server: String, variable: String, leaf: TOMLReader.Leaf)]? {
-        var found: [(server: String, variable: String, leaf: TOMLReader.Leaf)] = []
+    /// and its value spell that path. A key's own path is put together once, and only when a string in its value can be
+    /// four keys down, so a long dotted key is not copied for each string in its value. `stop` is asked in each value
+    /// (see `TOMLReader.leaves`). Nil when a value can't be followed.
+    static func envValues(_ keys: [TOMLOutline.Key], reader: TOMLReader, stop: () -> Bool = { false }) -> EnvValues? {
+        var values = EnvValues()
         for key in keys {
-            guard let leaves = reader.leaves(at: key.value) else { return nil }
-            for leaf in leaves {
-                let path = key.table + key.path + leaf.path
-                guard path.count == 4, path[0] == "mcp_servers", path[2] == "env" else { continue }
-                found.append((path[1], path[3], leaf))
+            let above = key.table.count + key.path.count
+            guard let leaves = reader.leaves(at: key.value, above: above, stop: stop) else { return nil }
+            values.tooDeep = values.tooDeep || leaves.tooDeep
+            if leaves.stopped {
+                values.stopped = true
+                return values
+            }
+            guard above <= 4 else { continue }
+            let prefix = key.table + key.path
+            for leaf in leaves.found where above + leaf.path.count == 4 {
+                let path = prefix + leaf.path
+                guard path[0] == "mcp_servers", path[2] == "env" else { continue }
+                values.variables.append((path[1], path[3], leaf))
             }
         }
-        return found
+        return values
     }
 
     /// The keys among env `variables`: each refused for its value, for being multi-line (which an edit doesn't read
