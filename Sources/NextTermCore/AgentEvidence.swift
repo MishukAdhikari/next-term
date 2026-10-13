@@ -450,10 +450,13 @@ extension AgentEvidence {
         /// starts with, to compare the agent's with. Nil while it is not known, and then nothing matches.
         public var shellRouting: [String: String]?
         public var home: String
+        /// The session OpenCode's title names, as the tab matched it while the title was the one it shows now
+        /// (OpencodeShownSession): its id only. Capture opens no store for it.
+        public var shownSession: String?
 
         public init(leader: AgentProcess? = nil, relaunched: [AgentProcess] = [], verified: Bool = false, childSessionIDs: [String] = [],
                     typedLine: String? = nil, expandedLine: String? = nil, shellRouting: [String: String]? = nil,
-                    home: String = NSHomeDirectory()) {
+                    home: String = NSHomeDirectory(), shownSession: String? = nil) {
             self.leader = leader
             self.relaunched = relaunched
             self.verified = verified
@@ -462,6 +465,7 @@ extension AgentEvidence {
             self.expandedLine = expandedLine
             self.shellRouting = shellRouting
             self.home = home
+            self.shownSession = shownSession
         }
 
         /// The typed and expanded lines of a tab's status, while the integration reports its command running.
@@ -498,6 +502,13 @@ extension AgentEvidence {
             evidence.sessionFolder = found.folder
         } else {
             nameSession(&evidence, typed: typed?.arguments, argv: argv, children: input.childSessionIDs)
+        }
+        // OpenCode keeps no record of the session it has open, and its line names none after `opencode -c`, or the one
+        // it started on after a switch inside it. Its title names the one it shows, and the tab kept that id.
+        if agent == .opencode, let shown = input.shownSession, agent.isSessionID(shown),
+           evidence.sessionID?.lowercased() != shown.lowercased() {
+            evidence.sessionID = shown
+            evidence.source = .shownTitle
         }
         let expanded = input.expandedLine.flatMap { $0.isEmpty ? nil : $0 }
         // The launch as a put-back line replays it (U2, KTD7): argv's options, the typed word that passes them on, and

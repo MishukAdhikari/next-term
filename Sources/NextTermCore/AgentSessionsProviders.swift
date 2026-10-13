@@ -207,14 +207,19 @@ public struct RunningAgent: Sendable, Equatable {
     /// The agent's process, when it is known: Claude Code and Copilot CLI record which session a process
     /// has open.
     public let pid: Int32?
+    /// The tab's title as the program set it, for OpenCode, whose title names the session it shows ("OC | <title>").
+    /// Matched against its sessions and never kept.
+    public let shownTitle: String?
 
-    public init(key: String, agent: AgentKind, directory: String, commandLine: String, startedAt: Date, pid: Int32? = nil) {
+    public init(key: String, agent: AgentKind, directory: String, commandLine: String, startedAt: Date, pid: Int32? = nil,
+                shownTitle: String? = nil) {
         self.key = key
         self.agent = agent
         self.directory = directory
         self.commandLine = commandLine
         self.startedAt = startedAt
         self.pid = pid
+        self.shownTitle = shownTitle
     }
 }
 
@@ -285,14 +290,16 @@ extension AgentSessions {
     private static func startTime(_ session: AgentSession) -> Date { session.createdAt ?? session.updatedAt }
 
     /// Which sessions are open in which tab: session identity (`AgentSession.identity`) → the tab's key.
-    /// The agent's record of what its process has open decides (`sessionID(of:pid:)`); else a resume
-    /// command names its session (`claude --resume <id>`); else the tab is guessed by time (`guess`).
+    /// The agent's record of what its process has open decides (`sessionID(of:pid:)`); else OpenCode's
+    /// title names the one it shows (`shownSession`), which a switch inside it moves off the one its line
+    /// resumed; else a resume command names its session (`claude --resume <id>`); else the tab is guessed
+    /// by time (`guess`).
     public static func openSessions(_ running: [RunningAgent], home: String = NSHomeDirectory()) -> [String: String] {
         var open: [String: String] = [:]
         var unnamed: [RunningAgent] = []
         for tab in running {
             let recorded = tab.pid.flatMap { sessionID(of: tab.agent, pid: $0, home: home) }
-            if let id = recorded ?? tab.agent.resumedID(in: tab.commandLine) {
+            if let id = recorded ?? shownSession(of: tab, home: home) ?? tab.agent.resumedID(in: tab.commandLine) {
                 open[tab.agent.rawValue + ":" + id] = tab.key
             } else {
                 unnamed.append(tab)
@@ -302,6 +309,12 @@ extension AgentSessions {
             if let session = guess(tab, among: running, taken: open, home: home) { open[session.identity] = tab.key }
         }
         return open
+    }
+
+    /// The session an OpenCode tab's title names, among those written in its folder since the agent started.
+    private static func shownSession(of tab: RunningAgent, home: String) -> String? {
+        guard tab.agent == .opencode, let title = tab.shownTitle else { return nil }
+        return OpencodeSessions(home: home).shown(title: title, in: tab.directory, since: tab.startedAt)
     }
 
     /// The session a tab whose agent named none is in: the newest its folder has had since the agent

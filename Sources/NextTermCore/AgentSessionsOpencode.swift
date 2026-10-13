@@ -135,3 +135,108 @@ struct OpencodeSessions: AgentSessionProvider {
         return object?["id"] as? String
     }
 }
+
+// MARK: - The session OpenCode shows
+
+extension OpencodeSessions {
+    /// What OpenCode puts before a session's title in the tab's title: "OC | Fix the login test". Its home screen and a
+    /// session with no title yet show "OpenCode", which names none.
+    static let titlePrefix = "OC | "
+
+    /// The session OpenCode's title `title` names among `sessions`: the only one of OpenCode's, written at or after
+    /// `since` (when the agent showing it started), whose title is the shown one. Past 40 characters OpenCode shows the
+    /// first 37 and "…" (an older build "..."), so a cut title names the sessions whose titles start with it. Both sides
+    /// compare as the session list shows them (`AgentSessions.clean`). Nil for none or several, and for an id out of
+    /// OpenCode's shape.
+    static func shown(title: String, in sessions: [AgentSession], since: Date) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix(titlePrefix) else { return nil }
+        let words = String(trimmed.dropFirst(titlePrefix.count))
+        let mark = ["…", "..."].first { (mark: String) -> Bool in words.hasSuffix(mark) }
+        let cut = mark != nil
+        var start = mark.map { (mark: String) -> String in String(words.dropLast(mark.count)) } ?? words
+        // JavaScript cuts by UTF-16 unit, so half a character may end the cut: what it leaves reads as U+FFFD.
+        while cut, start.hasSuffix("\u{FFFD}") { start.removeLast() }
+        let whole = AgentSessions.clean(words)
+        let prefix = AgentSessions.clean(start)
+        guard !prefix.isEmpty else { return nil }
+        let matches = sessions.filter { (session: AgentSession) -> Bool in
+            guard session.agent == .opencode, session.updatedAt >= since else { return false }
+            return session.title == whole || (cut && session.title.hasPrefix(prefix))
+        }
+        let ids = Set(matches.map(\.id))
+        guard ids.count == 1, let id = ids.first, RestoreAgent.opencode.isSessionID(id) else { return nil }
+        return id
+    }
+
+    /// `shown` over the sessions written in `folder` (not its subfolders) since `since`, read from every store now:
+    /// never on the main thread. Nil when no store can be read.
+    func shown(title: String, in folder: String, since: Date) -> String? {
+        guard title.trimmingCharacters(in: .whitespaces).hasPrefix(Self.titlePrefix) else { return nil }
+        let found = (try? sessions(in: canonicalPath(folder), subfolders: false, since: since)) ?? []
+        return Self.shown(title: title, in: found, since: since)
+    }
+}
+
+/// What a tab keeps of the session OpenCode shows. Matching its title reads OpenCode's store, so the tab looks a title up
+/// off the main thread, once, when the title changes, and keeps the id it found. The save, which captures every tab on
+/// the main thread, reads the kept id only while the title and the agent's start are the ones it was found for, and so
+/// never waits on a store. Only the id is kept: a program's title could hold anything.
+public struct OpencodeShownSession: Sendable {
+    /// One lookup: the title OpenCode showed, and when the agent showing it started.
+    public struct Ask: Equatable, Sendable {
+        public var title: String
+        public var start: Date
+
+        public init(title: String, start: Date) {
+            self.title = title
+            self.start = start
+        }
+    }
+
+    /// How long a title nothing was found for waits before it is looked up again. After `opencode -c` OpenCode shows
+    /// the session it continues before writing to it, and only a session written since the agent started can match.
+    public static let retryAfter: TimeInterval = 20
+
+    private var asked: Ask?
+    /// When `asked` was looked up, on the caller's clock.
+    private var askedAt: TimeInterval = 0
+    private var kept: (ask: Ask, id: String)?
+
+    public init() {}
+
+    /// The lookup to run now for the tab's title `title` (shown by an OpenCode that started at `start`), or nil when
+    /// there is none to run: a title that names no session, one already found, or one looked up less than
+    /// `retryAfter` ago. `now` is any steady clock in seconds.
+    public mutating func ask(title: String?, start: Date, at now: TimeInterval) -> Ask? {
+        guard let title, title.trimmingCharacters(in: .whitespaces).hasPrefix(OpencodeSessions.titlePrefix) else { return nil }
+        let ask = Ask(title: title, start: start)
+        if ask == asked {
+            guard kept?.ask != ask, now - askedAt >= Self.retryAfter else { return nil }
+        }
+        asked = ask
+        askedAt = now
+        return ask
+    }
+
+    /// The lookup `ask` found `id` (nil: none). An answer to a lookup the title has moved on from is dropped.
+    public mutating func found(_ id: String?, for ask: Ask) {
+        guard ask == asked else { return }
+        if let id {
+            kept = (ask, id)
+        } else {
+            kept = nil
+        }
+    }
+
+    /// The id kept for `title` shown by the agent that started at `start`, or nil: none found, or found for another.
+    public func id(title: String?, start: Date) -> String? {
+        guard let title, let kept, kept.ask == Ask(title: title, start: start) else { return nil }
+        return kept.id
+    }
+
+    /// Looks `ask` up in the folder the agent runs in, in the OpenCode stores of `home`: never on the main thread.
+    public static func lookUp(_ ask: Ask, in folder: String, home: String) -> String? {
+        OpencodeSessions(home: home).shown(title: ask.title, in: folder, since: ask.start)
+    }
+}

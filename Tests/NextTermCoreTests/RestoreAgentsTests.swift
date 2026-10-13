@@ -578,7 +578,7 @@ import Testing
 
     @Test func anIDExactOnlyThroughTheTypedLineGoesOnTheLine() {
         for agent in Self.automatic {
-            for source in [SessionSnapshot.IDSource.typedAndArgv, .childEnvironment, .guess, .unknown] {
+            for source in [SessionSnapshot.IDSource.typedAndArgv, .childEnvironment, .shownTitle, .guess, .unknown] {
                 let (base, facts) = passing(agent)
                 var evidence = base
                 evidence.source = source

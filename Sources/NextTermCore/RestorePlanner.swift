@@ -107,6 +107,8 @@ public enum SessionNaming: String, CaseIterable, Sendable {
     case newest
     /// Only the process named it, with nothing to agree: a guess.
     case unconfirmed
+    /// The one session whose title the agent showed when the tab was saved (OpenCode's): a guess.
+    case shown
 }
 
 /// The session a pane's line or resume names.
@@ -610,7 +612,7 @@ public enum RestorePlanner {
             holders.append(holder)
             // An id outside its pattern names nothing: the line is the program alone, and nothing is guessed in its place.
             guard let id = evidence.sessionID, evidence.agent.isSessionID(id) else { continue }
-            let naming: SessionNaming = evidence.isExact ? .exact : .unconfirmed
+            let naming: SessionNaming = evidence.isExact ? .exact : evidence.source == .shownTitle ? .shown : .unconfirmed
             named[index] = NamedSession(agent: evidence.agent, id: id, naming: naming, date: evidence.sessionDate)
             taken[evidence.agent, default: []].insert(id.lowercased())
         }
@@ -937,6 +939,7 @@ public struct RestoreNote: Equatable, Sendable {
         case .exact: break
         case .newest: said.append("This is a guess: the newest session in this folder.")
         case .unconfirmed: said.append("This is a guess: nothing confirmed this session.")
+        case .shown: said.append("This is a guess: the session \(session.agent.name) showed.")
         }
         if let date = session.date { said.append("Last used \(dates(date)).") }
         return said

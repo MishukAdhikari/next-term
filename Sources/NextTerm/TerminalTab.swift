@@ -474,6 +474,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var userTitle: String?
     /// Set by the running program via OSC 0/2. Cleared at each command boundary.
     private(set) var programTitle: String?
+    /// The session OpenCode's title names, looked up when the title changes (matchShownSession).
+    var shownSession = OpencodeShownSession()
     private(set) var directory: String {
         didSet { if !leftStartFolder, remote == nil, canonicalPath(directory) != canonicalPath(oldValue) { leftStartFolder = true } }
     }
@@ -727,6 +729,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         guard remote == nil else { return watchLogin() } // a remote tab's foreground comes from its host (applyRemote)
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
+        let wasAgent = status.running && status.kind == .agent
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
                                                      shellPid: view.process.shellPid, shellName: shellName)
         status.observe(foreground, at: Self.now)
@@ -740,6 +743,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                 changed = true
             }
         }
+        // OpenCode found behind a plain-looking command (a function that runs it) may have titled the tab already.
+        if !wasAgent, status.kind == .agent { matchShownSession() }
         if changed { delegate?.tabDidChange(self) }
     }
 
@@ -1211,6 +1216,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         programTitle = title
+        matchShownSession()
         delegate?.tabDidChange(self)
     }
 

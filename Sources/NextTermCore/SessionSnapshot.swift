@@ -524,6 +524,9 @@ extension SessionSnapshot {
         case childEnvironment
         /// The typed line and the live process's argv agree on it.
         case typedAndArgv
+        /// The one session whose title the agent showed as the tab's title (OpenCode's "OC | <title>"), matched while it
+        /// ran. A guess: two sessions may share a title, and only the id is kept, never the title.
+        case shownTitle
         /// Anything less, such as the newest session in the folder.
         case guess
         case unknown
@@ -531,7 +534,7 @@ extension SessionSnapshot {
         public var isExact: Bool {
             switch self {
             case .sessionFile, .openRollout, .runtimeFile, .typedAndArgv: return true
-            case .childEnvironment, .guess, .unknown: return false
+            case .childEnvironment, .shownTitle, .guess, .unknown: return false
             }
         }
     }
