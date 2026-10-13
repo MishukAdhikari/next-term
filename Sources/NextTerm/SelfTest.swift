@@ -791,6 +791,7 @@ enum SelfTest {
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
         await railChecks(c, proj: proj)
+        await terminalPositionChecks(c, proj: proj)
         await blameChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
@@ -3495,12 +3496,12 @@ enum SelfTest {
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard
-        let saved = (position: app.terminalPosition, side: app.sidebarSide, fraction: defaults.object(forKey: "editorFraction"),
+        let saved = (position: app.terminalPosition, side: app.sidebarSide, shares: savedEditorShares(),
                      width: defaults.object(forKey: "sidebarWidth"), sidebar: c.isSidebarVisible, frame: window.frame)
         func restore(_ key: String, _ value: Any?) {
             if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
-        func restoreFraction() { restore("editorFraction", saved.fraction) }
+        func restoreFraction() { restoreEditorShares(saved.shares) }
         let readme = proj.appendingPathComponent("README.md")
         area.closeAll()
         c.show(tab) // in the git project: the sidebar has its branch
@@ -3535,7 +3536,7 @@ enum SelfTest {
         let unproven = "the drag on the visible line did not move it, so these presses prove nothing"
         area.closeAll()
         restoreFraction()
-        let fraction = app.editorFraction
+        let fractions = [app.editorFraction(sideBySide: true), app.editorFraction(sideBySide: false)]
 
         /// What is wrong while nothing is open: an editor showing, a terminal short of the whole work area.
         func problems() -> String {
@@ -3548,7 +3549,8 @@ enum SelfTest {
             let (start, size) = work.isVertical ? (frame.minX, frame.width) : (frame.minY, frame.height)
             if abs(start) > 0.5 || abs(size - length) > 0.5 { found.append("the terminal has \(size) of \(length) from \(start)") }
             if c.tabBar.onToggleCollapse != nil { found.append("the terminal offers to collapse beside it") }
-            if app.editorFraction != fraction { found.append("the editor's share went from \(fraction) to \(app.editorFraction)") }
+            let shares = [app.editorFraction(sideBySide: true), app.editorFraction(sideBySide: false)]
+            if shares != fractions { found.append("the editor's shares went from \(fractions) to \(shares)") }
             return found.joined(separator: "; ")
         }
         var shot = false

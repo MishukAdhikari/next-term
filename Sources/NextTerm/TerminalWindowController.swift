@@ -285,7 +285,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.onFirstResponderChange = { [weak self] responder in
             self?.completions.responderChanged()
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
-            if self.terminalRailed { self.expandTerminal() } // typing into a terminal behind the rail: it opens
+            // Typing into a folded terminal (behind the rail, or under its bar above or below the editor): it opens.
+            if self.terminalCollapsed { self.expandTerminal() }
             self.paneFocused(tab)
         }
 
@@ -530,8 +531,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         group.layout()
     }
 
-    /// `unfold` false: the tab comes forward without opening a terminal folded to its rail (the tab in
-    /// front closed by itself), and the keyboard stays where it is. `arming` false: a tab an agent opened comes forward
+    /// `unfold` false: the tab comes forward without opening a folded terminal (the tab in front closed by
+    /// itself), and the keyboard stays where it is. `arming` false: a tab an agent opened comes forward
     /// still waiting for the user to choose it (a neighbour of a closed tab, an agent showing its tab); otherwise
     /// selecting it is choosing it.
     func select(_ index: Int, unfold: Bool = true, arming: Bool = true) {
@@ -544,8 +545,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if group.focused.view.awaitsChoice {
             // No keyboard for it, and none left with a terminal now hidden: keys go nowhere until a click.
             if window?.firstResponder is NextTermView { window?.makeFirstResponder(nil) }
-        } else if unfold || !terminalRailed {
-            // A terminal taking the keyboard opens the rail (see onFirstResponderChange).
+        } else if unfold || !terminalCollapsed {
+            // A terminal taking the keyboard unfolds it (see onFirstResponderChange).
             window?.makeFirstResponder(group.focused.view)
         }
         refreshVisibility()
@@ -784,10 +785,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// Whether you are looking at `tab`: a pane of the selected tab (every pane, unless another fills the
-    /// tab), in the window in front (userCanSeeWindow) of the active app. Folded to its rail, no terminal is on
-    /// screen, so what happens in the tab in front is news too. Its status and its notifications both go by this.
+    /// tab), in the window in front (userCanSeeWindow) of the active app. Folded, to its rail or to its bar above
+    /// or below the editor, no terminal is on screen, so what happens in the tab in front is news too. Its status
+    /// and its notifications both go by this.
     func isOnScreen(_ tab: TerminalTab) -> Bool {
-        guard userCanSeeWindow, !terminalRailed, let group = activeGroup, group.panes.contains(where: { $0 === tab }) else { return false }
+        guard userCanSeeWindow, !terminalCollapsed, let group = activeGroup, group.panes.contains(where: { $0 === tab }) else { return false }
         return group.zoomed == nil || group.zoomed === tab
     }
 
@@ -889,7 +891,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         for (i, tab) in groups.enumerated().flatMap({ index, group in group.panes.map { (index, $0) } }) {
             let state = tab.status.state
             defer { announcedStates[tab.id] = state }
-            guard i != activeIndex || terminalRailed, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
+            guard i != activeIndex || terminalCollapsed, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
             NSAccessibility.post(element: window as Any, notification: .announcementRequested, userInfo: [
                 .announcement: "\(tab.title): \(tab.stateDescription)",
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
@@ -1066,9 +1068,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var sidebarOnRight: Bool { AppDelegate.shared.sidebarSide == .right }
     private var terminalPosition: AppDelegate.TerminalPosition { AppDelegate.shared.terminalPosition }
     /// The terminal comes before the editor (left of it, or above it).
-    private var terminalFirst: Bool { terminalPosition == .left || terminalPosition == .top }
+    private var terminalFirst: Bool { terminalPosition.terminalFirst }
+    /// The terminal position the work area was last laid out for (nil: not yet).
+    private var workPosition: AppDelegate.TerminalPosition?
 
-    /// Puts the sidebar and the terminal where the View menu says, keeping their sizes.
+    /// Puts the sidebar and the terminal where the View menu says, keeping their sizes. Only a new terminal
+    /// position lays the work area out again: the sidebar on its other side, or the same position chosen
+    /// again, leaves a folded terminal folded and the divider between editor and terminal where it is.
     func applyLayout() {
         let sidebarWidth = AppDelegate.shared.sidebarWidth
         let order: [NSView] = sidebarOnRight ? [mainPane, sidebar] : [sidebar, mainPane]
@@ -1080,20 +1086,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         splitView.setHoldingPriority(.init(260), forSubviewAt: sidebarOnRight ? 1 : 0)
         splitView.setHoldingPriority(.init(250), forSubviewAt: sidebarOnRight ? 0 : 1)
 
-        workSplit.isVertical = terminalPosition == .left || terminalPosition == .right
-        let work: [NSView] = terminalFirst ? [terminalPane, editorArea] : [editorArea, terminalPane]
-        if workSplit.arrangedSubviews != work {
-            work.forEach(workSplit.removeArrangedSubview)
-            work.forEach(workSplit.addArrangedSubview)
+        let position = terminalPosition
+        let relaysWork = position.relaysWork(from: workPosition)
+        workPosition = position
+        if relaysWork {
+            workSplit.isVertical = position.sideBySide
+            let work: [NSView] = terminalFirst ? [terminalPane, editorArea] : [editorArea, terminalPane]
+            if workSplit.arrangedSubviews != work {
+                work.forEach(workSplit.removeArrangedSubview)
+                work.forEach(workSplit.addArrangedSubview)
+            }
+            // Window resizes go to the editor; the terminal keeps its size.
+            workSplit.setHoldingPriority(.init(250), forSubviewAt: terminalFirst ? 1 : 0)
+            workSplit.setHoldingPriority(.init(260), forSubviewAt: terminalFirst ? 0 : 1)
         }
-        // Window resizes go to the editor; the terminal keeps its size.
-        workSplit.setHoldingPriority(.init(250), forSubviewAt: terminalFirst ? 1 : 0)
-        workSplit.setHoldingPriority(.init(260), forSubviewAt: terminalFirst ? 0 : 1)
         splitView.adjustSubviews()
-        workSplit.adjustSubviews()
+        if relaysWork { workSplit.adjustSubviews() }
         if isSidebarVisible { placeSidebarDivider(width: sidebarWidth) }
-        terminalCollapsed = false // a new layout starts unfolded
-        placeWorkDivider()
+        if relaysWork {
+            terminalCollapsed = false // a new position starts unfolded
+            placeWorkDivider()
+        }
         updateCollapseButton()
         updateInsets()
     }
@@ -1104,13 +1117,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         splitView.setPosition(position, ofDividerAt: 0)
     }
 
-    /// The editor gets its remembered share of the work area, on whichever side it is.
+    /// The editor gets its remembered share of the work area, on whichever side it is: the share kept for the
+    /// terminal beside it, or above or below it. Never so much or so little that either pane goes under its
+    /// minimum, as dragging the divider never does.
     private func placeWorkDivider() {
         guard !editorArea.isHidden else { return }
         workSplit.layoutSubtreeIfNeeded()
         let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
-        let editor = round(length * AppDelegate.shared.editorFraction)
-        workSplit.setPosition(terminalFirst ? length - editor - workSplit.dividerThickness : editor, ofDividerAt: 0)
+        let thickness = workSplit.dividerThickness
+        let share = AppDelegate.shared.editorFraction(sideBySide: workSplit.isVertical)
+        let editor = EditorShare.editorLength(share: share, of: length, thickness: thickness,
+                                              editorMinimum: workMinimum, terminalMinimum: terminalMinimum)
+        workSplit.setPosition(terminalFirst ? length - editor - thickness : editor, ofDividerAt: 0)
     }
 
     func setSidebarVisible(_ visible: Bool) {
@@ -1225,8 +1243,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let length = workSplit.isVertical ? workSplit.bounds.width : workSplit.bounds.height
         workSplit.setPosition(terminalFirst ? collapsedLength : length - collapsedLength - workSplit.dividerThickness, ofDividerAt: 0)
         if isTerminalFocused, let view = editorArea.activeTextView { window?.makeFirstResponder(view) }
-        // Behind the rail nothing of the terminal shows to type into: whatever the editor has in front takes the keyboard.
-        if isTerminalFocused, terminalRailed { editorArea.select(editorArea.activeIndex) }
+        // Folded, nothing of the terminal shows to type into: whatever the editor has in front takes the keyboard.
+        if isTerminalFocused { editorArea.select(editorArea.activeIndex) }
         updateCollapseButton()
     }
 
@@ -1263,6 +1281,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                                  toolTip: KeyboardShortcuts.shared.hint(words, #selector(toggleTerminalCollapsed(_:))), label: words)
         updateUpdateButton()
         updateRail()
+        refreshVisibility() // folded or not, the tab in front is out of sight or back in it
     }
 
     // MARK: the rail
@@ -1397,7 +1416,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 }
                 if !terminalCollapsed {
                     let editor = workSplit.isVertical ? editorArea.frame.width : editorArea.frame.height
-                    AppDelegate.shared.editorFraction = editor / length
+                    AppDelegate.shared.setEditorFraction(editor / length, sideBySide: workSplit.isVertical)
                 }
             }
             return
@@ -2314,7 +2333,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         refreshVisibility()
         refresh()
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
-        if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalRailed {
+        if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)
         }
     }

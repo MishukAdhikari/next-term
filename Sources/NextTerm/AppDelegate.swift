@@ -53,15 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Where the terminal sits relative to the editor.
-    enum TerminalPosition: String, CaseIterable {
-        case bottom, right, left, top
-        var title: String { rawValue.capitalized }
-    }
+    typealias TerminalPosition = NextTermCore.TerminalPosition
 
     enum SidebarSide: String { case left, right }
 
     var terminalPosition: TerminalPosition {
-        get { TerminalPosition(rawValue: UserDefaults.standard.string(forKey: "terminalPosition") ?? "") ?? .bottom }
+        get { TerminalPosition(stored: UserDefaults.standard.string(forKey: "terminalPosition")) }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "terminalPosition") }
     }
 
@@ -72,8 +69,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
+        moveTerminal(to: position, announce: true)
+    }
+
+    /// Settings › Terminal › Position follows the menus.
+    static let terminalPositionChanged = Notification.Name("NextTermTerminalPositionChanged")
+
+    /// Moves the terminal in every window. The position it has already changes nothing: no window is laid out
+    /// again, so a folded terminal stays folded and no divider moves. `announce`: the user chose it (a menu,
+    /// Settings); with no file open in the window in front its terminal fills it, so a notice says where the
+    /// terminal goes once a file opens, rather than the choice seeming ignored.
+    func moveTerminal(to position: TerminalPosition, announce: Bool = false) {
+        guard position != terminalPosition else { return }
         terminalPosition = position
         controllers.forEach { $0.applyLayout() }
+        NotificationCenter.default.post(name: Self.terminalPositionChanged, object: nil)
+        guard announce, let front = TerminalWindow.front, let controller = front.windowController as? TerminalWindowController,
+              controller.editorArea.isHidden else { return }
+        GitToast.show(position.noticeWithNoFileOpen, in: front)
     }
 
     /// The editor's line height, as a multiple of the font's natural line height (1.35: readable code).
@@ -352,13 +365,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.applyLayout() }
     }
 
-    /// How much of the work area open files get; the terminal has the rest.
-    var editorFraction: CGFloat {
-        get {
-            let saved = UserDefaults.standard.double(forKey: "editorFraction")
-            return saved >= 0.15 && saved <= 0.9 ? CGFloat(saved) : 0.62
-        }
-        set { UserDefaults.standard.set(Double(min(0.9, max(0.15, newValue))), forKey: "editorFraction") }
+    /// How much of the work area open files get; the terminal has the rest. Kept apart for the terminal beside
+    /// the editor and above or below it, as a width dragged for one is no height for the other.
+    func editorFraction(sideBySide: Bool) -> CGFloat {
+        let defaults = UserDefaults.standard
+        let own = defaults.object(forKey: EditorShare.key(sideBySide: sideBySide)) as? Double
+        return EditorShare.share(own: own, shared: defaults.object(forKey: EditorShare.sharedKey) as? Double)
+    }
+
+    func setEditorFraction(_ share: CGFloat, sideBySide: Bool) {
+        UserDefaults.standard.set(Double(EditorShare.kept(share)), forKey: EditorShare.key(sideBySide: sideBySide))
     }
 
     /// Notifications need a real bundle (`swift run` has none).

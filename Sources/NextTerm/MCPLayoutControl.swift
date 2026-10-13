@@ -184,8 +184,8 @@ extension MCPWriteControl {
             if folded, controller.editorArea.isHidden {
                 return reply(MCPControl.fail("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
             }
-            // A new terminal position unfolds it: fold again after the move.
-            if folded != controller.terminalCollapsed || (folded && change.terminalPosition != nil) {
+            // A new terminal position unfolds it: fold again after the move. Moving the sidebar leaves it as it is.
+            if MCPLayoutChange.needsFoldStep(wanted: folded, folded: controller.terminalCollapsed, newPosition: change.terminalPosition != nil) {
                 change.terminalFolded = folded
                 lines.append("The terminal is \(folded ? "folded" : "unfolded") in \(place(controller)).")
             }

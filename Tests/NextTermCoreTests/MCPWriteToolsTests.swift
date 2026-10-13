@@ -128,6 +128,18 @@ import Testing
         #expect(change == MCPLayoutChange(terminalPosition: "right", sidebarShown: false, terminalFolded: true))
         #expect(try MCPLayoutChange.parse(["sidebar_side": "right"]).get().sidebarSide == "right")
     }
+
+    @Test func aFoldedTerminalAskedFoldedNeedsAStepOnlyWhenItMoves() {
+        // {sidebar_side, terminal_folded: true} on a folded terminal: moving the sidebar keeps it folded.
+        #expect(!MCPLayoutChange.needsFoldStep(wanted: true, folded: true, newPosition: false))
+        // A new terminal position unfolds it: folded again after the move.
+        #expect(MCPLayoutChange.needsFoldStep(wanted: true, folded: true, newPosition: true))
+        #expect(MCPLayoutChange.needsFoldStep(wanted: true, folded: false, newPosition: false))
+        #expect(MCPLayoutChange.needsFoldStep(wanted: false, folded: true, newPosition: false))
+        // Unfolded and asked unfolded: nothing, moved or not.
+        #expect(!MCPLayoutChange.needsFoldStep(wanted: false, folded: false, newPosition: true))
+        #expect(!MCPLayoutChange.needsFoldStep(wanted: false, folded: false, newPosition: false))
+    }
 }
 
 @Suite struct MCPFileToolsTests {

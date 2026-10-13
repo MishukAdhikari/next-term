@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 import SwiftTerm
 
-// Settings › Terminal: the cursor, the scrollback a tab keeps and where ⌘T opens a tab (NextTermCore/
-// TerminalSettings.swift). Applied at once to every open terminal; an import can set them too.
+// Settings › Terminal: the cursor, the scrollback a tab keeps, where ⌘T opens a tab (NextTermCore/
+// TerminalSettings.swift) and where the terminal sits around the editor. Applied at once to every open
+// terminal; an import can set them too.
 
 extension Preferences {
     static var terminalCursorShape: CursorShape {
@@ -97,12 +98,14 @@ extension StartFolder {
     }
 }
 
-/// Settings › Terminal's rows for the cursor, the scrollback and where new tabs open.
+/// Settings › Terminal's rows for the cursor, the scrollback, where new tabs open and where the terminal sits.
 final class TerminalBehaviourControls: NSObject {
     let shape = NSPopUpButton()
     let blink = NSButton(checkboxWithTitle: "Blink", target: nil, action: nil)
     let scrollback = NSPopUpButton()
     let startFolder = NSPopUpButton()
+    /// View › Terminal Position, here too.
+    let position = NSPopUpButton()
 
     static let scrollbackChoices = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000]
 
@@ -122,13 +125,23 @@ final class TerminalBehaviourControls: NSObject {
         startFolder.target = self
         startFolder.action = #selector(startFolderChanged)
         startFolder.toolTip = "Where ⌘T opens a tab. Splits open in the folder of the pane they split from."
+        for place in TerminalPosition.allCases {
+            position.addItem(withTitle: place.title)
+            position.lastItem?.representedObject = place.rawValue
+        }
+        position.target = self
+        position.action = #selector(positionChanged)
+        position.toolTip = "Where the terminal sits around the editor, in every window. With no file open it fills the window."
+        // Chosen from the View menu or the terminal's ⋯ while Settings is open.
+        NotificationCenter.default.addObserver(self, selector: #selector(showPosition), name: AppDelegate.terminalPositionChanged, object: nil)
     }
 
     /// The rows, made with the settings view's own row maker.
     func rows(_ row: (String, [NSView]) -> NSStackView) -> [NSView] {
         [row("Cursor:", [shape, blink]),
          row("Scrollback:", [scrollback, NSTextField(labelWithString: "lines")]),
-         row("New tabs:", [startFolder])]
+         row("New tabs:", [startFolder]),
+         row("Position:", [position])]
     }
 
     func refresh() {
@@ -142,6 +155,12 @@ final class TerminalBehaviourControls: NSObject {
         }
         scrollback.selectItem(withTag: lines)
         fillStartFolder()
+        showPosition()
+    }
+
+    @objc private func showPosition() {
+        guard let current = AppDelegate.shared?.terminalPosition else { return }
+        position.selectItem(at: TerminalPosition.allCases.firstIndex(of: current) ?? 0)
     }
 
     static func formatted(_ lines: Int) -> String {
@@ -180,6 +199,11 @@ final class TerminalBehaviourControls: NSObject {
     @objc private func scrollbackChanged() {
         guard let item = scrollback.selectedItem else { return }
         AppDelegate.shared.setTerminalScrollback(item.tag)
+    }
+
+    @objc private func positionChanged() {
+        guard let raw = position.selectedItem?.representedObject as? String, let chosen = TerminalPosition(rawValue: raw) else { return }
+        AppDelegate.shared.moveTerminal(to: chosen, announce: true)
     }
 
     @objc private func startFolderChanged() {

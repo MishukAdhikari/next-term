@@ -741,6 +741,13 @@ public struct MCPLayoutChange: Equatable, Sendable {
 
     public var isEmpty: Bool { terminalPosition == nil && sidebarSide == nil && sidebarShown == nil && terminalFolded == nil }
 
+    /// Whether terminal_folded needs a step of its own: the terminal is not folded or unfolded as asked, or a new
+    /// terminal position unfolds it, so one asked folded folds again after the move. Moving the sidebar to its
+    /// other side leaves the terminal as it is, so it needs none for that.
+    public static func needsFoldStep(wanted: Bool, folded: Bool, newPosition: Bool) -> Bool {
+        wanted != folded || (wanted && newPosition)
+    }
+
     public static func parse(_ arguments: [String: Any]) -> Result<MCPLayoutChange, MCPToolError> {
         MCPFileTools.catching {
             let args = MCPArguments(arguments)

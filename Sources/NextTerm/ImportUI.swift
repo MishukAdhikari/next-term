@@ -191,11 +191,7 @@ extension AppDelegate {
         case .editorLineHeight(let factor): editorLineHeight = CGFloat(factor)
         case .softWrap(let on): if softWrap != on { toggleSoftWrap(nil) }
         case .optionAsMeta(let on): if Preferences.optionAsMeta != on { toggleOptionAsMeta(nil) }
-        case .terminalPosition(let raw):
-            if let position = TerminalPosition(rawValue: raw) {
-                terminalPosition = position
-                controllers.forEach { $0.applyLayout() }
-            }
+        case .terminalPosition(let raw): if let position = TerminalPosition(rawValue: raw) { moveTerminal(to: position) }
         case .sidebarSide(let raw):
             if let side = SidebarSide(rawValue: raw), side != sidebarSide { toggleSidebarSide(nil) }
         case .editorFontFamily(let family): setEditorFontFamily(family)

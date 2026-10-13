@@ -74,8 +74,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   `/opt/homebrew/bin`), or, when there is none, offers to put it in `/usr/local/bin` with your password.
   It never changes PATH or touches anyone else's `nxtrm`.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
-  the project sidebar on the left or right. From the ⋯ buttons or the View menu. ⌘J folds the terminal
-  away so the editor gets the room, and brings it back at its size.
+  the project sidebar on the left or right. From the ⋯ buttons, the View menu or Settings › Terminal. ⌘J
+  folds the terminal away so the editor gets the room, and brings it back at its size.
 - **Projects.** ⌘O brings up the Welcome window with your recent projects; ⌘O again there (or Open…)
   opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in it by
   default. Next Term opens to a Welcome window, or reopens your last projects if you choose,
