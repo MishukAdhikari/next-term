@@ -245,12 +245,13 @@ public struct TabStatus {
             if busy { busy = false }
             lastStop = nil // a decision, not a finish
             guard question != asked else { return }
-            // The same request read with less of it: its words, number and notification stay (AgentScreen.sameQuestion).
-            if let shown = question, AgentScreen.sameQuestion(shown, asked) { return }
+            // Other words are another question with another number, so an id held for one never answers the next. When
+            // only the request's own selection moved (OpenCode 2.x, AgentScreen.selectionMoved), no second notification.
+            let moved = question.map { (shown: String) -> Bool in AgentScreen.selectionMoved(from: shown, to: asked) } ?? false
             question = asked
             questionSerial += 1
             askedAt = now
-            markQuestion(asked)
+            if !moved { markQuestion(asked) }
         case .ready:
             // The agent's own footer, without its working hint.
             let first = !footerSeen

@@ -391,21 +391,29 @@ import Testing
         #expect(claude.state == .done)
     }
 
-    /// OpenCode 2.x replaces a shell request's command with what "Always allow" saves while that button is selected, and
-    /// a tall fullscreen prompt leaves its header above the rows read: the same question, its words and id kept.
-    @Test func theSameRequestReadWithLessOfItKeepsItsWords() {
+    /// Every new reading of OpenCode's question is a new question with a new number, so an id held for one request never
+    /// answers another, even when OpenCode swaps requests under the same prompt. OpenCode 2.x replaces a shell request's
+    /// command with what "Always allow" saves while that button is selected: a new question too, with no second notice.
+    @Test func everyRequestReadIsItsOwnQuestion() {
         var s = TabStatus()
         s.commandStarted("opencode", at: 0)
         s.observe(agentScreen: .working, at: 1)
         s.observe(agentScreen: .asking("Permission required: $ npm test"), at: 10)
         let serial = s.questionSerial
         #expect(s.takeNotice()?.question == "Permission required: $ npm test")
+        // The selection moved onto "Always allow": its words and number change, and no new notice.
         s.observe(agentScreen: .asking("Permission required: This will always allow shell for this project."), at: 11)
-        s.observe(agentScreen: .asking("Permission required"), at: 12)
-        #expect(s.question == "Permission required: $ npm test" && s.questionSerial == serial && s.takeNotice() == nil)
-        s.observe(agentScreen: .asking("Permission required: $ rm -rf build"), at: 13)
-        #expect(s.question == "Permission required: $ rm -rf build" && s.questionSerial == serial + 1)
+        #expect(s.question == "Permission required: This will always allow shell for this project.")
+        #expect(s.questionSerial == serial + 1 && s.takeNotice() == nil)
+        // Back off it, the command shown may be another request's: a new question, with its notice.
+        s.observe(agentScreen: .asking("Permission required: $ rm -rf build"), at: 12)
+        #expect(s.question == "Permission required: $ rm -rf build" && s.questionSerial == serial + 2)
         #expect(s.takeNotice()?.question == "Permission required: $ rm -rf build")
+        // The header alone is another question, never the one read before.
+        s.observe(agentScreen: .asking("Permission required: Edit src/a.ts"), at: 13)
+        s.observe(agentScreen: .asking("Permission required"), at: 14)
+        #expect(s.question == "Permission required" && s.questionSerial == serial + 4)
+        #expect(s.takeNotice()?.question == "Permission required")
     }
 
     @Test func workThenReadyIsAFinish() {

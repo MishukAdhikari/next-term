@@ -98,10 +98,14 @@ import Testing
         // A list, a row of buttons, a y/n prompt, the choice Esc picks, and a numbered question's digit.
         #expect(tool.description.contains("up or down in a list, left or right in a row of buttons, then Return"))
         #expect(tool.description.contains("y or n and Return for a y/n prompt"))
-        #expect(tool.description.contains("Esc alone for the choice Esc picks (OpenCode's Reject or Cancel)"))
+        #expect(tool.description.contains("Esc alone for the choice Esc picks (OpenCode's Reject or Cancel"))
+        // OpenCode 2.x's fullscreen prompt: Esc shrinks it first, and the second Esc waits for the look.
+        #expect(tool.description.contains("a second Esc once it shows shrunk"))
         #expect(tool.description.contains("the digit alone for a numbered question that takes it (OpenCode's, options 1 to 9)"))
-        // Return only on a choice seen selected; a form with several questions is left to press_keys.
-        #expect(tool.description.contains("Return is pressed only once the screen shows the choice selected"))
+        // Return only on a choice seen selected, in a list or a row (a y/n prompt has no selection to see); a form with
+        // several questions is left to press_keys.
+        #expect(tool.description.contains("In a list or a row of buttons, Return is pressed only once the screen shows the choice selected"))
+        #expect(!tool.description.contains(". Return is pressed only once"))
         #expect(tool.description.contains("several questions"))
     }
 

@@ -127,3 +127,53 @@ enum ButtonRows {
         #expect(ButtonRows.buttons(labels, selected: 0, lead: lead).selected(among: labels) == 0)
     }
 }
+
+/// Rows as the app builds them from the terminal's cells (TerminalTab.screenRow): one character per cell, a wide
+/// character's second cell its own "\0" (SwiftTerm's translateToString), and each cell's background as it shows.
+extension ScreenRowTests {
+    /// `text`, one cell per character: the cells of `labels[selected]` and one either side drawn reversed on the default
+    /// colours, every other cell on the default background.
+    static func reversedButton(_ text: String, labels: [String], selected: Int) -> [Int] {
+        let spans: [Range<Int>] = ScreenRow(text).spans(of: labels) ?? []
+        let chosen: Range<Int> = (spans[selected].lowerBound - 1)..<(spans[selected].upperBound + 1)
+        return (0..<text.count).map { (offset: Int) -> Int in
+            let reversed: Bool = chosen.contains(offset)
+            return ScreenRow.background(ScreenRow.defaultColor, foreground: ScreenRow.defaultForeground, reversed: reversed)
+        }
+    }
+
+    @Test func aReversedCellShowsItsForeground() {
+        #expect(ScreenRow.background(7, foreground: 9, reversed: false) == 7)
+        #expect(ScreenRow.background(7, foreground: 9, reversed: true) == 9)
+        #expect(ScreenRow.background(ScreenRow.defaultColor, foreground: ScreenRow.defaultForeground, reversed: true)
+            == ScreenRow.defaultForeground)
+        // A theme that draws the selected button in reverse video on the terminal's own colours.
+        let labels = ButtonRows.permission
+        let text = "  ┃   Allow once   Allow always   Reject                  ⇆ select  enter confirm"
+        let row = ScreenRow(text: text, cells: Self.reversedButton(text, labels: labels, selected: 1))
+        #expect(row.selected(among: labels) == 1)
+    }
+
+    @Test func paletteColoursTellTheSelection() {
+        // A 256-colour theme: the selected button on 214, the others on 236, the row on 235.
+        let labels = ButtonRows.permission
+        let row = ButtonRows.buttons(labels, selected: 2, chosen: ScreenRow.paletteColor(214), other: ScreenRow.paletteColor(236),
+                                     row: ScreenRow.paletteColor(235))
+        #expect(row.selected(among: labels) == 2)
+        // Palette code 16 and true colour 0x000010 are two colours, not one.
+        let mixed = ButtonRows.buttons(labels, selected: 0, chosen: ScreenRow.paletteColor(16),
+                                       other: ScreenRow.trueColor(red: 0, green: 0, blue: 16))
+        #expect(mixed.selected(among: labels) == 0)
+    }
+
+    @Test func aWideCharactersSecondCellKeepsTheColoursInLine() {
+        // A CJK name before the buttons: each wide character takes two cells, the second read as "\0", so the text has a
+        // character for every cell and each background falls on its own character.
+        let labels = ButtonRows.permission
+        let text = "  ┃ 日\u{0}本\u{0}語\u{0}   Allow once   Allow always   Reject"
+        let rows = OpencodeScreens.rows([text], selected: 1)
+        #expect(rows[0].text.count == text.unicodeScalars.count)
+        #expect(!rows[0].backgrounds.isEmpty && rows[0].selected(among: labels) == 1)
+        #expect(OpencodeScreens.rows([text], selected: 2)[0].selected(among: labels) == 2)
+    }
+}

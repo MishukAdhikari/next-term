@@ -104,7 +104,8 @@ extension SelfTest {
 /// answer_agent in an OpenCode tab: a stand-in draws OpenCode's buttons, the selected one on a background of its own and
 /// the others on the row's (OpenCode's default theme), reads keys in raw mode, and logs each key and the button it
 /// picked. Its requests, one after another: "Allow once" selected; the selection on "Reject"; "Allow once" selected
-/// again, for Esc; every button on one background; then a question with two options.
+/// again, for Esc; every button on one background; then a question with two options, the first drawn selected on a
+/// background of its own, as 1.19 draws it (with none shown selected, a digit could land in "Type your own answer").
 extension SelfTest {
     static let opencodeAnswerStandIn = #"""
     #!/bin/sh
@@ -147,8 +148,11 @@ extension SelfTest {
     ask 3 0
     ask 4 none
     printf '\033[2J\033[H'
-    printf '%s\r\n' '  ┃' '  ┃  Which database should the tests use?' '  ┃' '  ┃  1. Postgres' '  ┃  2. SQLite' \
-      '  ┃  3. Type your own answer' '  ┃' '  ┃  ↑↓ select  enter submit  esc dismiss' '  ┃'
+    printf '\033[48;2;30;30;30m'
+    printf '%s\r\n' '  ┃' '  ┃  Which database should the tests use?' '  ┃'
+    printf '  ┃  \033[48;2;60;60;60m1. Postgres\033[48;2;30;30;30m\r\n'
+    printf '%s\r\n' '  ┃  2. SQLite' '  ┃  3. Type your own answer' '  ┃' '  ┃  ↑↓ select  enter submit  esc dismiss' '  ┃'
+    printf '\033[0m'
     b=$(key)
     stty min 0 time 10
     after=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')

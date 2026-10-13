@@ -351,19 +351,25 @@ extension AgentScreenOpencodeTests {
         #expect(words.count == 200 && words.hasSuffix("…"), "\(words.count)")
     }
 
-    @Test func alwaysAllowsBodyIn2xIsTheSameQuestion() {
-        let always = asked(OpencodeScreens.shellAlways2)
+    @Test func alwaysAllowsBodyIn2xIsItsSelectionMoved() {
+        let always = asked(OpencodeScreens.shellAlways2) ?? ""
         #expect(always == "Permission required: This will always allow shell for this project.")
         let shown = "Permission required: $ npm test"
-        #expect(AgentScreen.sameQuestion(shown, always ?? ""))
-        // The header alone (its rows above the lines read, in fullscreen): the same prompt, read with less of it.
-        #expect(AgentScreen.sameQuestion(shown, "Permission required"))
-        #expect(AgentScreen.sameQuestion("Permission required: Edit src/app.ts", "Permission required"))
-        // Another request is another question.
-        #expect(!AgentScreen.sameQuestion(shown, "Permission required: $ rm -rf build"))
-        #expect(!AgentScreen.sameQuestion("Permission required: Edit src/app.ts", always ?? ""))
-        #expect(!AgentScreen.sameQuestion("Which database should the tests use?", "Permission required"))
-        #expect(!AgentScreen.sameQuestion("Permission required", shown))
+        // The request's own command, then what "Always allow" saves: its selection moved onto that button.
+        #expect(AgentScreen.selectionMoved(from: shown, to: always))
+        // Back from it, the command shown can be another request's (OpenCode keeps the selection across requests).
+        #expect(!AgentScreen.selectionMoved(from: always, to: shown))
+        #expect(!AgentScreen.selectionMoved(from: always, to: "Permission required: $ rm -rf build"))
+        // The header alone is another question, never the same request read with less of it.
+        #expect(!AgentScreen.selectionMoved(from: "Permission required: Edit src/a.ts", to: "Permission required"))
+        #expect(!AgentScreen.selectionMoved(from: shown, to: "Permission required"))
+        #expect(!AgentScreen.selectionMoved(from: "Permission required", to: always))
+        #expect(!AgentScreen.selectionMoved(from: "Permission required", to: shown))
+        // Two requests are two questions.
+        #expect(!AgentScreen.selectionMoved(from: shown, to: "Permission required: $ rm -rf build"))
+        #expect(!AgentScreen.selectionMoved(from: "Permission required: Edit src/app.ts", to: always))
+        #expect(!AgentScreen.selectionMoved(from: "Permission required: Shell command ($ npm test)", to: always))
+        #expect(!AgentScreen.selectionMoved(from: "Which database should the tests use?", to: always))
     }
 
     @Test func hintWordsInTheTranscriptAreNotTheForm() {
@@ -461,25 +467,27 @@ extension AgentScreenOpencodeTests {
             #expect(.asking(menu.question) == read(screen))
             #expect(menu.choices == labels && menu.highlighted == 1, "\(menu.choices)")
         }
-        // 2.x with "Always allow" selected draws what it would save in place of the command: the same request.
+        // 2.x with "Always allow" selected draws what it would save in place of the command: its own words, which ask
+        // neither the command's question nor another's.
         let always = try #require(OpencodeScreens.menu(OpencodeScreens.rows(OpencodeScreens.shellAlways2, selected: 1,
                                                                                labels: ["Allow once", "Always allow", "Reject"])))
-        #expect(always.asks("Permission required: $ npm test"))
+        #expect(always.asks("Permission required: This will always allow shell for this project.") && always.highlighted == 1)
+        #expect(!always.asks("Permission required: $ npm test") && !always.asks("Permission required"))
         #expect(!always.asks("Permission required: Edit src/app.ts") && !always.asks("Which database should the tests use?"))
     }
 
     @Test func twoButtonsAndNarrowPanes() throws {
-        // OpenCode 2.x with nothing to save: Allow once and Reject, told apart by the row's own background between them.
+        // OpenCode 2.x with nothing to save: Allow once and Reject. 2.x draws each button on a background of its own, the
+        // selected one on action.primary.focused and the other on action.primary.base, over a row on a third
+        // (permission.tsx, SessionQuestion): two backgrounds, neither the row's, do not say which is selected. So Allow
+        // once is refused, and Reject is Esc (H2 checks this on real OpenCode).
         let labels = ["Allow once", "Reject"]
         var two = OpencodeScreens.shellPermission2
         two[two.count - 2] = "  ┃   Allow once   Reject                       ctrl+f fullscreen  ⇆ select  enter confirm"
-        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.rows(two, selected: 0, labels: labels, other: ButtonRows.row)))
+        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.rows(two, selected: 0, labels: labels)))
         #expect(menu.question == "Permission required: $ npm test")
-        #expect(menu.choices == labels && menu.highlighted == 0 && menu.escape == 1)
-        #expect(menu.keys(toPick: 0) == ["enter"] && menu.keys(toPick: 1) == ["escape"])
-        // A theme whose buttons each have a background of their own: which is selected is not shown.
-        let unclear = try #require(OpencodeScreens.menu(OpencodeScreens.rows(two, selected: 0, labels: labels)))
-        #expect(unclear.highlighted == nil && unclear.keys(toPick: 0) == nil && unclear.keys(toPick: 1) == ["escape"])
+        #expect(menu.choices == labels && menu.highlighted == nil && menu.escape == 1)
+        #expect(menu.keys(toPick: 0) == nil && menu.keys(toPick: 1) == ["escape"])
         // A pane narrower than 80 columns: the hints go under the buttons, which stay in a row.
         var narrow = OpencodeScreens.editPermission
         narrow.insert(contentsOf: ["  ┃", "  ┃   ctrl+f fullscreen  ⇆ select  enter confirm"], at: narrow.count - 1)
@@ -506,7 +514,8 @@ extension AgentScreenOpencodeTests {
 
 extension AgentScreenOpencodeTests {
     @Test func aSingleQuestionIsAnsweredByItsDigit() throws {
-        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.text(OpencodeScreens.question)))
+        // OpenCode 1.19 draws the selected option on a background of its own: here Postgres, the first.
+        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.form(OpencodeScreens.question, selected: 0)))
         #expect(menu.question == "Which database should the tests use?")
         // "Type your own answer" is not a choice: picking it opens a text box.
         #expect(menu.style == .digits && menu.choices == ["Postgres", "SQLite"])
@@ -514,14 +523,16 @@ extension AgentScreenOpencodeTests {
         #expect(menu.keys(toPick: 0) == ["1"] && menu.keys(toPick: 1) == ["2"])
         #expect(menu.index(choice: 2, answer: nil) == .success(1))
         #expect(menu.index(choice: nil, answer: "sqlite") == .success(1))
-        // With the sidebar beside it, the same.
-        #expect(OpencodeScreens.menu(OpencodeScreens.text(OpencodeScreens.withSidebar(OpencodeScreens.question))) == menu)
-        // A question that turns the typed answer off lists every option.
+        // With the sidebar beside it, or SQLite selected, the same.
+        #expect(OpencodeScreens.menu(OpencodeScreens.form(OpencodeScreens.withSidebar(OpencodeScreens.question), selected: 0)) == menu)
+        #expect(try #require(OpencodeScreens.menu(OpencodeScreens.form(OpencodeScreens.question, selected: 1))).keys(toPick: 0) == ["1"])
+        // A question that turns the typed answer off lists every option, and a digit picks whatever is selected.
         var fixed = OpencodeScreens.question
         fixed.remove(at: fixed.count - 4)
-        #expect(try #require(OpencodeScreens.menu(OpencodeScreens.text(fixed))).choices == ["Postgres", "SQLite"])
+        let plain = try #require(OpencodeScreens.menu(OpencodeScreens.text(fixed)))
+        #expect(plain.choices == ["Postgres", "SQLite"] && plain.keys(toPick: 1) == ["2"])
         let three = try #require(OpencodeScreens.menu(OpencodeScreens.text(OpencodeScreens.options(3))))
-        #expect(three.choices == ["Fixture 1", "Fixture 2", "Fixture 3"])
+        #expect(three.choices == ["Fixture 1", "Fixture 2", "Fixture 3"] && three.keys(toPick: 2) == ["3"])
     }
 
     @Test func onlyOptionsOneToNineHaveADigit() throws {
@@ -584,5 +595,118 @@ extension AgentScreenOpencodeTests {
         // Every other agent's menu asks only its own words.
         let list = AgentMenu(question: "Do you want to proceed?", style: .list, choices: ["Yes", "No"], highlighted: 0)
         #expect(list.asks("Do you want to proceed?") && !list.asks("Permission required"))
+    }
+}
+
+/// The review of U2: a fullscreen prompt on a tall pane, Esc on 2.x's fullscreen prompt, a digit and an answer of your own.
+extension OpencodeScreens {
+    /// `lines` as OpenCode 1.19 colours its question form: the option numbered `selected + 1`, from its number to the end
+    /// of its label, on the selected option's background (`backgroundElement`), every other cell on the box's own.
+    static func form(_ lines: [String], selected: Int?) -> [ScreenRow] {
+        lines.map { (line: String) -> ScreenRow in
+            var cells: [Int] = Array(repeating: ButtonRows.row, count: line.count)
+            let number: Int? = AgentScreen.Opencode.optionNumber(AgentScreen.Opencode.cell(line))
+            guard let number, number - 1 == selected, let digit = line.firstIndex(where: { $0.isNumber }) else {
+                return ScreenRow(text: line, cells: cells)
+            }
+            let start: Int = line.distance(from: line.startIndex, to: digit)
+            let label: String = AgentScreen.Opencode.cell(line)
+            for offset in start..<min(cells.count, start + label.count) { cells[offset] = ButtonRows.grey }
+            return ScreenRow(text: line, cells: cells)
+        }
+    }
+
+    /// A fullscreen permission prompt in a pane `height` rows tall: `top` (its header and what follows) at the top, the
+    /// row of `buttons` at the bottom, more than `AgentScreen.scannedLines` rows apart.
+    static func fullscreen(_ top: [String], buttons: String, height: Int = 60) -> [String] {
+        let filler: [String] = Array(repeating: "  ┃", count: height - top.count - 3)
+        return ["  ┃"] + top + filler + [buttons, "  ┃"]
+    }
+
+    static let fullscreenEdit = fullscreen(
+        ["  ┃  △ Permission required", "  ┃    → Edit src/app.ts", "  ┃", "  ┃   1   import { login } from \"./auth\""],
+        buttons: "  ┃   Allow once   Allow always   Reject                  ctrl+f minimize  ⇆ select  enter confirm")
+    static let fullscreenShell2 = fullscreen(
+        ["  ┃  △ Permission required", "  ┃", "  ┃  $ npm test"],
+        buttons: "  ┃   Allow once   Always allow   Reject                  ctrl+f minimize  ⇆ select  enter confirm")
+    static let labels2 = ["Allow once", "Always allow", "Reject"]
+}
+
+extension AgentScreenOpencodeTests {
+    @Test func aFullscreenPromptIsReadFromItsHeader() throws {
+        // Its header is further up than the rows read for other agents; OpenCode's whole screen is read.
+        let tall = OpencodeScreens.fullscreenEdit
+        #expect(tall.count > AgentScreen.scannedLines)
+        #expect(read(tall) == .asking("Permission required: Edit src/app.ts"))
+        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.rows(tall, selected: 0)))
+        #expect(menu.question == "Permission required: Edit src/app.ts" && menu.highlighted == 0)
+        // Another request's prompt, fullscreen too: its own words, not the first's.
+        var other = tall
+        other[2] = "  ┃    → Edit src/b.ts"
+        #expect(read(other) == .asking("Permission required: Edit src/b.ts"))
+        // 1.19 rejects on Esc, fullscreen or not.
+        #expect(!menu.shrinksFirst && menu.keys(toPick: 2) == ["escape"])
+    }
+
+    @Test func escOnAFullscreen2xPromptShrinksItFirst() throws {
+        let labels = OpencodeScreens.labels2
+        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.rows(OpencodeScreens.fullscreenShell2, selected: 0, labels: labels)))
+        #expect(menu.question == "Permission required: $ npm test")
+        // 2.x: Esc on a fullscreen prompt only shrinks it, so Reject takes a second Esc (sent once it shows shrunk).
+        #expect(menu.shrinksFirst && menu.keys(toPick: 2) == ["escape", "escape"])
+        #expect(menu.keys(toPick: 0) == ["enter"] && menu.keys(toPick: 1) == ["right", "enter"])
+        // Shrunk, the same question: Esc alone.
+        let small = try #require(OpencodeScreens.menu(OpencodeScreens.rows(OpencodeScreens.shellPermission2, selected: 0, labels: labels)))
+        #expect(small.question == menu.question && !small.shrinksFirst && small.keys(toPick: 2) == ["escape"])
+        // Two buttons in a narrow pane, the hints under them.
+        var narrow = OpencodeScreens.fullscreenShell2
+        narrow[narrow.count - 2] = "  ┃   Allow once   Reject"
+        narrow.insert("  ┃   ctrl+f minimize  ⇆ select  enter confirm", at: narrow.count - 1)
+        let two = try #require(OpencodeScreens.menu(OpencodeScreens.rows(narrow, selected: nil, labels: ["Allow once", "Reject"])))
+        #expect(two.shrinksFirst && two.keys(toPick: 1) == ["escape", "escape"])
+        // "minimize" in the sidebar beside a shrunk prompt is not its hint.
+        var beside = OpencodeScreens.shellPermission2
+        beside[beside.count - 2] += "   minimize the bundle"
+        let sidebar = try #require(OpencodeScreens.menu(OpencodeScreens.rows(beside, selected: 0, labels: labels)))
+        #expect(!sidebar.shrinksFirst && sidebar.keys(toPick: 2) == ["escape"])
+    }
+}
+
+extension AgentScreenOpencodeTests {
+    @Test func aDigitIsNeverTypedIntoAnAnswerOfYourOwn() throws {
+        // 1.19 with its box for an answer of your own open, under that row (its placeholder): its digit keys are off,
+        // and a digit would land in the box.
+        var typing = OpencodeScreens.question
+        typing.insert("  ┃     Type your own answer", at: typing.count - 3)
+        let open = try #require(OpencodeScreens.menu(OpencodeScreens.form(typing, selected: 2)))
+        #expect(.asking(open.question) == read(typing) && open.choices == ["Postgres", "SQLite"])
+        #expect(open.keys(toPick: 0) == nil && open.keys(toPick: 1) == nil)
+        #expect(open.refusal(toPick: 1) == AgentScreen.Opencode.ownAnswerOpen)
+        // Text typed in it, with the selection moved off by the mouse: still open.
+        typing[typing.count - 4] = "  ┃     MySQL 8"
+        let typed = try #require(OpencodeScreens.menu(OpencodeScreens.form(typing, selected: 0)))
+        #expect(typed.keys(toPick: 1) == nil && typed.refusal(toPick: 1) == AgentScreen.Opencode.ownAnswerOpen)
+        // The selection on "Type your own answer": 2.x types a key into that answer there.
+        let onOwn = try #require(OpencodeScreens.menu(OpencodeScreens.form(OpencodeScreens.question, selected: 2)))
+        #expect(onOwn.keys(toPick: 0) == nil && onOwn.refusal(toPick: 0) == AgentScreen.Opencode.ownAnswerSelected)
+        // No option shown selected (2.x marks it by its text's colour alone): it may be on that row.
+        let unseen = try #require(OpencodeScreens.menu(OpencodeScreens.text(OpencodeScreens.question)))
+        #expect(unseen.choices == ["Postgres", "SQLite"] && unseen.keys(toPick: 1) == nil)
+        #expect(unseen.refusal(toPick: 1) == AgentScreen.Opencode.optionNotShown)
+        // Two options shown selected at once: not plain either.
+        let rows = OpencodeScreens.form(OpencodeScreens.question, selected: 0)
+        let both = zip(rows, OpencodeScreens.form(OpencodeScreens.question, selected: 1)).map { (pair: (ScreenRow, ScreenRow)) -> ScreenRow in
+            pair.0.backgrounds.count > 1 ? pair.0 : pair.1
+        }
+        #expect(try #require(OpencodeScreens.menu(both)).keys(toPick: 1) == nil)
+    }
+
+    @Test func optionsAreMaskedAsTheQuestionIs() throws {
+        var secret = OpencodeScreens.question
+        secret[secret.count - 8] = "  ┃  1. curl -H 'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789' https://api.github.com"
+        let menu = try #require(OpencodeScreens.menu(OpencodeScreens.form(secret, selected: 1)))
+        #expect(menu.choices.count == 2 && menu.choices[1] == "SQLite")
+        #expect(!menu.choices[0].contains("ghp_abcdefghij") && menu.choices[0].contains(MCPRedaction.mask), "\(menu.choices[0])")
+        #expect(menu.keys(toPick: 0) == ["1"])
     }
 }

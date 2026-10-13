@@ -955,7 +955,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: agentActivity(liveTail()), at: Self.now)
+        status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 

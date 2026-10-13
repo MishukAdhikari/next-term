@@ -707,39 +707,52 @@ enum MCPControl {
         case .success(let found): index = found
         }
         guard let keys = menu.keys(toPick: index) else { return reply(fail(field(menu.refusal(toPick: index)))) }
-        let alone = keys.last != "enter"
+        let alone = keys.count == 1 && keys[0] != "enter"
+        let last = keys[keys.count - 1]
         let id = tab.id.uuidString.lowercased()
         let label = field(menu.choices[index])
-        // Still the same question, and (in a list, or a row of buttons) the cursor on the choice.
+        // The question this answer is for: OpenCode 2.x's arrows onto "Always allow" change its words (and so its id),
+        // the request the same (AgentScreen.selectionMoved).
+        var expected = current
+        // Still the same question, and (in a list, or a row of buttons) the cursor on the choice; for an Esc that first
+        // shrank a fullscreen prompt, the prompt shown shrunk, so the next Esc picks.
         func ready() -> Bool {
             tab.pollAgentScreen()
-            guard canType(tab), questionID(tab) == current else { return false }
+            guard canType(tab), let now = questionID(tab) else { return false }
+            if now != expected, menu.style == .row, !alone, let asked = tab.status.question,
+               AgentScreen.selectionMoved(from: question, to: asked) { expected = now }
+            guard now == expected else { return false }
             guard menu.style == .list || menu.style == .row, !alone else { return true }
+            if last == "escape" { return tab.agentMenu()?.keys(toPick: index) == ["escape"] }
             return tab.agentMenu()?.highlighted == index
         }
         func confirm(_ tries: Int) {
-            if ready() {
+            if ready(), let bytes = MCPServer.keyBytes(last) {
                 sent(to: tab)
-                tab.view.send(txt: "\r")
+                tab.view.send(txt: bytes)
                 return settle(0)
             }
             // A y/n prompt that took the letter by itself has its answer already.
-            if menu.style == .yesNo, questionID(tab) != current { return settle(15) }
-            if tries < 10, canType(tab), questionID(tab) == current {
+            if menu.style == .yesNo, questionID(tab) != expected { return settle(15) }
+            if tries < 10, canType(tab), questionID(tab) == expected {
                 return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { confirm(tries + 1) }
             }
-            let why = questionID(tab) == current ? "the cursor did not reach “\(label)”" : "the question changed meanwhile"
+            if last == "escape" {
+                let why = questionID(tab) == expected ? "the prompt still shows fullscreen" : "the question changed meanwhile"
+                return reply(fail("Esc was pressed once, which only shrinks the fullscreen prompt, and not again: \(why). read_tab shows the screen."))
+            }
+            let why = questionID(tab) == expected ? "the cursor did not reach “\(label)”" : "the question changed meanwhile"
             reply(fail("Return was not pressed: \(why). read_tab shows the screen."))
         }
         // The agent takes the answer and moves on: report where it went (a new question, or work).
         func settle(_ tries: Int) {
             tab.pollAgentScreen()
-            if tries < 15, questionID(tab) == current {
+            if tries < 15, questionID(tab) == expected {
                 return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { settle(tries + 1) }
             }
             var info: [String: Any] = ["id": id, "answered": label, "choice": index + 1, "state_after": state(tab)]
             if let after = questionID(tab) {
-                if after == current {
+                if after == expected {
                     info["note"] = "The question is still on screen; read_tab shows what the agent did with the answer."
                 } else {
                     info["question_after"] = tab.status.question.map(field)

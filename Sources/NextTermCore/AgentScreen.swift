@@ -76,9 +76,12 @@ public enum AgentScreen {
     /// `activity(screenLines:)` for a tab that shows OpenCode (`opencode`): OpenCode's own shapes first, then every
     /// agent's. Other agents' tabs never see OpenCode's shapes, and OpenCode's screen is never read as another's
     /// prompt while its own footer or question is there.
+    ///
+    /// The host passes an OpenCode tab's whole screen (at least `scannedLines`), so a fullscreen prompt's header, at its
+    /// top, is read with its buttons at the bottom; every agent's shapes still read only the last `scannedLines`.
     public static func activity(screenLines lines: [String], opencode: Bool) -> AgentActivity {
         guard opencode else { return activity(screenLines: lines) }
-        let own = Opencode.activity(Array(lines.suffix(scannedLines)))
+        let own = Opencode.activity(lines)
         return own == .idle ? activity(screenLines: lines) : own
     }
 
@@ -176,13 +179,22 @@ public struct AgentMenu: Equatable, Sendable {
     public let highlighted: Int?
     /// The choice Esc picks by itself, wherever the selection is (OpenCode's Reject and Cancel); nil when none.
     public let escape: Int?
+    /// Esc first shrinks the prompt from fullscreen (OpenCode 2.x), so the Esc choice takes a second Esc, sent only once
+    /// the prompt shows shrunk.
+    public let shrinksFirst: Bool
+    /// Why no key picks a choice now, said for the caller: OpenCode's box for an answer of your own may take the key
+    /// (`AgentScreen.Opencode.digitsRefusal`). Nil when keys can.
+    public let blocked: String?
 
-    public init(question: String, style: Style, choices: [String], highlighted: Int?, escape: Int? = nil) {
+    public init(question: String, style: Style, choices: [String], highlighted: Int?, escape: Int? = nil,
+                shrinksFirst: Bool = false, blocked: String? = nil) {
         self.question = question
         self.style = style
         self.choices = choices
         self.highlighted = highlighted
         self.escape = escape
+        self.shrinksFirst = shrinksFirst
+        self.blocked = blocked
     }
 
     /// The 0-based choice an answer names: `choice` as numbered on screen (1-based), or `answer`, a
@@ -215,11 +227,12 @@ public struct AgentMenu: Equatable, Sendable {
     /// cursor to it, then Return; for a y/n prompt, the letter and Return. Arrows, not the choice's
     /// digit: some agents pick on the digit alone, and the Return after it would answer whatever comes
     /// next. Nil when the list's cursor is not drawn, so where the arrows would start is unknown.
-    /// Esc alone for the choice Esc picks. In a row of buttons, left or right the shorter way round from the
-    /// selected one, then Return. For numbered options, the digit alone, which only options 1 to 9 have.
+    /// Esc alone for the choice Esc picks (twice when the first only shrinks the prompt). In a row of buttons, left or
+    /// right the shorter way round from the selected one, then Return. For numbered options, the digit alone, which
+    /// only options 1 to 9 have. Nil for every choice while `blocked`.
     public func keys(toPick index: Int) -> [String]? {
-        guard choices.indices.contains(index) else { return nil }
-        if index == escape { return ["escape"] }
+        guard blocked == nil, choices.indices.contains(index) else { return nil }
+        if index == escape { return shrinksFirst ? ["escape", "escape"] : ["escape"] }
         switch style {
         case .yesNo:
             return [index == 0 ? "y" : "n", "enter"]
@@ -239,6 +252,7 @@ public struct AgentMenu: Equatable, Sendable {
 
     /// Why `keys(toPick:)` gives no keys for choice `index`, said for the caller.
     public func refusal(toPick index: Int) -> String {
+        if let blocked { return blocked }
         let label = choices.indices.contains(index) ? choices[index] : "that choice"
         if style == .digits {
             return "OpenCode picks options 1 to 9 by their digit, and “\(label)” is option \(index + 1); nothing was typed. press_keys can answer: Down to it, then Return."
@@ -246,10 +260,9 @@ public struct AgentMenu: Equatable, Sendable {
         return "That screen does not show which choice is selected, so the way to “\(label)” is unknown; nothing was typed. press_keys can answer."
     }
 
-    /// Whether this is the menu of `question`, the question the tab reports: the same words, or the same OpenCode
-    /// permission request read with less of it (AgentScreen.sameQuestion).
+    /// Whether this is the menu of `question`, the question the tab reports: the same words, read from the same screen.
     public func asks(_ question: String) -> Bool {
-        self.question == question || AgentScreen.sameQuestion(question, self.question)
+        self.question == question
     }
 
     static func normalized(_ text: String) -> String {
@@ -302,7 +315,7 @@ extension AgentScreen {
               let masked = menu(screenLines: shown, mask: mask), masked.choices.count == read.choices.count,
               masked.style == read.style, masked.highlighted == read.highlighted else { return nil }
         return AgentMenu(question: question, style: masked.style, choices: masked.choices, highlighted: masked.highlighted,
-                         escape: masked.escape)
+                         escape: masked.escape, shrinksFirst: masked.shrinksFirst, blocked: masked.blocked)
     }
 
     /// The menu under the question an agent is asking (the one `activity` reports), or nil if the

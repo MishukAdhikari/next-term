@@ -77,6 +77,10 @@ extension AgentScreen {
         }
         /// Beside the buttons, or under them in a pane narrower than 80 columns.
         static let buttonHint = "enter confirm"
+        /// The hints while the prompt is fullscreen (1.19, 2.0): its key's, "minimize", before the others.
+        static let shrinkHint = pattern(#"\sminimize\s+⇆\s+select\s+enter\s+confirm"#)
+        /// 2.0's rows, where Esc on a fullscreen prompt only shrinks it (SessionQuestion's `dismiss`); 1.19's rejects.
+        static let shrinkingRows: [[String]] = [buttonRows[1], buttonRows[2]]
         /// Under "Reject permission"'s text box, which has no buttons.
         static let rejectHints = ["enter confirm", "esc cancel"]
 
@@ -108,8 +112,8 @@ extension AgentScreen {
 }
 
 extension AgentScreen.Opencode {
-    /// What OpenCode's screen says, in the bottom `scannedLines` of it: a question, its working hint, its footer alone
-    /// (ready), or nothing of its own (idle, for every agent's shapes to read).
+    /// What OpenCode's screen says, in the rows the host passes (its whole screen): a question, its working hint, its
+    /// footer alone (ready), or nothing of its own (idle, for every agent's shapes to read).
     static func activity(_ lines: [String]) -> AgentActivity {
         if let asked = permission(in: lines) ?? form(in: lines) { return .asking(shown(asked)) }
         let bottom = lines.suffix(AgentScreen.promptLines)
@@ -164,9 +168,9 @@ extension AgentScreen.Opencode {
     /// The words of the prompt under `header`, the nearest header above `row`. The permission prompt: "Permission
     /// required: " and its title, with the whole command after a shell command's ("Shell command ($ npm test)"), or
     /// the command alone where no title is drawn; with 2.0's "Always allow" selected and no title, the first line of
-    /// what it would save, which `sameRequest` takes for the request read before. A step: its header and its first
-    /// line. Without its header on screen (a prompt taller than the lines read), the header's words alone; nil for the
-    /// reject step, which only its header tells from other dialogs.
+    /// what it would save (`alwaysShown`). A step: its header and its first line. Without its header in the rows read,
+    /// the header's words alone, a question of its own; nil for the reject step, which only its header tells from other
+    /// dialogs.
     static func words(under header: String, above row: Int, in lines: [String]) -> String? {
         guard let top = (0..<row).reversed().first(where: { headerText(cell(lines[$0])) == header }) else {
             return header == rejectHeader ? nil : header
@@ -356,24 +360,23 @@ extension AgentScreen.Opencode {
 }
 
 extension AgentScreen {
-    /// Whether `read`, the question on screen now, is `shown`, the question the tab reports, read with less of it:
-    /// TabStatus then keeps the words that name the request, and the question's number, so its id and its notification
-    /// stay. Only OpenCode's permission prompt reads so (`Opencode.sameRequest`).
-    static func sameQuestion(_ shown: String, _ read: String) -> Bool {
-        Opencode.sameRequest(shown, read)
+    /// Whether `read`, the question on screen now, is what `shown`, the question read before, became when its own
+    /// selection moved: a new question all the same (its words no longer name the request, and OpenCode can swap
+    /// requests under them), with no second notification, and the move answer_agent's arrows make on the way to that
+    /// button. Only OpenCode's permission prompt reads so (`Opencode.alwaysShown`).
+    public static func selectionMoved(from shown: String, to read: String) -> Bool {
+        Opencode.alwaysShown(after: shown, read: read)
     }
 }
 
 extension AgentScreen.Opencode {
-    /// The same permission request, read with less of it: its header alone (the rest above the lines read, as in a
-    /// fullscreen prompt on a tall screen), or, for a shell request in 2.0, which draws no title, what "Always allow"
-    /// would save, drawn in place of the command while that button is selected (permission.tsx, `body={(option) => …}`).
-    /// Any other words are another request.
-    static func sameRequest(_ shown: String, _ read: String) -> Bool {
+    /// A shell request in 2.0, which draws no title, read with its command (`shown`), then with what "Always allow"
+    /// would save drawn in place of it once that button is selected (`read`; permission.tsx, `body={(option) => …}`).
+    /// Only that way round: back from it, the command shown may be another request's, as OpenCode keeps the selection
+    /// when one request follows another.
+    static func alwaysShown(after shown: String, read: String) -> Bool {
         let request = permissionHeader + ": "
-        guard shown.hasPrefix(request) else { return false }
-        if read == permissionHeader { return true }
-        return read.hasPrefix(request + alwaysBody) && shown.hasPrefix(request + command)
+        return shown.hasPrefix(request + command) && read.hasPrefix(request + alwaysBody)
     }
 }
 
@@ -384,15 +387,15 @@ extension AgentScreen {
     public static func menu(screenRows rows: [ScreenRow], opencode: Bool) -> AgentMenu? {
         let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
         guard opencode else { return menu(screenLines: lines) }
-        guard Opencode.activity(Array(lines.suffix(scannedLines))) != .idle else { return menu(screenLines: lines) }
-        return Opencode.menu(Array(rows.suffix(scannedLines)))
+        guard Opencode.activity(lines) != .idle else { return menu(screenLines: lines) }
+        return Opencode.menu(rows)
     }
 
     /// Why the question in a tab that shows OpenCode has no menu to pick from, said for the caller: a form with several
     /// questions or answers, its review, or the reject step's text box. Nil for every other screen and tab.
     public static func menuRefusal(screenRows rows: [ScreenRow], opencode: Bool) -> String? {
         guard opencode else { return nil }
-        let lines: [String] = rows.suffix(scannedLines).map { (row: ScreenRow) -> String in row.text }
+        let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
         return Opencode.refusal(lines)
     }
 }
@@ -408,11 +411,15 @@ extension AgentScreen.Opencode {
     static let severalAnswers = "This question takes several answers; press_keys can answer it: a digit picks or drops one, Right goes on to Confirm, and Return sends."
     static let reviewRefusal = "This form shows its answers to review; press_keys can answer it: Return sends them, Left goes back to a question."
     static let rejectStepRefusal = "This step asks what OpenCode should do instead, with no choices; nothing was typed. send_to_tab types a message and sends it; press_keys [\"enter\"] sends none, and [\"escape\"] goes back."
+    static let ownAnswerOpen = "A box for an answer of your own is open under “Type your own answer” (or shows one typed before), and a digit could go into it; nothing was typed. read_tab shows the form, and press_keys can answer."
+    static let ownAnswerSelected = "The selection is on “Type your own answer”, where OpenCode can take a digit into the answer; nothing was typed. press_keys can answer: Up to an option, then its digit or Return."
+    static let optionNotShown = "That screen does not show which option is selected, and on “Type your own answer” OpenCode can take a digit into the answer; nothing was typed. press_keys can answer."
 
-    /// The menu under OpenCode's question in the bottom `scannedLines` of the screen, as `activity` reads the question:
+    /// The menu under OpenCode's question in the rows the host passes, as `activity` reads the question:
     /// - a permission prompt or its confirm step: its buttons, a row, the selected one told by its background
-    ///   (`ScreenRow.selected`), Esc for Reject or Cancel;
-    /// - a form with one question and one answer: its options, each picked and sent by its digit.
+    ///   (`ScreenRow.selected`), Esc for Reject or Cancel (twice on 2.0's fullscreen prompt, which the first only shrinks);
+    /// - a form with one question and one answer: its options, masked as the question is, each picked and sent by its
+    ///   digit unless the digit could go into an answer of your own (`digitsRefusal`).
     ///
     /// Nil for the reject step and for a form with several questions or answers (`refusal` says why).
     static func menu(_ rows: [ScreenRow]) -> AgentMenu? {
@@ -421,28 +428,79 @@ extension AgentScreen.Opencode {
             guard let labels = prompt.labels else { return nil }
             let selected: Int? = rows[prompt.row].selected(among: labels)
             let escape: Int? = labels.firstIndex { (label: String) -> Bool in escapeChoices.contains(label) }
-            return AgentMenu(question: shown(prompt.words), style: .row, choices: labels, highlighted: selected, escape: escape)
+            let shrinks: Bool = shrinkingRows.contains(labels) && fullscreen(at: prompt.row, in: lines)
+            return AgentMenu(question: shown(prompt.words), style: .row, choices: labels, highlighted: selected,
+                             escape: escape, shrinksFirst: shrinks)
         }
-        guard let asked = form(in: lines), let options = singleOptions(in: lines) else { return nil }
-        return AgentMenu(question: shown(asked), style: .digits, choices: options, highlighted: nil)
+        guard let asked = form(in: lines), let single = singleForm(in: lines) else { return nil }
+        let choices: [String] = single.options.map { (label: String) -> String in CommandSecrets.mask(label) }
+        let held: String? = digitsRefusal(rows, single)
+        return AgentMenu(question: shown(asked), style: .digits, choices: choices, highlighted: nil, blocked: held)
     }
 
-    /// The options of a form that asks one question with one answer, from option 1 down to its hint row, without the row
-    /// for an answer of your own. Nil for a form that shows "⇆ tab" (several questions, or one with several answers, as
-    /// question.tsx draws it), or options with checkboxes.
-    static func singleOptions(in lines: [String]) -> [String]? {
+    /// Whether the prompt whose buttons are at `row` shows fullscreen: its hints, beside the buttons or under them, say
+    /// "minimize".
+    static func fullscreen(at row: Int, in lines: [String]) -> Bool {
+        let hints: ArraySlice<String> = lines[row..<min(row + 3, lines.count)]
+        return hints.contains { (line: String) -> Bool in found([shrinkHint], in: line) }
+    }
+
+    /// A form that asks one question with one answer, from option 1 down to its hint row (`hint`): its options without
+    /// the row for an answer of your own, the row of each, and that row's (`own`), when it has one. Nil for a form that
+    /// shows "⇆ tab" (several questions, or one with several answers, as question.tsx draws it), or options with
+    /// checkboxes.
+    static func singleForm(in lines: [String]) -> SingleForm? {
         let start = max(0, lines.count - AgentScreen.promptLines)
         guard let hint = (start..<lines.count).last(where: { isFormHint(lines[$0]) }), !lines[hint].contains(formTabs),
               cell(lines[hint]).contains(formSelect), let first = firstOption(above: hint, in: lines) else { return nil }
         var options: [String] = []
+        var rows: [Int] = []
         for row in first..<hint {
             let text = cell(lines[row])
             guard let number = optionNumber(text), number == options.count + 1 else { continue }
             options.append(optionLabel(text))
+            rows.append(row)
         }
-        if options.last == ownAnswer { options.removeLast() }
+        var own: Int?
+        if options.last == ownAnswer {
+            options.removeLast()
+            own = rows.removeLast()
+        }
         let boxed = options.contains { (label: String) -> Bool in isCheckbox(label) }
-        return options.isEmpty || boxed ? nil : options
+        return options.isEmpty || boxed ? nil : SingleForm(options: options, rows: rows, own: own, hint: hint)
+    }
+
+    struct SingleForm {
+        let options: [String]
+        let rows: [Int]
+        let own: Int?
+        let hint: Int
+    }
+
+    /// Why a digit might not pick an option of `form` now; nil when it does. OpenCode 1.19 turns its digit keys off while
+    /// its box for an answer of your own is open under that row (question.tsx, `enabled: !store.editing`), and 2.0 takes
+    /// a key into that answer while its row is selected (form.tsx, its key intercept). So, with that row on screen, a
+    /// digit needs no row drawn under it (the box, its placeholder, or an answer typed before) and another option shown
+    /// selected (`selectedRow`: 1.19 draws it on a background of its own, 2.0 marks it by its text's colour alone).
+    static func digitsRefusal(_ rows: [ScreenRow], _ form: SingleForm) -> String? {
+        guard let own = form.own else { return nil }
+        let below: Range<Int> = (own + 1)..<form.hint
+        if below.contains(where: { (row: Int) -> Bool in !cell(rows[row].text).isEmpty }) { return ownAnswerOpen }
+        let options: [Int] = form.rows + [own]
+        guard let selected = selectedRow(rows, among: options) else { return optionNotShown }
+        return selected == own ? ownAnswerSelected : nil
+    }
+
+    /// Which of `options` (rows of the form's options) shows selected: the one whose number is on a background of its
+    /// own, off the box's just before it. Nil unless exactly one is.
+    static func selectedRow(_ rows: [ScreenRow], among options: [Int]) -> Int? {
+        let marked: [Int] = options.filter { (row: Int) -> Bool in
+            let line: ScreenRow = rows[row]
+            guard let digit = line.text.firstIndex(where: { (character: Character) -> Bool in character.isNumber }) else { return false }
+            let offset: Int = line.text.distance(from: line.text.startIndex, to: digit)
+            return offset > 0 && line.background(at: offset) != line.background(at: offset - 1)
+        }
+        return marked.count == 1 ? marked[0] : nil
     }
 
     /// An option's label: after its number, without the " ✓" a picked one shows.

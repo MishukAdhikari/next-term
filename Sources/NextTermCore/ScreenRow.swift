@@ -33,6 +33,12 @@ public struct ScreenRow: Equatable, Sendable {
         0x1000000 + (code & 0xFF)
     }
 
+    /// The background a cell shows: its own, or its foreground when it is drawn reversed (SGR 7), as some themes draw
+    /// a selection. Both as this type's numbers, a default foreground being `defaultForeground`.
+    public static func background(_ background: Int, foreground: Int, reversed: Bool) -> Int {
+        reversed ? foreground : background
+    }
+
     public private(set) var text: String
     /// In the order of the text, none overlapping; a character in none is on the default background.
     public private(set) var backgrounds: [BackgroundRun]
