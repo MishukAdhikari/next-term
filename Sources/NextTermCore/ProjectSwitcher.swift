@@ -218,14 +218,16 @@ public struct SwitcherShown: Equatable, Sendable {
 /// name the same way, then its destination. An entry ranks by its weakest word, and equal ranks keep the list's order.
 /// Projects stay above servers.
 public enum SwitcherSearch {
-    /// The entries `query` finds, best first. With nothing typed, every project and the first `serverLimit` servers.
-    /// `home` is the home folder: the folders above it never match, so typing "Users" or one's own short name does not
-    /// find every project. `branches` holds each project's branch, by path, as far as it is read.
+    /// The entries `query` finds, best first. With nothing typed, every project and the first `serverLimit` servers,
+    /// with the server picked last in the window among them (`lastPick`, its id): further down the saved ones, it takes
+    /// the last place, so the selection can start on it. `home` is the home folder: a project in it is matched from "~"
+    /// down, so typing "Users" or one's own short name does not find every project; one outside it, as its row shows
+    /// it. `branches` holds each project's branch, by path, as far as it is read.
     public static func filter(_ list: SwitcherList, query: String, home: String,
-                              branches: [String: String] = [:]) -> SwitcherShown {
+                              branches: [String: String] = [:], lastPick: String? = nil) -> SwitcherShown {
         let search = SearchWords(query)
         guard !search.isEmpty else {
-            let servers: [SwitcherServer] = Array(list.servers.prefix(SwitcherList.serverLimit))
+            let servers: [SwitcherServer] = firstServers(list.servers, keeping: lastPick)
             return SwitcherShown(projects: list.projects, servers: servers)
         }
         let words: [String] = search.words
@@ -242,6 +244,16 @@ public enum SwitcherSearch {
     public static func noMatch(_ query: String) -> String {
         let typed: String = query.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return "No project or server matches “" + typed + "”."
+    }
+
+    /// The first `serverLimit` servers; the one picked last, when it is saved but further down, in the last place.
+    private static func firstServers(_ servers: [SwitcherServer], keeping lastPick: String?) -> [SwitcherServer] {
+        var shown: [SwitcherServer] = Array(servers.prefix(SwitcherList.serverLimit))
+        guard let lastPick, !shown.isEmpty else { return shown }
+        let isPick: (SwitcherServer) -> Bool = { (server: SwitcherServer) -> Bool in server.id == lastPick }
+        guard !shown.contains(where: isPick), let picked = servers.first(where: isPick) else { return shown }
+        shown[shown.count - 1] = picked
+        return shown
     }
 
     /// Ranks, best first.
@@ -350,17 +362,14 @@ extension SwitcherSearch {
         character.isLetter || character.isNumber
     }
 
-    /// The folder as the search sees it: "~/Code/shop" under the home folder; beside it, without the folder that
-    /// holds the home folders ("Shared/demo" for "/Users/Shared/demo"); anywhere else, as it is. So the home folder's
-    /// own name and the folders above it are never matched.
+    /// The folder as the search sees it, the way its row shows it: "~/Code/shop" under the home folder, so the home
+    /// folder's own name and the folders above it never match a project in it; anywhere else, as it is
+    /// ("/Users/Shared/demo"), so the text a row shows always finds it.
     private static func searchedFolder(_ path: String, home: String) -> String {
         var home: String = home
         while home.hasSuffix("/") { home.removeLast() }
-        guard !home.isEmpty else { return path }
-        if path == home || path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-        let above: String = (home as NSString).deletingLastPathComponent
-        guard above != "/", path.hasPrefix(above + "/") else { return path }
-        return String(path.dropFirst(above.count + 1))
+        guard !home.isEmpty, path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + path.dropFirst(home.count)
     }
 }
 
@@ -375,7 +384,7 @@ public enum SwitcherSelection {
     ///   project used last, else on the first closed one, so the key that showed it, then Return, switches back; with
     ///   neither, on the first row.
     /// - `lastPick`: the id of the server picked last in the window. Shown from anywhere else, the selection starts on
-    ///   it while it is listed, else on the first row.
+    ///   it while it is listed (`SwitcherSearch.filter` lists it while it is saved), else on the first row.
     public static func initial(_ shown: SwitcherShown, origin: String?, lastPick: String?) -> Int? {
         guard !shown.isEmpty else { return nil }
         if let origin {
@@ -389,6 +398,15 @@ public enum SwitcherSelection {
         }
         if let lastPick, let index = shown.index(of: .server(lastPick)) { return index }
         return 0
+    }
+
+    /// The row the selection is on after the search text changes, an index in `shown.entries`. With text, the best
+    /// match, which is the first row; nil with no match, so Return does nothing. Emptied (or only spaces left), the
+    /// whole list is back and the selection goes where `initial` started it, so clearing the search, then Return, still
+    /// switches back.
+    public static func afterSearch(_ shown: SwitcherShown, query: String, origin: String?, lastPick: String?) -> Int? {
+        guard !SearchWords(query).isEmpty else { return initial(shown, origin: origin, lastPick: lastPick) }
+        return shown.isEmpty ? nil : 0
     }
 
     /// The row `step` rows (or a page's) from `index`, kept to the list's ends; nil with nothing listed. From no
@@ -434,7 +452,8 @@ public struct SwitcherKeys: Equatable, Sendable {
     /// ⌘↩: the selected project in a new window.
     public static let newWindow = KeyChord(key: "\r", command: true)
     /// ⌘⌫: forget the selected closed project. Only while the search is empty: with text, the field's own delete to
-    /// the start of the line, so clearing a query never drops a project.
+    /// the start of the line, so clearing a query never drops a project. The Delete key is U+0008 here, as the menus
+    /// spell it and as `KeyboardShortcuts.chord(from:)` reads an event; the event's own U+007F does not match.
     public static let forget = KeyChord(key: "\u{8}", command: true)
     private static let down = KeyChord(key: "n", control: true)
     private static let up = KeyChord(key: "p", control: true)
@@ -460,18 +479,21 @@ public struct SwitcherKeys: Equatable, Sendable {
         self.close = close
     }
 
-    /// What a row in the first nine shows in its branch's place while ⌘ is held: its jump's key, "⌘1". Nil past the
-    /// ninth row or for a jump with no key.
-    public func jumpHint(_ row: Int) -> String? {
-        guard jumps.indices.contains(row) else { return nil }
+    /// What a row shows in its branch's place while ⌘ is held: its jump's key, "⌘1". Only the first nine projects the
+    /// list shows have one (`projects`, how many it shows now): nil for a server's row, past the ninth, or for a jump
+    /// with no key.
+    public func jumpHint(_ row: Int, projects: Int) -> String? {
+        guard row < projects, jumps.indices.contains(row) else { return nil }
         return jumps[row]?.display
     }
 
     /// A key equivalent pressed while the Welcome window is key; nil leaves it to the window and the menus. The jumps
-    /// and Close work anywhere in the window; ⌘↩, ⌘⌫, ⌃N and ⌃P only for the projects.
-    public func action(chord: KeyChord, focus: Focus, searchEmpty: Bool, selection: SwitcherEntry?) -> SwitcherAction? {
+    /// and Close work anywhere in the window; ⌘↩, ⌘⌫, ⌃N and ⌃P only for the projects. A jump reaches only the projects
+    /// the list shows (`projects`, how many it shows now), never a server; past them it is nil.
+    public func action(chord: KeyChord, focus: Focus, searchEmpty: Bool, selection: SwitcherEntry?,
+                       projects: Int) -> SwitcherAction? {
         let row: Int? = jumps.firstIndex { (jump: KeyChord?) -> Bool in jump == chord }
-        if let row { return .jump(row) }
+        if let row { return row < projects ? .jump(row) : nil }
         if let close, chord == close { return .close }
         guard focus == .projects else { return nil }
         switch chord {
@@ -585,7 +607,7 @@ public enum SwitcherText {
         return RecentProjects.abbreviate(parent, home: home)
     }
 
-    /// "xcdev, open, branch main", "api, open in 2 windows, branch main", or for a closed project
+    /// "wiki, open, branch main", "api, open in 2 windows, branch main", or for a closed project
     /// "Agents, in ~/Code, branch main".
     public static func accessibilityLabel(_ project: SwitcherProject, branch: String?, home: String) -> String {
         var parts: [String] = [project.title]

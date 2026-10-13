@@ -263,6 +263,54 @@ import Testing
         #expect(SwitcherSelection.lastPickKey == "welcomeLastPick")
     }
 
+    @Test func theServerPickedLastIsListedAndSelectedPastTheFirstThree() {
+        // Connected to three others since, from the remote sheet: staging is fourth in the saved order.
+        let servers: [SwitcherServer] = [server("a"), server("b"), server("c"), server("staging"), server("d")]
+        let list = SwitcherList.build(open: [], history: [used("/Users/sam/Code/shop", 50)], recents: [],
+                                      servers: servers)
+        let shown = SwitcherSearch.filter(list, query: "", home: home, lastPick: "id-staging")
+        // Still three servers, the pick in the third place.
+        check(names(shown), ["shop", "a", "b", "staging"])
+        #expect(SwitcherSelection.initial(shown, origin: nil, lastPick: "id-staging") == 3)
+        // Among the first three already: the three as given.
+        let inFirstThree = SwitcherSearch.filter(list, query: "", home: home, lastPick: "id-b")
+        check(names(inFirstThree), ["shop", "a", "b", "c"])
+        // No longer saved, or none: the first three.
+        let gone = SwitcherSearch.filter(list, query: "", home: home, lastPick: "id-gone")
+        check(names(gone), ["shop", "a", "b", "c"])
+        #expect(SwitcherSelection.initial(gone, origin: nil, lastPick: "id-gone") == 0)
+        // A search lists what it finds, picked last or not.
+        let typed = SwitcherSearch.filter(list, query: "b", home: home, lastPick: "id-staging")
+        check(names(typed), ["b"])
+    }
+
+    @Test func typingSelectsTheBestMatchAndEmptyingGoesBackToTheStart() {
+        // Nothing open; api used an hour ago, shop yesterday, docs last week. Servers staging (picked last) and prod.
+        let history: [ProjectHistory.Entry] = [
+            used("/Users/sam/Code/api", 300), used("/Users/sam/Code/shop", 200), used("/Users/sam/Code/docs", 100),
+        ]
+        let list = SwitcherList.build(open: [], history: history, recents: [],
+                                      servers: [server("staging"), server("prod")])
+        let all = SwitcherSearch.filter(list, query: "", home: home)
+        #expect(SwitcherSelection.initial(all, origin: nil, lastPick: nil) == 0)
+        let sh = SwitcherSearch.filter(list, query: "sh", home: home)
+        check(names(sh), ["shop"])
+        #expect(SwitcherSelection.afterSearch(sh, query: "sh", origin: nil, lastPick: nil) == 0)
+        // Starting on staging, "pro" finds only prod, and selects it.
+        #expect(SwitcherSelection.initial(all, origin: nil, lastPick: "id-staging") == 3)
+        let pro = SwitcherSearch.filter(list, query: "pro", home: home, lastPick: "id-staging")
+        check(names(pro), ["prod"])
+        #expect(SwitcherSelection.afterSearch(pro, query: "pro", origin: nil, lastPick: "id-staging") == 0)
+        // No match: nothing selected, so Return does nothing.
+        let none = SwitcherSearch.filter(list, query: "zz", home: home)
+        #expect(SwitcherSelection.afterSearch(none, query: "zz", origin: nil, lastPick: nil) == nil)
+        // Emptied, or only spaces left: where the window started it.
+        #expect(SwitcherSelection.afterSearch(all, query: "", origin: nil, lastPick: "id-staging") == 3)
+        #expect(SwitcherSelection.afterSearch(all, query: "  ", origin: nil, lastPick: "id-staging") == 3)
+        let fromShop = twoOpen
+        #expect(SwitcherSelection.afterSearch(fromShop, query: "", origin: "/Users/sam/Code/shop", lastPick: nil) == 1)
+    }
+
     @Test func movingStopsAtTheEnds() {
         #expect(SwitcherSelection.moved(nil, by: 1, count: 3) == 0)
         #expect(SwitcherSelection.moved(nil, by: -1, count: 3) == 2)
@@ -270,7 +318,8 @@ import Testing
         #expect(SwitcherSelection.moved(1, by: 1, count: 3) == 2)
         #expect(SwitcherSelection.moved(1, by: 10, count: 3) == 2)
         #expect(SwitcherSelection.moved(2, by: -10, count: 3) == 0)
-        #expect(SwitcherSelection.moved(0, by: 1, count: 0) == nil)
+        let inNothing: Int? = SwitcherSelection.moved(0, by: 1, count: 0)
+        #expect(inNothing == nil)
     }
 
     // MARK: keys
@@ -312,7 +361,8 @@ import Testing
         let keys = SwitcherKeys.standard
         func act(_ chord: KeyChord, _ focus: SwitcherKeys.Focus = .projects, empty: Bool = true,
                  selection: SwitcherEntry? = nil) -> SwitcherAction? {
-            keys.action(chord: chord, focus: focus, searchEmpty: empty, selection: selection ?? openShop)
+            let entry: SwitcherEntry = selection ?? openShop
+            return keys.action(chord: chord, focus: focus, searchEmpty: empty, selection: entry, projects: 12)
         }
         #expect(act(command("1")) == .jump(0))
         #expect(act(command("3")) == .jump(2))
@@ -327,7 +377,9 @@ import Testing
         // ⌥⌘O gives ⌘↩ to Fork: the sessions search keeps it.
         #expect(act(SwitcherKeys.newWindow, .sessions) == nil)
         #expect(act(SwitcherKeys.newWindow, .elsewhere) == nil)
-        #expect(keys.action(chord: SwitcherKeys.newWindow, focus: .projects, searchEmpty: false, selection: nil) == nil)
+        let noSelection: SwitcherAction? = keys.action(chord: SwitcherKeys.newWindow, focus: .projects,
+                                                       searchEmpty: false, selection: nil, projects: 0)
+        #expect(noSelection == nil)
         #expect(act(KeyChord(key: "n", control: true)) == .move(1))
         #expect(act(KeyChord(key: "p", control: true)) == .move(-1))
         #expect(act(KeyChord(key: "n", control: true), .sessions) == nil)
@@ -339,14 +391,18 @@ import Testing
         let keys = SwitcherKeys.standard
         let forget: KeyChord = SwitcherKeys.forget
         #expect(forget == KeyChord(key: "\u{8}", command: true))
-        #expect(keys.action(chord: forget, focus: .projects, searchEmpty: true, selection: closedDocs) == .forget)
+        func act(_ focus: SwitcherKeys.Focus = .projects, empty: Bool = true,
+                 selection: SwitcherEntry?) -> SwitcherAction? {
+            keys.action(chord: forget, focus: focus, searchEmpty: empty, selection: selection, projects: 2)
+        }
+        #expect(act(selection: closedDocs) == .forget)
         // Open projects cannot be forgotten, nor servers here.
-        #expect(keys.action(chord: forget, focus: .projects, searchEmpty: true, selection: openShop) == nil)
-        #expect(keys.action(chord: forget, focus: .projects, searchEmpty: true, selection: prod) == nil)
+        #expect(act(selection: openShop) == nil)
+        #expect(act(selection: prod) == nil)
         // With text, the field's own delete to the start of the line.
-        #expect(keys.action(chord: forget, focus: .projects, searchEmpty: false, selection: closedDocs) == nil)
-        #expect(keys.action(chord: forget, focus: .sessions, searchEmpty: true, selection: closedDocs) == nil)
-        #expect(keys.action(chord: forget, focus: .projects, searchEmpty: true, selection: nil) == nil)
+        #expect(act(empty: false, selection: closedDocs) == nil)
+        #expect(act(.sessions, selection: closedDocs) == nil)
+        #expect(act(selection: nil) == nil)
     }
 
     @Test func rebindingsCarryOver() {
@@ -355,7 +411,7 @@ import Testing
         jumps[8] = nil
         let keys = SwitcherKeys(jumps: jumps, close: KeyChord(key: "w", command: true, option: true))
         func act(_ chord: KeyChord) -> SwitcherAction? {
-            keys.action(chord: chord, focus: .projects, searchEmpty: true, selection: openShop)
+            keys.action(chord: chord, focus: .projects, searchEmpty: true, selection: openShop, projects: 12)
         }
         #expect(act(KeyChord(key: "1", control: true)) == .jump(0))
         #expect(act(command("1")) == nil)
@@ -368,18 +424,41 @@ import Testing
         #expect(SwitcherKeys.standard.close == command("w"))
     }
 
+    @Test func jumpsReachOnlyTheProjectsListed() {
+        let keys = SwitcherKeys.standard
+        func act(_ chord: KeyChord, projects: Int) -> SwitcherAction? {
+            keys.action(chord: chord, focus: .projects, searchEmpty: true, selection: openShop, projects: projects)
+        }
+        // One project listed: ⌘1 jumps to it, ⌘3 is left to the menus.
+        #expect(act(command("1"), projects: 1) == .jump(0))
+        #expect(act(command("3"), projects: 1) == nil)
+        // Two projects, then servers: the third row is a server, which ⌘3 does not reach.
+        #expect(act(command("2"), projects: 2) == .jump(1))
+        #expect(act(command("3"), projects: 2) == nil)
+        // A search that finds no project: no jump at all.
+        #expect(act(command("1"), projects: 0) == nil)
+        // Past nine projects, the tenth has no key.
+        #expect(act(command("9"), projects: 20) == .jump(8))
+        // No hint on a row a jump does not reach, a server's among them.
+        #expect(keys.jumpHint(1, projects: 2) == "⌘2")
+        #expect(keys.jumpHint(2, projects: 2) == nil)
+        #expect(keys.jumpHint(0, projects: 0) == nil)
+    }
+
     @Test func heldCommandShowsEachRowsJumpKey() {
         let keys = SwitcherKeys.standard
-        #expect(keys.jumpHint(0) == "⌘1")
-        #expect(keys.jumpHint(8) == "⌘9")
-        #expect(keys.jumpHint(9) == nil)
-        #expect(keys.jumpHint(-1) == nil)
+        #expect(keys.jumpHint(0, projects: 12) == "⌘1")
+        #expect(keys.jumpHint(8, projects: 12) == "⌘9")
+        #expect(keys.jumpHint(9, projects: 12) == nil)
+        #expect(keys.jumpHint(-1, projects: 12) == nil)
         // A number whose command has no key: no jump and no hint.
         var jumps: [KeyChord?] = keys.jumps
         jumps[2] = nil
         let unbound = SwitcherKeys(jumps: jumps, close: nil)
-        #expect(unbound.jumpHint(2) == nil)
-        #expect(unbound.action(chord: command("w"), focus: .projects, searchEmpty: true, selection: openShop) == nil)
+        #expect(unbound.jumpHint(2, projects: 12) == nil)
+        let noClose: SwitcherAction? = unbound.action(chord: command("w"), focus: .projects, searchEmpty: true,
+                                                      selection: openShop, projects: 12)
+        #expect(noClose == nil)
         // Read from Window › Select Tab 1–9 and File › Close Tab.
         let ids: [String] = (1...9).map { (n: Int) -> String in "selectTabByNumber:#\(n)" }
         check(SwitcherKeys.jumpCommands, ids)
@@ -441,15 +520,15 @@ import Testing
 
     @Test func aRowSaysOpenOnlyToVoiceOver() {
         let api = project("/Users/sam/Code/api", windows: 2)
-        let xcdev = project("/Users/sam/Code/xcdev", windows: 1)
+        let wiki = project("/Users/sam/Code/wiki", windows: 1)
         let agents = project("/Users/sam/Code/Agents")
         #expect(SwitcherText.windows(api) == "2 windows")
-        #expect(SwitcherText.windows(xcdev) == nil)
+        #expect(SwitcherText.windows(wiki) == nil)
         #expect(SwitcherText.windows(agents) == nil)
         #expect(SwitcherText.folder(of: agents, home: home) == "~/Code")
         #expect(SwitcherText.folder(of: project("/Users/sam/notes"), home: home) == "~")
         #expect(SwitcherText.folder(of: project("/Volumes/Disk/site"), home: home) == "/Volumes/Disk")
-        #expect(SwitcherText.accessibilityLabel(xcdev, branch: "main", home: home) == "xcdev, open, branch main")
+        #expect(SwitcherText.accessibilityLabel(wiki, branch: "main", home: home) == "wiki, open, branch main")
         let twoWindows: String = SwitcherText.accessibilityLabel(api, branch: "main", home: home)
         #expect(twoWindows == "api, open in 2 windows, branch main")
         #expect(SwitcherText.accessibilityLabel(agents, branch: "main", home: home) == "Agents, in ~/Code, branch main")
@@ -461,11 +540,18 @@ import Testing
 
     // MARK: more of the search
 
-    @Test func aFolderBesideTheHomeIsMatchedBelowTheUsersFolder() {
-        let projects: [SwitcherProject] = [project("/Users/Shared/demo"), project("/Users/sam/Code/shop")]
-        let list = SwitcherList(projects: projects, servers: [])
-        #expect(SwitcherSearch.filter(list, query: "users", home: home).isEmpty)
+    @Test func aFolderOutsideTheHomeIsMatchedAsItsRowShowsIt() {
+        let demo: SwitcherProject = project("/Users/Shared/demo")
+        let list = SwitcherList(projects: [demo, project("/Users/sam/Code/shop")], servers: [])
+        // Its second line reads "/Users/Shared", and that text finds it; the projects in the home are not found.
+        let shown: String = SwitcherText.folder(of: demo, home: home)
+        #expect(shown == "/Users/Shared")
+        check(paths(SwitcherSearch.filter(list, query: shown, home: home).projects), ["/Users/Shared/demo"])
+        check(paths(SwitcherSearch.filter(list, query: "users", home: home).projects), ["/Users/Shared/demo"])
         check(paths(SwitcherSearch.filter(list, query: "shared", home: home).projects), ["/Users/Shared/demo"])
+        // The home folder opened as a project is found by the name its row shows, and only by that.
+        let homeRow = SwitcherList(projects: [project(home), project("/Users/sam/Code/shop")], servers: [])
+        check(paths(SwitcherSearch.filter(homeRow, query: "sam", home: home).projects), [home])
         // A home with no folder above it to hide, and none given.
         let root = SwitcherList(projects: [project("/srv/app")], servers: [])
         #expect(SwitcherSearch.filter(root, query: "srv", home: "/").projects.count == 1)
