@@ -125,28 +125,52 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         // Each show starts the selection afresh: shown from a project window, on the other open project used last, so
         // the key that showed it, then Return, switches back.
         reloadProjects(selection: .start)
-        if closed { place() }
+        if closed || upElsewhere { place() }
         super.showWindow(sender)
         focusSearch()
     }
 
+    /// Up already, but on another display than the window it was asked from (behind the window clicked on there): it
+    /// comes over that window, as after a close, rather than forward on a display not being looked at. In front, it is
+    /// where the user put it. On another Space, `.moveToActiveSpace` brings it over.
+    private var upElsewhere: Bool {
+        guard let window, window.isVisible, !window.isKeyWindow else { return false }
+        guard let there = AppDelegate.shared.welcomeOrigin?.window?.screen else { return false }
+        return window.screen?.frame != there.frame
+    }
+
     /// Where it comes up after a close: centred over the window it was asked from, on that window's screen; asked
-    /// from no project window, centred on the screen in front. Up already, or minimized (it comes back from the Dock
-    /// where it was), it is not moved.
+    /// from no project window (the last one closed, a Dock click, a launch), centred on the screen the user's window in
+    /// front was on last, else on the screen in front. Up already on that window's display, or minimized (it comes back
+    /// from the Dock where it was), it is not moved. Made bigger than the screen, it shrinks to fit it.
     private func place() {
         guard let window else { return }
         let size: CGSize = window.frame.size
+        let minSize: CGSize = window.minSize
         if let origin = AppDelegate.shared.welcomeOrigin?.window, let screen = origin.screen ?? NSScreen.main {
-            let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin.frame, within: screen.visibleFrame)
+            let visible: CGRect = screen.visibleFrame
+            let over: CGRect = origin.frame
+            let frame: CGRect = SwitcherPlacement.frame(size: size, minSize: minSize, over: over, within: visible)
             window.setFrame(frame, display: false)
             return
         }
-        // Onto the screen in front first: `center` centres on the screen the window is on, which can be another.
-        if let screen = NSScreen.main {
+        // Onto that screen first: `center` centres on the screen the window is on, which can be another.
+        if let screen = lastFrontScreen ?? NSScreen.main {
             let visible: CGRect = screen.visibleFrame
-            window.setFrame(SwitcherPlacement.frame(size: size, over: visible, within: visible), display: false)
+            let frame: CGRect = SwitcherPlacement.frame(size: size, minSize: minSize, over: visible, within: visible)
+            window.setFrame(frame, display: false)
         }
         window.center()
+    }
+
+    /// The screen of the terminal window the user had in front last, closed since or not; nil before there was one, or
+    /// with its display unplugged. With no key window, `NSScreen.main` can be the menu bar's screen, not that one.
+    private var lastFrontScreen: NSScreen? {
+        guard let frame = ProjectHistoryRecorder.shared.lastFrontFrame else { return nil }
+        let screens: [NSScreen] = NSScreen.screens
+        let frames: [CGRect] = screens.map { (screen: NSScreen) -> CGRect in screen.frame }
+        guard let index = SwitcherPlacement.screen(of: frame, among: frames) else { return nil }
+        return screens[index]
     }
 
     /// The keyboard in the projects search, its text selected, so typing filters at once and replaces what is there.

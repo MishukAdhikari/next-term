@@ -29,6 +29,9 @@ final class ProjectHistoryRecorder {
     /// The terminal window that has the keyboard as the user put it there; nil while another window has it, or one
     /// brought forward for an agent, which is not a window the user went to.
     private weak var front: TerminalWindowController?
+    /// Where the terminal window the user had in front last was, as it came forward or gave up the keyboard (its close
+    /// too): the display the Welcome window comes up on when shown from no window, as when that window was the last.
+    private(set) var lastFrontFrame: CGRect?
     private var observers: [NSObjectProtocol] = []
 
     private init() {
@@ -94,6 +97,7 @@ final class ProjectHistoryRecorder {
         // Brought forward for an agent: not a window the user went to, as its own last time in front says too.
         guard !controller.keyingForAgent else { return }
         front = controller
+        lastFrontFrame = window?.frame
         if let path = controller.project { open.sawInFront(path, at: Date()) }
     }
 
@@ -101,6 +105,7 @@ final class ProjectHistoryRecorder {
     private func windowResignedKey(_ window: NSWindow?) {
         guard let controller = window?.windowController as? TerminalWindowController, controller === front else { return }
         front = nil
+        lastFrontFrame = window?.frame
         if let path = controller.project { open.sawInFront(path, at: Date()) }
     }
 

@@ -418,20 +418,40 @@ public enum SwitcherSelection {
     }
 }
 
-/// Where the window comes up when it was not showing: over the window it was asked from, on that window's screen, so
-/// it never opens on another display than the one being looked at.
+/// Where the window comes up when it was not showing, or was showing on another display: over the window it was asked
+/// from, on that window's screen, so it never opens on another display than the one being looked at.
 public enum SwitcherPlacement {
     /// A frame of `size` centred over `origin`, moved as little as it takes to sit inside `visible` (the screen's frame
-    /// less the menu bar and the Dock), on whole points. Too big for the screen, it keeps its left edge and its top, the
-    /// title bar, on it. Screen coordinates: y grows upward.
-    public static func frame(size: CGSize, over origin: CGRect, within visible: CGRect) -> CGRect {
-        let centredX: CGFloat = (origin.midX - size.width / 2).rounded()
-        let centredY: CGFloat = (origin.midY - size.height / 2).rounded()
+    /// less the menu bar and the Dock), on whole points. Bigger than the screen (made so on a bigger display), it
+    /// shrinks to fit, never below `minSize`; still too big then, it keeps its left edge and its top, the title bar, on
+    /// it. Screen coordinates: y grows upward.
+    public static func frame(size wanted: CGSize, minSize: CGSize, over origin: CGRect,
+                             within visible: CGRect) -> CGRect {
+        let width: CGFloat = max(min(wanted.width, visible.width), minSize.width)
+        let height: CGFloat = max(min(wanted.height, visible.height), minSize.height)
+        let centredX: CGFloat = (origin.midX - width / 2).rounded()
+        let centredY: CGFloat = (origin.midY - height / 2).rounded()
         let left: CGFloat = visible.minX
-        let bottom: CGFloat = visible.maxY - size.height
-        let x: CGFloat = kept(centredX, from: left, to: visible.maxX - size.width, tooBig: left)
+        let bottom: CGFloat = visible.maxY - height
+        let x: CGFloat = kept(centredX, from: left, to: visible.maxX - width, tooBig: left)
         let y: CGFloat = kept(centredY, from: visible.minY, to: bottom, tooBig: bottom)
-        return CGRect(origin: CGPoint(x: x, y: y), size: size)
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// Which of `screens` (their frames) holds most of `frame`: the screen a window is on, as AppKit counts it. Nil
+    /// when none holds any of it, its display unplugged since.
+    public static func screen(of frame: CGRect, among screens: [CGRect]) -> Int? {
+        var best: Int?
+        var bestArea: CGFloat = 0
+        for (index, screen) in screens.enumerated() {
+            let shared: CGRect = screen.intersection(frame)
+            let area: CGFloat = shared.isNull ? 0 : shared.width * shared.height
+            if area > bestArea {
+                best = index
+                bestArea = area
+            }
+        }
+        return best
     }
 
     /// `value` kept between `low` and `high`; `tooBig` when there is no room between them.
