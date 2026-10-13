@@ -25,7 +25,11 @@ extension SelfTest {
             UserKeys.ignoredForTest = false
             try? FileManager.default.removeItem(at: other)
         }
-        guard let window = c.window, await bringToFront(window) else { return check(false, "arrival: the project's window comes to the front") }
+        guard let window = c.window else { return check(false, "arrival: the project has a window") }
+        // What comes forward depends on Next Term being the app in front: with the screen in use elsewhere, say so.
+        guard await bringToFront(window), NSApp.isActive else {
+            return note("arrival checks skipped: Next Term isn't the app in front (" + notFrontmost(window) + ")")
+        }
         func newTab(_ directory: String) async -> (TerminalTab?, [String: Any]) {
             var result = MCPServer.CallResult(text: "", isError: false)
             MCPControl.call("new_tab", ["directory": directory], caller: nil) { result = $0 }

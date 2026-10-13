@@ -36,9 +36,8 @@ import Testing
     }
 
     @Test func readAndSavedInTheDefaults() throws {
-        let name = "nextterm-launch-settings-tests-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("launch-settings-tests")
+        defer { TestDefaults.remove(defaults, name) }
         // Never set, for a new user and for one updating into this release: the Welcome window, never chosen, Ask on, and
         // scrollback kept.
         #expect(LaunchSettings(defaults: defaults) == LaunchSettings())
@@ -73,9 +72,8 @@ import Testing
 
     @Test func aStoredReopenReadsAsResume() throws {
         // 0.10 stored "Reopen the projects that were open" as `lastProjects`: 0.11 reads it as "Resume where I left off".
-        let name = "nextterm-launch-settings-resume-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("launch-settings-resume")
+        defer { TestDefaults.remove(defaults, name) }
         defaults.set("lastProjects", forKey: LaunchSettings.Key.opens)
         let read = LaunchSettings(defaults: defaults)
         #expect(read.opens == .lastProjects && read.opensChosen)
@@ -84,9 +82,8 @@ import Testing
 
     @Test func eachSettingSavesOnlyItsOwnKey() throws {
         // Settings › General's controls: "At launch" counts as chosen only once the user chose it.
-        let name = "nextterm-launch-settings-own-key-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("launch-settings-own-key")
+        defer { TestDefaults.remove(defaults, name) }
         var settings = LaunchSettings(defaults: defaults)
         settings.keepScrollback = false
         settings.save(.keepScrollback, to: defaults)
@@ -104,7 +101,7 @@ import Testing
         // A whole save of settings whose "At launch" nobody chose leaves it unchosen.
         let name2 = name + "-whole"
         let other = try #require(UserDefaults(suiteName: name2))
-        defer { other.removePersistentDomain(forName: name2) }
+        defer { TestDefaults.remove(other, name2) }
         LaunchSettings().save(to: other)
         #expect(other.object(forKey: LaunchSettings.Key.opens) == nil)
         #expect(!LaunchSettings(defaults: other).opensChosen)
