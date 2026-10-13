@@ -124,8 +124,12 @@ extension SelfTest {
         check(await wait(2) { welcome.emptyText == "No sessions match “zzq”." }, "typed with no match, the list says so", welcome.emptyText ?? "no text")
         pressAppKey(window, "\r", code: 36)
         await pause(0.5)
-        check(window.isKeyWindow && typing(), "Return there with nothing to resume does nothing: not Open Project",
-              notFrontmost(window))
+        if NSApp.isActive {
+            check(window.isKeyWindow && typing(), "Return there with nothing to resume does nothing: not Open Project",
+                  notFrontmost(window))
+        } else {
+            note("skipped “Return there with nothing to resume does nothing”: " + notFrontmost(window))
+        }
         pressKey(window, "\u{1B}", code: 53)
         typeKeys(window, "loop fix")
         check(await wait(2) { welcome.shownSessionTitles == [fix] && welcome.selectedSessionTitle == fix } && typing(),
