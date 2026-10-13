@@ -429,33 +429,61 @@ public enum SecretImport {
         offset(range.lowerBound, in: text)..<offset(range.upperBound, in: text)
     }
 
-    /// The containers a JSON source has, with their objects: its own, or for `~/.claude.json` the top-level `mcpServers`
-    /// and each project's. Each project is read where the walk finds it (the first of a repeated key, as `object(at:)`
-    /// would), not looked up again from the top, so many projects take no longer than reading them.
-    static func containers(of source: Source, root: JSONC.Object) -> [(path: [String], servers: JSONC.Object)] {
-        if let containers = source.containers {
-            return containers.compactMap { path in object(at: path, in: root).map { (path, $0) } }
+    /// One servers' object of a JSON source: the keys to it, the object, and whether a key on the way to it is written
+    /// twice. JSON parsers read the last of a repeated key and `member(_:)` the first, so each copy is a container of its
+    /// own: a key in either is listed, and none moves.
+    struct Container {
+        let path: [String]
+        let servers: JSONC.Object
+        let repeated: Bool
+    }
+
+    /// The containers a JSON source has: its own, or for `~/.claude.json` the top-level `mcpServers` and each project's.
+    /// Each project is read where the walk finds it, not looked up again from the top, so many projects take no longer
+    /// than reading them.
+    static func containers(of source: Source, root: JSONC.Object) -> [Container] {
+        if let paths = source.containers {
+            return paths.flatMap { path in objects(at: path, in: root).map { Container(path: path, servers: $0.object, repeated: $0.repeated) } }
         }
-        var list: [(path: [String], servers: JSONC.Object)] = []
-        if let servers = object(at: ["mcpServers"], in: root) { list.append((["mcpServers"], servers)) }
-        guard let projects = root.member("projects"), case .object(let object) = projects.value else { return list }
-        var seen = Set<String>()
-        for project in object.members where seen.insert(project.key).inserted {
-            guard case .object(let settings) = project.value, let member = settings.member("mcpServers"),
-                  case .object(let servers) = member.value else { continue }
-            list.append((["projects", project.key, "mcpServers"], servers))
+        var list = objects(at: ["mcpServers"], in: root).map { Container(path: ["mcpServers"], servers: $0.object, repeated: $0.repeated) }
+        let copies = objects(at: ["projects"], in: root)
+        // How often each project is there, over every copy of `projects`.
+        var counts: [String: Int] = [:]
+        for copy in copies { for project in copy.object.members { counts[project.key, default: 0] += 1 } }
+        for copy in copies {
+            for project in copy.object.members {
+                guard case .object(let settings) = project.value else { continue }
+                let twice = copy.repeated || counts[project.key, default: 0] > 1
+                for servers in objects(at: ["mcpServers"], in: settings) {
+                    list.append(Container(path: ["projects", project.key, "mcpServers"], servers: servers.object, repeated: twice || servers.repeated))
+                }
+            }
         }
         return list
     }
 
-    /// The object at `path` from the root.
-    static func object(at path: [String], in root: JSONC.Object) -> JSONC.Object? {
-        var current = root
+    /// Every object at `path` from `root`, each copy of a key written twice on the way, and whether one was.
+    static func objects(at path: [String], in root: JSONC.Object) -> [(object: JSONC.Object, repeated: Bool)] {
+        var level = [(object: root, repeated: false)]
         for key in path {
-            guard let member = current.member(key), case .object(let object) = member.value else { return nil }
-            current = object
+            var next: [(object: JSONC.Object, repeated: Bool)] = []
+            for (object, repeated) in level {
+                let copies = object.members.filter { $0.key == key }
+                for copy in copies {
+                    if case .object(let inner) = copy.value { next.append((inner, repeated || copies.count > 1)) }
+                }
+            }
+            level = next
         }
-        return current
+        return level
+    }
+
+    /// The object at `path` from the root, when no key on the way to it is written twice: Undo and the check after a
+    /// write never take a copy its agent doesn't read for the one it does.
+    static func object(at path: [String], in root: JSONC.Object) -> JSONC.Object? {
+        let found = objects(at: path, in: root)
+        guard found.count == 1, let only = found.first, !only.repeated else { return nil }
+        return only.object
     }
 
     static func jsonEntries(_ text: String, source: Source, stop: () -> Bool = { false }) -> [Entry]? {
@@ -471,14 +499,14 @@ public enum SecretImport {
         let strictRefusal: String? = source.format == .strictJSON && (document.hasComments || document.hasTrailingCommas)
             ? "comments in a file that must be plain JSON" : nil
         var entries: [Entry] = []
-        for (path, servers) in containers(of: source, root: root) {
+        for container in containers(of: source, root: root) {
             // Asked for each project's servers too: `~/.claude.json` can list many projects with none.
             if stop() { return entries }
-            let repeated = servers.hasRepeatedKeys
-            for member in servers.members {
+            let repeated = container.repeated || container.servers.hasRepeatedKeys
+            for member in container.servers.members {
                 if stop() { return entries }
                 guard case .object(let object) = member.value else { continue }
-                var entry = Entry(location: Location(container: path, server: member.key), range: offsets(member.value.range, in: text),
+                var entry = Entry(location: Location(container: container.path, server: member.key), range: offsets(member.value.range, in: text),
                                   command: [], args: [])
                 let entryText = document.string(member.value.range)
                 entry.hasComments = entryText.contains("//") || entryText.contains("/*")
@@ -1440,9 +1468,9 @@ public enum SecretImport {
     static func jsonMembers(of source: Source, root: JSONC.Object, wanted: Set<Location>) -> [Location: JSONC.Member] {
         let paths = Set(wanted.map(\.container))
         var members: [Location: JSONC.Member] = [:]
-        for (path, servers) in containers(of: source, root: root) where paths.contains(path) {
-            for member in servers.members {
-                let location = Location(container: path, server: member.key)
+        for container in containers(of: source, root: root) where paths.contains(container.path) {
+            for member in container.servers.members {
+                let location = Location(container: container.path, server: member.key)
                 if wanted.contains(location), members[location] == nil { members[location] = member }
             }
         }
