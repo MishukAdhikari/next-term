@@ -373,10 +373,9 @@ enum MCPBridge {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         let environment = ProcessInfo.processInfo.environment
         let socket = environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
-        // The offer to run parallel work in tabs, first, for an agent in a Next Term tab while the setting is on.
-        let offering = (UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true)
-            && MCPServer.runsUnder(executable: Bundle.main.executablePath ?? "")
-        let instructions = MCPServer.instructions(offeringTabs: offering)
+        // Next Term's own skills, first, for an agent in a Next Term tab; next-term-tabs while the setting is on.
+        let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
+        let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
         let calls = DispatchGroup()
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }

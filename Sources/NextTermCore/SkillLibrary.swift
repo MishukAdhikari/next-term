@@ -114,7 +114,7 @@ public enum SkillLibrary {
         let own: [Copy]
     }
 
-    public static func gather(from start: String?, home: String, nextTerm: Bool) -> Found {
+    public static func gather(from start: String?, home: String, nextTerm: [BuiltInSkill]) -> Found {
         let chain = start.map { projectFolders(from: $0, home: home) } ?? []
         let top = chain.last
         let levels = chain.map { folder in
@@ -122,14 +122,13 @@ public enum SkillLibrary {
             return folders.flatMap { kind in read(folder + "/" + kind, scope: .project, kind: kind, place: relative + kind) }
         }
         let personal = folders.flatMap { kind in read(home + "/" + kind, scope: .personal, kind: kind, place: "~/" + kind) }
-        let own = nextTerm ? [Copy(name: BuiltInSkill.name, description: BuiltInSkill.description, scope: .nextTerm, folder: nil,
-                                   place: "Next Term", kind: nil)] : []
+        let own = nextTerm.map { Copy(name: $0.name, description: $0.description, scope: .nextTerm, folder: nil, place: "Next Term", kind: nil) }
         return Found(levels: levels, personal: personal, own: own)
     }
 
     /// Every skill for an agent working in `start` (nil: no project), one entry a name, in the order its rule ranks
-    /// them. `nextTerm`: Next Term's own are offered (Settings › Editor › Agents offer to run parallel work in tabs).
-    public static func entries(from start: String?, home: String, nextTerm: Bool, reader: Reader = Reader(program: nil)) -> [Entry] {
+    /// them. `nextTerm`: Next Term's own that are offered (BuiltInSkill.offered).
+    public static func entries(from start: String?, home: String, nextTerm: [BuiltInSkill], reader: Reader = Reader(program: nil)) -> [Entry] {
         rank(gather(from: start, home: home, nextTerm: nextTerm), reader: reader)
     }
 
@@ -181,7 +180,7 @@ public enum SkillLibrary {
         public func entry(_ name: String, for agent: SkillAgent) -> Entry? { byAgent[agent]?.first { $0.name == name } }
     }
 
-    public static func overview(project: String, home: String, nextTerm: Bool) -> Overview {
+    public static func overview(project: String, home: String, nextTerm: [BuiltInSkill]) -> Overview {
         let found = gather(from: project, home: home, nextTerm: nextTerm)
         var byAgent: [SkillAgent: [Entry]] = [:]
         for agent in SkillAgent.allCases { byAgent[agent] = rank(found, reader: Reader(program: agent.rawValue)) }
@@ -205,11 +204,11 @@ public enum SkillLibrary {
     /// One skill as an agent gets it: its entry, its SKILL.md, and the other files in its folder (relative paths, at
     /// most 100, none from .git or node_modules). `scope`: that scope's copy rather than the one the rule picks. Nil
     /// when there is none.
-    public static func skill(_ name: String, scope: Scope? = nil, from start: String?, home: String, nextTerm: Bool,
+    public static func skill(_ name: String, scope: Scope? = nil, from start: String?, home: String, nextTerm: [BuiltInSkill],
                              reader: Reader = Reader(program: nil)) -> (entry: Entry, copy: Copy, text: String, files: [String])? {
         guard let entry = entries(from: start, home: home, nextTerm: nextTerm, reader: reader).first(where: { $0.name == name }),
               let copy = ([entry.copy] + entry.others).first(where: { scope == nil || $0.scope == scope }) else { return nil }
-        guard let folder = copy.folder else { return (entry, copy, BuiltInSkill.text, []) }
+        guard let folder = copy.folder else { return BuiltInSkill.named(copy.name).map { (entry, copy, $0.text, []) } }
         guard let file = skillFile(in: folder), let text = readText(file, in: folder) else { return nil }
         return (entry, copy, text, otherFiles(in: folder))
     }

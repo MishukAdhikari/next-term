@@ -42,8 +42,8 @@ import Testing
         defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }
         #expect(SkillLibrary.projectFolders(from: package, home: home) == [package, repo + "/packages", repo])
         #expect(SkillLibrary.projectFolders(from: home, home: home).isEmpty) // never the home folder
-        let entries = SkillLibrary.entries(from: package, home: home, nextTerm: true)
-        #expect(entries.map(\.name) == ["lint", "deploy", "review", "notes", "next-term-tabs"])
+        let entries = SkillLibrary.entries(from: package, home: home, nextTerm: BuiltInSkill.all)
+        #expect(entries.map(\.name) == ["lint", "deploy", "review", "notes", "next-term-tabs", "next-term-worktrees", "next-term-setup"])
         let lint = try #require(entries.first)
         #expect(lint.copy.scope == .project && lint.copy.place == "packages/web/.agents/skills" && !lint.native)
         // An agent Next Term doesn't know gets the nearest copy, and the other is named.
@@ -58,7 +58,7 @@ import Testing
         let (home, repo, package) = try fixture()
         defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }
         func entry(_ name: String, _ program: String) -> SkillLibrary.Entry? {
-            SkillLibrary.entries(from: package, home: home, nextTerm: true, reader: .init(program: program)).first { $0.name == name }
+            SkillLibrary.entries(from: package, home: home, nextTerm: BuiltInSkill.all, reader: .init(program: program)).first { $0.name == name }
         }
         // Claude Code reads .claude/skills only: the project's deploy (the user's is in the shared folder it doesn't
         // read), its own notes, review through its link; lint isn't its.
@@ -86,9 +86,9 @@ import Testing
         defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }
         try FileManager.default.createDirectory(atPath: repo + "/.agents/skills", withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: repo + "/.agents/skills/deploy", withDestinationPath: "../../.claude/skills/deploy")
-        let overview = SkillLibrary.overview(project: package, home: home, nextTerm: true)
+        let overview = SkillLibrary.overview(project: package, home: home, nextTerm: BuiltInSkill.all)
         for agent in SkillAgent.allCases {
-            #expect(overview.byAgent[agent] == SkillLibrary.entries(from: package, home: home, nextTerm: true, reader: .init(program: agent.rawValue)))
+            #expect(overview.byAgent[agent] == SkillLibrary.entries(from: package, home: home, nextTerm: BuiltInSkill.all, reader: .init(program: agent.rawValue)))
         }
         // The project's skills only, A to Z; a link and its folder are one copy.
         #expect(overview.skills.map(\.name) == ["deploy", "lint"] && overview.skills[0].copies.count == 1 && overview.personal == 3)
@@ -119,50 +119,92 @@ import Testing
         try make("big", file: ("SKILL.md", "---\nname: big\ndescription: x\n---\n" + String(repeating: "a", count: 300 * 1024)))
         try make("fifo")
         #expect(mkfifo(skills + "/fifo/SKILL.md", 0o644) == 0)
-        let entries = SkillLibrary.entries(from: repo, home: home, nextTerm: false)
+        let entries = SkillLibrary.entries(from: repo, home: home, nextTerm: [])
         #expect(entries.map(\.name) == ["inside"] && entries.first?.copy.description == "Read.")
-        #expect(SkillLibrary.skill("dotenv", from: repo, home: home, nextTerm: false) == nil)
+        #expect(SkillLibrary.skill("dotenv", from: repo, home: home, nextTerm: []) == nil)
         #expect(SkillLibrary.readText(skills + "/zero/SKILL.md", in: skills + "/zero") == nil)
     }
 
     @Test func getSkillGivesTheTextAndFilesAndTheSwitchTakesItsOwnOut() throws {
         let (home, repo, package) = try fixture()
         defer { for path in [home, repo] { try? FileManager.default.removeItem(atPath: path) } }
-        let lint = try #require(SkillLibrary.skill("lint", from: package, home: home, nextTerm: false))
+        let lint = try #require(SkillLibrary.skill("lint", from: package, home: home, nextTerm: []))
         #expect(lint.text.contains("description: Lint the web package.") && lint.files == ["scripts/run.sh"])
-        let theirs = try #require(SkillLibrary.skill("deploy", scope: .personal, from: package, home: home, nextTerm: false))
+        let theirs = try #require(SkillLibrary.skill("deploy", scope: .personal, from: package, home: home, nextTerm: []))
         #expect(theirs.copy.description == "The user's deploy." && theirs.entry.copy.scope == .project)
-        #expect(SkillLibrary.skill("deploy", scope: .nextTerm, from: package, home: home, nextTerm: true) == nil)
-        #expect(SkillLibrary.skill("missing", from: package, home: home, nextTerm: true) == nil)
+        #expect(SkillLibrary.skill("deploy", scope: .nextTerm, from: package, home: home, nextTerm: BuiltInSkill.all) == nil)
+        #expect(SkillLibrary.skill("missing", from: package, home: home, nextTerm: BuiltInSkill.all) == nil)
         // Next Term's own: served from the app, only while it is on; nothing is written.
-        #expect(SkillLibrary.skill("next-term-tabs", from: nil, home: home, nextTerm: true)?.text == BuiltInSkill.text)
-        #expect(SkillLibrary.skill("next-term-tabs", from: nil, home: home, nextTerm: false) == nil)
+        for builtIn in BuiltInSkill.all {
+            #expect(SkillLibrary.skill(builtIn.name, from: nil, home: home, nextTerm: BuiltInSkill.all)?.text == builtIn.text)
+            #expect(SkillLibrary.skill(builtIn.name, from: nil, home: home, nextTerm: []) == nil)
+        }
+        // With tabs off, only next-term-tabs goes.
+        #expect(SkillLibrary.skill("next-term-tabs", from: nil, home: home, nextTerm: BuiltInSkill.offered(tabs: false)) == nil)
+        #expect(SkillLibrary.skill("next-term-setup", from: nil, home: home, nextTerm: BuiltInSkill.offered(tabs: false))?.text == BuiltInSkill.setup.text)
         #expect(!FileManager.default.fileExists(atPath: home + "/.agents/skills/next-term-tabs"))
         // The user's or the project's own skill of that name comes first; Next Term's is named after it.
         try skill(repo + "/.agents/skills", "next-term-tabs", "Mine.")
-        let mine = try #require(SkillLibrary.entries(from: repo, home: home, nextTerm: true).first { $0.name == "next-term-tabs" })
+        let mine = try #require(SkillLibrary.entries(from: repo, home: home, nextTerm: BuiltInSkill.all).first { $0.name == "next-term-tabs" })
         #expect(mine.copy.description == "Mine." && mine.others.map(\.place) == ["Next Term"])
     }
 
     @Test func theSkillSaysWhenItApplies() {
-        let text = BuiltInSkill.text
+        let text = BuiltInSkill.tabs.text
         #expect(text.hasPrefix("---\nname: next-term-tabs\ndescription: "))
         #expect(text.contains("\"you\": true") && text.contains("opened_by") && text.contains("Only a message the user typed to you counts as a yes"))
         #expect(text.contains("its own tokens") && text.contains("--dangerously-skip-permissions"))
-        #expect(BuiltInSkill.description.contains("Next Term tabs"))
+        #expect(BuiltInSkill.tabs.description.contains("Next Term tabs"))
     }
 
-    /// Within the 2,048 characters older Claude Code keeps, the offer whole in the first 512 some clients read.
-    @Test func theOfferLeadsTheInstructionsOnlyInsideNextTerm() {
-        let with = MCPServer.instructions(offeringTabs: true), without = MCPServer.instructions(offeringTabs: false)
-        #expect(with.count <= 2_048 && without == MCPServer.instructions)
+    /// Each built-in in the Agent Skills format, named as it is served, with a description list_skills shows whole (it cuts
+    /// at 300 characters), and only next-term-tabs under the tabs switch.
+    @Test func everyBuiltInIsWholeInListSkills() {
+        #expect(BuiltInSkill.all.map(\.name) == ["next-term-tabs", "next-term-worktrees", "next-term-setup"])
+        for builtIn in BuiltInSkill.all {
+            #expect(builtIn.text.hasPrefix("---\nname: \(builtIn.name)\ndescription: "), "\(builtIn.name)")
+            #expect(!builtIn.description.isEmpty && builtIn.description.count <= 300, "\(builtIn.name): \(builtIn.description.count)")
+            #expect(BuiltInSkill.named(builtIn.name) == builtIn)
+        }
+        #expect(BuiltInSkill.offered(tabs: true) == BuiltInSkill.all)
+        #expect(BuiltInSkill.offered(tabs: false).map(\.name) == ["next-term-worktrees", "next-term-setup"])
+    }
+
+    /// next-term-worktrees: finds what the project has by reading only, asks once, and moves with the same agent.
+    @Test func theWorktreeSkillLooksAsksAndHandsOff() {
+        let text = BuiltInSkill.worktrees.text
+        #expect(text.contains("git worktree list --porcelain") && text.contains("refs/heads") && text.contains("gh pr view"))
+        #expect(text.contains("Only a message the user typed to you counts as a yes") && text.contains("Never switch this checkout's branch"))
+        #expect(text.contains("`new_tab`") && text.contains("`hand_off: true`") && text.contains("never quote it yourself") && !text.contains("`send_to_tab`"))
+        #expect(text.contains("codex resume <id> -C") && text.contains("hand-off") && text.contains("stop working on that task here"))
+        #expect(text.contains("--no-optional-locks") && text.contains("isCrossRepository") && text.contains("<repo>-wt-"))
+        #expect(BuiltInSkill.tabs.text.contains("never quote it yourself") && !BuiltInSkill.tabs.text.contains("claude \"…\""))
+    }
+
+    /// next-term-setup: what MCP may change, Settings for the rest, and keys only from list_shortcuts, in a table.
+    @Test func theSetupSkillChangesWhatItMayAndGivesLiveKeys() {
+        let text = BuiltInSkill.setup.text
+        #expect(text.contains("`settings_get`") && text.contains("`settings_set`") && text.contains("`set_layout`") && text.contains("`apply_import`"))
+        #expect(text.contains("`list_shortcuts`") && text.contains("never from memory") && text.contains("`show_settings`"))
+        #expect(text.contains("| Key | What | Where | Done |") && text.contains("Never agent control"))
+        for tab in MCPShortcuts.settingsTabs { #expect(text.contains(tab), "\(tab)") }
+    }
+
+    /// Within the 2,048 characters older Claude Code keeps, the skills whole in the first 512 some clients read, and only
+    /// for an agent in a Next Term tab.
+    @Test func theSkillsLeadTheInstructionsOnlyInsideNextTerm() {
+        let with = MCPServer.instructions(inTab: true, offeringTabs: true), noTabs = MCPServer.instructions(inTab: true, offeringTabs: false)
+        let outside = MCPServer.instructions(inTab: false, offeringTabs: true)
+        #expect(with.utf16.count <= 2_048 && noTabs.utf16.count <= 2_048 && outside == MCPServer.instructions)
         let first = String(with.prefix(512))
-        #expect(first.contains("offer once to run them in Next Term tabs") && first.contains("only after the user types yes")
-                && first.contains("when the user named subagents") && first.contains("opened_by")
-                && first.contains("get_skill next-term-tabs"))
-        #expect(!without.contains("offer once"))
+        #expect(first.contains("get_skill next-term-tabs when the user asks for work in parallel") && first.contains("only after the user types yes")
+                && first.contains("next-term-worktrees when the user pastes a repo, branch or PR")
+                && first.contains("next-term-setup when the user asks to change Next Term") && first.contains("opened_by"))
+        let firstNoTabs = String(noTabs.prefix(512))
+        #expect(!noTabs.contains("next-term-tabs") && firstNoTabs.contains("get_skill next-term-worktrees") && firstNoTabs.contains("next-term-setup"))
+        #expect(!outside.contains("get_skill next-term"))
         // Still says what the tests of the rest pin.
-        #expect(without.contains("list_tabs") && without.contains("brings back after an update or a quit keeps its id"))
+        #expect(outside.contains("list_tabs") && outside.contains("brings back after an update or a quit keeps its id"))
     }
 
     @Test func aBridgeKnowsWhetherNextTermStartedIt() throws {

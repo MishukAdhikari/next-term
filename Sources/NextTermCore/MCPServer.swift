@@ -37,16 +37,14 @@ public enum MCPServer {
         the user to type a key into Next Term. store_secret saves a key you already hold.
         """
 
-    /// The offer, first in the instructions when the agent runs in a Next Term tab and Settings › Editor › "Agents offer
-    /// to run parallel work in tabs" is on; it sends the agent to the next-term-tabs skill (BuiltInSkill, over
-    /// get_skill) for the rules. Whole within its first 512 characters, as some clients read only those.
-    public static let offerParagraph = """
-        This agent runs in a Next Term tab. When the user asks for tasks in parallel, at the same time or \
-        in the background, or for another agent (Codex, Claude…) to do or review part of the work, read \
-        get_skill next-term-tabs, then offer once to run them in Next Term tabs, one agent each: name each \
-        tab, agent and task, say each uses its own tokens, and open them only after the user types yes. Not \
-        for small work, after a no, when the user named subagents, or in a tab with opened_by.
-        """
+    /// First in the instructions when the agent runs in a Next Term tab: each of Next Term's own skills offered
+    /// (BuiltInSkill.offered), with when to read it; get_skill gives the rules. next-term-tabs leads, while Settings ›
+    /// Editor › "Agents offer to run parallel work in tabs" is on. Whole within its first 512 characters, as some
+    /// clients read only those.
+    public static func skillsParagraph(offeringTabs: Bool) -> String {
+        let offered = BuiltInSkill.offered(tabs: offeringTabs).map { $0.name + " " + $0.when }
+        return "This agent runs in a Next Term tab. Read get_skill " + offered.joined(separator: "; ") + ". Not in a tab with opened_by."
+    }
 
     /// Whether a process (the MCP bridge, `nxtrm mcp`) runs under the Next Term app at `executable`: an agent in one of its
     /// tabs started it. Walks the parents (the agent, its shell, the app), not the environment, which some agents filter
@@ -62,9 +60,9 @@ public enum MCPServer {
         return false
     }
 
-    /// What `initialize` says: the offer first when `offeringTabs`.
-    public static func instructions(offeringTabs: Bool) -> String {
-        offeringTabs ? offerParagraph + " " + instructions : instructions
+    /// What `initialize` says: for an agent in a Next Term tab (`inTab`), Next Term's own skills first.
+    public static func instructions(inTab: Bool, offeringTabs: Bool) -> String {
+        inTab ? skillsParagraph(offeringTabs: offeringTabs) + " " + instructions : instructions
     }
 
     // MARK: tools
@@ -139,8 +137,8 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute folder path."}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 30),
         Tool(name: "new_tab", title: "New tab",
-             description: "Opens a terminal tab in a folder (in the window of the project that holds it, opening the project if needed), or a pane split beside another tab, and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"gemini\"). Returns the tab's id. Its window comes forward (Settings: agents_bring_tabs_forward), but in the window the user works in it opens behind their tab, and it never takes the user's keyboard until they click it. Before starting agents in several tabs for parallel work, offer it to the user and wait for their yes; a tab you start has your tab as its opened_by.",
-             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "title": {"type": "string", "description": "Tab title: for an agent, name its task."}, "split_beside": {"type": "string", "description": "A tab id: open as a pane split beside that tab instead of a new tab."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}}, "required": ["directory"], "additionalProperties": false}"#,
+             description: "Opens a terminal tab in a folder (in the window of the project that holds it, opening the project if needed), or a pane split beside another tab, and optionally runs a command in it, such as an agent (\"claude\", \"codex\", \"gemini\"). Returns the tab's id. Its window comes forward (Settings: agents_bring_tabs_forward), but in the window the user works in it opens behind their tab, and it never takes the user's keyboard until they click it. Before starting agents in several tabs for parallel work, offer it to the user and wait for their yes; a tab you start has your tab as its opened_by, unless hand_off. A linked worktree's folder opens in the worktree's own window.",
+             inputSchema: #"{"type": "object", "properties": {"directory": {"type": "string", "description": "Absolute folder path."}, "command": {"type": "string", "description": "Typed at the prompt and run."}, "prompt": {"type": "string", "description": "With command: an agent's first prompt, as plain text. Next Term quotes it for the shell and types it after command (command codex, prompt Fix the login test: codex 'Fix the login test'), so never quote it yourself."}, "hand_off": {"type": "boolean", "description": "The agent in this tab carries on your own conversation with the user (a hand-off, as next-term-worktrees moves work), not a task of yours: it gets no opened_by. Default false."}, "title": {"type": "string", "description": "Tab title: for an agent, name its task."}, "split_beside": {"type": "string", "description": "A tab id: open as a pane split beside that tab instead of a new tab."}, "direction": {"type": "string", "enum": ["right", "down"], "description": "With split_beside. Default right."}}, "required": ["directory"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 30),
         Tool(name: "send_to_tab", title: "Type into a tab",
              description: "Types text into a tab, as if pasted, and presses Return unless submit is false: a prompt for the agent in that tab, an answer to its question, or a shell command.",
@@ -191,13 +189,21 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
         Tool(name: "list_skills", title: "List agent skills",
-             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, with which of Claude Code, Codex and Command Code loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in Next Term tabs). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
+             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, with which of Claude Code, Codex and Command Code loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "get_skill", title: "Get a skill",
-             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs: when the user asks for work in parallel, in the background, in tabs, or by another agent.",
+             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, and next-term-setup before changing Next Term for the user.",
              inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "The skill's name, as list_skills gives it."}, "scope": {"type": "string", "enum": ["project", "personal", "next-term"], "description": "That scope's copy instead of the one your agent's rule picks."}, "project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "required": ["name"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "list_shortcuts", title: "List keyboard shortcuts",
+             description: "The user's keyboard shortcuts as Next Term has them now: the shortcut set (Next Term, VS Code or JetBrains), and each command's title, where it is (a menu path such as \"File › New Tab\", or the part it works in), its key (null when it has none), and its default when the user changed it. query narrows it to commands whose title or place has all its words, or whose key it is (\"⌥⌘T\"). Keys differ with the set and the user's own changes: tell the user keys from here, never from memory.",
+             inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "Words in the command's title or menu path (\"split\", \"terminal position\"), or a key such as ⌘T. Default: every command."}}, "additionalProperties": false}"#,
+             readOnly: true, destructive: false, idempotent: true, timeout: 15),
+        Tool(name: "show_settings", title: "Show Settings",
+             description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, skills or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
+             inputSchema: #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "secrets"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#,
+             readOnly: false, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "install_skill", title: "Ask to install a skill",
              description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, failed (with a note saying why), busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",
              inputSchema: #"{"type": "object", "properties": {"source": {"type": "string", "description": "owner/repo, owner/repo/path/to/skill, or a github.com link to a repository, folder or SKILL.md."}, "reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words."}, "request_id": {"type": "string", "description": "A pending request's id, to keep waiting for the user's answer."}}, "additionalProperties": false}"#,

@@ -23,10 +23,12 @@ import Testing
     /// Claude Code keeps a server's instructions up to 2,048 characters and cuts the rest, so every sentence must fit in
     /// them, the secret tools' at the end included, and with the parallel-tabs offer in front too.
     @Test func theInstructionsFitInTwoThousandAndFortyEightCharacters() {
-        for offering in [false, true] {
-            let said = MCPServer.instructions(offeringTabs: offering)
-            #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, offering tabs: \(offering)")
-            #expect(said.hasSuffix("store_secret saves a key you already hold."))
+        for inTab in [false, true] {
+            for offering in [false, true] {
+                let said = MCPServer.instructions(inTab: inTab, offeringTabs: offering)
+                #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, in a tab: \(inTab), offering tabs: \(offering)")
+                #expect(said.hasSuffix("store_secret saves a key you already hold."))
+            }
         }
     }
 
@@ -78,6 +80,7 @@ import Testing
         #expect(addHost.contains("only directory and keep change") && addHost.contains("remove_host") && !addHost.contains("is updated"))
         // Skills: listing only reads; asking to install or remove changes what agents follow, so clients ask first.
         #expect(hints("list_skills")["readOnlyHint"] as? Bool == true)
+        #expect(hints("list_shortcuts")["readOnlyHint"] as? Bool == true && hints("show_settings")["destructiveHint"] as? Bool == false)
         for name in ["install_skill", "remove_skill"] {
             #expect(hints(name)["destructiveHint"] as? Bool == true && hints(name)["idempotentHint"] as? Bool == false, "\(name)")
         }
