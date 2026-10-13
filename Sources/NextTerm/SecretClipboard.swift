@@ -27,8 +27,9 @@ final class SecretClipboard {
     /// The last Copy asked for this Mac only (`.currentHostOnly`), for the self-test: macOS gives no way to read it back.
     private(set) var preparedForThisMacOnly = false
     #if DEBUG
-    /// The last Copy's writes to the pasteboard, each the types it put there at once, for the self-test.
-    private(set) var lastCopyWrites: [[NSPasteboard.PasteboardType]] = []
+    /// The types the pasteboard held just before and just after the last Copy's write, read back from the pasteboard,
+    /// for the self-test; nil when that Copy made no write through `write(_:)`.
+    private(set) var lastCopyWrite: (before: [NSPasteboard.PasteboardType], after: [NSPasteboard.PasteboardType])?
     #endif
 
     init(pasteboard: NSPasteboard) {
@@ -40,18 +41,30 @@ final class SecretClipboard {
     @discardableResult
     func copy(_ value: SecretBytes) -> Bool {
         guard let text = value.utf8String() else { return false }
+        #if DEBUG
+        lastCopyWrite = nil
+        #endif
         pasteboard.prepareForNewContents(with: .currentHostOnly)
         preparedForThisMacOnly = true
-        let item = Self.markedItem(text)
-        #if DEBUG
-        lastCopyWrites = [item.types]
-        #endif
-        let wrote = pasteboard.writeObjects([item])
+        let wrote = write([Self.markedItem(text)])
         let count = pasteboard.changeCount
         copiedCount = count
         DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) { [weak self] in
             MainActor.assumeIsolated { self?.clearCopy(ifStill: count) }
         }
+        return wrote
+    }
+
+    /// Copy's one write. A debug build reads back what the pasteboard holds just before and just after it, for the
+    /// self-test: the value written before it, or a marker written after it, shows there.
+    private func write(_ items: [NSPasteboardItem]) -> Bool {
+        #if DEBUG
+        let before = pasteboard.types ?? []
+        #endif
+        let wrote = pasteboard.writeObjects(items)
+        #if DEBUG
+        lastCopyWrite = (before, pasteboard.types ?? [])
+        #endif
         return wrote
     }
 

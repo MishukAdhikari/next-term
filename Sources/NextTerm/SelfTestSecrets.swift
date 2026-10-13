@@ -364,6 +364,8 @@ extension SelfTest {
         check(printed && read.text.contains("•••") && !read.text.contains(value) && !waited.text.contains(value) && waited.text.contains("•••"),
               "secrets: read_tab and wait_for_tab show ••• where a tab printed a stored key", String(read.text.suffix(200)))
         await secretsWrappedTailCheck(tab, client: client, value: value)
+        await secretsWrappedWaitCheck(tab, client: client, value: value)
+        await secretsWrappedChoiceCheck(c, base: base, client: client, value: value, valueFile: valueFile)
 
         // A program sets the tab's title to the value (OSC 0), while its command runs.
         tab.view.send(txt: "printf '\\e]0;%s\\a' \"$K\"; sleep 6\r")
@@ -424,6 +426,67 @@ extension SelfTest {
         check(read.text.contains("•••") && !pieces.contains { read.text.contains($0) },
               "secrets: read_tab whose window starts on the second row of a key a wrap split shows ••• and none of its tail",
               String(read.text.suffix(200)))
+    }
+
+    /// wait_for_tab reads the last 40 rows. Keys a wrap split fill them, two rows each, and the same rows with one more
+    /// line after them move the window by a row, so one of the two windows starts on a key's second row: neither shows
+    /// any of a key's tail.
+    static func secretsWrappedWaitCheck(_ tab: TerminalTab, client: SecretsMCPClient, value: String) async {
+        let id = tab.id.uuidString.lowercased()
+        let tail = String(value.dropFirst(8))
+        let characters = Array(tail)
+        let pieces = (0...(characters.count - 6)).map { String(characters[$0..<$0 + 6]) }
+        let keys = "for i in $(seq 25); do printf '%*s%s\\n' $((COLUMNS - 8)) '' \"$K\"; done; "
+        var startsOnTail = false
+        for (round, extra) in ["", "printf 'x\\n'; "].enumerated() {
+            let mark = "wrapped-wait-\(round)"
+            tab.view.send(txt: keys + extra + "printf 'wrapped-wait-%s\\n' \(round)\r")
+            let done = await wait(15) { !tab.status.running && tab.screenTail().contains(mark) }
+            if tab.screenTail(40).first?.hasPrefix(tail) == true { startsOnTail = true }
+            let waited = await client.call("wait_for_tab", ["tab_id": id, "timeout_seconds": 5])
+            check(done && waited.text.contains("•••") && !pieces.contains { waited.text.contains($0) },
+                  "secrets: wait_for_tab over rows of keys a wrap split shows ••• and none of a key's tail (\(round + 1) of 2)",
+                  String(waited.text.suffix(200)))
+        }
+        check(startsOnTail, "secrets: one of wait_for_tab's two windows starts on the second row of a key a wrap split",
+              tab.screenTail(40).prefix(2).joined(separator: " | "))
+    }
+
+    /// The choices of an agent's question are read from rows masked over whole lines: a key the terminal wrapped inside
+    /// a choice is masked, though the choice's label is its first row only. A stand-in agent named claude asks.
+    static func secretsWrappedChoiceCheck(_ c: TerminalWindowController, base: URL, client: SecretsMCPClient,
+                                          value: String, valueFile: URL) async {
+        let bin = base.appendingPathComponent("choice-bin")
+        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let agent = bin.appendingPathComponent("claude")
+        // The key starts so that all but its last 4 characters end the first choice's row.
+        try? """
+        #!/bin/sh
+        K=$(cat \(ShellQuote.quote(valueFile.path)))
+        cols=$(stty size | cut -d' ' -f2)
+        pad=$((cols - 10 - ${#K})); [ "$pad" -lt 0 ] && pad=0
+        printf 'Do you want to use the stored key?\\n'
+        printf '\\342\\235\\257 1. Yes, use %*s%s\\n' "$pad" '' "$K"
+        printf '  2. No\\n'
+        while true; do sleep 1; done
+        """.write(to: agent, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agent.path)
+        let tab = c.addTab(directory: base.path, select: false)
+        defer { c.requestClose(tab) }
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "secrets: a tab for the choices check") }
+        tab.view.send(txt: "PATH=\(ShellQuote.quote(bin.path)):$PATH claude\r")
+        let asked = await wait(15) { tab.status.question == "Do you want to use the stored key?" }
+        let read = await client.call("read_tab", ["tab_id": tab.id.uuidString.lowercased(), "lines": 10])
+        let answer = (try? JSONSerialization.jsonObject(with: Data(read.text.utf8))) as? [String: Any]
+        let choices = answer?["choices"] as? [String] ?? []
+        let head = Array(value.dropLast(4))
+        let pieces = (0...(head.count - 6)).map { String(head[$0..<$0 + 6]) }
+        let shows = pieces.contains { piece in choices.contains { $0.contains(piece) } }
+        check(asked && choices.count == 2 && choices[0].contains("•••") && !shows,
+              "secrets: the choices of an agent's question show ••• for a key the terminal wrapped inside one, and none of it",
+              choices.joined(separator: " | "))
+        tab.view.send(txt: "\u{03}")
+        _ = await wait(5) { !tab.status.running }
     }
 
     /// get_skill gives a SKILL.md whole, with no field mask: a stored value in it whose quotes the answer's JSON escapes
@@ -1461,13 +1524,17 @@ extension SelfTest {
               "secrets: Copy puts the key on the pasteboard for this Mac only, marked concealed and transient, and says it clears in 60 seconds",
               types.map(\.rawValue).joined(separator: ", "))
         #if DEBUG
-        // One pasteboard write holds the value with both markers: a clipboard manager reading between writes never sees
-        // the value unmarked.
-        let writes = clipboard.lastCopyWrites
+        // One pasteboard write holds the value with both markers, read back from the pasteboard: nothing there just
+        // before it, all three just after it, and nothing written since. A clipboard manager reading between writes
+        // never sees the value unmarked.
+        let write = clipboard.lastCopyWrite
         let marked = [SecretClipboard.concealedType, SecretClipboard.transientType, .string]
-        check(writes.count == 1 && marked.allSatisfy(writes[0].contains) && clipboard.pasteboard.pasteboardItems?.count == 1,
+        let before = write?.before ?? [.string]
+        let after = write?.after ?? []
+        check(before.isEmpty && marked.allSatisfy(after.contains) && Set(after) == Set(types)
+              && clipboard.pasteboard.pasteboardItems?.count == 1,
               "secrets: Copy writes the key in one write that holds the concealed and transient markers too",
-              writes.map { $0.map(\.rawValue).joined(separator: "+") }.joined(separator: ", "))
+              before.map(\.rawValue).joined(separator: "+") + " then " + after.map(\.rawValue).joined(separator: "+"))
         #endif
         let cleared = await wait(5) { clipboard.pasteboard.string(forType: .string) == nil }
         check(cleared, "secrets: Copy's pasteboard is cleared after the delay when nothing was copied since")
