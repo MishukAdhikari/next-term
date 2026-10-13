@@ -2240,22 +2240,61 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let busy = busyTabs
         let kept = Self.keptList(tabs)
         guard !busy.isEmpty || !kept.isEmpty else { return true }
+        let info = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        // A linked worktree's window (an agent's, most often) can take its worktree with it: a choice set apart, last.
+        let worktree = project.flatMap { WorktreeWindow.repository(ofLinkedWorktree: $0) == nil ? nil : $0 }
+        let answered: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                self.closeConfirmed = true
+                sender.close()
+            case .alertThirdButtonReturn:
+                if let worktree { self.closeRemovingWorktree(worktree) }
+            default:
+                self.opensWelcome = false
+            }
+        }
+        if worktree != nil {
+            AlternativeAlert(title: "Close this window?", info: info, buttons: ["Close Window", "Cancel"], alternative: WorktreeRemoval.closeAndRemove,
+                             note: WorktreeRemoval.closingInfo(branch: sidebar.git.snapshot?.branch)).begin(over: sender, completion: answered)
+            return false
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
-        alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        alert.informativeText = info
         alert.addButton(withTitle: "Close Window")
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: sender) { [weak self] response in
-            guard let self else { return }
-            guard response == .alertFirstButtonReturn else {
-                self.opensWelcome = false
-                return
-            }
-            self.closeConfirmed = true
-            sender.close()
-        }
+        alert.beginSheetModal(for: sender, completionHandler: answered)
         return false
+    }
+
+    /// Close and Remove Worktree: when the worktree at `path` can go (WorktreeRemoval.verdict, with this window's tabs
+    /// and agents left out, as they end with it), the window closes, the programs in it end, and then the worktree is
+    /// removed. When it can't, says why; Close Window still closes and keeps it.
+    private func closeRemovingWorktree(_ path: String) {
+        withGit(at: path) { [weak self] actions in
+            guard let self, let window = self.window, let model = actions.model,
+                  let row = BranchPopupController.worktreeRow(at: path, in: model) else {
+                self?.opensWelcome = false
+                return NSSound.beep()
+            }
+            actions.removalVerdict(row, leaving: self) { verdict, _ in
+                if let why = WorktreeRemoval.whyItStays(verdict) {
+                    return GitPrompt.ask("“\(row.folder)” can’t be removed now", info: why, buttons: ["Close Window", "Cancel"], over: window) { choice in
+                        guard choice == 0 else { return self.opensWelcome = false }
+                        self.closeConfirmed = true
+                        window.close()
+                    }
+                }
+                // Ended here, not by the close (it finds them ended), to know when they are gone.
+                let waiting = TerminalTab.terminate(self.tabs, finishLater: false)
+                self.closeConfirmed = true
+                window.close()
+                TabHangup.finishLater(waiting) { GitActions.removeClosed(row.worktree, folder: row.folder, model: model) }
+            }
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

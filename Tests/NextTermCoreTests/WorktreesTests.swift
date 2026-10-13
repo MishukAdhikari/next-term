@@ -405,6 +405,20 @@ import Testing
             == "Its folder is gone, but git still lists it. Forgetting it deletes only git’s record of it. Its commit 4f2a9c1 is on no branch or tag and goes with it: make a branch at 4f2a9c1 first to keep it.")
     }
 
+    @Test func closeAndRemoveWorktreeSaysWhatGoesAndWhyItStays() {
+        #expect(WorktreeRemoval.closingInfo(branch: "claude/auto-danger")
+            == "Deletes its folder, with the ignored files in it. The branch claude/auto-danger stays, with its commits.")
+        #expect(WorktreeRemoval.closingInfo(branch: nil) == "Deletes its folder, with the ignored files in it.")
+        #expect(WorktreeRemoval.whyItStays(.remove) == nil)
+        #expect(WorktreeRemoval.whyItStays(.refuse("It has 3 changed files.", goTo: false))
+            == "It has 3 changed files. Commit or discard them first: Remove Worktree never deletes changes.")
+        #expect(WorktreeRemoval.whyItStays(.refuse("The tab “zsh” is in it.", goTo: true)) == "The tab “zsh” is in it. Close it there first.")
+        #expect(WorktreeRemoval.whyItStays(.refuse("A merge is in progress there: finish or abort it there first.", goTo: false))
+            == "A merge is in progress there: finish or abort it there first.")
+        #expect(WorktreeRemoval.whyItStays(.unlockFirst("It is locked: in use."))?.hasSuffix("unlock it from its row in Git › Worktrees… first.") == true)
+        #expect(WorktreeRemoval.whyItStays(.forget(losing: nil)) == "Its folder is gone already: Git › Worktrees… forgets it.")
+    }
+
     @Test func aDetachedWorktreesCommitOnNoBranch() throws {
         guard let git = GitRunner.locateGit() else { return }
         let repo = try TemporaryRepository(git: git)
