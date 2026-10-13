@@ -46,20 +46,29 @@ final class UserPresence: PresenceCheck {
         SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, [.privateKeyUsage, .userPresence], nil)
     }
 
+    /// A cancelled caller's sheet closes: its context is invalidated, and the check throws `cancelled` (Reveal's, when
+    /// Settings closes while it asks).
     func confirm(reason: String, accessControl: SecAccessControl?) async throws -> AnyObject {
         await takeTurn()
         defer { endTurn() }
+        if Task.isCancelled { throw Failure.cancelled }
         let context = LAContext()
+        let box = UncheckedBox(context)
         do {
-            if let accessControl {
-                _ = try await context.evaluateAccessControl(accessControl, operation: .useKeyKeyExchange, localizedReason: reason)
-            } else {
-                _ = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+            try await withTaskCancellationHandler {
+                if let accessControl {
+                    _ = try await context.evaluateAccessControl(accessControl, operation: .useKeyKeyExchange, localizedReason: reason)
+                } else {
+                    _ = try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+                }
+            } onCancel: {
+                box.value.invalidate()
             }
+            if Task.isCancelled { throw Failure.cancelled } // approved as its caller gave up
             return context
         } catch {
             context.invalidate()
-            throw Self.failure(error)
+            throw Task.isCancelled ? Failure.cancelled : Self.failure(error)
         }
     }
 

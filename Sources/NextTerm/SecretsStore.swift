@@ -783,9 +783,45 @@ final class StandInPresence: PresenceCheck {
 
     func confirm(reason: String, accessControl: SecAccessControl?) async throws -> AnyObject {
         calls += 1
+        #if DEBUG
+        if holds, !(await hold()) { throw UserPresence.Failure.cancelled }
+        #endif
         guard approves else { throw UserPresence.Failure.cancelled }
         return NSObject()
     }
 
     func finish(_ token: AnyObject) {}
+
+    #if DEBUG
+    /// A sheet left up: while set, each check waits for `release(approving:)`.
+    var holds = false
+    /// A cancelled asker's check ends at once, as `UserPresence` invalidating its context does. Off, the approval can
+    /// still come after the asker has gone, as one given while its window was closing.
+    var endsOnCancel = true
+    /// Checks ended by their asker's cancel.
+    private(set) var cancelledHolds = 0
+    private var held: CheckedContinuation<Bool, Never>?
+    var isHolding: Bool { held != nil }
+
+    func release(approving: Bool) {
+        let done = held
+        held = nil
+        done?.resume(returning: approving)
+    }
+
+    private func hold() async -> Bool {
+        release(approving: false) // one sheet at a time
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { held = $0 }
+        } onCancel: {
+            Task { @MainActor in self.endOnCancel() }
+        }
+    }
+
+    private func endOnCancel() {
+        guard endsOnCancel, held != nil else { return }
+        cancelledHolds += 1
+        release(approving: false)
+    }
+    #endif
 }

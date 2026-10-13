@@ -1553,6 +1553,9 @@ extension SelfTest {
         check(view.revealField?.stringValue == shownValue && view.revealField?.isSelectable == false,
               "secrets: Reveal shows the value after Touch ID, in a field that can't be selected or copied from")
         view.closeReveal()
+        #if DEBUG
+        await secretsRevealEndChecks(presence: presence, shownValue: shownValue)
+        #endif
 
         // Allowed now lists a grant, and Revoke ends it.
         let request = secretsRequest(asker: "wrapper:selftest-settings", command: ["true"], names: ["SHOWN_KEY"])
