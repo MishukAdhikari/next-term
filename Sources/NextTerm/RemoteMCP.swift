@@ -175,7 +175,7 @@ enum RemoteMCP {
                 info["command_typed"] = false
                 if tab.disconnected || tab.exited {
                     info["note"] = "ssh could not connect, so the command was not typed. The tab shows why."
-                    info["screen"] = tab.screenTail(8).joined(separator: "\n")
+                    info["screen"] = MCPControl.fieldTail(tab, 8).joined(separator: "\n") // masked over whole lines, as read_tab
                     return reply(MCPServer.CallResult(text: MCPServer.json(info), isError: true))
                 }
                 info["note"] = "The tab is open but its shell was not at a prompt within 45 s (ssh may be asking the user for a password or a host key). The command was not typed: send it with send_to_tab once read_tab shows a prompt."
