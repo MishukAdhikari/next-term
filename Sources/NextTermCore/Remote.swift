@@ -799,11 +799,13 @@ public struct RemoteChanges: Equatable, Sendable {
             if inStat { stat.append(line) } else { status.append(line) }
         }
         if let diffStart {
-            let raw = output.components(separatedBy: "\n") // payload's lines, before it drops their carriage returns
-            let text = raw[(raw.count - lines.count + diffStart)...].joined(separator: "\n")
+            // The diff's lines as the output has them, before payload dropped their carriage returns.
+            let text = lastLines(lines.count - diffStart, of: output)
             let end = Array("\n\(RemoteShell.endMarker)\n".utf8)
             changes.ended = text.utf8.count >= end.count && text.utf8.suffix(end.count).elementsEqual(end)
-            changes.diff = changes.ended ? String(decoding: text.utf8.dropLast(end.count), as: UTF8.self) : text
+            // A connection cut inside the end line leaves its start, which is no part of the diff.
+            let dropped = changes.ended ? end.count : startOfEnd(end, in: text)
+            changes.diff = dropped == 0 ? text : String(decoding: text.utf8.dropLast(dropped), as: UTF8.self)
         } else if inStat {
             if !stat.isEmpty { stat.removeLast() } // the line the connection was cut in
         } else if !status.isEmpty {
@@ -814,5 +816,32 @@ public struct RemoteChanges: Equatable, Sendable {
         }
         changes.stat = stat.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return changes
+    }
+
+    /// The last `count` of the lines `components(separatedBy: "\n")` would give, joined again: what follows the
+    /// `count`th line feed from the end. One pass back over the bytes, with no copy of the lines.
+    static func lastLines(_ count: Int, of output: String) -> String {
+        guard count > 0 else { return "" }
+        let bytes = output.utf8
+        var start = bytes.endIndex
+        var feeds = 0
+        while start > bytes.startIndex {
+            let before = bytes.index(before: start)
+            if bytes[before] == 0x0A {
+                feeds += 1
+                if feeds == count { break }
+            }
+            start = before
+        }
+        return String(output[start...])
+    }
+
+    /// How many bytes at the end of `text` are the start of `end` (none of it: 0, all of it: not asked).
+    static func startOfEnd(_ end: [UInt8], in text: String) -> Int {
+        let bytes = text.utf8
+        for length in stride(from: end.count - 1, through: 1, by: -1) where bytes.count >= length {
+            if bytes.suffix(length).elementsEqual(end.prefix(length)) { return length }
+        }
+        return 0
     }
 }

@@ -352,8 +352,9 @@ public enum MCPProjectTools {
             }
             let all = found.sorted { $0.relativePath < $1.relativePath }.flatMap(\.matches)
             var redactions = 0
+            let values = MCPRedaction.NamedValuesCache() // a long line is read once for all its matches
             let shown: [[String: Any]] = all.prefix(limit).map { match in
-                let preview = snippet(match, mask: mask)
+                let preview = snippet(match, mask: mask, values: values)
                 redactions += preview.count
                 return ["path": match.relativePath, "line": match.line, "column": match.range.location + 1, "text": preview.text]
             }
@@ -371,14 +372,16 @@ public enum MCPProjectTools {
     /// A match's line, redacted, cut around the match when it is long, with leading indentation dropped; and how many
     /// values it masked. An edge across anything redact masks moves in, toward the match, and ••• stands for what it
     /// left out (`MCPRedaction.snippet`), so the snippet never shows part of a value and never grows past 300 characters.
-    static func snippet(_ match: SearchMatch, mask: SecretMask = .current) -> (text: String, count: Int) {
+    static func snippet(_ match: SearchMatch, mask: SecretMask = .current,
+                        values: MCPRedaction.NamedValuesCache? = nil) -> (text: String, count: Int) {
         let line = match.lineText
         let ns = line as NSString
         guard ns.length > 300 else { return MCPRedaction.redact(line.trimmingCharacters(in: .whitespaces), mask: mask) }
         let start = max(0, match.range.location - 100)
         let range = ns.rangeOfComposedCharacterSequences(for: NSRange(location: start, length: min(300, ns.length - start)))
         guard let window = Range(range, in: line), let found = Range(match.range, in: line) else { return ("", 0) }
-        return MCPRedaction.snippet(line, window: window, match: found, mask: mask)
+        let named = values?.values(line, mask: mask)
+        return MCPRedaction.snippet(line, window: window, match: found, mask: mask, values: named)
     }
 
     // MARK: git

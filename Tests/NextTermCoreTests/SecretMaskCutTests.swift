@@ -310,3 +310,199 @@ private func crlfDiff(lines: Int, value: String) -> (diff: String, start: Int) {
         #expect(!showsPart(of: String(run.suffix(200)), in: text), "\(text.prefix(300))")
     }
 }
+
+/// A hex value, the same on every run: no long-run pattern masks it (hex never looks random), only its name does.
+private func hexValue(_ count: Int) -> String {
+    let digits = Array("0123456789abcdef")
+    var state: UInt64 = 0x2545_F491_4F6C_DD1D
+    var value = ""
+    value.reserveCapacity(count)
+    for _ in 0..<count {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        value.append(digits[Int(state >> 60)])
+    }
+    return value
+}
+
+@Suite struct NamedValueCutTests {
+    /// read_file cuts a line at 2,000 characters. A value masked for its name can be longer than the 512 characters a
+    /// cut looks around, and its name and quotes then lie outside them: the cut showed the value's first characters, or
+    /// all but the first few of a bare one. The cut goes before the name now.
+    @Test func readFileShowsNoPartOfALongNamedValue() throws {
+        let f = try ProjectFixture()
+        let quoted = hexValue(1200)
+        let line = String(repeating: "lorem ipsum ", count: 160) + "password = \"" + quoted + "\" end"
+        #expect(MCPRedaction.redact(line, mask: .empty).text.hasSuffix("password = \"•••\" end")) // what the whole line hides
+        try f.write("api/quoted.txt", line + "\n")
+        let result = json(MCPProjectTools.readFile(["path": "quoted.txt", "project": "api"], in: f.both, mask: .empty))
+        let text = try #require(result["text"] as? String)
+        #expect(!showsPart(of: quoted, in: text), "\(text.suffix(80))")
+        #expect(text.hasPrefix("lorem ipsum") && text.hasSuffix("…") && result["long_lines_cut"] as? Int == 1)
+
+        let bare = hexValue(3000)
+        try f.write("api/.env.example", "SECRET_KEY=" + bare + "\n")
+        let env = json(MCPProjectTools.readFile(["path": ".env.example", "project": "api"], in: f.both, mask: .empty))
+        let envText = try #require(env["text"] as? String)
+        #expect(!showsPart(of: bare, in: envText), "\(envText.prefix(80))")
+    }
+
+    /// find_in_files shows 300 characters around a match. Inside a long value masked for its name, each match's
+    /// snippet showed 300 of its characters, so a pattern like `[0-9a-f]{200}` read it all; a snippet whose end fell
+    /// inside one showed its start. A window inside such a value is ••• now, and an edge in one moves before its name.
+    @Test func findInFilesShowsNoPartOfALongNamedValue() throws {
+        let f = try ProjectFixture()
+        let bare = hexValue(3000)
+        try f.write("api/settings.txt", "SECRET_KEY=" + bare + "\n")
+        let probe = String(bare.dropFirst(1500).prefix(12))
+        let one = MCPProjectTools.findInFiles(["query": probe, "glob": "settings.txt", "project": "api"], in: f.both, git: nil,
+                                              mask: .empty)
+        let oneText = try #require((json(one)["matches"] as? [[String: Any]])?.first?["text"] as? String)
+        #expect(!showsPart(of: bare, in: oneText), "\(oneText)")
+        let chunks = MCPProjectTools.findInFiles(["query": "[0-9a-f]{200}", "regex": true, "case_sensitive": true, "glob": "settings.txt",
+                                                  "project": "api", "max_results": 200], in: f.both, git: nil, mask: .empty)
+        let found = try #require(json(chunks)["matches"] as? [[String: Any]])
+        #expect(found.count == 15)
+        for match in found {
+            let text = try #require(match["text"] as? String)
+            #expect(!showsPart(of: bare, in: text), "\(match["column"] ?? 0): \(text)")
+        }
+
+        let quoted = hexValue(1500)
+        let lead = "needle " + String(repeating: "lorem ", count: 25)
+        try f.write("api/conf.json", lead + "\"api_key\": \"" + quoted + "\"\n")
+        let upper = MCPProjectTools.findInFiles(["query": "needle", "glob": "conf.json", "project": "api"], in: f.both, git: nil,
+                                                mask: .empty)
+        let upperText = try #require((json(upper)["matches"] as? [[String: Any]])?.first?["text"] as? String)
+        #expect(upperText.hasPrefix("needle lorem") && upperText.hasSuffix("•••…"), "\(upperText)")
+        #expect(!showsPart(of: quoted, in: upperText), "\(upperText)")
+    }
+}
+
+extension NamedValueCutTests {
+    /// Each way a line names a secret's value, with the value longer than a cut's reach: quoted after `=`, `:`, `=>` or
+    /// `:=`, with its name quoted or not and Unicode spaces around, and bare on an env, YAML or diff line, or on a line
+    /// that starts after a lone carriage return. No cut and no snippet across any of them shows a part of it.
+    @Test(arguments: [
+        "const config = { \"apiKey\": \"%@\", other: 1 }",
+        "  token => '%@' , next",
+        "let secret := `%@` ok",
+        "pre password\u{00A0}=\u{3000}\"%@\" post",
+        "export DB_PASSWORD=%@",
+        "-API_TOKEN = %@   ",
+        "access_key: %@",
+        "x = 1;\rPASSWORD=%@",
+    ])
+    func noCutInAValueItsNameMasksShowsAnyOfIt(_ form: String) {
+        let value = hexValue(900)
+        let line = form.replacingOccurrences(of: "%@", with: value)
+        let redacted = MCPRedaction.redact(line, mask: .empty).text
+        #expect(!showsPart(of: value, in: redacted), "\(redacted)") // the whole line hides it
+        let length = line.utf16.count
+        for offset in stride(from: 1, to: length, by: 29) {
+            let at = String.Index(utf16Offset: offset, in: line)
+            let back = MCPRedaction.cleanCut(line, at: at, forward: false, mask: .empty)
+            let left = MCPRedaction.redact(String(line[..<back]), mask: .empty).text
+            #expect(!showsPart(of: value, in: left), "\(offset) back: \(left.suffix(40))")
+            let ahead = MCPRedaction.cleanCut(line, at: at, forward: true, mask: .empty)
+            let right = MCPRedaction.redact(String(line[ahead...]), mask: .empty).text
+            #expect(!showsPart(of: value, in: right), "\(offset) ahead: \(right.prefix(40))")
+        }
+        for start in stride(from: 0, to: length - 300, by: 37) {
+            let lower = String.Index(utf16Offset: start, in: line)
+            let window = lower..<String.Index(utf16Offset: start + 300, in: line)
+            let match = String.Index(utf16Offset: start + 100, in: line)..<String.Index(utf16Offset: start + 110, in: line)
+            let snippet = MCPRedaction.snippet(line, window: window, match: match, mask: .empty).text
+            #expect(!showsPart(of: value, in: snippet), "\(start): \(snippet)")
+        }
+    }
+
+    /// A long value under a name that is no secret's stays readable: only a secret's name makes its value one.
+    @Test func aLongValueUnderAnotherNameIsCutWhereAsked() {
+        let value = hexValue(900)
+        let line = "label = \"" + value + "\" and more"
+        let at = String.Index(utf16Offset: 400, in: line)
+        #expect(MCPRedaction.cleanCut(line, at: at, forward: false, mask: .empty) == at)
+        let window = String.Index(utf16Offset: 300, in: line)..<String.Index(utf16Offset: 600, in: line)
+        let match = String.Index(utf16Offset: 400, in: line)..<String.Index(utf16Offset: 410, in: line)
+        let snippet = MCPRedaction.snippet(line, window: window, match: match, mask: .empty).text
+        #expect(snippet == "…" + String(line[window]) + "…")
+    }
+}
+
+@Suite struct MaskedTailTests {
+    /// A remote tool's failure answer ends with ssh's error output, its last 600 characters. Cut first, a stored value
+    /// across where they start showed its end there, and the final mask cannot match part of one. Masked first, it is
+    /// ••• or left out.
+    @Test func aKeyAcrossWhereTheTailStartsNeverShows() {
+        let m = storedMask([stored])
+        let cutFirst = "bash: " + stored + " " + String(repeating: "x", count: 590) + "\n"
+        let before = String(cutFirst.trimmingCharacters(in: .whitespacesAndNewlines).suffix(600))
+        #expect(showsPart(of: stored, in: m.mask(before))) // the order before
+        for count in 560...610 {
+            let error = "bash: " + stored + " " + String(repeating: "x", count: count) + "\n"
+            let tail = m.maskedTail(error, characters: 600, endIsACut: false)
+            #expect(!showsPart(of: stored, in: tail) && tail.count <= 600, "\(count): \(tail.prefix(30))")
+        }
+        #expect(m.maskedTail("  ssh: no route to host\n", characters: 600, endIsACut: false) == "ssh: no route to host")
+        #expect(SecretMask.empty.maskedTail("plain\n", characters: 3, endIsACut: true) == "ain")
+    }
+
+    /// ssh's error output is kept up to 64 KB, and past that its end is a cut: a value it cut through is left out.
+    @Test func aKeyCutAtTheEndOfTheErrorOutputNeverShows() {
+        let m = storedMask([stored])
+        let lead = "warning: " + String(repeating: "noise ", count: 20)
+        for keep in 1...stored.count {
+            let part = String(stored.prefix(keep))
+            let tail = m.maskedTail(lead + part, characters: 600, endIsACut: true)
+            #expect(tail.hasPrefix("warning: noise") && !tail.hasSuffix(part), "\(keep): \(tail.suffix(30))")
+            if keep >= 5 { #expect(!showsPart(of: part, in: tail), "\(keep): \(tail.suffix(30))") }
+        }
+        let rest = " and the rest of a line that goes on past the margin"
+        let whole = m.maskedTail(lead + stored + rest, characters: 600, endIsACut: true)
+        #expect(whole.contains("noise ••• and the") && !whole.hasSuffix("margin") && !showsPart(of: stored, in: whole), "\(whole)")
+        #expect(m.maskedTail(lead + stored + rest, characters: 600, endIsACut: false).hasSuffix("•••" + rest))
+    }
+}
+
+extension HostChangesCutTests {
+    /// A connection cut inside the script's end line left the part of it that came at the end of the diff, with no key
+    /// stored to keep a margin. That part goes now, whatever the margin.
+    @Test func aConnectionsCutInTheEndLineLeavesNoneOfIt() throws {
+        let diff = "diff --git a/notes.md b/notes.md\n+one line\n"
+        let end = Array("\n\(RemoteShell.endMarker)\n".utf8)
+        for mask in [SecretMask.empty, storedMask([stored])] {
+            let asked = mask.bytesToRead(forCutAt: 100_000)
+            for count in 0..<end.count {
+                let output = hostOutput(diff, asked: asked, ended: false) + String(decoding: end.prefix(count), as: UTF8.self)
+                let changes = try #require(RemoteChanges.parse(output))
+                let shown = changes.shownDiff(cutAt: 100_000, asked: asked, mask: mask)
+                #expect(!changes.ended && diff.hasPrefix(shown.text) && !shown.text.contains("@@NEXT"), "\(count): \(shown.text)")
+                #expect(shown.cutAt == shown.text.utf8.count, "\(count)")
+            }
+        }
+    }
+
+    /// The host's bytes as they come: a Latin-1 byte (no UTF-8) and wide characters before the key, and a key of
+    /// two-byte characters. Neither `head -c` nor the connection, cutting at any byte near it, shows any of it.
+    @Test func aCutThroughInvalidOrWideCharactersNearAKeyShowsNoneOfIt() throws {
+        let wide = "Zq7Ωж9Ψ2λЖ4ξ8Ðr5ŵ3"
+        let m = storedMask([wide])
+        let lead = Array("diff --git a/.env b/.env\n+NAME=caf".utf8) + [0xE9] + Array(" \u{4E2D}\u{6587}\n+DB_PASSWORD=".utf8)
+        let host = lead + Array(wide.utf8) + Array("\n+NEXT=1\n".utf8) + Array(String(repeating: "+filler\n", count: 40).utf8)
+        let head = Array("\(RemoteShell.marker)\n## main\n\(RemoteShell.statMarker)\n\(RemoteShell.diffMarker)\n".utf8)
+        let end = Array("\n\(RemoteShell.endMarker)\n".utf8)
+        let start = lead.count
+        for limit in max(1, start - m.longest - 4)...(start + wide.utf8.count + 4) {
+            let asked = m.bytesToRead(forCutAt: limit)
+            let changes = try #require(RemoteChanges.parse(String(decoding: head + host.prefix(asked) + end, as: UTF8.self)))
+            let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: m)
+            #expect(!showsPart(of: wide, in: shown.text), "\(limit): \(shown.text.suffix(30))")
+        }
+        for cut in (start - 4)...(start + wide.utf8.count + m.longest + 2) {
+            let asked = m.bytesToRead(forCutAt: 100_000)
+            let changes = try #require(RemoteChanges.parse(String(decoding: head + host.prefix(cut), as: UTF8.self)))
+            let shown = changes.shownDiff(cutAt: 100_000, asked: asked, mask: m)
+            #expect(!changes.ended && !showsPart(of: wide, in: shown.text), "\(cut): \(shown.text.suffix(30))")
+        }
+    }
+}

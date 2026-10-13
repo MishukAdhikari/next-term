@@ -6,6 +6,16 @@ extension SecretMask {
     /// text was cut.
     public func bytesToRead(forCutAt maxBytes: Int) -> Int { maxBytes + longest + 1 }
 
+    /// The end of `text` for an answer: masked, trimmed of spaces and line ends, then its last `characters` characters.
+    /// Masking comes first: cut first, a stored value across where the end starts showed its own end, which no later
+    /// mask can match. When `endIsACut` (the text was read up to a limit) its last `longest` + 1 bytes go too, so a
+    /// value the limit cut through, which the mask cannot match either, is left out whole.
+    public func maskedTail(_ text: String, characters: Int, endIsACut: Bool) -> String {
+        let kept = endIsACut && !isEmpty ? text.utf8.count - longest - 1 : text.utf8.count
+        let masked = maskedPrefix(text, maxBytes: max(0, kept)).text
+        return String(masked.trimmingCharacters(in: .whitespacesAndNewlines).suffix(characters))
+    }
+
     /// `text` masked, then cut to at most `maxBytes` UTF-8 bytes, with `cut` when anything was left out. Masking comes
     /// first: a cut through a stored value leaves the value out whole, and never splits a character. Text a host already
     /// cut (`head -c`) should run `longest` bytes past `maxBytes`, so a value that starts before the cut is there whole.
@@ -45,16 +55,22 @@ extension MCPRedaction {
     }
 
     /// `index`, or the nearest place before it (after it with `forward`) where a cut shows no part of what `redact`
-    /// masks: a stored value or a pattern's match across the cut is left out whole (or taken in whole). It moves
-    /// `reach` characters at a time, to the text's start or end at most.
+    /// masks: a stored value or a pattern's match across the cut is left out whole (or taken in whole), and so is a value
+    /// masked for its name however long it is (`NamedValues`; the text kept before the cut may end with its name). It
+    /// moves `reach` characters at a time, or past such a value, to the text's start or end at most.
     static func cleanCut(_ text: String, at index: String.Index, forward: Bool, mask secrets: SecretMask) -> String.Index {
         let reach = reach(secrets)
+        let named = NamedValues(text, mask: secrets)
         var cut = index
-        while cutsAMask(text, at: cut, reach: reach, mask: secrets) {
+        while true {
+            if let past = named.clean(cut, keepingAfter: forward) {
+                cut = past
+                continue
+            }
+            guard cutsAMask(text, at: cut, reach: reach, mask: secrets) else { return cut }
             let limit = forward ? text.endIndex : text.startIndex
             cut = text.index(cut, offsetBy: forward ? reach : -reach, limitedBy: limit) ?? limit
         }
-        return cut
     }
 }
 
@@ -62,36 +78,44 @@ extension MCPRedaction {
     /// `line[window]` redacted, for a search result, with how many values it masked. An edge that would show part of
     /// what `redact` masks moves in, toward `match`, to the nearest clean place (`cutsAMask`), and ••• stands for what it
     /// left out: a run across an edge (an inlined image or font) is never read whole, so the snippet stays within its
-    /// window and costs a few small redactions however long the run. A window with no clean place at the match or its
-    /// far edge is all masked, and is ••• alone.
+    /// window and costs a few small redactions however long the run. An edge in a value masked for its name moves
+    /// out of it the same way (`NamedValues`, from `values` when the caller keeps the line's). A window with no clean
+    /// place at the match or its far edge is all masked, and is ••• alone.
     static func snippet(_ line: String, window: Range<String.Index>, match: Range<String.Index>,
-                        mask secrets: SecretMask) -> (text: String, count: Int) {
+                        mask secrets: SecretMask, values: NamedValues? = nil) -> (text: String, count: Int) {
         let reach = reach(secrets)
-        func cuts(_ index: String.Index) -> Bool { cutsAMask(line, at: index, reach: reach, mask: secrets) }
+        let named = values ?? NamedValues(line, mask: secrets)
+        // The lower edge keeps the text after it, the upper one the text before it.
+        func cutsLower(_ index: String.Index) -> Bool {
+            named.cuts(index, keepingAfter: true) || cutsAMask(line, at: index, reach: reach, mask: secrets)
+        }
+        func cutsUpper(_ index: String.Index) -> Bool {
+            named.cuts(index, keepingAfter: false) || cutsAMask(line, at: index, reach: reach, mask: secrets)
+        }
         let matchStart = min(max(match.lowerBound, window.lowerBound), window.upperBound)
         let matchEnd = min(max(match.upperBound, matchStart), window.upperBound)
         var lower = window.lowerBound
         var upper = window.upperBound
-        let movesLower = cuts(lower)
-        let movesUpper = cuts(upper)
+        let movesLower = cutsLower(lower)
+        let movesUpper = cutsUpper(upper)
         if movesLower {
             var cutting = lower
             var clean: String.Index?
             for place in [matchStart, matchEnd, upper] where place > cutting {
-                if cuts(place) { cutting = place } else { clean = place; break }
+                if cutsLower(place) { cutting = place } else { clean = place; break }
             }
             guard let clean else {
                 return ("…" + mask + (window.upperBound < line.endIndex ? "…" : ""), 1)
             }
-            lower = nearestClean(line, from: cutting, to: clean, cuts: cuts)
+            lower = nearestClean(line, from: cutting, to: clean, cuts: cutsLower)
         }
         if movesUpper {
             var cutting = upper
             var clean = lower // clean: where a cut was found clean above, or the window's own clean edge
             for place in [matchEnd, matchStart] where place < cutting && place > lower {
-                if cuts(place) { cutting = place } else { clean = place; break }
+                if cutsUpper(place) { cutting = place } else { clean = place; break }
             }
-            upper = nearestClean(line, from: cutting, to: clean, cuts: cuts)
+            upper = nearestClean(line, from: cutting, to: clean, cuts: cutsUpper)
         }
         let lead = lower > line.startIndex ? "…" : ""
         let trail = upper < line.endIndex ? "…" : ""
@@ -137,8 +161,8 @@ extension RemoteChanges {
 
     /// `text` without a carriage return at the end of a line, or of the text.
     static func droppingCarriageReturns(_ text: String) -> String {
+        guard text.utf8.contains(0x0D) else { return text } // the common case: no copy
         let bytes = Array(text.utf8)
-        guard bytes.contains(0x0D) else { return text }
         var kept: [UInt8] = []
         kept.reserveCapacity(bytes.count)
         for index in bytes.indices where bytes[index] != 0x0D || (index + 1 < bytes.count && bytes[index + 1] != 0x0A) {
