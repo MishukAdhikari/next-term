@@ -583,13 +583,13 @@ extension HostChangesCutTests {
         let start = lead.count
         for limit in max(1, start - m.longest - 4)...(start + wide.utf8.count + 4) {
             let asked = m.bytesToRead(forCutAt: limit)
-            let changes = try #require(RemoteChanges.parse(String(decoding: head + host.prefix(asked) + end, as: UTF8.self)))
+            let changes = try #require(RemoteChanges.parse(String(decoding: head + Array(host.prefix(asked)) + end, as: UTF8.self)))
             let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: m)
             #expect(!showsPart(of: wide, in: shown.text), "\(limit): \(shown.text.suffix(30))")
         }
         for cut in (start - 4)...(start + wide.utf8.count + m.longest + 2) {
             let asked = m.bytesToRead(forCutAt: 100_000)
-            let changes = try #require(RemoteChanges.parse(String(decoding: head + host.prefix(cut), as: UTF8.self)))
+            let changes = try #require(RemoteChanges.parse(String(decoding: head + Array(host.prefix(cut)), as: UTF8.self)))
             let shown = changes.shownDiff(cutAt: 100_000, asked: asked, mask: m)
             #expect(!changes.ended && !showsPart(of: wide, in: shown.text), "\(cut): \(shown.text.suffix(30))")
         }
