@@ -160,9 +160,14 @@ extension SelfTest {
         let shown = await wait(10) { view.revealField?.stringValue == shownValue }
         let popover = view.revealPopover
         settings.showTab("notifications")
-        let gone = view.window == nil && view.revealField == nil && popover?.isShown != true
+        // A popover's close is animated, so it may still report shown for a moment after the tab changes.
+        let gone = await wait(2) { view.window == nil && view.revealField == nil && popover?.isShown != true }
+        let detail = "shown \(shown), view in a window \(view.window != nil), field \(view.revealField != nil), "
+            + "popover shown \(popover?.isShown == true)"
         settings.showTab("secrets")
-        check(shown && gone && view.revealField == nil, "secrets: choosing another Settings tab hides and wipes a revealed key")
+        _ = await wait(5) { view.window != nil }
+        check(shown && gone && view.revealField == nil, "secrets: choosing another Settings tab hides and wipes a revealed key",
+              detail)
 
         // Touch ID up, then another tab: the asking ends, and a late approval shows nothing.
         let before = reveals()
