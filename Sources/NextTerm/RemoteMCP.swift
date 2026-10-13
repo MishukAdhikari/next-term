@@ -149,18 +149,20 @@ enum RemoteMCP {
         if session != nil && mode != .tmux { return reply(fail("session attaches to Next Term's tmux sessions: use it with keep tmux.")) }
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
-            ?? app.controllers.first ?? app.openWindow(directory: nil)
-        // With no open connection, ssh may ask the user for a password or a host key: show them the tab
-        // that asks (another tab may be logging in to this host already: then that one).
+            ?? app.controllers.first ?? app.openWindow(directory: nil, forAgent: true)
+        // With no open connection, ssh may ask the user for a password or a host key: show them the tab that asks
+        // (another tab may be logging in to this host already: then that one), selected even in the window they are in.
+        // It waits for their click like any tab an agent opened, so nothing they were typing goes to ssh (AgentArrival).
         let mustLogIn = !RemoteConnection.masterAlive(found)
-        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false)
+        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false, byAgent: true)
         if mustLogIn {
             let asking = RemoteConnection.loginTab(for: found) ?? tab
             if let owner = MCPControl.controller(of: asking) {
-                owner.show(asking)
-                owner.window?.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                if asking.view.awaitsChoice { asking.view.choiceHint = "ssh may ask for a password or a host key here. Click to answer." }
+                owner.presentForAgent(asking, explicit: true, login: true)
             }
+        } else {
+            controller.presentForAgent(tab)
         }
         MCPControl.driven.insert(tab.id)
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
@@ -175,7 +177,7 @@ enum RemoteMCP {
                 info["command_typed"] = false
                 if tab.disconnected || tab.exited {
                     info["note"] = "ssh could not connect, so the command was not typed. The tab shows why."
-                    info["screen"] = tab.screenTail(8).joined(separator: "\n")
+                    info["screen"] = MCPControl.fieldTail(tab, 8).joined(separator: "\n") // masked over whole lines, as read_tab
                     return reply(MCPServer.CallResult(text: MCPServer.json(info), isError: true))
                 }
                 info["note"] = "The tab is open but its shell was not at a prompt within 45 s (ssh may be asking the user for a password or a host key). The command was not typed: send it with send_to_tab once read_tab shows a prompt."
@@ -243,7 +245,11 @@ enum RemoteMCP {
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
         let withDiff = arguments["diff"] as? Bool ?? true
         let limit = min(2_000_000, max(1000, arguments["max_bytes"] as? Int ?? 200_000))
-        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? limit + 1 : 0)
+        // The diff is masked before it is cut, on the bytes `head -c` counts: the host sends the longest stored form's
+        // bytes past the cut, so a value that starts before it is there whole, and is left out whole. The answer takes
+        // the mask as it is then, up to 50 s later (RemoteChanges.shownDiff).
+        let asked = withDiff ? SecretMask.current.bytesToRead(forCutAt: limit) : 0
+        let script = RemoteShell.changesScript(directory: directory, maxBytes: asked)
         RemoteConnection.run(found, script: script, timeout: 50) { output in
             guard let changes = RemoteChanges.parse(output.output) else {
                 if output.status == 3 || output.status == 4 { return reply(fail("\(directory) on \(found.name): \(output.problem)")) }
@@ -252,9 +258,9 @@ enum RemoteMCP {
             var info: [String: Any] = ["host": found.name, "directory": directory, "branch": changes.branch,
                                        "files": changes.files, "stat": changes.stat]
             if withDiff {
-                let cut = changes.diff.utf8.count > limit
-                info["diff"] = cut ? String(decoding: Array(changes.diff.utf8.prefix(limit)), as: UTF8.self) : changes.diff
-                if cut { info["diff_cut_at_bytes"] = limit }
+                let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: SecretMask.current)
+                info["diff"] = shown.text
+                if let cut = shown.cutAt { info["diff_cut_at_bytes"] = cut }
             }
             reply(ok(info))
         }

@@ -1327,7 +1327,8 @@ struct TOMLOutline {
                     if i < scalars.endIndex { advance() }
                     continue
                 }
-                if isMultiLine(at: i) {
+                // Three of its own quotes: three of anything else ("...", "---", the other quotes) are its text.
+                if scalars[i] == c, isMultiLine(at: i) {
                     i = scalars.index(i, offsetBy: 3)
                     var extra = 0
                     while extra < 2, i < scalars.endIndex, scalars[i] == c {

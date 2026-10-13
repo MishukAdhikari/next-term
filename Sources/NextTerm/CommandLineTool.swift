@@ -11,6 +11,21 @@ enum CommandLineTool {
         if arguments == ["mcp"] { MCPBridge.run() }
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
+        // `nxtrm secret run …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still opens a file named secret.
+        if arguments.count >= 2, arguments[0] == "secret" {
+            if arguments[1] == "run" { SecretWrapper.run(Array(arguments.dropFirst(2))) }
+            if ["help", "-h", "--help"].contains(arguments[1]) {
+                print(SecretRun.help)
+                exit(0)
+            }
+        }
+        #if DEBUG
+        // The self-test's wrapper (SecretWrapper.runSelfTest); the app refuses this form outside the self-test, and a
+        // release build has no such form at all.
+        if arguments.count >= 5, arguments[0] == "--self-test-secret-wrapper", arguments[3] == "secret", arguments[4] == "run" {
+            SecretWrapper.runSelfTest(arguments)
+        }
+        #endif
         switch CommandLineOpen.parse(arguments, cwd: FileManager.default.currentDirectoryPath) {
         case .help:
             print(CommandLineOpen.usage)

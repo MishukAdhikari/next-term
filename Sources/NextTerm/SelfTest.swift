@@ -129,6 +129,11 @@ enum SelfTest {
     /// `seconds`: the caller skips what needs it, with a note. With the app in front and the window still not
     /// key (a sheet left over it), that is the app's own doing: a failed check, not only a skip.
     static func bringToFront(_ window: NSWindow, within seconds: Double = 6) async -> Bool {
+        // A sheet an earlier check left over this window would take the keyboard from it: say so, and end it.
+        if window.attachedSheet != nil {
+            check(false, "the window takes the keyboard with no sheet left over it", sheetText(window))
+            _ = await endSheets(over: window, with: .alertSecondButtonReturn)
+        }
         let deadline = Date().addingTimeInterval(seconds)
         repeat {
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -192,6 +197,30 @@ enum SelfTest {
     }
 
     /// The text of the sheet over `window`: an alert's title and message.
+    /// `controller`'s window is gone (AppDelegate drops it a moment after it closes), else a FAIL saying what its sheet asks,
+    /// and the sheet is answered with its first button (Close Window), whose own handler closes it.
+    static func closedAskingNothing(_ controller: TerminalWindowController, _ name: String) async {
+        let app: AppDelegate = AppDelegate.shared
+        let gone = await wait(3) { !app.controllers.contains { $0 === controller } }
+        check(gone, name, controller.window.map { "a sheet asks: " + sheetText($0) } ?? "")
+        guard !gone, let window = controller.window else { return }
+        _ = await endSheets(over: window)
+        _ = await wait(3) { !app.controllers.contains { $0 === controller } }
+    }
+
+    /// Sheets or a modal alert a group of checks left behind: a FAIL naming the group and what each asked, then each is
+    /// ended with Cancel, so one check's leftover never fails the checks after it.
+    static func endStrayQuestions(after group: String) async {
+        for window in NSApp.windows where window.attachedSheet != nil {
+            check(false, "\(group) leave no sheet up", "\(type(of: window)) “\(window.title)”: \(sheetText(window))")
+            _ = await endSheets(over: window, with: .alertSecondButtonReturn)
+        }
+        if let modal = NSApp.modalWindow {
+            check(false, "\(group) leave no modal alert up", modal.title)
+            NSApp.stopModal(withCode: .cancel)
+        }
+    }
+
     static func sheetText(_ window: NSWindow) -> String {
         func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }
         return window.attachedSheet?.contentView.map(fields)?.joined(separator: " ") ?? ""
@@ -248,6 +277,12 @@ enum SelfTest {
         // The notifications checked along the way (a decision, below) come as they do by default.
         let restoreNotificationSettings = defaultNotificationSettings()
         defer { restoreNotificationSettings() }
+        // Tabs the checks open over MCP stay behind, as the checks expect: a window that came forward for one seconds
+        // later (AgentArrival waits out the self-test's own keys) would take the keyboard from a later check. The
+        // arrival checks set the mode themselves; the user's choice is back afterwards.
+        let arrivalBefore = AppDelegate.shared.agentArrival
+        AppDelegate.shared.agentArrival = .off
+        defer { AppDelegate.shared.agentArrival = arrivalBefore }
         // Diffs side by side, as the checks read them (a run stopped part-way may have left Unified on), and the
         // user's choice back afterwards.
         let restoreDiffSettings = keepDiffSettings()
@@ -606,7 +641,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees, parallel (with scrollback), skills, notifications or services), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees, parallel (with scrollback), skills, notifications, services or secrets), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -615,6 +650,7 @@ enum SelfTest {
         case "held": return await heldWorktreeChecks(c)
         case "parallel":
             await parallelTabsChecks(c, proj: proj)
+            await arrivalChecks(c, proj: proj)
             return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
@@ -622,6 +658,7 @@ enum SelfTest {
             notificationsMenuChecks()
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
+        case "secrets": return await secretsChecks(c, proj: proj)
         default: break
         }
         #endif
@@ -773,6 +810,7 @@ enum SelfTest {
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
         await parallelTabsChecks(c, proj: proj)
+        await arrivalChecks(c, proj: proj)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
@@ -866,8 +904,11 @@ enum SelfTest {
         let windowsNow = app.controllers.count
         app.openProject(at: proj, from: fresh)
         check(app.controllers.count == windowsNow && fresh.project == proj.path && fresh.tabs.count == 1, "an untouched window is reused for the project")
+        // The adopted tab's shell is still starting: its children (a theme's mkdir) would make Close Project ask, in a
+        // sheet left over the window for the rest of the run (as for the extra tabs below).
+        _ = await wait(20) { fresh.tabs.first?.status.integrated == true && fresh.busyTabs.isEmpty }
         fresh.closeProject(nil)
-        _ = await wait(3) { !app.controllers.contains { $0 === fresh } }
+        await closedAskingNothing(fresh, "Close Project closes the reused window, asking nothing")
         // Outside a repository Git Log is off, like the Git menu's other commands.
         let plain = app.openWindow(directory: dir.path)
         _ = await wait(20) { plain.tabs.first?.status.integrated == true }
@@ -876,8 +917,9 @@ enum SelfTest {
         let branchesItem = NSMenuItem(title: "Branches…", action: #selector(TerminalWindowController.showBranches(_:)), keyEquivalent: "")
         check(!plain.validateMenuItem(gitLogItem) && !plain.validateMenuItem(branchesItem),
               "outside a repository Git Log is off, like Branches", plain.sidebar.root?.path ?? "no sidebar root")
+        _ = await wait(20) { plain.busyTabs.isEmpty }
         plain.window?.performClose(nil)
-        _ = await wait(3) { !app.controllers.contains { $0 === plain } }
+        await closedAskingNothing(plain, "the plain window closes, asking nothing")
         app.showWelcome(nil)
         check(NSApp.windows.contains { $0.title == "Welcome to Next Term" && $0.isVisible }, "the Welcome window lists recent projects")
         NSApp.windows.first { $0.title == "Welcome to Next Term" }?.close()
@@ -924,12 +966,14 @@ enum SelfTest {
         c.tabBar(c.tabBar, didMove: 0, to: 1)
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
 
+        await endStrayQuestions(after: "the project and window checks")
         await paneChecks(c)
         await menuChecks(c)
         await MainActor.run { acknowledgementsChecks() }
         await newFileChecks(c)
         await paneHeaderChecks(c)
 
+        await endStrayQuestions(after: "the pane, menu and new-file checks")
         await sessionChecks(proj: proj)
         await moreSessionChecks(proj: proj)
         await agentEvidenceChecks(proj: proj)
@@ -953,8 +997,11 @@ enum SelfTest {
         notificationsMenuChecks()
         agentSpinnerChecks()
         await skillsChecks()
+        await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
+        await endStrayQuestions(after: "the checks before the MCP restore")
         await restoreMCPChecks(proj: proj)
+        await endStrayQuestions(after: "the MCP restore checks")
         await completionChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
@@ -4870,6 +4917,12 @@ enum SelfTest {
         let file = proj.appendingPathComponent("mcp-target.txt")
         try? "one\ntwo\nthree\n".write(to: file, atomically: true, encoding: .utf8)
         let opened = await tool("open_in_editor", ["path": file.path, "line": 2])
+        // The selection is the front window's: the window that opened the file (its project's) comes forward as the user
+        // would bring it, whatever Settings › Editor › When an agent opens a tab says.
+        let path = canonicalPath(file.path)
+        let opener = AppDelegate.shared.controllers.filter { !$0.hasClosed && ($0.project.map { path.hasPrefix($0 + "/") } ?? false) }
+            .max { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }
+        if let window = opener?.window { _ = await bringToFront(window) }
         let selection = await tool("get_editor_selection")
         let open = await tool("get_open_files")
         check(!opened.isError && selection.json?["file"] as? String == canonicalPath(file.path)

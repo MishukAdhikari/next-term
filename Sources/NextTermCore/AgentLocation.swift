@@ -123,9 +123,11 @@ public enum AgentLocation {
     /// worktree comes or goes: when each checkout's git folder and HEAD last changed. No git process: while
     /// it is the same, the last `checkouts` still hold.
     public static func signature(commonDir: String) -> String {
+        // One lstat a path, every second for every checkout: FileManager's attributes also read every extended attribute.
         func stamp(_ path: String) -> String {
-            let date = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-            return date.map { String($0.timeIntervalSince1970) } ?? "-"
+            var info = stat()
+            guard lstat(path, &info) == 0 else { return "-" }
+            return "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
         }
         let admin = (commonDir as NSString).appendingPathComponent("worktrees")
         var parts = [stamp(commonDir), stamp(commonDir + "/HEAD"), stamp(admin)]

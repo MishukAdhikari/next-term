@@ -154,6 +154,12 @@ extension SelfTest {
         let cell = row >= 0 ? sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SessionRowCellView : nil
         check(cell?.badge.text == "running" && sidebar.outline.row(forItem: group.more) >= 0, "its row has a “running” badge, and More… is listed",
               "row \(row), badge \(cell?.badge.text ?? "none")")
+        // More… says the key that shows the whole list anywhere: Resume Agent Session…'s, as the menu has it now.
+        let moreRow = sidebar.outline.row(forItem: group.more)
+        let moreCell = moreRow >= 0 ? sidebar.outline.view(atColumn: 0, row: moreRow, makeIfNecessary: true) as? SessionRowCellView : nil
+        let resumeKey = SessionRowCellView.resumeKey ?? ""
+        check(!resumeKey.isEmpty && moreCell?.nameText.hasPrefix("More…") == true && moreCell?.nameText.hasSuffix(resumeKey) == true,
+              "More… shows Resume Agent Session…'s key", "\(moreCell?.nameText ?? "no row"), key \(resumeKey)")
         if let window = holder.window { await screenshot(window, suffix: "sidebar-sessions") }
 
         // Every item of a session's menu, More…'s and the group's is a command showing its key; of the agents' Continue

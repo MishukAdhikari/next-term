@@ -20,12 +20,22 @@ final class TerminalWindow: NSWindow {
     var onFirstResponderChange: ((NSResponder?) -> Void)?
 
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        // A tab an agent opened that the user hasn't chosen takes no keyboard, whatever asks for it (AgentArrival).
+        if let view = responder as? NextTermView, view.awaitsChoice { return false }
         let made = super.makeFirstResponder(responder)
         if made { onFirstResponderChange?(firstResponder) }
         return made
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown { UserKeys.pressed() }
+        // A click on a tab an agent opened chooses it: it takes the keyboard, and the click reaches nothing in it (a
+        // button in the agent's screen).
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type), let view = awaitingTerminal(at: event.locationInWindow) {
+            view.awaitsChoice = false
+            _ = makeFirstResponder(view)
+            return
+        }
         if event.type == .keyDown, event.keyCode == 48 /* Tab */,
            event.modifierFlags.intersection([.command, .option, .control]) == .control {
             onControlTab?(event.modifierFlags.contains(.shift))
@@ -41,6 +51,16 @@ final class TerminalWindow: NSWindow {
             return
         }
         super.sendEvent(event)
+    }
+
+    /// The terminal under `point` (window coordinates), if it waits for the user to choose it.
+    func awaitingTerminal(at point: NSPoint) -> NextTermView? {
+        var view = contentView?.superview?.hitTest(point) ?? contentView?.hitTest(point)
+        while let current = view {
+            if let terminal = current as? NextTermView { return terminal.awaitsChoice ? terminal : nil }
+            view = current.superview
+        }
+        return nil
     }
 
     #if DEBUG
@@ -206,6 +226,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The project's name in the title, the Window menu and notifications: its folder's, or for a linked
     /// worktree "xCloud ▸ 7027-sso", its repository's and its own.
     private(set) var projectTitle = ""
+    /// The window is being made key to bring an agent's tab forward (AgentArrival), not by the user.
+    var keyingForAgent = false
+    /// The window closed. AppDelegate drops it from its windows a moment later (windowClosed): until then, nothing may
+    /// open a project or a tab in it.
+    private(set) var hasClosed = false
 
     static func title(ofProject project: String?) -> String {
         guard let project else { return "" }
@@ -233,8 +258,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var activeTab: TerminalTab? { activeGroup?.focused }
     func group(of tab: TerminalTab) -> PaneGroup? { groups.first { $0.contains(tab) } }
 
-    /// `firstTab` false: a window the restore fills (`insertRestored`), with no tab of its own.
-    init(directory: String?, project: String? = nil, firstTab: Bool = true) {
+    /// `firstTab` false: a window the restore fills (`insertRestored`), with no tab of its own. `byAgent`: an agent opened
+    /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
+    init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
         projectTitle = Self.title(ofProject: self.project)
         let window = TerminalWindow(
@@ -318,27 +344,33 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+        ticker.tolerance = 0.03
         RunLoop.main.add(ticker, forMode: .common)
         self.ticker = ticker
+        // A window that refreshed once a second while no one could see it is up to date the moment it shows again.
+        for (name, ofApp) in NSWindow.visibilityNotifications {
+            NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged), name: name, object: ofApp ? NSApp : window)
+        }
 
-        if firstTab { addTab(directory: self.project ?? directory) }
+        if firstTab { addTab(directory: self.project ?? directory, byAgent: byAgent) }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     // MARK: tabs
 
-    /// `select` false: the tab opens behind the current one (an agent opening tabs leaves you where you are).
+    /// `select` false: the tab opens behind the current one. `byAgent`: an agent opened it over MCP, so it waits for the
+    /// user to choose it before it takes the keyboard (NextTermView.awaitsChoice, AgentArrival).
     @discardableResult
-    func addTab(directory: String?, select selectIt: Bool = true) -> TerminalTab {
-        insert(makeTab(directory: directory), select: selectIt)
+    func addTab(directory: String?, select selectIt: Bool = true, byAgent: Bool = false) -> TerminalTab {
+        insert(makeTab(directory: directory, byAgent: byAgent), select: selectIt)
     }
 
     /// A tab on a server: ssh in its pty, to a shell, tmux session or herdr there.
     /// `atEnd`: after the last tab (restoring keeps the saved order), not next to the current one.
     @discardableResult
-    func addRemoteTab(_ remote: RemoteTab, select selectIt: Bool = true, atEnd: Bool = false) -> TerminalTab {
-        insert(makeTab(directory: nil, remote: remote), select: selectIt, atEnd: atEnd)
+    func addRemoteTab(_ remote: RemoteTab, select selectIt: Bool = true, atEnd: Bool = false, byAgent: Bool = false) -> TerminalTab {
+        insert(makeTab(directory: nil, remote: remote, byAgent: byAgent), select: selectIt, atEnd: atEnd)
     }
 
     private func insert(_ tab: TerminalTab, select selectIt: Bool, atEnd: Bool = false) -> TerminalTab {
@@ -359,7 +391,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tab.start()
         AppDelegate.shared.projectsChanged()
         if selectIt || groups.count == 1 {
-            select(insertAt)
+            select(insertAt, arming: !tab.view.awaitsChoice)
         } else {
             view.isHidden = true
             if insertAt <= activeIndex { activeIndex += 1 }
@@ -394,16 +426,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         view.isHidden = groups.count - 1 != activeIndex
     }
 
-    private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID()) -> TerminalTab {
+    private func makeTab(directory: String?, remote: RemoteTab? = nil, id: UUID = UUID(), byAgent: Bool = false) -> TerminalTab {
         let tab = TerminalTab(directory: directory, fontSize: AppDelegate.shared.terminalFontSize, remote: remote, id: id)
+        tab.view.awaitsChoice = byAgent
         tab.delegate = self
         // ⌘-click on "src/a.ts:42" in the output opens the editor there.
         tab.view.openFile = { [weak self] url, line, column in self?.openFile(url, line: line, column: column) }
         return tab
     }
 
-    /// Brings a terminal to the front: its tab selected, its pane focused (and un-zoomed if hidden).
-    func show(_ tab: TerminalTab) {
+    /// Brings a terminal to the front: its tab selected, its pane focused (and un-zoomed if hidden). `arming` false: an
+    /// agent's tab is shown without being chosen for the user (it still waits for their click).
+    func show(_ tab: TerminalTab, arming: Bool = true) {
         guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
         let group = groups[index]
         if let zoomed = group.zoomed, zoomed !== tab {
@@ -412,7 +446,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         group.focused = tab
         group.updateDimming()
-        select(index)
+        select(index, arming: arming)
     }
 
     /// A pane got the keyboard (a click, or a move between panes).
@@ -432,12 +466,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// A new terminal beside `from` (the focused pane): to its right or below it, in its folder.
     @discardableResult
-    func split(vertical: Bool, from: TerminalTab? = nil, directory: String? = nil, focus: Bool = true) -> TerminalTab? {
+    func split(vertical: Bool, from: TerminalTab? = nil, directory: String? = nil, focus: Bool = true, byAgent: Bool = false) -> TerminalTab? {
         guard let from = from ?? activeTab, let group = group(of: from) else { return nil }
         // Beside a remote tab, another one on its host, in its folder (unless a folder here was asked for).
         let new = directory == nil && from.remote != nil
-            ? makeTab(directory: nil, remote: from.remote!.sibling(directory: from.directory))
-            : makeTab(directory: directory ?? from.currentDirectory())
+            ? makeTab(directory: nil, remote: from.remote!.sibling(directory: from.directory), byAgent: byAgent)
+            : makeTab(directory: directory ?? from.currentDirectory(), byAgent: byAgent)
         let focused = group.focused
         group.split(from, with: new, vertical: vertical)
         if !focus { group.focused = focused } // the keyboard stays with the pane that has it, beside `from` or not
@@ -458,6 +492,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     private func movePaneFocus(_ direction: PaneGroup.Direction) {
         guard let group = activeGroup, let tab = activeTab, let next = group.neighbor(of: tab, direction) else { return NSSound.beep() }
+        next.view.awaitsChoice = false // moving to it is choosing it
         window?.makeFirstResponder(next.view)
     }
 
@@ -470,6 +505,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         let panes = group.panes
         let next = panes[(index + delta + panes.count) % panes.count]
+        next.view.awaitsChoice = false // moving to it is choosing it
         if group.zoomed != nil {
             group.zoomed = next
             group.layout()
@@ -495,15 +531,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// `unfold` false: the tab comes forward without opening a terminal folded to its rail (the tab in
-    /// front closed by itself), and the keyboard stays where it is.
-    func select(_ index: Int, unfold: Bool = true) {
+    /// front closed by itself), and the keyboard stays where it is. `arming` false: a tab an agent opened comes forward
+    /// still waiting for the user to choose it (a neighbour of a closed tab, an agent showing its tab); otherwise
+    /// selecting it is choosing it.
+    func select(_ index: Int, unfold: Bool = true, arming: Bool = true) {
         guard groups.indices.contains(index) else { return }
         activeIndex = index
         let group = groups[index]
         group.focused.lastSelected = Date()
+        if arming { group.focused.view.awaitsChoice = false }
         for (i, other) in groups.enumerated() { other.view.isHidden = i != index }
-        // A terminal taking the keyboard opens the rail (see onFirstResponderChange).
-        if unfold || !terminalRailed { window?.makeFirstResponder(group.focused.view) }
+        if group.focused.view.awaitsChoice {
+            // No keyboard for it, and none left with a terminal now hidden: keys go nowhere until a click.
+            if window?.firstResponder is NextTermView { window?.makeFirstResponder(nil) }
+        } else if unfold || !terminalRailed {
+            // A terminal taking the keyboard opens the rail (see onFirstResponderChange).
+            window?.makeFirstResponder(group.focused.view)
+        }
         refreshVisibility()
         refresh()
     }
@@ -612,7 +656,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return
         }
         if index == activeIndex {
-            select(max(0, index - 1), unfold: false) // the left neighbour
+            select(max(0, index - 1), unfold: false, arming: false) // the left neighbour, an agent's still waiting for a click
         } else {
             // A background tab went away: keep the current one, and keep focus where it is.
             if index < activeIndex { activeIndex -= 1 }
@@ -759,16 +803,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tickCount += 1
         let now = TerminalTab.now
         refreshVisibility()
-        for tab in tabs {
+        for (index, tab) in tabs.enumerated() {
             tab.view.drawIfSeenAgain()
             if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
-            tab.pollAgentScreen()
+            // The agent in sight every 0.25 s; the others every 0.5 s, half of them on each tick.
+            if isOnScreen(tab) || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
             tab.status.tick(at: now)
             if let notice = tab.status.takeNotice() {
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
         }
         if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
+        // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
+        // notifications), and at once when it shows again (visibilityChanged).
+        if window?.canBeSeen != false || tickCount % 4 == 0 { refresh() }
+    }
+
+    @objc private func visibilityChanged() {
+        guard window?.canBeSeen == true else { return }
         refresh()
     }
 
@@ -2207,6 +2259,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowWillClose(_ notification: Notification) {
+        hasClosed = true
         ticker?.invalidate()
         ticker = nil
         sidebar.stopWatching()
@@ -2218,7 +2271,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        lastKey = Date()
+        if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
         refreshVisibility()
         refresh()
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones

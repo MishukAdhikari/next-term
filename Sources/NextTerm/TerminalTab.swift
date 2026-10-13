@@ -16,6 +16,42 @@ final class NextTermView: LocalProcessTerminalView {
     var beepAllowed = true
     /// False once the shell has ended: there is nothing left to send keystrokes to.
     var acceptsInput = true
+    /// An agent opened this tab over MCP and the user hasn't chosen it yet: it takes no keyboard (TerminalWindow refuses
+    /// it) until they click it, pick its tab, move to its pane, or paste or drop into it, so nothing meant for the tab
+    /// they were typing in lands in an agent's prompt (AgentArrival). A hint at its top says so.
+    var awaitsChoice = false {
+        didSet { if awaitsChoice != oldValue { showChoiceHint() } }
+    }
+    /// What the hint says.
+    var choiceHint = "An agent opened this tab. Click to type here." {
+        didSet { hintView?.stringValue = choiceHint }
+    }
+    private var hintView: NSTextField?
+
+    private func showChoiceHint() {
+        hintView?.removeFromSuperview()
+        hintView = nil
+        guard awaitsChoice else { return }
+        let hint = NSTextField(labelWithString: choiceHint)
+        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        hint.textColor = .white
+        hint.drawsBackground = true
+        hint.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        hint.alignment = .center
+        hint.wantsLayer = true
+        hint.layer?.cornerRadius = 5
+        hint.layer?.masksToBounds = true
+        hint.setAccessibilityLabel(choiceHint)
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hint)
+        NSLayoutConstraint.activate([
+            hint.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            hint.centerXAnchor.constraint(equalTo: centerXAnchor),
+            hint.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+        ])
+        hintView = hint
+    }
+
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
@@ -715,6 +751,19 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         tailRows(count).rows
     }
 
+    /// `screenTail`, with stored keys masked over whole lines (`SecretMask.mask(window:rows:text:)`): the rows above the
+    /// window are masked with it, wrapped by the terminal or not (agent UIs wrap with a newline or cursor moves), so the
+    /// tail of a key whose start is above the window never shows.
+    func screenTail(_ count: Int, masked mask: SecretMask) -> [String] {
+        let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let top = terminal.buffer.totalLinesTrimmed
+        let first = max(top, last - count + 1)
+        return mask.mask(window: first...last, rows: top...last) { row in
+            terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true) ?? ""
+        }
+    }
+
     /// `screenTail`, with the scroll-invariant row of its first line.
     private func tailRows(_ count: Int) -> (first: Int, rows: [String]) {
         let terminal = view.getTerminal()
@@ -776,6 +825,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
     func userInput() {
         touchedByUser = true
+        view.awaitsChoice = false // a paste or a drop into it is the user's choice
         MCPControl.typedByUser(self)
     }
 
@@ -905,8 +955,21 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: liveTail()), at: Self.now)
+        status.observe(agentScreen: agentActivity(liveTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
+    }
+
+    /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
+    /// (most of them, most of the time) is not parsed again 4 times a second. AgentScreen.activity is a function of the
+    /// lines and the masks alone, and TabStatus takes the same activity again as it did.
+    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, activity: AgentActivity)?
+
+    private func agentActivity(_ lines: [String]) -> AgentActivity {
+        let mask = ObjectIdentifier(SecretMask.current)
+        if let last = lastAgentRead, last.mask == mask, last.lines == lines { return last.activity }
+        let activity = AgentScreen.activity(screenLines: lines)
+        lastAgentRead = (lines, mask, activity)
+        return activity
     }
 
     /// What the program in front started outside the terminal that its hangup stops, as the close alerts name it
