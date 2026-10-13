@@ -19,9 +19,8 @@ import Testing
     @Test func aStoredNewTerminalReadsBack() throws {
         // "Open a new terminal" is kept as `newTerminal`. A build from before it reads that as any unknown value, the
         // Welcome window, and so does this one for a value it does not know.
-        let name = "nextterm-launch-settings-new-terminal-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("launch-settings-new-terminal")
+        defer { TestDefaults.remove(defaults, name) }
         var terminal = LaunchSettings()
         terminal.opens = .newTerminal
         terminal.save(.opens, to: defaults)
@@ -99,11 +98,11 @@ import Testing
         settings.save(.opens, to: defaults)
         #expect(LaunchSettings(defaults: defaults).opensChosen)
         // A whole save of settings whose "At launch" nobody chose leaves it unchosen.
-        let name2 = name + "-whole"
-        let other = try #require(UserDefaults(suiteName: name2))
+        let (other, name2) = try TestDefaults.make("launch-settings-whole")
         defer { TestDefaults.remove(other, name2) }
         LaunchSettings().save(to: other)
-        #expect(other.object(forKey: LaunchSettings.Key.opens) == nil)
+        let unchosen: Any? = other.object(forKey: LaunchSettings.Key.opens)
+        #expect(unchosen == nil)
         #expect(!LaunchSettings(defaults: other).opensChosen)
     }
 }

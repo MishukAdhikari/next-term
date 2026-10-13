@@ -15,12 +15,16 @@ import Testing
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/a", "/code/b"]
         #expect(same, "\(paths)")
-        #expect(history.lastUsed("/code/a") == at(300))
-        #expect(history.lastUsed("/code/b") == at(200))
-        #expect(history.lastUsed("/code/none") == nil)
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(300))
+        let usedB: Date? = history.lastUsed("/code/b")
+        #expect(usedB == at(200))
+        let usedNone: Date? = history.lastUsed("/code/none")
+        #expect(usedNone == nil)
         // Two opens in the same second: the later call comes first.
         history.record(opened: "/code/b", at: at(300))
-        #expect(history.paths.first == "/code/b")
+        let first: String? = history.paths.first
+        #expect(first == "/code/b")
     }
 
     @Test func aCloseKeepsTheLaterOfTheStoredTimeAndItsOwn() {
@@ -29,11 +33,14 @@ import Testing
         history.record(opened: "/code/a", at: at(500))
         // Opened at 500, its window last in front before that: a clock gone back, or a stale time. The stored one stays.
         history.record(closed: "/code/a", lastUsed: at(300))
-        #expect(history.lastUsed("/code/a") == at(500))
-        #expect(history.paths.first == "/code/a")
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(500))
+        let first: String? = history.paths.first
+        #expect(first == "/code/a")
         // b's window was in front after a was opened: b moves up, at that time.
         history.record(closed: "/code/b", lastUsed: at(600))
-        #expect(history.lastUsed("/code/b") == at(600))
+        let usedB: Date? = history.lastUsed("/code/b")
+        #expect(usedB == at(600))
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/b", "/code/a"]
         #expect(same, "\(paths)")
@@ -50,14 +57,20 @@ import Testing
             history.record(opened: "/code/p\(i)", at: at(Double(1_000 + i)))
         }
         #expect(ProjectHistory.limit == 50)
-        #expect(history.entries.count == 50)
-        #expect(history.paths.first == "/code/p50")
-        #expect(history.paths.last == "/code/p1")
-        #expect(history.lastUsed("/code/p0") == nil)
+        let count: Int = history.entries.count
+        #expect(count == 50)
+        let first: String? = history.paths.first
+        #expect(first == "/code/p50")
+        let last: String? = history.paths.last
+        #expect(last == "/code/p1")
+        let usedP0: Date? = history.lastUsed("/code/p0")
+        #expect(usedP0 == nil)
         // A close past the limit, older than every kept one, is not kept either.
         history.record(closed: "/code/old", lastUsed: at(10))
-        #expect(history.entries.count == 50)
-        #expect(history.lastUsed("/code/old") == nil)
+        let count2: Int = history.entries.count
+        #expect(count2 == 50)
+        let usedOld: Date? = history.lastUsed("/code/old")
+        #expect(usedOld == nil)
     }
 
     @Test func forgetAndClear() {
@@ -86,10 +99,13 @@ import Testing
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/y", "/code/x"]
         #expect(same, "\(paths)")
-        #expect(history.lastUsed("/code/x") == at(200))
-        #expect(history.lastUsed("/code/not-in-history") == nil)
+        let usedX: Date? = history.lastUsed("/code/x")
+        #expect(usedX == at(200))
+        let usedNotInHistory: Date? = history.lastUsed("/code/not-in-history")
+        #expect(usedNotInHistory == nil)
         history.record(closed: "/code/x", lastUsed: .distantPast)
-        #expect(history.lastUsed("/code/x") == at(200))
+        let usedX2: Date? = history.lastUsed("/code/x")
+        #expect(usedX2 == at(200))
         // With no window open it clears every one.
         history.clear(keeping: [])
         #expect(history == ProjectHistory())
@@ -154,8 +170,10 @@ import Testing
         #expect(moved.isEmpty, "\(moved.prefix(5))")
         // A stored time finer than a millisecond reads as the millisecond.
         let fine = ProjectHistory(stored: [["/code/a", 100.123_456_7] as [Any]])
-        #expect(fine.lastUsed("/code/a") == at(100.123))
-        #expect(ProjectHistory(stored: fine.stored) == fine)
+        let usedA: Date? = fine.lastUsed("/code/a")
+        #expect(usedA == at(100.123))
+        let readBack: ProjectHistory = ProjectHistory(stored: fine.stored)
+        #expect(readBack == fine)
     }
 
     @Test func aCloseFromAWindowNeverInFrontRecordsNothing() {
@@ -168,7 +186,8 @@ import Testing
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/a"]
         #expect(same, "\(paths)")
-        #expect(history.lastUsed("/code/a") == at(100))
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(100))
         // Nor does any time the defaults could not keep: before 1970, or past `Date.distantFuture`.
         history.record(opened: "/code/b", at: at(-1))
         history.record(closed: "/code/c", lastUsed: at(1e12))
@@ -176,7 +195,8 @@ import Testing
         let kept: [String] = history.paths
         let sameKept: Bool = kept == ["/code/d", "/code/a"]
         #expect(sameKept, "\(kept)")
-        #expect(ProjectHistory(stored: history.stored) == history)
+        let readBack: ProjectHistory = ProjectHistory(stored: history.stored)
+        #expect(readBack == history)
         // A stored time that far ahead is no time either.
         let stored: [Any] = [["/code/far", 1e12] as [Any], ["/code/a", 100.0] as [Any]]
         let read: [String] = ProjectHistory(stored: stored).paths
@@ -190,12 +210,14 @@ import Testing
         var history = ProjectHistory()
         history.record(opened: "/code/a", at: at(500))
         history.record(opened: "/code/b", at: at(400))
-        #expect(history.paths.first == "/code/a")
+        let first: String? = history.paths.first
+        #expect(first == "/code/a")
         history.record(opened: "/code/a", at: at(100))
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/b", "/code/a"]
         #expect(same, "\(paths)")
-        #expect(history.lastUsed("/code/a") == at(100))
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(100))
     }
 
     @Test func readsOnlyTheWellFormedStoredPairs() {
@@ -218,9 +240,12 @@ import Testing
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/h", "/code/a"]
         #expect(same, "\(paths)")
-        #expect(history.lastUsed("/code/h") == at(200))
-        #expect(history.lastUsed("/code/a") == at(100))
-        #expect(ProjectHistory(stored: []) == ProjectHistory())
+        let usedH: Date? = history.lastUsed("/code/h")
+        #expect(usedH == at(200))
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(100))
+        let readBack: ProjectHistory = ProjectHistory(stored: [])
+        #expect(readBack == ProjectHistory())
     }
 
     @Test func storedPairsReadBackNewestFirstAndCapped() {
@@ -231,15 +256,22 @@ import Testing
             stored.append(pair)
         }
         let history = ProjectHistory(stored: stored)
-        #expect(history.entries.count == 50)
-        #expect(history.paths.first == "/code/p59")
-        #expect(history.paths.last == "/code/p10")
+        let count: Int = history.entries.count
+        #expect(count == 50)
+        let first: String? = history.paths.first
+        #expect(first == "/code/p59")
+        let last: String? = history.paths.last
+        #expect(last == "/code/p10")
         // Written back as [path, seconds since 1970] pairs, newest first, and read back the same.
         let written: [[Any]] = history.stored
-        #expect(written.count == 50)
-        #expect(written.first?.first as? String == "/code/p59")
-        #expect(written.first?.last as? Double == 1_059)
-        #expect(ProjectHistory(stored: written) == history)
+        let writtenCount: Int = written.count
+        #expect(writtenCount == 50)
+        let firstPath: String? = written.first?.first as? String
+        #expect(firstPath == "/code/p59")
+        let firstSeconds: Double? = written.first?.last as? Double
+        #expect(firstSeconds == 1_059)
+        let readBack: ProjectHistory = ProjectHistory(stored: written)
+        #expect(readBack == history)
     }
 
     @Test func storedTiesKeepTheirOrderAndANewerDuplicateWins() {
@@ -254,8 +286,10 @@ import Testing
         let paths: [String] = history.paths
         let same: Bool = paths == ["/code/b", "/code/a", "/code/c"]
         #expect(same, "\(paths)")
-        #expect(history.lastUsed("/code/a") == at(300))
-        #expect(history.lastUsed("/code/c") == at(100))
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(300))
+        let usedC: Date? = history.lastUsed("/code/c")
+        #expect(usedC == at(100))
     }
 
     @Test func aLongStoredListReadsInTime() {
@@ -268,9 +302,12 @@ import Testing
         let clock = ContinuousClock()
         var history = ProjectHistory()
         let elapsed = clock.measure { history = ProjectHistory(stored: stored) }
-        #expect(history.entries.count == 50)
-        #expect(history.paths.first == "/code/p9999")
-        #expect(history.lastUsed("/code/p9999") == at(20_999))
+        let count: Int = history.entries.count
+        #expect(count == 50)
+        let first: String? = history.paths.first
+        #expect(first == "/code/p9999")
+        let usedP9999: Date? = history.lastUsed("/code/p9999")
+        #expect(usedP9999 == at(20_999))
         // Well under 0.1 s in a debug build on a recent Mac; one search a pair took seconds.
         #expect(elapsed < .seconds(2), "\(elapsed)")
     }
@@ -281,12 +318,17 @@ import Testing
             history.record(opened: "/code/p\(i)", at: at(Double(1_000 + i)))
         }
         history.record(closed: "/code/new", lastUsed: at(1_025))
-        #expect(history.entries.count == 50)
-        #expect(history.lastUsed("/code/p0") == nil)
-        #expect(history.lastUsed("/code/new") == at(1_025))
+        let count: Int = history.entries.count
+        #expect(count == 50)
+        let usedP0: Date? = history.lastUsed("/code/p0")
+        #expect(usedP0 == nil)
+        let usedNew: Date? = history.lastUsed("/code/new")
+        #expect(usedNew == at(1_025))
         // Ahead of p25, used at the same moment.
-        #expect(history.paths.firstIndex(of: "/code/new") == 24)
-        #expect(history.paths.firstIndex(of: "/code/p25") == 25)
+        let indexNew: Int? = history.paths.firstIndex(of: "/code/new")
+        #expect(indexNew == 24)
+        let indexP25: Int? = history.paths.firstIndex(of: "/code/p25")
+        #expect(indexP25 == 25)
     }
 
     @Test func existingLeavesOutARemovedFolder() throws {
@@ -310,57 +352,69 @@ import Testing
         let same: Bool = existing == [kept.path]
         #expect(same, "\(existing)")
         // Reading leaves the history itself as it was: a folder on a drive not mounted now comes back with it.
-        #expect(history.entries.count == 3)
+        let count: Int = history.entries.count
+        #expect(count == 3)
     }
 
     @Test func theStoreKeepsItsOwnKeyBesideRecentProjects() throws {
-        let name = "nextterm-project-history-tests-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("project-history-store")
+        defer { TestDefaults.remove(defaults, name) }
         defaults.set(["/code/recent"], forKey: "recentProjects")
         let store = ProjectHistoryStore(defaults: defaults)
-        #expect(store.load() == ProjectHistory())
+        let empty: ProjectHistory = store.load()
+        #expect(empty == ProjectHistory())
         var history = ProjectHistory()
         history.record(opened: "/code/a", at: at(100))
         history.record(opened: "/code/b", at: at(200))
         store.save(history)
         #expect(ProjectHistory.key == "projectHistory")
-        #expect(defaults.array(forKey: ProjectHistory.key)?.count == 2)
-        #expect(store.load() == history)
+        let storedCount: Int? = defaults.array(forKey: ProjectHistory.key)?.count
+        #expect(storedCount == 2)
+        let loaded: ProjectHistory = store.load()
+        #expect(loaded == history)
         // Recent Projects, for File › Open Recent and the Dock menu, is left as it was.
         let recent: [String]? = defaults.stringArray(forKey: "recentProjects")
         let sameRecent: Bool = recent == ["/code/recent"]
         #expect(sameRecent)
         // A value of another type under the key reads as an empty history.
         defaults.set("not a list", forKey: ProjectHistory.key)
-        #expect(store.load() == ProjectHistory())
+        let unreadable: ProjectHistory = store.load()
+        #expect(unreadable == ProjectHistory())
     }
 
     @Test func aSelfTestKeepsItsHistoryInAScratchSuiteEmptiedAtTheStart() throws {
-        // The suite the app's self-test uses is its own, never the app's domain.
+        // The suite the app's self-test uses is its own, never the app's domain, and a file in the temporary folder:
+        // named by a path, the defaults write it there, and nothing of a run is left in ~/Library/Preferences.
+        let folder: String = canonicalPath(FileManager.default.temporaryDirectory.path)
         let appSuite: String = ProjectHistoryStore.scratchSuite
-        #expect(appSuite != CommandLineLink.bundleIdentifier)
-        #expect(appSuite.hasPrefix(CommandLineLink.bundleIdentifier + "."))
+        let parent: String = (appSuite as NSString).deletingLastPathComponent
+        let file: String = (appSuite as NSString).lastPathComponent
+        #expect(parent == folder, "\(appSuite)")
+        #expect(file.hasPrefix(CommandLineLink.bundleIdentifier + ".self-test."), "\(file)")
         #expect(ProjectHistoryStore.isScratch(appSuite))
         // Here a suite of the test's own, as a run before this one left it.
-        let name = CommandLineLink.bundleIdentifier + ".self-test.project-history-tests-\(getpid())"
+        let own: String = CommandLineLink.bundleIdentifier + ".self-test.project-history-tests-\(getpid())"
+        let name: String = folder + "/" + own
         let earlier = try #require(UserDefaults(suiteName: name))
-        defer { earlier.removePersistentDomain(forName: name) }
+        defer { TestDefaults.remove(earlier, name) }
         var left = ProjectHistory()
         left.record(opened: "/fixture/earlier", at: at(100))
         ProjectHistoryStore(defaults: earlier).save(left)
         let scratch = try #require(ProjectHistoryStore.scratch(suiteName: name))
-        #expect(scratch.load() == ProjectHistory())
+        let emptied: ProjectHistory = scratch.load()
+        #expect(emptied == ProjectHistory())
         var history = ProjectHistory()
         history.record(opened: "/fixture/shop", at: at(200))
         scratch.save(history)
-        #expect(scratch.load() == history)
+        let loaded: ProjectHistory = scratch.load()
+        #expect(loaded == history)
     }
 
     @Test func onlyASelfTestsOwnSuiteIsEverEmptied() throws {
         // Decided without emptying anything: a wrong answer here never wipes a real domain on the machine running it.
+        let folder: String = canonicalPath(FileManager.default.temporaryDirectory.path)
         let prefix: String = CommandLineLink.bundleIdentifier + ".self-test."
-        #expect(ProjectHistoryStore.isScratch(prefix + "project-history-tests-42"))
+        #expect(ProjectHistoryStore.isScratch(folder + "/" + prefix + "project-history-tests-42"))
         var refused: [String] = []
         refused.append("")
         refused.append(CommandLineLink.bundleIdentifier) // the app's settings
@@ -368,20 +422,26 @@ import Testing
         refused.append("NextTerm") // a debug executable's own domain, run outside a bundle
         refused.append(Bundle.main.bundleIdentifier ?? "") // the process running this
         refused.append("com.example.other-app")
-        refused.append(prefix) // the prefix alone
-        refused.append(CommandLineLink.bundleIdentifier + ".self-testing")
-        refused.append(prefix + "a/b") // a path
-        refused.append(prefix + "..") // nor a way out of the folder the defaults keep
-        refused.append("/private/tmp/" + prefix + "x")
+        // A name alone, which the defaults keep in ~/Library/Preferences.
+        refused.append(prefix + "project-history-tests-42")
+        refused.append(folder) // the folder itself
+        refused.append(folder + "/" + prefix) // the prefix alone
+        refused.append(folder + "/" + CommandLineLink.bundleIdentifier + ".self-testing")
+        refused.append(folder + "/" + prefix + "a/b") // a path on from it
+        refused.append(folder + "/" + prefix + "..") // nor a way out of the folder
+        refused.append(folder + "/sub/" + prefix + "x") // a folder inside it
+        refused.append(folder + prefix + "x") // beside it
+        refused.append("/private/tmp/" + prefix + "x") // another folder
         let allowed: [String] = refused.filter { ProjectHistoryStore.isScratch($0) }
         #expect(allowed.isEmpty, "\(allowed)")
         // And `scratch` asks it: a suite of the test's own named otherwise is left as it was.
-        let name = "nextterm-project-history-not-scratch-\(getpid())"
-        let other = try #require(UserDefaults(suiteName: name))
-        defer { other.removePersistentDomain(forName: name) }
+        let (other, name) = try TestDefaults.make("project-history-not-scratch")
+        defer { TestDefaults.remove(other, name) }
         other.set("kept", forKey: "value")
-        #expect(ProjectHistoryStore.scratch(suiteName: name) == nil)
-        #expect(other.string(forKey: "value") == "kept")
+        let scratch: ProjectHistoryStore? = ProjectHistoryStore.scratch(suiteName: name)
+        #expect(scratch == nil)
+        let value: String? = other.string(forKey: "value")
+        #expect(value == "kept")
     }
 }
 
@@ -516,13 +576,17 @@ import Testing
         var open = OpenProjects()
         let opening: ProjectHistory.Changes = open.update([window(1, "/code/a", nil), window(2, "/code/b", nil)], at: at(100))
         history.record(opening, at: at(100))
-        #expect(history.lastUsed("/code/a") == at(100))
-        #expect(history.lastUsed("/code/b") == at(100))
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(100))
+        let usedB: Date? = history.lastUsed("/code/b")
+        #expect(usedB == at(100))
         // a's window came to the front at 300; b's never did, so its close leaves its open time as it is.
         open.sawInFront("/code/a", at: at(300))
         history.record(open.update([], at: at(500)), at: at(500))
-        #expect(history.lastUsed("/code/a") == at(300))
-        #expect(history.lastUsed("/code/b") == at(100))
+        let usedA2: Date? = history.lastUsed("/code/a")
+        #expect(usedA2 == at(300))
+        let usedB2: Date? = history.lastUsed("/code/b")
+        #expect(usedB2 == at(100))
         let paths: [String] = history.paths
         let order: Bool = paths == ["/code/a", "/code/b", "/code/old"]
         #expect(order, "\(paths)")

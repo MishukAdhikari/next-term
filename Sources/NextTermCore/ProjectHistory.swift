@@ -166,8 +166,16 @@ public struct ProjectHistory: Equatable, Sendable {
 /// Where the history is kept: its own key in a defaults domain, beside Recent Projects' and never in it.
 public struct ProjectHistoryStore {
     /// The suite a self-test keeps the history in, so the fixture windows it opens never push the user's own projects
-    /// out of the 50, and the user's history is never written during a run.
-    public static let scratchSuite = CommandLineLink.bundleIdentifier + ".self-test.project-history"
+    /// out of the 50, and the user's history is never written during a run. A path in the temporary folder: a suite
+    /// named by a path is written there, as `<path>.plist`, and nothing of a run is left in ~/Library/Preferences.
+    public static var scratchSuite: String { scratchPrefix + "project-history" }
+
+    /// What every scratch suite's name starts with: the temporary folder, as the kernel spells it, then
+    /// `<bundle id>.self-test.`.
+    private static var scratchPrefix: String {
+        let folder: String = canonicalPath(FileManager.default.temporaryDirectory.path)
+        return folder + "/" + CommandLineLink.bundleIdentifier + ".self-test."
+    }
 
     public let defaults: UserDefaults
 
@@ -175,11 +183,12 @@ public struct ProjectHistoryStore {
         self.defaults = defaults
     }
 
-    /// Whether `scratch(suiteName:)` may empty the suite: only a self-test's own, `<bundle id>.self-test.<name>` with
-    /// a name of letters, digits, `-` and `_`. Every other is refused, so no wrong name ever empties the app's
-    /// settings (its domain, or `NextTerm` for a debug build run outside a bundle), the global domain or another app's.
+    /// Whether `scratch(suiteName:)` may empty the suite: only a self-test's own, a file right in the temporary folder
+    /// named `<bundle id>.self-test.<name>`, with a name of letters, digits, `-` and `_`. Every other is refused, so no
+    /// wrong name ever empties the app's settings (its domain, or `NextTerm` for a debug build run outside a bundle),
+    /// the global domain or another app's, and no suite is ever kept in ~/Library/Preferences.
     public static func isScratch(_ suiteName: String) -> Bool {
-        let prefix: String = CommandLineLink.bundleIdentifier + ".self-test."
+        let prefix: String = scratchPrefix
         guard suiteName.hasPrefix(prefix) else { return false }
         let name: Substring = suiteName.dropFirst(prefix.count)
         return !name.isEmpty && name.allSatisfy(isNameCharacter)
