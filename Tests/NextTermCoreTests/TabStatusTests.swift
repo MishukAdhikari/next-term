@@ -71,6 +71,104 @@ import Testing
     }
 }
 
+/// OpenCode however it starts: its npm package with or without a version, run by any package runner, OpenCode 2's
+/// `opencode2` and `@opencode/cli`, and npm's native `opencode.exe`, each named "opencode". Its servers are commands.
+@Suite struct OpencodeRecognitionTests {
+    static let starts = [
+        "opencode", "opencode2", "npx opencode-ai", "npx opencode-ai@latest", "bunx opencode-ai@1.19.0", "npx @opencode/cli",
+        "npx -y @opencode/cli@2.0.26", "pnpm dlx opencode-ai", "yarn dlx opencode-ai@latest", "pnpx opencode-ai",
+        "/usr/local/lib/node_modules/opencode-ai/bin/opencode.exe", "cd ~/app && npx opencode-ai -c", "opencode ./web",
+        "opencode attach http://localhost:4096", "opencode -c", "opencode serve & opencode attach http://localhost:4096",
+    ]
+
+    @Test func everyStartIsOpencode() {
+        for line in Self.starts {
+            #expect(CommandClassifier.agentName(line) == "opencode", "\(line)")
+            #expect(CommandClassifier.kind(of: line) == .agent, "\(line)")
+            #expect(CommandClassifier.programName(line) == "opencode", "\(line)")
+        }
+        #expect(CommandClassifier.programLine("npx opencode-ai@latest -c") == "opencode -c")
+        #expect(CommandClassifier.parse("pnpm dlx opencode-ai -s ses_1").args == ["-s", "ses_1"])
+    }
+
+    /// A package runner's version is dropped for every agent, and only a runner's word is read as a package.
+    @Test func aRunnersVersionIsDroppedForEveryAgent() {
+        #expect(CommandClassifier.agentName("npx @anthropic-ai/claude-code@latest") == "claude-code")
+        #expect(CommandClassifier.programLine("npx @anthropic-ai/claude-code@2.1.280 --resume") == "claude-code --resume")
+        #expect(CommandClassifier.kind(of: "bunx @google/gemini-cli@latest") == .agent)
+        #expect(CommandClassifier.programName("/opt/tools@2/bin/make test") == "make")
+        #expect(CommandClassifier.programName("pnpm dlx create-vite@latest app") == "create-vite")
+        #expect(CommandClassifier.programName("pnpm install") == "pnpm" && CommandClassifier.kind(of: "yarn dlx cowsay@1 hi") == .command)
+        #expect(CommandClassifier.programName("npm exec opencode-ai") == "npm") // npm's exec is not read as a runner
+    }
+
+    @Test func itsServersAreCommands() {
+        let servers = ["opencode serve", "opencode web --port 4096", "opencode acp", "npx opencode-ai@latest serve --port 4096",
+                       "opencode --log-level DEBUG serve", "opencode2 web", "cd ~/app && opencode acp"]
+        for line in servers {
+            #expect(CommandClassifier.kind(of: line) == .command, "\(line)")
+            #expect(CommandClassifier.agentName(line) == nil, "\(line)")
+            #expect(CommandClassifier.programName(line) == "opencode", "\(line)")
+        }
+        #expect(CommandClassifier.kind(of: "node /usr/local/lib/node_modules/opencode-ai/bin/opencode serve") == .command)
+        // Another agent's word for a subcommand is that agent's own.
+        #expect(CommandClassifier.kind(of: "claude web") == .agent)
+    }
+
+    @Test func itsProcessesAreNamedOpencode() {
+        let npm = "/usr/local/lib/node_modules/opencode-ai/bin/opencode.exe"
+        let native = ForegroundProcess(isShell: false, name: "opencode.exe", arguments: [npm, "-c"], executablePath: npm)
+        #expect(CommandClassifier.kind(of: native) == .agent)
+        #expect(CommandClassifier.programName(of: native) == "opencode")
+        #expect(CommandClassifier.agentName(executable: npm, arguments: [npm, "-c"]) == "opencode")
+        let two = ForegroundProcess(isShell: false, name: "opencode2", arguments: ["opencode2"], executablePath: "/opt/homebrew/bin/opencode2")
+        #expect(CommandClassifier.kind(of: two) == .agent && CommandClassifier.programName(of: two) == "opencode")
+        let script = "/opt/homebrew/lib/node_modules/@opencode/cli/dist/index.js"
+        #expect(CommandClassifier.agentName(executable: "/opt/homebrew/bin/node", arguments: ["node", script]) == "opencode")
+        let node = ForegroundProcess(isShell: false, name: "node", arguments: ["node", script], executablePath: "/opt/homebrew/bin/node")
+        #expect(CommandClassifier.kind(of: node) == .agent && CommandClassifier.programName(of: node) == "opencode")
+    }
+
+    @Test func itsServerProcessesAreCommands() {
+        let serve = ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "serve"])
+        #expect(CommandClassifier.kind(of: serve) == .command)
+        #expect(CommandClassifier.programName(of: serve) == "opencode")
+        let wrapper = ForegroundProcess(isShell: false, name: "node", arguments: ["node", "/usr/local/bin/opencode", "web", "--port", "4096"],
+                                        executablePath: "/usr/local/bin/node")
+        #expect(CommandClassifier.kind(of: wrapper) == .command)
+        #expect(CommandClassifier.runsServer(executable: "/usr/local/bin/node", arguments: wrapper.arguments))
+        let acp = ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "--print-logs", "acp"])
+        #expect(CommandClassifier.kind(of: acp) == .command)
+        for tui in [["opencode"], ["opencode", "-c"], ["opencode", "attach", "http://localhost:4096"]] {
+            let process = ForegroundProcess(isShell: false, name: "opencode", arguments: tui)
+            #expect(CommandClassifier.kind(of: process) == .agent, "\(tui)")
+            #expect(!CommandClassifier.runsServer(executable: "", arguments: tui), "\(tui)")
+        }
+        // A server's tools still call as OpenCode, so the process is named for whoever asks which agent calls.
+        #expect(CommandClassifier.agentName(executable: "/usr/local/bin/opencode", arguments: ["opencode", "acp"]) == "opencode")
+    }
+
+    /// With the shell integration, polling upgrades a command to an agent only for an agent's TUI, never for a server.
+    @Test func anIntegratedServerTabStaysACommand() {
+        var server = TabStatus()
+        server.commandStarted("opencode serve", at: 0)
+        #expect(server.kind == .command && server.program == "opencode")
+        server.observe(ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "serve"]), at: 1)
+        #expect(server.kind == .command)
+        var function = TabStatus()
+        function.commandStarted("ocs", at: 0)
+        function.observe(ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "web"]), at: 1)
+        #expect(function.kind == .command)
+        var tui = TabStatus()
+        tui.commandStarted("oc", at: 0)
+        tui.observe(ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode"]), at: 1)
+        #expect(tui.kind == .agent && tui.program == "opencode")
+        var npx = TabStatus()
+        npx.commandStarted("npx opencode-ai@latest", at: 0)
+        #expect(npx.kind == .agent && npx.program == "opencode")
+    }
+}
+
 @Suite struct TabStatusTests {
     @Test func startupCommandsAreNotCommandsRun() {
         var s = TabStatus()

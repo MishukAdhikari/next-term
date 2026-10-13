@@ -50,6 +50,25 @@ import Testing
         #expect(CommandClassifier.kind(of: ForegroundProcess(isShell: false, name: "agy", arguments: ["agy"])) == .agent)
     }
 
+    /// OpenCode is restored however it was started, and its servers never: they run no session a tab could resume.
+    @Test func opencodeIsRestoredHoweverItStartedButNotItsServers() {
+        for line in ["npx opencode-ai@latest", "bunx opencode-ai", "npx @opencode/cli", "opencode2 -c", "pnpm dlx opencode-ai"] {
+            #expect(RestoreAgent(line: line) == .opencode, "\(line)")
+        }
+        for line in ["opencode serve", "opencode web --port 4096", "npx opencode-ai acp"] {
+            #expect(RestoreAgent(line: line) == nil, "\(line)")
+        }
+        let npm = "/usr/local/lib/node_modules/opencode-ai/bin/opencode.exe"
+        #expect(RestoreAgent(process: AgentProcess(pid: 42, startedAt: nil, executable: npm, arguments: [npm, "-s", "ses_1"])) == .opencode)
+        let two = "/opt/homebrew/lib/node_modules/@opencode/cli/bin/opencode.exe"
+        #expect(RestoreAgent(process: AgentProcess(pid: 43, startedAt: nil, executable: two, arguments: ["opencode2"])) == .opencode)
+        let served = AgentProcess(pid: 44, startedAt: nil, executable: npm, arguments: [npm, "serve", "--port", "4096"])
+        #expect(RestoreAgent(process: served) == nil)
+        let node = AgentProcess(pid: 45, startedAt: nil, executable: "/usr/local/bin/node",
+                                arguments: ["node", "/usr/local/lib/node_modules/opencode-ai/bin/opencode", "web"])
+        #expect(RestoreAgent(process: node) == nil)
+    }
+
     @Test func envUnsetIsReadAsAnOption() {
         #expect(CommandClassifier.parse("env -u CLAUDE_CODE_RESUME_PROMPT claude --resume x").name == "claude")
         #expect(CommandClassifier.parse("/usr/bin/env -u A -u B /opt/bin/codex resume x").name == "codex")

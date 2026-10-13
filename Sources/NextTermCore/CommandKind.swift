@@ -38,15 +38,30 @@ public struct ForegroundProcess: Equatable, Sendable {
 
 public enum CommandClassifier {
     static let agents: Set<String> = [
-        "claude", "claude-code", "claude.exe", "codex", "gemini", "gemini-cli", "aider", "opencode", "amp",
-        "cursor-agent", "goose", "crush", "qwen", "qwen-code", "copilot", "droid", "kiro", "kiro-cli", "q",
+        "claude", "claude-code", "claude.exe", "codex", "gemini", "gemini-cli", "aider", "opencode", "opencode-ai", "opencode2",
+        "opencode.exe", "amp", "cursor-agent", "goose", "crush", "qwen", "qwen-code", "copilot", "droid", "kiro", "kiro-cli", "q",
         "kimi", "plandex", "cline", "junie", "commandcode", "command-code", "cmd", "auggie", "agy",
     ]
+    /// Other names an agent runs by, and the name Next Term knows it by everywhere (its status, its notices, its session
+    /// list): npm's native `claude.exe` and `opencode.exe`, OpenCode's npm package `opencode-ai`, OpenCode 2's `opencode2`.
+    static let otherNames: [String: String] = [
+        "claude.exe": "claude", "opencode-ai": "opencode", "opencode2": "opencode", "opencode.exe": "opencode",
+    ]
+    /// Wrappers whose word is a package to fetch and run, `name@version` or `@scope/name@version`: `npx opencode-ai@latest`.
+    /// `dlx` stands for pnpm's and yarn's (`dlxManagers`).
+    static let packageRunners: Set<String> = ["npx", "bunx", "pnpx", "dlx"]
+    /// Package managers whose `dlx` runs a package as `npx` does: `pnpm dlx opencode-ai`.
+    static let dlxManagers: Set<String> = ["pnpm", "yarn"]
+    /// Packages whose program is not their last word: OpenCode 2's `@opencode/cli` runs as `opencode`.
+    static let packagePrograms: [String: String] = ["@opencode/cli": "opencode"]
+    /// OpenCode's servers: a headless server, a web server, and ACP over stdio for an editor. Each runs as a command, as
+    /// none shows the TUI an agent tab reads; `attach` shows it, so it stays an agent.
+    static let opencodeServers: Set<String> = ["serve", "web", "acp"]
     /// Pieces of an executable or script path that give an agent away when its name does not:
     /// Claude Code's native installer runs as ".../claude/versions/2.1.280", the npm build as node + cli.js.
     static let agentPathHints = [
         "@anthropic-ai/claude-code", "/claude/versions/", "/claude-code/", "@openai/codex", "/codex/",
-        "@google/gemini-cli", "/opencode", "/aider", "@qwen-code/", "/cursor-agent",
+        "@google/gemini-cli", "/opencode", "@opencode/cli", "/aider", "@qwen-code/", "/cursor-agent",
         "/command-code/", "/junie/versions/", "@augmentcode/",
     ]
     static let interactive: Set<String> = [
@@ -102,13 +117,19 @@ public enum CommandClassifier {
     /// `FOO=1 sudo npx @anthropic-ai/claude-code --resume` -> ("claude-code", ["--resume"])
     public static func parse(_ simpleCommand: String) -> (name: String, args: [String]) {
         let words = simpleCommand.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        guard let index = programIndex(words) else { return ("", []) }
-        return (baseName(words[index]), Array(words[(index + 1)...]))
+        guard let found = program(in: words) else { return ("", []) }
+        return (found.name, Array(words[(found.index + 1)...]))
     }
 
-    /// Where the program is among a simple command's words: past options, assignments and wrappers, and the value
-    /// a wrapper's option takes (`env -u NAME`).
+    /// Where the program is among a simple command's words.
     static func programIndex(_ words: [String]) -> Int? {
+        program(in: words)?.index
+    }
+
+    /// Where the program is among a simple command's words, past options, assignments and wrappers, the value a wrapper's
+    /// option takes (`env -u NAME`), and pnpm's or yarn's `dlx`; and its name. A package runner's word names its package's
+    /// program (`packageProgram`), and an agent's other name the one Next Term knows it by (`knownName`).
+    public static func program(in words: [String]) -> (index: Int, name: String)? {
         var wrapper = ""
         var skipNext = false
         for (index, word) in words.enumerated() {
@@ -127,9 +148,47 @@ public enum CommandClassifier {
                 wrapper = base
                 continue
             }
-            return index
+            if dlxManagers.contains(base), index + 1 < words.count, words[index + 1] == "dlx" {
+                wrapper = "dlx"
+                skipNext = true
+                continue
+            }
+            let name = packageRunners.contains(wrapper) ? packageProgram(word) : base
+            return (index, knownName(name))
         }
         return nil
+    }
+
+    /// The program a package runner's word runs: the package's, without its version (`opencode-ai@latest` is
+    /// opencode-ai, `@anthropic-ai/claude-code@2.1.280` claude-code), by `packagePrograms` or the package's last word.
+    static func packageProgram(_ word: String) -> String {
+        let unquoted = Substring(word.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")))
+        let package: Substring = unquoted.dropFirst().lastIndex(of: "@").map { unquoted[..<$0] } ?? unquoted
+        return packagePrograms[String(package)] ?? baseName(String(package))
+    }
+
+    /// The name Next Term knows a program by: an agent's other name (`otherNames`) is its own, any other name stays.
+    public static func knownName(_ name: String) -> String {
+        otherNames[name] ?? name
+    }
+
+    /// OpenCode's words start one of its servers (`opencode serve`, `opencode --log-level DEBUG web`): its first word that
+    /// is no option, past `--log-level`'s value, the one global option that takes one.
+    static func isServer(_ name: String, args: [String]) -> Bool {
+        guard knownName(name) == "opencode" else { return false }
+        var valueNext = false
+        for word in args {
+            if valueNext {
+                valueNext = false
+                continue
+            }
+            if word.hasPrefix("-") {
+                valueNext = word == "--log-level"
+                continue
+            }
+            return opencodeServers.contains(word)
+        }
+        return false
     }
 
     /// The program a command line is about: the agent if there is one, else the first command that is
@@ -160,18 +219,24 @@ public enum CommandClassifier {
     /// interpreter running an agent's script (`scriptAgentName`). A dev server in a folder named like an agent is none.
     public static func agentName(_ commandLine: String) -> String? {
         for (name, args) in segments(commandLine).map(parse) where !name.isEmpty {
-            if agents.contains(name) { return name == "claude.exe" ? "claude" : name }
-            guard interpreters.contains(stem(name)), let script = args.first(where: { !$0.hasPrefix("-") }) else { continue }
-            if let agent = scriptAgentName(script) { return agent }
+            if agents.contains(name) {
+                // OpenCode's servers run no agent a tab reads or resumes.
+                if isServer(name, args: args) { continue }
+                return knownName(name)
+            }
+            guard interpreters.contains(stem(name)), let at = args.firstIndex(where: { !$0.hasPrefix("-") }),
+                  let agent = scriptAgentName(args[at]) else { continue }
+            if !isServer(agent, args: Array(args[(at + 1)...])) { return agent }
         }
         return nil
     }
 
     /// The agent a process runs, judged as strictly: its executable's or argv[0]'s name is an agent's, its executable
-    /// lies in an agent's own install (`strictAgentHint`), or it is an interpreter running an agent's script.
+    /// lies in an agent's own install (`strictAgentHint`), or it is an interpreter running an agent's script. An OpenCode
+    /// server is OpenCode too, as its tools call Next Term as OpenCode; `runsServer` tells it from the TUI.
     public static func agentName(executable: String, arguments: [String]) -> String? {
         let names = [baseName(executable), arguments.first.map(baseName) ?? ""]
-        if let known = names.first(where: agents.contains) { return known == "claude.exe" ? "claude" : known }
+        if let known = names.first(where: agents.contains) { return knownName(known) }
         if let hinted = strictAgentHint(in: executable) { return hinted }
         guard names.contains(where: { interpreters.contains(stem($0)) }),
               let script = arguments.dropFirst().first(where: { !$0.hasPrefix("-") }) else { return nil }
@@ -184,8 +249,20 @@ public enum CommandClassifier {
         let name = baseName(script)
         let suffix = [".js", ".mjs", ".cjs", ".ts", ".py"].first { name.hasSuffix($0) }
         let bare = suffix.map { String(name.dropLast($0.count)) } ?? name
-        if agents.contains(bare) { return bare == "claude.exe" ? "claude" : bare }
+        if agents.contains(bare) { return knownName(bare) }
         return strictAgentHint(in: script)
+    }
+
+    /// The process runs one of OpenCode's servers (`opencode serve`, `web`, `acp`), a command: by its program's words,
+    /// after argv[0] or after the script an interpreter runs.
+    public static func runsServer(executable: String, arguments: [String]) -> Bool {
+        guard agentName(executable: executable, arguments: arguments) == "opencode" else { return false }
+        var script: Int?
+        if interpreters.contains(stem(baseName(arguments.first ?? executable))) {
+            script = arguments.indices.dropFirst().first(where: { (index: Int) -> Bool in !arguments[index].hasPrefix("-") })
+        }
+        let words: [String] = script.map { (index: Int) -> [String] in Array(arguments[(index + 1)...]) } ?? Array(arguments.dropFirst())
+        return isServer("opencode", args: words)
     }
 
     /// The agent a path gives away wherever it lies: a package only that agent has (`@openai/codex`), its versions
@@ -210,10 +287,11 @@ public enum CommandClassifier {
 
     static func kind(name: String, args: [String]) -> CommandKind {
         if name.isEmpty { return .command }
-        if agents.contains(name) { return .agent }
+        if agents.contains(name) { return isServer(name, args: args) ? .command : .agent }
         if interpreters.contains(stem(name)),
-           let script = args.first(where: { !$0.hasPrefix("-") }), containsAgentHint(script) {
-            return .agent
+           let at = args.firstIndex(where: { !$0.hasPrefix("-") }), containsAgentHint(args[at]) {
+            let agent = scriptAgentName(args[at]) ?? hintedAgentName(in: args[at]) ?? ""
+            return isServer(agent, args: Array(args[(at + 1)...])) ? .command : .agent
         }
         if interactive.contains(name) || args.contains("tinker") { return .interactive }
         if repls.contains(name) || repls.contains(stem(name)) {
@@ -228,7 +306,9 @@ public enum CommandClassifier {
     /// Classifies the process in the foreground. This sees through shell functions and aliases,
     /// which the command line cannot: `claude-auto-danger` (a function) runs a process named claude.
     public static func kind(of process: ForegroundProcess) -> CommandKind {
-        if isAgent(process) { return .agent }
+        if isAgent(process) {
+            return runsServer(executable: process.executablePath, arguments: process.arguments) ? .command : .agent
+        }
         let (name, args) = parse(process.commandLine)
         return kind(name: name.isEmpty ? baseName(process.name) : name, args: args)
     }
@@ -236,7 +316,7 @@ public enum CommandClassifier {
     public static func programName(of process: ForegroundProcess) -> String {
         if isAgent(process) {
             let names = ([process.name] + process.arguments.prefix(1)).map(baseName)
-            if let known = names.first(where: { agents.contains($0) }) { return known == "claude.exe" ? "claude" : known }
+            if let known = names.first(where: { agents.contains($0) }) { return knownName(known) }
             if let hinted = hintedAgentName(in: process.executablePath + " " + process.arguments.prefix(3).joined(separator: " ")) {
                 return hinted
             }
@@ -276,6 +356,7 @@ public enum CommandClassifier {
         if hint.contains("gemini") { return "gemini" }
         if hint.contains("command-code") { return "commandcode" }
         if hint.contains("junie") { return "junie" }
+        if hint.contains("opencode") { return "opencode" }
         return baseName(hint.trimmingCharacters(in: CharacterSet(charactersIn: "/@")))
     }
 

@@ -93,6 +93,8 @@ extension SessionSnapshot.Agent {
     /// its `index.js`. One the matrix does not know is `.unknown`, still an agent; a process that runs none, such as a
     /// dev server in a folder named like an agent, is nil.
     public init?(process: AgentProcess) {
+        // OpenCode's servers (`opencode serve`, `web`, `acp`) run no session a tab could resume: their tab is a command's.
+        if CommandClassifier.runsServer(executable: process.executable, arguments: process.arguments) { return nil }
         guard let name = CommandClassifier.agentName(executable: process.executable, arguments: process.arguments) else {
             guard let agent = Self.installed(at: Self.installPaths(of: process, resolved: false)) else { return nil }
             self = agent

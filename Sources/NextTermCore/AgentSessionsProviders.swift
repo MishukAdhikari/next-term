@@ -87,7 +87,7 @@ extension AgentKind {
         case "command-code", "commandcode", "cmd": self = .commandCode
         case "gemini", "gemini-cli": self = .gemini
         case "qwen", "qwen-code": self = .qwen
-        case "opencode": self = .opencode
+        case "opencode", "opencode-ai", "opencode2", "opencode.exe": self = .opencode
         case "cursor-agent": self = .cursor
         case "copilot": self = .copilot
         default: return nil
@@ -111,10 +111,10 @@ extension AgentKind {
     public func resumedID(in commandLine: String) -> String? {
         for segment in CommandClassifier.segments(commandLine) {
             let words = Self.words(segment)
-            // The program is the first word that is not an option, an assignment or a wrapper (`npx`).
-            guard let at = words.firstIndex(where: { !CommandClassifier.parse($0).name.isEmpty }),
-                  AgentKind(program: CommandClassifier.parse(words[at]).name) == self else { continue }
-            let args = Array(words[(at + 1)...])
+            // The program is the first word that is not an option, an assignment or a wrapper (`npx`, `pnpm dlx`), named
+            // as the classifier names it (`opencode-ai@latest` is opencode).
+            guard let program = CommandClassifier.program(in: words), AgentKind(program: program.name) == self else { continue }
+            let args = Array(words[(program.index + 1)...])
             guard var id = self == .codex ? Self.codexResumed(args) : resumedID(args) else { return nil }
             // Gemini CLI takes "latest" and a number (its list's order) too: neither names one session.
             if self == .gemini, id == "latest" || Int(id) != nil { return nil }
