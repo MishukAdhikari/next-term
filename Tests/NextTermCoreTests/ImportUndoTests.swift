@@ -8,9 +8,8 @@ import Testing
     typealias Value = ImportSnapshot.Value
 
     func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
-        let name = "nextterm-import-undo-tests-\(getpid())-\(UUID().uuidString.prefix(6))"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("import-undo-tests")
+        defer { TestDefaults.remove(defaults, name) }
         try body(defaults)
     }
 

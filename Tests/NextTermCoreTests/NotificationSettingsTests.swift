@@ -149,9 +149,8 @@ import Testing
     }
 
     @Test func readFromTheDefaults() throws {
-        let name = "nextterm-notification-tests-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("notification-tests")
+        defer { TestDefaults.remove(defaults, name) }
         #expect(NotificationSettings(defaults: defaults) == NotificationSettings())
         // As Settings › Notifications saves them.
         defaults.set(false, forKey: NotificationSettings.Key.decisions)
