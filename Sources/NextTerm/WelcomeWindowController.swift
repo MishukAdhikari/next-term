@@ -535,7 +535,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// The right pane for the selection: a project with its sessions, a server, or nothing chosen; with nothing at all
-    /// to list, the three ways in as cards, whatever is typed. A project's sessions are read again when another one is
+    /// to list and nothing typed, the three ways in as cards. A project's sessions are read again when another one is
     /// chosen, or with `reloadSessions` (the window shown again).
     private func showSelection(reloadSessions: Bool = false) {
         let entry: SwitcherEntry? = switcher.selectedEntry
@@ -543,7 +543,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             hosts.first { (host: RemoteHost) -> Bool in host.id == server.id }
         }
         if let host { serverPane.show(host) }
-        let cards: Bool = SwitcherWaysIn.showsCards(list)
+        let cards: Bool = SwitcherWaysIn.showsCards(list, query: appliedQuery)
         waysInCards.isHidden = !cards
         serverPane.isHidden = host == nil || cards
         detailPane.isHidden = host != nil || cards
@@ -756,10 +756,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// The hint line under the list, for the selection now, and the keys the three ways in show, as the menus have them
-    /// now: a rebinding in Settings carries over, and one removed shows no key.
+    /// now: a rebinding in Settings carries over, and one removed shows no key, nor one this window takes first
+    /// (`handleKeyEquivalent`), which would do something else here.
     private func updateHint() {
         let shortcuts = KeyboardShortcuts.shared
-        let waysIn = SwitcherWaysIn { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
+        let menus = SwitcherWaysIn { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
+        let waysIn: SwitcherWaysIn = menus.notTaken(by: switcherKeys)
         waysInRows.show(waysIn)
         waysInCards.show(waysIn)
         let selection: SwitcherEntry? = switcher.selectedEntry

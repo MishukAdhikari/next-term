@@ -526,10 +526,16 @@ import Testing
     @Test func aFirstLaunchCardSaysWhatItOpensInOneSentence() {
         let sentences: [String] = SwitcherWayIn.allCases.map(\.sentence)
         check(sentences, [
-            "A folder or a git repository, with its files, branches and agent sessions.",
-            "A terminal on your server over ssh, from a saved host or a new one.",
-            "A shell in your home folder, no project needed.",
+            "A folder or git repository, as a project.",
+            "A terminal on your server, over ssh.",
+            "A shell in your home folder, no project.",
         ])
+        // At most three lines in the narrowest card (87 pt of 12 pt text, in a window 720 pt wide), as measured with
+        // the system font; the self-test reads the lines on screen. A longer sentence needs measuring again.
+        for sentence in sentences {
+            let count: Int = sentence.count
+            #expect(count <= 42, "\(sentence)")
+        }
         let lines: [String] = sentences + SwitcherWayIn.allCases.map(\.title) + [SwitcherText.emptyList]
         for line in lines {
             #expect(!line.contains("..."), "\(line)")
@@ -555,13 +561,42 @@ import Testing
         #expect(read.newTerminal == command("n"))
     }
 
-    @Test func theCardsShowOnlyWhenThereIsNothingToList() {
+    @Test func theCardsShowOnlyWhenThereIsNothingToListAndNothingTyped() {
         let none = SwitcherList(projects: [], servers: [])
-        #expect(SwitcherWaysIn.showsCards(none))
+        #expect(SwitcherWaysIn.showsCards(none, query: ""))
         let oneServer = SwitcherList(projects: [], servers: [server("staging")])
-        #expect(!SwitcherWaysIn.showsCards(oneServer))
+        #expect(!SwitcherWaysIn.showsCards(oneServer, query: ""))
         let oneProject = SwitcherList(projects: [project("/Users/sam/Code/shop")], servers: [])
-        #expect(!SwitcherWaysIn.showsCards(oneProject))
+        #expect(!SwitcherWaysIn.showsCards(oneProject, query: ""))
+        // A search hides them until it is emptied, as it hides “Projects you open are listed here.”
+        let typing: Bool = SwitcherWaysIn.showsCards(none, query: "staging")
+        #expect(!typing)
+        // Spaces alone search for nothing.
+        let spaces: Bool = SwitcherWaysIn.showsCards(none, query: "  ")
+        #expect(spaces)
+    }
+
+    @Test func aWayInKeyTheWelcomeWindowTakesFirstIsNotShown() {
+        let keys = SwitcherKeys.standard
+        let enter = KeyChord(key: "\r", command: true)
+        let taken: [KeyChord] = [enter, SwitcherKeys.forget, KeyChord(key: "n", control: true),
+                                 KeyChord(key: "p", control: true), command("1"), command("9"), command("w")]
+        for chord in taken { #expect(keys.takes(chord), "\(chord.display)") }
+        let free: [KeyChord] = [command("o"), command("n"), KeyChord(key: "t", command: true, option: true)]
+        for chord in free { #expect(!keys.takes(chord), "\(chord.display)") }
+        // New Window given ⌘↩ in Settings: ⌘↩ opens the selection in a new window here, so New Terminal shows no key.
+        let rebound = SwitcherWaysIn(open: command("o"), connect: nil, newTerminal: enter)
+        let shown: SwitcherWaysIn = rebound.notTaken(by: keys)
+        #expect(shown.newTerminal == nil)
+        #expect(shown.open == command("o"))
+        #expect(SwitcherWaysIn.standard.notTaken(by: keys) == SwitcherWaysIn.standard)
+        // A jump or Close with no key takes nothing.
+        let unbound = SwitcherKeys(jumps: Array(repeating: nil, count: 9), close: nil)
+        #expect(!unbound.takes(command("1")))
+        #expect(!unbound.takes(command("w")))
+        // The hint line leaves it out too.
+        let parts = SwitcherHint.parts(selection: nil, searchEmpty: false, otherWindows: false, waysIn: shown)
+        check(parts, ["⌘O open…"])
     }
 
     // MARK: what the heading and a row say

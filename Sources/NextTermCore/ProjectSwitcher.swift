@@ -487,6 +487,15 @@ public struct SwitcherKeys: Equatable, Sendable {
         return jumps[row]?.display
     }
 
+    /// Whether the Welcome window may take `chord` before the menus, in some state: a jump, Close, ⌘↩, ⌘⌫, ⌃N or ⌃P.
+    /// A way in whose menu command has one of these shows no key there (`SwitcherWaysIn.notTaken(by:)`).
+    public func takes(_ chord: KeyChord) -> Bool {
+        if jumps.contains(chord) { return true }
+        if let close, chord == close { return true }
+        let own: [KeyChord] = [Self.newWindow, Self.forget, Self.down, Self.up]
+        return own.contains(chord)
+    }
+
     /// A key equivalent pressed while the Welcome window is key; nil leaves it to the window and the menus. The jumps
     /// and Close work anywhere in the window; ⌘↩, ⌘⌫, ⌃N and ⌃P only for the projects. A jump reaches only the projects
     /// the list shows (`projects`, how many it shows now), never a server; past them it is nil.
@@ -566,9 +575,23 @@ public struct SwitcherWaysIn: Equatable, Sendable {
         }
     }
 
-    /// With nothing at all to list, a first launch, the right pane shows the three ways in as cards, whatever is typed:
-    /// a search there can find nothing, and the cards are what there is to do.
-    public static func showsCards(_ list: SwitcherList) -> Bool { list.isEmpty }
+    /// The keys the rows, the cards and the hint line show in the Welcome window. A key the window takes first
+    /// (`SwitcherKeys.takes(_:)`) does something else there, New Window given ⌘↩ opening the selection in a new window,
+    /// so the way in shows no key rather than one that does not do what it does.
+    public func notTaken(by keys: SwitcherKeys) -> SwitcherWaysIn {
+        func kept(_ chord: KeyChord?) -> KeyChord? {
+            guard let chord, !keys.takes(chord) else { return nil }
+            return chord
+        }
+        return SwitcherWaysIn(open: kept(open), connect: kept(connect), newTerminal: kept(newTerminal))
+    }
+
+    /// With nothing at all to list, a first launch, the right pane shows the three ways in as cards, until something is
+    /// typed: a search hides them, as it hides the list's “Projects you open are listed here.”, and emptying it brings
+    /// them back. `query` is the search's text; spaces alone search for nothing.
+    public static func showsCards(_ list: SwitcherList, query: String) -> Bool {
+        list.isEmpty && SearchWords(query).isEmpty
+    }
 }
 
 /// The three ways in, for three kinds of user: Open… for one who works in a project, Connect to Server… for one who
@@ -604,12 +627,13 @@ public enum SwitcherWayIn: CaseIterable, Sendable {
         }
     }
 
-    /// What its first-launch card says it opens, in one sentence.
+    /// What its first-launch card says it opens, in one sentence that fits three lines in the narrowest card (87 pt of
+    /// 12 pt text, in a window 720 pt wide), measured with the system font.
     public var sentence: String {
         switch self {
-        case .open: return "A folder or a git repository, with its files, branches and agent sessions."
-        case .connect: return "A terminal on your server over ssh, from a saved host or a new one."
-        case .newTerminal: return "A shell in your home folder, no project needed."
+        case .open: return "A folder or git repository, as a project."
+        case .connect: return "A terminal on your server, over ssh."
+        case .newTerminal: return "A shell in your home folder, no project."
         }
     }
 

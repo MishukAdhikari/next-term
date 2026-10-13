@@ -42,8 +42,8 @@ final class SwitcherHintLine: NSTextField {
 // MARK: - the three ways in
 
 /// What a way in does when clicked, as the menu command does: Open… the folder panel (over the Welcome window when it
-/// is in front), Connect to Server… the remote sheet, New Terminal a window with a shell. And the command whose key its
-/// tooltip names: Open… is File › Open Project…'s key here.
+/// is in front), Connect to Server… the remote sheet, New Terminal a window with a shell. The key it shows is its menu
+/// command's (`SwitcherWayIn.command`): Open… is File › Open Project…'s key here.
 extension SwitcherWayIn {
     var action: Selector {
         switch self {
@@ -52,22 +52,14 @@ extension SwitcherWayIn {
         case .newTerminal: return #selector(AppDelegate.newWindow(_:))
         }
     }
-
-    var keyAction: Selector {
-        switch self {
-        case .open: return #selector(AppDelegate.openProjectPanel(_:))
-        case .connect, .newTerminal: return action
-        }
-    }
 }
 
 /// What a way-in row and a first-launch card share: a button that draws only a fill in its shape, under the pointer or
 /// while pressed, over labels that take no clicks and that VoiceOver never reads on their own. The button's title stays
-/// the visible title, which VoiceOver reads, and its tooltip names what it opens and the key the menus give it. It never
-/// has a key equivalent, so Return stays the selection's, and it is never the default button.
+/// the visible title, which VoiceOver reads, and its tooltip names what it opens and the key it shows. It never has a
+/// key equivalent, so Return stays the selection's, and it is never the default button.
 class WayInButton: NSButton {
     let way: SwitcherWayIn
-    private var tip: ShortcutToolTip?
 
     init(_ way: SwitcherWayIn) {
         self.way = way
@@ -83,7 +75,7 @@ class WayInButton: NSButton {
         setAccessibilityLabel(way.title)
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentHuggingPriority(.defaultLow, for: .vertical)
-        tip = ShortcutToolTip(self, way.help, way.keyAction)
+        showTip(nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -96,6 +88,17 @@ class WayInButton: NSButton {
             (view as? NSControl)?.cell?.setAccessibilityElement(false)
             addSubview(view)
         }
+    }
+
+    /// The tooltip, in `ShortcutToolTip`'s form, "Open a window with a shell (⌘N)", with the key the row shows: the
+    /// menus' key, unless the Welcome window takes that key first (`SwitcherWaysIn.notTaken(by:)`), then none.
+    func showTip(_ chord: KeyChord?) {
+        guard let chord else {
+            toolTip = way.help
+            return
+        }
+        let key: String = chord.display
+        toolTip = "\(way.help) (\(key))"
     }
 
     /// The fill's shape.
@@ -188,6 +191,7 @@ final class WayInRow: WayInButton {
     func show(key chord: KeyChord?) {
         key.stringValue = chord?.display ?? ""
         key.isHidden = chord == nil
+        showTip(chord)
         needsDisplay = true
     }
 
@@ -229,7 +233,8 @@ final class WaysInRows: NSStackView {
 /// One of the three ways in as a first-launch card: its symbol, its title, one sentence on what it opens, and its key,
 /// centred, on a fill of its own. No border: the fill is the card.
 final class WayInCard: WayInButton {
-    static let padding: CGFloat = 14
+    /// 12, not more: in the narrowest window each sentence then has the 87 pt it needs for three lines.
+    static let padding: CGFloat = 12
     /// The sentence's line height: 16 on 12 pt, 133 percent.
     static let lineHeight: CGFloat = 16
     private let icon = NSImageView()
@@ -249,6 +254,10 @@ final class WayInCard: WayInButton {
         // Two lines at most, in the narrowest window; one wherever there is room.
         label.maximumNumberOfLines = 2
         sentence.attributedStringValue = Self.sentenceText(way.sentence)
+        // Three lines at most (Typography). The sentences are measured to fit in the narrowest card; the cap is the
+        // backstop, and would end the third line with the text system's ellipsis.
+        sentence.maximumNumberOfLines = 3
+        sentence.cell?.truncatesLastVisibleLine = true
         key.alignment = .center
         add([icon, label, sentence, key])
         let pad: CGFloat = Self.padding
@@ -310,6 +319,7 @@ final class WayInCard: WayInButton {
     func show(key chord: KeyChord?) {
         key.stringValue = chord?.display ?? ""
         key.isHidden = chord == nil
+        showTip(chord)
         needsDisplay = true
     }
 
@@ -339,7 +349,8 @@ final class WaysInCards: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.setAccessibilityElement(true)
         stack.setAccessibilityRole(.group)
-        stack.setAccessibilityLabel("Start")
+        // Not the rows' "Start": on a first launch both show, and VoiceOver tells the two groups apart.
+        stack.setAccessibilityLabel("Get started")
         addSubview(stack)
         let wide = stack.widthAnchor.constraint(equalToConstant: Self.width)
         wide.priority = .defaultHigh
