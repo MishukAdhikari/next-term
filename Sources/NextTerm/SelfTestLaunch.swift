@@ -27,7 +27,7 @@ extension SelfTest {
 
     /// Settings › General back to its defaults, whatever is saved (a run stopped halfway leaves its choices behind).
     /// Call what it returns to put the saved ones back.
-    private static func defaultLaunchSettings(_ defaults: UserDefaults) -> () -> Void {
+    static func defaultLaunchSettings(_ defaults: UserDefaults) -> () -> Void {
         let keys = LaunchSettings.Key.all
         let saved = keys.map { defaults.object(forKey: $0) }
         keys.forEach(defaults.removeObject(forKey:))

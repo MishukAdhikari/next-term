@@ -11,7 +11,10 @@ extension SelfTest {
     /// the project, as on a new Mac before and after a folder is opened, and then a search that matches nothing.
     static func welcomeReturnKeyChecks(_ welcome: WelcomeWindowController, project: String) {
         let listed: [String] = returnKeyButtons(welcome.window)
-        let open: Bool = welcome.selectedEntry?.project?.isOpen == true
+        // Open or not as the windows say, not as the list does: the list's own word is what is checked.
+        let open: Bool = AppDelegate.shared.controllers.contains { (controller: TerminalWindowController) -> Bool in
+            !controller.hasClosed && controller.project == project
+        }
         let expected: String = open ? "Go to Window" : "Open Project"
         check(listed == [expected],
               "with a project and its sessions listed, Return on the Welcome window is \(expected), and Resume has no key",

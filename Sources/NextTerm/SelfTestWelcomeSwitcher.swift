@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import NextTermCore
 
 /// The Welcome window as a project switcher, on screen, with keys made as the keyboard makes them (CGEvents): the three
@@ -34,18 +35,57 @@ extension SelfTest {
 }
 
 #if DEBUG
-/// The keys the checks press, by their virtual key codes (an ANSI layout's places).
+/// The keys the checks press, by their virtual key codes. Return, Esc, Delete, ↓ and ⌘ sit in one place on every
+/// keyboard. The letters and figures are found on the keyboard layout in use, as ⌘ types them, since AppKit and the
+/// menus read a chord's character off the layout: on Dvorak, the key in QWERTY's W place types ⌘, (Settings).
+@MainActor
 private enum SwitcherKeyCode {
     static let returnKey: UInt16 = 36
     static let escape: UInt16 = 53
     static let delete: UInt16 = 51
     static let down: UInt16 = 125
     static let command: UInt16 = 55
-    static let n: UInt16 = 45
-    static let o: UInt16 = 31
-    static let w: UInt16 = 13
-    /// The keys of 1 to 9, for ⌘1 to ⌘9.
-    static let digits: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+    /// The keys that type N, O and W with ⌘ held, in an ANSI layout's places when the layout has none.
+    static var n: UInt16 { code(typing: "n") ?? 45 }
+    static var o: UInt16 { code(typing: "o") ?? 31 }
+    static var w: UInt16 { code(typing: "w") ?? 13 }
+    /// The key of `index + 1`, for ⌘1 to ⌘9.
+    static func digit(_ index: Int) -> UInt16 {
+        let ansi: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+        return code(typing: String(index + 1)) ?? ansi[index]
+    }
+
+    /// Every letter and figure the checks press is on the layout in use.
+    static var layoutHasKeys: Bool {
+        let typed: [String] = ["n", "o", "w"] + (1...9).map { (figure: Int) -> String in String(figure) }
+        return typed.allSatisfy { (text: String) -> Bool in code(typing: text) != nil }
+    }
+
+    /// The lowest key code that types `text` with ⌘ held on the keyboard layout in use (the main keys come before the
+    /// keypad's), as AppKit works a chord out (KeyboardShortcuts.chord(from:)); nil when no key does, or the layout has
+    /// no key map (an input method's).
+    private static func code(typing text: String) -> UInt16? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data: Data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+        let command: UInt32 = UInt32((cmdKey >> 8) & 0xFF)
+        let keyboard: UInt32 = UInt32(LMGetKbdType())
+        return data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> UInt16? in
+            guard let layout = bytes.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return nil }
+            for code in UInt16(0)..<128 {
+                var dead: UInt32 = 0
+                var length: Int = 0
+                let room: Int = 4
+                var characters: [UniChar] = [0, 0, 0, 0]
+                let status: OSStatus = UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), command, keyboard,
+                                                      OptionBits(kUCKeyTranslateNoDeadKeysMask), &dead, room, &length,
+                                                      &characters)
+                guard status == noErr, length == 1 else { continue }
+                if String(utf16CodeUnits: characters, count: length).lowercased() == text { return code }
+            }
+            return nil
+        }
+    }
 }
 
 /// The run's made-up projects, in one folder of the temporary folder, and the windows opened on them.
@@ -73,20 +113,36 @@ private final class SwitcherFixtures {
         return controller
     }
 
-    /// The repository “billing” with a linked worktree “billing-wt-sso” on the branch sso, made with git; nil without it.
-    func makeWorktree() -> String? {
+    /// The repository “billing” with a linked worktree “billing-wt-sso” on the branch sso, made with git off the main
+    /// thread, so the windows keep drawing meanwhile; nil without git.
+    func makeWorktree() async -> String? {
         if let worktree { return worktree }
         guard let git = GitRunner.locateGit() else { return nil }
         let repo: String = path("billing")
         let tree: String = base + "/billing-wt-sso"
         try? "one\n".write(toFile: repo + "/a.txt", atomically: true, encoding: .utf8)
-        SelfTest.gitOutput(git, repo, ["init", "-q", "-b", "main"])
-        SelfTest.gitOutput(git, repo, ["add", "-A"])
-        SelfTest.gitOutput(git, repo, ["commit", "-q", "-m", "start"])
-        SelfTest.gitOutput(git, repo, ["worktree", "add", "-q", "-b", "sso", tree])
-        guard FileManager.default.fileExists(atPath: tree + "/.git") else { return nil }
+        let steps: [[String]] = [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "start"],
+                                 ["worktree", "add", "-q", "-b", "sso", tree]]
+        let made: Bool = await Task.detached { () -> Bool in
+            for arguments in steps { SwitcherFixtures.git(git, in: repo, arguments) }
+            return FileManager.default.fileExists(atPath: tree + "/.git")
+        }.value
+        guard made else { return nil }
         worktree = canonicalPath(tree)
         return worktree
+    }
+
+    /// git in `folder`, as the self-test's own committer (SelfTest.gitOutput), waited for.
+    nonisolated private static func git(_ git: String, in folder: String, _ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: git)
+        let committer: [String] = ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        process.arguments = ["-C", folder] + committer + arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        process.waitUntilExit()
     }
 
     /// Every window on a project in `base`, however it opened.
@@ -122,17 +178,31 @@ extension SelfTest {
 
     /// A key down as the keyboard sends it, made from a CGEvent so AppKit reads its characters off the keyboard layout as
     /// it does a real key's, through the app: the key window's key equivalents first (the Welcome window's own, then the
-    /// menus'), then the window's first responder.
-    fileprivate static func switcherKey(_ code: UInt16, _ flags: NSEvent.ModifierFlags = []) {
+    /// menus'), then the window's first responder. It is pressed only while `window` is the key window, since AppKit
+    /// gives it to whichever window is (⌘W meant for the Welcome window would close a tab elsewhere). False when it is
+    /// not, with a failed check, or a note when Next Term is not the app in front; nothing is pressed then.
+    @discardableResult
+    fileprivate static func switcherKey(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], to window: NSWindow) -> Bool {
+        guard window.isKeyWindow else {
+            let key: String = NSApp.keyWindow.map { (other: NSWindow) -> String in "“\(other.title)”" } ?? "no window"
+            let detail: String = "key code \(code) not pressed, the keyboard in " + key
+            if NSApp.isActive {
+                check(false, "Welcome: the window a key is meant for has the keyboard when it is pressed", detail)
+            } else {
+                note("Welcome switcher: a key skipped, as Next Term is not the app in front (" + detail + ")")
+            }
+            return false
+        }
         let masks: [(NSEvent.ModifierFlags, CGEventFlags)] = [(.command, .maskCommand), (.shift, .maskShift),
                                                               (.option, .maskAlternate), (.control, .maskControl)]
         let source = CGEventSource(stateID: .hidSystemState)
-        guard let key = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true) else { return }
+        guard let key = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true) else { return false }
         var held = CGEventFlags()
         for (flag, mask) in masks where flags.contains(flag) { held.insert(mask) }
         key.flags = held
-        guard let event = NSEvent(cgEvent: key) else { return }
+        guard let event = NSEvent(cgEvent: key) else { return false }
         NSApp.sendEvent(event)
+        return true
     }
 
     /// ⌘ pressed or let go, as the flagsChanged CGEvent the keyboard makes, queued for the app as the keyboard's events
@@ -146,8 +216,10 @@ extension SelfTest {
         NSApp.postEvent(event, atStart: false)
     }
 
-    /// The keys pressed here have the menus' default chords: ⌘1–⌘9 (Select Tab 1–9), ⌘W (Close Tab), ⌘O, ⌥⌘T and ⌘N.
+    /// The keys pressed here have the menus' default chords: ⌘1–⌘9 (Select Tab 1–9), ⌘W (Close Tab), ⌘O, ⌥⌘T and ⌘N;
+    /// and the keyboard layout in use has a key for each of their letters and figures.
     fileprivate static var switcherKeysAreDefault: Bool {
+        guard SwitcherKeyCode.layoutHasKeys else { return false }
         let shortcuts = KeyboardShortcuts.shared
         let jumps: [KeyChord?] = SwitcherKeys.jumpCommands.map { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
         let keys = SwitcherKeys(jumps: jumps, close: shortcuts.chord(for: SwitcherKeys.closeCommand))
@@ -236,6 +308,7 @@ extension SelfTest {
             return false
         }
         firstLaunchChecks()
+        atLaunchFooterChecks()
         check(searchHasKeyboard(welcome), "Welcome: at launch the keyboard is in its search, “Search projects and servers”",
               String(describing: window.firstResponder))
         let parts: [String] = welcome.hintParts
@@ -344,11 +417,12 @@ extension SelfTest {
     }
 
     /// At launch with no other window: Esc never closes the Welcome window, ⌘W does; each show (Window › Welcome to Next
-    /// Term, a Dock click on it minimized) puts the keyboard in its search, emptied after a close and kept while minimized.
-    /// Then ⌘N, typed in the search, opens a shell window and closes the Welcome window. False when no key was pressed.
+    /// Term, a Dock click on it minimized) puts the keyboard in its search, emptied after a close and kept, selected, while
+    /// minimized. Then ⌘N, typed in the search, opens a shell window and closes the Welcome window, and that window's
+    /// close brings it back (lastWindowChecks). True when a window is open for the checks after these.
     private static func launchKeyChecks(_ app: AppDelegate, _ welcome: WelcomeWindowController, _ window: NSWindow) async -> Bool {
         guard switcherKeysAreDefault else {
-            note("Welcome switcher: the launch's keys not pressed, as the menus' keys were changed")
+            note("Welcome switcher: the launch's keys not pressed, as the menus' keys were changed or the keyboard layout lacks one")
             return false
         }
         guard await bringToFront(window), window.canBeSeen else {
@@ -356,14 +430,14 @@ extension SelfTest {
             return false
         }
         let search: NSSearchField = welcome.projectsSearchField
-        switcherKey(SwitcherKeyCode.escape)
+        guard switcherKey(SwitcherKeyCode.escape, to: window) else { return false }
         await pause(0.3)
         check(window.isVisible, "Welcome: Esc on its empty search, with no other window open, leaves it up")
         typeKeys(window, "zz")
         let typed: Bool = await wait(2) { search.stringValue == "zz" }
-        switcherKey(SwitcherKeyCode.escape)
+        switcherKey(SwitcherKeyCode.escape, to: window)
         let emptied: Bool = await wait(2) { search.stringValue.isEmpty }
-        switcherKey(SwitcherKeyCode.escape)
+        switcherKey(SwitcherKeyCode.escape, to: window)
         await pause(0.3)
         check(typed && emptied && window.isVisible && searchHasKeyboard(welcome),
               "Welcome: Esc empties a typed search, and Esc again, with no other window, leaves it up, the keyboard in the search",
@@ -372,7 +446,7 @@ extension SelfTest {
         // ⌘W closes it all the same; what was typed is gone at the next show.
         typeKeys(window, "zz")
         _ = await wait(2) { search.stringValue == "zz" }
-        switcherKey(SwitcherKeyCode.w, .command)
+        guard switcherKey(SwitcherKeyCode.w, .command, to: window) else { return false }
         let closed: Bool = await wait(2) { !window.isVisible }
         check(closed, "Welcome: ⌘W closes it, though it is the only window")
         app.showWelcome(nil)
@@ -381,17 +455,17 @@ extension SelfTest {
               "Welcome: Window › Welcome to Next Term shows it again, its search emptied, with the keyboard",
               "up \(window.isVisible), “\(search.stringValue)”, keyboard in \(String(describing: window.firstResponder))")
 
-        // Minimized with text typed, then a Dock click: the text kept, and the keyboard in the search again.
+        // Minimized with text typed, then a Dock click: the text kept and selected, and the keyboard in the search again.
         typeKeys(window, "zz")
         _ = await wait(2) { search.stringValue == "zz" }
         window.miniaturize(nil)
         if await wait(8, { window.isMiniaturized }) {
             let handled: Bool = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
             let restored: Bool = await wait(5) { !window.isMiniaturized && window.isVisible }
-            let focused: Bool = await wait(2) { searchHasKeyboard(welcome) }
+            let focused: Bool = await wait(2) { searchHasKeyboard(welcome) && searchAllSelected(welcome) }
             check(restored && !handled && focused && search.stringValue == "zz",
-                  "Welcome: minimized, a Dock click brings it back with what was typed, the keyboard in the search",
-                  "back \(restored), keyboard \(focused), “\(search.stringValue)”")
+                  "Welcome: minimized, a Dock click brings it back with what was typed, selected, the keyboard in the search",
+                  "back \(restored), keyboard and all selected \(focused), “\(search.stringValue)”")
         } else {
             note("Welcome: it did not minimize, so a Dock click bringing it back was not checked")
         }
@@ -401,11 +475,82 @@ extension SelfTest {
             note("Welcome switcher: ⌘N not pressed, as " + notFrontmost(window))
             return false
         }
-        switcherKey(SwitcherKeyCode.n, .command)
+        guard switcherKey(SwitcherKeyCode.n, .command, to: window) else { return false }
         let opened: Bool = await wait(5) { !app.controllers.isEmpty }
         check(opened && app.controllers.count == 1, "Welcome: ⌘N, typed with the keyboard in its search, opens a shell window",
               "\(app.controllers.count) windows")
-        return opened
+        guard opened else { return false }
+        return await lastWindowChecks(app, welcome, window)
+    }
+}
+#endif
+
+#if DEBUG
+extension SelfTest {
+    /// The last window closing with its last tab, as at the end of a day's work: the Welcome window shows on that
+    /// window's display, the keyboard in its search with its text selected. Then ⌘N again opens the window the later
+    /// checks use. True when a window is open for them.
+    private static func lastWindowChecks(_ app: AppDelegate, _ welcome: WelcomeWindowController, _ window: NSWindow) async -> Bool {
+        guard app.controllers.count == 1, let shell = app.controllers.first, let tab = shell.tabs.first,
+              let shellWindow = shell.window else { return !app.controllers.isEmpty }
+        let frame: CGRect = shellWindow.frame
+        shell.remove(tab)
+        let shown: Bool = await wait(5) { app.controllers.isEmpty && window.isVisible }
+        let focused: Bool = await wait(2) { searchHasKeyboard(welcome) && searchAllSelected(welcome) }
+        let screens: [CGRect] = NSScreen.screens.map { (screen: NSScreen) -> CGRect in screen.frame }
+        let expected: Int? = SwitcherPlacement.screen(of: frame, among: screens)
+        let placed: Int? = SwitcherPlacement.screen(of: window.frame, among: screens)
+        let display: String = "display \(placed.map(String.init) ?? "none"), the window's \(expected.map(String.init) ?? "none")"
+        check(shown && focused && placed == expected,
+              "Welcome: the last window closed with its last tab, it shows on that window's display, the keyboard in its search, its text selected",
+              "up \(window.isVisible), windows \(app.controllers.count), keyboard \(focused), " + display)
+        guard shown else { return !app.controllers.isEmpty }
+        guard await bringToFront(window) else {
+            note("Welcome switcher: ⌘N not pressed again, as " + notFrontmost(window))
+            return false
+        }
+        guard switcherKey(SwitcherKeyCode.n, .command, to: window) else { return false }
+        let again: Bool = await wait(5) { !app.controllers.isEmpty }
+        check(again && app.controllers.count == 1, "Welcome: and ⌘N there opens a shell window again", "\(app.controllers.count) windows")
+        return again
+    }
+
+    /// The footer's “At launch:” pop-up, on a second Welcome window never shown, as a first launch lays it out: in the
+    /// window, with the three choices titled as Settings › General titles its radio buttons, the third one too, and the
+    /// one saved selected. “Open a new terminal” picked there is saved, and an open General tab and a new one show it
+    /// selected; picked back in Settings › General, the footer follows. What was saved is put back.
+    private static func atLaunchFooterChecks() {
+        let defaults: UserDefaults = AppDelegate.shared.launchDefaults
+        let restore = defaultLaunchSettings(defaults)
+        defer {
+            restore()
+            NotificationCenter.default.post(name: LaunchSettings.changed, object: nil)
+        }
+        let fresh = WelcomeWindowController()
+        defer { fresh.close() }
+        fresh.list(projects: [])
+        fresh.window?.contentView?.layoutSubtreeIfNeeded()
+        let footer: AtLaunchFooter = fresh.atLaunchFooter
+        let titles: [String] = footer.popUp.itemTitles
+        let expected: [String] = ["Show the Welcome window", "Resume where I left off", "Open a new terminal"]
+        let content: CGRect = fresh.window?.contentView?.bounds ?? .zero
+        let placed: CGRect = footer.convert(footer.bounds, to: nil)
+        let shown: Bool = !footer.isHiddenOrHasHiddenAncestor && placed.width > 0 && content.contains(placed)
+        let general = GeneralSettingsView(frame: .zero)
+        check(titles == expected && general.opens.map(\.title) == expected && footer.choice == .welcome && shown,
+              "Welcome: its footer's At launch offers Settings › General's three choices, “Open a new terminal” too, “Show the Welcome window” until changed",
+              "\(titles), selected \(footer.popUp.titleOfSelectedItem ?? "none"), shown \(shown) at \(NSStringFromRect(placed))")
+
+        footer.choose(.newTerminal)
+        let saved: LaunchOpens = LaunchSettings(defaults: defaults).opens
+        let openTab: Bool = general.radio(.newTerminal).state == .on && general.radio(.welcome).state == .off
+        let newTab: Bool = GeneralSettingsView(frame: .zero).radio(.newTerminal).state == .on
+        check(saved == .newTerminal && openTab && newTab,
+              "Welcome: “Open a new terminal” picked in its footer is saved, and Settings › General shows it selected, open or opened after",
+              "saved \(saved.title), open tab \(openTab), new tab \(newTab)")
+        general.radio(.welcome).performClick(nil)
+        check(footer.choice == .welcome, "Welcome: picked back in Settings › General, the footer's At launch follows",
+              footer.popUp.titleOfSelectedItem ?? "none")
     }
 }
 #endif
@@ -423,6 +568,7 @@ extension SelfTest {
         app.welcomeController?.close()
         let fixtures = SwitcherFixtures(token: switcherToken)
         await orderChecks(app, fixtures)
+        await restoreOpenChecks(app, fixtures)
         searchScopeChecks()
         await markerChecks(app, fixtures)
         await switcherKeyChecks(app, fixtures)
@@ -470,7 +616,9 @@ extension SelfTest {
 
     /// The search's ranking and reach, on a second Welcome window never shown, over made-up projects in the home folder:
     /// the start of a name first, then the start of a word in it, then anywhere in it, then the folder; and the home
-    /// folder's own name finds only a project whose name has it, never every project in the home folder.
+    /// folder's own name finds only a project whose name has it, never every project in the home folder. The home is the
+    /// real one, as the window reads it (the search's own tests use a made-up one); a failed check's detail names no
+    /// folder there, so the account's name stays out of the report.
     private static func searchScopeChecks() {
         let home: String = NSHomeDirectory()
         let shop: String = home + "/Code/shop"
@@ -492,9 +640,40 @@ extension SelfTest {
         }
         controller.list(projects: [shop, named])
         controller.searchProjects(user)
-        check(controller.shownProjects == [named],
+        let listed: [String] = controller.shownProjects
+        let detail: String = "\(listed.count) listed, the one named with it " + (listed.contains(named) ? "among them" : "not")
+        check(listed == [named],
               "Welcome: the home folder's own name finds only a project named with it, never every project in the home folder",
-              names(controller.shownProjects))
+              detail)
+    }
+
+    /// A restore's window (after an update, a quit or a crash) counts as an open, as the launch builds it: its project is
+    /// recorded open in one window while it is up, and stays in the history once it closes. The snapshot is made up, and
+    /// planned with nothing read of the user's (no session, no host).
+    private static func restoreOpenChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures) async {
+        let kept: String = fixtures.path("kept")
+        let pane = SessionSnapshot.Pane(id: UUID(), folder: kept)
+        let group = SessionSnapshot.Group(root: .pane(pane), focused: pane.id)
+        let header = SessionSnapshot.Header(launchID: UUID(), generation: 1, clean: true, savedAt: Date())
+        let snapshot = SessionSnapshot(header: header, windows: [SessionSnapshot.Window(project: kept, groups: [group])])
+        let nothing = SessionLookup(read: { (_: AgentKind, _: String, _: Date) -> [AgentSession] in [] },
+                                    newest: { (_: AgentKind, _: String, _: Date, _: Set<String>) -> AgentSession? in nil })
+        let world = RestorePlanner.World(home: fixtures.base, checkFolder: { (_: String) -> FolderCheck in .found },
+                                         resumeFacts: { (_: SessionSnapshot.Evidence, _: String?, _: [String]) -> ResumeFacts in
+                                             ResumeFacts()
+                                         }, sessions: nothing)
+        let plans: [PanePlan] = RestorePlanner.plan(snapshot, kind: .quit, quitConsent: true, world: world)
+        let planned = RestorePlanning.Planned(plans: plans, folders: [:])
+        let built: RestoreBuild.Built = RestoreBuild.build(snapshot, planned: planned, scrollback: [:], savedAt: nil)
+        guard let restored = built.windows.first else { return check(false, "Welcome: a restore builds the made-up project's window") }
+        let recorder = ProjectHistoryRecorder.shared
+        let open: Bool = await wait(3) { recorder.windowCounts[kept] == 1 && recorder.history.lastUsed(kept) != nil }
+        check(open, "Welcome: a project a restore brings back is recorded as open, as every other open is",
+              "windows \(recorder.windowCounts[kept] ?? 0), in the history \(recorder.history.lastUsed(kept) != nil)")
+        for controller in built.windows { await closeSwitcherWindow(controller) }
+        let closed: Bool = await wait(3) { recorder.windowCounts[kept] == nil && recorder.history.lastUsed(kept) != nil }
+        check(closed && restored.hasClosed, "Welcome: and once its window closes, it is kept among the closed projects",
+              "windows \(recorder.windowCounts[kept] ?? 0), in the history \(recorder.history.lastUsed(kept) != nil)")
     }
 }
 #endif
@@ -509,9 +688,16 @@ extension SelfTest {
         let wiki: String = fixtures.path("wiki")
         _ = await fixtures.open("shop")
         _ = await fixtures.open("shop")
+        // A project the user opens while the Welcome window is up closes it: the next show lists the project.
+        app.showWelcome(nil)
+        let welcomeWindow: NSWindow? = app.welcomeController?.window
+        let up: Bool = await wait(2) { welcomeWindow?.isVisible == true }
         _ = await fixtures.open("wiki")
+        let gone: Bool = await wait(2) { welcomeWindow?.isVisible != true }
+        check(up && gone, "Welcome: a project the user opens, as File › Open Project does, closes the Welcome window",
+              "up before \(up), up after \(welcomeWindow?.isVisible == true)")
         var open: Set<String> = [shop, wiki]
-        let tree: String? = fixtures.makeWorktree()
+        let tree: String? = await fixtures.makeWorktree()
         if let tree {
             let controller: TerminalWindowController = app.openWorktreeWindow(tree)
             _ = await wait(5) { controller.window?.isVisible == true }
@@ -579,7 +765,9 @@ extension SelfTest {
 extension SelfTest {
     /// The keys, pressed as the keyboard sends them, with shop in two windows and wiki in one (markerChecks).
     private static func switcherKeyChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures) async {
-        guard switcherKeysAreDefault else { return note("Welcome switcher: its keys not pressed, as the menus' keys were changed") }
+        guard switcherKeysAreDefault else {
+            return note("Welcome switcher: its keys not pressed, as the menus' keys were changed or the keyboard layout lacks one")
+        }
         let shops: [TerminalWindowController] = fixtures.windows(on: fixtures.path("shop"))
         guard shops.count == 2, let wiki = fixtures.windows(on: fixtures.path("wiki")).first, let wikiWindow = wiki.window,
               let shopA = shops[0].window, let shopB = shops[1].window else {
@@ -592,7 +780,7 @@ extension SelfTest {
             }
         }
         await returnChecks(app, from: wikiWindow, back: shopB)
-        await hintAndEscapeChecks(app, from: shopB)
+        await hintAndEscapeChecks(app, fixtures, from: shopB)
         await jumpChecks(app, fixtures, from: shopB)
         await forgetChecks(app, fixtures, from: shopB)
         await agentOpenChecks(app, fixtures, from: shopB)
@@ -610,7 +798,7 @@ extension SelfTest {
             note("Welcome switcher: ⌘O not pressed, as " + notFrontmost(window))
             return nil
         }
-        switcherKey(SwitcherKeyCode.o, .command)
+        guard switcherKey(SwitcherKeyCode.o, .command, to: window) else { return nil }
         let shown: Bool = await wait(3) { app.welcomeController?.window?.isKeyWindow == true }
         guard shown, let welcome = app.welcomeController else {
             check(false, "Welcome: ⌘O in a project window shows the Welcome window, key", String(describing: NSApp.keyWindow))
@@ -645,7 +833,7 @@ extension SelfTest {
               "Welcome: it starts on the other open project used last, “Go to Window” is Return's, and the hint line says “↩ go to window”, “⌘↩ new window” and “esc close”",
               "\(welcome.selectedProject.map { ($0 as NSString).lastPathComponent } ?? "none"), "
                   + "\(welcome.returnButtonTitle ?? "no button"), " + welcome.hintParts.joined(separator: " | "))
-        switcherKey(SwitcherKeyCode.returnKey)
+        guard switcherKey(SwitcherKeyCode.returnKey, to: window) else { return }
         let switched: Bool = await wait(3) { back.isKeyWindow && !window.isVisible }
         check(switched, "Welcome: Return brings forward that project's window used last, of its two, and closes the Welcome window",
               "key \(String(describing: NSApp.keyWindow?.title)), Welcome up \(window.isVisible)")
@@ -655,10 +843,11 @@ extension SelfTest {
 
 #if DEBUG
 extension SelfTest {
-    /// ⌘ held shows each listed project's jump key in its branch's place, and letting go takes them away; typed text that
-    /// matches nothing says so, and the hint line names the three ways in; Esc empties the search and Esc again closes the
-    /// window, another being open; what was typed before ⌘W is gone at the next ⌘O.
-    private static func hintAndEscapeChecks(_ app: AppDelegate, from origin: NSWindow) async {
+    /// ⌘ held shows each listed project's jump key in its branch's place, and letting go gives the branches their place
+    /// back (the worktree's, sso); typed text that matches nothing says so, and the hint line names the three ways in; Esc
+    /// empties the search and Esc again closes the window, another being open. Left behind the window it came from, it
+    /// keeps what was typed for the next ⌘O, selected; what was typed before ⌘W is gone at the next ⌘O.
+    private static func hintAndEscapeChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
         guard let welcome = await showSwitcher(app, from: origin), let window = welcome.window else { return }
         let search: NSSearchField = welcome.projectsSearchField
         typeKeys(window, switcherToken)
@@ -668,16 +857,26 @@ extension SelfTest {
         func jumps() -> [String?] {
             (0..<count).map { (index: Int) -> String? in list.projectCell(at: index)?.shownJump }
         }
+        func branchesShown() -> Int {
+            (0..<count).filter { (index: Int) -> Bool in list.projectCell(at: index)?.shownBranch != nil }.count
+        }
         let expected: [String?] = (0..<count).map { (index: Int) -> String? in "⌘\(index + 1)" }
         holdCommand(true)
-        let shown: Bool = await wait(2) { count > 0 && jumps() == expected }
+        let shown: Bool = await wait(2) { count > 0 && jumps() == expected && branchesShown() == 0 }
         check(shown, "Welcome: ⌘ held, each of the \(count) projects listed shows its key, ⌘1 to ⌘\(count), in its branch's place",
-              jumps().map { (key: String?) -> String in key ?? "none" }.joined(separator: " "))
+              jumps().map { (key: String?) -> String in key ?? "none" }.joined(separator: " ") + ", \(branchesShown()) branches shown")
         holdCommand(false)
         let gone: Bool = await wait(2) { jumps().allSatisfy { (key: String?) -> Bool in key == nil } }
-        check(gone, "Welcome: let go, the keys give the branches their place back")
+        let treeIndex: Int? = fixtures.worktree.flatMap { (tree: String) -> Int? in
+            list.shown.projects.firstIndex { (project: SwitcherProject) -> Bool in project.path == tree }
+        }
+        func treeBranch() -> String? { treeIndex.flatMap { (index: Int) -> String? in list.projectCell(at: index)?.shownBranch } }
+        var branchBack = true
+        if treeIndex != nil { branchBack = await wait(3) { treeBranch()?.contains("sso") == true } }
+        check(gone && branchBack, "Welcome: let go, the keys give the branches their place back, the worktree's “sso” too",
+              "keys gone \(gone), the worktree's branch “\(treeBranch() ?? "hidden")”")
 
-        switcherKey(SwitcherKeyCode.escape)
+        guard switcherKey(SwitcherKeyCode.escape, to: window) else { return }
         _ = await wait(2) { search.stringValue.isEmpty }
         let typed: String = "zq" + switcherToken
         typeKeys(window, typed)
@@ -686,17 +885,33 @@ extension SelfTest {
         check(unmatched && welcome.selectedEntry == nil && welcome.hintParts == wayInHints,
               "Welcome: typed with no match, the list says so, nothing is selected, and the hint line names the three ways in",
               "\(welcome.noMatchText ?? "no line"), " + welcome.hintParts.joined(separator: " | "))
-        switcherKey(SwitcherKeyCode.escape)
+        guard switcherKey(SwitcherKeyCode.escape, to: window) else { return }
         let emptied: Bool = await wait(2) { search.stringValue.isEmpty && window.isVisible }
-        switcherKey(SwitcherKeyCode.escape)
+        guard switcherKey(SwitcherKeyCode.escape, to: window) else { return }
         let closed: Bool = await wait(2) { !window.isVisible }
         check(emptied && closed, "Welcome: Esc empties the search, and Esc again closes the window, another window being open",
               "emptied \(emptied), closed \(closed)")
+        await behindChecks(app, from: origin)
+    }
 
+    /// Typed in, then left behind the window it came from: ⌘O there brings it back with what was typed, selected, the
+    /// keyboard in the search. ⌘W then closes it, and at the next ⌘O what was typed is gone.
+    private static func behindChecks(_ app: AppDelegate, from origin: NSWindow) async {
         guard let again = await showSwitcher(app, from: origin), let shownAgain = again.window else { return }
+        let search: NSSearchField = again.projectsSearchField
         typeKeys(shownAgain, "zz")
-        _ = await wait(2) { again.projectsSearchField.stringValue == "zz" }
-        switcherKey(SwitcherKeyCode.w, .command)
+        _ = await wait(2) { search.stringValue == "zz" }
+        guard await bringToFront(origin) else {
+            return note("Welcome: left behind a window, not checked, as " + notFrontmost(origin))
+        }
+        let behind: Bool = shownAgain.isVisible && !shownAgain.isKeyWindow
+        guard switcherKey(SwitcherKeyCode.o, .command, to: origin) else { return }
+        let front: Bool = await wait(3) { shownAgain.isKeyWindow && searchHasKeyboard(again) }
+        let kept: Bool = search.stringValue == "zz" && searchAllSelected(again)
+        check(behind && front && kept,
+              "Welcome: left behind another window and shown again by ⌘O, it keeps what was typed, selected, the keyboard in the search",
+              "behind \(behind), key again \(front), “\(search.stringValue)”, all selected \(searchAllSelected(again))")
+        guard switcherKey(SwitcherKeyCode.w, .command, to: shownAgain) else { return }
         let shut: Bool = await wait(2) { !shownAgain.isVisible }
         guard let third = await showSwitcher(app, from: origin) else { return }
         check(shut && third.projectsSearchField.stringValue.isEmpty && searchHasKeyboard(third),
@@ -710,8 +925,8 @@ extension SelfTest {
 #if DEBUG
 extension SelfTest {
     /// ⌘3 does to the third project listed what Return would: with the worktree's window closed, that is the worktree,
-    /// which opens in a window of its own. ↓ moves the selection with the keyboard still in the search, and ⌘↩ on an
-    /// open project opens a second window on it, without asking.
+    /// which opens in a window of its own and stays out of File › Open Recent. ↓ moves the selection with the keyboard
+    /// still in the search, and ⌘↩ on an open project opens a second window on it, without asking.
     private static func jumpChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
         if let tree = fixtures.worktree {
             for controller in fixtures.windows(on: tree) { await closeSwitcherWindow(controller) }
@@ -725,7 +940,7 @@ extension SelfTest {
         }
         let third: SwitcherProject = list.shown.projects[2]
         let before: Int = fixtures.windows(on: third.path).count
-        switcherKey(SwitcherKeyCode.digits[2], .command)
+        guard switcherKey(SwitcherKeyCode.digit(2), .command, to: window) else { return }
         let acted: Bool = await wait(5) {
             let windows: [TerminalWindowController] = fixtures.windows(on: third.path)
             let front: Bool = windows.contains { (controller: TerminalWindowController) -> Bool in controller.window?.isKeyWindow == true }
@@ -733,6 +948,9 @@ extension SelfTest {
         }
         check(acted && !window.isVisible, "Welcome: ⌘3 does what Return does to the third project listed, \(third.title), and closes the Welcome window",
               "open before \(third.isOpen), windows on it \(fixtures.windows(on: third.path).count), Welcome up \(window.isVisible)")
+        if let tree = fixtures.worktree, third.path == tree {
+            check(!app.recentProjects.contains(tree), "Welcome: the closed worktree opened from the list stays out of File › Open Recent")
+        }
 
         guard let next = await showSwitcher(app, from: origin), let nextWindow = next.window else { return }
         typeKeys(nextWindow, switcherToken)
@@ -741,13 +959,13 @@ extension SelfTest {
         let rows: Int = next.switcherList.shown.entries.count
         var pressed = 0
         while next.selectedProject != wiki && pressed < rows {
-            switcherKey(SwitcherKeyCode.down)
+            guard switcherKey(SwitcherKeyCode.down, to: nextWindow) else { return }
             pressed += 1
         }
         check(next.selectedProject == wiki && searchHasKeyboard(next),
               "Welcome: ↓ moves the selection down the list, the keyboard staying in the search", "\(pressed) presses")
         let wikis: Int = fixtures.windows(on: wiki).count
-        switcherKey(SwitcherKeyCode.returnKey, .command)
+        guard switcherKey(SwitcherKeyCode.returnKey, .command, to: nextWindow) else { return }
         let second: Bool = await wait(5) { fixtures.windows(on: wiki).count == wikis + 1 }
         check(second && !nextWindow.isVisible, "Welcome: ⌘↩ on an open project opens a second window on it, without asking",
               "\(fixtures.windows(on: wiki).count) windows on wiki, \(wikis) before")
@@ -759,8 +977,11 @@ extension SelfTest {
 extension SelfTest {
     /// ⌘⌫ with text typed deletes the text, as in any field, and forgets nothing; on the empty search it forgets the
     /// selected closed project, from this list and from File › Open Recent; an open project it never forgets. ⌘↩ with the
-    /// keyboard in the sessions search opens no window.
+    /// keyboard in the sessions search, a made-up session listed there, opens no window and resumes nothing.
     private static func forgetChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
+        let shop: String = fixtures.path("shop")
+        let sessionFolder: URL? = fixtureSession(for: shop)
+        defer { if let sessionFolder { try? FileManager.default.removeItem(at: sessionFolder) } }
         guard let welcome = await showSwitcher(app, from: origin), let window = welcome.window else { return }
         let search: NSSearchField = welcome.projectsSearchField
         let recorder = ProjectHistoryRecorder.shared
@@ -768,7 +989,7 @@ extension SelfTest {
         let recentsBefore: [String] = app.recentProjects
         typeKeys(window, "zz")
         _ = await wait(2) { search.stringValue == "zz" }
-        switcherKey(SwitcherKeyCode.delete, .command)
+        guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
         let cleared: Bool = await wait(2) { search.stringValue.isEmpty }
         let kept: Bool = recorder.history.paths == historyBefore && app.recentProjects == recentsBefore
         check(cleared && kept, "Welcome: ⌘⌫ with text typed deletes the text and forgets no project",
@@ -777,32 +998,61 @@ extension SelfTest {
         let docs: String = fixtures.path("docs")
         welcome.select(project: docs)
         guard welcome.selectedProject == docs else { return check(false, "Welcome: the closed project docs is listed, for ⌘⌫") }
-        switcherKey(SwitcherKeyCode.delete, .command)
+        guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
         let forgot: Bool = await wait(2) {
             !welcome.shownProjects.contains(docs) && recorder.history.lastUsed(docs) == nil && !app.recentProjects.contains(docs)
         }
         check(forgot, "Welcome: ⌘⌫ on the empty search forgets the selected closed project, here and in File › Open Recent",
               "listed \(welcome.shownProjects.contains(docs)), in Open Recent \(app.recentProjects.contains(docs))")
 
-        let shop: String = fixtures.path("shop")
         welcome.select(project: shop)
-        switcherKey(SwitcherKeyCode.delete, .command)
+        guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
         await pause(0.3)
         check(welcome.shownProjects.contains(shop) && recorder.history.lastUsed(shop) != nil,
               "Welcome: ⌘⌫ never forgets an open project")
 
+        var listed = false
+        if sessionFolder != nil { listed = await wait(10) { welcome.shownSessionTitles == ["Tidy the fixtures"] } }
+        if !listed { note("Welcome: shop's made-up session was not listed, so ⌘↩ in the sessions search had none to resume") }
+        func tabCount() -> Int {
+            app.controllers.reduce(0) { (count: Int, controller: TerminalWindowController) -> Int in count + controller.tabs.count }
+        }
         let windows: Int = app.controllers.count
+        let tabs: Int = tabCount()
         guard welcome.focusSessionSearch() else { return check(false, "Welcome: a selected project's sessions search takes the keyboard") }
-        switcherKey(SwitcherKeyCode.returnKey, .command)
+        guard switcherKey(SwitcherKeyCode.returnKey, .command, to: window) else { return }
         await pause(0.5)
-        check(app.controllers.count == windows && window.isVisible, "Welcome: ⌘↩ in the sessions search opens no window",
-              "\(app.controllers.count) windows, \(windows) before")
+        check(app.controllers.count == windows && tabCount() == tabs && window.isVisible,
+              "Welcome: ⌘↩ in the sessions search, a session listed, opens no window and resumes nothing",
+              "\(app.controllers.count) windows, \(windows) before; \(tabCount()) tabs, \(tabs) before; session listed \(listed)")
         welcome.close()
     }
 
-    /// An agent opens a project while the user types in the Welcome window: the window stays up, and the project is listed
-    /// at once with a dot. Its window closed, the row loses the dot at once and comes first among the closed, with no new
-    /// show. A window brought to the front after its open, then left, is recorded as used when it was last in front.
+    /// A made-up Claude Code session, “Tidy the fixtures”, for `project`, in the sessions home the run points the Welcome
+    /// window at (in the temporary folder): its folder, to remove after; nil when that home is elsewhere, as nothing is
+    /// written in a real one.
+    private static func fixtureSession(for project: String) -> URL? {
+        let home: String = canonicalPath(SessionStore.home)
+        guard home.hasPrefix(canonicalPath(NSTemporaryDirectory()) + "/") else { return nil }
+        let projects: URL = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects", isDirectory: true)
+        let folder: URL = projects.appendingPathComponent(AgentSessions.claudeFolderName(project), isDirectory: true)
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
+        let stamp: String = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-600))
+        let asked: [String: Any] = ["type": "user", "cwd": project, "timestamp": stamp, "message": ["content": "Tidy the fixtures"]]
+        let titled: [String: Any] = ["type": "ai-title", "aiTitle": "Tidy the fixtures"]
+        let lines: [String] = [asked, titled].map { (object: [String: Any]) -> String in
+            let data: Data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
+            return String(decoding: data, as: UTF8.self)
+        }
+        let file: URL = folder.appendingPathComponent(switcherToken + ".jsonl")
+        guard (try? lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)) != nil else { return nil }
+        return folder
+    }
+
+    /// An agent opens a project over MCP while the user types in the Welcome window: the Welcome window stays up, though
+    /// the agent's window comes forward with the keyboard, and the project is listed at once with a dot. Its window
+    /// closed, the row loses the dot at once and comes first among the closed, with no new show. A window brought to the
+    /// front after its open, then left, is recorded as used when it was last in front.
     private static func agentOpenChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
         guard let welcome = await showSwitcher(app, from: origin), let window = welcome.window else { return }
         welcome.searchProjects(switcherToken)
@@ -814,15 +1064,23 @@ extension SelfTest {
             }
             return (index, list.shown.projects[index])
         }
-        // As MCP open_project does it, in a window of its own.
-        let agent: TerminalWindowController = app.openFolder(feed, newWindow: true, forAgent: true)
+        // As MCP open_project does it, under the default “When an agent opens a tab” (its window comes forward with the
+        // keyboard), the self-test's own keys not taken for typing, so it comes forward now and never after its close.
+        let arrival: AgentArrival.Mode = app.agentArrival
+        app.agentArrival = .focus
+        UserKeys.ignoredForTest = true
+        let agent: TerminalWindowController = app.openFolder(feed, newWindow: false, forAgent: true)
+        agent.presentForAgent(nil, explicit: true)
+        UserKeys.ignoredForTest = false
+        app.agentArrival = arrival
         let listed: Bool = await wait(3) {
             guard let row = feedRow() else { return false }
             return row.project.isOpen && list.projectCell(at: row.index)?.showsOpenDot == true
         }
         check(listed && window.isVisible,
-              "Welcome: a project an agent opens while the Welcome window has the keyboard is listed at once, with a dot, the window staying up",
-              "listed \(feedRow() != nil), up \(window.isVisible)")
+              "Welcome: a project an agent opens over MCP while the Welcome window has the keyboard is listed at once, with a dot, the window staying up",
+              "listed \(feedRow() != nil), up \(window.isVisible), Welcome key \(window.isKeyWindow), "
+                  + "agent's key \(agent.window?.isKeyWindow == true)")
         await closeSwitcherWindow(agent)
         let followed: Bool = await wait(3) {
             guard let row = feedRow() else { return false }
@@ -839,8 +1097,8 @@ extension SelfTest {
 
 #if DEBUG
 extension SelfTest {
-    /// A window brought to the front a while after its open, then left for another and closed: its project is recorded as
-    /// used when it was last in front, not when it opened.
+    /// A window brought to the front a while after its open, then left for another and closed a while later: its project
+    /// is recorded as used when it was last in front, not when it opened, nor when it closed.
     private static func lastInFrontChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
         let opened = Date()
         let notes: TerminalWindowController = await fixtures.open("notes")
@@ -849,12 +1107,18 @@ extension SelfTest {
         guard await bringToFront(notesWindow) else { return note("Welcome: the last time in front not checked, as " + notFrontmost(notesWindow)) }
         let front = Date()
         guard await bringToFront(origin) else { return note("Welcome: the last time in front not checked, as " + notFrontmost(origin)) }
+        await pause(1)
+        let closing = Date()
         await closeSwitcherWindow(notes)
         let used: Date? = ProjectHistoryRecorder.shared.history.lastUsed(fixtures.path("notes"))
         let late: Bool = used.map { (date: Date) -> Bool in date >= front.addingTimeInterval(-0.05) } ?? false
         let notAtOpen: Bool = used.map { (date: Date) -> Bool in date.timeIntervalSince(opened) > 0.5 } ?? false
-        check(late && notAtOpen, "Welcome: a closed project is recorded as used when its window was last in front, not when it opened",
-              used.map { (date: Date) -> String in String(format: "%.2f s after the open", date.timeIntervalSince(opened)) } ?? "not recorded")
+        let beforeClose: Bool = used.map { (date: Date) -> Bool in date < closing } ?? false
+        let detail: String = used.map { (date: Date) -> String in
+            String(format: "%.2f s after the open, %.2f s before the close", date.timeIntervalSince(opened), closing.timeIntervalSince(date))
+        } ?? "not recorded"
+        check(late && notAtOpen && beforeClose,
+              "Welcome: a closed project is recorded as used when its window was last in front, not when it opened or closed", detail)
     }
 
     /// The servers in the list: ↓ past the last project selects the first server, whose pane shows with Connect as
@@ -877,13 +1141,15 @@ extension SelfTest {
         guard let welcome = await showSwitcher(app, from: origin), let window = welcome.window else { return }
         typeKeys(window, switcherToken)
         _ = await wait(2) { welcome.projectsSearchField.stringValue == switcherToken }
-        for _ in welcome.shownProjects { switcherKey(SwitcherKeyCode.down) }
+        for _ in welcome.shownProjects {
+            guard switcherKey(SwitcherKeyCode.down, to: window) else { return }
+        }
         let enter: String = KeyChord(key: "\r").display
         let onServer: Bool = welcome.selectedEntry?.server != nil && welcome.serverPaneShown
         check(onServer && welcome.returnButtonTitle == "Connect" && welcome.hintParts == [enter + " connect"],
               "Welcome: ↓ past the last project selects the first server: its pane shows, Connect is Return's, the hint line says “↩ connect”",
               "\(String(describing: welcome.selectedEntry?.id)), " + welcome.hintParts.joined(separator: " | "))
-        switcherKey(SwitcherKeyCode.escape)
+        guard switcherKey(SwitcherKeyCode.escape, to: window) else { return }
         _ = await wait(2) { welcome.projectsSearchField.stringValue.isEmpty }
         typeKeys(window, switcherToken + "pro")
         let found: Bool = await wait(2) {
@@ -896,7 +1162,7 @@ extension SelfTest {
         func added() -> [TerminalWindowController] {
             app.controllers.filter { (controller: TerminalWindowController) -> Bool in !before.contains(ObjectIdentifier(controller)) }
         }
-        switcherKey(SwitcherKeyCode.returnKey)
+        guard switcherKey(SwitcherKeyCode.returnKey, to: window) else { return }
         let opened: Bool = await wait(5) {
             added().contains { (controller: TerminalWindowController) -> Bool in controller.tabs.first?.remote?.host.id == prod.id }
         }
@@ -930,31 +1196,6 @@ extension SelfTest {
         }
         let solid: Bool = window.alphaValue == 1 && window.backgroundColor == Theme.background
         return children && !overlay && !material && solid
-    }
-
-    /// NEXTTERM_SELFTEST_ONLY=welcome: the Welcome window's own checks without the run's others: ⌘O and Return's button
-    /// on a made-up project, then the switcher's. The launch's (launchChecks) and the last ones (a Dock click, the saved
-    /// servers, Clear Menu) run as in every run.
-    static func welcomePartChecks() async {
-        let app = AppDelegate.shared!
-        let restore = keepSwitcherDefaults()
-        let folder: String = canonicalPath(NSTemporaryDirectory()) + "/nt-welcome-part-\(getpid())"
-        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
-        let controller: TerminalWindowController = app.openFolder(folder, newWindow: true)
-        _ = await wait(5) { controller.window?.isVisible == true }
-        await openProjectChecks(app, from: controller)
-        app.showWelcome(nil)
-        if let welcome = app.welcomeController {
-            welcome.select(project: folder)
-            welcomeReturnKeyChecks(welcome, project: folder)
-            welcome.close()
-        } else {
-            check(false, "Welcome: the Welcome window shows")
-        }
-        await closeSwitcherWindow(controller)
-        restore()
-        try? FileManager.default.removeItem(atPath: folder)
-        await welcomeSwitcherChecks()
     }
 }
 #endif
