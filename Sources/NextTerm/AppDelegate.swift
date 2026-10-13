@@ -493,6 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
+        case .newTerminal: openWindow(directory: nil)
         }
     }
 

@@ -177,10 +177,15 @@ public enum QuitPolicy {
     }
 
     /// The settings to save once the quit goes ahead: checked gives "Resume where I left off", unchecked the Welcome
-    /// window, and "Don’t ask again" turns Ask off.
+    /// window, and "Don’t ask again" turns Ask off. Unchecked keeps "Open a new terminal", which resumes nothing either,
+    /// so a quit never undoes that choice.
     public static func settings(after answer: QuitAnswer, from settings: LaunchSettings) -> LaunchSettings {
         var updated = settings
-        updated.opens = answer.resume ? .lastProjects : .welcome
+        if answer.resume {
+            updated.opens = .lastProjects
+        } else if settings.opens != .newTerminal {
+            updated.opens = .welcome
+        }
         if case .quit(_, true) = answer { updated.askToReopenOnQuit = false }
         return updated
     }

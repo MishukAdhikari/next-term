@@ -50,7 +50,7 @@ final class GeneralSettingsView: NSView {
             note.preferredMaxLayoutWidth = noteWidth
             return note
         }
-        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project.")
+        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project; with “Open a new terminal” chosen, it opens a shell window.")
         let askNote = note("Asks only when a terminal window is open. Unsaved files and running work are always asked about.")
         let scrollbackNote = note("Brings shell output back when windows resume after a quit or an update. It is kept in private files, with secrets masked on a best-effort basis, until Next Term next opens.")
         // VoiceOver reads each note with the controls it is about.

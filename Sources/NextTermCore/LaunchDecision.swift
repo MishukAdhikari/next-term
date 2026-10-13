@@ -59,6 +59,8 @@ public enum LaunchOpening: Equatable, Sendable {
     /// "Coming from another app?", then the Welcome window; just the Welcome window when no app to import
     /// from is found.
     case importThenWelcome
+    /// A window with a shell and no project, as New Terminal opens: "Open a new terminal" in place of the Welcome window.
+    case newTerminal
 }
 
 /// The one table that says what a launch, or a reopen with no window, shows. The app gathers the inputs
@@ -70,6 +72,10 @@ public enum LaunchDecision {
     public static func opening(_ input: LaunchInput, exists: (String) -> Bool) -> LaunchOpening {
         // Row 1, and row 9: a restore built its windows, or a request opened its window.
         if input.terminalWindowOpen { return .nothing }
+        // "Open a new terminal" takes every row the Welcome window would, the first run's import offer too: that offer
+        // stays pending while no app to import from is found and no project was opened, which is how a user who only
+        // opens shell windows launches. A first launch has chosen nothing, so it still gets the offer.
+        if input.settings.opens == .newTerminal { return .newTerminal }
         let reopens = input.settings.opens == .lastProjects
         if input.kind == .dockReopen {
             // The session's windows were closed by hand: Reopen brings back the most recent project.

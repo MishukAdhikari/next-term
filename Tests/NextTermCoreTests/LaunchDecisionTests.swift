@@ -11,9 +11,28 @@ import Testing
         #expect(s.keepScrollback)
         // In the order of the radio buttons. Compared outside `#expect`, where arrays are slow to type-check.
         let titles: [String] = LaunchOpens.allCases.map(\.title)
-        let expected: [String] = ["Show the Welcome window", "Resume where I left off"]
+        let expected: [String] = ["Show the Welcome window", "Resume where I left off", "Open a new terminal"]
         let same: Bool = titles == expected
         #expect(same, "\(titles)")
+    }
+
+    @Test func aStoredNewTerminalReadsBack() throws {
+        // "Open a new terminal" is kept as `newTerminal`. A build from before it reads that as any unknown value, the
+        // Welcome window, and so does this one for a value it does not know.
+        let name = "nextterm-launch-settings-new-terminal-\(getpid())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var terminal = LaunchSettings()
+        terminal.opens = .newTerminal
+        terminal.save(.opens, to: defaults)
+        let stored: String? = defaults.string(forKey: LaunchSettings.Key.opens)
+        #expect(stored == "newTerminal")
+        let read = LaunchSettings(defaults: defaults)
+        #expect(read.opens == .newTerminal && read.opensChosen)
+        #expect(read.opens.title == "Open a new terminal")
+        defaults.set("newTerminals", forKey: LaunchSettings.Key.opens)
+        let unknown = LaunchSettings(defaults: defaults)
+        #expect(unknown.opens == .welcome && !unknown.opensChosen)
     }
 
     @Test func readAndSavedInTheDefaults() throws {
@@ -211,6 +230,56 @@ import Testing
                 #expect(decide(launch, existing: []) == .welcome, "\(kind), \(restore)")
             }
         }
+    }
+
+    @Test func openANewTerminalTakesTheWelcomeWindowsPlace() {
+        // A launch that names nothing and restores nothing: a shell window, never the projects open at the last quit.
+        #expect(decide(input(.normal, .newTerminal)) == .newTerminal)
+        #expect(decide(input(.normal, .newTerminal), existing: []) == .newTerminal)
+        // A request that opened nothing goes on as a normal launch.
+        #expect(decide(input(.request, .newTerminal)) == .newTerminal)
+        // A restore that left no terminal window falls back to the setting too.
+        for restore in LaunchRestoreResult.allCases {
+            var launch = input(.normal, .newTerminal)
+            launch.restore = restore
+            #expect(decide(launch) == .newTerminal, "\(restore)")
+        }
+    }
+
+    @Test func openANewTerminalAddsNothingToTheWindowsALaunchOpened() {
+        // A restore that built windows, or `nxtrm` with a folder: those windows, and no extra shell window.
+        var restored = input(.normal, .newTerminal)
+        restored.restore = .openedWindows
+        restored.terminalWindowOpen = true
+        #expect(decide(restored) == .nothing)
+        var request = input(.request, .newTerminal)
+        request.terminalWindowOpen = true
+        #expect(decide(request) == .nothing)
+    }
+
+    @Test func openANewTerminalOnADockClickWithNoWindow() {
+        // A shell window, not the most recent project and not the Welcome window.
+        #expect(decide(input(.dockReopen, .newTerminal)) == .newTerminal)
+        #expect(decide(input(.dockReopen, .newTerminal), existing: []) == .newTerminal)
+        var reopen = input(.dockReopen, .newTerminal)
+        reopen.mayOfferImport = true
+        #expect(decide(reopen) == .newTerminal)
+    }
+
+    @Test func openANewTerminalIsAChoiceTheImportOfferNeverOverrides() {
+        // The offer stays pending while no app to import from was ever found and no project was opened, which is how a
+        // user who only opens shell windows launches: the shell window they chose, not the Welcome window. A first launch
+        // has chosen nothing, and still gets the offer.
+        var later = input(.normal, .newTerminal)
+        later.mayOfferImport = true
+        later.recentProjects = []
+        #expect(decide(later) == .newTerminal)
+        #expect(decide(later, existing: []) == .newTerminal)
+        var first = LaunchInput(kind: .normal, restore: .notRun, terminalWindowOpen: false, settings: LaunchSettings(),
+                                sessionProjects: [], recentProjects: [], mayOfferImport: true)
+        #expect(decide(first) == .importThenWelcome)
+        first.settings.opens = .welcome
+        #expect(decide(first) == .importThenWelcome)
     }
 }
 
