@@ -82,9 +82,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// The checkbox in Undo's confirm: also delete the keys from Secrets.
     private(set) var undoDeleteBox: NSButton?
     private var timer: Timer?
-    private var lockObserver: NSObjectProtocol?
-    /// Watches the window this view is in, whichever it is, for its close.
-    private var closeObserver: NSObjectProtocol?
+    /// The Mac locking and Next Term hiding end Reveal.
+    private var endObservers: [NSObjectProtocol] = []
+    /// Watch the window this view is in, whichever it is, for its close and its minimizing.
+    private var windowObservers: [NSObjectProtocol] = []
     /// A Reveal still asking for Touch ID.
     private var revealTask: Task<Void, Never>?
 
@@ -93,8 +94,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretRequests.changed, object: nil)
-        lockObserver = NotificationCenter.default.addObserver(forName: SecretsStore.locked, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.endReveal() }
+        for name in [SecretsStore.locked, NSApplication.willHideNotification] {
+            endObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.endReveal() }
+            })
         }
         reload()
     }
@@ -103,15 +106,14 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        if let lockObserver { NotificationCenter.default.removeObserver(lockObserver) }
-        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        for observer in endObservers + windowObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         timer?.invalidate()
         timer = nil
-        watchWindowClose()
+        watchWindow()
         guard window != nil else { return endReveal() } // another Settings tab: a revealed key, and one asked for, go with it
         // Time left on approvals, once a minute.
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -122,14 +124,16 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     }
 
     /// Closing a window leaves its content view in it, so Settings closing (⌘W) would leave a revealed key behind: the
-    /// window's close ends Reveal, whichever window holds this view.
-    private func watchWindowClose() {
-        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-        closeObserver = nil
+    /// window's close ends Reveal, whichever window holds this view. So does its minimizing, so a Touch ID up for
+    /// Reveal can't be approved for a value nobody would see, and a value shown doesn't come back with the window.
+    private func watchWindow() {
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+        windowObservers = []
         guard let window else { return }
-        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window,
-                                                               queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.endReveal() }
+        for name in [NSWindow.willCloseNotification, NSWindow.willMiniaturizeNotification] {
+            windowObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.endReveal() }
+            })
         }
     }
 
@@ -677,7 +681,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
     }
 
-    /// One presence check, then the action; "Not approved." when it was cancelled.
+    /// One presence check, then the action; "Not approved." when the user, or macOS, cancelled it. A check this view
+    /// cancelled itself (Reveal's end) says nothing: nobody said no.
     @discardableResult
     private func run(_ action: SecretsStore.Action, then: @escaping ([String: SecretBytes]) -> Void) -> Task<Void, Never> {
         Task { @MainActor in
@@ -685,7 +690,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                 let values = try await SecretsStore.shared.perform(action, facts: SecretsStore.Facts(who: "you, in Settings › Secrets"))
                 then(values)
             } catch SecretsStore.Failure.cancelled {
-                self.say("Not approved.")
+                if !Task.isCancelled { self.say("Not approved.") }
             } catch {
                 self.say((error as? LocalizedError)?.errorDescription ?? "Next Term couldn’t do that.")
             }
@@ -704,8 +709,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     // MARK: Reveal
 
     /// The value in a popover by its row, in a window kept out of screen sharing and screenshots. It stays until it is
-    /// closed, the Mac locks, or its window closes or loses this view. It can't be selected: Copy, which marks the
-    /// pasteboard for this Mac only and clears it, is the one way a value reaches the pasteboard.
+    /// closed, the Mac locks, Next Term hides, or its window closes, minimizes or loses this view. It can't be selected:
+    /// Copy, which marks the pasteboard for this Mac only and clears it, is the one way a value reaches the pasteboard.
     private func showReveal(_ value: SecretBytes, for name: String) {
         closeReveal()
         // Only by its row, on screen: never by a table in a closed window or in none.
@@ -737,8 +742,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     @objc private func hideReveal() { closeReveal() }
 
-    /// Reveal ends with the view: its window closing, another Settings tab, the Mac locking. The value on screen is
-    /// wiped and goes, and a Touch ID still up for one is cancelled.
+    /// Reveal ends with the view: its window closing or minimizing, another Settings tab, the Mac locking, Next Term
+    /// hiding. The value on screen is wiped and goes, and a Touch ID still up for one is cancelled.
     func endReveal() {
         revealTask?.cancel()
         revealTask = nil

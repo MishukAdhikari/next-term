@@ -793,33 +793,50 @@ final class StandInPresence: PresenceCheck {
     func finish(_ token: AnyObject) {}
 
     #if DEBUG
-    /// A sheet left up: while set, each check waits for `release(approving:)`.
+    /// A sheet left up: while set, each check waits for `release(approving:)`. One is up at a time, as with
+    /// `UserPresence`: a second check waits its turn until the first ends.
     var holds = false
     /// A cancelled asker's check ends at once, as `UserPresence` invalidating its context does. Off, the approval can
     /// still come after the asker has gone, as one given while its window was closing.
     var endsOnCancel = true
     /// Checks ended by their asker's cancel.
     private(set) var cancelledHolds = 0
-    private var held: CheckedContinuation<Bool, Never>?
+    private var held: (id: Int, done: CheckedContinuation<Bool, Never>)?
+    private var heldCount = 0
+    private var sheetUp = false
+    private var turns: [CheckedContinuation<Void, Never>] = []
     var isHolding: Bool { held != nil }
 
+    /// Ends the sheet that is up, if one is; the next check waiting its turn comes up.
     func release(approving: Bool) {
-        let done = held
+        let done = held?.done
         held = nil
         done?.resume(returning: approving)
     }
 
     private func hold() async -> Bool {
-        release(approving: false) // one sheet at a time
+        if sheetUp {
+            await withCheckedContinuation { turns.append($0) }
+        } else {
+            sheetUp = true
+        }
+        defer {
+            if turns.isEmpty { sheetUp = false } else { turns.removeFirst().resume() } // the turn passes on
+        }
+        if Task.isCancelled { return false } // cancelled while it waited its turn
+        if !holds { return true } // no longer held: it goes through
+        heldCount += 1
+        let id = heldCount
         return await withTaskCancellationHandler {
-            await withCheckedContinuation { held = $0 }
+            await withCheckedContinuation { held = (id, $0) }
         } onCancel: {
-            Task { @MainActor in self.endOnCancel() }
+            Task { @MainActor in self.endOnCancel(id) }
         }
     }
 
-    private func endOnCancel() {
-        guard endsOnCancel, held != nil else { return }
+    /// Ends check `id` when it is the one up: a cancel that arrives late never ends a newer check.
+    private func endOnCancel(_ id: Int) {
+        guard endsOnCancel, held?.id == id else { return }
         cancelledHolds += 1
         release(approving: false)
     }
