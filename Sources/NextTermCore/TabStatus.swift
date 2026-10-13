@@ -19,9 +19,11 @@ public struct TabNotice: Equatable, Sendable {
     public var duration: TimeInterval = 0
     /// The attention came from the program itself (a bell, OSC 9 or OSC 777), not from Next Term.
     public var fromProgram = false
+    /// A program's own notification's words (OSC 9 or OSC 777), shown as they are.
+    public var message: String? = nil
 
     public init(state: TabState, command: String, program: String, kind: CommandKind, stillRunning: Bool,
-                question: String? = nil, duration: TimeInterval = 0, fromProgram: Bool = false) {
+                question: String? = nil, duration: TimeInterval = 0, fromProgram: Bool = false, message: String? = nil) {
         self.state = state
         self.command = command
         self.program = program
@@ -30,6 +32,7 @@ public struct TabNotice: Equatable, Sendable {
         self.question = question
         self.duration = duration
         self.fromProgram = fromProgram
+        self.message = message
     }
 }
 
@@ -327,9 +330,11 @@ public struct TabStatus {
         }
     }
 
-    /// BEL, or an OSC 9 / OSC 777 notification from the program.
-    public mutating func bell() {
-        mark(.attention, duration: .infinity, fromProgram: true)
+    /// BEL, or an OSC 9 / OSC 777 notification from the program, with its words when it gave some.
+    public mutating func bell(notice words: ProgramNotice? = nil) {
+        guard var notice = marked(.attention, duration: .infinity, fromProgram: true) else { return }
+        notice.message = words?.body
+        pendingNotice = notice
     }
 
     /// Next Term's own call to the tab, such as ssh asking for a password: attention like a bell, but not

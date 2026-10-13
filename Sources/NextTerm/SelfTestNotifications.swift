@@ -203,7 +203,9 @@ extension SelfTest {
         check(silent != nil && silent?.content.sound == nil, "with “Play a sound” off, it has no sound")
         defaults.removeObject(forKey: NotificationSettings.Key.sound)
 
-        // A program's own bell or notification: from another app only (in Next Term the amber mark says it).
+        // A program's own bell or notification: from another app only (in Next Term the amber mark says it). Not straight
+        // after Next Term's own notice for the tab (the OpenCode checks look at that), so the ones above are forgotten.
+        app.ownNoticeAt[back.id] = nil
         check(posted(bell("make"), active: true) == nil && posted(bell("make"), active: false)?.content.body == "make needs your attention",
               "a program’s bell notifies from another app only")
         defaults.set(false, forKey: NotificationSettings.Key.programAlerts)

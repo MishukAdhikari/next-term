@@ -69,6 +69,9 @@ extension SelfTest {
         _ = await wait(4) { !tab.status.running }
         await opencodeTitleChecks(c, dir: dir)
         await opencodeAnswerChecks(c, dir: dir)
+        #if DEBUG
+        await opencodeNoticeChecks(c, dir: dir)
+        #endif
     }
 
     /// `goose` here: an agent, but not OpenCode by its name, so only its title makes the tab read OpenCode's screen.
@@ -253,3 +256,91 @@ extension SelfTest {
         _ = await wait(4) { !tab.status.running }
     }
 }
+
+#if DEBUG
+/// OpenCode's own notifications. A new tab asks OpenTUI programs for OSC 777 (a value the user set is kept: the Core
+/// tests pin that). A stand-in `opencode` in a background tab sends OSC 777 as OpenTUI writes it, with a title and
+/// without, ended with ST: its words are the notification's body, under the program's name. Then it asks for a
+/// permission and, right after the decision notice, sends its own "Permission needs input": nothing more is posted.
+/// Next Term stands as not in front, since a program's notification shows only from another app.
+extension SelfTest {
+    static let opencodeNoticeStandIn = #"""
+    #!/bin/sh
+    printf '\033]777;notify;Stand-in session;Session error\033\\'
+    read a
+    printf '\033]777;notify;Session done;\033\\'
+    read b
+    printf '\033[?1049h\033]2;OC | Stand-in\007\033[2J\033[H'
+    printf '%s\n' '  ┃' '  ┃  △ Permission required' '  ┃    # Shell command' '  ┃' '  ┃  $ true' '  ┃' '  ┃'
+    printf '%s\n' '  ┃   Allow once   Allow always   Reject          ⇆ select  enter confirm' '  ┃'
+    read c
+    printf '\033]777;notify;Stand-in session;Permission needs input\033\\'
+    read d
+    printf '\033[?1049l'
+    """#
+
+    static func opencodeNoticeChecks(_ c: TerminalWindowController, dir: URL) async {
+        guard let app = AppDelegate.shared else { return }
+        await opencodeProtocolCheck(c)
+        let folder = dir.appendingPathComponent("notices")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let standIn = folder.appendingPathComponent("opencode")
+        try? opencodeNoticeStandIn.write(to: standIn, atomically: true, encoding: .utf8)
+        chmod(standIn.path, 0o755)
+        app.appActiveStandIn = false
+        defer { app.appActiveStandIn = nil }
+        let tab = c.addTab(directory: nil, select: false)
+        defer { c.remove(tab) }
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "OpenCode notices: the stand-in's tab starts its shell") }
+        let mine: () -> [UNNotificationRequest] = { app.testNotifications.filter { $0.identifier == tab.id.uuidString } }
+        let says: (String) -> (UNNotificationRequest) -> Bool = { body in
+            { request in request.content.title == "opencode" && request.content.body == body }
+        }
+        let shown: () -> String = { mine().suffix(3).map { "\($0.content.title) | \($0.content.body)" }.joined(separator: " || ") }
+
+        tab.view.send(txt: "PATH=\(folder.path):$PATH opencode\r")
+        let titled = await wait(6) { mine().contains(where: says("Session error")) }
+        check(titled, "OpenCode notices: a titled OSC 777 shows its words, under the program's name", shown())
+        tab.status.setVisible(true) // seen: the next notice is news again
+        tab.status.setVisible(false)
+        tab.view.send(txt: "\r")
+        let untitled = await wait(6) { mine().contains(where: says("Session done")) }
+        check(untitled, "OpenCode notices: one with no title shows its words too", shown())
+
+        tab.view.send(txt: "\r")
+        let asked = "Permission required: Shell command ($ true)"
+        let decided = await wait(10) { mine().last?.content.body == asked }
+        check(decided, "OpenCode notices: the stand-in's permission prompt posts the decision notice", shown())
+        let before = mine().count
+        tab.view.send(txt: "\r")
+        _ = await wait(2) { mine().count > before }
+        check(mine().count == before && mine().last?.content.body == asked,
+              "OpenCode notices: its own notice right after the decision posts nothing more, and the decision stays", shown())
+
+        // The rule itself: a program's notice within 10 seconds of Next Term's own for the tab is dropped; later, not.
+        let words = TabNotice(state: .attention, command: "opencode", program: "opencode", kind: .agent, stillRunning: true,
+                              duration: .infinity, fromProgram: true, message: "Permission needs input")
+        app.post(words, tab: tab, in: c, appActive: false)
+        check(mine().count == before, "OpenCode notices: a program's notice soon after Next Term's own is dropped", shown())
+        app.ownNoticeAt[tab.id] = ProcessInfo.processInfo.systemUptime - 11
+        app.post(words, tab: tab, in: c, appActive: false)
+        check(mine().last.map(says("Permission needs input")) == true, "OpenCode notices: 11 seconds after it, the program's shows", shown())
+
+        tab.view.send(txt: "\u{03}")
+        _ = await wait(4) { !tab.status.running }
+    }
+
+    /// A new tab's environment asks OpenTUI programs for OSC 777.
+    static func opencodeProtocolCheck(_ c: TerminalWindowController) async {
+        let tab = c.addTab(directory: nil, select: false)
+        defer { c.remove(tab) }
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "OpenCode notices: the protocol tab starts its shell") }
+        let inherited = ProcessInfo.processInfo.environment[ProgramNotice.protocolVariable]
+        let expected = inherited ?? ProgramNotice.protocolValue
+        tab.view.send(txt: "printenv \(ProgramNotice.protocolVariable)\r")
+        let printed = await wait(6) { tab.screenTail(6).contains { $0.trimmingCharacters(in: .whitespaces) == expected } }
+        check(printed, "OpenCode notices: a new tab has \(ProgramNotice.protocolVariable)=\(expected)",
+              tab.screenTail(4).joined(separator: " | "))
+    }
+}
+#endif

@@ -535,14 +535,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(clean, forType: .string)
         }
-        // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me".
-        // OSC 9;4 is a progress report, not a notification.
-        terminal.registerOscHandler(code: 9) { [weak self] payload in
-            if payload.starts(with: Array("4;".utf8)) { return }
-            self?.attention()
-        }
-        terminal.registerOscHandler(code: 777) { [weak self] payload in
-            if payload.starts(with: Array("notify;".utf8)) { self?.attention() }
+        // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me", in the program's own
+        // words when it gives some. OSC 9;4 is a progress report, not a notification.
+        for code in [9, 777] {
+            terminal.registerOscHandler(code: code) { [weak self] payload in
+                guard ProgramNotice.isNotification(code: code, payload: payload) else { return }
+                self?.attention(ProgramNotice.parse(code: code, payload: payload))
+            }
         }
     }
 
@@ -1195,8 +1194,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         delegate?.tabDidChange(self)
     }
 
-    private func attention() {
-        status.bell()
+    private func attention(_ notice: ProgramNotice? = nil) {
+        status.bell(notice: notice)
         delegate?.tabDidChange(self)
     }
 
@@ -1446,6 +1445,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        // OpenTUI programs (OpenCode) send their notifications as OSC 777, which a tab reads, unless the user chose.
+        ProgramNotice.prepare(&env)
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
         GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))

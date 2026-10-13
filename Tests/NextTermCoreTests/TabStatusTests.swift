@@ -453,6 +453,29 @@ import Testing
         s.observe(agentScreen: .ready, at: 21)
         #expect(s.question == nil && s.state == .idle)
     }
+
+    @Test func aProgramsNoticeCarriesItsWords() {
+        var s = TabStatus()
+        s.bell(notice: ProgramNotice(title: "Fix the login test", body: "Session error"))
+        let notice = s.takeNotice()
+        #expect(notice?.message == "Session error" && notice?.fromProgram == true && notice?.topic == .programAlert)
+        s.setVisible(true)
+        s.setVisible(false)
+        s.bell()
+        let bare = s.takeNotice()
+        #expect(bare?.state == .attention && bare?.message == nil)
+    }
+
+    @Test func aProgramsNoticeAfterADecisionAddsNothing() {
+        // The decision's amber mark is attention already: the program's vaguer notice never replaces it.
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10)
+        #expect(s.takeNotice()?.topic == .decision)
+        s.bell(notice: ProgramNotice(title: nil, body: "Permission needs input"))
+        #expect(s.takeNotice() == nil && s.question == "Permission required: Shell command ($ npm test)")
+    }
 }
 
 @Suite struct ShellIntegrationTests {

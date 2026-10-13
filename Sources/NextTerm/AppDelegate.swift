@@ -11,6 +11,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastBadge = -1
     /// Last notification per tab, to rate-limit noisy programs.
     private var lastNotified: [UUID: (at: Date, key: String)] = [:]
+    /// When Next Term last posted its own notice for each tab (system uptime): a program's notice for the tab soon
+    /// after it is dropped (ProgramNotice.repeatWindow). The self-test clears it between its checks.
+    var ownNoticeAt: [UUID: TimeInterval] = [:]
+    #if DEBUG
+    /// Stands in for whether Next Term is in front, for the self-test's notices that come from a tab's own output.
+    var appActiveStandIn: Bool?
+    #endif
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
@@ -1385,9 +1392,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// is in front, for the self-test.
     func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController, appActive: Bool? = nil) {
         let settings = NotificationSettings(defaults: .standard)
+        #if DEBUG
+        let active = appActive ?? appActiveStandIn ?? NSApp.isActive
+        #else
         let active = appActive ?? NSApp.isActive
+        #endif
         let visible = controller.isOnScreen(tab)
         guard settings.shouldNotify(notice, appActive: active, tabVisible: visible, drivenByAgent: MCPControl.isDriven(tab)) else { return }
+        // A program's notice straight after Next Term's own for the tab says less: the decision, or the finish, stays.
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if notice.fromProgram, ProgramNotice.isRepeat(lastOwnNoticeAt: ownNoticeAt[tab.id], now: uptime) { return }
         let program = Typography.shortened(notice.program, to: 60)
         let title = Typography.shortened(tab.title, to: 80)
         // Which project the tab is in (or its folder), unless its title says it already.
@@ -1410,7 +1424,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case .failed:
                 content.body = "\(program.isEmpty ? "Command" : program) failed" + (tab.status.exitCode.map { " (exit \($0))" } ?? "")
             case .attention:
-                content.body = "\(program.isEmpty ? "The terminal" : program) needs your attention"
+                guard let message = notice.message else {
+                    content.body = "\(program.isEmpty ? "The terminal" : program) needs your attention"
+                    break
+                }
+                // A program's own words, under its name, as a decision's question is.
+                if !program.isEmpty {
+                    content.title = program
+                    content.subtitle = [title, shownPlace].compactMap { $0 }.joined(separator: " — ")
+                }
+                content.body = message
             case .idle, .working:
                 return
             }
@@ -1419,6 +1442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let key = content.title + "\u{0}" + content.body
         if let last = lastNotified[tab.id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
         lastNotified[tab.id] = (Date(), key)
+        if !notice.fromProgram { ownNoticeAt[tab.id] = uptime }
         let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
         content.sound = audible ? .default : nil
         if audible { lastSoundAt = Date() }
