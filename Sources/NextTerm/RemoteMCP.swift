@@ -177,7 +177,7 @@ enum RemoteMCP {
                 info["command_typed"] = false
                 if tab.disconnected || tab.exited {
                     info["note"] = "ssh could not connect, so the command was not typed. The tab shows why."
-                    info["screen"] = tab.screenTail(8).joined(separator: "\n")
+                    info["screen"] = MCPControl.fieldTail(tab, 8).joined(separator: "\n") // masked over whole lines, as read_tab
                     return reply(MCPServer.CallResult(text: MCPServer.json(info), isError: true))
                 }
                 info["note"] = "The tab is open but its shell was not at a prompt within 45 s (ssh may be asking the user for a password or a host key). The command was not typed: send it with send_to_tab once read_tab shows a prompt."
@@ -245,7 +245,11 @@ enum RemoteMCP {
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
         let withDiff = arguments["diff"] as? Bool ?? true
         let limit = min(2_000_000, max(1000, arguments["max_bytes"] as? Int ?? 200_000))
-        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? limit + 1 : 0)
+        // The diff is masked before it is cut, on the bytes `head -c` counts: the host sends the longest stored form's
+        // bytes past the cut, so a value that starts before it is there whole, and is left out whole. The answer takes
+        // the mask as it is then, up to 50 s later (RemoteChanges.shownDiff).
+        let asked = withDiff ? SecretMask.current.bytesToRead(forCutAt: limit) : 0
+        let script = RemoteShell.changesScript(directory: directory, maxBytes: asked)
         RemoteConnection.run(found, script: script, timeout: 50) { output in
             guard let changes = RemoteChanges.parse(output.output) else {
                 if output.status == 3 || output.status == 4 { return reply(fail("\(directory) on \(found.name): \(output.problem)")) }
@@ -254,9 +258,9 @@ enum RemoteMCP {
             var info: [String: Any] = ["host": found.name, "directory": directory, "branch": changes.branch,
                                        "files": changes.files, "stat": changes.stat]
             if withDiff {
-                let cut = changes.diff.utf8.count > limit
-                info["diff"] = cut ? String(decoding: Array(changes.diff.utf8.prefix(limit)), as: UTF8.self) : changes.diff
-                if cut { info["diff_cut_at_bytes"] = limit }
+                let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: SecretMask.current)
+                info["diff"] = shown.text
+                if let cut = shown.cutAt { info["diff_cut_at_bytes"] = cut }
             }
             reply(ok(info))
         }

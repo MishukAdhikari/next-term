@@ -76,8 +76,9 @@ final class MCPControlServer: @unchecked Sendable {
             var pid: pid_t = 0
             var size = socklen_t(MemoryLayout<pid_t>.size)
             let peer = getsockopt(client, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0 ? pid : nil
+            let token = PeerCode.auditToken(of: client) // Secrets' wrapper is checked by its code (SecretSocket)
             _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
-            DispatchQueue.global(qos: .userInitiated).async { self.serve(client, peer: peer) }
+            DispatchQueue.global(qos: .userInitiated).async { self.serve(client, peer: peer, token: token) }
         }
     }
 
@@ -85,7 +86,7 @@ final class MCPControlServer: @unchecked Sendable {
     static var requestLimit = MCPServer.maxRequestBytes
 
     /// One request line in, one answer line out. The quit's drain can answer it at any point (`calls`).
-    private func serve(_ fd: Int32, peer: pid_t?) {
+    private func serve(_ fd: Int32, peer: pid_t?, token: audit_token_t? = nil) {
         let call = calls.begin(fd)
         defer { calls.end(call) }
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
@@ -102,13 +103,25 @@ final class MCPControlServer: @unchecked Sendable {
             ended = buffer[0..<count].contains(0x0A)
             line.append(contentsOf: buffer[0..<count])
         }
-        if let drained = call.answer { return send(drained, on: fd) }
+        let request = ended ? Self.request(in: line) : nil
+        // `nxtrm secret run`'s request, answered on this connection alone; never an MCP tool. The quit's drain leaves it be,
+        // and one the quit answered first gets nothing written: the wrapper reads the closed connection. A wrapper the quit
+        // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
+        // ends, as every other one does.
+        let route = calls.route(call, read: request, selfAnswering: request?.tool == SecretSocket.tool) {
+            SecretSocket.isWrapper(pid: peer)
+        }
+        switch route {
+        case .answerItself:
+            return SecretSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+        case .nothing: return
+        case .drained(let answer): return send(answer, on: fd)
+        case .serve: break
+        }
         if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
-        guard let end = line.firstIndex(of: 0x0A),
-              let request = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
-              let tool = request["tool"] as? String else { return }
-        let arguments = request["arguments"] as? [String: Any] ?? [:]
-        if call.asked(MCPCalls.Request(tool: tool, arguments: arguments)) {
+        guard let request else { return }
+        let tool = request.tool, arguments = request.arguments
+        if call.asked(request) {
             DispatchQueue.main.async {
                 guard call.starts() else { return } // the quit answered it first
                 MCPControl.call(tool, arguments, caller: peer) { result in call.finish(result) }
@@ -116,6 +129,14 @@ final class MCPControlServer: @unchecked Sendable {
             call.answered.wait()
         }
         send(call.answer ?? MCPServer.CallResult(text: "No answer", isError: true), on: fd)
+    }
+
+    /// The tool and arguments of a whole request line, or nil.
+    private static func request(in line: Data) -> MCPCalls.Request? {
+        guard let end = line.firstIndex(of: 0x0A),
+              let object = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
+              let tool = object["tool"] as? String else { return nil }
+        return MCPCalls.Request(tool: tool, arguments: object["arguments"] as? [String: Any] ?? [:])
     }
 
     /// As Next Term quits (KTD17): it takes no new connection, answers every call it is serving with `answer`, calls posted
@@ -143,9 +164,12 @@ final class MCPControlServer: @unchecked Sendable {
         send(MCPServer.CallResult(text: text, isError: true), on: fd)
     }
 
-    /// Writes the answer line; the connection closes as its call ends.
+    /// Writes the answer line; the connection closes as its call ends. Stored keys' values are masked in it one last
+    /// time, whatever tool made it (RemoteMCP, MCPWriteControl, SkillsMCP included), in its JSON's strings too, where
+    /// a value's quotes and line breaks are escaped.
     private func send(_ answer: MCPServer.CallResult, on fd: Int32) {
-        let data = MCPServer.encodeAnswer(answer)
+        let masked = MCPServer.CallResult(text: SecretMask.current.mask(answer: answer.text), isError: answer.isError)
+        let data = MCPServer.encodeAnswer(masked)
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
@@ -194,6 +218,7 @@ enum MCPControl {
 
     /// Input went in: watch for the work it starts (a command can start and end between two looks).
     private static func sent(to tab: TerminalTab) {
+        SecretRequests.tabGotInput(tab.id) // its run_with_secrets grants end
         driven.insert(tab.id)
         lastSent[tab.id] = Sent(at: TerminalTab.now, commands: tab.status.commandsStarted)
         func look(_ count: Int) {
@@ -216,6 +241,28 @@ enum MCPControl {
 
     private static var app: AppDelegate { AppDelegate.shared }
     private static var allTabs: [TerminalTab] { app.controllers.flatMap(\.tabs) }
+
+    /// A tab's text an agent reads (title, command, screen, question, choices, served URL, selected text), with stored
+    /// keys' exact values masked. Pattern masking is not added here: it would change what agents read today. The
+    /// self-test turns this off to check the last pass in `send`.
+    static var fieldMasks = true
+    static func field(_ text: String) -> String { fieldMasks ? SecretMask.current.mask(text) : text }
+    /// A tab's last `count` rows, masked over whole lines: a key a wrap split above the window is masked in the part the
+    /// window shows (`TerminalTab.screenTail(_:masked:)`).
+    static func fieldTail(_ tab: TerminalTab, _ count: Int = AgentScreen.scannedLines) -> [String] {
+        fieldMasks ? tab.screenTail(count, masked: SecretMask.current) : tab.screenTail(count)
+    }
+    /// The menu under the tab's question, for an agent to read: matched on the screen as the question was read from it,
+    /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
+    static func fieldMenu(_ tab: TerminalTab, question: String) -> AgentMenu? {
+        AgentScreen.menu(asking: question, screenLines: tab.screenTail(), shown: fieldTail(tab))
+    }
+    /// A tab's restored details (MCPRestoredTabs), masked: their note can quote a command line or a resume's screen, saved
+    /// before a key in it was stored.
+    static func restoredFields(_ tab: TerminalTab) -> [String: Any] {
+        let fields = MCPRestoredTabs.fields(tab)
+        return fieldMasks ? SecretMask.current.mask(fields: fields) : fields
+    }
 
     static func fail(_ text: String) -> MCPServer.CallResult { MCPServer.CallResult(text: text, isError: true) }
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
@@ -255,6 +302,11 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
                                requester: requester, reply: reply)
+            }
+        case "list_secrets", "request_secret", "store_secret", "run_with_secrets":
+            MainActor.assumeIsolated {
+                SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
+                                reply: reply)
             }
         case _ where MCPServer.isImportTool(tool):
             MainActor.assumeIsolated {
@@ -297,7 +349,7 @@ enum MCPControl {
     static func describe(_ tab: TerminalTab, in controller: TerminalWindowController, caller: TerminalTab?) -> [String: Any] {
         var info: [String: Any] = [
             "id": tab.id.uuidString.lowercased(),
-            "title": tab.title,
+            "title": field(tab.title),
             "directory": tab.directory,
             "state": state(tab),
             "front": controller.activeTab === tab,
@@ -310,10 +362,10 @@ enum MCPControl {
         if tab.status.running {
             info["program"] = tab.status.program
             info["agent"] = tab.status.kind == .agent
-            info["command"] = String(tab.status.command.prefix(300))
+            info["command"] = String(field(tab.status.command).prefix(300))
         }
         info.merge(questionInfo(tab)) { $1 }
-        info.merge(MCPRestoredTabs.fields(tab)) { $1 } // what a restart did to it (U13)
+        info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
         if tab === caller { info["you"] = true }
         if let openedBy = tab.openedBy {
@@ -321,7 +373,7 @@ enum MCPControl {
             if tab === caller { info["note"] = "Another agent started this tab: open no tabs unless the user asks you to, here." }
         }
         // A dev server's local address, without the query, where a login token goes (Jupyter's `?token=`).
-        if let url = tab.servedURL { info["served_url"] = ServedURL.shared(url) }
+        if let url = tab.servedURL { info["served_url"] = field(ServedURL.shared(url)) }
         info.merge(AgentPlaces.shared.fields(of: tab, in: controller)) { $1 } // where its agent works, against the window
         if let remote = tab.remote {
             if tab.loginPrompt { info["login_prompt"] = true } // ssh asks the user something in that tab
@@ -365,8 +417,8 @@ enum MCPControl {
     private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
         var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
         info.merge(questionInfo(tab)) { $1 }
-        info.merge(MCPRestoredTabs.fields(tab)) { $1 }
-        info["screen"] = tab.screenTail(min(2000, max(1, lines))).joined(separator: "\n")
+        info.merge(restoredFields(tab)) { $1 }
+        info["screen"] = fieldTail(tab, min(2000, max(1, lines))).joined(separator: "\n")
         return ok(info)
     }
 
@@ -380,8 +432,8 @@ enum MCPControl {
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
             info.merge(questionInfo(tab)) { $1 }
-            info.merge(MCPRestoredTabs.fields(tab)) { $1 }
-            info["screen"] = tab.screenTail(40).joined(separator: "\n")
+            info.merge(restoredFields(tab)) { $1 }
+            info["screen"] = fieldTail(tab, 40).joined(separator: "\n")
             return reply(ok(info))
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitFor(tab, until: deadline, sawWork: saw, reply: reply) }
@@ -411,7 +463,7 @@ enum MCPControl {
         if secret != nil || document.holdsSecrets {
             if range.length > 0 { info["withheld"] = "The selection is in a file that usually holds secrets, so its text isn't shared." }
         } else if range.length > 0 {
-            let selected = text.substring(with: range)
+            let selected = field(text.substring(with: range))
             info["text"] = selected.count > 200_000 ? String(selected.prefix(200_000)) + "\n… (cut at 200,000 characters)" : selected
         }
         return ok(info)
@@ -458,8 +510,6 @@ enum MCPControl {
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
         }
-        // The window of the project that holds the folder; else the folder's project, opened.
-        let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -473,13 +523,12 @@ enum MCPControl {
             }
             controller = owner
             tab = pane
-        } else if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
-            controller = owner
-            tab = owner.addTab(directory: directory, select: false, byAgent: true)
         } else {
-            controller = app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true)
+            // The window of the project that holds the folder; else the folder's project, opened.
+            let (owner, opened) = window(for: directory)
+            controller = owner
             // Never a restored tab: it may hold a put-back line (KTD10). Never the tab of the window the user is in.
-            if controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
+            if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
                canonicalPath(first.directory) == directory, !controller.hasUsersKeyboard {
                 tab = first
                 first.view.awaitsChoice = true
@@ -508,6 +557,15 @@ enum MCPControl {
             type(command, into: tab, submit: true)
             answer()
         }
+    }
+
+    /// The window a new tab in `directory` opens in (new_tab's rule, which run_with_secrets shares): the window of the
+    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true).
+    static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
+        // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
+        let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
+        if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) { return (owner, false) }
+        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true), true)
     }
 
     static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
@@ -608,8 +666,8 @@ enum MCPControl {
     /// The question, its choices as the screen lists them, and the id answer_agent takes back.
     static func questionInfo(_ tab: TerminalTab) -> [String: Any] {
         guard let question = tab.status.question, let id = questionID(tab) else { return [:] }
-        var info: [String: Any] = ["question": question, "question_id": id]
-        if let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question { info["choices"] = menu.choices }
+        var info: [String: Any] = ["question": field(question), "question_id": id]
+        if let menu = fieldMenu(tab, question: question) { info["choices"] = menu.choices.map(field) }
         return info
     }
 
@@ -633,10 +691,10 @@ enum MCPControl {
             return reply(fail("That tab is not asking anything now (state: \(state(tab))); nothing was typed. read_tab shows its screen."))
         }
         guard given == current else {
-            return reply(fail("That question is gone; nothing was typed. The tab now asks “\(question)” (question_id \(current)): answer that one only if you mean to."))
+            return reply(fail("That question is gone; nothing was typed. The tab now asks “\(field(question))” (question_id \(current)): answer that one only if you mean to."))
         }
-        guard let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question else {
-            return reply(fail("The choices for “\(question)” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
+        guard let menu = fieldMenu(tab, question: question) else {
+            return reply(fail("The choices for “\(field(question))” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
         }
         let index: Int
         switch menu.index(choice: choice as? Int, answer: answer as? String) {
@@ -644,10 +702,10 @@ enum MCPControl {
         case .success(let found): index = found
         }
         guard let keys = menu.keys(toPick: index) else {
-            return reply(fail("That screen does not show which choice is selected, so the way to “\(menu.choices[index])” is unknown; nothing was typed. press_keys can answer."))
+            return reply(fail("That screen does not show which choice is selected, so the way to “\(field(menu.choices[index]))” is unknown; nothing was typed. press_keys can answer."))
         }
         let id = tab.id.uuidString.lowercased()
-        let label = menu.choices[index]
+        let label = field(menu.choices[index])
         // Still the same question, and (in a list) the cursor on the choice.
         func ready() -> Bool {
             tab.pollAgentScreen()
@@ -680,7 +738,7 @@ enum MCPControl {
                 if after == current {
                     info["note"] = "The question is still on screen; read_tab shows what the agent did with the answer."
                 } else {
-                    info["question_after"] = tab.status.question
+                    info["question_after"] = tab.status.question.map(field)
                     info["question_id_after"] = after
                 }
             }

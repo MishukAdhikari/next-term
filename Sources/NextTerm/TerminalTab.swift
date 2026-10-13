@@ -751,6 +751,19 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         tailRows(count).rows
     }
 
+    /// `screenTail`, with stored keys masked over whole lines (`SecretMask.mask(window:rows:text:)`): the rows above the
+    /// window are masked with it, wrapped by the terminal or not (agent UIs wrap with a newline or cursor moves), so the
+    /// tail of a key whose start is above the window never shows.
+    func screenTail(_ count: Int, masked mask: SecretMask) -> [String] {
+        let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let top = terminal.buffer.totalLinesTrimmed
+        let first = max(top, last - count + 1)
+        return mask.mask(window: first...last, rows: top...last) { row in
+            terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true) ?? ""
+        }
+    }
+
     /// `screenTail`, with the scroll-invariant row of its first line.
     private func tailRows(_ count: Int) -> (first: Int, rows: [String]) {
         let terminal = view.getTerminal()

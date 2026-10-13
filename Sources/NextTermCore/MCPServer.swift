@@ -19,21 +19,22 @@ public enum MCPServer {
     }
 
     public static let instructions = """
-        Next Term is the terminal and editor this agent may be running in. Use these tools to orchestrate \
-        work across projects: list_tabs shows every open project and tab with the state of the agent in it \
-        (working, done, needs attention). Start an agent with new_tab (directory plus a command such as \
-        "claude" or "codex"), give it a task with send_to_tab, then wait_for_tab until it stops and \
-        read_tab to see what it said. An agent that needs a decision shows state "attention", the \
-        question, its choices and a question_id for answer_agent, which refuses if the question changed. \
-        Never type into your own tab ("you": true). read_file, find_in_files, git_status and get_diff read \
-        a project's files and changes; get_editor_selection gives the editor's selection. list_hosts, \
-        new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills and get_skill \
-        give the skills of your project, the user's and Next Term's, as your agent finds them: read one that \
-        fits the task and your agent doesn't load itself; install_skill and remove_skill ask the user. propose_edit shows an edit in the editor's diff \
-        to accept; write_file, create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, \
-        set_layout and settings_set ask the user on the Mac first, and change nothing when declined. For \
-        settings from another app use list_import_sources and preview_import, never its files; apply_import \
-        and undo_import ask the user. A tab Next Term brings back after an update or a quit keeps its id.
+        Next Term is the terminal and editor this agent may run in, for orchestrating work across projects. \
+        list_tabs shows every project and tab with its agent's state (working, done, needs attention). Start \
+        an agent with new_tab (a folder and a command such as "claude" or "codex"), give it a task with \
+        send_to_tab, then wait_for_tab until it stops and read_tab. An agent awaiting a decision shows \
+        "attention" and a question_id for answer_agent. Never type into your own tab ("you": true). \
+        read_file, find_in_files, git_status, get_diff and get_editor_selection read projects and the editor. \
+        list_hosts, new_remote_tab, host_sessions and host_changes work on the user's servers. list_skills \
+        and get_skill give your project's, the user's and Next Term's skills: read one that fits and your \
+        agent doesn't load itself. propose_edit shows an edit for the user to accept. write_file, \
+        create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
+        install_skill, remove_skill, apply_import and undo_import ask the user on the Mac first, and change \
+        nothing when declined. For settings from another app use list_import_sources and preview_import, \
+        never its files. A tab Next Term brings back after an update or a quit keeps its id. list_secrets \
+        lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a command \
+        with keys in its environment once the user approves on the Mac with Touch ID. request_secret asks \
+        the user to type a key into Next Term. store_secret saves a key you already hold.
         """
 
     /// The offer, first in the instructions when the agent runs in a Next Term tab and Settings › Editor › "Agents offer
@@ -209,7 +210,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + importTools
+    ] + controlTools + importTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 

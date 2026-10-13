@@ -144,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func startAgentControl() {
+        SecretsStore.marksLoadedBeforeSocket = SecretsStore.marksLoaded
         MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)
         MCPRegistration.update(on: true)
     }
@@ -376,6 +377,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
+        // load check, off the main thread.
+        MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             UserKeys.pressed()
@@ -1428,6 +1433,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var testNotifications: [UNNotificationRequest] = []
 
     private func deliver(_ request: UNNotificationRequest) {
+        // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
+        var request = request
+        let mask = SecretMask.current
+        if !mask.isEmpty, let content = request.content.mutableCopy() as? UNMutableNotificationContent {
+            content.title = mask.mask(content.title)
+            content.subtitle = mask.mask(content.subtitle)
+            content.body = mask.mask(content.body)
+            request = UNNotificationRequest(identifier: request.identifier, content: content, trigger: request.trigger)
+        }
         if SelfTest.isRequested { return testNotifications.append(request) }
         notificationCenter?.add(request)
     }
@@ -1716,6 +1730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
+        item(window, "Secrets", #selector(showSecrets(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main

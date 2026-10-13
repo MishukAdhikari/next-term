@@ -98,6 +98,7 @@ public struct MCPProjects: Sendable {
             return .failure(.init("Give the path without “..”."))
         }
         let real = Self.realPath(lexical)
+        if let reason = Self.vaultReason(real) { return .failure(Self.refusal(text, reason, writing: writing)) }
         guard let root = root(holding: real) else {
             return .failure(.init("\(text) is outside the projects open in Next Term (\(listed)); only files inside them are \(writing ? "written" : "read")."))
         }
@@ -156,6 +157,17 @@ public struct MCPProjects: Sendable {
             return "is a credentials file"
         }
         return nil
+    }
+
+    /// Why a real path is never read or written: it is in Next Term's Secrets folder, `Secrets.noindex`, or an old one
+    /// Start Over kept (`Secrets-<date>.old.noindex`). It runs on the real path, so a project opened at the folder, or at
+    /// `Next Term/`, is refused too.
+    public static func vaultReason(_ realPath: String) -> String? {
+        let parts = realPath.split(separator: "/")
+        guard let index = parts.lastIndex(where: { $0.lowercased().hasPrefix("secrets") && $0.lowercased().hasSuffix(".noindex") }) else {
+            return nil
+        }
+        return index == parts.count - 1 ? "is Next Term’s Secrets folder" : "is in Next Term’s Secrets folder"
     }
 
     // MARK: paths
@@ -252,7 +264,7 @@ public enum MCPProjectTools {
 
     // MARK: read_file
 
-    public static func readFile(_ arguments: [String: Any], in projects: MCPProjects) -> MCPServer.CallResult {
+    public static func readFile(_ arguments: [String: Any], in projects: MCPProjects, mask: SecretMask = .current) -> MCPServer.CallResult {
         run {
             let args = MCPArguments(arguments)
             let offset = try args.int("offset", in: 1...Int.max, default: 1)
@@ -272,18 +284,27 @@ public enum MCPProjectTools {
                 throw MCPToolError("offset \(offset) is past the end: \(file.relative) has \(lines.count) lines.")
             }
             var taken: [String] = []
-            var chars = 0, cutLines = 0
-            for line in lines.dropFirst(offset - 1).prefix(limit) {
+            var chars = 0, cutLines = 0, carried = 0
+            let range = min(offset - 1, lines.count)..<min(lines.count, offset - 1 + limit)
+            // A value named on a line before its own is ••• first: the cut and an offset past its name see its line alone.
+            let named = MCPRedaction.CarriedValues(lines, in: range, mask: mask)
+            for index in range {
+                let (line, count) = named.masked(lines[index], at: index)
                 var shown = line
                 if shown.count > maxLineLength {
-                    shown = String(shown.prefix(maxLineLength)) + "…"
+                    // Cut where nothing redact masks crosses the cut: a value across it would show its start.
+                    let end = line.index(line.startIndex, offsetBy: maxLineLength)
+                    let cut = MCPRedaction.cleanCut(line, at: end, forward: false, mask: mask)
+                    shown = String(line[..<cut]) + "…"
                     cutLines += 1
                 }
                 if !taken.isEmpty, chars + shown.count + 1 > maxChars { break }
                 taken.append(shown)
                 chars += shown.count + 1
+                carried += count
             }
-            let redacted = MCPRedaction.redact(taken.joined(separator: "\n"))
+            var redacted = MCPRedaction.redact(taken.joined(separator: "\n"), mask: mask)
+            redacted.count += carried
             let end = offset - 1 + taken.count
             var result: [String: Any] = ["path": file.relative, "project": file.root, "total_lines": lines.count,
                                          "start_line": taken.isEmpty ? 0 : offset, "end_line": end, "text": redacted.text]
@@ -297,7 +318,7 @@ public enum MCPProjectTools {
     // MARK: find_in_files
 
     public static func findInFiles(_ arguments: [String: Any], in projects: MCPProjects, git: String?,
-                                   timeout: TimeInterval = 40) -> MCPServer.CallResult {
+                                   timeout: TimeInterval = 40, mask: SecretMask = .current) -> MCPServer.CallResult {
         run {
             let args = MCPArguments(arguments)
             guard let text = try args.string("query"), !text.isEmpty else { throw MCPToolError("Give query: the text to find.") }
@@ -317,11 +338,12 @@ public enum MCPProjectTools {
             var secret = 0
             let files = ProjectSearch.files(in: folder, git: git).filter { path in
                 let full = (folder as NSString).appendingPathComponent(path)
-                guard MCPProjects.secretReason(path) == nil else { secret += 1; return false }
+                guard MCPProjects.secretReason(path) == nil, MCPProjects.vaultReason(full) == nil else { secret += 1; return false }
                 guard MCPProjects.isLink(full) else { return true }
                 // A link is followed only to a file inside an open project, and not to a secret one.
                 let real = MCPProjects.realPath(full)
-                guard let root = projects.root(holding: real), MCPProjects.secretReason(ProjectFile(root: root, path: real).relative) == nil else {
+                guard let root = projects.root(holding: real), MCPProjects.secretReason(ProjectFile(root: root, path: real).relative) == nil,
+                      MCPProjects.vaultReason(real) == nil else {
                     return false
                 }
                 return true
@@ -336,9 +358,12 @@ public enum MCPProjectTools {
             }
             let all = found.sorted { $0.relativePath < $1.relativePath }.flatMap(\.matches)
             var redactions = 0
+            let values = MCPRedaction.NamedValuesCache() // a long line is read once for all its matches
+            let named = MCPRedaction.CarriedLines(root: folder, mask: mask) // a value named on a line before the match's
             let shown: [[String: Any]] = all.prefix(limit).map { match in
-                let preview = MCPRedaction.redact(snippet(match))
-                redactions += preview.count
+                let carried = named.masking(match)
+                let preview = snippet(carried.match, mask: mask, values: values)
+                redactions += carried.count + preview.count
                 return ["path": match.relativePath, "line": match.line, "column": match.range.location + 1, "text": preview.text]
             }
             var result: [String: Any] = ["project": folder, "matches": shown, "total": all.count,
@@ -352,14 +377,19 @@ public enum MCPProjectTools {
         }
     }
 
-    /// A match's line, cut around the match when it is long, with leading indentation dropped.
-    static func snippet(_ match: SearchMatch) -> String {
-        let ns = match.lineText as NSString
-        guard ns.length > 300 else { return match.lineText.trimmingCharacters(in: .whitespaces) }
+    /// A match's line, redacted, cut around the match when it is long, with leading indentation dropped; and how many
+    /// values it masked. An edge across anything redact masks moves in, toward the match, and ••• stands for what it
+    /// left out (`MCPRedaction.snippet`), so the snippet never shows part of a value and never grows past 300 characters.
+    static func snippet(_ match: SearchMatch, mask: SecretMask = .current,
+                        values: MCPRedaction.NamedValuesCache? = nil) -> (text: String, count: Int) {
+        let line = match.lineText
+        let ns = line as NSString
+        guard ns.length > 300 else { return MCPRedaction.redact(line.trimmingCharacters(in: .whitespaces), mask: mask) }
         let start = max(0, match.range.location - 100)
         let range = ns.rangeOfComposedCharacterSequences(for: NSRange(location: start, length: min(300, ns.length - start)))
-        return (start > 0 ? "…" : "") + ns.substring(with: range).trimmingCharacters(in: .whitespaces)
-            + (NSMaxRange(range) < ns.length ? "…" : "")
+        guard let window = Range(range, in: line), let found = Range(match.range, in: line) else { return ("", 0) }
+        let named = values?.values(line, mask: mask)
+        return MCPRedaction.snippet(line, window: window, match: found, mask: mask, values: named)
     }
 
     // MARK: git
@@ -483,7 +513,9 @@ public enum MCPProjectTools {
             diffs.removeAll { $0.hunks.isEmpty && !$0.isBinary && !$0.isRename && $0.header.allSatisfy { $0.hasPrefix("diff --git") || $0.hasPrefix("index ") } }
             for diff in diffs {
                 let name = scope.relative(diff.path) ?? diff.path
-                if let reason = [diff.newPath, diff.oldPath].compactMap({ $0 }).lazy.compactMap(MCPProjects.secretReason).first {
+                let paths = [diff.newPath, diff.oldPath].compactMap { $0 }
+                let vault = paths.lazy.compactMap { MCPProjects.vaultReason(scope.gitRoot + "/" + $0) }.first
+                if let reason = paths.lazy.compactMap(MCPProjects.secretReason).first ?? vault {
                     leftOut.append(["path": name, "reason": reason])
                     continue
                 }

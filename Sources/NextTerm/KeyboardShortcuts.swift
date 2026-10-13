@@ -685,6 +685,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         skillsTab.label = "Skills"
         skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
+        // Secrets is last: after Skills, and after Remote Access once that tab is in.
+        let secretsTab = NSTabViewItem(identifier: "secrets")
+        secretsTab.label = "Secrets"
+        secretsTab.view = SecretsView()
+        tabs.addTabViewItem(secretsTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
         window.contentView = tabs

@@ -327,6 +327,8 @@ public enum RemoteShell {
     static let herdrMarker = "@@NEXTTERM-HERDR@@"
     static let statMarker = "@@NEXTTERM-STAT@@"
     static let diffMarker = "@@NEXTTERM-DIFF@@"
+    /// The changes script's last line: without it, the connection cut what the host printed.
+    static let endMarker = "@@NEXTTERM-END@@"
 
     /// Where Next Term keeps its few files on the host (tab pid files, the tmux config).
     static let cacheDir = "\"$HOME/.cache/next-term\""
@@ -539,6 +541,7 @@ public enum RemoteShell {
         $G diff "$B" --stat --no-color 2>/dev/null
         printf '%s\\n' \(quote(diffMarker))
         $G diff "$B" --no-color --no-ext-diff 2>/dev/null | head -c \(max(0, maxBytes))
+        printf '\\n%s\\n' \(quote(endMarker))
         """
     }
 
@@ -778,25 +781,67 @@ public struct RemoteChanges: Equatable, Sendable {
     /// `XY path` lines from `git status --porcelain`.
     public var files: [String] = []
     public var stat = ""
+    /// The diff as the host sent it, carriage returns and all: `head -c` counted them. host_changes shows it through
+    /// `shownDiff`, which masks it, cuts it and drops each line's carriage return.
     public var diff = ""
+    /// The script's end came: the connection cut nothing (its 8 MB cap, a timeout or a drop cuts anywhere).
+    public var ended = false
 
     public static func parse(_ output: String) -> RemoteChanges? {
         guard let lines = RemoteShell.payload(output) else { return nil }
         var changes = RemoteChanges()
-        var section = 0
-        var stat: [Substring] = [], diff: [Substring] = []
-        for line in lines {
-            if line == RemoteShell.statMarker { section = 1; continue }
-            if line == RemoteShell.diffMarker { section = 2; continue }
-            switch section {
-            case 0:
-                if line.hasPrefix("## ") { changes.branch = String(line.dropFirst(3)) } else if !line.isEmpty { changes.files.append(String(line)) }
-            case 1: stat.append(line)
-            default: diff.append(line)
-            }
+        var inStat = false
+        var status: [Substring] = [], stat: [Substring] = []
+        var diffStart: Int?
+        for (index, line) in lines.enumerated() {
+            if line == RemoteShell.statMarker { inStat = true; continue }
+            if line == RemoteShell.diffMarker { diffStart = index + 1; break }
+            if inStat { stat.append(line) } else { status.append(line) }
+        }
+        if let diffStart {
+            // The diff's lines as the output has them, before payload dropped their carriage returns.
+            let text = lastLines(lines.count - diffStart, of: output)
+            let end = Array("\n\(RemoteShell.endMarker)\n".utf8)
+            changes.ended = text.utf8.count >= end.count && text.utf8.suffix(end.count).elementsEqual(end)
+            // A connection cut inside the end line leaves its start, which is no part of the diff.
+            let dropped = changes.ended ? end.count : startOfEnd(end, in: text)
+            changes.diff = dropped == 0 ? text : String(decoding: text.utf8.dropLast(dropped), as: UTF8.self)
+        } else if inStat {
+            if !stat.isEmpty { stat.removeLast() } // the line the connection was cut in
+        } else if !status.isEmpty {
+            status.removeLast()
+        }
+        for line in status {
+            if line.hasPrefix("## ") { changes.branch = String(line.dropFirst(3)) } else if !line.isEmpty { changes.files.append(String(line)) }
         }
         changes.stat = stat.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        changes.diff = diff.joined(separator: "\n")
         return changes
+    }
+
+    /// The last `count` of the lines `components(separatedBy: "\n")` would give, joined again: what follows the
+    /// `count`th line feed from the end. One pass back over the bytes, with no copy of the lines.
+    static func lastLines(_ count: Int, of output: String) -> String {
+        guard count > 0 else { return "" }
+        let bytes = output.utf8
+        var start = bytes.endIndex
+        var feeds = 0
+        while start > bytes.startIndex {
+            let before = bytes.index(before: start)
+            if bytes[before] == 0x0A {
+                feeds += 1
+                if feeds == count { break }
+            }
+            start = before
+        }
+        return String(output[start...])
+    }
+
+    /// How many bytes at the end of `text` are the start of `end` (none of it: 0, all of it: not asked).
+    static func startOfEnd(_ end: [UInt8], in text: String) -> Int {
+        let bytes = text.utf8
+        for length in stride(from: end.count - 1, through: 1, by: -1) where bytes.count >= length {
+            if bytes.suffix(length).elementsEqual(end.prefix(length)) { return length }
+        }
+        return 0
     }
 }
