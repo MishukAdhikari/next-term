@@ -40,6 +40,10 @@ final class UserPresence: PresenceCheck {
 
     private var busy = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
+    #if DEBUG
+    /// The self-test's: makes each check's context, a stand-in that never shows a sheet.
+    var standInContext: (() -> LAContext)?
+    #endif
 
     /// The access control the Secure Enclave key is made with and evaluated against: built the same way both times.
     nonisolated static func secureEnclaveAccessControl() -> SecAccessControl? {
@@ -52,7 +56,7 @@ final class UserPresence: PresenceCheck {
         await takeTurn()
         defer { endTurn() }
         if Task.isCancelled { throw Failure.cancelled }
-        let context = LAContext()
+        let context = newContext()
         let box = UncheckedBox(context)
         do {
             try await withTaskCancellationHandler {
@@ -74,6 +78,13 @@ final class UserPresence: PresenceCheck {
 
     func finish(_ token: AnyObject) {
         (token as? LAContext)?.invalidate()
+    }
+
+    private func newContext() -> LAContext {
+        #if DEBUG
+        if let standInContext { return standInContext() }
+        #endif
+        return LAContext()
     }
 
     /// User cancel, app cancel, system cancel and not interactive all read "Not approved."; the rest can't ask.

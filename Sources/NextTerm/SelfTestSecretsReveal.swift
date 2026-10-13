@@ -85,6 +85,7 @@ extension SelfTest {
         await secretsRevealTabChecks(settings, view: view, presence: presence, shownValue: shownValue)
         window.close()
         await secretsRevealWindowChecks(presence: presence, reveals: reveals)
+        await secretsPresenceCancelChecks()
     }
 
     /// A Reveal ended by something other than the user's No (a newer Reveal, the Mac locking) ends quietly, and a value
