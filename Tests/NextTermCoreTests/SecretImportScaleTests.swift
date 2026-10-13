@@ -53,6 +53,31 @@ import Testing
         #expect(dotted?.variable == "D_TOKEN" && dotted?.movable == false && found.unreadable.isEmpty)
     }
 
+    /// A project file that writes one server's table, and its env table, thousands of times (TOML Codex refuses): each
+    /// place is read with its own keys, so the scan and a plan take time that grows with the file. Read as one list of
+    /// keys for the name, which every place then walked, it took time that grows with the square of the places.
+    @Test func aTOMLConfigThatRepeatsATableThousandsOfTimesIsScannedInTime() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        var text = ""
+        for _ in 0..<3_000 { text += "[mcp_servers.a]\ncommand = \"x\"\nargs = [\"a\"]\n\n[mcp_servers.a.env]\nLOG = \"1\"\n\n" }
+        text += "[mcp_servers.b]\ncommand = \"npx\"\nargs = [\"-y\", \"gh\"]\nenv = { GITHUB_TOKEN = \"\(F.github)\" }\n"
+        home.write("proj/.codex/config.toml", text)
+        let sources = F.sources(home, projects: [home.path + "/proj"])
+        var found = SecretImport.Scan()
+        let scanning = clock.measure { found = SecretImport.scan(sources) }
+        #expect(scanning < limit, "the scan took \(scanning)")
+        let finding = try #require(found.findings.first { $0.location.server == "b" })
+        #expect(finding.movable && found.findings.count == 1 && found.unreadable.isEmpty)
+
+        var planned: (edits: [SecretImport.FileEdit], failures: [SecretImport.PlanFailure]) = ([], [])
+        let planning = clock.measure {
+            planned = SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: [finding])], nxtrm: F.nxtrm)
+        }
+        #expect(planning < limit, "the plan took \(planning)")
+        #expect(planned.edits.count == 1 && planned.failures.isEmpty)
+    }
+
     /// Plans one group's move out of `relative` and writes it, each in time, and gives the file as written.
     func moveAll(_ home: F.Home, _ relative: String, count: Int) throws -> String {
         let found = SecretImport.scan(F.sources(home, projects: [home.path + "/proj"]))
@@ -175,5 +200,44 @@ import Testing
         let found = await task.value
         #expect(found.read.isEmpty && found.findings.isEmpty)
         #expect(!SecretImport.scan(sources).findings.isEmpty)
+    }
+
+    /// A scan cancelled while it reads a file stops in it, and lists nothing from it: what it read of the file so far is
+    /// not all the file holds.
+    @Test func aScanCancelledInAFileStopsThereAndListsNothingFromIt() async {
+        let home = F.Home()
+        defer { home.remove() }
+        var text = ""
+        for index in 0..<500 { text += "[mcp_servers.s\(index)]\ncommand = \"x\"\nenv = { S_TOKEN = \"\(F.github)\" }\n\n" }
+        home.write(".codex/config.toml", text)
+        home.write(".cursor/mcp.json", F.cursorJSON)
+        let codex = home.file(".codex/config.toml")
+        let sources = F.sources(home)
+        let task = Task { () -> SecretImport.Scan in
+            SecretImport.scan(sources, read: { path in
+                // The sheet closes as the scan reads Codex's file.
+                if path == codex { withUnsafeCurrentTask { $0?.cancel() } }
+                return SecretImport.readFile(path)
+            })
+        }
+        let found = await task.value
+        #expect(found.findings.allSatisfy { $0.source.path != codex } && !found.read.contains { $0.path == codex })
+        #expect(found.unreadable.isEmpty)
+        #expect(SecretImport.scan(sources).findings.filter { $0.source.path == codex }.count == 500)
+    }
+
+    /// Reading a file's servers is asked to stop before each one, not only once the file is done, and asks no more once
+    /// told to.
+    @Test func readingAFilesServersStopsWhenAsked() throws {
+        let toml = (0..<100).map { "[mcp_servers.s\($0)]\ncommand = \"x\"\n" }.joined(separator: "\n")
+        var asked = 0
+        let tables = try #require(SecretImport.tomlEntries(toml, stop: { asked += 1; return asked > 3 }))
+        #expect(tables.count == 3 && asked == 4)
+        let json = "{\"mcpServers\": {" + (0..<100).map { "\"s\($0)\": {\"command\": \"x\"}" }.joined(separator: ", ") + "}}"
+        let source = SecretImport.Source(path: "/p/.mcp.json", client: .claudeCode, format: .json, containers: [["mcpServers"]])
+        asked = 0
+        let members = try #require(SecretImport.jsonEntries(json, source: source, stop: { asked += 1; return asked > 3 }))
+        #expect(members.count < 3 && asked == 4)
+        #expect(SecretImport.tomlEntries(toml)?.count == 100 && SecretImport.jsonEntries(json, source: source)?.count == 100)
     }
 }

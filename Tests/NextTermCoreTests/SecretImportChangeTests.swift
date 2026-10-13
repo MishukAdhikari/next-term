@@ -89,4 +89,55 @@ import Testing
         }
         #expect(SecretImport.groups(found.findings, stored: []).isEmpty)
     }
+
+    /// A server's table written twice is TOML Codex refuses. Each place is listed with its own keys, an env table with the
+    /// server's table above it (or its first, when none is above), and neither place moves.
+    @Test func aServerTableWrittenTwiceIsListedPlaceByPlaceAndNotMovable() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        home.write(".codex/config.toml", """
+            [mcp_servers.twice.env]
+            EARLY_TOKEN = "\(F.stripe)"
+
+            [mcp_servers.twice]
+            command = "npx"
+            env = { FIRST_TOKEN = "\(F.openai)" }
+
+            [mcp_servers.once]
+            command = "npx"
+            args = ["-y", "gh"]
+            env = { GITHUB_TOKEN = "\(F.github)" }
+
+            [mcp_servers.twice]
+            command = "node"
+            args = ["server.js"]
+
+            [mcp_servers.twice.env]
+            SECOND_TOKEN = "\(F.github)"
+
+            """)
+        let entries = try #require(SecretImport.tomlEntries(home.read(".codex/config.toml")))
+        let places = entries.filter { $0.location.server == "twice" }
+        #expect(places.map(\.command) == [["npx"], ["node"]] && places.map(\.args) == [[], ["server.js"]])
+        #expect(places.map { $0.detected.map(\.variable) } == [["FIRST_TOKEN", "EARLY_TOKEN"], ["SECOND_TOKEN"]])
+        #expect(places.allSatisfy { $0.notMovable == "repeated keys" })
+        let found = SecretImport.scan(F.sources(home))
+        let twice = found.findings.filter { $0.location.server == "twice" }
+        #expect(twice.map(\.variable) == ["FIRST_TOKEN", "EARLY_TOKEN", "SECOND_TOKEN"])
+        #expect(twice.allSatisfy { $0.notMovable == "repeated keys" })
+        #expect(try finding(home, "GITHUB_TOKEN", server: "once").movable)
+    }
+
+    /// A table written again after the scan: the plan, which reads the file again, refuses it as the scan would.
+    @Test func aServerTableWrittenAgainAfterTheScanIsNotMoved() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        let once = "[mcp_servers.once]\ncommand = \"npx\"\nargs = [\"-y\", \"gh\"]\nenv = { GITHUB_TOKEN = \"\(F.github)\" }\n"
+        home.write(".codex/config.toml", once)
+        let scanned = try finding(home, "GITHUB_TOKEN", server: "once")
+        #expect(scanned.movable)
+        home.write(".codex/config.toml", once + "\n[mcp_servers.once]\ncommand = \"other\"\n")
+        let planned = SecretImport.plan([SecretImport.Move(name: "GITHUB_TOKEN", findings: [scanned])], nxtrm: F.nxtrm)
+        #expect(planned.edits.isEmpty && planned.failures.map(\.reason) == ["repeated keys"])
+    }
 }

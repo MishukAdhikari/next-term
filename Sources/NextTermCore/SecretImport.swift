@@ -220,7 +220,8 @@ public enum SecretImport {
     static let tooManyReason = "it lists more than 1,000 keys or servers, more than Next Term shows"
 
     /// Every finding in `sources`. `inGitWorkTree` and `isOpen` (a bundle identifier's app is running) are the
-    /// caller's; values stay in memory. A task cancelled meanwhile stops it between files, with what it found so far.
+    /// caller's; values stay in memory. A task cancelled meanwhile stops it between files, and between a file's servers,
+    /// with what it found in the files before: the file it stopped in is not listed, since part of it was not read.
     public static func scan(_ sources: [Source], read: (String) -> Data? = readFile, inGitWorkTree: (String) -> Bool = { _ in false },
                             isOpen: (String) -> Bool = { _ in false }) -> Scan {
         var scan = Scan()
@@ -235,24 +236,20 @@ public enum SecretImport {
                 scan.unreadable.append((source, "not UTF-8 text"))
                 continue
             }
+            let parsed: [Entry]?
+            switch source.format {
+            case .toml: parsed = tomlEntries(text, stop: { Task.isCancelled })
+            case .json, .strictJSON: parsed = jsonEntries(text, source: source, stop: { Task.isCancelled })
+            }
+            // Stopped in this file: what was read of it is not all it holds.
+            if Task.isCancelled { break }
             scan.read.append(source)
+            guard let entries = parsed else {
+                scan.unreadable.append((source, source.format == .toml ? "not TOML Next Term can read" : "not JSON Next Term can read"))
+                continue
+            }
             let shared = inGitWorkTree(source.path)
             let appOpen = source.readOnceBy.map(isOpen) ?? false
-            let entries: [Entry]
-            switch source.format {
-            case .toml:
-                guard let found = tomlEntries(text) else {
-                    scan.unreadable.append((source, "not TOML Next Term can read"))
-                    continue
-                }
-                entries = found
-            case .json, .strictJSON:
-                guard let found = jsonEntries(text, source: source) else {
-                    scan.unreadable.append((source, "not JSON Next Term can read"))
-                    continue
-                }
-                entries = found
-            }
             guard entries.reduce(0, { $0 + ($1.isWrapped ? 1 : $1.detected.count) }) <= maxListed else {
                 scan.unreadable.append((source, tooManyReason))
                 continue
@@ -460,20 +457,25 @@ public enum SecretImport {
         return current
     }
 
-    static func jsonEntries(_ text: String, source: Source) -> [Entry]? {
-        JSONC(text).flatMap { jsonEntries($0, source: source) }
+    static func jsonEntries(_ text: String, source: Source, stop: () -> Bool = { false }) -> [Entry]? {
+        guard let document = JSONC(text) else { return nil }
+        return jsonEntries(document, source: source, stop: stop)
     }
 
-    /// The entries of a parsed file: a plan reads them from the document it edits, so the file is parsed once.
-    static func jsonEntries(_ document: JSONC, source: Source) -> [Entry]? {
+    /// The entries of a parsed file: a plan reads them from the document it edits, so the file is parsed once. `stop` is
+    /// asked before each server: true ends the reading with the entries read so far (a cancelled scan drops them).
+    static func jsonEntries(_ document: JSONC, source: Source, stop: () -> Bool = { false }) -> [Entry]? {
         guard case .object(let root)? = document.root else { return nil }
         let text = document.text
         let strictRefusal: String? = source.format == .strictJSON && (document.hasComments || document.hasTrailingCommas)
             ? "comments in a file that must be plain JSON" : nil
         var entries: [Entry] = []
         for (path, servers) in containers(of: source, root: root) {
+            // Asked for each project's servers too: `~/.claude.json` can list many projects with none.
+            if stop() { return entries }
             let repeated = servers.hasRepeatedKeys
             for member in servers.members {
+                if stop() { return entries }
                 guard case .object(let object) = member.value else { continue }
                 var entry = Entry(location: Location(container: path, server: member.key), range: offsets(member.value.range, in: text),
                                   command: [], args: [])
@@ -654,34 +656,59 @@ public enum SecretImport {
         let header: TOMLOutline.Header
         /// From its header to the next table that is not one of its own, short of the comments just above that.
         let range: Range<String.Index>
+        /// The keys under this header, not those of another place that writes the same table.
         let keys: [TOMLOutline.Key]
-        /// Keys of `[mcp_servers.NAME.env]`.
+        /// Keys of its `[mcp_servers.NAME.env]` tables.
         let envKeys: [TOMLOutline.Key]
         let envHeader: TOMLOutline.Header?
+        /// The file writes `[mcp_servers.NAME]` more than once, which Codex refuses.
+        let isRepeated: Bool
     }
 
-    /// The servers' tables. The keys are sorted by table, and the `env` headers found, once for the file: looked for
-    /// table by table, they took time that grows with the square of the number of tables.
+    /// The servers' tables, from one walk over the headers and one over the keys. Each key goes with the header it is
+    /// under, and each `[mcp_servers.NAME.env]` table with the server's table above it (its first, when none is above), so
+    /// a table written thousands of times holds only its own keys at each place. Read as one list of keys for the name,
+    /// which each place walked, a crafted project file took time that grows with the square of its places.
     static func tomlTables(_ outline: TOMLOutline) -> [TOMLTable] {
-        var tables: [TOMLTable] = []
         let headers = outline.headers
-        var keysByTable: [[String]: [TOMLOutline.Key]] = [:]
-        for key in outline.keys { keysByTable[key.table, default: []].append(key) }
-        var envHeaders: [String: TOMLOutline.Header] = [:]
-        for header in headers where !header.isArray && header.path.count == 3 && header.path[0] == "mcp_servers" && header.path[2] == "env" {
-            if envHeaders[header.path[1]] == nil { envHeaders[header.path[1]] = header }
+        // Both lists are in the file's order.
+        var keysUnder = [[TOMLOutline.Key]](repeating: [], count: headers.count)
+        var current = -1
+        for key in outline.keys {
+            while current + 1 < headers.count, headers[current + 1].line.lowerBound < key.line.lowerBound { current += 1 }
+            if current >= 0 { keysUnder[current].append(key) }
         }
+        var places: [String: Int] = [:]
+        var last: [String: Int] = [:]
+        var envTables: [Int: [Int]] = [:]
+        var envFirst: [String: [Int]] = [:]
+        for (index, header) in headers.enumerated() where header.path.count >= 2 && header.path[0] == "mcp_servers" {
+            let name = header.path[1]
+            if header.path.count == 2 {
+                places[name, default: 0] += 1
+                guard !header.isArray else { continue }
+                if last[name] == nil { envTables[index] = envFirst.removeValue(forKey: name) }
+                last[name] = index
+            } else if header.path.count == 3 && header.path[2] == "env" {
+                if let server = last[name] {
+                    envTables[server, default: []].append(index)
+                } else {
+                    envFirst[name, default: []].append(index)
+                }
+            }
+        }
+        var tables: [TOMLTable] = []
         for (index, header) in headers.enumerated() where !header.isArray && header.path.count == 2 && header.path[0] == "mcp_servers" {
             let name = header.path[1]
             let own = ["mcp_servers", name]
             // Only this table's own tables are passed over, so the walks over all the tables take one pass.
             let next = headers[(index + 1)...].first { !$0.path.starts(with: own) || $0.path == own }
             let end = next.map { outline.commentsAbove($0.line.lowerBound) } ?? outline.text.unicodeScalars.endIndex
-            let keys = keysByTable[own] ?? []
-            let envKeys = keysByTable[own + ["env"]] ?? []
-            let envHeader = envHeaders[name]
-            tables.append(TOMLTable(name: name, header: header, range: header.line.lowerBound..<max(end, header.line.upperBound), keys: keys,
-                                    envKeys: envKeys, envHeader: envHeader))
+            let env = envTables[index] ?? []
+            let envHeader = env.first { !headers[$0].isArray }.map { headers[$0] }
+            tables.append(TOMLTable(name: name, header: header, range: header.line.lowerBound..<max(end, header.line.upperBound),
+                                    keys: keysUnder[index], envKeys: env.flatMap { keysUnder[$0] }, envHeader: envHeader,
+                                    isRepeated: places[name, default: 0] > 1))
         }
         return tables
     }
@@ -698,17 +725,20 @@ public enum SecretImport {
         return names
     }
 
-    static func tomlEntries(_ text: String) -> [Entry]? {
-        TOMLOutline(text).map(tomlEntries)
+    static func tomlEntries(_ text: String, stop: () -> Bool = { false }) -> [Entry]? {
+        guard let outline = TOMLOutline(text) else { return nil }
+        return tomlEntries(outline, stop: stop)
     }
 
-    /// The entries of a read outline: a plan reads them from the outline it edits, so the file is read once.
-    static func tomlEntries(_ outline: TOMLOutline) -> [Entry] {
+    /// The entries of a read outline: a plan reads them from the outline it edits, so the file is read once. `stop` is
+    /// asked before each server: true ends the reading with the entries read so far (a cancelled scan drops them).
+    static func tomlEntries(_ outline: TOMLOutline, stop: () -> Bool = { false }) -> [Entry] {
         let text = outline.text
         let reader = TOMLReader(outline)
         var entries: [Entry] = []
         let odd = tomlOddServers(outline)
         for table in tomlTables(outline) {
+            if stop() { return entries }
             var entry = Entry(location: Location(container: ["mcp_servers"], server: table.name), range: offsets(table.range, in: text),
                               command: [], args: [])
             if let command = table.keys.first(where: { $0.path == ["command"] }), let (_, value) = outline.string(at: command.value) {
@@ -751,6 +781,9 @@ public enum SecretImport {
             }
             // A variable named twice (inline and in its env table, or twice in either): which one Codex reads is unsure.
             if Set(names).count < names.count { entry.notMovable = "repeated keys" }
+            // The table written twice, as a repeated key in JSON: Codex refuses the file, and which place is the server
+            // can't be told.
+            if table.isRepeated { entry.notMovable = "repeated keys" }
             for variable in variables {
                 guard let kind = detect(name: variable.key, value: variable.value) else { continue }
                 entry.detected.append(Detected(field: .env(variable.key), variable: variable.key, value: SecretBytes(utf8: variable.value), kind: kind,
@@ -769,6 +802,7 @@ public enum SecretImport {
             oddEnv[full[1], default: []].append((full[3], key.value))
         }
         for name in odd.subtracting(entries.map(\.location.server)).sorted() {
+            if stop() { return entries }
             var entry = Entry(location: Location(container: ["mcp_servers"], server: name), range: 0..<0, command: [], args: [])
             entry.notMovable = oddShapeReason(name)
             for key in oddEnv[name] ?? [] {
