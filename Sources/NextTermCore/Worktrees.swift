@@ -566,6 +566,31 @@ public enum WorktreeRemoval {
         return "Its folder is deleted, with the ignored files in it. " + keeps
     }
 
+    /// The third button of a worktree window's Close Window question.
+    public static let closeAndRemove = "Close and Remove Worktree"
+
+    /// What that question says under the button: what goes besides the window, and that the branch stays (a detached
+    /// worktree's commit is checked once the button is pressed, as every other reason it might stay).
+    public static func closingInfo(branch: String?) -> String {
+        "Deletes its folder, with the ignored files in it." + (branch.map { " The branch \($0) stays, with its commits." } ?? "")
+    }
+
+    /// Why Close and Remove Worktree keeps the worktree, from the verdict with the closing window's own tabs and agents
+    /// left out; nil when it can go. Closing the window alone is still offered.
+    public static func whyItStays(_ verdict: Verdict) -> String? {
+        switch verdict {
+        case .remove:
+            return nil
+        case let .refuse(reason, there):
+            if there { return reason + " Close it there first." }
+            return reason + (reason.hasPrefix("It has") ? " Commit or discard them first: Remove Worktree never deletes changes." : "")
+        case let .unlockFirst(reason):
+            return reason + " A lock keeps git from removing a worktree: unlock it from its row in Git › Worktrees… first."
+        case .forget:
+            return "Its folder is gone already: Git › Worktrees… forgets it."
+        }
+    }
+
     /// What the question about a branch another worktree holds offers, button by button.
     public enum HeldAction: Equatable, Sendable { case remove, forget, open, cancel }
 
