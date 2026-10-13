@@ -596,12 +596,13 @@ enum MCPControl {
     static func questionInfo(_ tab: TerminalTab) -> [String: Any] {
         guard let question = tab.status.question, let id = questionID(tab) else { return [:] }
         var info: [String: Any] = ["question": question, "question_id": id]
-        if let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question { info["choices"] = menu.choices }
+        if let menu = tab.agentMenu(), menu.asks(question) { info["choices"] = menu.choices }
         return info
     }
 
     /// Picks one of the choices of the question on screen, if it is still the one the caller saw:
     /// the arrows to it, a look that the cursor landed there and the question is unchanged, then Return.
+    /// A key that answers by itself (a digit, or Esc for the choice Esc picks) is sent once the question is seen unchanged.
     private static func answerAgent(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
         let tab: TerminalTab
         switch target(arguments, caller: caller) {
@@ -622,7 +623,8 @@ enum MCPControl {
         guard given == current else {
             return reply(fail("That question is gone; nothing was typed. The tab now asks “\(question)” (question_id \(current)): answer that one only if you mean to."))
         }
-        guard let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question else {
+        guard let menu = tab.agentMenu(), menu.asks(question) else {
+            if let why = tab.menuRefusal() { return reply(fail(why)) }
             return reply(fail("The choices for “\(question)” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
         }
         let index: Int
@@ -630,17 +632,16 @@ enum MCPControl {
         case .failure(let error): return reply(fail(error.text + " Nothing was typed."))
         case .success(let found): index = found
         }
-        guard let keys = menu.keys(toPick: index) else {
-            return reply(fail("That screen does not show which choice is selected, so the way to “\(menu.choices[index])” is unknown; nothing was typed. press_keys can answer."))
-        }
+        guard let keys = menu.keys(toPick: index) else { return reply(fail(menu.refusal(toPick: index))) }
+        let alone = keys.last != "enter"
         let id = tab.id.uuidString.lowercased()
         let label = menu.choices[index]
-        // Still the same question, and (in a list) the cursor on the choice.
+        // Still the same question, and (in a list, or a row of buttons) the cursor on the choice.
         func ready() -> Bool {
             tab.pollAgentScreen()
             guard canType(tab), questionID(tab) == current else { return false }
-            guard menu.style == .list else { return true }
-            return AgentScreen.menu(screenLines: tab.screenTail())?.highlighted == index
+            guard menu.style == .list || menu.style == .row, !alone else { return true }
+            return tab.agentMenu()?.highlighted == index
         }
         func confirm(_ tries: Int) {
             if ready() {
@@ -684,7 +685,16 @@ enum MCPControl {
             tab.view.send(txt: bytes)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(position + 1) }
         }
-        press(0)
+        // The key alone answers: no Return after it, which would land on whatever the agent shows next.
+        func answerAlone() {
+            guard ready(), let bytes = MCPServer.keyBytes(keys[0]) else {
+                return reply(fail("Nothing was typed: the question changed meanwhile, or the tab can no longer take input. read_tab shows the screen."))
+            }
+            sent(to: tab)
+            tab.view.send(txt: bytes)
+            settle(0)
+        }
+        if alone { answerAlone() } else { press(0) }
     }
 
     // MARK: project files and git

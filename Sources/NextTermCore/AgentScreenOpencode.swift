@@ -132,14 +132,21 @@ extension AgentScreen.Opencode {
     /// The permission prompt, or a step after it, whose buttons (or the reject step's hints) are in the last
     /// `promptLines` of `lines`: its words, read from its header down.
     static func permission(in lines: [String]) -> String? {
+        permissionPrompt(in: lines)?.words
+    }
+
+    /// `permission(in:)`, with the row of its buttons and their labels; no labels for the reject step, which has none.
+    static func permissionPrompt(in lines: [String]) -> (row: Int, labels: [String]?, words: String)? {
         let start = max(0, lines.count - AgentScreen.promptLines)
         for row in (start..<lines.count).reversed() {
             if let labels = buttons(at: row, in: lines) {
-                return words(under: labels == confirmButtons ? alwaysHeader : permissionHeader, above: row, in: lines)
+                let header = labels == confirmButtons ? alwaysHeader : permissionHeader
+                guard let asked = words(under: header, above: row, in: lines) else { return nil }
+                return (row, labels, asked)
             }
             // Other dialogs show these hints too: only under its own header is it the reject step.
             if rejectHints.allSatisfy({ lines[row].contains($0) }), let asked = words(under: rejectHeader, above: row, in: lines) {
-                return asked
+                return (row, nil, asked)
             }
         }
         return nil
@@ -367,5 +374,101 @@ extension AgentScreen.Opencode {
         guard shown.hasPrefix(request) else { return false }
         if read == permissionHeader { return true }
         return read.hasPrefix(request + alwaysBody) && shown.hasPrefix(request + command)
+    }
+}
+
+extension AgentScreen {
+    /// The menu under the question a tab's agent asks, read from its rows, colours and all. In a tab that shows OpenCode
+    /// (`opencode`), OpenCode's own buttons and options, the selected button told by its background; an OpenCode tab that
+    /// shows none of OpenCode's shapes, and every other tab, reads its rows' text as `menu(screenLines:)` does.
+    public static func menu(screenRows rows: [ScreenRow], opencode: Bool) -> AgentMenu? {
+        let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
+        guard opencode else { return menu(screenLines: lines) }
+        guard Opencode.activity(Array(lines.suffix(scannedLines))) != .idle else { return menu(screenLines: lines) }
+        return Opencode.menu(Array(rows.suffix(scannedLines)))
+    }
+
+    /// Why the question in a tab that shows OpenCode has no menu to pick from, said for the caller: a form with several
+    /// questions or answers, its review, or the reject step's text box. Nil for every other screen and tab.
+    public static func menuRefusal(screenRows rows: [ScreenRow], opencode: Bool) -> String? {
+        guard opencode else { return nil }
+        let lines: [String] = rows.suffix(scannedLines).map { (row: ScreenRow) -> String in row.text }
+        return Opencode.refusal(lines)
+    }
+}
+
+extension AgentScreen.Opencode {
+    // MARK: answering
+
+    /// The choices Esc picks by itself, wherever the selection is (`escapeKey`, permission.tsx, 1.19 and 2.0).
+    static let escapeChoices = ["Reject", "Cancel"]
+    /// The form's row for an answer of your own: its digit opens a text box, so it is not a choice to pick.
+    static let ownAnswer = "Type your own answer"
+    static let severalQuestions = "This form asks several questions; press_keys can answer it: a digit picks, Right goes to the next question."
+    static let severalAnswers = "This question takes several answers; press_keys can answer it: a digit picks or drops one, Right goes on to Confirm, and Return sends."
+    static let reviewRefusal = "This form shows its answers to review; press_keys can answer it: Return sends them, Left goes back to a question."
+    static let rejectStepRefusal = "This step asks what OpenCode should do instead, with no choices; nothing was typed. send_to_tab types a message and sends it; press_keys [\"enter\"] sends none, and [\"escape\"] goes back."
+
+    /// The menu under OpenCode's question in the bottom `scannedLines` of the screen, as `activity` reads the question:
+    /// - a permission prompt or its confirm step: its buttons, a row, the selected one told by its background
+    ///   (`ScreenRow.selected`), Esc for Reject or Cancel;
+    /// - a form with one question and one answer: its options, each picked and sent by its digit.
+    ///
+    /// Nil for the reject step and for a form with several questions or answers (`refusal` says why).
+    static func menu(_ rows: [ScreenRow]) -> AgentMenu? {
+        let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
+        if let prompt = permissionPrompt(in: lines) {
+            guard let labels = prompt.labels else { return nil }
+            let selected: Int? = rows[prompt.row].selected(among: labels)
+            let escape: Int? = labels.firstIndex { (label: String) -> Bool in escapeChoices.contains(label) }
+            return AgentMenu(question: shown(prompt.words), style: .row, choices: labels, highlighted: selected, escape: escape)
+        }
+        guard let asked = form(in: lines), let options = singleOptions(in: lines) else { return nil }
+        return AgentMenu(question: shown(asked), style: .digits, choices: options, highlighted: nil)
+    }
+
+    /// The options of a form that asks one question with one answer, from option 1 down to its hint row, without the row
+    /// for an answer of your own. Nil for a form that shows "⇆ tab" (several questions, or one with several answers, as
+    /// question.tsx draws it), or options with checkboxes.
+    static func singleOptions(in lines: [String]) -> [String]? {
+        let start = max(0, lines.count - AgentScreen.promptLines)
+        guard let hint = (start..<lines.count).last(where: { isFormHint(lines[$0]) }), !lines[hint].contains(formTabs),
+              cell(lines[hint]).contains(formSelect), let first = firstOption(above: hint, in: lines) else { return nil }
+        var options: [String] = []
+        for row in first..<hint {
+            let text = cell(lines[row])
+            guard let number = optionNumber(text), number == options.count + 1 else { continue }
+            options.append(optionLabel(text))
+        }
+        if options.last == ownAnswer { options.removeLast() }
+        let boxed = options.contains { (label: String) -> Bool in isCheckbox(label) }
+        return options.isEmpty || boxed ? nil : options
+    }
+
+    /// An option's label: after its number, without the " ✓" a picked one shows.
+    static func optionLabel(_ text: String) -> String {
+        var label = text.drop { $0 != "." }.dropFirst().drop { $0.isWhitespace }
+        if label.hasSuffix(" ✓") { label = label.dropLast(2) }
+        return label.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// "[ ] Lint", "[✓] Unit tests": an option of a question that takes several answers.
+    static func isCheckbox(_ label: String) -> Bool {
+        label.hasPrefix("[") && label.dropFirst(2).hasPrefix("] ")
+    }
+
+    /// Why OpenCode's question on screen has no menu: the reject step, a form's review, or a form with several answers or
+    /// questions. Nil when it has one, or asks nothing.
+    static func refusal(_ lines: [String]) -> String? {
+        if let prompt = permissionPrompt(in: lines) { return prompt.labels == nil ? rejectStepRefusal : nil }
+        let start = max(0, lines.count - AgentScreen.promptLines)
+        guard form(in: lines) != nil, let hint = (start..<lines.count).last(where: { isFormHint(lines[$0]) }),
+              lines[hint].contains(formTabs) else { return nil }
+        guard cell(lines[hint]).contains(formSelect) else { return reviewRefusal }
+        let boxed = lines[start..<hint].contains { (line: String) -> Bool in
+            let text = cell(line)
+            return optionNumber(text) != nil && isCheckbox(optionLabel(text))
+        }
+        return boxed ? severalAnswers : severalQuestions
     }
 }

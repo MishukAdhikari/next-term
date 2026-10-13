@@ -148,6 +148,10 @@ public struct AgentMenu: Equatable, Sendable {
         case list
         /// A "(y/n)" prompt: a letter, then Return.
         case yesNo
+        /// A row of buttons: left and right move the selection, round from either end, and Return picks (OpenCode).
+        case row
+        /// Numbered options: the option's digit alone picks it and sends the answer, with no Return (OpenCode's question).
+        case digits
     }
 
     /// The question the choices answer, as `AgentScreen.activity` reads it.
@@ -156,12 +160,15 @@ public struct AgentMenu: Equatable, Sendable {
     public let choices: [String]
     /// The choice the list's cursor is on (0-based), nil when the screen draws none.
     public let highlighted: Int?
+    /// The choice Esc picks by itself, wherever the selection is (OpenCode's Reject and Cancel); nil when none.
+    public let escape: Int?
 
-    public init(question: String, style: Style, choices: [String], highlighted: Int?) {
+    public init(question: String, style: Style, choices: [String], highlighted: Int?, escape: Int? = nil) {
         self.question = question
         self.style = style
         self.choices = choices
         self.highlighted = highlighted
+        self.escape = escape
     }
 
     /// The 0-based choice an answer names: `choice` as numbered on screen (1-based), or `answer`, a
@@ -194,15 +201,41 @@ public struct AgentMenu: Equatable, Sendable {
     /// cursor to it, then Return; for a y/n prompt, the letter and Return. Arrows, not the choice's
     /// digit: some agents pick on the digit alone, and the Return after it would answer whatever comes
     /// next. Nil when the list's cursor is not drawn, so where the arrows would start is unknown.
+    /// Esc alone for the choice Esc picks. In a row of buttons, left or right the shorter way round from the
+    /// selected one, then Return. For numbered options, the digit alone, which only options 1 to 9 have.
     public func keys(toPick index: Int) -> [String]? {
         guard choices.indices.contains(index) else { return nil }
+        if index == escape { return ["escape"] }
         switch style {
         case .yesNo:
             return [index == 0 ? "y" : "n", "enter"]
         case .list:
             guard let highlighted else { return nil }
             return Array(repeating: index > highlighted ? "down" : "up", count: abs(index - highlighted)) + ["enter"]
+        case .row:
+            guard let highlighted else { return nil }
+            let right: Int = (index - highlighted + choices.count) % choices.count
+            let left: Int = (highlighted - index + choices.count) % choices.count
+            let steps: [String] = right <= left ? Array(repeating: "right", count: right) : Array(repeating: "left", count: left)
+            return steps + ["enter"]
+        case .digits:
+            return index < 9 ? [String(index + 1)] : nil
         }
+    }
+
+    /// Why `keys(toPick:)` gives no keys for choice `index`, said for the caller.
+    public func refusal(toPick index: Int) -> String {
+        let label = choices.indices.contains(index) ? choices[index] : "that choice"
+        if style == .digits {
+            return "OpenCode picks options 1 to 9 by their digit, and “\(label)” is option \(index + 1); nothing was typed. press_keys can answer: Down to it, then Return."
+        }
+        return "That screen does not show which choice is selected, so the way to “\(label)” is unknown; nothing was typed. press_keys can answer."
+    }
+
+    /// Whether this is the menu of `question`, the question the tab reports: the same words, or the same OpenCode
+    /// permission request read with less of it (AgentScreen.sameQuestion).
+    public func asks(_ question: String) -> Bool {
+        self.question == question || AgentScreen.sameQuestion(question, self.question)
     }
 
     static func normalized(_ text: String) -> String {
