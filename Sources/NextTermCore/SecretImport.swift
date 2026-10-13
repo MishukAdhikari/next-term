@@ -649,6 +649,173 @@ public enum SecretImport {
         }
 
         static let bare = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-".unicodeScalars)
+        /// What ends a bare value (a number, a date, true), as `TOMLOutline` reads one.
+        static let valueEnds: Set<Unicode.Scalar> = [",", "]", "}", "#", "\n", "\r"]
+
+        /// A string in a value: its path below the value's key, where it is, what it says, and whether it is multi-line.
+        struct Leaf {
+            let path: [String]
+            let range: Range<String.Index>
+            let value: String
+            let multiLine: Bool
+        }
+
+        /// Every string in the value at `start`, with its path below the value's key: the value itself when it is one, or
+        /// each string of an inline table, in inline tables in it too, under its keys (dotted ones too). Strings in arrays
+        /// are passed over. Followed with a list of what is still open, not by recursion (see `JSONC.parseValue`). Nil
+        /// when it can't be followed.
+        func leaves(at start: String.Index) -> [Leaf]? {
+            var found: [Leaf] = []
+            // Each array or inline table still open: what closes it, its path, and whether it is in an array.
+            var open: [(close: Unicode.Scalar, path: [String], inArray: Bool)] = []
+            var i = start
+            var path: [String] = []
+            while true {
+                // At a value.
+                guard i < scalars.endIndex else { return nil }
+                let c = scalars[i]
+                let inArray = open.last.map { $0.close == "]" || $0.inArray } ?? false
+                if c == "{" || c == "[" {
+                    guard open.count < JSONC.maxDepth else { return nil }
+                    open.append((c == "{" ? "}" : "]", path, inArray))
+                    i = scalars.index(after: i)
+                } else {
+                    if c == "\"" || c == "'" {
+                        guard let string = anyString(at: i) else { return nil }
+                        if !inArray { found.append(Leaf(path: path, range: string.range, value: string.value, multiLine: string.multiLine)) }
+                        i = string.range.upperBound
+                    } else {
+                        let from = i
+                        while i < scalars.endIndex, !Self.valueEnds.contains(scalars[i]) { i = scalars.index(after: i) }
+                        guard i > from else { return nil }
+                    }
+                    guard let last = open.last else { return found }
+                    guard separator(&i, close: last.close) else { return nil }
+                }
+                // Past each table or array this closes, and what that closes in turn.
+                while true {
+                    skipSpace(&i)
+                    guard i < scalars.endIndex, let last = open.last else { return nil }
+                    guard scalars[i] == last.close else { break }
+                    i = scalars.index(after: i)
+                    open.removeLast()
+                    guard let outer = open.last else { return found }
+                    guard separator(&i, close: outer.close) else { return nil }
+                }
+                guard let last = open.last else { return nil }
+                path = last.path
+                // An element of an inline table starts with its key.
+                if last.close == "}" {
+                    guard let key = key(at: &i), i < scalars.endIndex, scalars[i] == "=" else { return nil }
+                    i = scalars.index(after: i)
+                    skipSpace(&i)
+                    path += key
+                }
+            }
+        }
+
+        /// After an element: past a comma, or at `close`; false when something else is there.
+        func separator(_ i: inout String.Index, close: Unicode.Scalar) -> Bool {
+            skipSpace(&i)
+            guard i < scalars.endIndex else { return false }
+            guard scalars[i] == "," else { return scalars[i] == close }
+            i = scalars.index(after: i)
+            return true
+        }
+
+        /// A key at `i`, dotted or not: bare words and single-line quoted strings between dots. `i` ends past it.
+        func key(at i: inout String.Index) -> [String]? {
+            var path: [String] = []
+            while true {
+                skipSpace(&i)
+                guard i < scalars.endIndex else { return nil }
+                if scalars[i] == "\"" || scalars[i] == "'" {
+                    guard let (range, value) = outline.string(at: i) else { return nil }
+                    path.append(value)
+                    i = range.upperBound
+                } else {
+                    let from = i
+                    while i < scalars.endIndex, Self.bare.contains(scalars[i]) { i = scalars.index(after: i) }
+                    guard i > from else { return nil }
+                    path.append(String(scalars[from..<i]))
+                }
+                skipSpace(&i)
+                guard i < scalars.endIndex, scalars[i] == "." else { return path }
+                i = scalars.index(after: i)
+            }
+        }
+
+        /// A string of any kind at `index`: its range, what it says, and whether it is multi-line.
+        func anyString(at index: String.Index) -> (range: Range<String.Index>, value: String, multiLine: Bool)? {
+            if let (range, value) = outline.string(at: index) { return (range, value, false) }
+            return multiLineString(at: index).map { ($0.range, $0.value, true) }
+        }
+
+        /// Three of `quote` from `index` on.
+        func isTriple(_ quote: Unicode.Scalar, at index: String.Index) -> Bool {
+            scalars[index...].prefix(3).elementsEqual([quote, quote, quote])
+        }
+
+        /// A multi-line string at `index` (`"""…"""` or `'''…'''`), as TOML reads it: a line break just after the opening
+        /// quotes is not part of it, a basic one's escapes are read, and a backslash at the end of one of its lines takes
+        /// the line break and the blanks after it. Up to two quotes just before the closing three are its own.
+        func multiLineString(at index: String.Index) -> (range: Range<String.Index>, value: String)? {
+            guard index < scalars.endIndex else { return nil }
+            let quote = scalars[index]
+            guard quote == "\"" || quote == "'", isTriple(quote, at: index) else { return nil }
+            var i = scalars.index(index, offsetBy: 3)
+            let crlf: [Unicode.Scalar] = ["\r", "\n"]
+            if i < scalars.endIndex, scalars[i] == "\n" {
+                i = scalars.index(after: i)
+            } else if scalars[i...].prefix(2).elementsEqual(crlf) {
+                i = scalars.index(i, offsetBy: 2)
+            }
+            var value = String.UnicodeScalarView()
+            while i < scalars.endIndex {
+                let c = scalars[i]
+                if c == quote, isTriple(quote, at: i) {
+                    var end = i
+                    var run = 0
+                    while end < scalars.endIndex, scalars[end] == quote, run < 5 {
+                        end = scalars.index(after: end)
+                        run += 1
+                    }
+                    for _ in 3..<run { value.append(quote) }
+                    return (index..<end, String(value))
+                }
+                i = scalars.index(after: i)
+                guard quote == "\"", c == "\\" else {
+                    value.append(c)
+                    continue
+                }
+                guard i < scalars.endIndex, let unescaped = escape(at: &i) else { return nil }
+                value.append(contentsOf: unescaped)
+            }
+            return nil
+        }
+
+        /// What the escape after a backslash at `i` in a multi-line basic string stands for, with `i` past it: at the end
+        /// of a line, nothing, and the blanks and line breaks after it go too. Nil for one TOML doesn't have.
+        func escape(at i: inout String.Index) -> String.UnicodeScalarView? {
+            let c = scalars[i]
+            if c == " " || c == "\t" || c == "\n" || c == "\r" {
+                var j = i
+                while j < scalars.endIndex, scalars[j] == " " || scalars[j] == "\t" { j = scalars.index(after: j) }
+                guard j < scalars.endIndex, scalars[j] == "\n" || scalars[j] == "\r" else { return nil }
+                while j < scalars.endIndex, scalars[j].properties.isWhitespace { j = scalars.index(after: j) }
+                i = j
+                return String.UnicodeScalarView()
+            }
+            i = scalars.index(after: i)
+            let simple: [Unicode.Scalar: Unicode.Scalar] = ["n": "\n", "t": "\t", "r": "\r", "b": "\u{8}", "f": "\u{C}", "e": "\u{1B}",
+                                                           "\"": "\"", "\\": "\\"]
+            if let scalar = simple[c] { return String.UnicodeScalarView([scalar]) }
+            guard c == "u" || c == "U" else { return nil }
+            guard let end = scalars.index(i, offsetBy: c == "u" ? 4 : 8, limitedBy: scalars.endIndex),
+                  let code = UInt32(String(scalars[i..<end]), radix: 16), let scalar = Unicode.Scalar(code) else { return nil }
+            i = end
+            return String.UnicodeScalarView([scalar])
+        }
     }
 
     /// One `[mcp_servers.NAME]` table and what it holds.
@@ -661,23 +828,33 @@ public enum SecretImport {
         let keys: [TOMLOutline.Key]
         /// Keys of its `[mcp_servers.NAME.env]` tables.
         let envKeys: [TOMLOutline.Key]
-        let envHeader: TOMLOutline.Header?
+        /// Its `[mcp_servers.NAME.env]` headers: two are an env written twice, and `[[…]]` is not the map Codex reads.
+        let envHeaders: [TOMLOutline.Header]
         /// The file writes `[mcp_servers.NAME]` more than once, which Codex refuses.
         let isRepeated: Bool
     }
 
-    /// The servers' tables, from one walk over the headers and one over the keys. Each key goes with the header it is
-    /// under, and each `[mcp_servers.NAME.env]` table with the server's table above it (its first, when none is above), so
-    /// a table written thousands of times holds only its own keys at each place. Read as one list of keys for the name,
-    /// which each place walked, a crafted project file took time that grows with the square of its places.
-    static func tomlTables(_ outline: TOMLOutline) -> [TOMLTable] {
+    static func tomlTables(_ outline: TOMLOutline) -> [TOMLTable] { tomlLayout(outline).tables }
+
+    /// The servers' tables, from one walk over the headers and one over the keys, and the keys under `mcp_servers` that
+    /// none of them holds: dotted keys from above, a server written as an inline table or an array of tables, an env
+    /// table with no server table. Each key goes with the header it is under, and each `[mcp_servers.NAME.env]` table
+    /// with the server's table above it (its first, when none is above), so a table written thousands of times holds only
+    /// its own keys at each place. Read as one list of keys for the name, which each place walked, a crafted project file
+    /// took time that grows with the square of its places.
+    static func tomlLayout(_ outline: TOMLOutline) -> (tables: [TOMLTable], loose: [TOMLOutline.Key]) {
         let headers = outline.headers
         // Both lists are in the file's order.
         var keysUnder = [[TOMLOutline.Key]](repeating: [], count: headers.count)
+        var top: [TOMLOutline.Key] = []
         var current = -1
         for key in outline.keys {
             while current + 1 < headers.count, headers[current + 1].line.lowerBound < key.line.lowerBound { current += 1 }
-            if current >= 0 { keysUnder[current].append(key) }
+            if current >= 0 {
+                keysUnder[current].append(key)
+            } else if key.path.first == "mcp_servers" {
+                top.append(key)
+            }
         }
         var places: [String: Int] = [:]
         var last: [String: Int] = [:]
@@ -699,6 +876,7 @@ public enum SecretImport {
             }
         }
         var tables: [TOMLTable] = []
+        var held = [Bool](repeating: false, count: headers.count)
         for (index, header) in headers.enumerated() where !header.isArray && header.path.count == 2 && header.path[0] == "mcp_servers" {
             let name = header.path[1]
             let own = ["mcp_servers", name]
@@ -706,21 +884,27 @@ public enum SecretImport {
             let next = headers[(index + 1)...].first { !$0.path.starts(with: own) || $0.path == own }
             let end = next.map { outline.commentsAbove($0.line.lowerBound) } ?? outline.text.unicodeScalars.endIndex
             let env = envTables[index] ?? []
-            let envHeader = env.first { !headers[$0].isArray }.map { headers[$0] }
+            held[index] = true
+            for table in env { held[table] = true }
             tables.append(TOMLTable(name: name, header: header, range: header.line.lowerBound..<max(end, header.line.upperBound),
-                                    keys: keysUnder[index], envKeys: env.flatMap { keysUnder[$0] }, envHeader: envHeader,
+                                    keys: keysUnder[index], envKeys: env.flatMap { keysUnder[$0] }, envHeaders: env.map { headers[$0] },
                                     isRepeated: places[name, default: 0] > 1))
         }
-        return tables
+        var loose = top
+        for (index, header) in headers.enumerated() where !held[index] && header.path.first == "mcp_servers" { loose += keysUnder[index] }
+        return (tables, loose)
     }
 
-    /// Servers written another way (dotted keys, inline): listed with what to write by hand.
+    /// Servers written another way (dotted keys, inline, env keys dotted in the server's table): listed with what to
+    /// write by hand.
     static func tomlOddServers(_ outline: TOMLOutline) -> Set<String> {
         var names = Set<String>()
         for key in outline.keys {
             let full = key.table + key.path
-            guard full.count >= 3, full[0] == "mcp_servers" else { continue }
-            let tableShape = key.table == Array(full.prefix(2)) || key.table == Array(full.prefix(3)) && full[2] == "env"
+            guard full.count >= 2, full[0] == "mcp_servers" else { continue }
+            let dottedEnv = key.path.count > 1 && key.path[0] == "env"
+            let inTable = key.table == Array(full.prefix(2)) && !dottedEnv
+            let tableShape = inTable || key.table == Array(full.prefix(3)) && full[2] == "env"
             if !tableShape { names.insert(full[1]) }
         }
         return names
@@ -732,13 +916,15 @@ public enum SecretImport {
     }
 
     /// The entries of a read outline: a plan reads them from the outline it edits, so the file is read once. `stop` is
-    /// asked before each server: true ends the reading with the entries read so far (a cancelled scan drops them).
-    static func tomlEntries(_ outline: TOMLOutline, stop: () -> Bool = { false }) -> [Entry] {
+    /// asked before each server: true ends the reading with the entries read so far (a cancelled scan drops them). Nil
+    /// when a value that could hold a server's env can't be followed.
+    static func tomlEntries(_ outline: TOMLOutline, stop: () -> Bool = { false }) -> [Entry]? {
         let text = outline.text
         let reader = TOMLReader(outline)
         var entries: [Entry] = []
         let odd = tomlOddServers(outline)
-        for table in tomlTables(outline) {
+        let layout = tomlLayout(outline)
+        for table in layout.tables {
             if stop() { return entries }
             var entry = Entry(location: Location(container: ["mcp_servers"], server: table.name), range: offsets(table.range, in: text),
                               command: [], args: [])
@@ -767,53 +953,80 @@ public enum SecretImport {
                                                    notMovable: headerReason, range: offsets(value.range, in: text)))
                 }
             }
-            var variables: [(key: String, value: String, range: Range<String.Index>)] = []
-            if let env = table.keys.first(where: { $0.path == ["env"] }) {
-                if let (members, _) = reader.members(at: env.value) {
-                    for member in members { if let value = member.value { variables.append((member.key, value.text, value.range)) } }
-                } else {
-                    entry.notMovable = entry.notMovable ?? "its env is written in a shape Next Term can't edit"
-                }
-            }
-            var names = variables.map(\.key)
-            for key in table.envKeys where key.path.count == 1 {
-                names.append(key.path[0])
-                if let (range, value) = outline.string(at: key.value) { variables.append((key.path[0], value, range)) }
-            }
-            // A variable named twice (inline and in its env table, or twice in either): which one Codex reads is unsure.
-            if Set(names).count < names.count { entry.notMovable = "repeated keys" }
+            // Its env, wherever this place writes it: inline, with dotted keys, or in its env tables.
+            let inline = table.keys.filter { $0.path == ["env"] }
+            let dotted = table.keys.filter { $0.path.count > 1 && $0.path[0] == "env" }
+            if let env = inline.first, reader.members(at: env.value) == nil { entry.notMovable = entry.notMovable ?? envShapeReason }
+            if table.envHeaders.contains(where: \.isArray) { entry.notMovable = envShapeReason }
+            if odd.contains(table.name) { entry.notMovable = oddShapeReason(table.name) }
+            guard let variables = envValues(inline + dotted + table.envKeys, reader: reader) else { return nil }
+            let names = variables.map(\.variable)
+            // A variable named twice, or the env written twice (inline, dotted or as a table, or a table twice): Codex
+            // refuses the file, or which one it reads is unsure.
+            let written = inline.count + (dotted.isEmpty ? 0 : 1) + table.envHeaders.count
+            if Set(names).count < names.count || written > 1 { entry.notMovable = "repeated keys" }
             // The table written twice, as a repeated key in JSON: Codex refuses the file, and which place is the server
             // can't be told.
             if table.isRepeated { entry.notMovable = "repeated keys" }
-            for variable in variables {
-                guard let kind = detect(name: variable.key, value: variable.value) else { continue }
-                entry.detected.append(Detected(field: .env(variable.key), variable: variable.key, value: SecretBytes(utf8: variable.value), kind: kind,
-                                               notMovable: valueRefusal(variable: variable.key, value: variable.value),
-                                               range: offsets(variable.range, in: text)))
-            }
-            if odd.contains(table.name) { entry.notMovable = oddShapeReason(table.name) }
+            entry.detected += envFindings(variables, text: text, refusal: nil)
             entries.append(entry)
         }
-        // Servers with no table of their own (all dotted keys): what they hold is listed, not movable. Their env keys are
-        // sorted by server in one pass.
-        var oddEnv: [String: [(variable: String, value: String.Index)]] = [:]
-        for key in outline.keys {
+        // Keys no server table holds, sorted by server in one pass: what they write in a server's env is listed, not
+        // movable, with the server's first table, or as a server of its own when it has none.
+        var loose: [String: [(variable: String, leaf: TOMLReader.Leaf)]] = [:]
+        for key in layout.loose {
             let full = key.table + key.path
-            guard full.count == 4, full[0] == "mcp_servers", full[2] == "env", odd.contains(full[1]) else { continue }
-            oddEnv[full[1], default: []].append((full[3], key.value))
+            // Only a key that is a server, its env or one of its variables can hold one (`mcp_servers = {…}` too).
+            guard full.count <= 2 || full.count <= 4 && full[2] == "env" else { continue }
+            guard let variables = envValues([key], reader: reader) else { return nil }
+            for variable in variables { loose[variable.server, default: []].append((variable.variable, variable.leaf)) }
         }
-        for name in odd.subtracting(entries.map(\.location.server)).sorted() {
+        var first: [String: Int] = [:]
+        for (index, entry) in entries.enumerated() where first[entry.location.server] == nil { first[entry.location.server] = index }
+        for (name, variables) in loose {
+            guard let index = first[name] else { continue }
+            entries[index].notMovable = entries[index].notMovable ?? oddShapeReason(name)
+            entries[index].detected += envFindings(variables.map { (name, $0.variable, $0.leaf) }, text: text, refusal: oddShapeReason(name))
+        }
+        for name in odd.union(loose.keys).subtracting(first.keys).sorted() {
             if stop() { return entries }
             var entry = Entry(location: Location(container: ["mcp_servers"], server: name), range: 0..<0, command: [], args: [])
             entry.notMovable = oddShapeReason(name)
-            for key in oddEnv[name] ?? [] {
-                guard let (range, value) = outline.string(at: key.value), let kind = detect(name: key.variable, value: value) else { continue }
-                entry.detected.append(Detected(field: .env(key.variable), variable: key.variable, value: SecretBytes(utf8: value), kind: kind,
-                                               notMovable: entry.notMovable, range: offsets(range, in: text)))
-            }
+            entry.detected = envFindings((loose[name] ?? []).map { (name, $0.variable, $0.leaf) }, text: text, refusal: entry.notMovable)
             entries.append(entry)
         }
         return entries
+    }
+
+    static let envShapeReason = "its env is written in a shape Next Term can't edit"
+
+    /// The env variables `keys` write, as Codex reads them: each string at `mcp_servers.SERVER.env.NAME`, however the key
+    /// and its value spell that path. Nil when a value can't be followed.
+    static func envValues(_ keys: [TOMLOutline.Key], reader: TOMLReader) -> [(server: String, variable: String, leaf: TOMLReader.Leaf)]? {
+        var found: [(server: String, variable: String, leaf: TOMLReader.Leaf)] = []
+        for key in keys {
+            guard let leaves = reader.leaves(at: key.value) else { return nil }
+            for leaf in leaves {
+                let path = key.table + key.path + leaf.path
+                guard path.count == 4, path[0] == "mcp_servers", path[2] == "env" else { continue }
+                found.append((path[1], path[3], leaf))
+            }
+        }
+        return found
+    }
+
+    /// The keys among env `variables`: each refused for its value, for being multi-line (which an edit doesn't read
+    /// yet), or for `refusal`.
+    static func envFindings(_ variables: [(server: String, variable: String, leaf: TOMLReader.Leaf)], text: String,
+                            refusal: String?) -> [Detected] {
+        var found: [Detected] = []
+        for (_, variable, leaf) in variables {
+            guard let kind = detect(name: variable, value: leaf.value) else { continue }
+            let reason = refusal ?? valueRefusal(variable: variable, value: leaf.value) ?? (leaf.multiLine ? envShapeReason : nil)
+            found.append(Detected(field: .env(variable), variable: variable, value: SecretBytes(utf8: leaf.value), kind: kind, notMovable: reason,
+                                  range: offsets(leaf.range, in: text)))
+        }
+        return found
     }
 
     /// Why a server written with dotted keys can't move, with what to write by hand (names only).
@@ -1271,7 +1484,7 @@ public enum SecretImport {
         guard let outline = TOMLOutline(text) else { return .failure(EditFailure("the entry is not there any more")) }
         let wanted = Set(moves.map(\.location))
         let names = Set(wanted.map(\.server))
-        let found = firstByLocation(tomlEntries(outline), wanted: wanted)
+        let found = firstByLocation(tomlEntries(outline) ?? [], wanted: wanted)
         let tables = firstTables(outline, named: names)
         let reader = TOMLReader(outline)
         let bytes = Array(text.utf8)
@@ -1300,7 +1513,7 @@ public enum SecretImport {
             made.append(EditedEntry(original: backup.text, written: "", kept: backup.kept))
         }
         guard let updated = replacing(text, changes), let check = TOMLOutline(updated) else { return .failure(EditFailure("check failed")) }
-        let newFound = firstByLocation(tomlEntries(check), wanted: wanted)
+        let newFound = firstByLocation(tomlEntries(check) ?? [], wanted: wanted)
         let newTables = firstTables(check, named: names)
         // Each entry now starts the wrapper and holds none of its moved keys.
         var spans: [(old: Range<Int>, new: Range<Int>)] = []
