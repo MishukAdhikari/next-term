@@ -72,7 +72,13 @@ public enum CommandSuggestion {
     public static func redactedCommand(_ command: String) -> String { masked(command) }
 
     /// Recent output as sent: its end, secrets masked (command lines typed at a prompt are in it too).
-    public static func redactedOutput(_ output: String) -> String { masked(String(output.suffix(maxOutput))) }
+    public static func redactedOutput(_ output: String) -> String { redactedOutput(output, mask: .current) }
+
+    /// As `redactedOutput(_:)`, with the stored keys' exact values from `secrets`. Masked before the end is cut: a key
+    /// across the cut would show its tail, with no mark left to match.
+    static func redactedOutput(_ output: String, mask secrets: SecretMask) -> String {
+        String(CommandSecrets.mask(output, mask: secrets).suffix(maxOutput))
+    }
 
     /// The command-line secret detector's masking (CommandSecrets): MCPRedaction's secrets, and the shapes secrets
     /// take on a command line, such as `-p…`, `--password=…` and `API_KEY=…`.

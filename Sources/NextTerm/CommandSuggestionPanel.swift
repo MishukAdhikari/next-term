@@ -160,7 +160,8 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     /// Recent output, as it would be sent, for the user to include or not: this request only.
     @objc private func includeOutput() {
         guard let tab else { return }
-        let text = CommandSuggestion.redactedOutput(tab.screenTail(60).joined(separator: "\n"))
+        // Rows masked over whole lines first: a stored key the terminal wrapped is masked in each of its rows.
+        let text = CommandSuggestion.redactedOutput(tab.screenTail(60, masked: SecretMask.current).joined(separator: "\n"))
         let alert = NSAlert()
         alert.messageText = "Include this output?"
         alert.informativeText = "The end of the tab’s output, as it would be sent with this request only, secrets masked."
