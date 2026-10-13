@@ -35,8 +35,8 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
     var onSelect: (() -> Void)?
     /// A double-click on a row.
     var onActivate: (() -> Void)?
-    /// Remove from List on a closed project's row, by its index in `shown.projects`.
-    var onForget: ((Int) -> Void)?
+    /// Remove from List on a closed project's row, by its path: the list may be read again while the menu is up.
+    var onForget: ((String) -> Void)?
 
     init(table: NSTableView) {
         self.table = table
@@ -75,6 +75,10 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
         if !shown.servers.isEmpty { rows.append(.serversHeading) }
         for index in shown.servers.indices { rows.append(.entry(shown.projects.count + index)) }
         self.rows = rows
+        // With the selected row gone, the table selects one of its own (it allows no empty selection): not the user's
+        // pick, and the window selects the right one next.
+        selecting = true
+        defer { selecting = false }
         table.reloadData()
     }
 
@@ -206,13 +210,14 @@ extension WelcomeSwitcherList {
               !project.isOpen else { return }
         let item = NSMenuItem(title: "Remove from List", action: #selector(removeClicked(_:)), keyEquivalent: "")
         item.target = self
-        item.tag = index
+        item.representedObject = project.path
         item.toolTip = "Leaves the Welcome window and File › Open Recent; the folder stays as it is"
         menu.addItem(item)
     }
 
     @objc private func removeClicked(_ sender: NSMenuItem) {
-        onForget?(sender.tag)
+        guard let path = sender.representedObject as? String else { return }
+        onForget?(path)
     }
 
     /// The title a project has in its window, read from git's files: a linked worktree's "xCloud ▸ 7027-sso", else

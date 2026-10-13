@@ -20,6 +20,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var hosts: [RemoteHost] = []
     /// A closed linked worktree's title ("xCloud ▸ 7027-sso"), by path, once read from git's files.
     private var titles: [String: String] = [:]
+    /// The history's folders that were not on disk at the last look. A show looks on the main thread, so the list is
+    /// right as it appears; a refresh while it shows leaves these out and looks again off the main thread, so up to 50
+    /// folders, one on a network drive that stopped answering among them, never hold the window up as it comes forward.
+    private var missing: Set<String> = []
+    /// Counts the looks at the folders, so only the newest one's `missing` is kept.
+    private var folderLook = 0
     /// The right pane while a server is selected.
     private let serverPane = WelcomeServerPane()
     private let hintLine = SwitcherHintLine()
@@ -141,7 +147,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         search.action = #selector(searchChanged)
         switcher.onSelect = { [weak self] in self?.showSelection() }
         switcher.onActivate = { [weak self] in self?.activateSelection(newWindow: false) }
-        switcher.onForget = { [weak self] index in self?.forget(at: index) }
+        switcher.onForget = { [weak self] path in self?.forget(path) }
         let projectsScroll = Self.scroll(projectsTable)
         noMatch.font = .systemFont(ofSize: 12)
         noMatch.textColor = Theme.textDim
@@ -347,7 +353,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     func reloadProjects() { reloadProjects(selection: .keep) }
 
     private func reloadProjects(selection: Selection) {
-        buildList()
+        buildList(looksAtFolders: selection == .start)
         applySearch(selection, reloadSessions: selection == .start)
         readBranchesAndTitles()
     }
@@ -361,11 +367,20 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// What there is to list: the open projects (as many windows each as the history's recorder last counted, and the
     /// newest time one was in front), then the ones used before, newest first, then Recent Projects' with no recorded
-    /// use, then the saved servers.
-    private func buildList() {
+    /// use, then the saved servers. `looksAtFolders` (a show): which of the history's folders are gone is read from
+    /// disk here; otherwise the last look's `missing` is left out.
+    private func buildList(looksAtFolders: Bool = false) {
         let recorder = ProjectHistoryRecorder.shared
         let open: [SwitcherList.Window] = openWindows(recorder.windowCounts)
-        let history: [ProjectHistory.Entry] = recorder.history.existing()
+        let stored: ProjectHistory = recorder.history
+        let history: [ProjectHistory.Entry]
+        if looksAtFolders {
+            history = stored.existing()
+            missing = Self.missing(stored, present: history)
+            folderLook += 1
+        } else {
+            history = stored.entries.filter { (entry: ProjectHistory.Entry) -> Bool in !missing.contains(entry.path) }
+        }
         let recents: [String] = AppDelegate.shared.recentProjects
         hosts = Self.savedHosts()
         let servers: [SwitcherServer] = hosts.map { (host: RemoteHost) -> SwitcherServer in SwitcherServer(host) }
@@ -396,32 +411,49 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         return hosts
     }
 
-    /// Each listed project's branch, and a linked worktree's title, read off the main thread from git's files; then
-    /// the list shows them, the search finds the branches, and the selection stays.
+    /// Each listed project's branch, and a linked worktree's title, read off the main thread from git's files, with
+    /// which of the history's folders are gone; then the list shows them, the search finds the branches, and the
+    /// selection stays. A folder gone at the last look is read too, so one that is back shows with its branch.
     private func readBranchesAndTitles() {
-        let paths: [String] = list.projects.map(\.path)
+        let stored: ProjectHistory = ProjectHistoryRecorder.shared.history
+        let paths: [String] = list.projects.map(\.path) + missing.sorted()
+        folderLook += 1
+        let look: Int = folderLook
         DispatchQueue.global(qos: .userInitiated).async {
+            let gone: Set<String> = Self.missing(stored, present: stored.existing())
             var branches: [String: String] = [:]
             var titles: [String: String] = [:]
-            for path in paths {
+            for path in paths where !gone.contains(path) {
                 branches[path] = SessionStore.branch(of: path)
                 titles[path] = WelcomeSwitcherList.title(ofProject: path)
             }
             DispatchQueue.main.async { [weak self] in
-                self?.read(paths, branches: branches, titles: titles)
+                self?.read(paths, branches: branches, titles: titles, missing: gone, look: look)
             }
         }
     }
 
-    private func read(_ paths: [String], branches found: [String: String], titles named: [String: String]) {
-        var renamed = false
+    private func read(_ paths: [String], branches found: [String: String], titles named: [String: String],
+                      missing gone: Set<String>, look: Int) {
+        var changed = false
+        // A show or a newer read looked since: theirs stands.
+        if look == folderLook, gone != missing {
+            missing = gone
+            changed = true
+        }
         for path in paths {
             branches[path] = found[path]
-            if titles[path] != named[path] { renamed = true }
+            if titles[path] != named[path] { changed = true }
             titles[path] = named[path]
         }
-        if renamed { buildList() }
+        if changed { buildList() }
         applySearch(.keep)
+    }
+
+    /// The history's folders not among `present`, the ones on disk.
+    private nonisolated static func missing(_ history: ProjectHistory, present: [ProjectHistory.Entry]) -> Set<String> {
+        let found: Set<String> = Set(present.map(\.path))
+        return Set(history.paths).subtracting(found)
     }
 
     /// For the self-test: the search field holding `text`, as if typed.
@@ -593,6 +625,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
                 // Its window in front last: Open Project would bring the first one made.
                 window.makeKeyAndOrderFront(nil)
                 close()
+            } else if WorktreeWindow.repository(ofLinkedWorktree: project.path) != nil {
+                // A linked worktree opens in a window of its own, as the Git menu opens it, and stays out of
+                // File › Open Recent, which Open Project would add it to.
+                AppDelegate.shared.openWorktreeWindow(project.path)
             } else {
                 let url = URL(fileURLWithPath: project.path)
                 AppDelegate.shared.openProject(at: url, from: AppDelegate.shared.welcomeOrigin)
@@ -616,9 +652,13 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         return newest?.window
     }
 
-    /// ⌘⌫ or Remove from List on a closed project: it leaves this list and File › Open Recent.
-    private func forget(at index: Int) {
-        guard let project = switcher.shown.projects[safe: index], !project.isOpen else { return }
+    /// ⌘⌫ or Remove from List on a closed project: it leaves this list and File › Open Recent. By its path, as the list
+    /// may be read again while Remove from List's menu is up; one that has opened since stays.
+    private func forget(_ path: String) {
+        let project: SwitcherProject? = switcher.shown.projects.first { (project: SwitcherProject) -> Bool in
+            project.path == path
+        }
+        guard let project, !project.isOpen else { return }
         ProjectHistoryRecorder.shared.forget(project.path)
         // While the window shows, the recorder and Recent Projects tell it as they change.
         if window?.isVisible != true { reloadProjects() }
@@ -675,8 +715,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         case .close:
             close()
         case .forget:
-            guard let index = switcher.selectedIndex else { return }
-            forget(at: index)
+            guard case .project(let project)? = switcher.selectedEntry else { return }
+            forget(project.path)
         }
     }
 

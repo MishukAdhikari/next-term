@@ -102,7 +102,8 @@ import Testing
         defer { TestDefaults.remove(other, name2) }
         LaunchSettings().save(to: other)
         let unchosen: Any? = other.object(forKey: LaunchSettings.Key.opens)
-        #expect(unchosen == nil)
+        let unset: Bool = unchosen == nil
+        #expect(unset)
         #expect(!LaunchSettings(defaults: other).opensChosen)
     }
 }
