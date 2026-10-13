@@ -329,13 +329,83 @@ import Testing
         }
         #expect(s.state == .working && !s.screenSynced) // output timing, until the screen speaks
         s.observe(agentScreen: .ready, at: 6.25)
-        #expect(s.screenSynced && s.state == .idle)
+        #expect(s.state == .idle)
         for t in stride(from: 6.5, through: 14, by: 0.25) {
-            s.output(at: t) // its animations go on: not work
+            s.output(at: t) // it goes on drawing: output timing may call it working, but no turn of its own ends
             s.observe(agentScreen: .ready, at: t)
             s.tick(at: t)
         }
-        #expect(s.state == .idle && s.takeNotice() == nil)
+        s.tick(at: 17)
+        #expect(s.state == .idle && s.unseen == nil && s.takeNotice() == nil)
+    }
+
+    /// A release whose working hint the table lacks draws its footer while it works too (OpenCode 2.x's prompt footer
+    /// is the same busy or not): until its working hint has shown, output timing says when it works, and no done.
+    @Test func beforeItsWorkingHintTheFooterLeavesOutputTimingOn() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .ready, at: 1)
+        for t in stride(from: 5.0, through: 30, by: 0.25) {
+            s.output(at: t)
+            s.observe(agentScreen: .ready, at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .working && !s.screenSynced)
+        for t in stride(from: 30.25, through: 34, by: 0.25) {
+            s.observe(agentScreen: .ready, at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .idle && s.unseen == nil && s.takeNotice() == nil)
+        // A question syncs the tab with its screen, and the footer while it works after the answer unsyncs it.
+        s.observe(agentScreen: .asking("Permission required: $ npm test"), at: 40)
+        #expect(s.state == .attention && s.screenSynced)
+        s.observe(agentScreen: .ready, at: 42)
+        s.output(at: 42.5)
+        #expect(s.question == nil && s.state == .working && !s.screenSynced)
+        // Its working hint, once: from then on the footer alone is a finish.
+        s.observe(agentScreen: .working, at: 50)
+        s.observe(agentScreen: .ready, at: 70)
+        s.tick(at: 71)
+        #expect(s.state == .done && s.takeNotice()?.topic == .agentFinished)
+    }
+
+    /// OpenCode showing none of its shapes once its footer has been seen (a sub-agent's session, which has a footer of
+    /// its own): nothing to go by, so the tab stays as it was, never "done" while OpenCode may still work.
+    @Test func noneOfItsShapesKeepsTheState() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .ready, at: 1)
+        s.observe(agentScreen: .working, at: 2)
+        s.observe(agentScreen: .idle, at: 10)
+        s.tick(at: 20)
+        #expect(s.state == .working && s.takeNotice() == nil)
+        s.observe(agentScreen: .ready, at: 30)
+        s.tick(at: 31)
+        #expect(s.state == .done && s.takeNotice()?.duration == 28)
+        // Every other agent: no hint is a stop, as before.
+        var claude = TabStatus()
+        claude.commandStarted("claude", at: 0)
+        claude.observe(agentScreen: .working, at: 1)
+        claude.observe(agentScreen: .idle, at: 10)
+        claude.tick(at: 11)
+        #expect(claude.state == .done)
+    }
+
+    /// OpenCode 2.x replaces a shell request's command with what "Always allow" saves while that button is selected, and
+    /// a tall fullscreen prompt leaves its header above the rows read: the same question, its words and id kept.
+    @Test func theSameRequestReadWithLessOfItKeepsItsWords() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        s.observe(agentScreen: .asking("Permission required: $ npm test"), at: 10)
+        let serial = s.questionSerial
+        #expect(s.takeNotice()?.question == "Permission required: $ npm test")
+        s.observe(agentScreen: .asking("Permission required: This will always allow shell for this project."), at: 11)
+        s.observe(agentScreen: .asking("Permission required"), at: 12)
+        #expect(s.question == "Permission required: $ npm test" && s.questionSerial == serial && s.takeNotice() == nil)
+        s.observe(agentScreen: .asking("Permission required: $ rm -rf build"), at: 13)
+        #expect(s.question == "Permission required: $ rm -rf build" && s.questionSerial == serial + 1)
+        #expect(s.takeNotice()?.question == "Permission required: $ rm -rf build")
     }
 
     @Test func workThenReadyIsAFinish() {

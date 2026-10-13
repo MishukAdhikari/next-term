@@ -283,3 +283,102 @@ enum OpencodeScreens {
         #expect(asked.count == 200)
     }
 }
+
+/// Screens from the review of OpenCode's reading: secrets, long commands, 2.x's "Always allow" body, hints in prose.
+extension OpencodeScreens {
+    /// The shell prompt (1.19) with `command` as its body rows, and `gap` blank rows between them and the buttons: two
+    /// (the box's padding and the buttons' own), or fewer when the command fills the box and runs on under them.
+    static func shell(_ command: [String], gap: Int = 2) -> [String] {
+        transcript + ["  ┃", "  ┃  △ Permission required", "  ┃    # Shell command", "  ┃"]
+            + command.map { "  ┃  " + $0 } + Array(repeating: "  ┃", count: gap)
+            + ["  ┃   Allow once   Allow always   Reject                  ctrl+f fullscreen  ⇆ select  enter confirm", "  ┃"]
+    }
+
+    /// OpenCode 2.x with "Always allow" selected: the body says what it saves in place of the command (permission.tsx,
+    /// `permissionAlwaysLines`).
+    static let shellAlways2 = transcript + [
+        "  ┃",
+        "  ┃  △ Permission required",
+        "  ┃",
+        "  ┃  This will always allow shell for this project.",
+        "  ┃",
+        "  ┃",
+        "  ┃   Allow once   Always allow   Reject                  ctrl+f fullscreen  ⇆ select  enter confirm",
+        "  ┃",
+    ]
+}
+
+extension AgentScreenOpencodeTests {
+    func asked(_ lines: [String]) -> String? {
+        guard case .asking(let words) = read(lines) else { return nil }
+        return words
+    }
+
+    @Test func secretsInTheQuestionAreMasked() {
+        let curl = OpencodeScreens.shell(["$ curl -H 'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789' https://api.github.com"])
+        let words = asked(curl) ?? ""
+        #expect(words.hasPrefix("Permission required: Shell command ($ curl -H "), "\(words)")
+        #expect(!words.contains("ghp_abcdefghij") && words.contains(MCPRedaction.mask), "\(words)")
+        var fetch = OpencodeScreens.editPermission
+        fetch[6] = "  ┃    % WebFetch https://deploy:hunter2secret@hooks.example.com/build"
+        let fetched = asked(fetch) ?? ""
+        #expect(fetched.hasPrefix("Permission required: WebFetch https://") && !fetched.contains("hunter2secret"), "\(fetched)")
+    }
+
+    @Test func aCommandOnSeveralRowsIsQuotedWhole() {
+        let wrapped = OpencodeScreens.shell(["$ rm -rf build && npm ci && npm run build && npm test -- --coverage",
+                                             "--runInBand && git push origin main --force"])
+        #expect(asked(wrapped) == "Permission required: Shell command ($ rm -rf build && npm ci && npm run build "
+            + "&& npm test -- --coverage --runInBand && git push origin main --force)")
+        // A command with a blank line in it: every row down to the buttons.
+        let heredoc = OpencodeScreens.shell(["$ cat > notes.txt <<'EOF'", "first", "", "last", "EOF"])
+        #expect(asked(heredoc) == "Permission required: Shell command ($ cat > notes.txt <<'EOF' first last EOF)")
+        // Spaces inside a command are the command's, not the gap before the sidebar.
+        #expect(asked(OpencodeScreens.shell(["$ echo one   two"])) == "Permission required: Shell command ($ echo one   two)")
+        #expect(asked(OpencodeScreens.withSidebar(OpencodeScreens.shell(["$ echo one   two"])))
+            == "Permission required: Shell command ($ echo one   two)")
+        let wrappedBeside = OpencodeScreens.withSidebar(wrapped)
+        #expect(asked(wrappedBeside) == asked(wrapped))
+    }
+
+    @Test func aCommandCutShortSaysSo() {
+        // The box is full: the command runs on under the buttons, so less than the box's padding is left above them.
+        let full = OpencodeScreens.shell(["$ for f in a b c; do", "    echo $f"], gap: 1)
+        #expect(asked(full) == "Permission required: Shell command ($ for f in a b c; do echo $f …)")
+        // Past 200 characters, the words end in "…".
+        let long = OpencodeScreens.shell(["$ npm test -- " + String(repeating: "--grep login ", count: 20)])
+        let words = asked(long) ?? ""
+        #expect(words.count == 200 && words.hasSuffix("…"), "\(words.count)")
+    }
+
+    @Test func alwaysAllowsBodyIn2xIsTheSameQuestion() {
+        let always = asked(OpencodeScreens.shellAlways2)
+        #expect(always == "Permission required: This will always allow shell for this project.")
+        let shown = "Permission required: $ npm test"
+        #expect(AgentScreen.sameQuestion(shown, always ?? ""))
+        // The header alone (its rows above the lines read, in fullscreen): the same prompt, read with less of it.
+        #expect(AgentScreen.sameQuestion(shown, "Permission required"))
+        #expect(AgentScreen.sameQuestion("Permission required: Edit src/app.ts", "Permission required"))
+        // Another request is another question.
+        #expect(!AgentScreen.sameQuestion(shown, "Permission required: $ rm -rf build"))
+        #expect(!AgentScreen.sameQuestion("Permission required: Edit src/app.ts", always ?? ""))
+        #expect(!AgentScreen.sameQuestion("Which database should the tests use?", "Permission required"))
+        #expect(!AgentScreen.sameQuestion("Permission required", shown))
+    }
+
+    @Test func hintWordsInTheTranscriptAreNotTheForm() {
+        let quoted = #"     78  /// The question form's hint row (1.19): "esc dismiss" with "enter submit""#
+        let working = OpencodeScreens.transcript + [quoted] + OpencodeScreens.footer("   ■■⬝⬝⬝⬝⬝⬝ esc interrupt")
+        #expect(read(working) == .working)
+        // Its own hint row, with no options above it, is not the form either; only the review tab has none.
+        for hint in ["  ┃  ↑↓ select  enter submit  esc dismiss", "  ┃  ⇆ tab  enter submit  esc dismiss"] {
+            #expect(read(OpencodeScreens.transcript + [hint] + OpencodeScreens.footer("   ~/code/shop")) == .ready, "\(hint)")
+        }
+    }
+
+    @Test func proseWithAKeyWordBeforeCommandsIsNotTheFooter() {
+        for prose in ["     You can set up these commands", "     Open a new tab agents", "     Jump to the end commands"] {
+            #expect(read(OpencodeScreens.transcript + [prose]) == .idle, "\(prose)")
+        }
+    }
+}

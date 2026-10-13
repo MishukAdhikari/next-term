@@ -7,7 +7,8 @@ public enum AgentActivity: Equatable, Sendable {
     /// It is asking for a decision (a permission prompt); the question, if found.
     case asking(String)
     /// The agent's own footer is on screen without its working hint: it waits for your next prompt, and says so
-    /// itself, so from now on its screen, not its output, says when it works (OpenCode, `AgentScreen.Opencode`).
+    /// itself (OpenCode, `AgentScreen.Opencode`). Once its working hint has shown this run, its screen, not its
+    /// output, says when it works (TabStatus).
     case ready
     /// None of the above: waiting for your next prompt.
     case idle

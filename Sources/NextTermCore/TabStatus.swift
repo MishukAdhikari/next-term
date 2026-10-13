@@ -69,8 +69,14 @@ public struct TabStatus {
     /// number, so an answer meant for one never lands on the next (see MCPServer.questionID).
     public private(set) var questionSerial = 0
     /// The agent's own screen has shown its working or question hint during this run, so the screen is
-    /// trusted over output timing (an idle agent may keep redrawing a status line).
+    /// trusted over output timing (an idle agent may keep redrawing a status line). An agent with a footer of its own
+    /// (`AgentActivity.ready`) is synced by its question only until its footer shows again, unless its working hint
+    /// has shown too.
     public private(set) var screenSynced = false
+    /// The agent's own footer (`AgentActivity.ready`, OpenCode's) has been on screen this run.
+    private var footerSeen = false
+    /// Its working hint has been on screen this run: from then on its footer alone means it stopped.
+    private var workingSeen = false
     /// Jobs the shell holds (suspended or in the background), reported by the zsh integration.
     public private(set) var jobs = 0
     public private(set) var jobSummary = ""
@@ -225,6 +231,7 @@ public struct TabStatus {
         switch activity {
         case .working:
             screenSynced = true
+            workingSeen = true
             answered()
             if !busy {
                 busy = true
@@ -238,30 +245,49 @@ public struct TabStatus {
             if busy { busy = false }
             lastStop = nil // a decision, not a finish
             guard question != asked else { return }
+            // The same request read with less of it: its words, number and notification stay (AgentScreen.sameQuestion).
+            if let shown = question, AgentScreen.sameQuestion(shown, asked) { return }
             question = asked
             questionSerial += 1
             askedAt = now
             markQuestion(asked)
         case .ready:
-            // The agent's own footer, without its working hint. The first time this run it only syncs: what output
-            // timing called work so far was the agent drawing itself, and its first frame is not the end of a turn.
-            if !screenSynced {
-                screenSynced = true
-                answered()
-                busy = false
-                lastStop = nil
+            // The agent's own footer, without its working hint.
+            let first = !footerSeen
+            footerSeen = true
+            answered()
+            guard workingSeen else {
+                // Its working hint has not shown this run, so the footer may be there while it works (a release whose
+                // hint the table lacks): output timing says when it works, and nothing it times ends a turn (tick()).
+                // Its first frame ends what output timing called work so far: that was the agent drawing itself.
+                screenSynced = false
+                if first {
+                    busy = false
+                    lastStop = nil
+                }
                 return
             }
-            fallthrough
+            screenSynced = true
+            stopped(at: now)
         case .idle:
+            // An agent with a footer of its own that shows none of its shapes (OpenCode in a sub-agent's session,
+            // which draws a footer of its own): no sign either way, so it stays as it was. Its question has gone.
+            if footerSeen {
+                answered()
+                return
+            }
             // Before the screen has shown its hints this run, the output timing decides (see tick()).
             guard screenSynced else { return }
             answered()
-            if busy {
-                busy = false
-                lastStop = (now, busySince, marked(.done, duration: now - busySince))
-            }
+            stopped(at: now)
         }
+    }
+
+    /// The screen says the agent stopped: a finish, whose notice waits for `stopSettles`.
+    private mutating func stopped(at now: TimeInterval) {
+        guard busy else { return }
+        busy = false
+        lastStop = (now, busySince, marked(.done, duration: now - busySince))
     }
 
     private var askedAt: TimeInterval = 0
@@ -316,7 +342,10 @@ public struct TabStatus {
         settleStop(at: now)
         guard busy, !screenSynced, now - lastOutputAt >= Self.quietAfter else { return }
         busy = false
-        if running && kind == .agent { mark(.done, duration: lastOutputAt - busySince) }
+        // An agent whose own footer has shown this run, and not yet its working hint: what output timing saw was no
+        // turn of its own (its startup, a redraw), or one whose end its screen cannot tell. No done, no notice.
+        let ownTurn = workingSeen || !footerSeen
+        if running && kind == .agent && ownTurn { mark(.done, duration: lastOutputAt - busySince) }
     }
 
     /// The screen has said the agent stopped for `stopSettles`: the stop is real, and its notice goes out
@@ -357,6 +386,8 @@ public struct TabStatus {
         lastStop = nil
         question = nil
         screenSynced = false
+        footerSeen = false
+        workingSeen = false
         exitCode = nil
         if unseen == .done || unseen == .failed { unseen = nil }
     }
