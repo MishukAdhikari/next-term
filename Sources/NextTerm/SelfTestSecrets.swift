@@ -33,8 +33,12 @@ extension SelfTest {
         let realFolder = SecretFolder(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let realBefore = secretsFolderDate(realFolder.url)
         let savedMask = SecretMask.current
+        // The tabs and windows run_with_secrets opens come forward at once: the self-test's own keys would hold them back.
+        let keysIgnored = UserKeys.ignoredForTest
+        UserKeys.ignoredForTest = true
         defer {
             SecretMask.current = savedMask
+            UserKeys.ignoredForTest = keysIgnored
             SecretClipboard.shared.pasteboard.releaseGlobally()
         }
         await secretsStoreChecks(base)
@@ -1086,6 +1090,7 @@ extension SelfTest {
         await secretsRequestChecks()
         await secretsStoreToolChecks(c, base: base)
         await secretsRunChecks(c, base: base, proj: proj, value: value)
+        await secretsArrivalChecks(c)
         for name in store.index?.names ?? [] { _ = try? await store.perform(.delete(name: name)) }
     }
 
@@ -1249,6 +1254,8 @@ extension SelfTest {
             return requests.showing?.panel != nil
         }
         let tab = app.controllers.flatMap(\.tabs).first { $0.id == ticket?.tab }
+        // Whether it is its window's selected tab now, as it opened: nothing has chosen a tab since.
+        let selectedThen = tab.flatMap { tab in MCPControl.controller(of: tab).map { $0.activeTab === tab } }
         opened += newTabs(since: before)
         // The screen's rows, without their breaks or spaces: the ticket line is longer than a row.
         let typed = secretsUnwrapped(screen(tab))
@@ -1277,11 +1284,11 @@ extension SelfTest {
         let length = String(value.utf8.count)
         let ran = await wait(15) { screen(tab).contains("\(length)LEN") || screen(tab).contains("\(length)\nLEN") }
         check(started["status"] as? String == "started" && started["approved"] as? String == "once"
-              && started["tab_id"] as? String == tab?.id.uuidString.lowercased() && started["selected"] is Bool
-              && ran && !secretsJSON(started).contains(value),
+              && started["tab_id"] as? String == tab?.id.uuidString.lowercased() && selectedThen != nil
+              && started["selected"] as? Bool == selectedThen && ran && !secretsJSON(started).contains(value),
               "secrets: after Allow the command runs in its tab with the key, and the agent gets started with the tab's id "
-                  + "and whether it was selected",
-              secretsJSON(started))
+                  + "and whether it was its window's selected tab when it opened",
+              secretsJSON(started) + ", selected then \(String(describing: selectedThen))")
         if let tab {
             _ = await wait(10) { !tab.status.running }
             // zsh's fc lists the lines before the one running it. The bracket in each pattern keeps this line's own
@@ -1473,7 +1480,10 @@ extension SelfTest {
         requests.resetForSelfTest()
 
         // Asked from a tab of Next Term's (its shell's pid stands for an agent there): the new tab's opened_by is that tab.
-        let asker = c.activeTab
+        // The window's own tab, never one run_with_secrets opened above, which may now be its selected one.
+        let asker = c.tabs.first { tab in
+            !MCPControl.isDriven(tab) && !opened.contains { $0 === tab } && !tab.exited && tab.remote == nil
+        }
         SecretRequests.ticketWindow = .milliseconds(150)
         let late = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path],
                                      pid: asker?.view.process.shellPid)

@@ -59,6 +59,12 @@ extension TerminalWindowController {
 
     private func raise(_ raise: AgentArrival.Raise) {
         guard let window else { return }
+        // The user is typing a key in Secrets or Settings: it keeps the keyboard and its window stays in front.
+        if raise != .none, let entry = SecretEntryWindows.current {
+            if !window.isMiniaturized { window.order(.below, relativeTo: entry.windowNumber) }
+            if raise == .attention { NSApp.requestUserAttention(.informationalRequest) }
+            return
+        }
         if raise != .none, window.isMiniaturized { window.deminiaturize(nil) }
         // A terminal hidden behind the tab now in front keeps no keyboard for the window to give it.
         if raise != .none, let terminal = window.firstResponder as? NSView, terminal is NextTermView, terminal.isHiddenOrHasHiddenAncestor {

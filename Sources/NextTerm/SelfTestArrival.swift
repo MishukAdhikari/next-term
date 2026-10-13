@@ -9,9 +9,7 @@ extension SelfTest {
     static func arrivalChecks(_ first: TerminalWindowController, proj: URL) async {
         let app: AppDelegate = AppDelegate.shared
         let modeBefore = app.agentArrival
-        #if DEBUG
         UserKeys.ignoredForTest = true // the self-test's own keys would hold every window back
-        #endif
         let other = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nt-arrival-\(getpid())")
         try? FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         var opened: [TerminalTab] = []
@@ -23,9 +21,7 @@ extension SelfTest {
             for tab in opened { app.controllers.first { $0.tabs.contains { $0 === tab } }?.remove(tab) }
             if existing == nil { for tab in c.tabs { c.remove(tab) } } // its last tab takes the window
             app.agentArrival = modeBefore
-            #if DEBUG
             UserKeys.ignoredForTest = false
-            #endif
             try? FileManager.default.removeItem(at: other)
         }
         guard let window = c.window, await bringToFront(window) else { return check(false, "arrival: the project's window comes to the front") }
