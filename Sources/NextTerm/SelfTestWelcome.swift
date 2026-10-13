@@ -1,30 +1,34 @@
 import AppKit
 import NextTermCore
 
-/// The Welcome window's Return key: "Open…" while no project is chosen, else "Open Project", and never Resume, even with
-/// a project's sessions listed, but in the sessions search, where it resumes. A double-click and the buttons are checked
-/// with the sessions; the sessions search here too.
+/// The Welcome window's Return key: the selection's, through the right pane's button, Go to Window for an open project
+/// and Open Project for a closed one; with nothing selected (nothing listed, or a search that matches nothing) no button
+/// has it, and none of the three ways in ever does. Never Resume, even with a project's sessions listed, but in the
+/// sessions search, where it resumes. A double-click and the buttons are checked with the sessions; the sessions search
+/// here too.
 extension SelfTest {
     /// `welcome` shows `project`, with its sessions listed. A second Welcome window, never shown, lists nothing and then
     /// the project, as on a new Mac before and after a folder is opened, and then a search that matches nothing.
     static func welcomeReturnKeyChecks(_ welcome: WelcomeWindowController, project: String) {
         let listed: [String] = returnKeyButtons(welcome.window)
-        check(listed == ["Open Project"],
-              "with a project and its sessions listed, Return on the Welcome window opens the project, and Resume has no key",
+        let open: Bool = welcome.selectedEntry?.project?.isOpen == true
+        let expected: String = open ? "Go to Window" : "Open Project"
+        check(listed == [expected],
+              "with a project and its sessions listed, Return on the Welcome window is \(expected), and Resume has no key",
               "Return on \(listed)")
 
         let fresh = WelcomeWindowController()
         defer { fresh.close() }
         fresh.list(projects: [])
         let none: [String] = returnKeyButtons(fresh.window)
-        check(none == ["Open…"], "with no recent projects, Return on the Welcome window is Open…", "Return on \(none)")
+        check(none.isEmpty, "with nothing listed, Return on the Welcome window presses nothing: not Open…", "Return on \(none)")
         fresh.list(projects: [project])
         let one: [String] = returnKeyButtons(fresh.window)
-        check(one == ["Open Project"], "once a project is listed, Return moves to Open Project", "Return on \(one)")
-        // Open Project is off while no project is chosen: Return never lands on it then.
+        check(one == ["Open Project"], "once a project is listed, Return is Open Project's", "Return on \(one)")
+        // Nothing matches: nothing is selected, and Return does nothing.
         fresh.searchProjects("no-such-project-\(getpid())")
         let unmatched: [String] = returnKeyButtons(fresh.window)
-        check(unmatched == ["Open…"], "with a search that matches no project, Return on the Welcome window is Open…",
+        check(unmatched.isEmpty, "with a search that matches nothing, Return on the Welcome window presses nothing",
               "Return on \(unmatched)")
         fresh.searchProjects("")
         let cleared: [String] = returnKeyButtons(fresh.window)
@@ -151,7 +155,7 @@ extension SelfTest {
     }
 
     /// The titles of the buttons in `window` that Return presses: one at most.
-    private static func returnKeyButtons(_ window: NSWindow?) -> [String] {
+    static func returnKeyButtons(_ window: NSWindow?) -> [String] {
         guard let content = window?.contentView else { return [] }
         var found: [String] = []
         var views: [NSView] = [content]

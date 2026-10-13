@@ -837,6 +837,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     var wayInCards: [WayInCard] { waysInCards.cards }
     var cardsShown: Bool { !waysInCards.isHidden }
     var atLaunchFooter: AtLaunchFooter { atLaunch }
+    /// The list itself: its rows' cells and the heading's count.
+    var switcherList: WelcomeSwitcherList { switcher }
     var selectedEntry: SwitcherEntry? { switcher.selectedEntry }
     var returnButtonTitle: String? {
         guard let entry = switcher.selectedEntry else { return nil }

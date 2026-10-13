@@ -14,7 +14,9 @@ extension SelfTest {
         check(welcome && app.controllers.isEmpty, "a launch that names nothing shows the Welcome window, and no terminal window",
               "Welcome \(welcome), terminal windows \(app.controllers.count)")
         check(app.remoteRestorePending, "kept remote tabs wait for the first terminal window, rather than opening one under the Welcome window")
-        app.newWindow(nil)
+        // The switcher's checks with the Welcome window alone, ending with ⌘N; without the keys, New Terminal as the menu runs it.
+        let pressed: Bool = await welcomeLaunchSwitcherChecks(app)
+        if !pressed { app.newWindow(nil) }
         let closed = await wait(5) { app.welcomeController?.window?.isVisible != true }
         check(closed && app.controllers.count == 1 && !app.remoteRestorePending,
               "New Terminal closes the Welcome window, and the kept remote tabs' restore starts once its window is open",
@@ -271,6 +273,8 @@ extension SelfTest {
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: folder) }
         app.setRecentProjects([folder])
+        // The run's projects leave the Welcome list too (the self-test's own history), so it lists the one recent project.
+        ProjectHistoryRecorder.shared.clear()
 
         // "Show the Welcome window": the Welcome window, though a recent project is there.
         LaunchSettings().save(to: defaults)

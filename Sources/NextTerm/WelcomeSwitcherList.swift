@@ -202,6 +202,20 @@ extension WelcomeSwitcherList {
         }
     }
 
+    /// For the self-test: the PROJECTS heading's count as drawn ("3 open"), nil while it shows none or the heading is
+    /// not listed.
+    var headingCount: String? {
+        guard let row = rows.firstIndex(of: .projectsHeading) else { return nil }
+        let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? SwitcherHeaderCell
+        return cell?.countText
+    }
+
+    /// For the self-test: the row of the project at `index` in `shown.projects`, made if it is out of view.
+    func projectCell(at index: Int) -> SwitcherProjectCell? {
+        guard index < shown.projects.count, let row = rows.firstIndex(of: .entry(index)) else { return nil }
+        return table.view(atColumn: 0, row: row, makeIfNecessary: true) as? SwitcherProjectCell
+    }
+
     // MARK: Remove from List
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -429,6 +443,21 @@ final class SwitcherProjectCell: NSTableCellView {
     var shownFolder: String { folder.stringValue }
     var showsOpenDot: Bool { !dot.isHidden }
     var shownJump: String? { jump.isHidden ? nil : jump.stringValue }
+    var shownBranch: String? { branch.isHidden ? nil : branch.stringValue }
+
+    /// For the self-test: how far below the name's baseline the folder's is, as laid out (about 15 pt: 136 percent of
+    /// the second line's 11 pt).
+    var baselineGap: CGFloat {
+        layoutSubtreeIfNeeded()
+        let nameBase: CGFloat = baseline(of: name)
+        let folderBase: CGFloat = baseline(of: folder)
+        return isFlipped ? folderBase - nameBase : nameBase - folderBase
+    }
+
+    private func baseline(of label: NSTextField) -> CGFloat {
+        let offset: CGFloat = label.firstBaselineOffsetFromTop
+        return isFlipped ? label.frame.minY + offset : label.frame.maxY - offset
+    }
 }
 
 /// A saved server in the Welcome list: the server mark in the gutter, its name, and where it points after it.
