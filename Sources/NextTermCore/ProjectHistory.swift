@@ -189,3 +189,125 @@ public struct ProjectHistoryStore {
         defaults.set(history.stored, forKey: ProjectHistory.key)
     }
 }
+
+// MARK: - What the windows hold
+
+extension ProjectHistory {
+    /// What changed in the open projects between two looks at the windows, for the history to record.
+    public struct Changes: Equatable, Sendable {
+        /// Projects a window took since the last look, by path.
+        public let opened: [String]
+        /// Projects no window holds any more, by path, each at when one of its windows was last in front:
+        /// `Date.distantPast` for one never in front, which records no time.
+        public let closed: [Entry]
+
+        public init(opened: [String], closed: [Entry]) {
+            self.opened = opened
+            self.closed = closed
+        }
+
+        public var isEmpty: Bool { opened.isEmpty && closed.isEmpty }
+    }
+
+    /// Records what changed: each project opened at `now`, the time of the look, then each closed one at its last time
+    /// in front, which only moves its time forward.
+    public mutating func record(_ changes: Changes, at now: Date) {
+        for path in changes.opened { record(opened: path, at: now) }
+        for entry in changes.closed { record(closed: entry.path, lastUsed: entry.lastUsed) }
+    }
+}
+
+/// The projects the windows hold, as last looked at, each with the newest time one of its windows was in front: what
+/// tells the history that a project was opened, or closed and when it was last used.
+///
+/// Every change to what the windows hold is a look (`update`), however the window got its project. Between looks a
+/// window coming to the front or leaving it is told as it happens (`sawInFront`), so a close records when its window was
+/// last in front, not a time from an older look. A quit closes no window, so it closes every project itself (`quit`).
+public struct OpenProjects: Equatable, Sendable {
+    /// One window with a project, at a look.
+    public struct Window: Equatable, Sendable {
+        /// Which window: the same at every look while it is open.
+        public let id: Int
+        public let path: String
+        /// When it was last in front; `Date.distantPast` for a window never in front.
+        public let lastInFront: Date
+        /// It has the keyboard now, as the user put it there: its project is in front at the look.
+        public let isFront: Bool
+
+        public init(id: Int, path: String, lastInFront: Date, isFront: Bool) {
+            self.id = id
+            self.path = path
+            self.lastInFront = lastInFront
+            self.isFront = isFront
+        }
+    }
+
+    /// Each open project at the newest time one of its windows was in front.
+    private var lastInFront: [String: Date] = [:]
+    /// Times a window came to the front or left it since the last look, by its project.
+    private var seen: [String: Date] = [:]
+    /// The project each window held at the last look.
+    private var held: [Int: String] = [:]
+    /// After a quit nothing opens or closes: the windows are still there as the app ends.
+    private var hasQuit = false
+
+    public init() {}
+
+    /// The open projects, by path.
+    public var paths: [String] { lastInFront.keys.sorted() }
+
+    /// A window on `path` came to the front, or left it, at `date`. A time older than one already kept changes nothing.
+    public mutating func sawInFront(_ path: String, at date: Date) {
+        guard !hasQuit else { return }
+        seen[path] = Self.later(seen[path], date)
+    }
+
+    /// A look at the windows as they are at `now`. A project a window took since the last look is opened. One no
+    /// window holds any more is closed at the newest time any of its windows was in front, the one that just closed
+    /// included. A window with the keyboard has its project in front now; one that took another project while it had
+    /// the keyboard (Open Recent in this window) had the old one in front until now.
+    public mutating func update(_ windows: [Window], at now: Date) -> ProjectHistory.Changes {
+        guard !hasQuit else { return ProjectHistory.Changes(opened: [], closed: []) }
+        var times: [String: Date] = lastInFront
+        for (path, date) in seen { times[path] = Self.later(times[path], date) }
+        seen.removeAll()
+        var open: [String: Date] = [:]
+        for window in windows {
+            var time: Date = window.lastInFront
+            if window.isFront {
+                time = max(time, now)
+                if let before = held[window.id], before != window.path { times[before] = Self.later(times[before], now) }
+            }
+            open[window.path] = Self.later(open[window.path], time)
+        }
+        for (path, time) in open {
+            if let kept = times[path] { open[path] = max(time, kept) }
+        }
+        let opened: [String] = open.keys.filter { lastInFront[$0] == nil }.sorted()
+        let gone: [String] = lastInFront.keys.filter { open[$0] == nil }.sorted()
+        let closed: [ProjectHistory.Entry] = gone.map { path in
+            ProjectHistory.Entry(path: path, lastUsed: times[path] ?? .distantPast)
+        }
+        lastInFront = open
+        held.removeAll()
+        for window in windows { held[window.id] = window.path }
+        return ProjectHistory.Changes(opened: opened, closed: closed)
+    }
+
+    /// Next Term quits with these windows open: a last look at them, then every project closes, the one with the
+    /// keyboard in front until now. Nothing after it opens or closes anything.
+    public mutating func quit(_ windows: [Window], at now: Date) -> ProjectHistory.Changes {
+        guard !hasQuit else { return ProjectHistory.Changes(opened: [], closed: []) }
+        let look: ProjectHistory.Changes = update(windows, at: now)
+        let last: ProjectHistory.Changes = update([], at: now)
+        hasQuit = true
+        var closed: [ProjectHistory.Entry] = look.closed + last.closed
+        closed.sort { $0.path < $1.path }
+        return ProjectHistory.Changes(opened: look.opened, closed: closed)
+    }
+
+    private static func later(_ kept: Date?, _ date: Date) -> Date {
+        guard let kept else { return date }
+        return max(kept, date)
+    }
+}

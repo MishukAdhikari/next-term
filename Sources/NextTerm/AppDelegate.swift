@@ -263,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
         updateCopilotFolders()
         RemoteConnection.projectsChanged()
+        ProjectHistoryRecorder.shared.update(controllers)
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -1078,6 +1079,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func clearRecentProjects(_ sender: Any?) {
+        ProjectHistoryRecorder.shared.clear()
         recent = RecentProjects()
     }
 

@@ -329,3 +329,151 @@ import Testing
         #expect(other.string(forKey: "value") == "kept")
     }
 }
+
+/// What the open windows say at each look: which projects a window took, which no window holds any more, and when each
+/// of those was last in front.
+@Suite struct OpenProjectsTests {
+    private func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+
+    /// A window `id` on `path`, last in front at `seconds` (never, for nil); `front`: it has the keyboard now.
+    private func window(_ id: Int, _ path: String, _ seconds: Double?, front: Bool = false) -> OpenProjects.Window {
+        let lastInFront: Date = seconds.map(at) ?? .distantPast
+        return OpenProjects.Window(id: id, path: path, lastInFront: lastInFront, isFront: front)
+    }
+
+    private func entry(_ path: String, _ seconds: Double) -> ProjectHistory.Entry {
+        ProjectHistory.Entry(path: path, lastUsed: at(seconds))
+    }
+
+    /// Compared through typed parameters, not inside `#expect`, where array literals are slow to type-check.
+    private func same(_ entries: [ProjectHistory.Entry], _ expected: [ProjectHistory.Entry]) -> Bool { entries == expected }
+    private func same(_ paths: [String], _ expected: [String]) -> Bool { paths == expected }
+
+    @Test func aFolderAWindowTakesIsOpenedAndOneNoWindowHoldsIsClosed() {
+        var open = OpenProjects()
+        let first: ProjectHistory.Changes = open.update([window(1, "/code/b", nil), window(2, "/code/a", nil)], at: at(100))
+        let opened: [String] = first.opened
+        let bothOpened: Bool = opened == ["/code/a", "/code/b"]
+        #expect(bothOpened, "\(opened)")
+        #expect(first.closed.isEmpty)
+        // a's window came to the front at 200 (a look at another change saw it), then closed.
+        #expect(open.update([window(1, "/code/b", nil), window(2, "/code/a", 200)], at: at(250)).isEmpty)
+        let second: ProjectHistory.Changes = open.update([window(1, "/code/b", nil)], at: at(300))
+        #expect(second.opened.isEmpty)
+        #expect(same(second.closed, [entry("/code/a", 200)]), "\(second.closed)")
+        let paths: [String] = open.paths
+        #expect(same(paths, ["/code/b"]), "\(paths)")
+        // Nothing changed since: nothing to record.
+        #expect(open.update([window(1, "/code/b", nil)], at: at(400)).isEmpty)
+    }
+
+    @Test func aProjectStayingOpenRecordsNothingUntilItsLastWindowCloses() {
+        var open = OpenProjects()
+        _ = open.update([window(1, "/code/a", nil)], at: at(100))
+        // Its window came to the front at 200, then at 300: still open, nothing to record.
+        #expect(open.update([window(1, "/code/a", 200)], at: at(250)).isEmpty)
+        #expect(open.update([window(1, "/code/a", 300)], at: at(350)).isEmpty)
+        let changes: ProjectHistory.Changes = open.update([], at: at(400))
+        #expect(changes.opened.isEmpty)
+        #expect(same(changes.closed, [entry("/code/a", 300)]), "\(changes.closed)")
+    }
+
+    @Test func twoWindowsOnOneFolderCloseAsOne() {
+        var open = OpenProjects()
+        let windows: [OpenProjects.Window] = [window(1, "/code/a", 300), window(2, "/code/a", 200), window(3, "/code/b", 100)]
+        let first: ProjectHistory.Changes = open.update(windows, at: at(400))
+        #expect(same(first.opened, ["/code/a", "/code/b"]), "\(first.opened)")
+        // The window of a's two that was in front last closes: a is still open, and keeps that window's time.
+        let one: ProjectHistory.Changes = open.update([window(2, "/code/a", 200), window(3, "/code/b", 100)], at: at(500))
+        #expect(one.isEmpty)
+        let both: ProjectHistory.Changes = open.update([window(3, "/code/b", 100)], at: at(600))
+        #expect(same(both.closed, [entry("/code/a", 300)]), "\(both.closed)")
+    }
+
+    @Test func aTimeInFrontSeenSinceTheLastLookIsTheClosesTime() {
+        var open = OpenProjects()
+        _ = open.update([window(1, "/code/a", 100), window(2, "/code/b", 500)], at: at(150))
+        // a's window came to the front at 300 and left it at 350, seen as it happened, not at a look.
+        open.sawInFront("/code/a", at: at(300))
+        open.sawInFront("/code/a", at: at(350))
+        // A time older than one kept changes nothing.
+        open.sawInFront("/code/a", at: at(200))
+        // b's own window says a later time than the one seen: that one is b's.
+        open.sawInFront("/code/b", at: at(400))
+        let changes: ProjectHistory.Changes = open.update([], at: at(600))
+        let closed: [ProjectHistory.Entry] = changes.closed
+        let expected: [ProjectHistory.Entry] = [entry("/code/a", 350), entry("/code/b", 500)]
+        let same: Bool = closed == expected
+        #expect(same, "\(closed)")
+        // A folder seen in front that no window had at a look is neither opened nor closed.
+        open.sawInFront("/code/x", at: at(700))
+        #expect(open.update([], at: at(800)).isEmpty)
+    }
+
+    @Test func aWindowTakingAnotherProjectWhileInFrontClosesTheOldOneThen() {
+        // Open Recent in a's window, in this window: it takes b while it has the keyboard, which it got at 100.
+        var open = OpenProjects()
+        _ = open.update([window(1, "/code/a", 100, front: true)], at: at(150))
+        let changes: ProjectHistory.Changes = open.update([window(1, "/code/b", 100, front: true)], at: at(900))
+        #expect(same(changes.opened, ["/code/b"]), "\(changes.opened)")
+        #expect(same(changes.closed, [entry("/code/a", 900)]), "\(changes.closed)")
+        // Behind another window, the old project closes at the window's own last time in front.
+        var behind = OpenProjects()
+        _ = behind.update([window(1, "/code/a", 100)], at: at(150))
+        let later: ProjectHistory.Changes = behind.update([window(1, "/code/b", 100)], at: at(900))
+        #expect(same(later.closed, [entry("/code/a", 100)]), "\(later.closed)")
+    }
+
+    @Test func aQuitClosesEveryOpenProjectAtItsOwnTime() {
+        var open = OpenProjects()
+        let windows: [OpenProjects.Window] = [window(1, "/code/a", 100), window(2, "/code/b", 200), window(3, "/code/c", nil)]
+        _ = open.update(windows, at: at(250))
+        open.sawInFront("/code/a", at: at(260))
+        // b's window has the keyboard as Next Term quits: in front until then. c's never came to the front.
+        let atQuit: [OpenProjects.Window] = [window(1, "/code/a", 100), window(2, "/code/b", 300, front: true),
+                                             window(3, "/code/c", nil)]
+        let quit: ProjectHistory.Changes = open.quit(atQuit, at: at(400))
+        #expect(quit.opened.isEmpty)
+        let closed: [ProjectHistory.Entry] = quit.closed
+        var expected: [ProjectHistory.Entry] = [entry("/code/a", 260), entry("/code/b", 400)]
+        expected.append(ProjectHistory.Entry(path: "/code/c", lastUsed: .distantPast))
+        let same: Bool = closed == expected
+        #expect(same, "\(closed)")
+        #expect(open.paths.isEmpty)
+        // The windows are still there as the app ends: a look then opens nothing again, and closes nothing twice.
+        #expect(open.update(atQuit, at: at(410)).isEmpty)
+        #expect(open.quit(atQuit, at: at(420)).isEmpty)
+    }
+
+    @Test func aQuitAlsoOpensAWindowNoLookSaw() {
+        var open = OpenProjects()
+        _ = open.update([window(1, "/code/a", 100)], at: at(150))
+        let quit: ProjectHistory.Changes = open.quit([window(1, "/code/a", 100), window(2, "/code/d", nil)], at: at(400))
+        #expect(same(quit.opened, ["/code/d"]), "\(quit.opened)")
+        let closed: [String] = quit.closed.map(\.path)
+        let both: Bool = closed == ["/code/a", "/code/d"]
+        #expect(both, "\(closed)")
+    }
+
+    @Test func recordingTheChangesOpensAtTheLookAndClosesAtTheirTimes() {
+        var history = ProjectHistory()
+        history.record(opened: "/code/old", at: at(50))
+        var open = OpenProjects()
+        let opening: ProjectHistory.Changes = open.update([window(1, "/code/a", nil), window(2, "/code/b", nil)], at: at(100))
+        history.record(opening, at: at(100))
+        #expect(history.lastUsed("/code/a") == at(100))
+        #expect(history.lastUsed("/code/b") == at(100))
+        // a's window came to the front at 300; b's never did, so its close leaves its open time as it is.
+        open.sawInFront("/code/a", at: at(300))
+        history.record(open.update([], at: at(500)), at: at(500))
+        #expect(history.lastUsed("/code/a") == at(300))
+        #expect(history.lastUsed("/code/b") == at(100))
+        let paths: [String] = history.paths
+        let order: Bool = paths == ["/code/a", "/code/b", "/code/old"]
+        #expect(order, "\(paths)")
+        // Nothing to record leaves the history as it was.
+        let before: ProjectHistory = history
+        history.record(ProjectHistory.Changes(opened: [], closed: []), at: at(600))
+        #expect(history == before)
+    }
+}
