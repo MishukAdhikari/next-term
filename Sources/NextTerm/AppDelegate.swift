@@ -131,6 +131,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Settings › Editor › "When an agent opens a tab" (MCP: agents_bring_tabs_forward): its window comes forward and
+    /// takes focus, comes forward only, or stays where it is (AgentArrival). The tab never takes the keyboard by itself.
+    static let agentArrivalKey = "agentsBringTabsForward"
+    static let agentArrivalChanged = Notification.Name("NextTermAgentArrivalChanged")
+    var agentArrival: AgentArrival.Mode {
+        get { UserDefaults.standard.string(forKey: Self.agentArrivalKey).flatMap(AgentArrival.Mode.init(rawValue:)) ?? .focus }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Self.agentArrivalKey)
+            NotificationCenter.default.post(name: Self.agentArrivalChanged, object: nil)
+        }
+    }
+
     func startAgentControl() {
         MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)
         MCPRegistration.update(on: true)
@@ -364,6 +376,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            UserKeys.pressed()
+            return event
+        }
         RemotePoller.shared.start() // status of remote tabs, from their hosts
         followAgentSpinner()
         // Claude Code's IDE link, before the first tab so every tab can use it.
@@ -516,28 +533,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// A folder from outside (nxtrm, Finder, an agent): its window if it is open, an unused window, or a new one.
     /// A linked worktree's folder is kept out of Recent Projects, as Open in New Window keeps it (openWorktreeWindow).
+    /// `forAgent`: an agent asked over MCP. Nothing comes forward here (the caller's presentForAgent brings it as
+    /// AgentArrival says), a new window's first tab waits for the user's choice, the Welcome window stays while the user
+    /// types in it, and the empty window the user is in is not taken for the project.
     @discardableResult
-    func openFolder(_ path: String, newWindow: Bool) -> TerminalWindowController {
+    func openFolder(_ path: String, newWindow: Bool, forAgent: Bool = false) -> TerminalWindowController {
         let path = canonicalPath(path)
         if WorktreeWindow.repository(ofLinkedWorktree: path) == nil { recent.add(path) }
-        welcome?.close()
-        if !newWindow, let open = controllers.first(where: { $0.project == path }) {
-            open.window?.makeKeyAndOrderFront(nil)
+        closeWelcome(forAgent: forAgent)
+        if !newWindow, let open = controllers.first(where: { $0.project == path && !$0.hasClosed }) {
+            if !forAgent { open.window?.makeKeyAndOrderFront(nil) }
             return open
-        } else if !newWindow, let unused = controllers.first(where: \.isPristine) {
+        } else if !newWindow, let unused = controllers.first(where: { $0.isPristine && !$0.hasClosed && !(forAgent && $0.hasUsersKeyboard) }) {
             unused.adoptProject(path)
-            unused.window?.makeKeyAndOrderFront(nil)
+            if !forAgent { unused.window?.makeKeyAndOrderFront(nil) }
             return unused
         } else {
-            return openWindow(directory: path, project: path)
+            return openWindow(directory: path, project: path, forAgent: forAgent)
         }
+    }
+
+    /// The Welcome window closes as a project opens, unless an agent opened it while the user types in the Welcome window.
+    private func closeWelcome(forAgent: Bool) {
+        if forAgent, let window = welcome?.window, window.isKeyWindow { return }
+        welcome?.close()
     }
 
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
     /// on the file's project (its git root, or its folder).
-    func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool) {
+    /// `forAgent`: open_in_editor. The file opens without taking the keyboard, and its window comes forward as
+    /// AgentArrival says, not as a window the user went to.
+    func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool, forAgent: Bool = false) {
         let path = canonicalPath(path)
-        let owners = controllers.filter { controller in controller.project.map { path.hasPrefix($0 + "/") } ?? false }
+        let owners = controllers.filter { controller in !controller.hasClosed && (controller.project.map { path.hasPrefix($0 + "/") } ?? false) }
         let owner = owners.max { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }
         let front = (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? controllers.last
         let target: TerminalWindowController
@@ -546,9 +574,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } else {
             let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
             recent.add(root)
-            target = openWindow(directory: root, project: root)
+            target = openWindow(directory: root, project: root, forAgent: forAgent)
         }
-        welcome?.close()
+        closeWelcome(forAgent: forAgent)
+        if forAgent {
+            target.openFile(URL(fileURLWithPath: path), line: line, column: column, focus: false)
+            target.presentForAgent(nil)
+            return
+        }
         target.window?.makeKeyAndOrderFront(nil)
         target.openFile(URL(fileURLWithPath: path), line: line, column: column)
     }
@@ -860,11 +893,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: windows
 
+    /// `forAgent`: an agent asked over MCP. The window is placed but not shown here (the caller's presentForAgent brings
+    /// it), and its first tab waits for the user's choice.
     @discardableResult
-    func openWindow(directory: String?, project: String? = nil) -> TerminalWindowController {
-        let controller = TerminalWindowController(directory: directory, project: project)
+    func openWindow(directory: String?, project: String? = nil, forAgent: Bool = false) -> TerminalWindowController {
+        let controller = TerminalWindowController(directory: directory, project: project, byAgent: forAgent)
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
-        welcome?.close()
+        closeWelcome(forAgent: forAgent)
         // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
         // is in full screen, and never below the minimum.
         let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controllers.last?.window
@@ -880,6 +915,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.append(controller)
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
+        if forAgent { return controller }
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         return controller
@@ -1202,7 +1238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,
     /// Settings).
-    private var lastUsedController: TerminalWindowController? { controllers.max { $0.lastKey < $1.lastKey } }
+    /// The terminal window the user went to last (one brought forward for an agent doesn't count: keyingForAgent).
+    var lastUsedController: TerminalWindowController? { controllers.max { $0.lastKey < $1.lastKey } }
 
     /// ⌥⌘T with no terminal window in front, and the Welcome window's Connect to Server…. From the Welcome
     /// window (in front, or the only one open) the sheet comes over it: Connect opens a window for the tab,

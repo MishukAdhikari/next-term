@@ -149,18 +149,20 @@ enum RemoteMCP {
         if session != nil && mode != .tmux { return reply(fail("session attaches to Next Term's tmux sessions: use it with keep tmux.")) }
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
-            ?? app.controllers.first ?? app.openWindow(directory: nil)
-        // With no open connection, ssh may ask the user for a password or a host key: show them the tab
-        // that asks (another tab may be logging in to this host already: then that one).
+            ?? app.controllers.first ?? app.openWindow(directory: nil, forAgent: true)
+        // With no open connection, ssh may ask the user for a password or a host key: show them the tab that asks
+        // (another tab may be logging in to this host already: then that one), selected even in the window they are in.
+        // It waits for their click like any tab an agent opened, so nothing they were typing goes to ssh (AgentArrival).
         let mustLogIn = !RemoteConnection.masterAlive(found)
-        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false)
+        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false, byAgent: true)
         if mustLogIn {
             let asking = RemoteConnection.loginTab(for: found) ?? tab
             if let owner = MCPControl.controller(of: asking) {
-                owner.show(asking)
-                owner.window?.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                if asking.view.awaitsChoice { asking.view.choiceHint = "ssh may ask for a password or a host key here. Click to answer." }
+                owner.presentForAgent(asking, explicit: true, login: true)
             }
+        } else {
+            controller.presentForAgent(tab)
         }
         MCPControl.driven.insert(tab.id)
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }

@@ -16,6 +16,42 @@ final class NextTermView: LocalProcessTerminalView {
     var beepAllowed = true
     /// False once the shell has ended: there is nothing left to send keystrokes to.
     var acceptsInput = true
+    /// An agent opened this tab over MCP and the user hasn't chosen it yet: it takes no keyboard (TerminalWindow refuses
+    /// it) until they click it, pick its tab, move to its pane, or paste or drop into it, so nothing meant for the tab
+    /// they were typing in lands in an agent's prompt (AgentArrival). A hint at its top says so.
+    var awaitsChoice = false {
+        didSet { if awaitsChoice != oldValue { showChoiceHint() } }
+    }
+    /// What the hint says.
+    var choiceHint = "An agent opened this tab. Click to type here." {
+        didSet { hintView?.stringValue = choiceHint }
+    }
+    private var hintView: NSTextField?
+
+    private func showChoiceHint() {
+        hintView?.removeFromSuperview()
+        hintView = nil
+        guard awaitsChoice else { return }
+        let hint = NSTextField(labelWithString: choiceHint)
+        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        hint.textColor = .white
+        hint.drawsBackground = true
+        hint.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        hint.alignment = .center
+        hint.wantsLayer = true
+        hint.layer?.cornerRadius = 5
+        hint.layer?.masksToBounds = true
+        hint.setAccessibilityLabel(choiceHint)
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hint)
+        NSLayoutConstraint.activate([
+            hint.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            hint.centerXAnchor.constraint(equalTo: centerXAnchor),
+            hint.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+        ])
+        hintView = hint
+    }
+
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
@@ -776,6 +812,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
     func userInput() {
         touchedByUser = true
+        view.awaitsChoice = false // a paste or a drop into it is the user's choice
         MCPControl.typedByUser(self)
     }
 
