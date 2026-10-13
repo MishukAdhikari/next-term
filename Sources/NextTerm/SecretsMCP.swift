@@ -282,13 +282,24 @@ enum SecretsMCP {
         if let refusal = requests.precheck(asker: asker, binding: preliminary, names: invocation.names, command: command, folder: folder) {
             return reply(MCPControl.ok(answer(for: .refused(refusal), tool: "run_with_secrets")))
         }
-        let ticketTab = target ?? newTab(folder: folder, program: program, keys: invocation.names, caller: caller)
+        // A new tab comes forward as new_tab's does, and the answer says whether it was selected (AgentArrival).
+        let ticketTab: TerminalTab
+        let arrived: (selected: Bool, note: String?)?
+        if let target {
+            ticketTab = target
+            arrived = nil
+        } else {
+            let made = newTab(folder: folder, program: program, keys: invocation.names, caller: caller)
+            ticketTab = made.tab
+            arrived = made.arrived
+        }
         let tabID = ticketTab.id.uuidString.lowercased()
         let call = Call(asker: asker, tool: "run_with_secrets")
         let ticket = SecretRequests.Ticket(asker: asker, keys: keys, command: command, folder: folder, target: targetWord,
                                            tabID: ticketTab.id, askedBy: facts, agentWords: words, program: program,
                                            isRemote: facts.connection != nil, notice: notice) { decision in
             var result = answer(for: decision, tool: "run_with_secrets")
+            if let arrived { result = withArrival(result, arrived) }
             result["tab_id"] = tabID
             resolve(call, result)
         }
@@ -353,16 +364,31 @@ enum SecretsMCP {
         return .success(tab)
     }
 
-    /// A new tab in the folder's window (new_tab's rule), never a reused one, without taking the keyboard. Its title
-    /// names the program and the keys; as with new_tab, the asking agent's tab is its opened_by, so an agent run there
-    /// is that agent's worker and opens no tabs of its own unless the user asks it to.
-    static func newTab(folder: String, program: String, keys: [String], caller: TerminalTab?) -> TerminalTab {
+    /// A new tab in the folder's window (new_tab's rule), never a reused one. As with new_tab, it takes no keyboard until
+    /// the user clicks or chooses it, and its window comes forward as Settings › Editor › "When an agent opens a tab"
+    /// says (AgentArrival); `arrived` is what the answer says of that. Its title names the program and the keys; as with
+    /// new_tab, the asking agent's tab is its opened_by, so an agent run there is that agent's worker and opens no tabs
+    /// of its own unless the user asks it to.
+    static func newTab(folder: String, program: String, keys: [String],
+                       caller: TerminalTab?) -> (tab: TerminalTab, arrived: (selected: Bool, note: String?)) {
         let (controller, _) = MCPControl.window(for: folder)
-        let tab = controller.addTab(directory: folder, select: false)
+        let tab = controller.addTab(directory: folder, select: false, byAgent: true)
         tab.openedBy = caller?.id
         tab.userTitle = "\(program) · with \(SecretReason.keys(keys))"
+        let arrived = controller.presentForAgent(tab)
         controller.refresh()
-        return tab
+        return (tab, arrived)
+    }
+
+    /// A decision's answer for a tab run_with_secrets opened: whether the tab was selected in its window, and the
+    /// arrival's note after the decision's own, as new_tab answers them.
+    static func withArrival(_ result: [String: Any], _ arrived: (selected: Bool, note: String?)) -> [String: Any] {
+        var result = result
+        result["selected"] = arrived.selected
+        if let note = arrived.note {
+            result["note"] = (result["note"] as? String).map { "\($0) \(note)" } ?? note
+        }
+        return result
     }
 
     /// The tab's shell, by its process's name.

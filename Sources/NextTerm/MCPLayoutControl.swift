@@ -23,6 +23,7 @@ extension MCPWriteControl {
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
             if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
+            tab.view.awaitsChoice = false // the user approved giving it the keyboard
             controller.show(tab)
             reply(MCPControl.ok(["id": id, "focused": true, "approved": approved]))
         }
@@ -55,9 +56,10 @@ extension MCPWriteControl {
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
-            guard let pane = controller.split(vertical: !down, from: tab, directory: directory, focus: false) else {
+            guard let pane = controller.split(vertical: !down, from: tab, directory: directory, focus: false, byAgent: true) else {
                 return reply(MCPControl.fail("Could not split that tab."))
             }
+            controller.presentForAgent(nil) // its window comes forward; the pane waits for the user's click
             MCPControl.driven.insert(pane.id) // the agent that asked for it waits for its work
             reply(MCPControl.ok(["id": pane.id.uuidString.lowercased(), "beside": tab.id.uuidString.lowercased(),
                                  "directory": pane.directory, "approved": approved]))
@@ -239,6 +241,7 @@ extension MCPWriteControl {
         case "notify_commands": return .choice(mcpName(notifications.commands))
         case "agent_spinner": return .choice(AgentSpinner.current.rawValue)
         case "agents_offer_tabs": return .flag(app.agentsOfferTabs)
+        case "agents_bring_tabs_forward": return .choice(app.agentArrival.rawValue)
         default: return .flag(false)
         }
     }
@@ -261,6 +264,7 @@ extension MCPWriteControl {
             }
         case ("agent_spinner", .choice(let name)): if let choice = AgentSpinner(rawValue: name) { AgentSpinner.current = choice }
         case ("agents_offer_tabs", .flag(let on)): app.agentsOfferTabs = on
+        case ("agents_bring_tabs_forward", .choice(let name)): if let mode = AgentArrival.Mode(rawValue: name) { app.agentArrival = mode }
         default: break
         }
         // Settings › Notifications shows it, if open.

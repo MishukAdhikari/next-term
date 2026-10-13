@@ -615,6 +615,7 @@ enum SelfTest {
         case "held": return await heldWorktreeChecks(c)
         case "parallel":
             await parallelTabsChecks(c, proj: proj)
+            await arrivalChecks(c, proj: proj)
             return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
@@ -774,6 +775,7 @@ enum SelfTest {
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
         await parallelTabsChecks(c, proj: proj)
+        await arrivalChecks(c, proj: proj)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)

@@ -499,8 +499,11 @@ enum MCPControl {
 
     private static func openProject(_ raw: String) -> MCPServer.CallResult {
         guard let path = absolute(raw), isFolder(path) else { return fail("Not a folder (give an absolute path): \(raw)") }
-        let controller = app.openFolder(path, newWindow: false)
-        return ok(["project": path, "tabs": controller.tabs.map { describe($0, in: controller, caller: nil) }])
+        let controller = app.openFolder(path, newWindow: false, forAgent: true)
+        let shown = controller.presentForAgent(nil, explicit: true)
+        var answer: [String: Any] = ["project": path, "tabs": controller.tabs.map { describe($0, in: controller, caller: nil) }]
+        if let note = shown.note { answer["note"] = note }
+        return ok(answer)
     }
 
     private static func newTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
@@ -515,27 +518,38 @@ enum MCPControl {
                 return reply(fail("No tab with that split_beside id; list_tabs shows them."))
             }
             let down = (arguments["direction"] as? String) == "down"
-            guard let pane = owner.split(vertical: !down, from: beside, directory: directory, focus: false) else {
+            guard let pane = owner.split(vertical: !down, from: beside, directory: directory, focus: false, byAgent: true) else {
                 return reply(fail("Could not split that tab."))
             }
             controller = owner
             tab = pane
         } else {
+            // The window of the project that holds the folder; else the folder's project, opened.
             let (owner, opened) = window(for: directory)
             controller = owner
-            // Never a restored tab: it may hold a put-back line (KTD10).
+            // Never a restored tab: it may hold a put-back line (KTD10). Never the tab of the window the user is in.
             if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
-               canonicalPath(first.directory) == directory {
+               canonicalPath(first.directory) == directory, !controller.hasUsersKeyboard {
                 tab = first
+                first.view.awaitsChoice = true
+                if controller.window?.firstResponder === first.view { controller.window?.makeFirstResponder(nil) }
             } else {
-                tab = controller.addTab(directory: directory, select: false)
+                tab = controller.addTab(directory: directory, select: false, byAgent: true)
             }
         }
+        // Its window comes forward (Settings › Editor › When an agent opens a tab); the tab waits for the user's click.
+        // A pane beside another tab: its window, as the tab beside it is already there.
+        let arrived = controller.presentForAgent(arguments["split_beside"] == nil ? tab : nil)
         driven.insert(tab.id)
         tab.openedBy = caller?.id // an agent's worker: it opens no tabs of its own unless the user asks it to
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
-        let answer = { reply(ok(["id": tab.id.uuidString.lowercased(), "directory": tab.directory, "project": (controller.project as Any?) ?? NSNull()])) }
+        let answer = {
+            var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "directory": tab.directory,
+                                       "project": (controller.project as Any?) ?? NSNull(), "selected": arrived.selected]
+            if let note = arrived.note { info["note"] = note }
+            reply(ok(info))
+        }
         guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
         guard !command.contains("\n") else { return reply(fail("The command must be one line.")) }
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
@@ -548,9 +562,10 @@ enum MCPControl {
     /// The window a new tab in `directory` opens in (new_tab's rule, which run_with_secrets shares): the window of the
     /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true).
     static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
-        let owners = app.controllers.filter { $0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false }
+        // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
+        let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
         if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) { return (owner, false) }
-        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false), true)
+        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true), true)
     }
 
     static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
@@ -763,12 +778,14 @@ enum MCPControl {
         }
     }
 
+    /// Shows a tab as one an agent opened does (AgentArrival): selected and its window forward, never with the keyboard,
+    /// never over the tab the user is working in, nor over another app.
     private static func showTab(_ tab: TerminalTab) -> MCPServer.CallResult {
         guard let controller = controller(of: tab) else { return fail("That tab is gone.") }
-        controller.show(tab)
-        controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        return ok(["id": tab.id.uuidString.lowercased(), "shown": true])
+        let shown = controller.presentForAgent(tab, explicit: true)
+        var answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "shown": shown.selected, "keyboard": false]
+        if let note = shown.note { answer["note"] = note }
+        return ok(answer)
     }
 
     private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
@@ -831,7 +848,7 @@ enum MCPControl {
         }
         let line = (arguments["line"] as? Int).map { max(1, $0) }
         let column = max(1, arguments["column"] as? Int ?? 1)
-        app.openFile(path, line: line, column: column, newWindow: false)
+        app.openFile(path, line: line, column: column, newWindow: false, forAgent: true)
         return ok(["path": path, "opened": true])
     }
 }

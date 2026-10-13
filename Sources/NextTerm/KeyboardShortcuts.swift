@@ -919,6 +919,8 @@ final class EditorSettingsView: NSView {
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
     /// AppDelegate.agentsOfferTabs: the next-term-tabs skill in Next Term's skill library and the offer in the MCP instructions.
     let offerTabs = NSButton(checkboxWithTitle: "Agents offer to run parallel work in tabs (the next-term-tabs skill)", target: nil, action: nil)
+    /// AppDelegate.agentArrival: whether the window of a tab an agent opens comes forward (AgentArrival).
+    let arrival = NSPopUpButton()
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
     private let fontFamily = FontFamilyPopup()
@@ -934,6 +936,15 @@ final class EditorSettingsView: NSView {
         fontFamily.onChange = { family in AppDelegate.shared.setEditorFontFamily(family) }
         // agents_offer_tabs changed by an agent over MCP (settings_set): the box follows.
         NotificationCenter.default.addObserver(self, selector: #selector(offerTabsFollow), name: AppDelegate.offerTabsChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(arrivalFollow), name: AppDelegate.agentArrivalChanged, object: nil)
+        for (mode, title) in [(AgentArrival.Mode.focus, "Bring its window forward and focus it"), (.show, "Bring its window forward"),
+                              (.off, "Leave it in the background")] {
+            arrival.addItem(withTitle: title)
+            arrival.lastItem?.representedObject = mode.rawValue
+        }
+        arrival.target = self
+        arrival.action = #selector(arrivalChanged)
+        arrival.toolTip = "The new tab is selected so you can see it, but it never takes what you type: click it to type there. In the window you are typing in, it opens behind your tab, and while you type, its window waits until you stop. From another app, the Dock icon bounces instead."
         for frequency in FetchFrequency.allCases {
             backgroundFetch.addItem(withTitle: frequency.title)
             backgroundFetch.lastItem?.representedObject = frequency.rawValue
@@ -968,6 +979,7 @@ final class EditorSettingsView: NSView {
         dotIcons.target = self
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
+        claude.toolTip = "Claude Code, Gemini CLI, Qwen Code and opencode started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn this off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot."
         claude.action = #selector(claudeChanged)
         copilot.target = self
         copilot.action = #selector(copilotChanged)
@@ -995,7 +1007,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. Terminals use this font size too unless the Terminal tab gives them their own; ⌘+ and ⌘- change the size of what has the keyboard. The terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -1016,12 +1028,16 @@ final class EditorSettingsView: NSView {
             row("", [copilot]),
             row("", [control]),
             row("", [offerTabs]),
+            row("", [NSTextField(labelWithString: "When an agent opens a tab:"), arrival]),
             row("", [controlStatus]),
             note,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
+        // The agents' options sit closer together, as one group.
+        let agents = stack.arrangedSubviews.suffix(7).dropLast(2)
+        for view in agents { stack.setCustomSpacing(8, after: view) }
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -1057,6 +1073,8 @@ final class EditorSettingsView: NSView {
         control.state = app.agentControl ? .on : .off
         offerTabs.state = app.agentsOfferTabs ? .on : .off
         offerTabs.isEnabled = app.agentControl // it needs the tab tools
+        arrival.selectItem(at: arrival.indexOfItem(withRepresentedObject: app.agentArrival.rawValue))
+        arrival.isEnabled = app.agentControl
         let status = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
             : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
             : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
@@ -1110,6 +1128,13 @@ final class EditorSettingsView: NSView {
     }
 
     @objc private func offerTabsFollow() { offerTabs.state = AppDelegate.shared.agentsOfferTabs ? .on : .off }
+
+    @objc private func arrivalFollow() { arrival.selectItem(at: arrival.indexOfItem(withRepresentedObject: AppDelegate.shared.agentArrival.rawValue)) }
+
+    @objc private func arrivalChanged() {
+        guard let raw = arrival.selectedItem?.representedObject as? String, let mode = AgentArrival.Mode(rawValue: raw) else { return }
+        AppDelegate.shared.agentArrival = mode
+    }
 
     @objc private func offerTabsChanged() {
         AppDelegate.shared.agentsOfferTabs = offerTabs.state == .on

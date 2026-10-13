@@ -1256,7 +1256,11 @@ extension SelfTest {
         check(tab != nil && typed.contains("--self-test-secret-wrapper") && typed.contains(ticketWords)
               && !typed.contains(secretsUnwrapped(command)),
               "secrets: run_with_secrets opens a tab and types only the ticket line, in the self-test form", String(screen(tab).suffix(300)))
-        check(tab.map { MCPControl.controller(of: $0)?.activeTab !== $0 } == true, "secrets: the new tab does not take the keyboard")
+        // As any tab an agent opens (AgentArrival): selected or not, as its window allows, it waits for the user's click.
+        let tabWindow = tab.flatMap { MCPControl.controller(of: $0)?.window }
+        check(tab?.view.awaitsChoice == true && tabWindow != nil && tabWindow?.firstResponder !== tab?.view,
+              "secrets: the new tab does not take the keyboard until the user clicks it",
+              "waits \(tab?.view.awaitsChoice == true), first responder \(String(describing: tabWindow?.firstResponder))")
         // Its title names the program and the key, and it counts as driven by MCP. Asked from outside Next Term's tabs,
         // it has no opened_by (the late ticket below is asked from a tab).
         let isDriven = tab.map { MCPControl.isDriven($0) } ?? false
@@ -1273,8 +1277,10 @@ extension SelfTest {
         let length = String(value.utf8.count)
         let ran = await wait(15) { screen(tab).contains("\(length)LEN") || screen(tab).contains("\(length)\nLEN") }
         check(started["status"] as? String == "started" && started["approved"] as? String == "once"
-              && started["tab_id"] as? String == tab?.id.uuidString.lowercased() && ran && !secretsJSON(started).contains(value),
-              "secrets: after Allow the command runs in its tab with the key, and the agent gets started with the tab's id",
+              && started["tab_id"] as? String == tab?.id.uuidString.lowercased() && started["selected"] is Bool
+              && ran && !secretsJSON(started).contains(value),
+              "secrets: after Allow the command runs in its tab with the key, and the agent gets started with the tab's id "
+                  + "and whether it was selected",
               secretsJSON(started))
         if let tab {
             _ = await wait(10) { !tab.status.running }
@@ -1471,7 +1477,9 @@ extension SelfTest {
         SecretRequests.ticketWindow = .milliseconds(150)
         let late = await secretsTool("run_with_secrets", ["secrets": ["TOOL_KEY"], "command": "true", "directory": folder.path],
                                      pid: asker?.view.process.shellPid)
-        check(late["status"] as? String == "refused" && late["note"] as? String == "The tab's shell did not start nxtrm within 30 seconds.",
+        // The note may go on to say where the tab opened (AgentArrival).
+        let lateNote = late["note"] as? String ?? ""
+        check(late["status"] as? String == "refused" && lateNote.hasPrefix("The tab's shell did not start nxtrm within 30 seconds."),
               "secrets: a ticket not redeemed in time ends refused", secretsJSON(late))
         SecretRequests.ticketWindow = .seconds(30)
         for tab in AppDelegate.shared.controllers.flatMap(\.tabs) where !before.contains(tab.id) { opened.append(tab) }
