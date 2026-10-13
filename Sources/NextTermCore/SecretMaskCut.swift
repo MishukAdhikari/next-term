@@ -119,3 +119,31 @@ extension MCPRedaction {
         return good
     }
 }
+
+extension RemoteChanges {
+    /// The diff host_changes shows, and the bytes it was cut at (nil: it is whole). It is masked, then cut at `maxBytes`
+    /// of the bytes as the host sent them, which `head -c` counted, carriage returns and all; only then is each line's
+    /// carriage return dropped, as the other sections' are. `asked` is what `head -c` was asked for. Where the host may
+    /// have cut (it sent that much) or the connection did (the script's end never came), the cut is `mask.longest` + 1
+    /// bytes before the end at least, so a value that starts before it is there whole and is left out whole. `mask` is
+    /// the one at hand when the answer is built: one stored during the run, longer than the margin asked for, is safe too.
+    public func shownDiff(cutAt maxBytes: Int, asked: Int, mask: SecretMask) -> (text: String, cutAt: Int?) {
+        let sent = diff.utf8.count
+        let endIsACut = !ended || sent >= asked
+        let cut = max(0, endIsACut ? min(maxBytes, sent - mask.longest - 1) : maxBytes)
+        let shown = mask.maskedPrefix(diff, maxBytes: cut)
+        return (Self.droppingCarriageReturns(shown.text), shown.cut || !ended ? cut : nil)
+    }
+
+    /// `text` without a carriage return at the end of a line, or of the text.
+    static func droppingCarriageReturns(_ text: String) -> String {
+        let bytes = Array(text.utf8)
+        guard bytes.contains(0x0D) else { return text }
+        var kept: [UInt8] = []
+        kept.reserveCapacity(bytes.count)
+        for index in bytes.indices where bytes[index] != 0x0D || (index + 1 < bytes.count && bytes[index + 1] != 0x0A) {
+            kept.append(bytes[index])
+        }
+        return String(decoding: kept, as: UTF8.self)
+    }
+}

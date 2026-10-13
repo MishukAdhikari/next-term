@@ -82,6 +82,154 @@ private func showsPart(of value: String, in text: String) -> Bool {
     }
 }
 
+/// What a host prints for host_changes: its status and stat, then `diff` as `head -c` cut it at `asked` bytes, then the
+/// script's end, unless the connection was cut first (`ended` false).
+private func hostOutput(_ diff: String, asked: Int, ended: Bool = true) -> String {
+    let sent = String(decoding: Array(diff.utf8.prefix(asked)), as: UTF8.self)
+    let head = "\(RemoteShell.marker)\n## main\n M .env\n\(RemoteShell.statMarker)\n .env | 2 +-\n\(RemoteShell.diffMarker)\n"
+    return head + sent + (ended ? "\n\(RemoteShell.endMarker)\n" : "")
+}
+
+/// A diff of a file with CRLF line ends, as git prints it: the header's lines end in a newline, the file's in a carriage
+/// return and a newline. `value` follows `lines` such lines; `start` is its first byte in the diff.
+private func crlfDiff(lines: Int, value: String) -> (diff: String, start: Int) {
+    var diff = "diff --git a/.env b/.env\nindex 1111111..2222222 100644\n--- a/.env\n+++ b/.env\n@@ -0,0 +1,\(lines + 2) @@\n"
+    for line in 0..<lines { diff += "+SETTING_\(line)=on\r\n" }
+    diff += "+DB_PASSWORD="
+    let start = diff.utf8.count
+    return (diff + value + "\r\n+NEXT=1\r\n", start)
+}
+
+@Suite struct HostChangesCutTests {
+    /// The host's `head -c` counts each line's carriage return, and the answer drops them. Counting the margin after
+    /// they were dropped, 200 of them used it up: the host's cut fell inside a value before the agent's did, and the
+    /// value's start showed. Counted on the bytes as the host sent them, no cut shows any of it.
+    @Test func aKeyAcrossTheCutOfACRLFDiffNeverShows() throws {
+        let m = storedMask([stored])
+        let (diff, start) = crlfDiff(lines: 200, value: stored)
+        let into = start + 9 - m.longest // the host's cut 10 bytes into the value
+        let early = try #require(RemoteChanges.parse(hostOutput(diff, asked: m.bytesToRead(forCutAt: into))))
+        let dropped = early.diff.replacingOccurrences(of: "\r\n", with: "\n")
+        #expect(showsPart(of: stored, in: m.maskedPrefix(dropped, maxBytes: into).text)) // the order before
+        for limit in (start - m.longest - 5)...(start + stored.utf8.count + 5) {
+            let asked = m.bytesToRead(forCutAt: limit)
+            let changes = try #require(RemoteChanges.parse(hostOutput(diff, asked: asked)))
+            let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: m)
+            #expect(!showsPart(of: stored, in: shown.text), "\(limit): \(shown.text.suffix(40))")
+            #expect(shown.cutAt == limit && shown.text.utf8.count <= limit && !shown.text.utf8.contains(0x0D), "\(limit)")
+        }
+        let past = start + stored.utf8.count + 3
+        let after = try #require(RemoteChanges.parse(hostOutput(diff, asked: m.bytesToRead(forCutAt: past))))
+        let pastText = after.shownDiff(cutAt: past, asked: m.bytesToRead(forCutAt: past), mask: m).text
+        #expect(pastText.hasSuffix("+DB_PASSWORD=•••\n+"))
+        let whole = try #require(RemoteChanges.parse(hostOutput(diff, asked: m.bytesToRead(forCutAt: 100_000))))
+        let all = whole.shownDiff(cutAt: 100_000, asked: m.bytesToRead(forCutAt: 100_000), mask: m)
+        let expected = diff.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: stored, with: "•••")
+        #expect(whole.ended && all.cutAt == nil && all.text == expected)
+    }
+
+    /// The connection keeps at most 8 MB of what a host prints, and a long status can take most of it: the connection's
+    /// cut then comes before `head -c`'s, with no margin past it. The script's end never comes, so the diff is masked
+    /// and cut with the margin there too, and a value across the connection's cut never shows.
+    @Test func aConnectionsCutIsMaskedWithTheMargin() throws {
+        let m = storedMask([stored])
+        let head = "diff --git a/.env b/.env\n+DB_PASSWORD="
+        let diff = head + stored + "\n+NEXT=1\n" + String(repeating: "+filler line\n", count: 60)
+        let start = head.utf8.count
+        let asked = m.bytesToRead(forCutAt: 100_000)
+        let early = String(decoding: Array(diff.utf8.prefix(start + 10)), as: UTF8.self)
+        #expect(showsPart(of: stored, in: m.maskedPrefix(early, maxBytes: 100_000).text)) // the order before
+        for end in start...(start + stored.utf8.count + m.longest + 2) {
+            let sent = String(decoding: Array(diff.utf8.prefix(end)), as: UTF8.self)
+            let changes = try #require(RemoteChanges.parse(hostOutput(sent, asked: asked, ended: false)))
+            let shown = changes.shownDiff(cutAt: 100_000, asked: asked, mask: m)
+            #expect(!changes.ended && shown.cutAt != nil, "\(end)")
+            #expect(!showsPart(of: stored, in: shown.text), "\(end): \(shown.text.suffix(40))")
+        }
+        // A cut in the status leaves out the line it fell in, and the diff, which never came, is cut at 0.
+        let status = try #require(RemoteChanges.parse("\(RemoteShell.marker)\n## main\n M .env\n M conf"))
+        #expect(status.files == [" M .env"] && status.branch == "main" && !status.ended)
+        #expect(status.shownDiff(cutAt: 100_000, asked: asked, mask: m) == ("", 0))
+        let inStat = "\(RemoteShell.marker)\n## main\n M .env\n\(RemoteShell.statMarker)\n .env | 2 +-\n con"
+        let stat = try #require(RemoteChanges.parse(inStat))
+        #expect(stat.files == [" M .env"] && stat.stat == ".env | 2 +-")
+    }
+
+    /// host_changes asks the host for the margin of the mask it has then, and its answer can come 50 s later. A longer
+    /// key stored meanwhile, across the cut, came past the host's cut in part: the answer takes the mask again, and
+    /// its margin, so none of that key shows.
+    @Test func aKeyStoredDuringTheRunKeepsItsMargin() throws {
+        let asking = storedMask([other])
+        let long = "Vb3nXq8wLe5rTz1yKu7iPo2aSd6fGh4jMc9vBx0nWq5eRt8y"
+        let answering = storedMask([other, long])
+        let head = "diff --git a/.env b/.env\n+API_KEY="
+        let diff = head + long + "\n+NEXT=1\n"
+        let start = head.utf8.count
+        let sent = String(decoding: Array(diff.utf8.prefix(asking.bytesToRead(forCutAt: start + 10))), as: UTF8.self)
+        #expect(showsPart(of: long, in: answering.maskedPrefix(sent, maxBytes: start + 10).text)) // the order before
+        for limit in (start - asking.longest - 5)...(start + long.utf8.count + 3) {
+            let asked = asking.bytesToRead(forCutAt: limit)
+            let changes = try #require(RemoteChanges.parse(hostOutput(diff, asked: asked)))
+            let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: answering)
+            #expect(!showsPart(of: long, in: shown.text), "\(limit): \(shown.text)")
+        }
+    }
+
+    /// The script on a real work tree with a CRLF file: its end comes after the diff, and no cut shows the key.
+    @Test func theScriptCutsARealCRLFDiffWithoutShowingAKey() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-crlf-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try FileManager.default.createDirectory(atPath: home + "/repo", withIntermediateDirectories: true)
+        let lines = (0..<120).map { "SETTING_\($0)=on\r\n" }.joined()
+        try Data("A=1\r\n".utf8).write(to: URL(fileURLWithPath: home + "/repo/.env"))
+        try shell("git init -q && git add .env && git -c user.email=a@b -c user.name=a commit -q -m a", in: home)
+        let changed = "A=1\r\n" + lines + "DB_PASSWORD=" + stored + "\r\nNEXT=1\r\n"
+        try Data(changed.utf8).write(to: URL(fileURLWithPath: home + "/repo/.env"))
+        let m = storedMask([stored])
+        let whole = try changesOutput(home, maxBytes: 100_000)
+        let first = try #require(RemoteChanges.parse(whole))
+        #expect(first.ended && first.diff.contains("+SETTING_7=on\r\n") && first.files == [" M .env"])
+        let bytes = Array(first.diff.utf8), needle = Array(stored.utf8)
+        let offset = try #require((0...(bytes.count - needle.count)).first { Array(bytes[$0..<$0 + needle.count]) == needle })
+        for limit in stride(from: offset - m.longest - 1, through: offset + stored.utf8.count, by: 7) {
+            let asked = m.bytesToRead(forCutAt: limit)
+            let output = try changesOutput(home, maxBytes: asked)
+            let changes = try #require(RemoteChanges.parse(output))
+            let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: m)
+            #expect(changes.ended && shown.cutAt == limit, "\(limit)")
+            #expect(!showsPart(of: stored, in: shown.text), "\(limit): \(shown.text.suffix(40))")
+            #expect(!shown.text.utf8.contains(0x0D), "\(limit)")
+        }
+    }
+
+    private func shell(_ line: String, in home: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", line]
+        process.currentDirectoryURL = URL(fileURLWithPath: home + "/repo")
+        process.environment = ["HOME": home, "PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+    }
+
+    /// What `RemoteShell.changesScript` prints on this Mac for the repository in `home`, as a host would send it.
+    private func changesOutput(_ home: String, maxBytes: Int) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", "-c", RemoteShell.command(RemoteShell.changesScript(directory: "~/repo", maxBytes: maxBytes))]
+        process.environment = ["HOME": home, "PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 @Suite struct MCPCutMaskTests {
     /// read_file cuts a line at 2,000 characters. A stored value, or a token the patterns know, across the cut is left
     /// out whole, never shown in part.

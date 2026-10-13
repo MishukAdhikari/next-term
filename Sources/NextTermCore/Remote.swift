@@ -327,6 +327,8 @@ public enum RemoteShell {
     static let herdrMarker = "@@NEXTTERM-HERDR@@"
     static let statMarker = "@@NEXTTERM-STAT@@"
     static let diffMarker = "@@NEXTTERM-DIFF@@"
+    /// The changes script's last line: without it, the connection cut what the host printed.
+    static let endMarker = "@@NEXTTERM-END@@"
 
     /// Where Next Term keeps its few files on the host (tab pid files, the tmux config).
     static let cacheDir = "\"$HOME/.cache/next-term\""
@@ -539,6 +541,7 @@ public enum RemoteShell {
         $G diff "$B" --stat --no-color 2>/dev/null
         printf '%s\\n' \(quote(diffMarker))
         $G diff "$B" --no-color --no-ext-diff 2>/dev/null | head -c \(max(0, maxBytes))
+        printf '\\n%s\\n' \(quote(endMarker))
         """
     }
 
@@ -778,25 +781,38 @@ public struct RemoteChanges: Equatable, Sendable {
     /// `XY path` lines from `git status --porcelain`.
     public var files: [String] = []
     public var stat = ""
+    /// The diff as the host sent it, carriage returns and all: `head -c` counted them. host_changes shows it through
+    /// `shownDiff`, which masks it, cuts it and drops each line's carriage return.
     public var diff = ""
+    /// The script's end came: the connection cut nothing (its 8 MB cap, a timeout or a drop cuts anywhere).
+    public var ended = false
 
     public static func parse(_ output: String) -> RemoteChanges? {
         guard let lines = RemoteShell.payload(output) else { return nil }
         var changes = RemoteChanges()
-        var section = 0
-        var stat: [Substring] = [], diff: [Substring] = []
-        for line in lines {
-            if line == RemoteShell.statMarker { section = 1; continue }
-            if line == RemoteShell.diffMarker { section = 2; continue }
-            switch section {
-            case 0:
-                if line.hasPrefix("## ") { changes.branch = String(line.dropFirst(3)) } else if !line.isEmpty { changes.files.append(String(line)) }
-            case 1: stat.append(line)
-            default: diff.append(line)
-            }
+        var inStat = false
+        var status: [Substring] = [], stat: [Substring] = []
+        var diffStart: Int?
+        for (index, line) in lines.enumerated() {
+            if line == RemoteShell.statMarker { inStat = true; continue }
+            if line == RemoteShell.diffMarker { diffStart = index + 1; break }
+            if inStat { stat.append(line) } else { status.append(line) }
+        }
+        if let diffStart {
+            let raw = output.components(separatedBy: "\n") // payload's lines, before it drops their carriage returns
+            let text = raw[(raw.count - lines.count + diffStart)...].joined(separator: "\n")
+            let end = Array("\n\(RemoteShell.endMarker)\n".utf8)
+            changes.ended = text.utf8.count >= end.count && text.utf8.suffix(end.count).elementsEqual(end)
+            changes.diff = changes.ended ? String(decoding: text.utf8.dropLast(end.count), as: UTF8.self) : text
+        } else if inStat {
+            if !stat.isEmpty { stat.removeLast() } // the line the connection was cut in
+        } else if !status.isEmpty {
+            status.removeLast()
+        }
+        for line in status {
+            if line.hasPrefix("## ") { changes.branch = String(line.dropFirst(3)) } else if !line.isEmpty { changes.files.append(String(line)) }
         }
         changes.stat = stat.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        changes.diff = diff.joined(separator: "\n")
         return changes
     }
 }

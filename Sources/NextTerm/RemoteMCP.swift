@@ -243,10 +243,11 @@ enum RemoteMCP {
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
         let withDiff = arguments["diff"] as? Bool ?? true
         let limit = min(2_000_000, max(1000, arguments["max_bytes"] as? Int ?? 200_000))
-        // The diff is masked before it is cut: the host sends the longest stored form's bytes past the cut, so a value
-        // that starts before it is there whole, and is left out whole (SecretMask.maskedPrefix).
-        let mask = SecretMask.current
-        let script = RemoteShell.changesScript(directory: directory, maxBytes: withDiff ? mask.bytesToRead(forCutAt: limit) : 0)
+        // The diff is masked before it is cut, on the bytes `head -c` counts: the host sends the longest stored form's
+        // bytes past the cut, so a value that starts before it is there whole, and is left out whole. The answer takes
+        // the mask as it is then, up to 50 s later (RemoteChanges.shownDiff).
+        let asked = withDiff ? SecretMask.current.bytesToRead(forCutAt: limit) : 0
+        let script = RemoteShell.changesScript(directory: directory, maxBytes: asked)
         RemoteConnection.run(found, script: script, timeout: 50) { output in
             guard let changes = RemoteChanges.parse(output.output) else {
                 if output.status == 3 || output.status == 4 { return reply(fail("\(directory) on \(found.name): \(output.problem)")) }
@@ -255,9 +256,9 @@ enum RemoteMCP {
             var info: [String: Any] = ["host": found.name, "directory": directory, "branch": changes.branch,
                                        "files": changes.files, "stat": changes.stat]
             if withDiff {
-                let shown = mask.maskedPrefix(changes.diff, maxBytes: limit)
+                let shown = changes.shownDiff(cutAt: limit, asked: asked, mask: SecretMask.current)
                 info["diff"] = shown.text
-                if shown.cut { info["diff_cut_at_bytes"] = limit }
+                if let cut = shown.cutAt { info["diff_cut_at_bytes"] = cut }
             }
             reply(ok(info))
         }
