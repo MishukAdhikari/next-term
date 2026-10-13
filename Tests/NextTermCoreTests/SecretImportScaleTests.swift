@@ -272,9 +272,10 @@ import Testing
         var asked = 0
         let found = SecretImport.scan(sources, stop: { asked += 1; return asked > 10 })
         #expect(asked == 12 && found.read.isEmpty && found.findings.isEmpty && found.unreadable.isEmpty)
-        // Not stopped: before, in and after each file (Cursor's: its servers' object, then its one server).
+        // Not stopped: before, in and after each file (Cursor's: its servers' object, then its one server). In Codex's,
+        // once in its envs too: their 1,000 values read and 500 variables checked, one `stopEvery` of them.
         asked = 0
         let whole = SecretImport.scan(sources, stop: { asked += 1; return false })
-        #expect(whole.findings.count == 501 && whole.read.count == 2 && asked == (1 + 500 + 1) + (1 + 1 + 1 + 1))
+        #expect(whole.findings.count == 501 && whole.read.count == 2 && asked == (1 + 500 + 1 + 1) + (1 + 1 + 1 + 1))
     }
 }
