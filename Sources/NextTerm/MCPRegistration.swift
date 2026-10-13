@@ -125,9 +125,10 @@ enum LoginShell {
     }()
 
     /// What an interactive login shell (5 s at most) sets that a Finder-launched app lacks: PATH, the
-    /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc), and
-    /// XDG_STATE_HOME (where `npx skills` keeps its lock file when it is set). One probe per launch
-    /// serves the agents' registration, remote tabs' ssh and the Skills library.
+    /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc),
+    /// XDG_STATE_HOME (where `npx skills` keeps its lock file when it is set), and what moves OpenCode's
+    /// folders and database (OpencodePaths.variables, kept in OpencodePaths.shellEnvironment). One probe per
+    /// launch serves the agents' registration, remote tabs' ssh, the Skills library and OpenCode's sessions.
     /// The command reads the environment with /usr/bin/env, so it is the same text in zsh, bash, fish and
     /// tcsh (fish and csh reject `${VAR:-}`, and fish's "$PATH" is a list joined by spaces). The same listing
     /// gives the agents' routing variables, kept as digests only, for a restore to compare with (KTD5).
@@ -138,6 +139,7 @@ enum LoginShell {
         // XDG_STATE_HOME is read on its own (printenv between markers): a newline inside another
         // variable's value could otherwise fake a line of env's output.
         let command = "/usr/bin/printf %s \(marker); /usr/bin/env; /usr/bin/printf %s \(marker); /usr/bin/printenv XDG_STATE_HOME; /usr/bin/printf %s \(marker)"
+            + OpencodePaths.variables.map { "; /usr/bin/printenv \($0); /usr/bin/printf %s \(marker)" }.joined()
         guard let output = capture(shell, ["-l", "-i", "-c", command], timeout: 5) else { return ([], nil, nil, nil) }
         let parts = output.components(separatedBy: marker)
         guard parts.count >= 3 else { return ([], nil, nil, nil) }
@@ -153,6 +155,13 @@ enum LoginShell {
             // Only an absolute path counts (the XDG rules; a relative one is ignored).
             if value.hasPrefix("/"), !value.contains("\n") { state = value }
         }
+        // OpenCode's variables, each printed on its own between markers as XDG_STATE_HOME is; OpencodePaths keeps
+        // only the values its rules allow.
+        var opencode: [String: String] = [:]
+        for (index, name) in OpencodePaths.variables.enumerated() where parts.count > index + 4 {
+            opencode[name] = parts[index + 3]
+        }
+        OpencodePaths.shellEnvironment = OpencodePaths.shellValues(opencode)
         return (path, socket, state, AgentEvidence.routingDigests(environmentListing: parts[1]))
     }()
 

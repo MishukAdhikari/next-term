@@ -203,6 +203,96 @@ import Testing
         #expect(listing.problems.keys.contains(.opencode) && listing.sessions.isEmpty)
     }
 
+    /// OpenCode 2's table, as its migration creates it (the columns a reader looks at, and a few around them).
+    static let opencode2Tables = """
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace_id TEXT, parent_id TEXT, slug TEXT NOT NULL,
+          directory TEXT NOT NULL, path TEXT, title TEXT, version TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL,
+          time_updated INTEGER NOT NULL, time_archived INTEGER, time_suspended INTEGER);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL,
+          time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+        """
+
+    @Test func opencode2FromItsSessionV2Table() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        // The store OpenCode 2 left: its sessions in session_v2, the old session table beside it, never read again.
+        let sql = Self.opencode2Tables + """
+            CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT, model TEXT, time_created INTEGER,
+              time_updated INTEGER, time_archived INTEGER);
+            INSERT INTO session VALUES ('ses_old', NULL, '\(project)', 'From the first line', NULL, 1000, 9900, NULL);
+            INSERT INTO session_v2 VALUES ('ses_a', 'p', NULL, NULL, 'a', '\(project)', NULL, 'Wire the cache', '2.0.3', 'build',
+              '{"id":"gpt-6","providerID":"openai"}', 1000, 9000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_b', 'p', NULL, NULL, 'b', '\(project)', NULL, NULL, '2.0.3', NULL, NULL, 1000, 8000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_c', 'p', NULL, NULL, 'c', '\(project)', NULL, '', '2.0.3', NULL, NULL, 1000, 7000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_d', 'p', NULL, NULL, 'd', '\(project)', NULL, NULL, '2.0.3', NULL, NULL, 1000, 6000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_e', 'p', NULL, 'ses_a', 'e', '\(project)', NULL, 'A sub-agent', '2.0.3', NULL, NULL, 1000, 9500, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_f', 'p', NULL, NULL, 'f', '\(project)', NULL, 'Put away', '2.0.3', NULL, NULL, 1000, 9500, 9600, NULL);
+            INSERT INTO session_message VALUES ('m1', 'ses_b', 'user', 1, 1, 1, '{"text":"Add the retry"}');
+            INSERT INTO session_message VALUES ('m2', 'ses_c', 'user', 1, 1, 1, '{"text":"  Fix the flaky test  "}');
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        let found = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: nil)
+        // ses_d was never asked anything; ses_old is the old table's.
+        #expect(found.map(\.id) == ["ses_a", "ses_b", "ses_c"])
+        #expect(found.map(\.title) == ["Wire the cache", "Add the retry", "Fix the flaky test"])
+        #expect(found[0].model == "gpt-6" && found[0].resumeCommand() == "opencode --session ses_a")
+    }
+
+    @Test func opencodeMergesItsDatabasesByID() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let data = home + "/.local/share/opencode"
+        func row(_ id: String, _ title: String, updated: Int) -> String {
+            "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)', '2.0.3', NULL, NULL, 1000, \(updated), NULL, NULL);"
+        }
+        try database(data + "/opencode.db", Self.opencode2Tables + row("ses_1", "Older words", updated: 5000) + row("ses_2", "Only here", updated: 4000))
+        try database(data + "/opencode-dev.db", Self.opencode2Tables + row("ses_1", "Newer words", updated: 7000) + row("ses_3", "Dev only", updated: 6000))
+        // A channel store whose table changed leaves the others readable.
+        try database(data + "/opencode-old.db", "CREATE TABLE session (id TEXT, cwd TEXT);")
+        let found = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: nil)
+        #expect(found.map(\.id) == ["ses_1", "ses_3", "ses_2"] && found[0].title == "Newer words")
+        let fromMainOnly = OpencodeSessions(home: home, environment: ["OPENCODE_DISABLE_CHANNEL_DB": "1"])
+        #expect(try fromMainOnly.sessions(in: project, subfolders: false, since: nil).map(\.title) == ["Older words", "Only here"])
+    }
+
+    @Test func opencodeWhereTheShellMovesItsStore() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        func store(_ title: String) -> String {
+            Self.opencode2Tables + "INSERT INTO session_v2 VALUES ('ses_\(title.count)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)',"
+                + " '2.0.3', NULL, NULL, 1000, 9000, NULL, NULL);"
+        }
+        try database(home + "/.local/share/opencode/opencode.db", store("In the default place"))
+        try database(home + "/xdg/opencode/opencode.db", store("Under XDG_DATA_HOME"))
+        try database(home + "/elsewhere/mine.db", store("Named by OPENCODE_DB"))
+        func titles(_ environment: [String: String]) throws -> [String] {
+            try OpencodeSessions(home: home, environment: environment).sessions(in: project, subfolders: false, since: nil).map(\.title)
+        }
+        #expect(try titles([:]) == ["In the default place"])
+        #expect(try titles(["XDG_DATA_HOME": home + "/xdg"]) == ["Under XDG_DATA_HOME"])
+        #expect(try titles(["OPENCODE_DB": home + "/elsewhere/mine.db"]) == ["Named by OPENCODE_DB"])
+        #expect(try titles(["OPENCODE_DB": ":memory:"]).isEmpty)
+        // A made-up home never takes the login shell's variables.
+        #expect(OpencodeSessions(home: home).environment.isEmpty)
+    }
+
+    @Test func opencodeWithoutATitleColumnUsesTheFirstPrompt() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let sql = """
+            CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL, time_updated INTEGER NOT NULL);
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT);
+            INSERT INTO session_v2 VALUES ('ses_t', '/p', 9000);
+            INSERT INTO session_message VALUES ('m1', 'ses_t', 'user', 1, '{"text":"Name the branch"}');
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        let found = try OpencodeSessions(home: home).sessions(in: "/p", subfolders: false, since: nil)
+        #expect(found.map(\.title) == ["Name the branch"] && found.first?.createdAt == nil)
+    }
+
     // MARK: Cursor Agent
 
     @Test func cursorFromMetaAndStore() throws {
