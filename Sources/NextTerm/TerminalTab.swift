@@ -437,7 +437,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// Set by the user (double-click a tab). Wins over everything else.
     var userTitle: String?
     /// Set by the running program via OSC 0/2. Cleared at each command boundary.
-    private var programTitle: String?
+    private(set) var programTitle: String?
     private(set) var directory: String {
         didSet { if !leftStartFolder, remote == nil, canonicalPath(directory) != canonicalPath(oldValue) { leftStartFolder = true } }
     }
@@ -905,7 +905,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: liveTail()), at: Self.now)
+        let activity = AgentScreen.activity(screenLines: liveTail(), opencode: isOpencodeScreen)
+        status.observe(agentScreen: activity, at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 

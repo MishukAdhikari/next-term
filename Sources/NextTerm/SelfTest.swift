@@ -950,6 +950,7 @@ enum SelfTest {
 
         await linkChecks(c)
         await notificationChecks(c)
+        await opencodeScreenChecks(c)
         notificationsMenuChecks()
         agentSpinnerChecks()
         await skillsChecks()

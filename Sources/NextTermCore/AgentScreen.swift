@@ -6,6 +6,9 @@ public enum AgentActivity: Equatable, Sendable {
     case working
     /// It is asking for a decision (a permission prompt); the question, if found.
     case asking(String)
+    /// The agent's own footer is on screen without its working hint: it waits for your next prompt, and says so
+    /// itself, so from now on its screen, not its output, says when it works (OpenCode, `AgentScreen.Opencode`).
+    case ready
     /// None of the above: waiting for your next prompt.
     case idle
 }
@@ -65,6 +68,15 @@ public enum AgentScreen {
         let range = NSRange(location: 0, length: (text as NSString).length)
         if working.contains(where: { $0.firstMatch(in: text, range: range) != nil }) { return .working }
         return .idle
+    }
+
+    /// `activity(screenLines:)` for a tab that shows OpenCode (`opencode`): OpenCode's own shapes first, then every
+    /// agent's. Other agents' tabs never see OpenCode's shapes, and OpenCode's screen is never read as another's
+    /// prompt while its own footer or question is there.
+    public static func activity(screenLines lines: [String], opencode: Bool) -> AgentActivity {
+        guard opencode else { return activity(screenLines: lines) }
+        let own = Opencode.activity(Array(lines.suffix(scannedLines)))
+        return own == .idle ? activity(screenLines: lines) : own
     }
 
     /// A question with fixed words ("Do you want to…?") and its choices, in the last `promptLines`
@@ -314,20 +326,24 @@ extension AgentScreen {
         expression.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
     }
 
-    /// A line without the box an agent may draw around its prompt.
+    /// A line without the box an agent may draw around its prompt ("┃" is OpenCode's).
     private static func inner(_ line: String) -> String {
         var text = Substring(line)
-        while let first = text.first, first == "│" || first == "|" || first.isWhitespace { text = text.dropFirst() }
-        while let last = text.last, last == "│" || last == "|" || last.isWhitespace { text = text.dropLast() }
+        while let first = text.first, boxSides.contains(first) || first.isWhitespace { text = text.dropFirst() }
+        while let last = text.last, boxSides.contains(last) || last.isWhitespace { text = text.dropLast() }
         return String(text)
     }
 
-    /// A blank line, a box's edge, or the hint line under a list: where the choices end.
+    static let boxSides: Set<Character> = ["│", "|", "┃"]
+
+    /// A blank line, a box's edge, or the hint line under a list: where the choices end. OpenCode's hints too
+    /// ("↑↓ select … esc dismiss" under its questions, "⇆ select  enter confirm" beside its buttons).
     private static func isEdge(_ line: String) -> Bool {
         if line.isEmpty { return true }
         if let first = line.first, "╭╰┌└─━═".contains(first) { return true }
         let lower = line.lowercased()
-        return ["enter to select", "esc to cancel", "to navigate", "↑↓", "↑/↓"].contains { lower.contains($0) }
+        let hints = ["enter to select", "esc to cancel", "to navigate", "↑↓", "↑/↓", "esc dismiss", "⇆ select", "enter confirm"]
+        return hints.contains { lower.contains($0) }
     }
 
     private static func splitCursor(_ line: String) -> (cursor: Bool, rest: String) {

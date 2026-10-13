@@ -242,6 +242,17 @@ public struct TabStatus {
             questionSerial += 1
             askedAt = now
             markQuestion(asked)
+        case .ready:
+            // The agent's own footer, without its working hint. The first time this run it only syncs: what output
+            // timing called work so far was the agent drawing itself, and its first frame is not the end of a turn.
+            if !screenSynced {
+                screenSynced = true
+                answered()
+                busy = false
+                lastStop = nil
+                return
+            }
+            fallthrough
         case .idle:
             // Before the screen has shown its hints this run, the output timing decides (see tick()).
             guard screenSynced else { return }

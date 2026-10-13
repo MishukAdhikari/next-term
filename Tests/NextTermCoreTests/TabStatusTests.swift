@@ -318,6 +318,63 @@ import Testing
         s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 1)
         #expect(s.running)
     }
+
+    /// An agent whose own footer says it waits (OpenCode): its startup drawing is not a turn.
+    @Test func theFirstReadyEndsStartupWithoutANotice() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        for t in stride(from: 0.0, through: 6, by: 0.25) {
+            s.output(at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .working && !s.screenSynced) // output timing, until the screen speaks
+        s.observe(agentScreen: .ready, at: 6.25)
+        #expect(s.screenSynced && s.state == .idle)
+        for t in stride(from: 6.5, through: 14, by: 0.25) {
+            s.output(at: t) // its animations go on: not work
+            s.observe(agentScreen: .ready, at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .idle && s.takeNotice() == nil)
+    }
+
+    @Test func workThenReadyIsAFinish() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .ready, at: 1)
+        s.observe(agentScreen: .working, at: 2)
+        #expect(s.state == .working)
+        s.observe(agentScreen: .ready, at: 42)
+        s.tick(at: 42)
+        #expect(s.state == .done && s.takeNotice() == nil) // held for a second
+        s.observe(agentScreen: .ready, at: 43)
+        s.tick(at: 43)
+        let notice = s.takeNotice()
+        #expect(notice?.duration == 40 && notice?.stillRunning == true && notice?.topic == .agentFinished)
+        // Back to work before the second is up: the same turn.
+        s.observe(agentScreen: .working, at: 50)
+        s.observe(agentScreen: .ready, at: 60)
+        s.observe(agentScreen: .working, at: 60.5)
+        s.tick(at: 62)
+        #expect(s.takeNotice() == nil && s.state == .working)
+    }
+
+    @Test func aQuestionAfterWorkAndItsAnswer() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10)
+        #expect(s.state == .attention)
+        let notice = s.takeNotice()
+        #expect(notice?.question == "Permission required: Shell command ($ npm test)" && notice?.topic == .decision)
+        s.observe(agentScreen: .working, at: 12) // answered
+        #expect(s.question == nil && s.state == .working)
+        // Answered and done at once: the question goes, and the stop notifies as any.
+        s.observe(agentScreen: .asking("Always allow: This will allow bash until OpenCode is restarted."), at: 20)
+        _ = s.takeNotice()
+        s.observe(agentScreen: .ready, at: 21)
+        #expect(s.question == nil && s.state == .idle)
+    }
 }
 
 @Suite struct ShellIntegrationTests {
