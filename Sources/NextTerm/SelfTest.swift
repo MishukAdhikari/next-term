@@ -587,6 +587,8 @@ enum SelfTest {
         await pause(0.2)
         check(asked.contains("sleep 30") && c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
         c.closeTab(nil)
+        // On a slow machine the sheet comes a moment later: wait for it, or it stays up over the window.
+        _ = await wait(2) { window.attachedSheet != nil }
         if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
         check(await wait(2) { !c.tabs.contains { $0 === busy } }, "Close Tab removes it")
         check(await wait(4) { kill(shellPid, 0) != 0 }, "its shell is stopped and reaped")
