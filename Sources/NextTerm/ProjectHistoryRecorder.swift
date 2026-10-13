@@ -67,16 +67,35 @@ final class ProjectHistoryRecorder {
     }
 
     /// ⌘⌫ on a closed project in the Welcome window: it leaves the history and Recent Projects both. A project a window
-    /// holds stays. Each list is written only if it held the project.
-    func forget(_ path: String) {
+    /// holds stays. Each list is written only if it held the project. What was taken, for Undo (`restore`); nil when
+    /// nothing was.
+    @discardableResult
+    func forget(_ path: String) -> ProjectHistory.Forgotten? {
         var recent = RecentProjects(UserDefaults.standard.stringArray(forKey: "recentProjects") ?? [])
         let listed: RecentProjects = recent
-        let forgot: Bool = history.forget(path, recent: &recent, open: open.paths)
+        let forgotten: ProjectHistory.Forgotten? = history.forget(path, recent: &recent, open: open.paths)
         // Recent Projects first, so the Welcome list told next reads both as they are now.
         if recent != listed { AppDelegate.shared.setRecentProjects(recent.paths) }
-        guard forgot else { return }
+        guard forgotten?.entry != nil else { return forgotten }
         store?.save(history)
         changed()
+        return forgotten
+    }
+
+    /// Undo of ⌘⌫: the project back in the history at its last use, and in Recent Projects where it stood. One used
+    /// again since keeps its newer time and place.
+    func restore(_ forgotten: ProjectHistory.Forgotten) {
+        var recent = RecentProjects(UserDefaults.standard.stringArray(forKey: "recentProjects") ?? [])
+        let listed: RecentProjects = recent
+        var next: ProjectHistory = history
+        next.restore(forgotten, recent: &recent)
+        // The history first: the Welcome list told of it lists the project at its time, then Recent Projects' order.
+        if next != history {
+            history = next
+            store?.save(next)
+            changed()
+        }
+        if recent != listed { AppDelegate.shared.setRecentProjects(recent.paths) }
     }
 
     /// Clear Menu: the closed projects leave the history with Recent Projects. An open one keeps its place and time, so
@@ -85,6 +104,20 @@ final class ProjectHistoryRecorder {
         var next: ProjectHistory = history
         next.clear(keeping: open.paths)
         guard next != history else { return }
+        history = next
+        store?.save(next)
+        changed()
+    }
+
+    /// Whether Clear Menu has something to clear in the history: a project no window holds, which the Welcome window
+    /// lists, though Recent Projects may be empty.
+    var canClear: Bool { history.canClear(keeping: open.paths) }
+
+    /// A worktree removed: the projects in its folder leave the history, as they leave Recent Projects. One a window
+    /// holds stays. `places` spells the folder each way it may have been kept.
+    func forget(under places: [String]) {
+        var next: ProjectHistory = history
+        guard next.forget(under: places, open: open.paths) else { return }
         history = next
         store?.save(next)
         changed()

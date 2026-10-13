@@ -118,31 +118,161 @@ import Testing
         history.record(opened: "/code/b", at: at(300))
         var recent = RecentProjects(["/code/b", "/code/open", "/code/a", "/code/only-recent"])
         let open: [String] = ["/code/open"]
-        // A closed project leaves both lists: true, as the history changed.
-        #expect(history.forget("/code/a", recent: &recent, open: open))
+        // A closed project leaves both lists, and what was taken says where it stood in each, for Undo.
+        let forgotA: ProjectHistory.Forgotten? = history.forget("/code/a", recent: &recent, open: open)
+        let entryA = ProjectHistory.Entry(path: "/code/a", lastUsed: at(100))
+        let takenA = ProjectHistory.Forgotten(path: "/code/a", entry: entryA, historyIndex: 2, recentIndex: 2)
+        #expect(forgotA == takenA)
         let paths: [String] = history.paths
         let samePaths: Bool = paths == ["/code/b", "/code/open"]
         #expect(samePaths, "\(paths)")
         let listed: [String] = recent.paths
         let sameListed: Bool = listed == ["/code/b", "/code/open", "/code/only-recent"]
         #expect(sameListed, "\(listed)")
-        // An open project stays in both.
+        // An open project stays in both: nothing taken.
         let keptHistory: ProjectHistory = history
         let keptRecent: RecentProjects = recent
-        #expect(!history.forget("/code/open", recent: &recent, open: open))
+        let forgotOpen: ProjectHistory.Forgotten? = history.forget("/code/open", recent: &recent, open: open)
+        #expect(forgotOpen == nil)
         #expect(history == keptHistory)
         #expect(recent == keptRecent)
-        // One only Recent Projects holds leaves it; the history is unchanged, so there is nothing to save.
-        #expect(!history.forget("/code/only-recent", recent: &recent, open: open))
+        // One only Recent Projects holds leaves it; the history is unchanged, so there is nothing to save there.
+        let forgotRecent: ProjectHistory.Forgotten? = history.forget("/code/only-recent", recent: &recent, open: open)
+        let takenRecent = ProjectHistory.Forgotten(path: "/code/only-recent", entry: nil, historyIndex: nil,
+                                                   recentIndex: 2)
+        #expect(forgotRecent == takenRecent)
         #expect(history == keptHistory)
         let left: [String] = recent.paths
         let sameLeft: Bool = left == ["/code/b", "/code/open"]
         #expect(sameLeft, "\(left)")
         // One neither holds changes nothing.
         let before: RecentProjects = recent
-        #expect(!history.forget("/code/none", recent: &recent, open: open))
+        let forgotNone: ProjectHistory.Forgotten? = history.forget("/code/none", recent: &recent, open: open)
+        #expect(forgotNone == nil)
         #expect(history == keptHistory)
         #expect(recent == before)
+    }
+
+    @Test func undoOfAForgetPutsTheProjectBackWithItsTimeAndWhereItStoodInRecentProjects() {
+        var history = ProjectHistory()
+        history.record(opened: "/code/a", at: at(100))
+        history.record(opened: "/code/b", at: at(200))
+        history.record(opened: "/code/c", at: at(300))
+        var recent = RecentProjects(["/code/c", "/code/b", "/code/a"])
+        let historyBefore: ProjectHistory = history
+        let recentBefore: RecentProjects = recent
+        guard let forgotten = history.forget("/code/b", recent: &recent, open: []) else {
+            Issue.record("b was not forgotten")
+            return
+        }
+        history.restore(forgotten, recent: &recent)
+        #expect(history == historyBefore)
+        #expect(recent == recentBefore)
+        let usedB: Date? = history.lastUsed("/code/b")
+        #expect(usedB == at(200))
+        // Undone twice, nothing more changes.
+        history.restore(forgotten, recent: &recent)
+        #expect(history == historyBefore)
+        #expect(recent == recentBefore)
+    }
+
+    @Test func undoAfterTheProjectWasUsedAgainKeepsItsNewerTimeAndPlace() {
+        var history = ProjectHistory()
+        history.record(opened: "/code/a", at: at(100))
+        history.record(opened: "/code/b", at: at(200))
+        var recent = RecentProjects(["/code/b", "/code/a"])
+        guard let forgotten = history.forget("/code/a", recent: &recent, open: []) else {
+            Issue.record("a was not forgotten")
+            return
+        }
+        // Opened again since: first in both lists, at its new time.
+        history.record(opened: "/code/a", at: at(500))
+        recent.add("/code/a")
+        let historyNow: ProjectHistory = history
+        let recentNow: RecentProjects = recent
+        history.restore(forgotten, recent: &recent)
+        #expect(history == historyNow)
+        #expect(recent == recentNow)
+        let usedA: Date? = history.lastUsed("/code/a")
+        #expect(usedA == at(500))
+    }
+
+    @Test func undoAmongProjectsUsedAtTheSameMomentPutsItBackWhereItStood() {
+        // A restore at launch opens several projects at one look: one time for all of them.
+        var history = ProjectHistory()
+        history.record(opened: "/code/old", at: at(100))
+        for name in ["x", "y", "z"] { history.record(opened: "/code/" + name, at: at(300)) }
+        history.record(opened: "/code/new", at: at(400))
+        let before: [String] = history.paths
+        let sameBefore: Bool = before == ["/code/new", "/code/z", "/code/y", "/code/x", "/code/old"]
+        #expect(sameBefore, "\(before)")
+        var recent = RecentProjects()
+        guard let forgotten = history.forget("/code/y", recent: &recent, open: []) else {
+            Issue.record("y was not forgotten")
+            return
+        }
+        #expect(forgotten.historyIndex == 2)
+        #expect(forgotten.recentIndex == nil)
+        history.restore(forgotten, recent: &recent)
+        let after: [String] = history.paths
+        let sameAfter: Bool = after == before
+        #expect(sameAfter, "\(after)")
+        #expect(recent.paths.isEmpty)
+        // An index the times no longer allow is kept within them: the list stays newest first.
+        var moved = ProjectHistory()
+        moved.record(opened: "/code/a", at: at(100))
+        moved.record(opened: "/code/b", at: at(200))
+        moved.restore(ProjectHistory.Entry(path: "/code/c", lastUsed: at(150)), at: 0)
+        let kept: [String] = moved.paths
+        let sameKept: Bool = kept == ["/code/b", "/code/c", "/code/a"]
+        #expect(sameKept, "\(kept)")
+        moved.restore(ProjectHistory.Entry(path: "/code/d", lastUsed: at(50)), at: 1)
+        let last: String? = moved.paths.last
+        #expect(last == "/code/d")
+    }
+
+    @Test func clearMenuHasSomethingToClearWhileTheHistoryHoldsAClosedProject() {
+        var history = ProjectHistory()
+        #expect(!history.canClear(keeping: []))
+        history.record(opened: "/code/a", at: at(100))
+        history.record(opened: "/code/b", at: at(200))
+        // Every project open: Clear Menu would keep them all.
+        #expect(!history.canClear(keeping: ["/code/a", "/code/b"]))
+        // One closed, as after Clear Menu with it open, then its window's close: something to clear.
+        #expect(history.canClear(keeping: ["/code/b"]))
+        #expect(history.canClear(keeping: []))
+        // As Clear Menu does it.
+        var cleared: ProjectHistory = history
+        cleared.clear(keeping: ["/code/b"])
+        #expect(!cleared.canClear(keeping: ["/code/b"]))
+    }
+
+    @Test func aRemovedWorktreeLeavesTheHistoryWithTheProjectsInside() {
+        var history = ProjectHistory()
+        history.record(opened: "/code/shop", at: at(100))
+        history.record(opened: "/code/shop-worktrees/sso", at: at(200))
+        history.record(opened: "/code/shop-worktrees/sso/web", at: at(300))
+        history.record(opened: "/code/shop-worktrees/sso-old", at: at(400))
+        history.record(opened: "/private/code/shop-worktrees/pay", at: at(500))
+        // Spelled as git and as the kernel spell it; the folder named like it, "sso-old", is another.
+        let places: [String] = ["/code/shop-worktrees/sso", "/private/code/shop-worktrees/sso"]
+        let removed: Bool = history.forget(under: places, open: [])
+        #expect(removed)
+        let paths: [String] = history.paths
+        let same: Bool = paths == ["/private/code/shop-worktrees/pay", "/code/shop-worktrees/sso-old", "/code/shop"]
+        #expect(same, "\(paths)")
+        let again: Bool = history.forget(under: places, open: [])
+        #expect(!again)
+        // One a window holds stays.
+        let openKept: Bool = history.forget(under: ["/code/shop"], open: ["/code/shop"])
+        #expect(!openKept)
+        let open: Date? = history.lastUsed("/code/shop")
+        #expect(open == at(100))
+        let pay: Bool = history.forget(under: ["/private/code/shop-worktrees/pay"], open: ["/code/shop"])
+        #expect(pay)
+        let left: [String] = history.paths
+        let sameLeft: Bool = left == ["/code/shop-worktrees/sso-old", "/code/shop"]
+        #expect(sameLeft, "\(left)")
     }
 
     @Test func timesAreKeptToTheMillisecondSoAHistoryReadsBackTheSame() {

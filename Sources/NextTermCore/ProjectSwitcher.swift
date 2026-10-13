@@ -476,6 +476,9 @@ public enum SwitcherAction: Equatable, Sendable {
     case close
     /// The selected closed project leaves the list, and Open Recent.
     case forget
+    /// The key is the switcher's, and does nothing now: ⌘⌫ held down, repeating. One press forgets one project at most,
+    /// and the press that emptied the search none; the repeats reach neither the field nor a menu.
+    case ignore
 }
 
 /// The switcher's keys. Two places take them, as the window gets them: the projects search's own commands
@@ -495,8 +498,10 @@ public struct SwitcherKeys: Equatable, Sendable {
     /// ⌘↩: the selected project in a new window.
     public static let newWindow = KeyChord(key: "\r", command: true)
     /// ⌘⌫: forget the selected closed project. Only while the search is empty: with text, the field's own delete to
-    /// the start of the line, so clearing a query never drops a project. The Delete key is U+0008 here, as the menus
-    /// spell it and as `KeyboardShortcuts.chord(from:)` reads an event; the event's own U+007F does not match.
+    /// the start of the line, so clearing a query never drops a project. Only the press, never its repeats: held down,
+    /// the selection moves on to the next closed project after each forget, and a repeat would take that one too. The
+    /// Delete key is U+0008 here, as the menus spell it and as `KeyboardShortcuts.chord(from:)` reads an event; the
+    /// event's own U+007F does not match.
     public static let forget = KeyChord(key: "\u{8}", command: true)
     private static let down = KeyChord(key: "n", control: true)
     private static let up = KeyChord(key: "p", control: true)
@@ -522,12 +527,24 @@ public struct SwitcherKeys: Equatable, Sendable {
         self.close = close
     }
 
-    /// What a row shows in its branch's place while ⌘ is held: its jump's key, "⌘1". Only the first nine projects the
-    /// list shows have one (`projects`, how many it shows now): nil for a server's row, past the ninth, or for a jump
-    /// with no key.
+    /// What a row shows in its branch's place while the jumps' modifiers are held (`showsJumps`): its jump's key,
+    /// "⌘1". Only the first nine projects the list shows have one (`projects`, how many it shows now): nil for a
+    /// server's row, past the ninth, or for a jump with no key.
     public func jumpHint(_ row: Int, projects: Int) -> String? {
         guard row < projects, jumps.indices.contains(row) else { return nil }
         return jumps[row]?.display
+    }
+
+    /// Whether the rows show their jump keys with these modifiers held: every modifier of the first jump that has a
+    /// key (Select Tab 1's, unless it has none), as the menus have it now, so a rebinding carries over; more held shows
+    /// them too. Never with no jump key, nor for one with no modifier, which would show them with nothing held.
+    public func showsJumps(command: Bool, shift: Bool, option: Bool, control: Bool) -> Bool {
+        let first: KeyChord? = jumps.lazy.compactMap { (jump: KeyChord?) -> KeyChord? in jump }.first
+        guard let first, first.command || first.shift || first.option || first.control else { return false }
+        if first.command && !command { return false }
+        if first.shift && !shift { return false }
+        if first.option && !option { return false }
+        return !first.control || control
     }
 
     /// Whether the Welcome window may take `chord` before the menus, in some state: a jump, Close, ⌘↩, ⌘⌫, ⌃N or ⌃P.
@@ -541,9 +558,10 @@ public struct SwitcherKeys: Equatable, Sendable {
 
     /// A key equivalent pressed while the Welcome window is key; nil leaves it to the window and the menus. The jumps
     /// and Close work anywhere in the window; ⌘↩, ⌘⌫, ⌃N and ⌃P only for the projects. A jump reaches only the projects
-    /// the list shows (`projects`, how many it shows now), never a server; past them it is nil.
+    /// the list shows (`projects`, how many it shows now), never a server; past them it is nil. `isRepeat`: the key is
+    /// held down and this is one of its repeats, which never forgets.
     public func action(chord: KeyChord, focus: Focus, searchEmpty: Bool, selection: SwitcherEntry?,
-                       projects: Int) -> SwitcherAction? {
+                       projects: Int, isRepeat: Bool = false) -> SwitcherAction? {
         let row: Int? = jumps.firstIndex { (jump: KeyChord?) -> Bool in jump == chord }
         if let row { return row < projects ? .jump(row) : nil }
         if let close, chord == close { return .close }
@@ -556,8 +574,12 @@ public struct SwitcherKeys: Equatable, Sendable {
             guard let selection else { return nil }
             return .activate(newWindow: selection.project != nil)
         case Self.forget:
+            // With text, the field's, held or not. On the empty search a repeat does nothing: held down, each forget
+            // would select the next closed project for the next repeat to take.
+            guard searchEmpty else { return nil }
+            if isRepeat { return .ignore }
             // Open projects stay listed while open.
-            guard searchEmpty, let project = selection?.project, !project.isOpen else { return nil }
+            guard let project = selection?.project, !project.isOpen else { return nil }
             return .forget
         default:
             return nil
@@ -756,6 +778,24 @@ public enum SwitcherText {
         return RecentProjects.abbreviate(parent, home: home)
     }
 
+    /// The name Edit › Undo gives a forget, after its “Undo”: “Forget “docs””, by the title the row shows.
+    public static func forgetAction(_ title: String) -> String {
+        "Forget “" + title + "”"
+    }
+
+    /// A server's row to VoiceOver: "staging, deploy@staging.example.com".
+    public static func accessibilityLabel(_ server: SwitcherServer) -> String {
+        server.name + ", " + server.destination
+    }
+
+    /// What VoiceOver hears of a row the keys selected from the search, as the row says it.
+    public static func accessibilityLabel(_ entry: SwitcherEntry, branch: String?, home: String) -> String {
+        switch entry {
+        case .project(let project): return accessibilityLabel(project, branch: branch, home: home)
+        case .server(let server): return accessibilityLabel(server)
+        }
+    }
+
     /// "wiki, open, branch main", "api, open in 2 windows, branch main", or for a closed project
     /// "Agents, in ~/Code, branch main".
     public static func accessibilityLabel(_ project: SwitcherProject, branch: String?, home: String) -> String {
@@ -769,5 +809,38 @@ public enum SwitcherText {
         }
         if let branch, !branch.isEmpty { parts.append("branch " + branch) }
         return parts.joined(separator: ", ")
+    }
+}
+
+/// The agent sessions read per project, so going back to one shows them at once while they are read again: the `limit`
+/// projects read last, the others let go, so moving through a long list never keeps every project's sessions.
+public struct SwitcherSessionCache<Value> {
+    /// How many projects the Welcome window keeps.
+    public static var standardLimit: Int { 20 }
+
+    public let limit: Int
+    private var values: [String: Value] = [:]
+    /// The paths kept, the one read last first.
+    public private(set) var paths: [String] = []
+
+    /// `limit`: how many projects it keeps, `standardLimit` unless given.
+    public init(limit: Int? = nil) {
+        self.limit = max(1, limit ?? Self.standardLimit)
+    }
+
+    /// A project's sessions as read last; nil when not kept. Looking does not count as a read. Set: read now, it is the
+    /// newest kept, and past `limit` the one read longest ago goes; nil lets it go.
+    public subscript(path: String) -> Value? {
+        get { values[path] }
+        set {
+            paths.removeAll { (kept: String) -> Bool in kept == path }
+            guard let newValue else {
+                values[path] = nil
+                return
+            }
+            values[path] = newValue
+            paths.insert(path, at: 0)
+            while paths.count > limit { values[paths.removeLast()] = nil }
+        }
     }
 }

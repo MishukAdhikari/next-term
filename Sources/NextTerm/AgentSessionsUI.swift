@@ -72,10 +72,22 @@ enum SessionStore {
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "\(Int(seconds / 3600)) h ago" }
         if calendar.isDateInYesterday(date) { return "yesterday" }
+        if seconds < 6 * 86400 { return weekday.string(from: date) }
+        let thisYear: Bool = calendar.isDate(date, equalTo: now, toGranularity: .year)
+        return (thisYear ? monthDay : monthDayYear).string(from: date)
+    }
+
+    /// Made once each, not for every row drawn: "Tue", "Sep 14" and "Sep 14, 2025", as the user's region writes them.
+    private static let weekday: DateFormatter = formatter("EEE")
+    private static let monthDay: DateFormatter = formatter("MMM d")
+    private static let monthDayYear: DateFormatter = formatter("MMM d yyyy")
+
+    private static func formatter(_ template: String) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate(seconds < 6 * 86400 ? "EEE" : calendar.isDate(date, equalTo: now, toGranularity: .year) ? "MMM d" : "MMM d yyyy")
-        return formatter.string(from: date)
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
     }
 
     static func color(_ agent: AgentKind) -> NSColor {

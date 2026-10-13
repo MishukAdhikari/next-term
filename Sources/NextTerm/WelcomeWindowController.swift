@@ -37,7 +37,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let hintLine = SwitcherHintLine()
     /// Over the list when the search finds nothing.
     private let noMatch = NSTextField(wrappingLabelWithString: "")
-    /// Tells the rows while ⌘ is held, as long as the window is key.
+    /// Tells the rows while the jumps' modifiers are held (⌘, or as rebound), as long as the window is key.
     private var modifierMonitor: Any?
     private var observers: [NSObjectProtocol] = []
     /// The projects search's count VoiceOver hears once typing settles.
@@ -70,8 +70,13 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var appliedSessionQuery = ""
     private var countAnnouncement: DispatchWorkItem?
     private var branches: [String: String] = [:]
-    /// Sessions already read, per project, so moving through the list is instant (refreshed in the background).
-    private var cache: [String: [AgentSession]] = [:]
+    /// Sessions already read, per project, so moving through the list is instant (refreshed in the background): the
+    /// projects read last, so a long list is never all kept.
+    private var cache = SwitcherSessionCache<[AgentSession]>()
+    /// The read that waits for the selection to rest, so moving through the list reads only where it stops.
+    private var pendingSessionRead: DispatchWorkItem?
+    /// How long the selection rests on a project before its sessions are read: ↓ held, or typing, passes over many.
+    static let sessionReadDelay = 0.15
     private var agentFilter: AgentKind?
     /// The tabs the shown project's sessions are open in.
     private var sessionTabs = SessionTabs()
@@ -105,7 +110,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             MainActor.assumeIsolated { self?.listChanged() }
         }
         let keys = center.addObserver(forName: KeyboardShortcuts.changed, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.listChanged() }
+            MainActor.assumeIsolated {
+                self?.menuKeys = nil
+                self?.listChanged()
+            }
         }
         observers = [history, keys]
     }
@@ -123,14 +131,18 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let closed: Bool = window.map { (window: NSWindow) -> Bool in !window.isVisible && !window.isMiniaturized } ?? false
         if closed { resetSessionSearch() }
         // Each show starts the selection afresh: shown from a project window, on the other open project used last, so
-        // the key that showed it, then Return, switches back.
+        // the key that showed it, then Return, switches back. It reads the selected project's sessions again too, the
+        // same one as before the close among them, as they may have changed since.
         reloadProjects(selection: .start)
-        // The same project selected as before the close: its sessions are read again, as they may have changed since.
-        if closed { showSelection(reloadSessions: true) }
         if closed || upElsewhere { place() }
+        showing = true
         super.showWindow(sender)
+        showing = false
         focusSearch()
     }
+
+    /// A show is under way: it has just read the list, so the window becoming key in it does not read it again.
+    private var showing = false
 
     /// Up already, but on another display than the window it was asked from (behind the window clicked on there): it
     /// comes over that window, as after a close, rather than forward on a display not being looked at. In front, it is
@@ -577,10 +589,27 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// The jumps' and Close's keys as the menus have them now, so a rebinding carries over.
-    private var switcherKeys: SwitcherKeys {
+    private var switcherKeys: SwitcherKeys { readMenuKeys().switcher }
+
+    /// The keys of the jumps, Close and the three ways in, as the menus have them: read once, and again after the
+    /// shortcuts change (`KeyboardShortcuts.changed`). Each command's key is read from the saved bindings, and a key
+    /// typed in the search would read them some thirty times.
+    private var menuKeys: MenuKeys?
+
+    private struct MenuKeys {
+        let switcher: SwitcherKeys
+        let waysIn: SwitcherWaysIn
+    }
+
+    private func readMenuKeys() -> MenuKeys {
+        if let menuKeys { return menuKeys }
         let shortcuts = KeyboardShortcuts.shared
         let jumps: [KeyChord?] = SwitcherKeys.jumpCommands.map { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
-        return SwitcherKeys(jumps: jumps, close: shortcuts.chord(for: SwitcherKeys.closeCommand))
+        let keys = SwitcherKeys(jumps: jumps, close: shortcuts.chord(for: SwitcherKeys.closeCommand))
+        let waysIn = SwitcherWaysIn { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
+        let read = MenuKeys(switcher: keys, waysIn: waysIn)
+        menuKeys = read
+        return read
     }
 
     /// The project shown on the right (kept here: its sessions are read for it).
@@ -595,7 +624,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// The right pane for the selection: a project with its sessions, a server, or nothing chosen; with nothing at all
     /// to list and nothing typed, the three ways in as cards. A project's sessions are read again when another one is
-    /// chosen, or with `reloadSessions` (the window shown again).
+    /// chosen, once the selection rests on it, or at once with `reloadSessions` (the window shown again).
     private func showSelection(reloadSessions: Bool = false) {
         let entry: SwitcherEntry? = switcher.selectedEntry
         let host: RemoteHost? = entry?.server.flatMap { (server: SwitcherServer) -> RemoteHost? in
@@ -645,20 +674,38 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         projectPath.toolTip = project.path
         guard current != previous || reloadSessions else { return }
         let path: String = project.path
-        sessions = cache[path] ?? []
+        let kept: [AgentSession]? = cache[path]
+        sessions = kept ?? []
         sessionTabs = SessionTabs()
-        sessionsLoading = cache[path] == nil
+        sessionsLoading = kept == nil
         sessionProblems = [:]
         applyFilter()
-        SessionStore.load(path) { [weak self] listing, tabs in
-            guard let self else { return }
-            self.cache[path] = listing.sessions
-            guard self.selectedProject == path else { return }
-            self.sessions = listing.sessions
-            self.sessionTabs = tabs
-            self.sessionsLoading = false
-            self.sessionProblems = listing.problems
-            self.applyFilter()
+        readSessions(of: path, after: reloadSessions ? 0 : Self.sessionReadDelay)
+    }
+
+    /// Reads `path`'s sessions after `delay`, while it is still the project shown; a read asked for since takes its
+    /// place. Reads run one at a time off the main thread, so one per project passed would queue up behind each other.
+    private func readSessions(of path: String, after delay: TimeInterval) {
+        pendingSessionRead?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.selectedProject == path else { return }
+            self.pendingSessionRead = nil
+            SessionStore.load(path) { [weak self] listing, tabs in
+                guard let self else { return }
+                self.cache[path] = listing.sessions
+                guard self.selectedProject == path else { return }
+                self.sessions = listing.sessions
+                self.sessionTabs = tabs
+                self.sessionsLoading = false
+                self.sessionProblems = listing.problems
+                self.applyFilter()
+            }
+        }
+        pendingSessionRead = work
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        } else {
+            work.perform()
         }
     }
 
@@ -730,9 +777,36 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             project.path == path
         }
         guard let project, !project.isOpen else { return }
-        ProjectHistoryRecorder.shared.forget(project.path)
+        forget(project.path, title: project.title)
+    }
+
+    /// Forgets the project, with Edit › Undo (⌘Z) to put it back: “Undo Forget “docs””. Redo forgets it again.
+    private func forget(_ path: String, title: String) {
+        guard let forgotten = ProjectHistoryRecorder.shared.forget(path) else { return }
+        if let undo = window?.undoManager {
+            undo.registerUndo(withTarget: self) { (target: WelcomeWindowController) in
+                target.unforget(forgotten, title: title)
+            }
+            undo.setActionName(SwitcherText.forgetAction(title))
+        }
         // While the window shows, the recorder and Recent Projects tell it as they change.
         if window?.isVisible != true { reloadProjects() }
+    }
+
+    /// Undo of a forget: the project back in this list at its last use and in File › Open Recent where it stood, and
+    /// selected, as before the forget.
+    private func unforget(_ forgotten: ProjectHistory.Forgotten, title: String) {
+        ProjectHistoryRecorder.shared.restore(forgotten)
+        if let undo = window?.undoManager {
+            undo.registerUndo(withTarget: self) { (target: WelcomeWindowController) in
+                target.forget(forgotten.path, title: title)
+            }
+            undo.setActionName(SwitcherText.forgetAction(title))
+        }
+        guard window?.isVisible == true else { return reloadProjects() }
+        // Told as it changed; read here when it was not, so the project is there to select.
+        if switcher.shown.index(of: .project(forgotten.path)) == nil { reloadProjects() }
+        select(project: forgotten.path)
     }
 
     // MARK: the switcher's keys
@@ -784,14 +858,38 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         case .forget:
             guard case .project(let project)? = switcher.selectedEntry else { return }
             forget(project.path)
+        case .ignore:
+            break
         }
     }
 
     private func move(by step: Int) {
         let count: Int = switcher.shown.entries.count
         guard let index = SwitcherSelection.moved(switcher.selectedIndex, by: step, count: count) else { return }
+        let before: Int? = switcher.selectedIndex
         switcher.select(index)
         showSelection()
+        // The list says its selection itself while it has the keyboard; from the search, VoiceOver is told here.
+        if index != before, searchHasKeyboard { announceSelection() }
+    }
+
+    /// The projects search is being typed in.
+    private var searchHasKeyboard: Bool {
+        guard let editor = search.currentEditor() else { return false }
+        return window?.firstResponder === editor
+    }
+
+    /// For the self-test: what VoiceOver was last told of a row the keys selected from the search.
+    private(set) var announcedSelection: String?
+
+    /// The row the keys just selected, as the row says it to VoiceOver: "Agents, in ~/Code, branch main".
+    private func announceSelection() {
+        guard let window, let entry = switcher.selectedEntry else { return }
+        let branch: String? = entry.project.flatMap { (project: SwitcherProject) -> String? in branches[project.path] }
+        let text: String = SwitcherText.accessibilityLabel(entry, branch: branch, home: NSHomeDirectory())
+        announcedSelection = text
+        NSAccessibility.post(element: window, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     /// Where the keyboard is: the projects search or the list, the sessions search or theirs, or elsewhere.
@@ -818,9 +916,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// now: a rebinding in Settings carries over, and one removed shows no key, nor one this window takes first
     /// (`handleKeyEquivalent`), which would do something else here.
     private func updateHint() {
-        let shortcuts = KeyboardShortcuts.shared
-        let menus = SwitcherWaysIn { (id: String) -> KeyChord? in shortcuts.chord(for: id) }
-        let waysIn: SwitcherWaysIn = menus.notTaken(by: switcherKeys)
+        let keys: MenuKeys = readMenuKeys()
+        let waysIn: SwitcherWaysIn = keys.waysIn.notTaken(by: keys.switcher)
         waysInRows.show(waysIn)
         waysInCards.show(waysIn)
         let selection: SwitcherEntry? = switcher.selectedEntry
@@ -879,9 +976,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     // MARK: window
 
-    /// Back in front, the list is read again: windows may have opened, closed or come forward behind it.
+    /// Back in front, the list is read again: windows may have opened, closed or come forward behind it. Not in a show,
+    /// which read it a moment ago.
     func windowDidBecomeKey(_ notification: Notification) {
-        reloadProjects()
+        if !showing { reloadProjects() }
         // A quit's resume question can have set it since.
         atLaunch.refresh()
         watchModifiers(true)
@@ -911,8 +1009,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         reloadProjects()
     }
 
-    /// ⌘ held while the window is key shows the jump keys in the first nine projects' rows. A local monitor: the
-    /// search's field editor has the keyboard, and the window would not be told.
+    /// The jumps' modifiers held while the window is key (⌘, or those Select Tab 1's key has now) show the jump keys in
+    /// the first nine projects' rows. A local monitor: the search's field editor has the keyboard, and the window would
+    /// not be told.
     private func watchModifiers(_ on: Bool) {
         if on, modifierMonitor == nil {
             modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -929,7 +1028,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func modifiersChanged(_ flags: NSEvent.ModifierFlags) {
         guard window?.isKeyWindow == true else { return switcher.showJumps(false) }
-        switcher.showJumps(flags.intersection(.deviceIndependentFlagsMask).contains(.command))
+        let held: NSEvent.ModifierFlags = flags.intersection(.deviceIndependentFlagsMask)
+        let shows: Bool = switcherKeys.showsJumps(command: held.contains(.command), shift: held.contains(.shift),
+                                                  option: held.contains(.option), control: held.contains(.control))
+        switcher.showJumps(shows)
     }
 
     // MARK: servers
@@ -1132,7 +1234,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The keys the window takes before its buttons and the menus do: Find… (⌘F) goes to the sessions search while
     /// a project's sessions show, and Return in that search resumes (the right pane's button holds Return everywhere
     /// else). Then the switcher's, while this window has the keyboard: ⌘1 to ⌘9 (Select Tab 1 to 9's keys) and ⌘W
-    /// (Close Tab's) anywhere in it; ⌘↩, ⌘⌫ (on an empty search only) and ⌃N ⌃P in the projects search or the list.
+    /// (Close Tab's) anywhere in it; ⌘↩, ⌘⌫ (on an empty search only, and never its repeats) and ⌃N ⌃P in the projects
+    /// search or the list.
     private func handleKeyEquivalent(_ event: NSEvent) -> Bool {
         let chord = KeyboardShortcuts.chord(from: event)
         if let chord, chord == Self.findChord { return focusSessionSearch() }
@@ -1142,8 +1245,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         guard let chord, let window, window.isKeyWindow, window.attachedSheet == nil else { return false }
         let keys: SwitcherKeys = switcherKeys
-        let action: SwitcherAction? = keys.action(chord: chord, focus: keyboardFocus, searchEmpty: search.stringValue.isEmpty,
-                                                  selection: switcher.selectedEntry, projects: switcher.shown.projects.count)
+        let empty: Bool = search.stringValue.isEmpty
+        let selection: SwitcherEntry? = switcher.selectedEntry
+        let projects: Int = switcher.shown.projects.count
+        let focus: SwitcherKeys.Focus = keyboardFocus
+        let action: SwitcherAction? = keys.action(chord: chord, focus: focus, searchEmpty: empty, selection: selection,
+                                                  projects: projects, isRepeat: event.isARepeat)
         guard let action else { return false }
         perform(action)
         return true

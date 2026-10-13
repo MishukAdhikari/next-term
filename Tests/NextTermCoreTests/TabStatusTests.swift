@@ -554,6 +554,28 @@ import Testing
         #expect(r.paths.isEmpty)
     }
 
+    @Test func undoOfAForgetPutsAPathBackWhereItStood() {
+        var r = RecentProjects(["/a", "/b", "/c"])
+        r.remove("/b")
+        r.restore("/b", at: 1)
+        #expect(r.paths == ["/a", "/b", "/c"])
+        // Listed again since: where it is now.
+        r.restore("/b", at: 2)
+        #expect(r.paths == ["/a", "/b", "/c"])
+        // The list shorter now: at its end.
+        var short = RecentProjects(["/a"])
+        short.restore("/z", at: 5)
+        #expect(short.paths == ["/a", "/z"])
+        short.restore("/y", at: -1)
+        #expect(short.paths == ["/y", "/a", "/z"])
+        // Full: the last one goes, as for an open.
+        var full = RecentProjects((0..<RecentProjects.limit).map { "/p\($0)" })
+        full.restore("/back", at: 3)
+        #expect(full.paths.count == RecentProjects.limit)
+        #expect(full.paths[3] == "/back")
+        #expect(!full.paths.contains("/p9"))
+    }
+
     @Test func existingAndAbbreviation() {
         let r = RecentProjects(["/tmp", "/no/such/folder"])
         #expect(r.existing() == ["/tmp"])

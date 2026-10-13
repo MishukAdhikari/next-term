@@ -25,7 +25,8 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
     private var keys: SwitcherKeys = .standard
     /// Where each server's tabs open, by its id, for its row's tooltip.
     private var folders: [String: String] = [:]
-    /// ⌘ is held: the first nine projects show their jump key in their branch's place.
+    /// The jumps' modifiers are held (⌘, or as rebound): the first nine projects show their jump key in their branch's
+    /// place.
     private(set) var showsJumps = false
     private let home: String = NSHomeDirectory()
     /// While the window selects a row itself, the table's notice of it is not the user's pick.
@@ -190,7 +191,7 @@ extension WelcomeSwitcherList {
         return cell
     }
 
-    /// ⌘ held or let go: the project rows in view show their jump key, or their branch again.
+    /// The jumps' modifiers held or let go: the project rows in view show their jump key, or their branch again.
     func showJumps(_ on: Bool) {
         guard on != showsJumps else { return }
         showsJumps = on
@@ -328,7 +329,8 @@ final class SwitcherHeaderCell: NSTableCellView {
 
 /// A project in the Welcome list: a green dot in the gutter while a window has it open (open is said by the dot only,
 /// the name keeps its weight and colour), its name, its branch at the right, and below the folder it is in, with "2
-/// windows" after it when more than one window has it. While ⌘ is held its jump key ("⌘1") shows in its branch's place.
+/// windows" after it when more than one window has it. While the jumps' modifiers are held its jump key ("⌘1") shows in
+/// its branch's place.
 final class SwitcherProjectCell: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("SwitcherProjectCell")
     static let secondaryFont = NSFont.systemFont(ofSize: 11)
@@ -341,7 +343,7 @@ final class SwitcherProjectCell: NSTableCellView {
     private var branchName: String?
     private var folderName = ""
 
-    /// ⌘ is held: the jump key shows instead of the branch.
+    /// The jumps' modifiers are held: the jump key shows instead of the branch.
     var showsJump = false {
         didSet { showJumpOrBranch() }
     }
@@ -509,7 +511,7 @@ final class SwitcherServerCell: NSTableCellView {
         name.stringValue = server.name
         destination.stringValue = server.destination
         toolTip = "Open a tab on \(server.name) (\(server.destination))" + (folder.map { ", in " + $0 } ?? "")
-        setAccessibilityLabel("\(server.name), \(server.destination)")
+        setAccessibilityLabel(SwitcherText.accessibilityLabel(server))
         setAccessibilityHelp("Opens a tab on this server")
     }
 }

@@ -405,6 +405,61 @@ import Testing
         #expect(act(selection: nil) == nil)
     }
 
+    @Test func aHeldForgetKeyForgetsOneProjectAtMost() {
+        let keys = SwitcherKeys.standard
+        func act(empty: Bool = true, selection: SwitcherEntry? = nil, repeating: Bool,
+                 _ focus: SwitcherKeys.Focus = .projects) -> SwitcherAction? {
+            let entry: SwitcherEntry = selection ?? closedDocs
+            return keys.action(chord: SwitcherKeys.forget, focus: focus, searchEmpty: empty, selection: entry,
+                               projects: 2, isRepeat: repeating)
+        }
+        // The press itself forgets the closed project selected.
+        #expect(act(repeating: false) == .forget)
+        // Held down, its repeats forget nothing: the selection moved on to the next closed project, which stays. They
+        // are the window's still, so they reach neither the field nor a menu.
+        #expect(act(repeating: true) == .ignore)
+        #expect(act(selection: openShop, repeating: true) == .ignore)
+        // The press that empties a typed search is the field's, and its repeats forget nothing once it is empty.
+        #expect(act(empty: false, repeating: false) == nil)
+        #expect(act(empty: false, repeating: true) == nil)
+        #expect(act(empty: true, repeating: true) == .ignore)
+        // In the sessions search ⌘⌫ is that field's, repeating or not.
+        #expect(act(repeating: true, .sessions) == nil)
+        // The other keys repeat as they always did: ⌃N held moves on down the list.
+        let down: SwitcherAction? = keys.action(chord: KeyChord(key: "n", control: true), focus: .projects,
+                                                searchEmpty: true, selection: closedDocs, projects: 2, isRepeat: true)
+        #expect(down == .move(1))
+    }
+
+    @Test func theJumpHintsShowWhileTheJumpsModifiersAreHeld() {
+        let standard = SwitcherKeys.standard
+        #expect(standard.showsJumps(command: true, shift: false, option: false, control: false))
+        // More held than the jumps take still shows them; fewer, or others, do not.
+        #expect(standard.showsJumps(command: true, shift: true, option: false, control: false))
+        #expect(!standard.showsJumps(command: false, shift: false, option: false, control: false))
+        #expect(!standard.showsJumps(command: false, shift: false, option: true, control: true))
+        // Rebound to ⌃⌥1 and on: shown while ⌃⌥ is held, not ⌘.
+        let rebound: [KeyChord?] = (1...9).map { (n: Int) -> KeyChord? in
+            KeyChord(key: "\(n)", option: true, control: true)
+        }
+        let keys = SwitcherKeys(jumps: rebound, close: nil)
+        #expect(keys.showsJumps(command: false, shift: false, option: true, control: true))
+        #expect(!keys.showsJumps(command: true, shift: false, option: false, control: false))
+        #expect(!keys.showsJumps(command: false, shift: false, option: false, control: true))
+        // Select Tab 1 with no key: the next jump that has one says which.
+        var firstRemoved: [KeyChord?] = SwitcherKeys.standard.jumps
+        firstRemoved[0] = nil
+        let second = SwitcherKeys(jumps: firstRemoved, close: nil)
+        #expect(second.showsJumps(command: true, shift: false, option: false, control: false))
+        // No jump with a key, or one with no modifier (a function key): never, or they would show with nothing held.
+        let none = SwitcherKeys(jumps: Array(repeating: nil, count: 9), close: nil)
+        #expect(!none.showsJumps(command: true, shift: false, option: false, control: false))
+        var bare: [KeyChord?] = Array(repeating: nil, count: 9)
+        bare[0] = KeyChord(key: "\u{F704}")
+        let functionKey = SwitcherKeys(jumps: bare, close: nil)
+        #expect(!functionKey.showsJumps(command: false, shift: false, option: false, control: false))
+    }
+
     @Test func rebindingsCarryOver() {
         var jumps: [KeyChord?] = (1...9).map { (n: Int) -> KeyChord? in KeyChord(key: "\(n)", command: true) }
         jumps[0] = KeyChord(key: "1", control: true)
@@ -627,6 +682,52 @@ import Testing
         // A worktree is read by the title its row shows.
         let worktree = project("/Users/sam/Code/xCloud-worktrees/7027-sso", windows: 1, title: "xCloud ▸ 7027-sso")
         #expect(SwitcherText.accessibilityLabel(worktree, branch: nil, home: home) == "xCloud ▸ 7027-sso, open")
+    }
+
+    @Test func aRowTheKeysSelectFromTheSearchIsSaidAsItsRowSaysIt() {
+        // What VoiceOver hears when ↓ or ⌃N moves the selection with the keyboard in the search.
+        let agents: SwitcherEntry = .project(project("/Users/sam/Code/Agents"))
+        let said: String = SwitcherText.accessibilityLabel(agents, branch: "main", home: home)
+        #expect(said == "Agents, in ~/Code, branch main")
+        let staging: SwitcherServer = server("staging", "deploy@staging.example.com")
+        #expect(SwitcherText.accessibilityLabel(staging) == "staging, deploy@staging.example.com")
+        let stagingRow: SwitcherEntry = .server(staging)
+        let serverSaid: String = SwitcherText.accessibilityLabel(stagingRow, branch: "main", home: home)
+        #expect(serverSaid == "staging, deploy@staging.example.com")
+    }
+
+    @Test func undoNamesTheProjectForgotten() {
+        #expect(SwitcherText.forgetAction("docs") == "Forget “docs”")
+        #expect(SwitcherText.forgetAction("xCloud ▸ 7027-sso") == "Forget “xCloud ▸ 7027-sso”")
+    }
+
+    // MARK: the sessions read
+
+    @Test func theSessionsKeptAreTheProjectsReadLast() {
+        var cache = SwitcherSessionCache<Int>(limit: 3)
+        #expect(cache["/code/a"] == nil)
+        cache["/code/a"] = 1
+        cache["/code/b"] = 2
+        cache["/code/c"] = 3
+        check(cache.paths, ["/code/c", "/code/b", "/code/a"])
+        // Read again, a project is the newest kept, with what it holds now.
+        cache["/code/a"] = 10
+        check(cache.paths, ["/code/a", "/code/c", "/code/b"])
+        #expect(cache["/code/a"] == 10)
+        // A fourth lets the one read longest ago go.
+        cache["/code/d"] = 4
+        check(cache.paths, ["/code/d", "/code/a", "/code/c"])
+        #expect(cache["/code/b"] == nil)
+        // Looking does not count as reading.
+        #expect(cache["/code/c"] == 3)
+        cache["/code/e"] = 5
+        #expect(cache["/code/c"] == nil)
+        // Set to nil, it goes.
+        cache["/code/e"] = nil
+        check(cache.paths, ["/code/d", "/code/a"])
+        #expect(SwitcherSessionCache<Int>.standardLimit == 20)
+        let standard = SwitcherSessionCache<Int>()
+        #expect(standard.limit == 20)
     }
 
     // MARK: more of the search

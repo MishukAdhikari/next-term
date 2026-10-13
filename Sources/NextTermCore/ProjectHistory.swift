@@ -93,15 +93,82 @@ public struct ProjectHistory: Equatable, Sendable {
         entries.removeAll { !kept.contains($0.path) }
     }
 
+    /// Whether Clear Menu has something to clear here: a project no window in `open` holds. Recent Projects can be
+    /// empty while it does (cleared with the project open, then its window closed), and the Welcome list lists it.
+    public func canClear(keeping open: [String]) -> Bool {
+        let kept = Set(open)
+        return entries.contains { (entry: Entry) -> Bool in !kept.contains(entry.path) }
+    }
+
+    /// What ⌘⌫ took from the history and Recent Projects, for Undo to put back as it was.
+    public struct Forgotten: Equatable, Sendable {
+        public let path: String
+        /// Its entry, with its last use; nil when the history did not hold it.
+        public let entry: Entry?
+        /// Where the entry stood in the history, newest first; nil with no entry.
+        public let historyIndex: Int?
+        /// Where it stood in Recent Projects; nil when it was not listed there.
+        public let recentIndex: Int?
+
+        public init(path: String, entry: Entry?, historyIndex: Int?, recentIndex: Int?) {
+            self.path = path
+            self.entry = entry
+            self.historyIndex = historyIndex
+            self.recentIndex = recentIndex
+        }
+    }
+
     /// ⌘⌫ on a closed project in the Welcome window: it leaves the history and Recent Projects both. A project in
-    /// `open`, which a window holds, stays in both. True when the history held it, so there is something to save.
+    /// `open`, which a window holds, stays in both. What was taken, and from where, for Undo; nil when nothing was (an
+    /// open project, or one neither list holds). Its `entry` is nil when only Recent Projects changed.
     @discardableResult
-    public mutating func forget(_ path: String, recent: inout RecentProjects, open: [String]) -> Bool {
-        guard !open.contains(path) else { return false }
+    public mutating func forget(_ path: String, recent: inout RecentProjects, open: [String]) -> Forgotten? {
+        guard !open.contains(path) else { return nil }
+        let recentIndex: Int? = recent.paths.firstIndex(of: path)
+        let historyIndex: Int? = entries.firstIndex { (entry: Entry) -> Bool in entry.path == path }
+        let entry: Entry? = historyIndex.map { (index: Int) -> Entry in entries[index] }
+        guard entry != nil || recentIndex != nil else { return nil }
         recent.remove(path)
-        guard lastUsed(path) != nil else { return false }
         forget(path)
-        return true
+        return Forgotten(path: path, entry: entry, historyIndex: historyIndex, recentIndex: recentIndex)
+    }
+
+    /// Undo of ⌘⌫: the project back in the history at its last use, and in Recent Projects where it stood. One used
+    /// again since keeps its newer time and place in each.
+    public mutating func restore(_ forgotten: Forgotten, recent: inout RecentProjects) {
+        if let index = forgotten.recentIndex { recent.restore(forgotten.path, at: index) }
+        if let entry = forgotten.entry { restore(entry, at: forgotten.historyIndex ?? entries.endIndex) }
+    }
+
+    /// An entry back at its own time, at `index` (where it stood) as far as the times allow: among the projects used at
+    /// the same moment (a restore's, opened at one look) it takes its old place, and the list stays newest first. A
+    /// later time kept for it since stays.
+    public mutating func restore(_ entry: Entry, at index: Int) {
+        if let kept = lastUsed(entry.path), kept >= entry.lastUsed { return }
+        entries.removeAll { $0.path == entry.path }
+        let time: Date = entry.lastUsed
+        let first: Int = entries.firstIndex { (other: Entry) -> Bool in other.lastUsed <= time } ?? entries.endIndex
+        let last: Int = entries.firstIndex { (other: Entry) -> Bool in other.lastUsed < time } ?? entries.endIndex
+        entries.insert(entry, at: min(max(index, first), last))
+        trim()
+    }
+
+    /// A worktree removed: the projects in its folder leave the history, its own and any inside it, as the folder is
+    /// gone. `places` spells that folder each way it may have been kept (as git and as the kernel spell it). A project
+    /// in `open`, which a window holds, stays. True when the history changed.
+    @discardableResult
+    public mutating func forget(under places: [String], open: [String]) -> Bool {
+        let kept = Set(open)
+        let count: Int = entries.count
+        entries.removeAll { (entry: Entry) -> Bool in
+            !kept.contains(entry.path) && Self.isInside(entry.path, places)
+        }
+        return entries.count != count
+    }
+
+    /// `path` is one of `places`, or in one of them.
+    private static func isInside(_ path: String, _ places: [String]) -> Bool {
+        places.contains { (place: String) -> Bool in path == place || path.hasPrefix(place + "/") }
     }
 
     /// The ones whose folder still exists. The history keeps the others, so a folder on a drive that is not mounted

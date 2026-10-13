@@ -180,10 +180,11 @@ extension SelfTest {
     /// it does a real key's, through the app: the key window's key equivalents first (the Welcome window's own, then the
     /// menus'), then the window's first responder. It is pressed only while `window` is the key window, since AppKit
     /// gives it to whichever window is (⌘W meant for the Welcome window would close a tab elsewhere). False when it is
-
-    /// not, with a failed check, or a note when Next Term is not the app in front; nothing is pressed then.
+    /// not, with a failed check, or a note when Next Term is not the app in front; nothing is pressed then. `repeating`:
+    /// one of the repeats the keyboard sends while the key is held down.
     @discardableResult
-    fileprivate static func switcherKey(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], to window: NSWindow) -> Bool {
+    fileprivate static func switcherKey(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], repeating: Bool = false,
+                                        to window: NSWindow) -> Bool {
         guard window.isKeyWindow else {
             let key: String = NSApp.keyWindow.map { (other: NSWindow) -> String in "“\(other.title)”" } ?? "no window"
             let detail: String = "key code \(code) not pressed, the keyboard in " + key
@@ -201,6 +202,7 @@ extension SelfTest {
         var held = CGEventFlags()
         for (flag, mask) in masks where flags.contains(flag) { held.insert(mask) }
         key.flags = held
+        if repeating { key.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
         guard let event = NSEvent(cgEvent: key) else { return false }
         NSApp.sendEvent(event)
         return true
@@ -965,6 +967,11 @@ extension SelfTest {
         }
         check(next.selectedProject == wiki && searchHasKeyboard(next),
               "Welcome: ↓ moves the selection down the list, the keyboard staying in the search", "\(pressed) presses")
+        if pressed > 0 {
+            let said: String = next.announcedSelection ?? "nothing"
+            check(said.hasPrefix("wiki, open"), "Welcome: VoiceOver hears the row ↓ selects from the search, as the row says it",
+                  said)
+        }
         let wikis: Int = fixtures.windows(on: wiki).count
         guard switcherKey(SwitcherKeyCode.returnKey, .command, to: nextWindow) else { return }
         let second: Bool = await wait(5) { fixtures.windows(on: wiki).count == wikis + 1 }
@@ -977,8 +984,9 @@ extension SelfTest {
 #if DEBUG
 extension SelfTest {
     /// ⌘⌫ with text typed deletes the text, as in any field, and forgets nothing; on the empty search it forgets the
-    /// selected closed project, from this list and from File › Open Recent; an open project it never forgets. ⌘↩ with the
-    /// keyboard in the sessions search, a made-up session listed there, opens no window and resumes nothing.
+    /// selected closed project, from this list and from File › Open Recent, and Edit › Undo puts it back; held down, its
+    /// repeats forget nothing; an open project it never forgets. ⌘↩ with the keyboard in the sessions search, a made-up
+    /// session listed there, opens no window and resumes nothing.
     private static func forgetChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
         let shop: String = fixtures.path("shop")
         let sessionFolder: URL? = fixtureSession(for: shop)
@@ -1005,12 +1013,15 @@ extension SelfTest {
         let docs: String = fixtures.path("docs")
         welcome.select(project: docs)
         guard welcome.selectedProject == docs else { return check(false, "Welcome: the closed project docs is listed, for ⌘⌫") }
+        let usedBefore: Date? = recorder.history.lastUsed(docs)
+        let recentAt: Int? = UserDefaults.standard.stringArray(forKey: "recentProjects")?.firstIndex(of: docs)
         guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
         let forgot: Bool = await wait(2) {
             !welcome.shownProjects.contains(docs) && recorder.history.lastUsed(docs) == nil && !app.recentProjects.contains(docs)
         }
         check(forgot, "Welcome: ⌘⌫ on the empty search forgets the selected closed project, here and in File › Open Recent",
               "listed \(welcome.shownProjects.contains(docs)), in Open Recent \(app.recentProjects.contains(docs))")
+        if forgot { await undoForgetChecks(app, welcome, docs, usedBefore: usedBefore, recentAt: recentAt) }
 
         welcome.select(project: shop)
         guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
@@ -1033,6 +1044,42 @@ extension SelfTest {
               "Welcome: ⌘↩ in the sessions search, a session listed, opens no window and resumes nothing",
               "\(app.controllers.count) windows, \(windows) before; \(tabCount()) tabs, \(tabs) before; session listed \(listed)")
         welcome.close()
+    }
+
+    /// After ⌘⌫ forgot `docs`: Edit › Undo reads “Undo Forget “docs””, and puts it back in the list at its last use,
+    /// selected, and in File › Open Recent where it stood. ⌘⌫ held down on it then forgets nothing on its repeats; a press
+    /// forgets it again, as the checks after these expect.
+    private static func undoForgetChecks(_ app: AppDelegate, _ welcome: WelcomeWindowController, _ docs: String,
+                                         usedBefore: Date?, recentAt: Int?) async {
+        guard let window = welcome.window else { return }
+        let recorder = ProjectHistoryRecorder.shared
+        func items(_ menu: NSMenu) -> [NSMenuItem] {
+            menu.items.flatMap { (item: NSMenuItem) -> [NSMenuItem] in [item] + (item.submenu.map(items) ?? []) }
+        }
+        let undo: Selector = Selector(("undo:"))
+        let undoItem: NSMenuItem? = items(NSApp.mainMenu ?? NSMenu()).first { (item: NSMenuItem) -> Bool in item.action == undo }
+        undoItem?.menu?.update()
+        let name: String = (docs as NSString).lastPathComponent
+        let title: String = "Undo " + SwitcherText.forgetAction(name)
+        check(undoItem?.title == title && undoItem?.isEnabled == true, "Welcome: after ⌘⌫, Edit › Undo reads “\(title)”",
+              "“\(undoItem?.title ?? "no Undo item")”, on \(undoItem?.isEnabled == true)")
+        NSApp.sendAction(undo, to: nil, from: nil)
+        let back: Bool = await wait(2) {
+            welcome.shownProjects.contains(docs) && recorder.history.lastUsed(docs) == usedBefore
+        }
+        let recentNow: Int? = UserDefaults.standard.stringArray(forKey: "recentProjects")?.firstIndex(of: docs)
+        check(back && recentNow == recentAt && welcome.selectedProject == docs,
+              "Welcome: Undo puts the forgotten project back, at its last use and selected, and in File › Open Recent where it stood",
+              "listed \(welcome.shownProjects.contains(docs)), time kept \(recorder.history.lastUsed(docs) == usedBefore), "
+                  + "Open Recent at \(recentNow.map(String.init) ?? "none") of \(recentAt.map(String.init) ?? "none"), "
+                  + "selected \(welcome.selectedProject.map { ($0 as NSString).lastPathComponent } ?? "none")")
+        guard back, welcome.selectedProject == docs else { return }
+        guard switcherKey(SwitcherKeyCode.delete, .command, repeating: true, to: window) else { return }
+        await pause(0.3)
+        check(welcome.shownProjects.contains(docs) && recorder.history.lastUsed(docs) != nil,
+              "Welcome: ⌘⌫ held down forgets nothing on its repeats, so one press forgets one project at most")
+        guard switcherKey(SwitcherKeyCode.delete, .command, to: window) else { return }
+        _ = await wait(2) { !welcome.shownProjects.contains(docs) }
     }
 
     /// A made-up Claude Code session, “Tidy the fixtures”, for `project`, in the sessions home the run points the Welcome
