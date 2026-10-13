@@ -381,7 +381,9 @@ private func hexValue(_ count: Int) -> String {
 extension NamedValueCutTests {
     /// Each way a line names a secret's value, with the value longer than a cut's reach: quoted after `=`, `:`, `=>` or
     /// `:=`, with its name quoted or not and Unicode spaces around, and bare on an env, YAML or diff line, or on a line
-    /// that starts after a lone carriage return. No cut and no snippet across any of them shows a part of it.
+    /// that starts after a lone carriage return, with spaces, tabs or a line's end after it. No cut and no snippet
+    /// across any of them shows a part of it. The text a cut keeps before it is redacted as read_file redacts it, with
+    /// its "…" after it.
     @Test(arguments: [
         "const config = { \"apiKey\": \"%@\", other: 1 }",
         "  token => '%@' , next",
@@ -391,6 +393,8 @@ extension NamedValueCutTests {
         "-API_TOKEN = %@   ",
         "access_key: %@",
         "x = 1;\rPASSWORD=%@",
+        "export DB_PASSWORD=%@\t\t \t",
+        "SECRET_KEY=%@    \rNEXT=1",
     ])
     func noCutInAValueItsNameMasksShowsAnyOfIt(_ form: String) {
         let value = hexValue(900)
@@ -398,12 +402,13 @@ extension NamedValueCutTests {
         let redacted = MCPRedaction.redact(line, mask: .empty).text
         #expect(!showsPart(of: value, in: redacted), "\(redacted)") // the whole line hides it
         let length = line.utf16.count
-        // Every 29th place, and either side of the value's end: a cut on a closing quote keeps all of the value.
+        // Every 29th place, and around the value's end: a cut on a closing quote keeps all of the value, and one in the
+        // spaces after a bare value keeps it without the line's end its pattern needs.
         let end = line.range(of: value)!.upperBound.utf16Offset(in: line)
-        for offset in Array(stride(from: 1, to: length, by: 29)) + [end - 1, end, end + 1] where offset < length {
+        for offset in Array(stride(from: 1, to: length, by: 29)) + [end - 1, end, end + 1, end + 2, length - 1] where offset < length {
             let at = String.Index(utf16Offset: offset, in: line)
             let back = MCPRedaction.cleanCut(line, at: at, forward: false, mask: .empty)
-            let left = MCPRedaction.redact(String(line[..<back]), mask: .empty).text
+            let left = MCPRedaction.redact(String(line[..<back]) + "…", mask: .empty).text
             #expect(!showsPart(of: value, in: left), "\(offset) back: \(left.suffix(40))")
             let ahead = MCPRedaction.cleanCut(line, at: at, forward: true, mask: .empty)
             let right = MCPRedaction.redact(String(line[ahead...]), mask: .empty).text
@@ -455,8 +460,9 @@ extension NamedValueCutTests {
 
     /// A cut on a quoted value's closing quote is in the value for the text before it, which holds all of the value
     /// and not the quote: it goes back to just after the opening quote. A cut past the quote, or one that keeps the
-    /// text after the quote, is not. A bare value's end is not either: the text before a cut there holds the whole
-    /// value, which its name masks.
+    /// text after the quote, is not. A bare value's pattern needs the line's end after it, past any spaces: a cut at
+    /// its end, in the spaces after it or on the line's end leaves that out, and goes back to the value's start. One
+    /// past the line's end is not in it, and neither is one that keeps the text after the value.
     @Test func aQuotedValuesClosingQuoteIsInTheValue() {
         for quote in ["\"", "'", "`"] {
             let line = "let password = " + quote + "0f1e2d3c4b5a6978" + quote + " end"
@@ -467,10 +473,48 @@ extension NamedValueCutTests {
             #expect(!values.cuts(line.index(after: close), keepingAfter: false), "\(quote)")
             #expect(!values.cuts(close, keepingAfter: true) && values.cuts(line.index(before: close), keepingAfter: true))
         }
-        let bare = "API_TOKEN=0f1e2d3c4b5a6978  "
+        let bare = "API_TOKEN=0f1e2d3c4b5a6978 \t\rnext" // the value at 10..<26, the line's end at 28
         let values = MCPRedaction.NamedValues(bare, mask: .empty)
-        let end = bare.index(bare.startIndex, offsetBy: 26)
-        #expect(!values.cuts(end, keepingAfter: false) && values.cuts(bare.index(before: end), keepingAfter: false))
+        let first = bare.index(bare.startIndex, offsetBy: 10)
+        for offset in 11...28 {
+            let at = bare.index(bare.startIndex, offsetBy: offset)
+            #expect(values.cuts(at, keepingAfter: false) && values.clean(at, keepingAfter: false) == first, "\(offset)")
+        }
+        let past = bare.index(bare.startIndex, offsetBy: 29)
+        #expect(!values.cuts(past, keepingAfter: false))
+        #expect(!values.cuts(bare.index(bare.startIndex, offsetBy: 26), keepingAfter: true))
+    }
+
+    /// read_file adds "…" to a line it cuts, then redacts. A bare value's pattern needs only spaces and then the line's
+    /// end after the value: a cut in the spaces or tabs after one kept all of it with "…" where the line's end was, so
+    /// nothing masked it. Cut there, the line shows none of it; cut past a line's end inside the line, the text kept
+    /// masks it. Not cut, the line comes back masked.
+    @Test func readFileCutInTheSpacesAfterABareValueShowsNoneOfIt() throws {
+        let f = try ProjectFixture()
+        let value = "Tr0ub4dor&3!horse"
+        let spaces = String(repeating: " ", count: 2100)
+        let lines = [
+            "DB_PASSWORD=" + value + spaces,
+            "export DB_PASSWORD=" + value + String(repeating: "\t", count: 2100),
+            "  -API_TOKEN = " + value + " \t" + spaces,
+            "secret: " + value + String(repeating: " \t", count: 1050),
+            "DB_PASSWORD=" + value + spaces + "\rNEXT=1",
+            "DB_PASSWORD=" + value + "  \r" + spaces, // the cut past the line's end: the kept text masks it
+            "DB_PASSWORD=" + hexValue(1980) + String(repeating: " ", count: 100), // the cut 8 past the value
+        ]
+        for (index, line) in lines.enumerated() {
+            let secret = line.contains(value) ? value : String(line.dropFirst(12).prefix(1980))
+            #expect(!showsPart(of: secret, in: MCPRedaction.redact(line, mask: .empty).text), "\(index)") // the whole line hides it
+            try f.write("api/b-\(index).ini", line + "\n")
+            let result = json(MCPProjectTools.readFile(["path": "b-\(index).ini", "project": "api"], in: f.both, mask: .empty))
+            let text = try #require(result["text"] as? String)
+            #expect(!showsPart(of: secret, in: text), "\(index): \(text.prefix(60).debugDescription)")
+            #expect(result["long_lines_cut"] as? Int == 1, "\(index)")
+        }
+        try f.write("api/short.ini", "DB_PASSWORD=" + value + String(repeating: " ", count: 100) + "\n")
+        let short = json(MCPProjectTools.readFile(["path": "short.ini", "project": "api"], in: f.both, mask: .empty))
+        #expect(short["text"] as? String == "DB_PASSWORD=•••" + String(repeating: " ", count: 100))
+        #expect(short["redacted"] as? Int == 1 && short["long_lines_cut"] == nil)
     }
 }
 

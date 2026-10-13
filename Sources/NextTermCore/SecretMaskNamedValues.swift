@@ -8,8 +8,9 @@ extension MCPRedaction {
     /// ••• the patterns see.
     struct NamedValues {
         let line: String
-        /// Inside a value, or on a quoted value's closing quote: a cut there that keeps the text before it shows the
-        /// value's start, or all of it without the quote the pattern needs to mask it. UTF-8 offsets, sorted, apart.
+        /// Inside a value, on a quoted value's closing quote, or from a bare value's end through the line's end after its
+        /// spaces: a cut there that keeps the text before it shows the value's start, or all of it without the quote or
+        /// the line's end the pattern needs to mask it. UTF-8 offsets, sorted, apart.
         private let keepingBefore: [Range<Int>]
         /// From just past where a value's match starts (its name, or a bare value's line start) to the value's end: a cut
         /// there that keeps the text after it shows the value, or its end, with a part of its name that may be no

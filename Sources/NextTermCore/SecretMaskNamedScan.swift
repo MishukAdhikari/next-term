@@ -3,7 +3,8 @@ import Foundation
 extension NamedValueBytes {
     /// A value `quotedValue` or `bareValue` masks for its name, in UTF-8 offsets: where the match starts (the name; a bare
     /// value's line start), the value alone, and where the text the pattern needs to mask it ends: past a quoted value's
-    /// closing quote, at a bare value's end (spaces or the text's end may follow).
+    /// closing quote; past the line's end after a bare value and its spaces, or at the text's end. Text kept up to the
+    /// value's end or into its spaces, with read_file's "…" after it, has no line's end there.
     struct Found: Equatable {
         let start: Int
         let value: Range<Int>
@@ -60,8 +61,8 @@ extension NamedValueBytes {
         var found: [Found] = []
         var lineStart = 0
         while lineStart < count {
-            if let value = bareValue(lineStart: lineStart) {
-                found.append(Found(start: lineStart, value: value, end: value.upperBound))
+            if let bare = bareValue(lineStart: lineStart) {
+                found.append(Found(start: lineStart, value: bare.value, end: bare.lineEnd + lineEnd(bare.lineEnd)))
             }
             var at = lineStart
             while at < count, lineEnd(at) == 0 { at += 1 }
@@ -71,7 +72,8 @@ extension NamedValueBytes {
         return found
     }
 
-    private func bareValue(lineStart: Int) -> Range<Int>? {
+    /// The value, and where the line's end after it and its spaces is (the text's end when none is).
+    private func bareValue(lineStart: Int) -> (value: Range<Int>, lineEnd: Int)? {
         let sign = bytes[lineStart] == 0x2B || bytes[lineStart] == 0x2D
         if sign, let value = bareValue(name: afterIndent(lineStart + 1)) { return value }
         // `[+\-]?` takes nothing: the name may start with a -, which is one of its characters.
@@ -88,7 +90,7 @@ extension NamedValueBytes {
         return after > at + export.count ? after : at
     }
 
-    private func bareValue(name start: Int) -> Range<Int>? {
+    private func bareValue(name start: Int) -> (value: Range<Int>, lineEnd: Int)? {
         // The name's look-behind: no name's character before it (a - the sign took).
         if start > 0, Self.isName(bytes[start - 1]) { return nil }
         var at = start
@@ -104,7 +106,7 @@ extension NamedValueBytes {
         var rest = end
         while lineEnd(rest) == 0, case let length = space(rest), length > 0 { rest += length }
         guard rest == count || lineEnd(rest) > 0, MCPRedaction.isSecretName(text(name)) else { return nil }
-        return first..<end
+        return (first..<end, rest)
     }
 
     /// A quote or a `#`, which a bare value cannot hold.

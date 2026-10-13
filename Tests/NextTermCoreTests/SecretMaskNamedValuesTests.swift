@@ -148,10 +148,17 @@ extension NamedValueBytesTests {
             for place in [line.index(after: start.lowerBound), line.index(before: start.upperBound)] {
                 #expect(values.cuts(place, keepingAfter: false) && values.cuts(place, keepingAfter: true), "\(line.debugDescription)")
             }
-            // At the probe's ends a cut keeps all of it: one at its end is in the value (a closing quote the pattern
-            // needs is left out) or keeps text that masks it; one at its start is in the value, its name left out.
-            let before = MCPRedaction.redact(String(line[..<start.upperBound]), maskingRun: { _ in nil }, mask: mask).text
-            #expect(values.cuts(start.upperBound, keepingAfter: false) || !before.contains(probe), "\(line.debugDescription)")
+            // A cut at the probe's end or past it keeps all of it: it is in the value (a closing quote, or the line's end
+            // after a bare value's spaces, that the pattern needs is left out), or the text it keeps masks the value with
+            // read_file's "…" after it. One at its start is in the value, its name left out.
+            var place = start.upperBound
+            while place < line.endIndex {
+                let kept = String(line[..<place]) + "…"
+                let before = MCPRedaction.redact(kept, maskingRun: { _ in nil }, mask: mask).text
+                let at = line.distance(from: start.upperBound, to: place)
+                #expect(values.cuts(place, keepingAfter: false) || !before.contains(probe), "\(line.debugDescription) +\(at)")
+                place = line.index(after: place)
+            }
             #expect(values.cuts(start.lowerBound, keepingAfter: true), "\(line.debugDescription)")
         }
         #expect(masked > 300, "\(masked)")
