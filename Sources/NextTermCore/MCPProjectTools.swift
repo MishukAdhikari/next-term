@@ -284,8 +284,12 @@ public enum MCPProjectTools {
                 throw MCPToolError("offset \(offset) is past the end: \(file.relative) has \(lines.count) lines.")
             }
             var taken: [String] = []
-            var chars = 0, cutLines = 0
-            for line in lines.dropFirst(offset - 1).prefix(limit) {
+            var chars = 0, cutLines = 0, carried = 0
+            let range = min(offset - 1, lines.count)..<min(lines.count, offset - 1 + limit)
+            // A value named on a line before its own is ••• first: the cut and an offset past its name see its line alone.
+            let named = MCPRedaction.CarriedValues(lines, in: range, mask: mask)
+            for index in range {
+                let (line, count) = named.masked(lines[index], at: index)
                 var shown = line
                 if shown.count > maxLineLength {
                     // Cut where nothing redact masks crosses the cut: a value across it would show its start.
@@ -297,8 +301,10 @@ public enum MCPProjectTools {
                 if !taken.isEmpty, chars + shown.count + 1 > maxChars { break }
                 taken.append(shown)
                 chars += shown.count + 1
+                carried += count
             }
-            let redacted = MCPRedaction.redact(taken.joined(separator: "\n"), mask: mask)
+            var redacted = MCPRedaction.redact(taken.joined(separator: "\n"), mask: mask)
+            redacted.count += carried
             let end = offset - 1 + taken.count
             var result: [String: Any] = ["path": file.relative, "project": file.root, "total_lines": lines.count,
                                          "start_line": taken.isEmpty ? 0 : offset, "end_line": end, "text": redacted.text]
@@ -353,9 +359,11 @@ public enum MCPProjectTools {
             let all = found.sorted { $0.relativePath < $1.relativePath }.flatMap(\.matches)
             var redactions = 0
             let values = MCPRedaction.NamedValuesCache() // a long line is read once for all its matches
+            let named = MCPRedaction.CarriedLines(root: folder, mask: mask) // a value named on a line before the match's
             let shown: [[String: Any]] = all.prefix(limit).map { match in
-                let preview = snippet(match, mask: mask, values: values)
-                redactions += preview.count
+                let carried = named.masking(match)
+                let preview = snippet(carried.match, mask: mask, values: values)
+                redactions += carried.count + preview.count
                 return ["path": match.relativePath, "line": match.line, "column": match.range.location + 1, "text": preview.text]
             }
             var result: [String: Any] = ["project": folder, "matches": shown, "total": all.count,
