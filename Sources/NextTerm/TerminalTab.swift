@@ -955,8 +955,21 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: liveTail()), at: Self.now)
+        status.observe(agentScreen: agentActivity(liveTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
+    }
+
+    /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
+    /// (most of them, most of the time) is not parsed again 4 times a second. AgentScreen.activity is a function of the
+    /// lines and the masks alone, and TabStatus takes the same activity again as it did.
+    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, activity: AgentActivity)?
+
+    private func agentActivity(_ lines: [String]) -> AgentActivity {
+        let mask = ObjectIdentifier(SecretMask.current)
+        if let last = lastAgentRead, last.mask == mask, last.lines == lines { return last.activity }
+        let activity = AgentScreen.activity(screenLines: lines)
+        lastAgentRead = (lines, mask, activity)
+        return activity
     }
 
     /// What the program in front started outside the terminal that its hangup stops, as the close alerts name it

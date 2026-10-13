@@ -344,8 +344,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+        ticker.tolerance = 0.03
         RunLoop.main.add(ticker, forMode: .common)
         self.ticker = ticker
+        // A window that refreshed once a second while no one could see it is up to date the moment it shows again.
+        for (name, ofApp) in NSWindow.visibilityNotifications {
+            NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged), name: name, object: ofApp ? NSApp : window)
+        }
 
         if firstTab { addTab(directory: self.project ?? directory, byAgent: byAgent) }
     }
@@ -798,16 +803,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         tickCount += 1
         let now = TerminalTab.now
         refreshVisibility()
-        for tab in tabs {
+        for (index, tab) in tabs.enumerated() {
             tab.view.drawIfSeenAgain()
             if tickCount % 2 == 0 { tab.pollForeground(); tab.pollServing() } // every 0.5 s
-            tab.pollAgentScreen()
+            // The agent in sight every 0.25 s; the others every 0.5 s, half of them on each tick.
+            if isOnScreen(tab) || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
             tab.status.tick(at: now)
             if let notice = tab.status.takeNotice() {
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
         }
         if tickCount % 4 == 0 { editorArea.checkDisk() } // agents edit the files you have open
+        // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
+        // notifications), and at once when it shows again (visibilityChanged).
+        if window?.canBeSeen != false || tickCount % 4 == 0 { refresh() }
+    }
+
+    @objc private func visibilityChanged() {
+        guard window?.canBeSeen == true else { return }
         refresh()
     }
 

@@ -91,6 +91,8 @@ public enum AgentScreen {
     /// is nil when the options reach above `lines`.
     static func form(in lines: [String], mask: SecretMask = .current) -> (row: Int?, question: String)? {
         let start = max(0, lines.count - promptLines)
+        // No hint line, no form: what almost every screen says, found without reading each row's text.
+        guard lines[start...].contains(where: { $0.contains(formHint) }) else { return nil }
         // Its own rows sit just over its hint, with no other list between: the same rows in the transcript,
         // with another picker's hint further down, are not the form.
         guard let mark = lines[start...].lastIndex(where: { matches(formRow, splitCursor(inner($0)).rest) }),
@@ -342,10 +344,12 @@ extension AgentScreen {
 
     /// A line without the box an agent may draw around its prompt.
     private static func inner(_ line: String) -> String {
-        var text = Substring(line)
-        while let first = text.first, first == "│" || first == "|" || first.isWhitespace { text = text.dropFirst() }
-        while let last = text.last, last == "│" || last == "|" || last.isWhitespace { text = text.dropLast() }
-        return String(text)
+        // By index, once over the line: Collection's dropLast() counts the whole line at each character it drops.
+        func edge(_ c: Character) -> Bool { c == "│" || c == "|" || c.isWhitespace }
+        var start = line.startIndex, end = line.endIndex
+        while start < end, edge(line[start]) { start = line.index(after: start) }
+        while end > start, edge(line[line.index(before: end)]) { end = line.index(before: end) }
+        return String(line[start..<end])
     }
 
     /// A blank line, a box's edge, or the hint line under a list: where the choices end.

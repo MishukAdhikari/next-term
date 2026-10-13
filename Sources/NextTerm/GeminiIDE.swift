@@ -74,11 +74,22 @@ final class GeminiIDEServer: @unchecked Sendable { // mutable state lives on `qu
         listener.start(queue: queue)
         self.listener = listener
         _ = ready.wait(timeout: .now() + 1)
+        // One keepalive however often the link is turned off and on again.
+        keepAlive?.invalidate()
         let keepAlive = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.heartbeat() }
+        keepAlive.tolerance = 5
         RunLoop.main.add(keepAlive, forMode: .common)
+        self.keepAlive = keepAlive
     }
 
-    func stop() { queue.sync { stopOnQueue() } }
+    /// The 30 s heartbeat to connected clients: one, gone when the link stops.
+    private var keepAlive: Timer?
+
+    func stop() {
+        keepAlive?.invalidate()
+        keepAlive = nil
+        queue.sync { stopOnQueue() }
+    }
 
     private func stopOnQueue() {
         listener?.cancel()
