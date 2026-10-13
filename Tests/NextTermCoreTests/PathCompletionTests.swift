@@ -190,7 +190,8 @@ import Testing
         var elapsed = Double.infinity
         var listing = PathCompletion.Listing(folder: dir.path, entries: [])
         var result = PathCompletion.Result()
-        for _ in 0..<3 {
+        // The best of five: other work on a loaded Mac (a parallel test run, a build) only ever adds to one run's time.
+        for _ in 0..<5 {
             let started = cpu()
             listing = PathCompletion.list(dir.path)
             result = PathCompletion.Prepared(listing, foldersOnly: false, hidden: false).candidates("fo1")

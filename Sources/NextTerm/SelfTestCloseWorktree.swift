@@ -48,13 +48,19 @@ extension SelfTest {
         try? "new\n".write(toFile: tree + "/new.txt", atomically: true, encoding: .utf8)
         window.performClose(nil)
         let asked = await wait(10) { sheetText().contains("Close this window?") }
-        // Top to bottom as drawn: the alternative under Cancel, past the rule with "or", red, its note under it.
+        // Top to bottom as drawn: the alternative under Cancel, past the rule with "or", red, its note under it. Laid out first:
+        // a sheet over a window of an app that isn't in front may not have been yet.
+        window.attachedSheet?.contentView?.layoutSubtreeIfNeeded()
         let drawn = (AlternativeAlert.current?.buttons ?? []).sorted { $0.frame.minY > $1.frame.minY }
-        check(asked && offered() == ["Close Window", "Cancel", "Close and Remove Worktree"] && drawn.map(\.title) == offered()
-              && drawn.last?.hasDestructiveAction == true && drawn.first?.keyEquivalent == "\r" && drawn[safe: 1]?.keyEquivalent == "\u{1b}"
-              && sheetText().contains("| or | Deletes its folder, with the ignored files in it. The branch agent/x stays, with its commits."),
+        let parts: [(String, Bool)] = [
+            ("offered", offered() == ["Close Window", "Cancel", "Close and Remove Worktree"]), ("drawn in that order", drawn.map(\.title) == offered()),
+            ("red", drawn.last?.hasDestructiveAction == true), ("Return", drawn.first?.keyEquivalent == "\r"),
+            ("Escape", drawn[safe: 1]?.keyEquivalent == "\u{1b}"),
+            ("text", sheetText().contains("| or | Deletes its folder, with the ignored files in it. The branch agent/x stays, with its commits.")),
+        ]
+        check(asked && parts.allSatisfy(\.1),
               "close and remove worktree: a worktree's Close Window question sets it apart under Cancel, past “or”, saying the branch stays",
-              "\(sheetText()) | \(drawn.map(\.title))")
+              "not: " + parts.filter { !$0.1 }.map(\.0).joined(separator: ", ") + " | \(drawn.map { "\($0.title)@\(Int($0.frame.minY))" }) | \(sheetText())")
         if asked { _ = await press("Close and Remove Worktree") }
         let stays = await wait(15) { sheetText().contains("“app-wt-agent” can’t be removed now") }
         check(stays && offered() == ["Close Window", "Cancel"] && sheetText().contains("It has 1 changed file. Commit or discard them first"),
