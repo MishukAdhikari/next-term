@@ -57,10 +57,12 @@ public enum AgentScreen {
     /// What the form says when its question has scrolled out of reach.
     static let formFallback = "Choose one of the options"
 
-    public static func activity(screenLines lines: [String]) -> AgentActivity {
+    /// `mask` masks stored keys in a question before it is cut or its rows are joined (`SecretMask.current` unless a test
+    /// gives its own).
+    public static func activity(screenLines lines: [String], mask: SecretMask = .current) -> AgentActivity {
         let bottom = Array(lines.suffix(scannedLines))
         // A question with its choices on screen wins: the agent is blocked on you.
-        if let asked = form(in: bottom)?.question ?? prompt(in: bottom)?.question { return .asking(asked) }
+        if let asked = form(in: bottom, mask: mask)?.question ?? prompt(in: bottom, mask: mask)?.question { return .asking(asked) }
         let text = bottom.suffix(promptLines).joined(separator: "\n")
         let range = NSRange(location: 0, length: (text as NSString).length)
         if working.contains(where: { $0.firstMatch(in: text, range: range) != nil }) { return .working }
@@ -69,7 +71,7 @@ public enum AgentScreen {
 
     /// A question with fixed words ("Do you want to…?") and its choices, in the last `promptLines`
     /// of `lines`: the question and the row it is on.
-    static func prompt(in lines: [String]) -> (row: Int, question: String)? {
+    static func prompt(in lines: [String], mask: SecretMask = .current) -> (row: Int, question: String)? {
         let start = max(0, lines.count - promptLines)
         let text = lines[start...].joined(separator: "\n")
         guard choices.contains(where: { matches($0, text) }) else { return nil }
@@ -78,7 +80,8 @@ public enum AgentScreen {
             let ns = line as NSString
             guard let match = question.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { continue }
             let asked = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
-            return (row, String(asked.prefix(200)))
+            // Masked before the cut: a stored key across it would keep its start, with no mark left to match.
+            return (row, String(mask.mask(asked).prefix(200)))
         }
         return nil
     }
@@ -86,7 +89,7 @@ public enum AgentScreen {
     /// Claude Code's question form, its own rows in the last `promptLines` of `lines`: the question
     /// above its options (a long one wraps, drawn with a "│" gutter) and the row of option 1. The row
     /// is nil when the options reach above `lines`.
-    static func form(in lines: [String]) -> (row: Int?, question: String)? {
+    static func form(in lines: [String], mask: SecretMask = .current) -> (row: Int?, question: String)? {
         let start = max(0, lines.count - promptLines)
         // Its own rows sit just over its hint, with no other list between: the same rows in the transcript,
         // with another picker's hint further down, are not the form.
@@ -113,8 +116,17 @@ public enum AgentScreen {
             words.insert(inner(lines[above]), at: 0)
             above -= 1
         }
-        let asked = words.joined(separator: " ")
+        let asked = maskedQuestion(words, mask: mask)
         return (first, asked.isEmpty ? formFallback : String(asked.prefix(200)))
+    }
+
+    /// A form's question rows joined with spaces, stored keys masked over the rows first (`SecretMask.mask(rows:)`): a key
+    /// the wrap split is masked in both parts, and is one ••• in the question.
+    static func maskedQuestion(_ rows: [String], mask: SecretMask) -> String {
+        let masked = mask.mask(rows: rows)
+        let joined = masked.joined(separator: " ")
+        guard masked != rows else { return joined }
+        return joined.replacingOccurrences(of: MCPRedaction.mask + " " + MCPRedaction.mask, with: MCPRedaction.mask)
     }
 
     /// The number and label of a form's option row, without a preview drawn beside it.
@@ -232,13 +244,13 @@ extension AgentScreen {
 
     /// The menu under the question an agent is asking (the one `activity` reports), or nil if the
     /// screen shows none.
-    public static func menu(screenLines lines: [String]) -> AgentMenu? {
+    public static func menu(screenLines lines: [String], mask: SecretMask = .current) -> AgentMenu? {
         let bottom = Array(lines.suffix(scannedLines))
-        if let asked = form(in: bottom) {
+        if let asked = form(in: bottom, mask: mask) {
             guard let first = asked.row else { return nil }
             return formMenu(bottom, first: first, question: asked.question)
         }
-        guard let (row, asked) = prompt(in: bottom) else { return nil }
+        guard let (row, asked) = prompt(in: bottom, mask: mask) else { return nil }
         if matches(yesNo, bottom[row]) || (row + 1 < bottom.count && matches(yesNo, bottom[row + 1])) {
             return AgentMenu(question: asked, style: .yesNo, choices: ["Yes", "No"], highlighted: nil)
         }

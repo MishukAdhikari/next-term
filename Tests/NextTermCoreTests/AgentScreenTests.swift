@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NextTermCore
@@ -490,5 +491,65 @@ import Testing
     @Test func noMenuWithoutAQuestion() {
         #expect(AgentScreen.menu(screenLines: ["⏺ Done.", "> "]) == nil)
         #expect(AgentScreen.menu(screenLines: ["Do you want to refactor the parser next?", "> "]) == nil)
+    }
+}
+
+@Suite struct AgentQuestionMaskTests {
+    static let value = "Rk7vQp2xLm9nWz4cTb8hYq3sJ6dF"
+
+    static func mask() -> SecretMask {
+        let key = SymmetricKey(size: .bits256)
+        return SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
+    }
+
+    /// Whether `text` shows any 5 characters in a row of the stored value.
+    static func showsPart(_ text: String) -> Bool {
+        let characters = Array(value)
+        return (0...(characters.count - 5)).contains { text.contains(String(characters[$0..<$0 + 5])) }
+    }
+
+    /// A question is cut to 200 characters. A stored key across the cut is masked first, so none of it shows: cut first,
+    /// its start was left with no mark to match.
+    @Test func aKeyAcrossTheQuestionsCutIsMaskedFirst() throws {
+        let filler = String(repeating: "x", count: 160) // the key at 179..<207, across the cut at 200
+        let asking = ["Do you want to use " + filler + Self.value + "?", "❯ 1. Yes", "  2. No"]
+        let mask = Self.mask()
+        let asked = "Do you want to use " + filler + "•••?"
+        #expect(AgentScreen.activity(screenLines: asking, mask: mask) == .asking(asked))
+        let menu = try #require(AgentScreen.menu(screenLines: asking, mask: mask))
+        #expect(menu.question == asked && menu.choices == ["Yes", "No"])
+        guard case .asking(let plain) = AgentScreen.activity(screenLines: asking, mask: .empty) else {
+            return #expect(Bool(false), "no question read")
+        }
+        #expect(Self.showsPart(mask.mask(plain))) // masked after the cut, the key's start shows
+    }
+
+    /// A form's question that wraps with a gutter is joined from its rows. A key the wrap split is masked over the rows
+    /// first, so neither part shows.
+    @Test func aKeyAFormsWrapSplitIsMasked() throws {
+        let split = Self.value.index(Self.value.startIndex, offsetBy: 14)
+        let form = [
+            "────────────────────────────────────────────────────────",
+            " ☐ Key",
+            "",
+            "│ Should the deploy use the key " + Self.value[..<split],
+            "│ " + Self.value[split...] + " from the vault?",
+            "",
+            "❯ 1. Yes",
+            "  2. No",
+            "  3. Type something.",
+            "────────────────────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        let asked = "Should the deploy use the key ••• from the vault?"
+        let mask = Self.mask()
+        #expect(AgentScreen.activity(screenLines: form, mask: mask) == .asking(asked))
+        #expect(try #require(AgentScreen.menu(screenLines: form, mask: mask)).question == asked)
+        guard case .asking(let plain) = AgentScreen.activity(screenLines: form, mask: .empty) else {
+            return #expect(Bool(false), "no question read")
+        }
+        #expect(Self.showsPart(mask.mask(plain))) // joined first, with a space in the key, no mark matched
     }
 }
