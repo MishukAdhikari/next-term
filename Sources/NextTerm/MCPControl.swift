@@ -298,6 +298,8 @@ enum MCPControl {
         case "open_in_editor": reply(openInEditor(arguments))
         case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
             RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
+        case "list_shortcuts": MainActor.assumeIsolated { reply(ShortcutsMCP.listShortcuts(arguments)) }
+        case "show_settings": MainActor.assumeIsolated { reply(ShortcutsMCP.showSettings(arguments)) }
         case "list_skills", "get_skill", "install_skill", "remove_skill":
             MainActor.assumeIsolated {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
@@ -541,7 +543,9 @@ enum MCPControl {
         // A pane beside another tab: its window, as the tab beside it is already there.
         let arrived = controller.presentForAgent(arguments["split_beside"] == nil ? tab : nil)
         driven.insert(tab.id)
-        tab.openedBy = caller?.id // an agent's worker: it opens no tabs of its own unless the user asks it to
+        // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
+        // conversation (next-term-worktrees), so it is nobody's worker.
+        if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
         let answer = {
@@ -552,9 +556,10 @@ enum MCPControl {
         }
         guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
         guard !command.contains("\n") else { return reply(fail("The command must be one line.")) }
+        let line = MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
         whenReady(tab, until: TerminalTab.now + 3) {
-            type(command, into: tab, submit: true)
+            type(line, into: tab, submit: true)
             answer()
         }
     }
@@ -564,7 +569,11 @@ enum MCPControl {
     static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
         // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
         let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
-        if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) { return (owner, false) }
+        if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
+            // A linked worktree inside the owner's folder (.claude/worktrees/x) gets its own window, as Open Worktree gives it.
+            guard let worktree = owner.project.flatMap({ MCPServer.ownWorktree(of: directory, inside: $0) }) else { return (owner, false) }
+            return (app.openFolder(worktree, newWindow: false, forAgent: true), true)
+        }
         return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true), true)
     }
 

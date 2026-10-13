@@ -38,7 +38,8 @@ extension SelfTest {
         guard let view = pane.project else { return check(false, "skills project: choosing Project shows it") }
         _ = await wait(10) { view.rows.count >= 3 }
         probe.layoutIfNeeded()
-        check(probe.frame.width <= 621 && pane.personal.isHidden && view.rows.map(\.name) == ["st-deploy", "st-lint", "next-term-tabs"],
+        check(probe.frame.width <= 621 && pane.personal.isHidden
+              && view.rows.map(\.name) == ["st-deploy", "st-lint", "next-term-tabs", "next-term-worktrees", "next-term-setup"],
               "skills project: Project lists the project's skills and Next Term's own last, fits Settings, and Personal is hidden",
               "\(probe.frame.width) \(view.rows.map(\.name))")
 
@@ -57,9 +58,11 @@ extension SelfTest {
               "skills project: a folder an agent doesn't read is offered through Next Term",
               [claude, codex, commandCode].map { text("st-lint", $0) }.joined(separator: " | "))
         let builtIn = !app.agentControl ? "—" : app.agentsOfferTabs ? "via Next Term" : "off"
-        check(text("next-term-tabs", "where") == "Next Term" && text("next-term-tabs", codex) == builtIn && view.openButton.isEnabled == false
+        check(text("next-term-tabs", "where") == "Next Term" && text("next-term-tabs", codex) == builtIn
+              && text("next-term-setup", codex) == reachable && text("next-term-worktrees", claude) == reachable && view.openButton.isEnabled == false
               && view.summary.stringValue == "2 skills · read-only",
-              "skills project: Next Term's own skill follows its switch, and the summary counts the project's", text("next-term-tabs", codex) + " " + view.summary.stringValue)
+              "skills project: Next Term's own skills follow their switches (tabs its own, the others agent control), and the summary counts the project's",
+              ["next-term-tabs", "next-term-worktrees", "next-term-setup"].map { text($0, codex) }.joined(separator: " | ") + " " + view.summary.stringValue)
 
         ProjectSkillsView.projectsForTest = []
         view.reload()

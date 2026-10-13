@@ -707,6 +707,9 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
     }
 
+    /// The tab shown, by its identifier (for the self-test of show_settings).
+    var shownTab: String? { (window?.contentView as? NSTabView)?.selectedTabViewItem?.identifier as? String }
+
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private func build() {

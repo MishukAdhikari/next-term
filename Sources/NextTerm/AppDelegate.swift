@@ -118,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Settings › Editor › "Agents offer to run parallel work in tabs" (MCP: agents_offer_tabs): Next Term's next-term-tabs
-    /// skill (BuiltInSkill) in its skill library over MCP (list_skills, get_skill), and the offer first in the MCP
+    /// skill (BuiltInSkill) in its skill library over MCP (list_skills, get_skill), and its line first in the MCP
     /// instructions an agent in a tab gets (MCPBridge). On by default; nothing is written in the agents' folders, so off
     /// takes both out at once.
     static let offerTabsKey = "agentsOfferTabs"
@@ -130,6 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NotificationCenter.default.post(name: Self.offerTabsChanged, object: nil)
         }
     }
+
+    /// Next Term's own skills in its library: none while agents may not control Next Term, next-term-tabs only while
+    /// agents offer tabs.
+    var builtInSkills: [BuiltInSkill] { agentControl ? BuiltInSkill.offered(tabs: agentsOfferTabs) : [] }
 
     /// Settings › Editor › "When an agent opens a tab" (MCP: agents_bring_tabs_forward): its window comes forward and
     /// takes focus, comes forward only, or stays where it is (AgentArrival). The tab never takes the keyboard by itself.
@@ -594,17 +598,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private var settings: SettingsWindowController?
+    /// The Settings window while it is open, for the self-test.
+    var openSettings: SettingsWindowController? { settings?.window?.isVisible == true ? settings : nil }
 
     @objc func showSettings(_ sender: Any?) { showSettings(tab: nil) }
 
-    /// Settings, on the tab it was left on, or on `tab` ("skills", SettingsWindowController's identifiers).
-    func showSettings(tab: String?) {
+    /// Settings, on the tab it was left on, or on `tab` ("skills", SettingsWindowController's identifiers). `forAgent`
+    /// (MCP show_settings): in front, but the keyboard stays where the user has it, as the approval window does.
+    func showSettings(tab: String?, forAgent: Bool = false) {
         // The Claude app may have been opened since the last pass: what waits for it to quit, under the setting, is
         // worked out again (nothing is written while it is open).
         MCPRegistration.update(on: agentControl, claudeAppOnly: true)
         if settings == nil { settings = SettingsWindowController() }
         settings?.reload()
         if let tab { settings?.showTab(tab) }
+        guard !forAgent else {
+            if settings?.window?.isMiniaturized == true { settings?.window?.deminiaturize(nil) }
+            settings?.window?.orderFront(nil)
+            return
+        }
         settings?.showWindow(nil)
         settings?.window?.makeKeyAndOrderFront(nil)
     }
