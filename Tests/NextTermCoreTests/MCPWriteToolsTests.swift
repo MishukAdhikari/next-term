@@ -129,6 +129,39 @@ import Testing
         #expect(try MCPLayoutChange.parse(["sidebar_side": "right"]).get().sidebarSide == "right")
     }
 
+    @Test func terminalTabsGoTopLeftOrRight() throws {
+        for side in ["top", "left", "right"] {
+            let change = try MCPLayoutChange.parse(["terminal_tabs": side]).get()
+            #expect(change == MCPLayoutChange(terminalTabs: side) && !change.isEmpty, "\(side)")
+        }
+        // Any other word, or not a word, asks nothing and says what it takes.
+        #expect(MCPLayoutChange.parse(["terminal_tabs": "side"]).failureText == "terminal_tabs is one of top, left, right.")
+        #expect(MCPLayoutChange.parse(["terminal_tabs": "Left"]).isFailure)
+        #expect(MCPLayoutChange.parse(["terminal_tabs": true]).isFailure)
+        // With the others in one call.
+        let both = try MCPLayoutChange.parse(["terminal_tabs": "right", "terminal_position": "bottom", "terminal_folded": true]).get()
+        #expect(both == MCPLayoutChange(terminalPosition: "bottom", terminalTabs: "right", terminalFolded: true))
+        // An empty call names all five.
+        let empty = try #require(MCPLayoutChange.parse([:]).failureText)
+        for name in ["terminal_position", "sidebar_side", "terminal_tabs", "sidebar", "terminal_folded"] {
+            #expect(empty.contains(name), "\(name)")
+        }
+    }
+
+    @Test func setLayoutListsTerminalTabs() throws {
+        let tool = try #require(MCPServer.tool(named: "set_layout"))
+        let schema = try #require(try JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8)) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let tabs = try #require(properties["terminal_tabs"] as? [String: Any])
+        #expect(tabs["type"] as? String == "string")
+        #expect(tabs["enum"] as? [String] == TerminalTabsSetting.allCases.map(\.rawValue))
+        #expect(tool.description.contains("terminal_tabs (top, or left or right"))
+        // Every window has the same, as the terminal's position: said with the arguments that apply to every window.
+        let everyWindow = try #require(tool.description.range(of: "apply to every window"))
+        let named = try #require(tool.description.range(of: "terminal_tabs"))
+        #expect(named.lowerBound < everyWindow.lowerBound)
+    }
+
     @Test func aFoldedTerminalAskedFoldedNeedsAStepOnlyWhenItMoves() {
         // {sidebar_side, terminal_folded: true} on a folded terminal: moving the sidebar keeps it folded.
         #expect(!MCPLayoutChange.needsFoldStep(wanted: true, folded: true, newPosition: false))
