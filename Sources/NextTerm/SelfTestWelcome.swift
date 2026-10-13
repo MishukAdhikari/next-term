@@ -149,7 +149,8 @@ extension SelfTest {
         check(await wait(2) { window.isVisible } && window.attachedSheet == nil && projectWindow.attachedSheet == nil,
               "⌘O in a project window shows the Welcome window, with no folder panel",
               "visible \(window.isVisible), sheets \(window.attachedSheet != nil) \(projectWindow.attachedSheet != nil)")
-        check(app.welcomeOrigin === controller, "and a project chosen there opens as from the window ⌘O was pressed in")
+        // The origin is the key window ⌘O was pressed in: with the app not in front there is none to press it in.
+        if front { check(app.welcomeOrigin === controller, "and a project chosen there opens as from the window ⌘O was pressed in") }
         guard front, await wait(2, { window.isKeyWindow }) else {
             return note("open project: ⌘O on the Welcome window skipped, \(notFrontmost(window))")
         }
