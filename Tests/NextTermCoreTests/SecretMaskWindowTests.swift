@@ -18,69 +18,87 @@ private func showsPart(of value: String, in text: String) -> Bool {
     return (0...(characters.count - 5)).contains { text.contains(String(characters[$0..<$0 + 5])) }
 }
 
-/// A screen of `columns` columns: each row's text and whether it continues the row above (a wrap).
+/// A screen's rows, and which of them the last mask read.
 private struct Screen {
-    var rows: [(text: String, wrapped: Bool)]
+    var rows: [String]
     var read = Set<Int>()
 
-    mutating func masked(_ mask: SecretMask, _ window: ClosedRange<Int>, columns: Int) -> [String] {
+    mutating func masked(_ mask: SecretMask, _ window: ClosedRange<Int>) -> [String] {
         var asked = Set<Int>()
         let rows = rows
-        let result = mask.mask(window: window, columns: columns,
-                               wrapped: { row in asked.insert(row); return rows.indices.contains(row) && rows[row].wrapped },
-                               text: { row in asked.insert(row); return rows.indices.contains(row) ? rows[row].text : "" })
+        let result = mask.mask(window: window, rows: 0...(rows.count - 1)) { row in
+            asked.insert(row)
+            return rows[row]
+        }
         read = asked
         return result
     }
 }
 
 @Suite struct SecretMaskWindowTests {
-    /// A 10-column screen where `printenv` printed `stored` (24 characters) across four rows.
+    /// A 10-column screen where `printenv` printed `stored` (24 characters) across four rows: the terminal's own wrap, or
+    /// an agent UI's newlines, the rows the same.
     fileprivate func screen() -> Screen {
         let value = Array(stored)
-        return Screen(rows: [
-            ("$ printenv", false),
-            ("K: " + String(value[0..<7]), false),
-            (String(value[7..<17]), true),
-            (String(value[17..<24]) + " ok", true),
-            ("$", false),
-        ])
+        return Screen(rows: ["$ printenv", "K: " + String(value[0..<7]), String(value[7..<17]), String(value[17..<24]) + " ok", "$"])
     }
 
-    /// read_tab's window can start on a row that continues a line wrapped above it: the rows above are masked with it,
-    /// so the key's tail is never shown.
-    @Test func aWindowStartingInsideAWrappedKeyShowsNoPartOfIt() {
+    /// read_tab's window can start on a row that holds the tail of a key whose start is above it: the rows above are
+    /// masked with it, so the key's tail is never shown.
+    @Test func aWindowStartingInsideAKeyShowsNoPartOfIt() {
         let m = storedMask([stored])
         var s = screen()
         // The rows alone, as before: the key's start is above them, so nothing matches.
-        #expect(showsPart(of: stored, in: m.mask(rows: s.rows[2...4].map(\.text)).joined()))
-        let masked = s.masked(m, 2...4, columns: 10)
+        #expect(showsPart(of: stored, in: m.mask(rows: Array(s.rows[2...4])).joined()))
+        let masked = s.masked(m, 2...4)
         #expect(masked == ["•••", "••• ok", "$"])
         #expect(!showsPart(of: stored, in: masked.joined()))
-        #expect(s.masked(m, 3...4, columns: 10) == ["••• ok", "$"])
+        #expect(s.masked(m, 3...4) == ["••• ok", "$"])
     }
 
-    /// A window ending inside a key that wraps on below it is masked with the rows the wrap joins to it.
-    @Test func aWindowEndingInsideAWrappedKeyShowsNoPartOfIt() {
+    /// A window ending inside a key that goes on below it is masked with the rows below.
+    @Test func aWindowEndingInsideAKeyShowsNoPartOfIt() {
         let m = storedMask([stored])
         var s = screen()
-        let masked = s.masked(m, 0...2, columns: 10)
+        let masked = s.masked(m, 0...2)
         #expect(masked == ["$ printenv", "K: •••", "•••"])
         #expect(!showsPart(of: stored, in: masked.joined()))
+        #expect(s.masked(m, 2...2) == ["•••"])
     }
 
-    /// The walk past the window is bounded by the longest form over the width, even in a line wrapped thousands of
-    /// times; with no marks nothing outside the window is read.
+    /// An agent UI that wraps a key to its own box, narrower than the terminal, puts it on more rows than the terminal's
+    /// width would, with newlines: a window starting on its second row, or its last, is masked with all the rows above
+    /// that hold the rest.
+    @Test func aKeyHardWrappedNarrowerThanTheTerminalShowsNoPartOfIt() {
+        let m = storedMask([stored])
+        let value = Array(stored)
+        let pieces = stride(from: 0, to: value.count, by: 5).map { String(value[$0..<min($0 + 5, value.count)]) }
+        var s = Screen(rows: ["$ cat key"] + pieces + ["$"])
+        let last = pieces.count
+        #expect(s.masked(m, 2...(last + 1)) == Array(repeating: "•••", count: last - 1) + ["$"])
+        let masked = s.masked(m, last...(last + 1))
+        #expect(masked == ["•••", "$"])
+        #expect(!showsPart(of: stored, in: s.masked(m, (last - 1)...(last + 1)).joined()))
+    }
+
+    /// The walk past the window stops after the bytes the longest form can have outside it, and a blank row counts as
+    /// one; with no marks nothing outside the window is read, and no row outside the screen ever is.
     @Test func theWalkIsBounded() {
         let m = storedMask([stored])
-        var s = Screen(rows: (0..<20_000).map { ("row \($0) xxxx", $0 > 0) })
+        #expect(m.longest >= stored.count)
+        var s = Screen(rows: (0..<20_000).map { "row \($0) xxxx" }) // 13 bytes each near the window
         let window = 9_000...9_009
-        #expect(s.masked(m, window, columns: 10).count == 10)
-        let reach = m.longest / 10 + 2
-        #expect(m.longest >= stored.count && (s.read.min() ?? 0) >= window.lowerBound - reach)
-        #expect((s.read.max() ?? .max) <= window.upperBound + reach + 1)
+        #expect(s.masked(m, window).count == 10)
+        let reach = (m.longest - 1 + 12) / 13
+        #expect((s.read.min() ?? 0) >= window.lowerBound - reach && (s.read.max() ?? .max) <= window.upperBound + reach)
+        var blank = Screen(rows: Array(repeating: "", count: 20_000))
+        #expect(blank.masked(m, window) == Array(repeating: "", count: 10))
+        #expect(blank.read.count == window.count + 2 * (m.longest - 1))
+        var edge = screen()
+        #expect(edge.masked(m, 0...1) == ["$ printenv", "K: •••"])
+        #expect(edge.read.isSubset(of: Set(0...4)))
         var plain = screen()
-        #expect(plain.masked(.empty, 2...4, columns: 10) == plain.rows[2...4].map(\.text))
-        #expect(plain.read.isSubset(of: Set(2...4)))
+        #expect(plain.masked(.empty, 2...4) == Array(plain.rows[2...4]))
+        #expect(plain.read == Set(2...4))
     }
 }

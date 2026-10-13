@@ -242,6 +242,20 @@ extension AgentScreen {
     /// A key hint after a choice: "(esc)", "(shift+tab)", Codex's "(y)".
     static let keyHint = try! NSRegularExpression(pattern: #"\s*\((?:esc|tab|shift\+tab|ctrl\+\w|\w)\)$"#, options: [.caseInsensitive])
 
+    /// The menu under `question`, the one `activity` read from `lines`, for an agent to read: matched on `lines`, like
+    /// with like, with its choices from `shown`, the same rows with stored keys masked over whole lines
+    /// (`SecretMask.mask(window:rows:text:)`), so a key the screen split inside a choice shows none of it. Matched on
+    /// `shown`, a key split across a form's question rows with no gutter is "••• •••" there, where the question has one
+    /// "•••". Nil when either reads no menu, its question is another, or the two differ in their number of choices,
+    /// their style or their cursor.
+    public static func menu(asking question: String, screenLines lines: [String], shown: [String],
+                            mask: SecretMask = .current) -> AgentMenu? {
+        guard let read = menu(screenLines: lines, mask: mask), read.question == question,
+              let masked = menu(screenLines: shown, mask: mask), masked.choices.count == read.choices.count,
+              masked.style == read.style, masked.highlighted == read.highlighted else { return nil }
+        return AgentMenu(question: question, style: masked.style, choices: masked.choices, highlighted: masked.highlighted)
+    }
+
     /// The menu under the question an agent is asking (the one `activity` reports), or nil if the
     /// screen shows none.
     public static func menu(screenLines lines: [String], mask: SecretMask = .current) -> AgentMenu? {

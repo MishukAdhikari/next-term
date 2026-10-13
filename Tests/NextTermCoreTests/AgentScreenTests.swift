@@ -552,4 +552,53 @@ import Testing
         }
         #expect(Self.showsPart(mask.mask(plain))) // joined first, with a space in the key, no mark matched
     }
+
+    /// A form with no gutter, a key split across its question's rows and another across a choice's: the screen read for
+    /// an agent is masked over whole lines, where the key's two halves are "••• •••", but the tab's question, read from
+    /// the screen as it is, has one "•••". The menu is matched on the rows the question was read from, like with like, and
+    /// its choices come from the masked rows, so they are given, and show none of the key.
+    @Test func aFormsChoicesAreReadFromMaskedRowsAndMatchedOnTheQuestionsOwn() throws {
+        let value = Self.value
+        let split = value.index(value.startIndex, offsetBy: 14)
+        let choiceSplit = value.index(value.startIndex, offsetBy: 20)
+        let form: [String] = [
+            "────────────────────────────────────────────────────────",
+            " ☐ Key",
+            "",
+            "Should the deploy use the key " + String(value[..<split]),
+            String(value[split...]) + " from the vault?",
+            "",
+            "❯ 1. Yes, use " + String(value[..<choiceSplit]),
+            String(value[choiceSplit...]),
+            "  2. No",
+            "  3. Type something.",
+            "────────────────────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        let mask = Self.mask()
+        let shown = mask.mask(rows: form)
+        let asked = "Should the deploy use the key ••• from the vault?"
+        #expect(AgentScreen.activity(screenLines: form, mask: mask) == .asking(asked))
+        // Matched on the masked rows, as before: their question differs, and the choices were dropped.
+        #expect(try #require(AgentScreen.menu(screenLines: shown, mask: mask)).question != asked)
+        // Read from the rows as they are, a choice holds the key's head, which no mark matches alone.
+        let plain = try #require(AgentScreen.menu(screenLines: form, mask: mask))
+        #expect(Self.showsPart(plain.choices.map { mask.mask($0) }.joined()))
+        let menu = try #require(AgentScreen.menu(asking: asked, screenLines: form, shown: shown, mask: mask))
+        #expect(menu == AgentMenu(question: asked, style: .list, choices: ["Yes, use •••", "No"], highlighted: 0))
+        #expect(!Self.showsPart(menu.choices.joined()))
+        #expect(AgentScreen.menu(asking: "Should the deploy stop?", screenLines: form, shown: shown, mask: mask) == nil)
+    }
+
+    /// The masked rows must read as the same menu, its choices, style and cursor: otherwise nothing is given.
+    @Test func aMenuTheMaskedRowsReadOtherwiseIsNotGiven() {
+        let asking = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+        let mask = Self.mask()
+        #expect(AgentScreen.menu(asking: "Do you want to proceed?", screenLines: asking, shown: asking, mask: mask)?.choices == ["Yes", "No"])
+        let moved = ["Do you want to proceed?", "  1. Yes", "❯ 2. No"]
+        #expect(AgentScreen.menu(asking: "Do you want to proceed?", screenLines: asking, shown: moved, mask: mask) == nil)
+        #expect(AgentScreen.menu(asking: "Do you want to proceed?", screenLines: asking, shown: ["Do you want to proceed?"], mask: mask) == nil)
+    }
 }

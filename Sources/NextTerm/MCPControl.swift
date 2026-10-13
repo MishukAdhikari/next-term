@@ -252,6 +252,11 @@ enum MCPControl {
     static func fieldTail(_ tab: TerminalTab, _ count: Int = AgentScreen.scannedLines) -> [String] {
         fieldMasks ? tab.screenTail(count, masked: SecretMask.current) : tab.screenTail(count)
     }
+    /// The menu under the tab's question, for an agent to read: matched on the screen as the question was read from it,
+    /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
+    static func fieldMenu(_ tab: TerminalTab, question: String) -> AgentMenu? {
+        AgentScreen.menu(asking: question, screenLines: tab.screenTail(), shown: fieldTail(tab))
+    }
     /// A tab's restored details (MCPRestoredTabs), masked: their note can quote a command line or a resume's screen, saved
     /// before a key in it was stored.
     static func restoredFields(_ tab: TerminalTab) -> [String: Any] {
@@ -647,7 +652,7 @@ enum MCPControl {
     static func questionInfo(_ tab: TerminalTab) -> [String: Any] {
         guard let question = tab.status.question, let id = questionID(tab) else { return [:] }
         var info: [String: Any] = ["question": field(question), "question_id": id]
-        if let menu = AgentScreen.menu(screenLines: fieldTail(tab)), menu.question == field(question) { info["choices"] = menu.choices.map(field) }
+        if let menu = fieldMenu(tab, question: question) { info["choices"] = menu.choices.map(field) }
         return info
     }
 
@@ -673,7 +678,7 @@ enum MCPControl {
         guard given == current else {
             return reply(fail("That question is gone; nothing was typed. The tab now asks “\(field(question))” (question_id \(current)): answer that one only if you mean to."))
         }
-        guard let menu = AgentScreen.menu(screenLines: tab.screenTail()), menu.question == question else {
+        guard let menu = fieldMenu(tab, question: question) else {
             return reply(fail("The choices for “\(field(question))” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
         }
         let index: Int

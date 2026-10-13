@@ -364,6 +364,7 @@ extension SelfTest {
         check(printed && read.text.contains("•••") && !read.text.contains(value) && !waited.text.contains(value) && waited.text.contains("•••"),
               "secrets: read_tab and wait_for_tab show ••• where a tab printed a stored key", String(read.text.suffix(200)))
         await secretsWrappedTailCheck(tab, client: client, value: value)
+        await secretsHardWrappedTailCheck(tab, client: client, value: value)
         await secretsWrappedWaitCheck(tab, client: client, value: value)
         await secretsWrappedChoiceCheck(c, base: base, client: client, value: value, valueFile: valueFile)
 
@@ -425,6 +426,24 @@ extension SelfTest {
         let pieces = (0...(characters.count - 6)).map { String(characters[$0..<$0 + 6]) }
         check(read.text.contains("•••") && !pieces.contains { read.text.contains($0) },
               "secrets: read_tab whose window starts on the second row of a key a wrap split shows ••• and none of its tail",
+              String(read.text.suffix(200)))
+    }
+
+    /// As `secretsWrappedTailCheck`, with the key split by a newline, as agent UIs (Ink, ratatui) wrap: no row is marked
+    /// as the terminal's wrap, and the rows above the window are masked with it all the same.
+    static func secretsHardWrappedTailCheck(_ tab: TerminalTab, client: SecretsMCPClient, value: String) async {
+        let tail = String(value.dropFirst(8))
+        tab.view.send(txt: "printf '%.8s\\n%s\\n' \"$K\" \"${K#????????}\"; printf 'after-newline\\n'\r")
+        let shown = await wait(10) { tab.screenTail().contains("after-newline") && !tab.status.running }
+        let rows = tab.screenTail(60)
+        guard shown, let second = rows.lastIndex(of: tail) else {
+            return check(false, "secrets: a key a newline split shows on two rows", rows.suffix(4).joined(separator: " | "))
+        }
+        let read = await client.call("read_tab", ["tab_id": tab.id.uuidString.lowercased(), "lines": rows.count - second])
+        let characters = Array(tail)
+        let pieces = (0...(characters.count - 6)).map { String(characters[$0..<$0 + 6]) }
+        check(read.text.contains("•••") && !pieces.contains { read.text.contains($0) },
+              "secrets: read_tab whose window starts on the second row of a key a newline split shows ••• and none of its tail",
               String(read.text.suffix(200)))
     }
 
