@@ -220,13 +220,14 @@ public enum SecretImport {
     static let tooManyReason = "it lists more than 1,000 keys or servers, more than Next Term shows"
 
     /// Every finding in `sources`. `inGitWorkTree` and `isOpen` (a bundle identifier's app is running) are the
-    /// caller's; values stay in memory. A task cancelled meanwhile stops it between files, and between a file's servers,
-    /// with what it found in the files before: the file it stopped in is not listed, since part of it was not read.
+    /// caller's; values stay in memory. `stop` (by default, the task is cancelled) is asked between files, and between a
+    /// file's servers: true ends the scan with what it found in the files before. The file it stopped in is not listed,
+    /// since part of it was not read.
     public static func scan(_ sources: [Source], read: (String) -> Data? = readFile, inGitWorkTree: (String) -> Bool = { _ in false },
-                            isOpen: (String) -> Bool = { _ in false }) -> Scan {
+                            isOpen: (String) -> Bool = { _ in false }, stop: () -> Bool = { Task.isCancelled }) -> Scan {
         var scan = Scan()
         for source in sources {
-            if Task.isCancelled { break }
+            if stop() { break }
             guard let data = read(source.path) else {
                 // Reported, not passed over: "no keys found" would be a false all-clear.
                 if let reason = unreadReason(source.path) { scan.unreadable.append((source, reason)) }
@@ -238,11 +239,11 @@ public enum SecretImport {
             }
             let parsed: [Entry]?
             switch source.format {
-            case .toml: parsed = tomlEntries(text, stop: { Task.isCancelled })
-            case .json, .strictJSON: parsed = jsonEntries(text, source: source, stop: { Task.isCancelled })
+            case .toml: parsed = tomlEntries(text, stop: stop)
+            case .json, .strictJSON: parsed = jsonEntries(text, source: source, stop: stop)
             }
             // Stopped in this file: what was read of it is not all it holds.
-            if Task.isCancelled { break }
+            if stop() { break }
             scan.read.append(source)
             guard let entries = parsed else {
                 scan.unreadable.append((source, source.format == .toml ? "not TOML Next Term can read" : "not JSON Next Term can read"))

@@ -240,4 +240,41 @@ import Testing
         #expect(members.count < 3 && asked == 4)
         #expect(SecretImport.tomlEntries(toml)?.count == 100 && SecretImport.jsonEntries(json, source: source)?.count == 100)
     }
+
+    /// Servers written with dotted keys only, and `~/.claude.json`'s projects with no servers in theirs, are asked about
+    /// one by one too.
+    @Test func readingDottedServersAndEmptyProjectsStopsWhenAsked() throws {
+        let toml = "[mcp_servers]\n" + (0..<100).map { "d\($0).command = \"x\"\n" }.joined()
+        var asked = 0
+        let dotted = try #require(SecretImport.tomlEntries(toml, stop: { asked += 1; return asked > 3 }))
+        #expect(dotted.count == 3 && asked == 4)
+        #expect(SecretImport.tomlEntries(toml)?.count == 100)
+        let projects = (0..<100).map { "\"/p\($0)\": {\"mcpServers\": {}}" }.joined(separator: ", ")
+        let claude = SecretImport.Source(path: "/h/.claude.json", client: .claudeCode, format: .json, containers: nil)
+        asked = 0
+        let none = try #require(SecretImport.jsonEntries("{\"projects\": {\(projects)}}", source: claude, stop: { asked += 1; return asked > 3 }))
+        #expect(none.isEmpty && asked == 4)
+    }
+
+    /// The scan asks its own `stop` (the task's cancel, in the app) between files and inside each one: told to stop in
+    /// a file, it stops there, a few servers in, and lists nothing from it.
+    @Test func aScanToldToStopInAFileStopsThereAndListsNothingFromIt() {
+        let home = F.Home()
+        defer { home.remove() }
+        var text = ""
+        for index in 0..<500 { text += "[mcp_servers.s\(index)]\ncommand = \"x\"\nenv = { S_TOKEN = \"\(F.github)\" }\n\n" }
+        home.write(".codex/config.toml", text)
+        home.write(".cursor/mcp.json", F.standard(container: "mcpServers", variable: "GITHUB_TOKEN", value: F.github))
+        let all = F.sources(home)
+        let sources = [".codex/config.toml", ".cursor/mcp.json"].compactMap { relative in all.first { $0.path == home.file(relative) } }
+        #expect(sources.map(\.client) == [.codex, .cursor])
+        // Once before the file, before each of 10 servers (the 10th says stop), and once after the file.
+        var asked = 0
+        let found = SecretImport.scan(sources, stop: { asked += 1; return asked > 10 })
+        #expect(asked == 12 && found.read.isEmpty && found.findings.isEmpty && found.unreadable.isEmpty)
+        // Not stopped: before, in and after each file (Cursor's: its servers' object, then its one server).
+        asked = 0
+        let whole = SecretImport.scan(sources, stop: { asked += 1; return false })
+        #expect(whole.findings.count == 501 && whole.read.count == 2 && asked == (1 + 500 + 1) + (1 + 1 + 1 + 1))
+    }
 }
