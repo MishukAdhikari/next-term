@@ -86,6 +86,24 @@ public struct ProjectHistory: Equatable, Sendable {
         entries.removeAll()
     }
 
+    /// Clear Menu: every project no window holds leaves the history. The ones in `open` keep their place and time, as
+    /// the Welcome list shows them open, so one whose window was never in front is still listed after it closes.
+    public mutating func clear(keeping open: [String]) {
+        let kept = Set(open)
+        entries.removeAll { !kept.contains($0.path) }
+    }
+
+    /// ⌘⌫ on a closed project in the Welcome window: it leaves the history and Recent Projects both. A project in
+    /// `open`, which a window holds, stays in both. True when the history held it, so there is something to save.
+    @discardableResult
+    public mutating func forget(_ path: String, recent: inout RecentProjects, open: [String]) -> Bool {
+        guard !open.contains(path) else { return false }
+        recent.remove(path)
+        guard lastUsed(path) != nil else { return false }
+        forget(path)
+        return true
+    }
+
     /// The ones whose folder still exists. The history keeps the others, so a folder on a drive that is not mounted
     /// now is listed again when it is back.
     public func existing(fileManager: FileManager = .default) -> [Entry] {
@@ -248,6 +266,9 @@ public struct OpenProjects: Equatable, Sendable {
     private var seen: [String: Date] = [:]
     /// The project each window held at the last look.
     private var held: [Int: String] = [:]
+    /// How many windows hold each open project, at the last look: what the Welcome list shows beside it. A look can
+    /// change it while the history stays as it was (one of a project's two windows closing, or a window never in front).
+    public private(set) var windowCounts: [String: Int] = [:]
     /// After a quit nothing opens or closes: the windows are still there as the app ends.
     private var hasQuit = false
 
@@ -290,7 +311,11 @@ public struct OpenProjects: Equatable, Sendable {
         }
         lastInFront = open
         held.removeAll()
-        for window in windows { held[window.id] = window.path }
+        windowCounts.removeAll()
+        for window in windows {
+            held[window.id] = window.path
+            windowCounts[window.path, default: 0] += 1
+        }
         return ProjectHistory.Changes(opened: opened, closed: closed)
     }
 

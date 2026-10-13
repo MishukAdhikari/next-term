@@ -74,6 +74,61 @@ import Testing
         #expect(history == ProjectHistory())
     }
 
+    @Test func clearMenuKeepsTheProjectsAWindowHolds() {
+        // Clear Menu clears the closed projects; an open one keeps its place and time, so one whose window was never in
+        // front (an agent opened it) is still listed after its window closes.
+        var history = ProjectHistory()
+        history.record(opened: "/code/a", at: at(100))
+        history.record(opened: "/code/x", at: at(200))
+        history.record(opened: "/code/b", at: at(300))
+        history.record(opened: "/code/y", at: at(400))
+        history.clear(keeping: ["/code/y", "/code/x", "/code/not-in-history"])
+        let paths: [String] = history.paths
+        let same: Bool = paths == ["/code/y", "/code/x"]
+        #expect(same, "\(paths)")
+        #expect(history.lastUsed("/code/x") == at(200))
+        #expect(history.lastUsed("/code/not-in-history") == nil)
+        history.record(closed: "/code/x", lastUsed: .distantPast)
+        #expect(history.lastUsed("/code/x") == at(200))
+        // With no window open it clears every one.
+        history.clear(keeping: [])
+        #expect(history == ProjectHistory())
+    }
+
+    @Test func forgetDropsAClosedProjectFromBothListsAndNeverAnOpenOne() {
+        var history = ProjectHistory()
+        history.record(opened: "/code/a", at: at(100))
+        history.record(opened: "/code/open", at: at(200))
+        history.record(opened: "/code/b", at: at(300))
+        var recent = RecentProjects(["/code/b", "/code/open", "/code/a", "/code/only-recent"])
+        let open: [String] = ["/code/open"]
+        // A closed project leaves both lists: true, as the history changed.
+        #expect(history.forget("/code/a", recent: &recent, open: open))
+        let paths: [String] = history.paths
+        let samePaths: Bool = paths == ["/code/b", "/code/open"]
+        #expect(samePaths, "\(paths)")
+        let listed: [String] = recent.paths
+        let sameListed: Bool = listed == ["/code/b", "/code/open", "/code/only-recent"]
+        #expect(sameListed, "\(listed)")
+        // An open project stays in both.
+        let keptHistory: ProjectHistory = history
+        let keptRecent: RecentProjects = recent
+        #expect(!history.forget("/code/open", recent: &recent, open: open))
+        #expect(history == keptHistory)
+        #expect(recent == keptRecent)
+        // One only Recent Projects holds leaves it; the history is unchanged, so there is nothing to save.
+        #expect(!history.forget("/code/only-recent", recent: &recent, open: open))
+        #expect(history == keptHistory)
+        let left: [String] = recent.paths
+        let sameLeft: Bool = left == ["/code/b", "/code/open"]
+        #expect(sameLeft, "\(left)")
+        // One neither holds changes nothing.
+        let before: RecentProjects = recent
+        #expect(!history.forget("/code/none", recent: &recent, open: open))
+        #expect(history == keptHistory)
+        #expect(recent == before)
+    }
+
     @Test func timesAreKeptToTheMillisecondSoAHistoryReadsBackTheSame() {
         // Times as `Date()` gives them, after 2001 and before it: a history read back from the defaults is equal to the
         // one written, and a close at the same time as the stored one changes nothing.
@@ -475,5 +530,35 @@ import Testing
         let before: ProjectHistory = history
         history.record(ProjectHistory.Changes(opened: [], closed: []), at: at(600))
         #expect(history == before)
+    }
+
+    /// Compared through a typed parameter, not inside `#expect`, where dictionary literals are slow to type-check.
+    private func same(_ counts: [String: Int], _ expected: [String: Int]) -> Bool { counts == expected }
+
+    @Test func theWindowCountsFollowEveryLookWhenTheHistoryDoesNot() {
+        // What the Welcome list shows beside each open project: how many windows hold it. A look can change them while
+        // the history stays as it was, so the list is told of the look, not only of a new time.
+        var open = OpenProjects()
+        #expect(open.windowCounts.isEmpty)
+        var history = ProjectHistory()
+        let windows: [OpenProjects.Window] = [window(1, "/code/a", 100), window(2, "/code/a", 200), window(3, "/code/x", nil)]
+        history.record(open.update(windows, at: at(300)), at: at(300))
+        #expect(same(open.windowCounts, ["/code/a": 2, "/code/x": 1]), "\(open.windowCounts)")
+        let kept: ProjectHistory = history
+        // One of a's two windows closes: a is still open, nothing to record, yet a has one window now.
+        let one: ProjectHistory.Changes = open.update([window(1, "/code/a", 100), window(3, "/code/x", nil)], at: at(400))
+        #expect(one.isEmpty)
+        #expect(same(open.windowCounts, ["/code/a": 1, "/code/x": 1]), "\(open.windowCounts)")
+        // x's window, an agent's never in front, closes: closed at no time, so the history is unchanged, yet x is gone.
+        history.record(open.update([window(1, "/code/a", 100)], at: at(500)), at: at(500))
+        #expect(history == kept)
+        #expect(same(open.windowCounts, ["/code/a": 1]), "\(open.windowCounts)")
+        let paths: [String] = open.paths
+        #expect(same(paths, ["/code/a"]), "\(paths)")
+        // After a quit no window is counted, nor at a look after it.
+        _ = open.quit([window(1, "/code/a", 100)], at: at(600))
+        #expect(open.windowCounts.isEmpty)
+        _ = open.update([window(1, "/code/a", 100)], at: at(700))
+        #expect(open.windowCounts.isEmpty)
     }
 }

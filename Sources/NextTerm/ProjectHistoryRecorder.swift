@@ -11,9 +11,12 @@ import NextTermCore
 /// see it watches itself: windows coming to the front and leaving it, and the quit, which closes no window.
 ///
 /// Main thread only, as the windows are.
+@MainActor
 final class ProjectHistoryRecorder {
     static let shared = ProjectHistoryRecorder()
-    /// Posted on the main thread after the history changed, for the Welcome window to list it as it is now.
+    /// Posted on the main thread after the history changed, or what the windows hold did (a project opened or closed,
+    /// a window more or fewer on one), for the Welcome window to list them as they are now. A close can leave the
+    /// history as it was (a window never in front, one of a project's two) and still change the dots and counts.
     static let didChange = Notification.Name("NextTermProjectHistoryChanged")
 
     /// Where the history is kept: the user's defaults, or during a self-test a scratch suite emptied as the run starts,
@@ -33,45 +36,55 @@ final class ProjectHistoryRecorder {
         history = store?.load() ?? ProjectHistory()
         let center = NotificationCenter.default
         // No queue: told as it happens, while a window brought forward for an agent is still marked so, and the quit
-        // before the app ends.
+        // before the app ends. AppKit posts these on the main thread.
         let becameKey = center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: nil) { [weak self] note in
-            self?.windowBecameKey(note.object as? NSWindow)
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated { self?.windowBecameKey(window) }
         }
         let resignedKey = center.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: nil) { [weak self] note in
-            self?.windowResignedKey(note.object as? NSWindow)
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated { self?.windowResignedKey(window) }
         }
         let quits = center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.quit()
+            MainActor.assumeIsolated { self?.quit() }
         }
         observers = [becameKey, resignedKey, quits]
     }
 
+    /// How many windows hold each open project, as at the last look: what `didChange` tells of beside the history.
+    var windowCounts: [String: Int] { open.windowCounts }
+
     /// What the windows hold changed: a project a window took is opened now, one no window holds any more is closed at
-    /// its last time in front.
+    /// its last time in front. The Welcome list is told whenever the history or the open projects' windows changed.
     func update(_ controllers: [TerminalWindowController]) {
         let now = Date()
-        record(open.update(windows(controllers), at: now), at: now, notify: true)
+        let counts: [String: Int] = open.windowCounts
+        let recorded: Bool = record(open.update(windows(controllers), at: now), at: now)
+        if recorded || open.windowCounts != counts { changed() }
     }
 
     /// ⌘⌫ on a closed project in the Welcome window: it leaves the history and Recent Projects both. A project a window
-    /// holds stays.
+    /// holds stays. Each list is written only if it held the project.
     func forget(_ path: String) {
-        guard !open.paths.contains(path) else { return }
-        if history.lastUsed(path) != nil {
-            history.forget(path)
-            saved()
-        }
-        let stored: [String] = UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []
-        var recent = RecentProjects(stored)
-        recent.remove(path)
-        if recent.paths != stored { AppDelegate.shared.setRecentProjects(recent.paths) }
+        var recent = RecentProjects(UserDefaults.standard.stringArray(forKey: "recentProjects") ?? [])
+        let listed: RecentProjects = recent
+        let forgot: Bool = history.forget(path, recent: &recent, open: open.paths)
+        // Recent Projects first, so the Welcome list told next reads both as they are now.
+        if recent != listed { AppDelegate.shared.setRecentProjects(recent.paths) }
+        guard forgot else { return }
+        store?.save(history)
+        changed()
     }
 
-    /// Clear Menu: the history goes with Recent Projects. A project still open comes back as its last window closes.
+    /// Clear Menu: the closed projects leave the history with Recent Projects. An open one keeps its place and time, so
+    /// it is still listed after its window closes, even a window never in front.
     func clear() {
-        guard !history.entries.isEmpty else { return }
-        history.clear()
-        saved()
+        var next: ProjectHistory = history
+        next.clear(keeping: open.paths)
+        guard next != history else { return }
+        history = next
+        store?.save(next)
+        changed()
     }
 
     // MARK: watching
@@ -95,7 +108,8 @@ final class ProjectHistoryRecorder {
     /// the one with the keyboard now.
     private func quit() {
         let now = Date()
-        record(open.quit(windows(AppDelegate.shared.controllers), at: now), at: now, notify: false)
+        // Only saved: no window is left to tell.
+        record(open.quit(windows(AppDelegate.shared.controllers), at: now), at: now)
     }
 
     // MARK: recording
@@ -111,18 +125,19 @@ final class ProjectHistoryRecorder {
         return windows
     }
 
-    private func record(_ changes: ProjectHistory.Changes, at now: Date, notify: Bool) {
-        guard !changes.isEmpty else { return }
+    /// Records what a look saw and saves the history if it changed; true then.
+    @discardableResult
+    private func record(_ changes: ProjectHistory.Changes, at now: Date) -> Bool {
+        guard !changes.isEmpty else { return false }
         var next: ProjectHistory = history
         next.record(changes, at: now)
-        guard next != history else { return }
+        guard next != history else { return false }
         history = next
-        // At the quit no window is left to tell: only saved.
-        if notify { saved() } else { store?.save(next) }
+        store?.save(next)
+        return true
     }
 
-    private func saved() {
-        store?.save(history)
+    private func changed() {
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 }
