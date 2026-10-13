@@ -83,6 +83,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        // Solid and dark, with the system's shadow, and nothing laid over the windows behind it: they stay as they are
+        // and clickable, their agents in view, and the Mac already shows them subdued while this one is in front. A
+        // dimmed or blurred screen would say they are blocked, which they are not.
         window.backgroundColor = Theme.background
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
@@ -95,7 +98,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         window.keyEquivalentHandler = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
         window.cancelHandler = { [weak self] in self?.cancel() ?? false }
         build()
-        window.center()
         // While it shows, the list follows the windows (a project opened, closed, or in a window more), the history
         // (⌘⌫, Clear Menu) and the keys the jumps and the hint line name.
         let center = NotificationCenter.default
@@ -118,13 +120,44 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     override func showWindow(_ sender: Any?) {
         // Shown again after a close (this controller lives as long as the app), it lists every session, as for
         // another project. Shown while up, or brought back from the Dock, it keeps what was typed.
-        if let window, !window.isVisible, !window.isMiniaturized { resetSessionSearch() }
+        let closed: Bool = window.map { (window: NSWindow) -> Bool in !window.isVisible && !window.isMiniaturized } ?? false
+        if closed { resetSessionSearch() }
         // Each show starts the selection afresh: shown from a project window, on the other open project used last, so
         // the key that showed it, then Return, switches back.
         reloadProjects(selection: .start)
+        if closed { place() }
         super.showWindow(sender)
-        window?.makeFirstResponder(projectsTable)
+        focusSearch()
     }
+
+    /// Where it comes up after a close: centred over the window it was asked from, on that window's screen; asked
+    /// from no project window, centred on the screen in front. Up already, or minimized (it comes back from the Dock
+    /// where it was), it is not moved.
+    private func place() {
+        guard let window else { return }
+        let size: CGSize = window.frame.size
+        if let origin = AppDelegate.shared.welcomeOrigin?.window, let screen = origin.screen ?? NSScreen.main {
+            let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin.frame, within: screen.visibleFrame)
+            window.setFrame(frame, display: false)
+            return
+        }
+        // Onto the screen in front first: `center` centres on the screen the window is on, which can be another.
+        if let screen = NSScreen.main {
+            let visible: CGRect = screen.visibleFrame
+            window.setFrame(SwitcherPlacement.frame(size: size, over: visible, within: visible), display: false)
+        }
+        window.center()
+    }
+
+    /// The keyboard in the projects search, its text selected, so typing filters at once and replaces what is there.
+    private func focusSearch() {
+        guard let window else { return }
+        window.makeFirstResponder(search)
+        search.currentEditor()?.selectAll(nil)
+    }
+
+    /// For the self-test: where each show puts the keyboard.
+    var projectsSearchField: NSSearchField { search }
 
     // MARK: layout
 
@@ -828,6 +861,20 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func windowDidResignKey(_ notification: Notification) {
         watchModifiers(false)
+    }
+
+    /// Closed, the projects search is emptied, so the next show lists everything. Minimized or behind another window,
+    /// it keeps what was typed.
+    func windowWillClose(_ notification: Notification) {
+        listAnnouncement?.cancel()
+        listAnnouncement = nil
+        (search.currentEditor() as? NSTextView)?.string = ""
+        search.stringValue = ""
+    }
+
+    /// Brought back from the Dock, the keyboard is in the search, as at a show.
+    func windowDidDeminiaturize(_ notification: Notification) {
+        focusSearch()
     }
 
     /// The list follows what it lists while the window shows; hidden, the next show reads it.

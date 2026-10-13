@@ -418,6 +418,29 @@ public enum SwitcherSelection {
     }
 }
 
+/// Where the window comes up when it was not showing: over the window it was asked from, on that window's screen, so
+/// it never opens on another display than the one being looked at.
+public enum SwitcherPlacement {
+    /// A frame of `size` centred over `origin`, moved as little as it takes to sit inside `visible` (the screen's frame
+    /// less the menu bar and the Dock), on whole points. Too big for the screen, it keeps its left edge and its top, the
+    /// title bar, on it. Screen coordinates: y grows upward.
+    public static func frame(size: CGSize, over origin: CGRect, within visible: CGRect) -> CGRect {
+        let centredX: CGFloat = (origin.midX - size.width / 2).rounded()
+        let centredY: CGFloat = (origin.midY - size.height / 2).rounded()
+        let left: CGFloat = visible.minX
+        let bottom: CGFloat = visible.maxY - size.height
+        let x: CGFloat = kept(centredX, from: left, to: visible.maxX - size.width, tooBig: left)
+        let y: CGFloat = kept(centredY, from: visible.minY, to: bottom, tooBig: bottom)
+        return CGRect(origin: CGPoint(x: x, y: y), size: size)
+    }
+
+    /// `value` kept between `low` and `high`; `tooBig` when there is no room between them.
+    private static func kept(_ value: CGFloat, from low: CGFloat, to high: CGFloat, tooBig: CGFloat) -> CGFloat {
+        guard high >= low else { return tooBig }
+        return min(max(value, low), high)
+    }
+}
+
 /// What a key does in the switcher.
 public enum SwitcherAction: Equatable, Sendable {
     /// The selection moves by rows: ↓ and ↑, ⌃N and ⌃P.

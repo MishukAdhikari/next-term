@@ -683,4 +683,57 @@ import Testing
         #expect(server.name == "staging")
         #expect(server.destination == "deploy@staging.example.com")
     }
+
+    // MARK: where the window comes up
+
+    private let size = CGSize(width: 900, height: 580)
+    /// A made-up 1920 × 1080 display with the menu bar and the Dock taken off.
+    private let display = CGRect(x: 0, y: 0, width: 1920, height: 1055)
+
+    @Test func comesUpCentredOverTheWindowItWasAskedFrom() {
+        let origin = CGRect(x: 100, y: 100, width: 1200, height: 800)
+        let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin, within: display)
+        let expected = CGRect(x: 250, y: 210, width: 900, height: 580)
+        #expect(frame == expected)
+        let dx: CGFloat = abs(frame.midX - origin.midX)
+        let dy: CGFloat = abs(frame.midY - origin.midY)
+        #expect(dx <= 1 && dy <= 1)
+    }
+
+    @Test func overASmallWindowByTheEdgeItStaysOnThatScreen() {
+        let origin = CGRect(x: 1700, y: 900, width: 200, height: 100)
+        let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin, within: display)
+        let expected = CGRect(x: 1020, y: 475, width: 900, height: 580)
+        #expect(frame == expected)
+        #expect(display.contains(frame))
+    }
+
+    @Test func onASecondDisplayLeftOfTheFirstItStaysOnThatDisplay() {
+        let second = CGRect(x: -1440, y: 0, width: 1440, height: 875)
+        let origin = CGRect(x: -1430, y: 20, width: 600, height: 400)
+        let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin, within: second)
+        let expected = CGRect(x: -1440, y: 0, width: 900, height: 580)
+        #expect(frame == expected)
+        #expect(second.contains(frame))
+    }
+
+    @Test func onADisplayTooSmallItsTitleBarStaysOnScreen() {
+        let small = CGRect(x: 0, y: 0, width: 800, height: 500)
+        let origin = CGRect(x: 100, y: 50, width: 600, height: 400)
+        let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin, within: small)
+        // The left edge and the top on the display; the rest runs off its right and bottom.
+        #expect(frame.minX == small.minX)
+        #expect(frame.maxY == small.maxY)
+        #expect(frame.size == size)
+    }
+
+    @Test func landsOnWholePoints() {
+        let origin = CGRect(x: 100.5, y: 100.25, width: 1001, height: 701)
+        let frame: CGRect = SwitcherPlacement.frame(size: size, over: origin, within: display)
+        #expect(frame.minX == frame.minX.rounded())
+        #expect(frame.minY == frame.minY.rounded())
+        let dx: CGFloat = abs(frame.midX - origin.midX)
+        let dy: CGFloat = abs(frame.midY - origin.midY)
+        #expect(dx <= 1 && dy <= 1)
+    }
 }
