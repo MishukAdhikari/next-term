@@ -216,6 +216,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
+    /// The offer to open a project for an agent in the home folder came up here (offerProjectForHomeAgent): once a window.
+    private(set) var offeredProjectForAgent = false
+    /// Browse Home Folder was clicked in this window's "No project open": while its tab is in no project, the tree shows
+    /// the home folder, as files only (ProjectSidebarView.browsingOnly).
+    private(set) var browsesHome = false
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
@@ -342,6 +347,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.header.onSummaryClick = { [weak self] in self?.showUncommittedChanges() }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
+        sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         // Lines selected in a diff go to the agents, as the editor's selection does.
@@ -869,6 +875,36 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         updateProjectRoot()
         updateTabPlace()
         noteAgentTabs()
+        offerProjectForHomeAgent()
+    }
+
+    /// An agent Next Term recognises runs here, in a window with no project, in the home folder: once in this window, a
+    /// notice offers to open a project for it (Choose Folder…, as Open… does), with Don’t Ask Again for every window
+    /// (HomeAgentOffer). The agent is never held: the notice only offers.
+    private func offerProjectForHomeAgent() {
+        guard project == nil, !offeredProjectForAgent else { return }
+        let agents: [TerminalTab] = tabs.filter { (tab: TerminalTab) -> Bool in tab.status.running && tab.status.kind == .agent }
+        guard !agents.isEmpty else { return }
+        let home: String = ProtectedPlaces.current.home
+        let rows: [HomeAgentOffer.Tab] = agents.map { (tab: TerminalTab) -> HomeAgentOffer.Tab in
+            // The agent's own folder: `cd ~/app && claude` runs in app, though the tab's folder is still the prompt's
+            // until the next precmd. While the shell is still in front, no folder yet: a later tick asks again.
+            let pgid: pid_t = tcgetpgrp(tab.view.process.childfd)
+            let leads: Bool = pgid > 0 && pgid != tab.view.process.shellPid
+            let folder: String = leads ? (ProcessInspector.currentDirectory(of: pgid) ?? "") : ""
+            let local: String = folder.isEmpty ? "" : canonicalPath(folder)
+            return HomeAgentOffer.Tab(directory: tab.remote != nil ? tab.directory : local, runsAgent: true, remote: tab.remote != nil)
+        }
+        let on: Bool = HomeAgentOffer.isOn(.standard)
+        guard HomeAgentOffer.offers(on: on, windowProject: project, offered: false, tabs: rows, home: home) else { return }
+        offeredProjectForAgent = true
+        let tab: TerminalTab? = zip(agents, rows).first { $0.1.directory == home && !$0.1.remote }?.0
+        let text: String = HomeAgentOffer.text(agent: tab.map(Self.agentName(of:)) ?? "An agent")
+        // The panel comes over this window, not the key one: the notice can't be key, so a click on it leaves another
+        // window key, or none. Weak, as the notice keeps its action while it shows.
+        let choose: () -> Void = { [weak self] in AppDelegate.shared.chooseProjectFolder(from: self) }
+        GitToast.show(text, in: window, button: "Choose Folder…", action: choose,
+                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) })
     }
 
     /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never
@@ -910,14 +946,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     var isSidebarVisible: Bool { !sidebar.isHidden }
 
-    /// A project window's tree stays on its project. Otherwise it follows the active tab: its git work
-    /// tree, or its folder when outside one.
+    /// A project window's tree stays on its project. Otherwise it follows the active tab into the project it is in (its
+    /// git work tree, or its folder when outside one), offering Open as Project Window; in a folder that is never a
+    /// project (the home folder, /: ProjectRoot.project) it shows "No project open", and nothing there is read.
     private func updateProjectRoot() {
         guard isSidebarVisible else { return }
         if let project {
             guard projectKey != project else { return }
             projectKey = project
-            sidebar.setRoot(project)
+            sidebar.offerProjectWindow(nil)
+            // A folder that is never a project (the home folder opened as one): its files, and nothing scanned there.
+            sidebar.setRoot(project, browsing: ProjectRoot.isNeverRoot(project))
             return
         }
         // A remote tab's folder is on its host, not this Mac: the tree stays where it was.
@@ -925,15 +964,42 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let key = tab.id.uuidString + "\u{0}" + tab.directory
         guard key != projectKey else { return }
         projectKey = key
-        sidebar.setRoot(ProjectRoot.find(from: tab.directory))
+        if let root = ProjectRoot.project(from: tab.directory) {
+            sidebar.setRoot(root)
+            sidebar.offerProjectWindow(sidebar.root?.path ?? root)
+        } else if browsesHome {
+            sidebar.offerProjectWindow(nil)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+        } else {
+            sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
+        }
         AppDelegate.shared.projectsChanged()
+    }
+
+    /// Browse Home Folder: the home folder's tree in this window, while its tab is in no project. Never a project: no git,
+    /// Databases, Services or Agent Sessions there, and each folder in it, Desktop and Documents too, read only as the user
+    /// opens it (when macOS asks for those, it is because the user did).
+    func browseHomeFolder() {
+        browsesHome = true
+        projectKey = nil
+        // With a remote tab in front the tree stays as it was (updateProjectRoot), but this click asks for it to change.
+        // The next local tab is placed afresh: in the home folder it keeps this tree, in a project it shows that one.
+        if activeTab?.remote != nil {
+            sidebar.offerProjectWindow(nil)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+            return
+        }
+        updateProjectRoot()
     }
 
     // MARK: find and replace in files
 
-    /// The folder searches cover: the project, else what the sidebar shows, else the tab's git root.
+    /// The folder searches cover: the project, else what the sidebar shows, else the project the tab is in, else its
+    /// folder (the home folder, whose protected places the searches leave out: ProtectedPlaces).
     var searchRoot: String {
-        project ?? sidebar.root?.path ?? activeTab.flatMap { $0.remote == nil ? ProjectRoot.find(from: $0.directory) : nil } ?? NSHomeDirectory()
+        if let root = project ?? sidebar.root?.path { return root }
+        guard let tab = activeTab, tab.remote == nil else { return NSHomeDirectory() }
+        return ProjectRoot.project(from: tab.directory) ?? tab.directory
     }
 
     @objc func findInFiles(_ sender: Any?) {
@@ -2346,6 +2412,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
         refreshVisibility()
         refresh()
+        // Another window may have opened a project since: "No project open" lists it.
+        if sidebar.showsNoProject { sidebar.noProject.show(recent: AppDelegate.shared.recentProjects) }
+        sidebar.retryDenied() // back from System Settings, perhaps, with a folder allowed
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)

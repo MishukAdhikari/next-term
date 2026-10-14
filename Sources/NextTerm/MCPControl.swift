@@ -573,7 +573,9 @@ enum MCPControl {
     }
 
     /// The window a new tab in `directory` opens in (new_tab's rule, which run_with_secrets shares): the window of the
-    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true).
+    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true); in a
+    /// folder that is never a project (the home folder: ProjectRoot.project), the window with no project that has a tab
+    /// there already, else a new one.
     static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
         // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
         let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
@@ -582,7 +584,18 @@ enum MCPControl {
             guard let worktree = owner.project.flatMap({ MCPServer.ownWorktree(of: directory, inside: $0) }) else { return (owner, false) }
             return (app.openFolder(worktree, newWindow: false, forAgent: true), true)
         }
-        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true), true)
+        guard let project = ProjectRoot.project(from: directory) else {
+            // A folder that is never a project (the home folder): the window with no project that has a tab there already
+            // (one an earlier call opened) takes the tab, as a project's window does; else a new one.
+            let folder: String = canonicalPath(directory)
+            let plain: TerminalWindowController? = app.controllers.first { (controller: TerminalWindowController) -> Bool in
+                guard !controller.hasClosed, controller.project == nil else { return false }
+                return controller.tabs.contains { (tab: TerminalTab) -> Bool in tab.remote == nil && canonicalPath(tab.directory) == folder }
+            }
+            if let plain { return (plain, false) }
+            return (app.openWindow(directory: directory, forAgent: true), true)
+        }
+        return (app.openFolder(project, newWindow: false, forAgent: true), true)
     }
 
     static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {

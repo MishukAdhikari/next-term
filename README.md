@@ -88,6 +88,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Open…) opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in
   it by default. Next Term opens to the Welcome window, reopens your last projects, or opens a new
   terminal, as you choose. Open Recent and Close Project too.
+- **A new terminal stays out of your files.** New Terminal (⌘N) opens a shell where new tabs open
+  (Settings › Terminal › New tabs: your home folder unless you chose a folder). With no project, its
+  sidebar says "No project open" and lists your recent projects, Open Folder…, Connect to Server… and
+  Browse Home Folder, and no files; `cd` into a project and its tree appears, with Open as Project
+  Window. Browse Home Folder shows your home folder's files in that window, each folder read only when
+  you open it. Start an agent in your home folder and Next Term offers once to open a project for it
+  instead (Don't Ask Again turns that off); the agent runs either way.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
   button when the upstream has commits you don't (Next Term fetches every 10 minutes, so it appears
@@ -182,6 +189,10 @@ Next Term is not notarized by Apple, so with the disk image macOS blocks the fir
   Privacy & Security**, scroll down, click **Open Anyway** next to Next Term, and confirm.
 - **macOS 13 and 14:** right-click Next Term in Applications, choose **Open**, then **Open** again.
 
+Releases are signed with Next Term's own certificate, so what you allow (a folder, the camera, the microphone) stays
+allowed from one update to the next. The first update to a signed release may ask once more, and Full Disk Access, if
+you gave it, needs giving again once; see [Release signing](docs/signing.md).
+
 Each release includes `NextTerm-x.y.z.dmg.sha256`. Check the download with `shasum -a 256 -c
 NextTerm-x.y.z.dmg.sha256` before allowing it.
 
@@ -219,7 +230,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Action | Keys |
 |---|---|
 | New tab (in the project, or the current tab's folder) | ⌘T |
-| New window | ⌘N |
+| New window (where new tabs open: your home folder unless Settings › Terminal says otherwise) | ⌘N |
 | New remote tab (on one of your servers) | ⌥⌘T |
 | Switch to or open a project (the Welcome window: ↩ go there, ⌘↩ new window, ⌘1–⌘9 the first nine; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
@@ -265,6 +276,17 @@ Next Term's menu.
 
 ## Security
 
+- **Privacy prompts:** Next Term never reads your Desktop, Documents, Downloads, Pictures, Movies, Music,
+  `~/Library` (with iCloud Drive and cloud-storage folders) or other disks on its own. The sidebar's
+  scans, git status, Go to File, Find in Files and the checks at launch leave them out, and your home
+  folder, `/`, `/Volumes` and `~/Library` are never a project, so opening a terminal asks for nothing.
+  A project you open inside one of them, or a folder you open in the tree, works as any other: macOS
+  asks once, because you went there. If you said Don't Allow, the folder says macOS hasn't given Next
+  Term access, with a button to the System Settings pane that changes it, and nothing asks again.
+  Settings › General › Full Disk Access… opens that pane for anyone who wants every folder without
+  prompts; Next Term never asks for it. When macOS asks, it says "Next Term, or a command running in
+  it, wants to access…": macOS asks in Next Term's name for the programs in its tabs too, and every
+  kind of access a program could ask for has a reason given.
 - **Clipboard:** programs can copy to the clipboard (OSC 52) only from the tab you are looking at, and can
   never read it, so a remote host over ssh cannot harvest what you copied. ⌘V strips control characters.
 - **Screen contents** cannot be read back through terminal queries (DECRQCRA answers are blanked).
@@ -306,7 +328,8 @@ swift run NextTerm            # run a debug build
 scripts/build-dmg.sh          # universal app + DMG + checksum in dist/, and NextTerm.dSYM for crash reports
 ```
 
-To sign and notarize for distribution:
+To sign with the release identity, as CI signs releases ([Release signing](docs/signing.md)):
+`SIGN_ID=<its SHA-1> scripts/build-dmg.sh`. To sign and notarize for distribution:
 `SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=<notarytool profile> scripts/build-dmg.sh`.
 
 ## Tests
@@ -338,7 +361,8 @@ Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects,
                         notifications, self-test
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme
 Tests/                  unit tests (swift-testing)
-scripts/                build, test and icon scripts
+scripts/                build, test, signing and icon scripts
+docs/                   release signing (signing.md)
 ```
 
 `NextTermCore` has no AppKit dependency, so another front end can reuse it. An iPad or iPhone app

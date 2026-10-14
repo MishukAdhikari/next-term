@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// Settings › General: what a launch that names no folder or file shows, whether a quit with a terminal window open asks
-/// about resuming, and whether a restore brings scrollback back. Each control saves only its own choice, as it changes,
+/// about resuming, whether a restore brings scrollback back, and Full Disk Access… for the user who wants it. Each control saves only its own choice, as it changes,
 /// and it is read at the next launch, reopen or quit (LaunchSettings): "At launch" counts as chosen only once the user
 /// chose it.
 final class GeneralSettingsView: NSView {
@@ -14,10 +14,13 @@ final class GeneralSettingsView: NSView {
     let askToResume = NSButton(checkboxWithTitle: "Ask whether to resume when quitting", target: nil, action: nil)
     /// Beside "Sessions:".
     let keepScrollback = NSButton(checkboxWithTitle: "Keep scrollback", target: nil, action: nil)
+    /// Beside "Privacy:": System Settings' Full Disk Access pane, opened when clicked. Nothing asks for it by itself.
+    let fullDiskAccess = NSButton(title: "Full Disk Access…", target: nil, action: nil)
     /// The labels in the 110 pt column on the left, as in the other tabs.
     let launchLabel = NSTextField(labelWithString: "At launch:")
     let quitLabel = NSTextField(labelWithString: "At quit:")
     let sessionsLabel = NSTextField(labelWithString: "Sessions:")
+    let privacyLabel = NSTextField(labelWithString: "Privacy:")
     /// Where the choices are kept: the defaults the launch and the quit read them from.
     private let defaults: UserDefaults = AppDelegate.shared?.launchDefaults ?? .standard
 
@@ -39,6 +42,9 @@ final class GeneralSettingsView: NSView {
         askToResume.action = #selector(askToResumeChanged)
         keepScrollback.target = self
         keepScrollback.action = #selector(keepScrollbackChanged)
+        fullDiskAccess.bezelStyle = .rounded
+        fullDiskAccess.target = self
+        fullDiskAccess.action = #selector(openFullDiskAccess)
 
         // No wider than the widest control above them, which the column never gets narrower than: a note squeezed in a
         // narrow window would wrap to a line its height leaves out.
@@ -53,10 +59,12 @@ final class GeneralSettingsView: NSView {
         let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project; with “Open a new terminal” chosen, it opens a shell window.")
         let askNote = note("Asks only when a terminal window is open. Unsaved files and running work are always asked about.")
         let scrollbackNote = note("Brings shell output back when windows resume after a quit or an update. It is kept in private files, with secrets masked on a best-effort basis, until Next Term next opens.")
+        let privacyNote = note("Only if you want Next Term and the commands in it to reach every folder without macOS asking: this opens System Settings, where you add Next Term yourself.")
         // VoiceOver reads each note with the controls it is about.
         for radio in opens { radio.setAccessibilityHelp(opensNote.stringValue) }
         askToResume.setAccessibilityHelp(askNote.stringValue)
         keepScrollback.setAccessibilityHelp(scrollbackNote.stringValue)
+        fullDiskAccess.setAccessibilityHelp(privacyNote.stringValue)
         // A label in the 110 pt column on the left, as in the other tabs, and its controls beside it: on the first line's
         // baseline, for the radio buttons' two lines.
         func row(_ label: NSTextField, _ views: [NSView]) -> NSStackView {
@@ -80,12 +88,17 @@ final class GeneralSettingsView: NSView {
         let quitRow = row(quitLabel, [askToResume])
         let askNoteRow = row(blank(), [askNote])
         let sessionsRow = row(sessionsLabel, [keepScrollback])
-        let stack = NSStackView(views: [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, row(blank(), [scrollbackNote])])
+        let scrollbackNoteRow = row(blank(), [scrollbackNote])
+        let privacyRow = row(privacyLabel, [fullDiskAccess])
+        let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, privacyRow,
+                              row(blank(), [privacyNote])]
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.setCustomSpacing(20, after: opensNoteRow)
         stack.setCustomSpacing(20, after: askNoteRow)
+        stack.setCustomSpacing(20, after: scrollbackNoteRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -136,6 +149,11 @@ final class GeneralSettingsView: NSView {
         var settings = LaunchSettings(defaults: defaults)
         settings.askToReopenOnQuit = askToResume.state == .on
         settings.save(.askToReopenOnQuit, to: defaults)
+    }
+
+    /// Full Disk Access…: System Settings' pane, for the user to add Next Term there if they want to.
+    @objc private func openFullDiskAccess() {
+        NSWorkspace.shared.open(PrivacySettings.url(.fullDiskAccess))
     }
 
     @objc private func keepScrollbackChanged() {

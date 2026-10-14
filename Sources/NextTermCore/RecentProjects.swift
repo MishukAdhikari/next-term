@@ -44,9 +44,14 @@ public struct RecentProjects: Equatable, Sendable {
         paths.removeAll()
     }
 
-    /// The ones whose folder still exists.
-    public func existing(fileManager: FileManager = .default) -> [String] {
+    /// The ones whose folder still exists. One in a protected place (ProtectedPlaces: ~/Documents/site, a disk in
+    /// /Volumes) is listed as saved, without a look: looking would set off macOS's prompt for that place before the user
+    /// opened anything. It is checked when it is opened. One on a disk is listed while the kernel's mount table
+    /// (`mounted`) has that disk, so one on an unplugged disk is left out, never chosen and dropped as gone.
+    public func existing(fileManager: FileManager = .default, protected: ProtectedPlaces = .current,
+                         mounted: Set<String> = ProtectedPlaces.mountPoints()) -> [String] {
         paths.filter { path in
+            if protected.holds(path) { return ProtectedPlaces.seemsThere(path, mounted: mounted) }
             var isDir: ObjCBool = false
             return fileManager.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
         }

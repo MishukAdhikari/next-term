@@ -493,9 +493,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Each listed project's branch, and a linked worktree's title, read off the main thread from git's files, with
     /// which of the history's folders are gone; then the list shows them, the search finds the branches, and the
     /// selection stays. A folder gone at the last look is read too, so one that is back shows with its branch.
+    /// A project in a protected place (ProtectedPlaces: ~/Documents, ~/Desktop, a disk in /Volumes) that no window has
+    /// open is not read: it shows with its saved name and folder, and no branch, until it is opened.
     private func readBranchesAndTitles() {
         let stored: ProjectHistory = ProjectHistoryRecorder.shared.history
-        let paths: [String] = list.projects.map(\.path) + missing.sorted()
+        let open: Set<String> = Self.openProjects()
+        let paths: [String] = (list.projects.map(\.path) + missing.sorted()).filter { Self.mayLook(inside: $0, open: open) }
         folderLook += 1
         let look: Int = folderLook
         DispatchQueue.global(qos: .userInitiated).async {
@@ -527,6 +530,17 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         if changed { buildList() }
         applySearch(.keep)
+    }
+
+    /// The projects a window has open now.
+    private static func openProjects() -> Set<String> {
+        Set(AppDelegate.shared.controllers.compactMap { (controller: TerminalWindowController) -> String? in controller.project })
+    }
+
+    /// Whether the list may read in `path`'s folder (its .git, for the branch and a worktree's title): not in a protected
+    /// place unless a window has it open (the user opened it, and macOS asked then).
+    private nonisolated static func mayLook(inside path: String, open: Set<String>) -> Bool {
+        open.contains(path) || !ProtectedPlaces.current.holds(path)
     }
 
     /// The history's folders not among `present`, the ones on disk.
@@ -685,12 +699,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Reads `path`'s sessions after `delay`, while it is still the project shown; a read asked for since takes its
     /// place. Reads run one at a time off the main thread, so one per project passed would queue up behind each other.
+    /// They come from the agents' own folders; the project's is not looked at while the list may not look in it
+    /// (`mayLook`: one in ~/Documents that no window has open, which the list may have selected by itself).
     private func readSessions(of path: String, after delay: TimeInterval) {
         pendingSessionRead?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.selectedProject == path else { return }
             self.pendingSessionRead = nil
-            SessionStore.load(path) { [weak self] listing, tabs in
+            let resolving: Bool = Self.mayLook(inside: path, open: Self.openProjects())
+            SessionStore.load(path, resolving: resolving) { [weak self] listing, tabs in
                 guard let self else { return }
                 self.cache[path] = listing.sessions
                 guard self.selectedProject == path else { return }
@@ -714,7 +731,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let font = NSFont.systemFont(ofSize: 12)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.textDim]
         let line = NSMutableAttributedString(string: RecentProjects.abbreviate(path), attributes: attributes)
-        if let branch = branches[path] ?? SessionStore.branch(of: path) {
+        let readable: Bool = Self.mayLook(inside: path, open: Self.openProjects())
+        if let branch = branches[path] ?? (readable ? SessionStore.branch(of: path) : nil) {
             line.append(Typography.gap(14, font: font))
             line.append(SwitcherRowStyle.branch(branch, font: font, symbolSize: 11, color: Theme.textDim))
         }

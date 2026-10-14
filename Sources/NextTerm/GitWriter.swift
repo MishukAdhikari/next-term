@@ -370,11 +370,13 @@ final class GitCommandsWindowController: NSWindowController {
 }
 
 /// A short notice at the bottom of a window ("Switched to feat/login"), with one optional button
-/// ("Undo"). It goes by itself; a notice with a button stays longer.
+/// ("Undo"), and a second one after it for a notice that offers something ("Don’t Ask Again"). It goes by
+/// itself; a notice with a button stays longer.
 final class GitToast {
     private static var current: NSPanel?
     private static var shown: GitNotice.Shown?
     private static var action: (() -> Void)?
+    private static var otherAction: (() -> Void)?
     private static var hide: DispatchWorkItem?
     /// How many notices have come up. Work whose notice comes late (after the branches are read again) notes it as it
     /// begins, and passes it as `begun`: an Undo that came up meanwhile stays (GitNotice.replaces).
@@ -382,6 +384,17 @@ final class GitToast {
 
     static func show(_ text: String, in window: NSWindow?, button: String? = nil, isError: Bool = false, begun: Int? = nil,
                      action: (() -> Void)? = nil) {
+        present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: nil, otherAction: nil)
+    }
+
+    /// A notice that offers something: its button, then `other` after it ("Don’t Ask Again").
+    static func show(_ text: String, in window: NSWindow?, button: String, action: @escaping () -> Void, other: String,
+                     otherAction: @escaping () -> Void) {
+        present(text, in: window, button: button, isError: false, begun: nil, action: action, other: other, otherAction: otherAction)
+    }
+
+    private static func present(_ text: String, in window: NSWindow?, button: String?, isError: Bool, begun: Int?,
+                                action: (() -> Void)?, other: String?, otherAction: (() -> Void)?) {
         guard let window else { return }
         guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
         dismiss()
@@ -392,6 +405,12 @@ final class GitToast {
         var views: [NSView] = [label]
         if let button {
             let control = NSButton(title: button, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressed))
+            control.bezelStyle = .rounded
+            control.controlSize = .small
+            views.append(control)
+        }
+        if let other {
+            let control = NSButton(title: other, target: GitToastTarget.shared, action: #selector(GitToastTarget.pressedOther))
             control.bezelStyle = .rounded
             control.controlSize = .small
             views.append(control)
@@ -423,6 +442,7 @@ final class GitToast {
         count += 1
         shown = GitNotice.Shown(number: count, hasButton: button != nil)
         self.action = action
+        self.otherAction = otherAction
         NSAccessibility.post(element: panel, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
         let work = DispatchWorkItem { dismiss() }
@@ -436,6 +456,7 @@ final class GitToast {
         current = nil
         shown = nil
         action = nil
+        otherAction = nil
     }
 
     fileprivate static func pressed() {
@@ -444,14 +465,22 @@ final class GitToast {
         run?()
     }
 
+    fileprivate static func pressedOther() {
+        let run = otherAction
+        dismiss()
+        run?()
+    }
+
     /// The current notice's text, for the self-test.
     static var text: String? { (current?.contentView?.subviews.first as? NSStackView)?.views.compactMap { ($0 as? NSTextField)?.stringValue }.first }
     static func pressButtonForTest() { pressed() }
+    static func pressOtherButtonForTest() { pressedOther() }
 }
 
 private final class GitToastTarget: NSObject {
     static let shared = GitToastTarget()
     @objc func pressed() { GitToast.pressed() }
+    @objc func pressedOther() { GitToast.pressedOther() }
 }
 
 /// Small sheets the git operations share: a name to type (checked as it is typed), a yes/no.
