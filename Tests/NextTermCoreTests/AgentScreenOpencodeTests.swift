@@ -810,3 +810,77 @@ extension AgentScreenOpencodeTests {
         #expect(reviewed.hasPrefix("Review: Key: •••") && !Self.showsKey(reviewed), "\(reviewed)")
     }
 }
+
+/// The menu MCP gives in a tab that shows OpenCode (MCPControl.fieldMenu, in the app target, which has no unit tests):
+/// AgentScreen.menu(asking:screenRows:shown:) over the tab's rows with their colours (tab.liveRows) and the same rows'
+/// text masked over whole lines (fieldTail), tab.agentScreenLines rows each.
+extension AgentScreenOpencodeTests {
+    @Test func mcpReadsAnOpencodeTabsMenuFromItsRowsColoursAndAll() throws {
+        let mask = Self.storedMask()
+        let asked = "Permission required: Shell command ($ npm test)"
+        for lines in [OpencodeScreens.shellPermission, OpencodeScreens.withSidebar(OpencodeScreens.shellPermission)] {
+            let rows: [ScreenRow] = OpencodeScreens.rows(lines, selected: 2)
+            let shown: [String] = mask.mask(rows: lines)
+            let menu = try #require(AgentScreen.menu(asking: asked, screenRows: rows, shown: shown, mask: mask))
+            // The selected button is told only by its background: Reject, so Allow once is Right, then Return.
+            #expect(menu == AgentScreen.menu(screenRows: rows, opencode: true, mask: mask))
+            #expect(menu.style == .row && menu.choices == ["Allow once", "Allow always", "Reject"] && menu.highlighted == 2)
+            #expect(menu.keys(toPick: 0) == ["right", "enter"] && menu.keys(toPick: 2) == ["escape"])
+            // The rows' text alone, read as every other tab's, gives no menu to pick from.
+            #expect(AgentScreen.menu(asking: asked, screenLines: lines, shown: shown, mask: mask) == nil)
+            // Another question: none.
+            #expect(AgentScreen.menu(asking: "Permission required: Edit src/app.ts", screenRows: rows, shown: shown, mask: mask) == nil)
+        }
+        // A form with one question: its options' words from the masked rows, each picked by its digit.
+        let question = "Which database should the tests use?"
+        let form: [ScreenRow] = OpencodeScreens.form(OpencodeScreens.question, selected: 1)
+        let picked = try #require(AgentScreen.menu(asking: question, screenRows: form, shown: mask.mask(rows: OpencodeScreens.question),
+                                                   mask: mask))
+        #expect(picked == AgentScreen.menu(screenRows: form, opencode: true, mask: mask))
+        #expect(picked.style == .digits && picked.choices == ["Postgres", "SQLite"] && picked.keys(toPick: 1) == ["2"])
+    }
+
+    /// An OpenCode tab that shows none of OpenCode's shapes (here another agent's form) gives main's menu, matched on the
+    /// rows and its choices from the masked ones (menu(asking:screenLines:shown:)): never the menu its rows read alone,
+    /// whose choice holds the halves of a key the screen split.
+    @Test func anOpencodeTabWithNoneOfItsShapesGivesMainsMaskedMenu() throws {
+        let mask = Self.storedMask()
+        let key: String = Self.storedKey
+        let split: String.Index = key.index(key.startIndex, offsetBy: 14)
+        let choiceSplit: String.Index = key.index(key.startIndex, offsetBy: 20)
+        let form: [String] = [
+            "────────────────────────────────────────────────────────",
+            " ☐ Key",
+            "",
+            "Should the deploy use the key " + String(key[..<split]),
+            String(key[split...]) + " from the vault?",
+            "",
+            "❯ 1. Yes, use " + String(key[..<choiceSplit]),
+            String(key[choiceSplit...]),
+            "  2. No",
+            "  3. Type something.",
+            "────────────────────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        let asked = "Should the deploy use the key ••• from the vault?"
+        let rows: [ScreenRow] = OpencodeScreens.text(form)
+        let shown: [String] = mask.mask(rows: form)
+        #expect(AgentScreen.Opencode.activity(form, mask: mask) == .idle)
+        let menu = try #require(AgentScreen.menu(asking: asked, screenRows: rows, shown: shown, mask: mask))
+        #expect(menu == AgentScreen.menu(asking: asked, screenLines: form, shown: shown, mask: mask))
+        #expect(menu == AgentMenu(question: asked, style: .list, choices: ["Yes, use •••", "No"], highlighted: 0))
+        #expect(!Self.showsKey(menu.question + " " + menu.choices.joined(separator: " ")))
+        // Read from the rows alone, a choice holds the key's head: that menu is not the one given.
+        let plain = try #require(AgentScreen.menu(screenRows: rows, opencode: true, mask: mask))
+        #expect(plain != menu && Self.showsKey(plain.choices.joined(separator: " ")), "\(plain.choices)")
+        // As main's: another question, or masked rows that read another menu, give none.
+        #expect(AgentScreen.menu(asking: "Should the deploy stop?", screenRows: rows, shown: shown, mask: mask) == nil)
+        let moved: [String] = shown.map { (line: String) -> String in
+            line.hasPrefix("❯ 1.") ? "  1." + line.dropFirst(4) : (line == "  2. No" ? "❯ 2. No" : line)
+        }
+        #expect(moved != shown)
+        #expect(AgentScreen.menu(asking: asked, screenRows: rows, shown: moved, mask: mask) == nil)
+    }
+}

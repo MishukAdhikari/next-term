@@ -280,31 +280,65 @@ import Testing
         #expect(MCPServer.keyBytes("rm") == nil)
     }
 
-    /// OpenCode reads a word after its options as the project folder: new_tab gives it the prompt with --prompt, unless
-    /// the command takes a prompt already (--prompt, or `run` and its message). Every other agent's line is as before.
+    /// OpenCode reads a word after its options as the project folder: new_tab gives it the prompt joined to --prompt=, as
+    /// one word, unless the command takes a prompt already (--prompt, or `run` and its message). Every other agent's line
+    /// is as before.
     @Test func newTabGivesOpencodeItsPromptWithPromptOption() throws {
         let prompt = "Fix the login test"
-        #expect(MCPServer.commandLine("opencode", prompt: prompt) == "opencode --prompt 'Fix the login test'")
-        #expect(MCPServer.commandLine("opencode2", prompt: prompt) == "opencode2 --prompt 'Fix the login test'")
-        #expect(MCPServer.commandLine("/opt/homebrew/bin/opencode", prompt: prompt) == "/opt/homebrew/bin/opencode --prompt 'Fix the login test'")
+        let given = "--prompt='Fix the login test'"
+        #expect(MCPServer.commandLine("opencode", prompt: prompt) == "opencode " + given)
+        #expect(MCPServer.commandLine("opencode2", prompt: prompt) == "opencode2 " + given)
+        #expect(MCPServer.commandLine("opencode-ai", prompt: prompt) == "opencode-ai " + given)
+        #expect(MCPServer.commandLine("opencode.exe", prompt: prompt) == "opencode.exe " + given)
+        #expect(MCPServer.commandLine("/opt/homebrew/bin/opencode", prompt: prompt) == "/opt/homebrew/bin/opencode " + given)
         #expect(MCPServer.commandLine("opencode -m anthropic/claude-sonnet-4 --agent plan", prompt: prompt)
-            == "opencode -m anthropic/claude-sonnet-4 --agent plan --prompt 'Fix the login test'")
-        #expect(MCPServer.commandLine("opencode -c", prompt: prompt) == "opencode -c --prompt 'Fix the login test'")
-        // A prompt option already there: the prompt follows it as typed.
-        #expect(MCPServer.commandLine("opencode --prompt", prompt: prompt) == "opencode --prompt 'Fix the login test'")
-        #expect(MCPServer.commandLine("opencode -m x --prompt", prompt: prompt) == "opencode -m x --prompt 'Fix the login test'")
-        // `run` takes its message as words, after its options too.
+            == "opencode -m anthropic/claude-sonnet-4 --agent plan " + given)
+        #expect(MCPServer.commandLine("opencode -c", prompt: prompt) == "opencode -c " + given)
+        // OpenCode found as CommandClassifier finds it: past assignments, env, package runners and set-up commands.
+        let launches: [String] = [
+            "OPENCODE_CONFIG=~/oc.json opencode", "env X=1 opencode", "env -u OPENAI_API_KEY opencode", "npx opencode-ai",
+            "npx -y opencode-ai@latest", "bunx opencode-ai@latest", "pnpm dlx opencode-ai", "bun x opencode-ai",
+            "npx @opencode/cli", "npx -p opencode-ai opencode", "cd ~/code/shop && opencode -m x",
+        ]
+        for command in launches {
+            #expect(MCPServer.commandLine(command, prompt: prompt) == command + " " + given, "\(command)")
+        }
+        // A prompt that starts with "-" is --prompt's value only joined to it: after a space OpenCode's parser takes it
+        // for an option (a list's "- fix login" is lost, `-v` prints the version and exits).
+        #expect(MCPServer.commandLine("opencode", prompt: "- fix login\n- rerun the tests")
+            == #"opencode --prompt=$'- fix login\x0A- rerun the tests'"#)
+        #expect(MCPServer.commandLine("opencode", prompt: "- fix login") == "opencode --prompt='- fix login'")
+        #expect(MCPServer.commandLine("opencode", prompt: "-v") == "opencode --prompt=-v")
+        #expect(MCPServer.commandLine("npx opencode-ai@latest", prompt: "--help") == "npx opencode-ai@latest --prompt=--help")
+        // Quoted as every prompt is: a single quote, `$(…)` and backticks stay words.
+        #expect(MCPServer.commandLine("opencode", prompt: "Don't run $(rm -rf ~) or `id`")
+            == #"opencode --prompt='Don'\''t run $(rm -rf ~) or `id`'"#)
+        // A prompt option already there with no value: the prompt joins it. One with its value: the prompt follows.
+        #expect(MCPServer.commandLine("opencode --prompt", prompt: prompt) == "opencode " + given)
+        #expect(MCPServer.commandLine("opencode -m x --prompt", prompt: "- fix login") == "opencode -m x --prompt='- fix login'")
+        #expect(MCPServer.commandLine("opencode --prompt=", prompt: prompt) == "opencode " + given)
+        #expect(MCPServer.commandLine("env X=1 opencode --prompt ", prompt: prompt) == "env X=1 opencode " + given)
+        #expect(MCPServer.commandLine("opencode --prompt=hi", prompt: prompt) == "opencode --prompt=hi 'Fix the login test'")
+        // `run` takes its message as words, after its options too; one that starts with "-" after `--`.
         #expect(MCPServer.commandLine("opencode run", prompt: prompt) == "opencode run 'Fix the login test'")
         #expect(MCPServer.commandLine("opencode -m x run", prompt: prompt) == "opencode -m x run 'Fix the login test'")
+        #expect(MCPServer.commandLine("npx opencode-ai run", prompt: prompt) == "npx opencode-ai run 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode run", prompt: "- fix login") == "opencode run -- '- fix login'")
+        #expect(MCPServer.commandLine("opencode run", prompt: "-v") == "opencode run -- -v")
+        #expect(MCPServer.commandLine("opencode run --", prompt: "-v") == "opencode run -- -v")
         // No prompt, nothing added; other agents, and words that only start like OpenCode's, unchanged.
         #expect(MCPServer.commandLine("opencode", prompt: nil) == "opencode" && MCPServer.commandLine("opencode", prompt: "") == "opencode")
         #expect(MCPServer.commandLine("claude", prompt: prompt) == "claude 'Fix the login test'")
         #expect(MCPServer.commandLine("codex", prompt: prompt) == "codex 'Fix the login test'")
+        #expect(MCPServer.commandLine("claude", prompt: "- fix login") == "claude '- fix login'")
+        #expect(MCPServer.commandLine("codex", prompt: "Don't stop") == #"codex 'Don'\''t stop'"#)
+        #expect(MCPServer.commandLine("npx @anthropic-ai/claude-code", prompt: prompt) == "npx @anthropic-ai/claude-code 'Fix the login test'")
+        #expect(MCPServer.commandLine("env X=1 codex", prompt: prompt) == "env X=1 codex 'Fix the login test'")
         #expect(MCPServer.commandLine("opencoder", prompt: prompt) == "opencoder 'Fix the login test'")
         #expect(MCPServer.commandLine("claude --model opus", prompt: prompt) == "claude --model opus 'Fix the login test'")
         // What new_tab and the skills tell agents.
         let tool = try #require(MCPServer.tools.first { (tool: MCPServer.Tool) -> Bool in tool.name == "new_tab" })
-        #expect(tool.inputSchema.contains("opencode --prompt 'Fix the login test'"))
+        #expect(tool.inputSchema.contains("opencode --prompt='Fix the login test'"))
         #expect(BuiltInSkill.tabs.text.contains("`opencode`") && BuiltInSkill.worktrees.text.contains("`opencode`"))
         #expect(BuiltInSkill.tabs.text.contains("`--prompt`") && BuiltInSkill.worktrees.text.contains("`--prompt`"))
     }
