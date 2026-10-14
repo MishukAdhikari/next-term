@@ -278,17 +278,30 @@ public enum SecretImport {
                     scan.wrapped.append((source, entry.location))
                     continue
                 }
+                guard !entry.detected.isEmpty else { continue }
+                // Where the entry is, read once for all its values: a server's name can be millions of characters long.
+                let place: String = source.path + "\u{0}" + entry.location.description + "\u{0}"
+                var entryHash = SHA256()
+                entryHash.update(data: Data(place.utf8))
                 for detected in entry.detected {
                     var reason = detected.notMovable ?? entry.notMovable
                     if reason == nil, appOpen { reason = claudeAppOpenReason }
-                    let id = [source.path, entry.location.description, "\(detected.field)"].joined(separator: "\u{0}")
-                    scan.findings.append(Finding(id: SecretRun.digest(Data(id.utf8)), source: source, location: entry.location,
+                    let id = findingID(entryHash, field: detected.field)
+                    scan.findings.append(Finding(id: id, source: source, location: entry.location,
                                                  field: detected.field, variable: detected.variable, value: detected.value, kind: detected.kind,
                                                  notMovable: reason, shared: shared, loses: entry.hasComments))
                 }
             }
         }
         return scan
+    }
+
+    /// A finding's id: the digest of its file's path, its entry's place and its field, with `entryHash` holding the path
+    /// and the place already (`SecretRun.digest` of the three, joined by NULs).
+    static func findingID(_ entryHash: SHA256, field: Field) -> String {
+        var hash = entryHash
+        hash.update(data: Data("\(field)".utf8))
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Why a file the scan couldn't read is reported: a plain file over 8 MB, or one this account can't open. Nil for one

@@ -279,3 +279,24 @@ import Testing
         #expect(whole.findings.count == 501 && whole.read.count == 2 && asked == (1 + 500 + 1 + 1) + (1 + 1 + 1 + 1))
     }
 }
+
+extension SecretImportScaleTests {
+    /// A server named with millions of characters: where its entry is ("mcpServers.…") is worked out once for the entry,
+    /// not again for each of its keys, and each key's id is what it was. Worked out for each key, a thousand keys under
+    /// such a name read it a thousand times, with no stop asked in between.
+    @Test func aLongServerNameIsReadOnceForItsEntry() throws {
+        let home = F.Home()
+        defer { home.remove() }
+        let name = String(repeating: "s", count: 6_000_000)
+        let env = (0..<1_000).map { "\"K\($0)_TOKEN\": \"made-up-value-\($0)\"" }.joined(separator: ", ")
+        home.write("proj/.mcp.json", "{\"mcpServers\": {\"" + name + "\": {\"command\": \"x\", \"env\": {" + env + "}}}}\n")
+        let sources = F.sources(home, projects: [home.path + "/proj"])
+        var found = SecretImport.Scan()
+        let scanning = clock.measure { found = SecretImport.scan(sources) }
+        #expect(scanning < limit, "the scan took \(scanning)")
+        #expect(found.findings.count == 1_000 && found.unreadable.isEmpty)
+        let first = try #require(found.findings.first)
+        let id: String = [first.source.path, first.location.description, "\(first.field)"].joined(separator: "\u{0}")
+        #expect(first.id == SecretRun.digest(Data(id.utf8)) && Set(found.findings.map(\.id)).count == 1_000)
+    }
+}
