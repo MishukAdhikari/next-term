@@ -254,6 +254,11 @@ public final class SecretVault {
     public static let maskKeyLength = 32
     /// The length of the recovery key, for a copy of the vault key in the login keychain.
     public static let recoveryKeyLength = 32
+    /// How many days a key's rotation reminder may be set to. The menus offer fewer; a later release may offer others.
+    public static let remindRange = 1...3650
+    /// The most retired marks one key keeps: the forms of a few old values (five each today), with room for forms a
+    /// later release may mark, so a vault it saved still reads here.
+    public static let maxRetiredMarks = 32
 
     static let wrapSalt = Data("NextTerm Secrets wrap 1".utf8)
     static let wrapLabel = "nextterm-wrap/1"
@@ -294,6 +299,10 @@ public final class SecretVault {
         case writeOnly(String)
         /// The change would make vault.json larger, and larger than `maxWriteSize`, so nothing was saved.
         case full
+        /// A key's link failed the link rules (`SecretLink`), for this reason.
+        case badLink(SecretLink.Refusal)
+        /// A rotation reminder outside `remindRange`.
+        case badReminder
 
         public var errorDescription: String? {
             switch self {
@@ -320,6 +329,8 @@ public final class SecretVault {
                 let megabytes = SecretVault.maxWriteSize / (1024 * 1024)
                 return "Secrets is full, so nothing was saved: its file can’t grow past \(megabytes) MB. Delete keys you no longer "
                     + "use, then try again."
+            case .badLink(let refusal): return refusal.sentence
+            case .badReminder: return "A reminder to rotate a key is from 1 to 3,650 days."
             }
         }
     }
@@ -348,7 +359,31 @@ public final class SecretVault {
         }
     }
 
+    /// Where a key's link came from: typed by the user, a suggestion the user took with Use, or an import's URL field
+    /// the user saw in the preview. Read leniently (see `KeyedDecodingContainer.decodeIfPresent` below): a kind a
+    /// later release adds reads as none here.
+    public enum LinkFrom: String, Codable, Sendable, CaseIterable {
+        case user, suggested, imported
+    }
+
+    /// An old value's marks, kept after its key got a new value while the old key may still work, until `until`. They
+    /// hold no value (see `Mark`). The first save after `until` drops them.
+    public struct Retired: Codable, Equatable, Sendable {
+        public let marks: [Mark]
+        public let until: Date
+
+        public init(marks: [Mark], until: Date) {
+            self.marks = marks
+            self.until = until
+        }
+    }
+
     /// One key: its facts in the clear (authenticated by the index's MAC) and its value sealed.
+    ///
+    /// The members after `marks` came after 0.11.6. Each is optional: a vault without them decodes as before, and a nil
+    /// is left out when encoding, so the vault stays format 1 and 0.11.6, which skips members it doesn't know, still
+    /// opens it (and drops them when it next saves). Like `purpose`, they are not in the value's seal: the index's MAC
+    /// covers them, and a new link needs no new seal.
     public struct Entry: Codable, Equatable, Sendable {
         public let id: String
         public internal(set) var name: String
@@ -361,9 +396,22 @@ public final class SecretVault {
         /// AES-GCM's combined form: nonce, ciphertext, tag.
         var box: Data
         public internal(set) var marks: [Mark]
+        /// "Where it came from": the provider's page where the key was made, as `SecretLink.check` gave it when saved.
+        /// Read with no MAC check for lists, so it is checked again before it is shown or opened.
+        public internal(set) var link: String? = nil
+        public internal(set) var linkFrom: LinkFrom? = nil
+        /// When the value was last set: by an add, a new value or an import. A rename or a purpose edit leaves it.
+        public internal(set) var valueSet: Date? = nil
+        /// Remind the user to rotate the key this many days after `lastSet`; nil is never.
+        public internal(set) var remindDays: Int? = nil
+        public internal(set) var retired: Retired? = nil
 
         /// Added by the user: in Settings, through `request_secret` or the import. Not by an agent's `store_secret`.
         public var addedByUser: Bool { origin != .agent }
+
+        /// When the value was last set, or for a key saved before that was recorded, when the key was made: its age can
+        /// then only seem greater than it is, never less.
+        public var lastSet: Date { valueSet ?? created }
     }
 
     struct Wrapped: Codable, Equatable, Sendable {
@@ -526,28 +574,51 @@ public final class SecretVault {
     /// Adds a key. The value is trimmed of white space at both ends; one holding NUL, CR or LF is refused, and so is
     /// one over 16 KB. With `maskKey` (`mask.key`), the entry gets the value's masking marks, made here with the value
     /// at hand (`SecretMask.marks(for:key:)`).
+    ///
+    /// `link` is kept as `SecretLink.check` gives it, and never when it holds the value (`badLink`); the app checks it
+    /// against the stored keys first. `linkFrom` says where it came from (`user` unless given), and goes with it: no
+    /// link, or an empty one, keeps neither. `remindDays` is in `remindRange` (`badReminder`).
     public func add(name: String, purpose: String, purposeBy: PurposeBy, origin: Origin, writeOnly: Bool,
-                    value: SecretBytes, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
+                    value: SecretBytes, link: String? = nil, linkFrom: LinkFrom? = nil, remindDays: Int? = nil,
+                    maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         guard StoredSecretName.isValid(name) else { throw Failure.badName }
         guard index.entry(named: name) == nil else { throw Failure.nameTaken(name) }
         guard index.entries.count < Self.maxEntries else { throw Failure.tooManyKeys }
         let purpose = try Self.checkedPurpose(purpose)
         let value = try Self.normalized(value, name: name)
+        let source = try Self.checkedLink(link, from: linkFrom, value: value)
+        let remindDays = try Self.checkedReminder(remindDays)
         let id = UUID().uuidString.lowercased()
         let box = try Self.seal(value, key: key, id: id, name: name, writeOnly: writeOnly, origin: origin)
         let date = Self.whole(now)
         let marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
-        let entry = Entry(id: id, name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly,
+        var entry = Entry(id: id, name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly,
                           created: date, changed: date, box: box, marks: marks)
-        return try written(key) { index.entries.append(entry) }
+        entry.link = source?.link
+        entry.linkFrom = source?.from
+        entry.valueSet = date
+        entry.remindDays = remindDays
+        return try written(key, now: now) { index.entries.append(entry) }
     }
 
-    /// Renames a key, changes what it is for, or both. A new name seals the value again, since the name is in its seal.
+    /// Renames a key, changes what it is for, its link, its reminder, or any of them. A new name seals the value again,
+    /// since the name is in its seal; the others need no new seal. For `link` and `remindDays`, nil leaves them as they
+    /// are and `.some(nil)` clears them (so does an empty link); a new link is checked as `add` checks one, with
+    /// `linkFrom` (`user` unless given). When the value was set stays as it is.
     public func edit(_ name: String, newName: String? = nil, purpose: String? = nil, purposeBy: PurposeBy? = nil,
+                     link: String?? = nil, linkFrom: LinkFrom? = nil, remindDays: Int?? = nil,
                      now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
+        if let link {
+            let source = try Self.checkedLink(link, from: linkFrom, value: nil)
+            entry.link = source?.link
+            entry.linkFrom = source?.from
+        }
+        if let remindDays {
+            entry.remindDays = try Self.checkedReminder(remindDays)
+        }
         if let newName, newName != name {
             guard StoredSecretName.isValid(newName) else { throw Failure.badName }
             guard index.entry(named: newName) == nil else { throw Failure.nameTaken(newName) }
@@ -560,7 +631,7 @@ public final class SecretVault {
             entry.purposeBy = purposeBy ?? .user
         }
         entry.changed = Self.whole(now)
-        return try written(key) { index.entries[position] = entry }
+        return try written(key, now: now) { index.entries[position] = entry }
     }
 
     /// A new value for a key, write-only or not. `origin`, when given, is who replaced it (`agent` for an agent's
@@ -576,7 +647,8 @@ public final class SecretVault {
         entry.writeOnly = writeOnly
         entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         entry.changed = Self.whole(now)
-        return try written(key) { index.entries[position] = entry }
+        entry.valueSet = entry.changed
+        return try written(key, now: now) { index.entries[position] = entry }
     }
 
     /// Makes a normal key write-only, one way: its value is sealed again with the flag.
@@ -588,7 +660,7 @@ public final class SecretVault {
         entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: true, origin: entry.origin)
         entry.writeOnly = true
         entry.changed = Self.whole(now)
-        return try written(key, cap: Self.maxFileSize) { index.entries[position] = entry }
+        return try written(key, cap: Self.maxFileSize, now: now) { index.entries[position] = entry }
     }
 
     public func delete(_ name: String) throws -> Data {
@@ -597,13 +669,15 @@ public final class SecretVault {
         return try written(key, cap: Self.maxFileSize) { _ = index.entries.remove(at: position) }
     }
 
-    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again.
+    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again. Retired marks were made
+    /// under the old key and can't be made again, since the old values are gone, so they go.
     public func remark(maskKey: SymmetricKey) throws -> Data {
         let key = try unlockedKey()
         return try written(key, cap: Self.maxFileSize) {
             for position in index.entries.indices {
                 let value = try Self.open(index.entries[position], key: key)
                 index.entries[position].marks = SecretMask.marks(for: value, key: maskKey)
+                index.entries[position].retired = nil
             }
         }
     }
@@ -718,11 +792,17 @@ public final class SecretVault {
     /// The index changed by `change`, then the new file's bytes, for the caller to write. When anything fails, a file
     /// that grows past `cap` (`writeCap` unless given) included, the index and the file are left as they were. A file
     /// past the cap already (written before there was one, or grown by upkeep) still takes a change that doesn't make
-    /// it larger, such as a leaked key replaced in place.
-    private func written(_ key: SymmetricKey, cap: Int? = nil, _ change: () throws -> Void) throws -> Data {
+    /// it larger, such as a leaked key replaced in place. Retired marks whose date has passed by `now` go, so the file
+    /// shrinks.
+    private func written(_ key: SymmetricKey, cap: Int? = nil, now: Date = Date(),
+                         _ change: () throws -> Void) throws -> Data {
         let before = index
         do {
             try change()
+            for position in index.entries.indices {
+                guard let until = index.entries[position].retired?.until, until <= now else { continue }
+                index.entries[position].retired = nil
+            }
             let new = try Self.encodeFile(index, key: key)
             let fits: Bool = new.count <= cap ?? writeCap
             guard fits || new.count <= file.count else { throw Failure.full }
@@ -857,7 +937,28 @@ public final class SecretVault {
         for entry in index.entries {
             guard StoredSecretName.isValid(entry.name), !entry.id.isEmpty, entry.id.utf8.count <= 64,
                   entry.purpose.count <= maxPurposeLength, names.insert(entry.name).inserted,
-                  ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible) else { return false }
+                  ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible),
+                  hasWellFormedFacts(entry) else { return false }
+        }
+        return true
+    }
+
+    /// The structure of the members added after 0.11.6, and only that: a link of at most 2048 bytes with no control
+    /// character, a reminder from 1 to 3650 days, and retired marks that a value's forms could have, at most
+    /// `maxRetiredMarks`. The link rules (`SecretLink`) and the menus' reminder ages aren't checked here: either may change
+    /// in a later release, and a vault it saved must not read here as changed outside Next Term. A stored link that
+    /// fails the rules shows as one that can't be opened, and stays editable.
+    static func hasWellFormedFacts(_ entry: Entry) -> Bool {
+        if let link = entry.link {
+            let hasControl = link.unicodeScalars.contains { (scalar: Unicode.Scalar) -> Bool in
+                scalar.properties.generalCategory == .control
+            }
+            guard link.utf8.count <= SecretLink.maxLength, !hasControl else { return false }
+        }
+        if let days = entry.remindDays, !remindRange.contains(days) { return false }
+        if let retired = entry.retired {
+            let plausible = retired.marks.allSatisfy(SecretMask.isPlausible)
+            guard retired.marks.count <= maxRetiredMarks, plausible else { return false }
         }
         return true
     }
@@ -874,6 +975,25 @@ public final class SecretVault {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
+
+    /// A link to keep, as `SecretLink.check` gives it with no stored keys to look for (the app looks for them first),
+    /// and where it came from; nil for no link or an empty one. `value` is the key's own, when at hand.
+    static func checkedLink(_ text: String?, from: LinkFrom?,
+                            value: SecretBytes?) throws -> (link: String, from: LinkFrom)? {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let result = SecretLink.check(text, mask: { (_: String) -> Bool in false }, value: value)
+        switch result {
+        case .success(let url): return (url.absoluteString, from ?? .user)
+        case .failure(let refusal): throw Failure.badLink(refusal)
+        }
+    }
+
+    /// A rotation reminder: nil (never), or a number of days in `remindRange`.
+    static func checkedReminder(_ days: Int?) throws -> Int? {
+        guard let days else { return nil }
+        guard remindRange.contains(days) else { throw Failure.badReminder }
+        return days
+    }
 
     /// What a key is for: trimmed, one line, at most 200 characters.
     static func checkedPurpose(_ text: String) throws -> String {
@@ -918,6 +1038,18 @@ public final class SecretVault {
     /// Dates are stored to the second (ISO 8601), so the one in memory is too.
     static func whole(_ date: Date) -> Date {
         Date(timeIntervalSince1970: date.timeIntervalSince1970.rounded(.down))
+    }
+}
+
+// MARK: reading new members leniently
+
+extension KeyedDecodingContainer {
+    /// `Entry.linkFrom`, read so that a kind this build doesn't know (one a later release adds), or anything not a
+    /// string, reads as none. Synthesized `Decodable` picks this overload over the generic one, so one new kind never
+    /// makes the whole index unreadable, which would report the vault as changed outside Next Term.
+    func decodeIfPresent(_ type: SecretVault.LinkFrom.Type, forKey key: Key) throws -> SecretVault.LinkFrom? {
+        guard let text = try? decodeIfPresent(String.self, forKey: key) else { return nil }
+        return SecretVault.LinkFrom(rawValue: text)
     }
 }
 
