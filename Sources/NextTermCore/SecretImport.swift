@@ -130,6 +130,24 @@ public enum SecretImport {
         return list.filter { seen.insert(canonicalPath($0.path)).inserted }
     }
 
+    /// Shared through git: a `.git` (a clone's folder, or a worktree's file) in the file's folder or one above it, on
+    /// the path as given or on the one it resolves to. Reads and writes follow a link, so a config linked into a dotfiles
+    /// repository is changed, and committed, there.
+    public static func isInGitWorkTree(_ path: String) -> Bool {
+        if hasGitAbove(path) { return true }
+        let real = canonicalPath(path)
+        return real != path && hasGitAbove(real)
+    }
+
+    static func hasGitAbove(_ path: String) -> Bool {
+        var folder = (path as NSString).deletingLastPathComponent
+        while folder.count > 1 {
+            if FileManager.default.fileExists(atPath: (folder as NSString).appendingPathComponent(".git")) { return true }
+            folder = (folder as NSString).deletingLastPathComponent
+        }
+        return false
+    }
+
     // MARK: findings
 
     /// Where a server's entry is: the keys to its container, and its name.

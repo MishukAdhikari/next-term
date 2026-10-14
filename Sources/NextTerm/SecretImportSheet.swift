@@ -163,7 +163,7 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         scanTask?.cancel()
         scanTask = Task.detached {
             let sources = SecretImport.sources(home: setup.home, projects: setup.projects)
-            let found = SecretImport.scan(sources, inGitWorkTree: Self.isInGitWorkTree, isOpen: { setup.running.contains($0) })
+            let found = SecretImport.scan(sources, inGitWorkTree: SecretImport.isInGitWorkTree, isOpen: { setup.running.contains($0) })
             // Checked again on the main actor, where `closeSheet` cancels: a scan that ended as the sheet closed shows nothing.
             await MainActor.run {
                 guard !Task.isCancelled else { return }
@@ -276,16 +276,6 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let label = small("⚠︎ " + text, color: .systemOrange)
         label.setAccessibilityLabel("Warning: \(text)")
         return label
-    }
-
-    /// In a git work tree: a `.git` in the file's folder or one above it.
-    nonisolated static func isInGitWorkTree(_ path: String) -> Bool {
-        var folder = (path as NSString).deletingLastPathComponent
-        while folder.count > 1 {
-            if FileManager.default.fileExists(atPath: (folder as NSString).appendingPathComponent(".git")) { return true }
-            folder = (folder as NSString).deletingLastPathComponent
-        }
-        return false
     }
 
     // MARK: ticking
