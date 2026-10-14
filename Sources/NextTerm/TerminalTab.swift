@@ -56,6 +56,9 @@ final class NextTermView: LocalProcessTerminalView {
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
+    /// Each write `inputWrites` counts, as it comes, before that gate: a line it ends is one Next Term can no longer name
+    /// for zsh's history (TerminalTab.history).
+    var onWrite: ((ArraySlice<UInt8>) -> Void)?
     /// Writes into the shell other than the terminal's own answers: every key, paste and drop, and all text anything types
     /// into the tab (Insert Path, a suggested command, Send to Agent, MCP, the restore itself). A restored action types
     /// only onto a line nothing else wrote to (`RestoreLayout.LineWatch`), whether or not what wrote said it was the user.
@@ -131,7 +134,10 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
-        if !answering { inputWrites += 1 }
+        if !answering {
+            inputWrites += 1
+            onWrite?(data)
+        }
         if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -265,18 +271,22 @@ final class NextTermView: LocalProcessTerminalView {
     }
 
     /// Types text at the prompt as a paste: with bracketed paste on (zsh's default), the line editor
-    /// inserts it literally and never runs it, even if it contained a newline.
-    func typeIn(_ text: String) {
+    /// inserts it literally and never runs it, even if it contained a newline. Returns the text as typed.
+    @discardableResult
+    func typeIn(_ text: String) -> String {
         let clean = String(text.unicodeScalars.filter { !ShellQuote.isControl($0) })
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + clean + "\u{1b}[201~" : clean)
+        return clean
     }
 
     /// Types text as a paste that keeps its line breaks (a prompt for an agent): other control
-    /// characters are dropped, so the text cannot end the paste early or press keys.
-    func typeText(_ text: String) {
+    /// characters are dropped, so the text cannot end the paste early or press keys. Returns the text as typed.
+    @discardableResult
+    func typeText(_ text: String) -> String {
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+        return lines
     }
 
     // MARK: links (⌘-click): web and mail links open; files open safely; other schemes are refused
@@ -491,6 +501,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var execWatcher: DispatchSourceProcess?
     /// Tab completion in this tab.
     private(set) lazy var completion = CompletionSession(tab: self)
+    /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
+    /// (ShellHistory, submitOwnLine).
+    private(set) var history = ShellHistory.Readiness()
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil, id: UUID = UUID()) {
@@ -515,6 +528,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
+        view.onWrite = { [weak self] data in self?.history.input(data) }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
 
@@ -610,6 +624,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.programTitle = nil
             self.status.shellReplaced()
             self.completion.shellReplaced()
+            self.history.disarm()
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -720,11 +735,22 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.runWhenReady(command, waited: waited + 0.1) }
             return
         }
-        view.typeText(command)
+        let typed = view.typeText(command)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.exited else { return }
-            self.view.send(txt: "\r")
+            self.submitOwnLine(typed)
         }
+    }
+
+    /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
+    /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, runWhenReady,
+    /// a restore's resume). Where the tab's zsh can take history's key now, the key names the line first, in the same
+    /// write, so zsh keeps the line out of its history, ↑ and autosuggestions (ShellHistory). Anywhere else (bash, fish,
+    /// a server, a program in front, a zsh without the hook) a plain Return, as before; and zsh keeps out only that line
+    /// to the byte, so one the user typed on too goes in as theirs.
+    func submitOwnLine(_ typed: String) {
+        let bytes = ShellHistory.submit(typed: typed, armed: history.armed)
+        view.send(data: bytes[...])
     }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
@@ -1175,9 +1201,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         switch event {
         case .completion(let message):
             return completion.handle(message)
+        case .history(let version):
+            return history.marked(version: version)
         case .commandStarted(let line, let expanded):
             onCommandMark?(event)
             completion.disarm()
+            history.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1

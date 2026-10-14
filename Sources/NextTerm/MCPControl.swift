@@ -192,6 +192,9 @@ enum MCPControl {
         var sawWork = false
     }
     private static var lastSent: [UUID: Sent] = [:]
+    /// Text send_to_tab typed with no Return, as typed, and the tab's write count just after it: a press_keys Return that
+    /// comes next, with nothing written meanwhile, submits that line (TerminalTab.submitOwnLine).
+    private static var unsubmitted: [UUID: (typed: String, writes: Int)] = [:]
 
     /// Tabs an agent drives over MCP: opened with new_tab, or given input with send_to_tab, press_keys or
     /// answer_agent, until you type in one yourself. That agent waits for their work (wait_for_tab), so while
@@ -210,6 +213,7 @@ enum MCPControl {
     static func forget(_ tab: TerminalTab) {
         driven.remove(tab.id)
         lastSent[tab.id] = nil
+        unsubmitted[tab.id] = nil
     }
 
     private static func isBusy(_ tab: TerminalTab) -> Bool {
@@ -585,15 +589,20 @@ enum MCPControl {
     }
 
     /// Types text as a paste (literal, never run early), then presses Return after a moment: agents
-    /// take a paste in as a block and only treat a separate Return as "send".
+    /// take a paste in as a block and only treat a separate Return as "send". That Return is Next Term's own, so a zsh
+    /// with the history hook keeps the line out of its history (TerminalTab.submitOwnLine).
     static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
         guard canType(tab) else { return }
-        tab.view.typeText(text)
-        guard submit else { return }
+        let typed = tab.view.typeText(text)
+        guard submit else {
+            unsubmitted[tab.id] = (typed: typed, writes: tab.view.inputWrites)
+            return
+        }
+        unsubmitted[tab.id] = nil
         sent(to: tab)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard canType(tab) else { return } // the connection may have dropped in between
-            tab.view.send(txt: "\r")
+            tab.submitOwnLine(typed)
         }
     }
 
@@ -660,7 +669,13 @@ enum MCPControl {
             guard canType(tab) else {
                 return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
             }
-            tab.view.send(txt: sequences[index])
+            // A Return right after send_to_tab's text, with nothing written since, submits that line.
+            let pending = unsubmitted.removeValue(forKey: tab.id)
+            if sequences[index] == "\r", let pending, pending.writes == tab.view.inputWrites {
+                tab.submitOwnLine(pending.typed)
+            } else {
+                tab.view.send(txt: sequences[index])
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) }
         }
         sent(to: tab)
