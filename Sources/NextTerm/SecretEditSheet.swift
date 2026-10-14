@@ -99,7 +99,9 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             link.onChange = { [weak self] in self?.refresh() }
             link.value = { [weak self] in self.flatMap { $0.hasValue ? $0.typedValue : nil } }
             linkField = link
-            views += [link, reminderRow(entry?.remindDays)]
+            // A new key starts with the reminder Settings › Secrets sets for new keys; a stored key shows its own.
+            let remind: Int? = entry == nil ? SecretReminderRecords.newKeyDays : entry?.remindDays
+            views += [link, reminderRow(remind)]
         }
         if hasValue {
             valueField.placeholderString = "Paste or type the key"

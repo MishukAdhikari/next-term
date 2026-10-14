@@ -791,6 +791,7 @@ final class SecretsStore {
         var boxes: [String: Data] = [:]
         var stored = Set<String>()
         let names = keys.map(\.name)
+        let remindDays: Int? = SecretReminderRecords.newKeyDays // new keys start with Settings › Secrets' reminder
         try await run(makes: true, names: names, reason: reason) { vault, maskKey in
             var file: Data?
             stored = [] // the change may run again, on a vault.json read again
@@ -799,7 +800,7 @@ final class SecretsStore {
                 // it is, not stored twice. Another value, or a key not a move's, is refused, as add refuses it.
                 if try vault.isReusable(key.name, for: key.value) { continue }
                 file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: false, value: key.value,
-                                     maskKey: maskKey)
+                                     remindDays: remindDays, maskKey: maskKey)
                 stored.insert(key.name)
             }
             for (id, values) in kept where !values.isEmpty { boxes[id] = try vault.sealBackup(values, id: id) }

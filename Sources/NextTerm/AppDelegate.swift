@@ -437,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -1518,7 +1519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// would be shown, and shows you nothing.
     var testNotifications: [UNNotificationRequest] = []
 
-    private func deliver(_ request: UNNotificationRequest) {
+    func deliver(_ request: UNNotificationRequest) {
         // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
         var request = request
         let mask = SecretMask.current
@@ -1589,8 +1590,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let tabID = response.notification.request.content.userInfo["tab"] as? String
+        let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let reminder { // a key rotation reminder: Rotate… for its key
+                SecretReminders.open(reminder)
+                return completionHandler()
+            }
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
                     controller.window?.makeKeyAndOrderFront(nil)

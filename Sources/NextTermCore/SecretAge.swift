@@ -39,6 +39,32 @@ public enum SecretAge {
         return days(from: entry.lastSet, to: now, calendar: calendar) >= remind
     }
 
+    /// At most one reminder about a due key in this many days.
+    public static let reminderGap = 7
+
+    /// The reminders to post now, in the list's order: each key whose Remind Me Tomorrow day has come (`remindOn`, once:
+    /// the caller drops the record when it posts), else each due key not reminded in the last `reminderGap` days
+    /// (`lastShown`). A key gets one at most. A day in `lastShown` after today means the clock was set back, so it no
+    /// longer holds the reminder back.
+    public static func toNotify(entries: [SecretVault.Entry], lastShown: [String: Date], remindOn: [String: Date], now: Date,
+                                calendar: Calendar = .current) -> [SecretReminder] {
+        let today: Date = calendar.startOfDay(for: now)
+        var reminders: [SecretReminder] = []
+        for entry in entries {
+            if let day = remindOn[entry.name], calendar.startOfDay(for: day) <= today {
+                reminders.append(SecretReminder(name: entry.name, kind: .deleteOld))
+                continue
+            }
+            guard due(entry: entry, now: now, calendar: calendar) else { continue }
+            if let shown = lastShown[entry.name], calendar.startOfDay(for: shown) <= today,
+               days(from: shown, to: now, calendar: calendar) < reminderGap {
+                continue
+            }
+            reminders.append(SecretReminder(name: entry.name, kind: .due))
+        }
+        return reminders
+    }
+
     /// The day as `list_secrets` gives it and GitHub's new-token form names it: `2026-10-12`, always in the Gregorian
     /// calendar, on the day of `calendar`'s time zone. A Mac set to the Buddhist or Japanese calendar still gets 2026.
     public static func day(_ date: Date, calendar: Calendar = .current) -> String {

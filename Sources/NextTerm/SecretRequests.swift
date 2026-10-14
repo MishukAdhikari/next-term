@@ -433,7 +433,8 @@ final class SecretRequests {
             action = .replace(name: name, value: value, writeOnly: stored.writeOnly, origin: .agent)
         } else {
             let purpose = StoredSecretName.purpose(fromReason: request.agentWords ?? "")
-            action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value)
+            action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value,
+                          remindDays: SecretReminderRecords.newKeyDays)
         }
         let reason = stored == nil ? SecretReason.save(name) : SecretReason.replaceWithAgentsKey(name)
         let facts = SecretsStore.Facts(who: Self.who(request))
@@ -462,7 +463,7 @@ final class SecretRequests {
             action = .replace(name: form.name, value: form.value, writeOnly: form.writeOnly, origin: .request)
         } else {
             action = .add(name: form.name, purpose: form.purpose, purposeBy: form.purposeBy, origin: .request, writeOnly: form.writeOnly,
-                          value: form.value, link: form.link, linkFrom: form.linkFrom)
+                          value: form.value, link: form.link, linkFrom: form.linkFrom, remindDays: SecretReminderRecords.newKeyDays)
         }
         let reason = stored == nil ? SecretReason.save(form.name) : SecretReason.replace(form.name)
         let pasted = window.pastedAt

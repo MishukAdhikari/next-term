@@ -71,6 +71,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var pausedRows: [(text: String, resume: NSButton)] = []
     /// Recent imports.
     let importsBox = NSStackView()
+    /// "Remind me in Notification Center" and the reminder new keys start with.
+    private(set) var reminderSettings = SecretReminderSettingsView()
     private var resumeActions: [ObjectIdentifier: () -> Void] = [:]
 
     private(set) var entries: [SecretVault.Entry] = []
@@ -207,10 +209,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let docs = NSButton(title: "What Secrets protects, and what it doesn't", target: self, action: #selector(openDocs))
         docs.bezelStyle = .inline
         let rows: [NSView] = [statusLabel, startOverButton, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons,
-                              valueButtons, actionLabel, allowedBox, importsBox, pausedBox, footer, docs]
+                              valueButtons, actionLabel, reminderSettings, allowedBox, importsBox, pausedBox, footer, docs]
         for row in rows { content.addArrangedSubview(row) }
         for row in [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons, actionLabel,
-                    allowedBox, importsBox, pausedBox, footer] {
+                    reminderSettings, allowedBox, importsBox, pausedBox, footer] {
             row.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32).isActive = true
         }
         // At least six rows high.
@@ -353,9 +355,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             cell.textColor = .secondaryLabelColor
             if entry.writeOnly { cell.setAccessibilityLabel("Write-only") }
         case "rotated":
-            cell.stringValue = SecretAge.text(entry: entry, now: Date())
-            cell.textColor = .secondaryLabelColor
-            cell.toolTip = cell.stringValue
+            Self.fillRotatedCell(cell, entry, now: Date())
         default:
             cell.stringValue = SecretsStore.shared.lastUse[entry.name].map(Self.lastUsedText) ?? "Never used"
             cell.textColor = .secondaryLabelColor
@@ -379,6 +379,35 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             cell.stringValue = ""
         }
     }
+
+    /// The Rotated cell: when the key's value was set ("92 days ago", "Added today"), led by a Due badge once its
+    /// "Remind me to rotate" age has passed. The badge shows whether or not reminders go to Notification Center.
+    static func fillRotatedCell(_ cell: NSTextField, _ entry: SecretVault.Entry, now: Date) {
+        let age: String = SecretAge.text(entry: entry, now: now)
+        cell.textColor = .secondaryLabelColor
+        guard SecretAge.due(entry: entry, now: now), let days = entry.remindDays else {
+            cell.stringValue = age
+            cell.toolTip = age
+            cell.setAccessibilityLabel(nil)
+            return
+        }
+        let font: NSFont = cell.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let cut = NSMutableParagraphStyle()
+        cut.lineBreakMode = .byTruncatingTail
+        let badge: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.systemOrange, .paragraphStyle: cut,
+                                                    .font: NSFont.systemFont(ofSize: font.pointSize, weight: .semibold)]
+        let rest: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: cut,
+                                                   .font: font]
+        let text = NSMutableAttributedString(string: dueBadge, attributes: badge)
+        text.append(NSAttributedString(string: " " + age, attributes: rest))
+        cell.attributedStringValue = text
+        let after: String = days == 1 ? "1 day" : "\(days) days"
+        cell.toolTip = "\(age). Due: you asked to be reminded to rotate it after \(after)."
+        cell.setAccessibilityLabel("\(age), due to rotate")
+    }
+
+    /// The Rotated cell's badge for a key whose reminder is due.
+    static let dueBadge = "Due"
 
     /// "5 min ago by Claude Code in “api”".
     static func lastUsedText(_ line: SecretAudit.Line) -> String {
