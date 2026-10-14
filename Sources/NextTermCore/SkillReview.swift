@@ -660,7 +660,7 @@ extension SkillReview {
     }
 
     /// The servers in a JSON file that run a package with no exact version: every object with a string
-    /// `command` (or a list of words, as opencode writes one) is a server. Nil when the file is not JSON
+    /// `command` (or a list of words, as OpenCode writes one) is a server. Nil when the file is not JSON
     /// that every reader takes the same way (comments, a trailing comma, a key twice): the prose
     /// patterns check it then.
     static func serverJSONFlags(_ data: Data, file: String) -> [Flag]? {

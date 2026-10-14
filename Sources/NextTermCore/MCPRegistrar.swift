@@ -49,7 +49,7 @@ public enum MCPRegistrar {
         public let format: Format
         /// JSON: the top-level key holding the servers (`mcpServers`, `mcp`, `amp.mcpServers`).
         public let container: String
-        /// Top-level members a new file starts with (Qwen's `$version`, opencode's `$schema`), as JSON.
+        /// Top-level members a new file starts with (Qwen's `$version`, OpenCode's `$schema`), as JSON.
         public let preamble: [String: String]
         /// The entry for a command path.
         public let entry: @Sendable (String) -> [String: Any]
@@ -95,7 +95,7 @@ public enum MCPRegistrar {
             Target(id: "cursor", name: "Cursor", programs: ["cursor-agent"], markers: [path(".cursor")], file: path(".cursor/mcp.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: [:],
                    entry: { ["type": "stdio", "command": $0, "args": ["mcp"]] }),
-            Target(id: "opencode", name: "opencode", programs: ["opencode"], file: opencode, formerFiles: opencodeFormer,
+            Target(id: "opencode", name: "OpenCode", programs: ["opencode"], file: opencode, formerFiles: opencodeFormer,
                    format: .json(strict: false), container: "mcp", preamble: ["$schema": #""https://opencode.ai/config.json""#],
                    entry: { ["type": "local", "command": [$0, "mcp"], "enabled": true] }),
             Target(id: "copilot", name: "Copilot CLI", programs: ["copilot"], file: path(".copilot/mcp-config.json"),
@@ -122,7 +122,7 @@ public enum MCPRegistrar {
         ]
     }
 
-    /// The command of an entry: `command` as a string, or the first word of a `command` array (opencode).
+    /// The command of an entry: `command` as a string, or the first word of a `command` array (OpenCode).
     static func command(of value: Any?) -> String? {
         guard let entry = value as? [String: Any] else { return nil }
         return (entry["command"] as? String) ?? ((entry["command"] as? [Any])?.first as? String)
@@ -458,7 +458,7 @@ public enum MCPRegistrar {
         return Plan(.registered, text: text)
     }
 
-    /// Where an entry's command string is: `command`, or the first word of a `command` array (opencode).
+    /// Where an entry's command string is: `command`, or the first word of a `command` array (OpenCode).
     private static func commandRange(of entry: JSONC.Value, in document: JSONC) -> Range<String.Index>? {
         guard case .object(let object) = entry, let command = object.member("command") else { return nil }
         if case .scalar(let range) = command.value { return range }

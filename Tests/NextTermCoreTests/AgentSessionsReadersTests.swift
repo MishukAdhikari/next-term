@@ -3,7 +3,7 @@ import SQLite3
 import Testing
 @testable import NextTermCore
 
-/// Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot CLI, each from a store made here by hand in
+/// Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot CLI, each from a store made here by hand in
 /// that agent's format (no real sessions), plus `newest` and which tab a session is open in.
 @Suite struct AgentSessionsReadersTests {
     func home() throws -> String {
@@ -136,7 +136,7 @@ import Testing
         #expect(named.resumeCommand() == "qwen --resume \(id1)" && named.resumeCommand(fork: true) == "qwen --resume \(id1) --fork-session")
     }
 
-    // MARK: opencode
+    // MARK: OpenCode
 
     @Test func opencodeFromItsDatabase() throws {
         let home = try home()

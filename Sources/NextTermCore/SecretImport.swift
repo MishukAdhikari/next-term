@@ -10,7 +10,7 @@ import Darwin
 /// Core plans and writes; the app asks. Only this file touches `MCPRegistrar`'s internal `JSONC`, `TOMLOutline`,
 /// `compact`, `tomlString`, `Plan` and `write(_:to:)`; the sheet sees the public types and functions here.
 ///
-/// - **A finding** is a member of a server's `env` (opencode: `environment`) whose name holds TOKEN, SECRET,
+/// - **A finding** is a member of a server's `env` (OpenCode: `environment`) whose name holds TOKEN, SECRET,
 ///   PASSWORD, PASSWD, KEY, AUTH, CREDENTIAL or PAT as a word part, or whose value has a token's shape or looks
 ///   random. References (`${…}`, `$X`, `{env:…}`, `{file:…}`, `op://…`) are skipped. Keys in headers and in the
 ///   command's arguments are listed, not movable.
@@ -44,7 +44,7 @@ public enum SecretImport {
             case .gemini: return "Gemini CLI"
             case .vscode: return "VS Code"
             case .copilot: return "Copilot CLI"
-            case .opencode: return "opencode"
+            case .opencode: return "OpenCode"
             case .qwen: return "Qwen Code"
             case .amp: return "Amp"
             case .junie: return "Junie"
@@ -536,7 +536,7 @@ public enum SecretImport {
         let commandValue = object.member("command")?.value
         var args: [(value: String, range: Range<Int>)] = []
         if client == .opencode {
-            // opencode: the command and its arguments are one array.
+            // OpenCode: the command and its arguments are one array.
             guard let words = strings(commandValue), !words.isEmpty else { return shapeRefusal(&entry, object) }
             entry.command = [words[0].value]
             args = Array(words.dropFirst())

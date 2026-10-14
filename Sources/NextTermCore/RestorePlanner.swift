@@ -154,7 +154,7 @@ public struct FolderChoice: Equatable, Sendable {
 }
 
 /// Where a guessed session comes from (the plan's agent matrix): Claude Code, Codex and Command Code from their own
-/// readers, Gemini CLI, Cursor Agent and opencode from `AgentSessions.newest`.
+/// readers, Gemini CLI, Cursor Agent and OpenCode from `AgentSessions.newest`.
 public struct SessionLookup {
     /// An agent's own reader: the sessions it recorded in exactly `folder`, files last written before the date skipped.
     public var read: (AgentKind, String, Date) -> [AgentSession]
@@ -639,7 +639,7 @@ public enum RestorePlanner {
 
     /// The newest session `agent` started in `folder` at or after `start`, and before `limit` when there is one, not in
     /// `taken` whatever its case, from that agent's reader (the plan's matrix): Claude Code, Codex and Command Code from
-    /// their own, which also skip a session a live process has open; Gemini CLI, Cursor Agent and opencode from
+    /// their own, which also skip a session a live process has open; Gemini CLI, Cursor Agent and OpenCode from
     /// `AgentSessions.newest`. Nil for every other agent: Qwen Code, Copilot CLI, Amp and Junie have no reader for a
     /// guess, and Kiro CLI and Goose have no store the session list reads (no AgentKind), so `newest` has none to read.
     static func guess(_ agent: RestoreAgent, in folder: String, after start: Date, before limit: Date? = nil, excluding taken: Set<String>,

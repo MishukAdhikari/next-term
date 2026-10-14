@@ -316,7 +316,7 @@ import Testing
             #expect(MCPRegistrar.unregister(target) == .removed, "\(target.id)")
             #expect(json(target.file)?[target.container] == nil, "\(target.id)")
         }
-        // opencode's command is one array; Qwen's file is versioned.
+        // OpenCode's command is one array; Qwen's file is versioned.
         let opencode = try target("opencode", home: home)
         #expect(MCPRegistrar.isOurs(command: MCPRegistrar.command(of: opencode.entry(command))))
         #expect(try read(try target("qwen", home: home).file).contains("\"$version\": 4"))
@@ -735,7 +735,7 @@ import Testing
         try write(original, app.file)
         #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
         #expect(try read(app.file) == original.replacingOccurrences(of: moved, with: command))
-        // opencode's command is an array: its first word changes.
+        // OpenCode's command is an array: its first word changes.
         let opencode = try target("opencode", home: home)
         let theirs = "{\n  \"mcp\": {\n    \"next-term\": {\"type\": \"local\", \"command\": [\"\(moved)\", \"mcp\"], \"enabled\": false}\n  }\n}\n"
         try write(theirs, opencode.file)

@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 /// The conversations AI agents have kept for a project, so one can be picked up again in a click. Each
-/// agent stores its own (Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent,
+/// agent stores its own (Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, OpenCode, Cursor Agent,
 /// Copilot CLI), in its own format: one reader per agent (`AgentSessionProvider`) takes only what the list
 /// needs (id, folder, title, times, branch, model) from the start and end of each file or from the agent's
 /// index, never a whole transcript, and never writes anything. Titles are scrubbed of anything that looks
@@ -18,7 +18,7 @@ public enum AgentKind: String, CaseIterable, Sendable, Codable {
         case .commandCode: return "Command Code"
         case .gemini: return "Gemini CLI"
         case .qwen: return "Qwen Code"
-        case .opencode: return "opencode"
+        case .opencode: return "OpenCode"
         case .cursor: return "Cursor Agent"
         case .copilot: return "Copilot CLI"
         }

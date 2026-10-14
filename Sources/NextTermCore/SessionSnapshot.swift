@@ -328,7 +328,7 @@ extension SessionSnapshot {
     /// The agent in a pane, and how its session id is known.
     public struct Evidence: Equatable, Sendable {
         public var agent: Agent
-        /// The session id as the agent's resume takes it: ASCII letters, digits and `._:-_` only (opencode's
+        /// The session id as the agent's resume takes it: ASCII letters, digits and `._:-_` only (OpenCode's
         /// start `ses_`). Each agent's own pattern is narrower (RestoreAgent.isSessionID).
         public var sessionID: String?
         public var source: IDSource

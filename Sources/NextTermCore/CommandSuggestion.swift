@@ -38,7 +38,7 @@ public enum CommandSuggestion {
     public static let leftOut: [(name: String, why: String)] = [
         ("Codex", "codex exec has no way to turn all of its tools off, only to sandbox them; a read-only sandbox limits them but doesn't remove them (0.154.0)"),
         ("Copilot CLI", "its flags for running with no tools and no MCP couldn't be checked here"),
-        ("opencode", "its flags for running with no tools and no MCP couldn't be checked here"),
+        ("OpenCode", "its flags for running with no tools and no MCP couldn't be checked here"),
     ]
 
     public static func adapter(_ id: String) -> Adapter? { adapters.first { $0.id == id } }

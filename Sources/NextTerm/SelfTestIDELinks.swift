@@ -3,7 +3,7 @@ import Network
 import NextTermCore
 
 /// The IDE links beyond Claude Code's own client: GitHub Copilot CLI's (a stand-in CLI over the lock's Unix
-/// socket) and opencode's (a stand-in run from a tab under opencode's name, with no token).
+/// socket) and OpenCode's (a stand-in run from a tab under opencode's name, with no token).
 extension SelfTest {
     // MARK: Copilot CLI link
 
@@ -303,14 +303,14 @@ extension SelfTest {
         check(await wait(3) { copilotPane() == nil }, "a proposal closes when its copilot goes away")
     }
 
-    // MARK: opencode, without the token
+    // MARK: OpenCode, without the token
 
-    /// opencode reads Claude's lock files but connects without the token from a Next Term tab. Its stand-in
+    /// OpenCode reads Claude's lock files but connects without the token from a Next Term tab. Its stand-in
     /// is this app's own binary under the name npm gives opencode (opencode.exe), run in a tab; the same
     /// binary under another name is refused.
     static func opencodeLinkChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let port = ClaudeIDEServer.shared.port, let executable = Bundle.main.executablePath else {
-            return check(false, "the Claude Code link is listening for opencode")
+            return check(false, "the Claude Code link is listening for OpenCode")
         }
         let dir = URL(fileURLWithPath: canonicalPath(NSTemporaryDirectory())).appendingPathComponent("nt-opencode-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -322,10 +322,10 @@ extension SelfTest {
             if clonefile(executable, target, 0) != 0 { try? FileManager.default.copyItem(atPath: executable, toPath: target) }
         }
         guard FileManager.default.isExecutableFile(atPath: dir.appendingPathComponent("impostor").path) else {
-            return check(false, "the opencode stand-in is in place")
+            return check(false, "the OpenCode stand-in is in place")
         }
         c.openFile(proj.appendingPathComponent("src/main.php"))
-        guard let editor = c.editorArea.activeEditor else { return check(false, "an editor is open for opencode to see") }
+        guard let editor = c.editorArea.activeEditor else { return check(false, "an editor is open for OpenCode to see") }
         editor.textView.setSelectedRange(NSRange(location: 0, length: editor.document.lines.starts[min(1, editor.document.lines.count - 1)]))
         let tab = c.addTab(directory: dir.path)
         _ = await wait(20) { tab.status.integrated }
@@ -338,7 +338,7 @@ extension SelfTest {
         let seen = await wait(15) { messages("opencode.jsonl").contains { $0["method"] as? String == "selection_changed" } }
         let selection = messages("opencode.jsonl").last { $0["method"] as? String == "selection_changed" }?["params"] as? [String: Any]
         check(seen && selection?["filePath"] as? String == editor.document.path,
-              "opencode in a tab connects without the token and sees the editor's selection", tab.screenTail(4).joined(separator: " | "))
+              "OpenCode in a tab connects without the token and sees the editor's selection", tab.screenTail(4).joined(separator: " | "))
         check(AppDelegate.shared.claudeClient(for: tab) != nil, "and it is matched to its tab (for ⌥⌘K)")
         let tool = messages("opencode.jsonl").first { $0["id"] as? Int == 2 }?["result"] as? [String: Any]
         check(tool?["isError"] as? Bool == true && c.editorArea.proposals.isEmpty, "without the token it gets no tools (no proposals)")
@@ -353,7 +353,7 @@ extension SelfTest {
               "\(messages("impostor.jsonl").count) messages")
         c.requestClose(tab)
 
-        // Started in another terminal, opencode reads the lock and sends the token, still with no subprotocol
+        // Started in another terminal, OpenCode reads the lock and sends the token, still with no subprotocol
         // and no ide_connected: it is in once it says it is initialized.
         let elsewhere = ClaudeTestClient(port: port, token: ClaudeIDEServer.shared.token, subprotocol: false)
         elsewhere.send(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [
@@ -366,13 +366,13 @@ extension SelfTest {
         c.window?.makeFirstResponder(editor.textView)
         editor.textView.setSelectedRange(NSRange(location: 0, length: 3))
         check(await wait(3) { elsewhere.last("selection_changed")?["filePath"] as? String == editor.document.path },
-              "opencode started elsewhere, with the token, sees the selection too")
+              "OpenCode started elsewhere, with the token, sees the selection too")
         elsewhere.close()
         await opencodeSendChecks(c, dir: dir, port: port)
     }
 
-    /// opencode's editor client, as the self-test's stand-in (`<copy named opencode.exe> --cli
-    /// --self-test-ide-client <port> <file>`, run in a tab): connects the way opencode does from a Next Term
+    /// OpenCode's editor client, as the self-test's stand-in (`<copy named opencode.exe> --cli
+    /// --self-test-ide-client <port> <file>`, run in a tab): connects the way OpenCode does from a Next Term
     /// tab (no token, no subprotocol), asks for a tool it must not get, and writes every message it gets to
     /// <file>, one per line, for 8 seconds once it is in, however long getting in took (10 seconds at most while it is
     /// not), or until it is turned away.
