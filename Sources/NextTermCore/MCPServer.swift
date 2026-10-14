@@ -102,7 +102,7 @@ public enum MCPServer {
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "wait_for_tab", title: "Wait for a tab",
              description: "Waits until the tab's agent stops working (done, or waiting for input or a decision), or until its command finishes, then returns the state and the last lines of the screen. Returns early with \"timed_out\": true; call again to keep waiting.",
-             inputSchema: #"{"type": "object", "properties": {\#(tabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50: some clients give up on a tool after 60 seconds, unless they send a progress token (the wait then sends progress every 20 seconds); call again to keep waiting."}}, "required": ["tab_id"], "additionalProperties": false}"#,
+             inputSchema: #"{"type": "object", "properties": {\#(tabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50: some clients give up on a tool after 60 seconds, unless they send a progress token and reset their timeout on progress (the wait then sends progress every 20 seconds); call again to keep waiting."}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 300),
         Tool(name: "list_projects", title: "List projects",
              description: "Projects open in Next Term and recently opened ones (folder paths).",

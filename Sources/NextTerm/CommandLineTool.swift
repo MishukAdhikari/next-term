@@ -379,11 +379,11 @@ enum MCPBridge {
         let calls = DispatchGroup()
         #if DEBUG
         // The self-test's shorter progress interval (SelfTestOpencodeProgress).
-        let testInterval = environment["NEXTTERM_TEST_MCP_PROGRESS_SECONDS"].flatMap(TimeInterval.init)
-        let progressEvery = testInterval.flatMap { $0 > 0 ? $0 : nil } ?? MCPProgress.interval
+        let progressEvery = MCPProgress.interval(testSeconds: environment["NEXTTERM_TEST_MCP_PROGRESS_SECONDS"])
         #else
         let progressEvery = MCPProgress.interval
         #endif
+        let progress = MCPProgress.Tickers(every: progressEvery, send: send)
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
@@ -392,13 +392,12 @@ enum MCPBridge {
             }
             let messages = (object as? [[String: Any]]) ?? [(object as? [String: Any]) ?? [:]]
             for message in messages {
+                progress.cancel(message) // notifications/cancelled: that call's progress stops
                 if message["method"] as? String == "tools/call" {
                     // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
                     // progress token gets progress until its answer is sent (MCPProgress).
-                    DispatchQueue.global().async(group: calls) {
-                        MCPProgress.answer(message, every: progressEvery, send: send) {
-                            MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
-                        }
+                    progress.answer(message, in: calls) {
+                        MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
                     }
                 } else if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
                                                            call: { _, _ in MCPServer.CallResult(text: "") }) {
@@ -406,6 +405,7 @@ enum MCPBridge {
                 }
             }
         }
+        progress.stopAll() // stdin closed: the calls in flight send no more progress
         calls.wait() // stdin closed: finish the answers in flight (a caller may still read them), then go
         exit(0)
     }

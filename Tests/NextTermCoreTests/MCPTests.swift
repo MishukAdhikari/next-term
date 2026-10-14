@@ -202,45 +202,64 @@ import Testing
         #expect(answer(["jsonrpc": "2.0", "method": "notifications/initialized"]) == nil)
     }
 
-    /// The bridge's path for a call (MCPProgress.answer): with a progress token, progress while the call waits and
-    /// nothing after its answer, an error's included; without one, only the answer, however long the call takes.
+    /// The bridge's path for a call (MCPProgress.Tickers.answer): with a progress token, progress while the call waits
+    /// and nothing after its answer, a failed call's included; without one, only the answer, however long the call takes.
     @Test func aCallWithAProgressTokenGetsProgressBeforeItsAnswerAndNoneAfter() {
         func call(_ name: String, token: Any?) -> [String: Any] {
             var params: [String: Any] = ["name": name, "arguments": ["tab_id": "t"]]
             if let token { params["_meta"] = ["progressToken": token] }
             return ["jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": params]
         }
-        func run(_ message: [String: Any], _ sent: SentLines, call body: @escaping () -> Void) {
-            MCPProgress.answer(message, every: 0.05, send: sent.send) {
-                MCPServer.respond(to: message, version: "1.2.3") { _, _ in
-                    body()
-                    return MCPServer.CallResult(text: "done")
-                }
+        func run(_ message: [String: Any], _ sent: SentLines, call body: @escaping () -> MCPServer.CallResult) {
+            let calls = DispatchGroup()
+            MCPProgress.Tickers(every: 0.05, send: sent.send).answer(message, in: calls) {
+                MCPServer.respond(to: message, version: "1.2.3") { _, _ in body() }
             }
+            #expect(calls.wait(timeout: .now() + 10) == .success)
             Thread.sleep(forTimeInterval: 0.3) // six intervals more: nothing may follow the answer
         }
         func isAnswer(_ line: [String: Any]?) -> Bool { line?["id"] as? Int == 8 && line?["method"] == nil }
+        func result(_ line: [String: Any]?) -> [String: Any]? { line?["result"] as? [String: Any] }
+        func text(_ line: [String: Any]?) -> String? {
+            ((result(line)?["content"] as? [[String: Any]])?.first)?["text"] as? String
+        }
 
         let waited = SentLines()
-        run(call("wait_for_tab", token: "p1"), waited) { _ = waited.next(within: 5) } // answers once progress was sent
+        run(call("wait_for_tab", token: "p1"), waited) { // answers once progress was sent
+            _ = waited.next(within: 5)
+            return MCPServer.CallResult(text: "done")
+        }
         let lines = waited.all
         let progress = lines.dropLast()
         #expect(progress.count >= 1 && isAnswer(lines.last), "\(lines)")
-        #expect(progress.allSatisfy { ($0["params"] as? [String: Any])?["progressToken"] as? String == "p1" })
+        #expect(progress.allSatisfy { SentLines.token($0) == AnyHashable("p1") })
         #expect(progress.compactMap(SentLines.step) == (0..<progress.count).map { $0 + 1 })
-        let text = (((lines.last?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first)?["text"] as? String
-        #expect(text == "done")
+        #expect(text(lines.last) == "done")
+
+        let failedLate = SentLines()
+        run(call("wait_for_tab", token: 3), failedLate) { // fails after progress, as when Next Term quits mid-wait
+            _ = failedLate.next(within: 5)
+            return MCPServer.CallResult(text: "Next Term is not running", isError: true)
+        }
+        let failedLines = failedLate.all
+        #expect(failedLines.count >= 2 && isAnswer(failedLines.last), "\(failedLines)")
+        #expect(failedLines.dropLast().allSatisfy { SentLines.token($0) == AnyHashable(3) })
+        #expect(result(failedLines.last)?["isError"] as? Bool == true)
 
         let failed = SentLines()
-        run(call("rm_rf", token: 3), failed) {}
+        run(call("rm_rf", token: 3), failed) { MCPServer.CallResult(text: "") }
         #expect(failed.all.count == 1 && isAnswer(failed.all.first) && failed.all.first?["error"] != nil)
 
         let plain = SentLines()
-        run(call("wait_for_tab", token: nil), plain) { Thread.sleep(forTimeInterval: 0.25) }
+        run(call("wait_for_tab", token: nil), plain) {
+            Thread.sleep(forTimeInterval: 0.25)
+            return MCPServer.CallResult(text: "done")
+        }
         #expect(plain.all.count == 1 && isAnswer(plain.all.first), "\(plain.all)")
-        // wait_for_tab says a long wait holds for a client that sends a token.
+        // wait_for_tab says a long wait holds for a client that sends a token and resets its timeout on progress.
         let wait = MCPServer.tools.first { $0.name == "wait_for_tab" }
-        #expect(wait?.inputSchema.contains("unless they send a progress token") == true)
+        let kept = "unless they send a progress token and reset their timeout on progress"
+        #expect(wait?.inputSchema.contains(kept) == true)
     }
 
     @Test func socketLinesRoundTrip() throws {
