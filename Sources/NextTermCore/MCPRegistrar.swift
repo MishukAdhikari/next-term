@@ -43,6 +43,9 @@ public enum MCPRegistrar {
         /// from that copy (the Claude app): the file is edited only while it is closed (see `pass`).
         public var readOnceBy: String?
         public let file: String
+        /// Files the agent no longer reads that an earlier pass may have put ours in (OpenCode's ~/.config/opencode once
+        /// XDG_CONFIG_HOME moves its folder): `register` and `unregister` take ours out of them.
+        public var formerFiles: [String] = []
         public let format: Format
         /// JSON: the top-level key holding the servers (`mcpServers`, `mcp`, `amp.mcpServers`).
         public let container: String
@@ -59,22 +62,27 @@ public enum MCPRegistrar {
 
     /// The agents, from claudedocs/research_next-term-mcp-registration (paths and shapes checked against
     /// each agent's source). Claude Code is registered through its own command line instead. `environment`: the
-    /// variables that move OpenCode's config folder (`OpencodePaths`); nil takes the login shell's for the user's own
-    /// home, and none for another.
-    public static func targets(home: String = NSHomeDirectory(), environment: [String: String]? = nil) -> [Target] {
+    /// variables that move OpenCode's config folder (`OpencodePaths`); nil takes `shell`'s, the login shell's, for the
+    /// user's own home, and none for another.
+    public static func targets(home: String = NSHomeDirectory(), environment: [String: String]? = nil,
+                               shell: OpencodePaths.Shell = OpencodePaths.shell) -> [Target] {
         func path(_ relative: String) -> String { (home as NSString).appendingPathComponent(relative) }
         func existing(_ candidates: [String]) -> String {
             candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
         }
         let standard: @Sendable (String) -> [String: Any] = { ["command": $0, "args": ["mcp"]] }
         // OpenCode reads opencode.json, then opencode.jsonc (later wins), in its config folder, which XDG_CONFIG_HOME
-        // moves: write the one that exists.
-        let variables = environment ?? OpencodePaths.environment(home: home)
-        let opencodeFolder = OpencodePaths.configFolder(home: home, environment: variables) as NSString
-        let opencodeFiles = ["opencode.jsonc", "opencode.json"].map { (name: String) -> String in
-            opencodeFolder.appendingPathComponent(name)
+        // moves: write the one that exists. Ours leaves the folder it reads with no variable, where Next Term wrote
+        // before it followed XDG_CONFIG_HOME.
+        func opencodeFiles(_ folder: String) -> [String] {
+            ["opencode.jsonc", "opencode.json"].map { (name: String) -> String in (folder as NSString).appendingPathComponent(name) }
         }
-        let opencode = existing(opencodeFiles)
+        let variables = environment ?? OpencodePaths.environment(home: home, shell: shell)
+        let opencodeFolder = OpencodePaths.configFolder(home: home, environment: variables)
+        let opencode = existing(opencodeFiles(opencodeFolder))
+        let unmoved = OpencodePaths.configFolder(home: home, environment: [:])
+        let isMoved = (opencodeFolder as NSString).standardizingPath != (unmoved as NSString).standardizingPath
+        let opencodeFormer = isMoved ? opencodeFiles(unmoved) : []
         let amp = existing([path(".config/amp/settings.json"), path(".config/amp/settings.jsonc")])
         return [
             Target(id: "codex", name: "Codex", programs: ["codex"], markers: [path(".codex")], apps: ["com.openai.codex"],
@@ -87,7 +95,7 @@ public enum MCPRegistrar {
             Target(id: "cursor", name: "Cursor", programs: ["cursor-agent"], markers: [path(".cursor")], file: path(".cursor/mcp.json"),
                    format: .json(strict: false), container: "mcpServers", preamble: [:],
                    entry: { ["type": "stdio", "command": $0, "args": ["mcp"]] }),
-            Target(id: "opencode", name: "opencode", programs: ["opencode"], file: opencode,
+            Target(id: "opencode", name: "opencode", programs: ["opencode"], file: opencode, formerFiles: opencodeFormer,
                    format: .json(strict: false), container: "mcp", preamble: ["$schema": #""https://opencode.ai/config.json""#],
                    entry: { ["type": "local", "command": [$0, "mcp"], "enabled": true] }),
             Target(id: "copilot", name: "Copilot CLI", programs: ["copilot"], file: path(".copilot/mcp-config.json"),
@@ -138,12 +146,36 @@ public enum MCPRegistrar {
     /// `programInstalled`: one of the target's programs is on the user's PATH (a missing file is created).
     @discardableResult
     public static func register(_ target: Target, command: String, programInstalled: Bool) -> Status {
-        write(plan(target, command: command, programInstalled: programInstalled), to: target.file)
+        let status = write(plan(target, command: command, programInstalled: programInstalled), to: target.file)
+        clearFormerFiles(target)
+        return status
     }
 
     @discardableResult
     public static func unregister(_ target: Target) -> Status {
-        write(plan(target, command: nil, programInstalled: false), to: target.file)
+        let status = write(plan(target, command: nil, programInstalled: false), to: target.file)
+        clearFormerFiles(target)
+        return status
+    }
+
+    /// Takes ours out of the target's `formerFiles` as turning the setting off does (a `next-term` that is not ours
+    /// stays), unless one is in the target's own folder under another name, a link, where ours is the entry just written.
+    static func clearFormerFiles(_ target: Target) {
+        let folder = (target.file as NSString).deletingLastPathComponent
+        for former in target.formerFiles where !isSameFolder((former as NSString).deletingLastPathComponent, folder) {
+            let old = Target(id: target.id, name: target.name, programs: target.programs, file: former, format: target.format,
+                             container: target.container, preamble: target.preamble, entry: target.entry)
+            _ = write(plan(old, command: nil, programInstalled: false), to: former)
+        }
+    }
+
+    /// The same folder by its path, or by what it is (one a link to the other).
+    static func isSameFolder(_ a: String, _ b: String) -> Bool {
+        if (a as NSString).standardizingPath == (b as NSString).standardizingPath { return true }
+        var first = stat()
+        var second = stat()
+        guard stat(a, &first) == 0, stat(b, &second) == 0 else { return false }
+        return first.st_dev == second.st_dev && first.st_ino == second.st_ino
     }
 
     /// An edit worked out from the file as it was read, not written yet.

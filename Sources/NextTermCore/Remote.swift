@@ -494,6 +494,22 @@ public enum RemoteShell {
         return lines.joined(separator: "\n")
     }
 
+    /// An `agent` line for each agent a tab on the host could start, by the command that starts it. OpenCode is also
+    /// looked for where its installer (`~/.opencode/bin`), Bun, npm and Linuxbrew put it: a command over ssh doesn't get
+    /// the PATH those add at the end of .bashrc, past the guard that stops a shell that is not interactive, but a tab
+    /// does. OpenCode 2's `opencode2` counts when there is no `opencode`.
+    static let agentLines = """
+        for a in claude codex gemini; do command -v "$a" >/dev/null 2>&1 && printf 'agent\\t%s\\n' "$a"; done
+        O=
+        for n in opencode opencode2; do
+          if command -v "$n" >/dev/null 2>&1; then O=$n; break; fi
+          for d in "$HOME/.opencode/bin" "$HOME/.bun/bin" "$HOME/.npm-global/bin" /home/linuxbrew/.linuxbrew/bin; do
+            if [ -x "$d/$n" ]; then O=$n; break 2; fi
+          done
+        done
+        [ -n "$O" ] && printf 'agent\\t%s\\n' "$O"
+        """
+
     /// What the host has: for check_host and the sheet.
     public static let probeScript = """
         printf '\\n%s\\n' \(quote(marker))
@@ -505,7 +521,7 @@ public enum RemoteShell {
         \(findHerdr)
         [ -n "$H" ] && printf 'herdr\\t%s\\n' "$("$H" --version 2>/dev/null | head -n 1)"
         command -v git >/dev/null 2>&1 && printf 'git\\t%s\\n' "$(git --version 2>/dev/null)"
-        for a in claude codex gemini opencode; do command -v "$a" >/dev/null 2>&1 && printf 'agent\\t%s\\n' "$a"; done
+        \(agentLines)
         command -v loginctl >/dev/null 2>&1 && printf 'linger\\t%s\\n' "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
         [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         true

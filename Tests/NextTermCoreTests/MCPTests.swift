@@ -338,8 +338,76 @@ import Testing
         let servers = json(folder + "/opencode.jsonc")?["mcp"] as? [String: Any]
         #expect(MCPRegistrar.command(of: servers?["next-term"]) == command)
         #expect(!FileManager.default.fileExists(atPath: home + "/.config"))
-        // A home that is not the user's own never takes the login shell's variables (a test's made-up home).
-        #expect(try target("opencode", home: home).file == home + "/.config/opencode/opencode.jsonc")
+    }
+
+    /// With no environment given, the login shell's variables decide for the user's own home, and none for another.
+    /// Only paths are worked out here: nothing is written for the user's own home.
+    @Test func theUsersOwnHomeTakesTheLoginShellsConfigFolder() throws {
+        let other = try home()
+        defer { try? FileManager.default.removeItem(atPath: other) }
+        let (defaults, name) = try TestDefaults.make("mcp-opencode-shell")
+        defer { TestDefaults.remove(defaults, name) }
+        let shell = OpencodePaths.Shell()
+        shell.probed(["XDG_CONFIG_HOME": other + "/xdg\n"], keepIn: defaults)
+        func opencode(home: String) throws -> MCPRegistrar.Target {
+            try #require(MCPRegistrar.targets(home: home, shell: shell).first { $0.id == "opencode" })
+        }
+        #expect(try opencode(home: NSHomeDirectory()).file == other + "/xdg/opencode/opencode.jsonc")
+        // A home that is not the user's own never takes them (a test's or the self-test's made-up home).
+        #expect(try opencode(home: other).file == other + "/.config/opencode/opencode.jsonc")
+        #expect(try opencode(home: other).formerFiles.isEmpty)
+    }
+
+    /// Once XDG_CONFIG_HOME moves OpenCode's folder, ours leaves ~/.config/opencode, where an earlier release (or a
+    /// pass before the login shell's probe answered) put it and OpenCode no longer reads: on the next pass, and when
+    /// the setting is turned off. The rest of that file stays byte for byte, and a `next-term` that is not ours stays.
+    @Test func aMovedConfigFolderTakesOursOutOfTheOldOne() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let moved = ["XDG_CONFIG_HOME": home + "/xdg"]
+        func opencode(_ environment: [String: String]) throws -> MCPRegistrar.Target {
+            try #require(MCPRegistrar.targets(home: home, environment: environment).first { $0.id == "opencode" })
+        }
+        let old = home + "/.config/opencode/opencode.jsonc"
+        let theirs = "{\n  // mine\n  \"theme\": \"dark\"\n}\n"
+        try write(theirs, old)
+        #expect(MCPRegistrar.register(try opencode([:]), command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.command(of: (json(old)?["mcp"] as? [String: Any])?["next-term"]) == command)
+        let inFolder = try opencode(moved)
+        #expect(inFolder.formerFiles == [old, home + "/.config/opencode/opencode.json"])
+        #expect(MCPRegistrar.register(inFolder, command: command, programInstalled: true) == .registered)
+        #expect(try read(old) == theirs)
+        let file = home + "/xdg/opencode/opencode.jsonc"
+        #expect(MCPRegistrar.command(of: (json(file)?["mcp"] as? [String: Any])?["next-term"]) == command)
+        // Turned off: ours goes from both, though the old one has it again (a pass before the probe answered).
+        #expect(MCPRegistrar.register(try opencode([:]), command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.unregister(inFolder) == .removed)
+        #expect(try read(old) == theirs)
+        #expect((json(file)?["mcp"] as? [String: Any])?["next-term"] == nil)
+        // Someone else's next-term in the old folder is never touched.
+        let other = "{\n  \"mcp\": {\"next-term\": {\"type\": \"local\", \"command\": [\"/opt/other/next-term\"]}}\n}\n"
+        try write(other, old)
+        #expect(MCPRegistrar.register(inFolder, command: command, programInstalled: true) == .registered)
+        #expect(try read(old) == other)
+    }
+
+    /// XDG_CONFIG_HOME set to ~/.config, or to a link to it, is OpenCode's own folder: the entry just written stays.
+    @Test func aConfigFolderThatIsTheOldOneKeepsOurs() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let old = home + "/.config/opencode/opencode.jsonc"
+        try write("{}\n", old)
+        func opencode(_ base: String) throws -> MCPRegistrar.Target {
+            let environment = ["XDG_CONFIG_HOME": base]
+            return try #require(MCPRegistrar.targets(home: home, environment: environment).first { $0.id == "opencode" })
+        }
+        #expect(try opencode(home + "/.config/").formerFiles.isEmpty)
+        try FileManager.default.createSymbolicLink(atPath: home + "/link", withDestinationPath: home + "/.config")
+        let linked = try opencode(home + "/link")
+        #expect(linked.file == home + "/link/opencode/opencode.jsonc")
+        #expect(!linked.formerFiles.isEmpty)
+        #expect(MCPRegistrar.register(linked, command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.command(of: (json(old)?["mcp"] as? [String: Any])?["next-term"]) == command)
     }
 
     @Test func commentsAndOtherServersSurvive() throws {
