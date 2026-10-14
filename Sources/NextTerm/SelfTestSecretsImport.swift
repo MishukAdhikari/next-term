@@ -7,7 +7,8 @@ extension SelfTest {
     /// `secretsImportChecks` (its files as they were, the token stored under GITHUB_TOKEN): a move that changes no file
     /// doesn't leave the sheet waiting for Touch ID (K4 problem 2); a file it couldn't check is listed, and the sheet
     /// never says no keys were found (review finding 16, K4 problem 3); closing it cancels its scan, and it plans off the
-    /// main thread (K4 problem 4); the key the earlier move stored is used again, not copied (review finding 19).
+    /// main thread (K4 problem 4); the key the earlier move stored is used again, not copied (review finding 19); the
+    /// Claude app opened after the scan leaves its file (review finding 17).
     static func secretsImportReportChecks(view: SecretsView, home: URL, token: String, cursorText: String, codexText: String) async {
         let fm = FileManager.default
         let cursor = home.appendingPathComponent(".cursor/mcp.json")
@@ -81,6 +82,8 @@ extension SelfTest {
 
         // A variable named like a key in Secrets leaves the entry it wraps, named before and after the write (finding #18).
         await secretsImportDroppedChecks(view: view, home: home)
+        // Whether the Claude app runs is asked again when Move plans (finding #17).
+        await secretsImportOpenAppChecks(view: view, home: home)
     }
 }
 #endif

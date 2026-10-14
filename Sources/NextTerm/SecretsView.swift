@@ -14,15 +14,14 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         var seen = Set<String>()
         setup.projects = AppDelegate.shared.controllers.compactMap(\.project).filter { seen.insert($0).inserted }
         setup.agentControl = SecretsView.agentControlIsOn()
-        setup.running = SecretsView.runningApps()
+        setup.isOpen = { SecretsView.isRunning($0) }
         setup.nxtrm = SecretImportSheet.nxtrmCommand()
         return setup
     }
 
-    /// The bundle identifiers of the apps that save their MCP file whole (the Claude app), when they run.
-    static func runningApps() -> Set<String> {
-        let claude = MCPRegistrar.claudeAppBundle
-        return NSRunningApplication.runningApplications(withBundleIdentifier: claude).isEmpty ? [] : [claude]
+    /// Whether the app with this bundle identifier runs now: asked each time, on any thread.
+    nonisolated static func isRunning(_ bundle: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
     }
     static let docsURL = URL(string: "https://nxtrm.mishuk.me/docs/secrets/")!
 
@@ -627,8 +626,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// One Touch ID, then each entry put back while it is what Next Term wrote; the backups that went back are removed.
     /// An entry that holds a write-only key is left: Next Term never shows that key again, in a file either.
     func putBack(_ backups: [SecretImport.EntryBackup], names: [String], delete: Bool) {
-        let running = Self.runningApps()
         let importSetup = Self.importSetup()
+        let isOpen = importSetup.isOpen
         let lockWait = importSetup.lockWait
         let home = importSetup.home
         let writeOnly = Set(names.filter { SecretsStore.shared.index?.entry(named: $0)?.writeOnly == true })
@@ -655,7 +654,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                     var back = Set(asked)
                     for backup in held {
                         let result = SecretImport.undo(backup, values: values, kept: opened[backup.id] ?? [], home: home, lockWait: lockWait,
-                                                       isOpen: { running.contains($0) })
+                                                       isOpen: isOpen)
                         outcome.add(backup, result)
                         if result != .written { back.subtract(backup.names) }
                     }

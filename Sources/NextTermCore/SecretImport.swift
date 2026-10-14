@@ -1608,9 +1608,10 @@ public enum SecretImport {
     /// One `FileEdit` per file the chosen moves touch. `nxtrm` is the wrapper's command: the `nxtrm` path, or the app's
     /// binary and `--cli`. `stored` is the vault's names: with the names this import stores (the moves of the files that
     /// plan), what the wrapper takes out of a server's environment unless the entry asks for it, so a wrapped entry drops
-    /// a variable of that name too.
-    public static func plan(_ moves: [Move], nxtrm: [String], stored: [String] = [], read: (String) -> Data? = readFile,
-                            now: Date = Date()) -> (edits: [FileEdit], failures: [PlanFailure]) {
+    /// a variable of that name too. `isOpen` is asked now, not taken from the scan: a file an app saves whole (the
+    /// Claude app's) is left while that app runs, and its moves store no key.
+    public static func plan(_ moves: [Move], nxtrm: [String], stored: [String] = [], isOpen: (String) -> Bool = { _ in false },
+                            read: (String) -> Data? = readFile, now: Date = Date()) -> (edits: [FileEdit], failures: [PlanFailure]) {
         var byFile: [String: (Source, [Move])] = [:]
         var order: [String] = []
         for move in moves {
@@ -1623,12 +1624,16 @@ public enum SecretImport {
             }
         }
         // Each file read once: a second pass plans from the same bytes.
-        var unreadable: [PlanFailure] = []
+        var left: [PlanFailure] = []
         var files: [(source: Source, moves: [Move], data: Data)] = []
         for path in order {
             guard let (source, fileMoves) = byFile[path] else { continue }
+            if let app = source.readOnceBy, isOpen(app) {
+                left.append(PlanFailure(path: path, reason: claudeAppOpenReason))
+                continue
+            }
             guard let data = read(path) else {
-                unreadable.append(PlanFailure(path: path, reason: "it can't be read"))
+                left.append(PlanFailure(path: path, reason: "it can't be read"))
                 continue
             }
             files.append((source, fileMoves, data))
@@ -1649,7 +1654,7 @@ public enum SecretImport {
         }
         // The failures in the files' order, as one pass gave them.
         let place: [String: Int] = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-        let failures: [PlanFailure] = (unreadable + planned.failures).sorted { (place[$0.path] ?? 0) < (place[$1.path] ?? 0) }
+        let failures: [PlanFailure] = (left + planned.failures).sorted { (place[$0.path] ?? 0) < (place[$1.path] ?? 0) }
         return (planned.edits, failures)
     }
 
@@ -2101,7 +2106,7 @@ public enum SecretImport {
     public static let lockedNote = "Claude Code is saving its settings. Try again in a moment."
 
     /// Writes one file's edit: read again, planned once more if its bytes changed, under Claude Code's lock for
-    /// `~/.claude.json`, through `MCPRegistrar.write(_:to:)`, and checked after.
+    /// `~/.claude.json`, through `MCPRegistrar.write(_:to:)`, and checked after. `isOpen` is asked just before the write.
     public static func apply(_ edit: FileEdit, lockWait: TimeInterval = 5, isOpen: (String) -> Bool = { _ in false },
                              read: (String) -> Data? = readFile) -> Applied {
         if let app = edit.source.readOnceBy, isOpen(app) { return .skipped(claudeAppOpenReason) }

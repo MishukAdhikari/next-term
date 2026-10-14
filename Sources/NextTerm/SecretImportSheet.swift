@@ -21,12 +21,14 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     static let restart = "Restart the servers: /mcp in Claude Code, or restart the agent. The first time an agent starts these servers, "
         + "approve each one. Restart any you missed."
 
-    /// Where it looks, and how (the self-test passes a temporary home and no running apps).
+    /// Where it looks, and how (the self-test passes a temporary home, and no app runs).
     struct Setup {
         var home = NSHomeDirectory()
         var projects: [String] = []
         var agentControl = true
-        var running: Set<String> = []
+        /// Whether the app with this bundle identifier runs now (the Claude app, which saves its MCP file whole): asked
+        /// at the scan, when the move plans and just before each write, never kept from an earlier ask.
+        var isOpen: @Sendable (String) -> Bool = { _ in false }
         var lockWait: TimeInterval = 5
         /// The command moved entries start (`nxtrmCommand()`); nil when no path to it lasts, and the import refuses.
         var nxtrm: [String]?
@@ -163,7 +165,7 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         scanTask?.cancel()
         scanTask = Task.detached {
             let sources = SecretImport.sources(home: setup.home, projects: setup.projects)
-            let found = SecretImport.scan(sources, inGitWorkTree: SecretImport.isInGitWorkTree, isOpen: { setup.running.contains($0) })
+            let found = SecretImport.scan(sources, inGitWorkTree: SecretImport.isInGitWorkTree, isOpen: setup.isOpen)
             // Checked again on the main actor, where `closeSheet` cancels: a scan that ended as the sheet closed shows nothing.
             await MainActor.run {
                 guard !Task.isCancelled else { return }
@@ -373,7 +375,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let stored: [String] = SecretsStore.shared.index?.names ?? []
         Task { @MainActor in
             let planned = await Task.detached { () -> (edits: [SecretImport.FileEdit], failures: [SecretImport.PlanFailure], onMain: Bool) in
-                let plan = SecretImport.plan(moves, nxtrm: nxtrm, stored: stored)
+                // An app opened since the scan leaves its file now, before any key is stored for it.
+                let plan = SecretImport.plan(moves, nxtrm: nxtrm, stored: stored, isOpen: setup.isOpen)
                 return (plan.edits, plan.failures, pthread_main_np() != 0)
             }.value
             #if DEBUG
@@ -404,7 +407,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
                 let written = await Task.detached { () -> [String: SecretImport.Applied] in
                     var results: [String: SecretImport.Applied] = [:]
                     for edit in edits {
-                        results[edit.path] = SecretImport.apply(edit, lockWait: setup.lockWait, isOpen: { setup.running.contains($0) })
+                        // Asked again here: the app may have opened during Touch ID.
+                        results[edit.path] = SecretImport.apply(edit, lockWait: setup.lockWait, isOpen: setup.isOpen)
                     }
                     return results
                 }.value
