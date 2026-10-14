@@ -66,6 +66,23 @@ import Testing
         #expect(SecretKeyPages.suggest(value: notSendGrid, name: "LLM_KEY") == nil)
     }
 
+    /// A shape is checked on the bytes read and on the value's length, never past them: a Twilio key's last 10 hex
+    /// digits and a SendGrid key's second dot are not read, so a value of that length whose first bytes fit is taken
+    /// for one. It stays a suggestion the user accepts with Use.
+    @Test func aShapeIsCheckedOnlyOnTheBytesReadAndTheLength() {
+        let twilioHead = "SK" + String(repeating: "0a", count: 11)
+        #expect(twilioHead.utf8.count == SecretKeyPages.headLength)
+        let twilioTail = SecretBytes(utf8: twilioHead + String(repeating: "z", count: 10))
+        #expect(SecretKeyPages.suggest(value: twilioTail, name: "LLM_KEY")?.provider == "Twilio")
+        let twilioShort = SecretBytes(utf8: twilioHead + String(repeating: "z", count: 9))
+        #expect(SecretKeyPages.suggest(value: twilioShort, name: "LLM_KEY") == nil)
+        let noSecondDot = SecretBytes(utf8: "SG." + String(repeating: "q", count: 66))
+        #expect(SecretKeyPages.suggest(value: noSecondDot, name: "LLM_KEY")?.provider == "SendGrid")
+        let tenBeforeTheDot: String = "SG." + String(repeating: "q", count: 10)
+        let earlyDot = SecretBytes(utf8: tenBeforeTheDot + "." + String(repeating: "q", count: 55))
+        #expect(SecretKeyPages.suggest(value: earlyDot, name: "LLM_KEY") == nil)
+    }
+
     @Test func aPrefixTwoProvidersShareSuggestsNothing() {
         // A bare sk- is a legacy OpenAI key or a DeepSeek one; eyJ starts any JWT (Qdrant, legacy Supabase).
         #expect(Self.provider("sk-", length: 48) == nil)
@@ -155,6 +172,44 @@ extension SecretKeyPagesTests {
         #expect(SecretKeyPages.page(forName: "NEXT_PUBLIC") == nil)
     }
 
+    /// A name in camel case reads the same however it splits a provider's name: `OpenAIApiKey` is OPEN, AI, API, KEY,
+    /// and still OpenAI's. Only whole parts spell the name.
+    @Test func aProvidersNameSplitInCamelCaseIsStillItsName() {
+        let cases: [(String, String)] = [
+            ("OpenAIApiKey", "OpenAI"), ("openAIApiKey", "OpenAI"), ("openRouterApiKey", "OpenRouter"),
+            ("deepSeekApiKey", "DeepSeek"), ("LangChainApiKey", "LangSmith"), ("HuggingFaceToken", "Hugging Face"),
+            ("HUGGING_FACE_HUB_TOKEN", "Hugging Face"), ("gitHubToken", "GitHub"), ("xAIApiKey", "xAI"),
+        ]
+        for (name, provider) in cases {
+            #expect(SecretKeyPages.page(forName: name)?.provider == provider, "\(name)")
+        }
+        for name in ["OPEN_API_KEY", "openAirKey", "GIT_TOKEN", "LANG_KEY"] {
+            #expect(SecretKeyPages.page(forName: name) == nil, "\(name)")
+        }
+    }
+
+    /// A webhook's signing secret and an OAuth app's client secret are made somewhere other than a provider's key
+    /// page, and GitHub's page (whose new-token form Rotate fills) makes personal access tokens only.
+    @Test func aSecretThatIsNotThePagesKindSuggestsNothing() {
+        let others = ["GITHUB_CLIENT_SECRET", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "GITHUB_OAUTH_TOKEN",
+                      "STRIPE_WEBHOOK_SECRET", "AZURE_CLIENT_SECRET", "OPENAI_WEBHOOK_SECRET", "stripeWebhookSecret"]
+        for name in others {
+            #expect(SecretKeyPages.page(forName: name) == nil, "\(name)")
+        }
+        let tokens = ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT", "GH_PAT", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                      "GITHUB_ACCESS_TOKEN", "GITHUB_API_TOKEN", "githubToken", "VITE_GITHUB_TOKEN"]
+        for name in tokens {
+            #expect(SecretKeyPages.page(forName: name)?.id == "github", "\(name)")
+        }
+        // Slack's apps page is where its client secret is made; other keys keep their provider.
+        #expect(SecretKeyPages.page(forName: "SLACK_CLIENT_SECRET")?.provider == "Slack")
+        #expect(SecretKeyPages.page(forName: "STRIPE_RESTRICTED_KEY")?.provider == "Stripe")
+        #expect(SecretKeyPages.page(forName: "AZURE_SEARCH_ADMIN_KEY")?.provider == "Azure")
+        // The value still wins: a fine-grained token under any name is GitHub's.
+        let token = SecretKeyPages.suggest(value: Self.value("github_pat_"), name: "GITHUB_CLIENT_SECRET")
+        #expect(token?.id == "github")
+    }
+
     @Test func withNoValueTheNameAloneSuggests() {
         let cohere = SecretKeyPages.suggest(value: nil, name: "COHERE_API_KEY")
         #expect(cohere?.url.absoluteString == "https://dashboard.cohere.com/api-keys")
@@ -198,7 +253,9 @@ extension SecretKeyPagesTests {
             for signal in page.names {
                 switch signal {
                 case .exact(let name):
-                    #expect(StoredSecretName.isValid(name) && SecretName.isSecret(name), "\(page.id): \(name)")
+                    // GH_PAT has no word `SecretName` knows; the import's detector reads PAT as one.
+                    let secret: Bool = SecretName.isSecret(name) || SecretImport.nameLooksSecret(name)
+                    #expect(StoredSecretName.isValid(name) && secret, "\(page.id): \(name)")
                 case .prefix(let prefix):
                     #expect(StoredSecretName.isValid(prefix) && !prefix.hasSuffix("_"), "\(page.id): \(prefix)")
                 }
@@ -329,6 +386,18 @@ extension SecretKeyPagesTests {
                      "localhost:3000"] {
             #expect(SecretKeyPages.page(forHost: host) == nil, "\(host)")
         }
+    }
+
+    /// Two pages can share a host (GitHub's fine-grained and classic tokens), and a link names its page by host: a
+    /// value's page and its host's page always name the same provider, so a check across the two compares providers.
+    @Test func aPageAndItsHostNameTheSameProvider() throws {
+        for page in SecretKeyPages.all {
+            #expect(SecretKeyPages.page(forHost: page.host)?.provider == page.provider, "\(page.id)")
+        }
+        let classic = try #require(SecretKeyPages.page(forValue: Self.value("ghp_")))
+        let byHost = try #require(SecretKeyPages.page(forHost: classic.host))
+        #expect(classic.id != byHost.id)
+        #expect(classic.provider == byHost.provider)
     }
 
     @Test func aLinkNamesThePageItIs() throws {

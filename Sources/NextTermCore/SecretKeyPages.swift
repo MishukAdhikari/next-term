@@ -5,10 +5,11 @@ import Foundation
 public struct KeyPage: Sendable, Hashable, Identifiable {
     /// A key's name that suggests the page.
     public enum NameSignal: Sendable, Hashable {
-        /// This name exactly: `CO_API_KEY`.
+        /// This name, however its parts are marked: `CO_API_KEY`, or `coApiKey`.
         case exact(String)
-        /// A name whose first parts are these and that holds a secret word (`SecretName.isSecret`): `PINECONE` gives
-        /// `PINECONE_API_KEY`, never `PINECONE_INDEX`, and never `MY_PINECONE_KEY`.
+        /// A name whose first parts spell this, however it splits it (`openAIApiKey` is OPEN, AI, API, KEY), and that
+        /// holds a secret word (`SecretName.isSecret`): `PINECONE` gives `PINECONE_API_KEY`, never `PINECONE_INDEX`,
+        /// and never `MY_PINECONE_KEY`. A webhook's or an OAuth app's secret is never taken this way.
         case prefix(String)
     }
 
@@ -42,7 +43,9 @@ public struct KeyPage: Sendable, Hashable, Identifiable {
             ValuePrefix(head: head, body: .any, length: nil)
         }
 
-        /// A short head with the characters after it and the whole length: `AKIA`, 16 capitals or digits, 20 in all.
+        /// A short head, the characters allowed after it and the whole length: `AKIA`, 16 capitals or digits, 20 in
+        /// all. The characters are checked only in the bytes read (`SecretKeyPages.headLength`); past them only the
+        /// length counts, so a longer shape's tail is not.
         public static func shaped(_ head: String, _ body: Body, length: Int) -> ValuePrefix {
             ValuePrefix(head: head, body: body, length: length)
         }
@@ -134,14 +137,15 @@ public enum SecretKeyPages {
         return groups.flatMap { (group: [KeyPage]) -> [KeyPage] in group }
     }()
 
-    /// How many of a value's bytes are read, after any white space at its start. No `String` is made of them.
+    /// How many of a value's bytes are copied out and matched, after any white space at its start. No `String` is made
+    /// of them. The rest is only compared with white space at its end, to know the value's length.
     public static let headLength = 24
     /// A value shorter than this names no provider by its head: no provider's key is shorter.
     public static let minimumLength = 20
 
     /// Heads more than one provider's keys start with, which no row takes without a shape: a bare `sk-` (a legacy
     /// OpenAI key or a DeepSeek one), `eyJ` (any JWT: Qdrant Cloud, a legacy Supabase key) and `SK` (a Twilio API key
-    /// only with its 32 hex digits). Such a value is told by its name, or not at all.
+    /// only when the bytes read are hex and the value is 34 long). Such a value is told by its name, or not at all.
     public static let sharedHeads = ["sk-", "eyJ", "SK"]
 
     /// What the link field suggests: the page the value's head names, else the one the name names, else none.
@@ -204,7 +208,8 @@ extension SecretKeyPages {
     ]
 
     /// The page a key's name names: an exact name first, then the longest provider prefix of a name that holds a
-    /// secret word. The name is read in parts (`SecretName.segments`), so `openaiApiKey` reads as `OPENAI_API_KEY`.
+    /// secret word and isn't another kind of secret. The name is read in parts (`SecretName.segments`) and compared by
+    /// its letters, so `openaiApiKey`, `openAIApiKey` and `OPENAI_API_KEY` read alike.
     public static func page(forName name: String) -> KeyPage? {
         var parts: [String] = SecretName.segments(of: name.trimmingCharacters(in: .whitespaces))
         let framework: [String]? = publicPrefixes.first { (prefix: [String]) -> Bool in
@@ -212,22 +217,51 @@ extension SecretKeyPages {
         }
         if let framework { parts.removeFirst(framework.count) }
         guard !parts.isEmpty else { return nil }
-        let joined: String = parts.joined(separator: "_")
-        for page in all where page.names.contains(.exact(joined)) { return page }
-        guard SecretName.isSecret(joined) else { return nil }
+        let letters: String = parts.joined()
+        for page in all {
+            for case .exact(let exact) in page.names where spelling(of: exact) == letters { return page }
+        }
+        guard SecretName.isSecret(parts.joined(separator: "_")), !namesAnotherKind(parts) else { return nil }
         var best: (page: KeyPage, length: Int)?
         for page in all {
             for case .prefix(let prefix) in page.names {
-                let wanted: [String] = SecretName.segments(of: prefix)
-                guard parts.count > wanted.count, parts.starts(with: wanted) else { continue }
+                let wanted: String = spelling(of: prefix)
+                guard let used = partsSpelling(wanted, in: parts), used < parts.count else { continue }
                 if wanted.count > (best?.length ?? 0) { best = (page, wanted.count) }
             }
         }
         return best?.page
     }
 
+    /// A name's letters without the marks between its parts: `GITHUB_TOKEN` and `gitHubToken` are both GITHUBTOKEN.
+    static func spelling(of name: String) -> String {
+        SecretName.segments(of: name).joined()
+    }
+
+    /// How many of a name's first parts spell `word` together (OPEN and AI spell OPENAI), or nil. Whole parts only:
+    /// OPENAIR spells no OPENAI.
+    static func partsSpelling(_ word: String, in parts: [String]) -> Int? {
+        var spelled = ""
+        for (index, part) in parts.enumerated() {
+            spelled += part
+            if spelled == word { return index + 1 }
+            guard word.hasPrefix(spelled) else { return nil }
+        }
+        return nil
+    }
+
+    /// Whether a name is a secret made somewhere other than a provider's key page: a webhook's signing secret
+    /// (`STRIPE_WEBHOOK_SECRET`) or an OAuth app's client secret (`AZURE_CLIENT_SECRET`). A row whose page does make
+    /// one names it exactly (Slack's apps page and `SLACK_CLIENT_SECRET`).
+    static func namesAnotherKind(_ parts: [String]) -> Bool {
+        if parts.contains("WEBHOOK") || parts.contains("WEBHOOKS") { return true }
+        let pairs: Zip2Sequence<[String], ArraySlice<String>> = zip(parts, parts.dropFirst())
+        return pairs.contains { (pair: (String, String)) -> Bool in pair.0 == "CLIENT" && pair.1 == "SECRET" }
+    }
+
     /// The provider a link's host belongs to, for `list_secrets`' `service`: a page's host, or a host under it
-    /// (`us.cloud.langfuse.com`), the most specific first. A port is not part of the host.
+    /// (`us.cloud.langfuse.com`), the most specific first. A port is not part of the host. Two pages can share a host
+    /// (GitHub's fine-grained and classic tokens), so this names a provider, not a page: compare `provider`, not `id`.
     public static func page(forHost host: String) -> KeyPage? {
         var wanted: String = host.lowercased()
         if !wanted.hasPrefix("["), let colon = wanted.lastIndex(of: ":") { wanted = String(wanted[..<colon]) }
@@ -295,8 +329,7 @@ extension SecretKeyPages {
                                    names: [.prefix("FIREWORKS")])
     static let huggingFace = KeyPage("huggingface", "Hugging Face", "Access Tokens",
                                      "https://huggingface.co/settings/tokens",
-                                     names: [.prefix("HF"), .prefix("HUGGINGFACE"), .prefix("HUGGING_FACE"),
-                                             .prefix("HUGGINGFACEHUB")],
+                                     names: [.prefix("HF"), .prefix("HUGGINGFACE"), .prefix("HUGGINGFACEHUB")],
                                      prefixes: [.head("hf_")])
     static let replicate = KeyPage("replicate", "Replicate", "API Tokens", "https://replicate.com/account/api-tokens",
                                    names: [.prefix("REPLICATE")], prefixes: [.head("r8_")])
@@ -316,17 +349,25 @@ extension SecretKeyPages {
     /// GitHub's recommended tokens, first for a GitHub name; Rotate opens its new-token page filled in.
     static let githubFineGrained = KeyPage("github", "GitHub", "Fine-grained Tokens",
                                            "https://github.com/settings/personal-access-tokens",
-                                           names: [.prefix("GITHUB"), .exact("GH_TOKEN")],
-                                           prefixes: [.head("github_pat_")], newToken: .githubFineGrained)
+                                           names: githubTokenNames, prefixes: [.head("github_pat_")],
+                                           newToken: .githubFineGrained)
+    /// Only a personal access token's names: the page's new-token form makes one, and an OAuth app's client secret, an
+    /// app's private key or a webhook's secret is made elsewhere.
+    static let githubTokenNames: [KeyPage.NameSignal] = [
+        .exact("GITHUB_TOKEN"), .exact("GITHUB_PAT"), .exact("GITHUB_PERSONAL_ACCESS_TOKEN"),
+        .exact("GITHUB_ACCESS_TOKEN"), .exact("GITHUB_API_TOKEN"), .exact("GH_TOKEN"), .exact("GH_PAT"),
+    ]
     static let githubClassic = KeyPage("github-classic", "GitHub", "Tokens (classic)", "https://github.com/settings/tokens",
                                        names: [], prefixes: [.head("ghp_")])
     static let slack = KeyPage("slack", "Slack", "Your Apps", "https://api.slack.com/apps",
-                               names: [.prefix("SLACK")],
+                               names: [.prefix("SLACK"), .exact("SLACK_CLIENT_SECRET")],
                                prefixes: [.head("xoxb-"), .head("xoxp-"), .head("xoxa-"), .head("xoxr-"), .head("xapp-")])
-    /// An API key's id is SK and 32 hex digits; SK alone starts too many words.
+    /// An API key's id is SK and 32 hex digits; SK alone starts too many words. The first 22 digits are checked, and
+    /// the length.
     static let twilio = KeyPage("twilio", "Twilio", "Console", "https://console.twilio.com/",
                                 names: [.prefix("TWILIO")], prefixes: [.shaped("SK", .hex, length: 34)])
-    /// SG., 22 characters, a dot and 43 more.
+    /// SG., 22 characters, a dot and 43 more, 69 in all. The first 21 characters are checked, and the length; the dot
+    /// is past the bytes read.
     static let sendGrid = KeyPage("sendgrid", "SendGrid", "API Keys", "https://app.sendgrid.com/settings/api_keys",
                                   names: [.prefix("SENDGRID")], prefixes: [.shaped("SG.", .base64URL, length: 69)])
     static let sentry = KeyPage("sentry", "Sentry", "Console", "https://sentry.io/",
