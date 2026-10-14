@@ -164,6 +164,14 @@ public enum SecretImport {
         public var description: String {
             (container + [server]).map { $0.contains("/") || $0.contains(".") ? "[“\($0)”]" : $0 }.joined(separator: ".")
         }
+
+        /// A part has more characters than the import lists (`maxNameLength`), counted only up to one past it.
+        var isTooLong: Bool {
+            let most: Int = SecretImport.maxNameLength
+            return (container + [server]).contains { (part: String) -> Bool in
+                part.utf8.count > most && part.prefix(most + 1).count > most
+            }
+        }
     }
 
     public enum Field: Sendable, Equatable, Hashable {
@@ -200,7 +208,8 @@ public enum SecretImport {
         public var findings: [Finding] = []
         /// Entries that already run `nxtrm secret run`: "uses Next Term's Secrets".
         public var wrapped: [(source: Source, location: Location)] = []
-        /// Files that are there but could not be read, or read as their format, or list more than the import shows.
+        /// Files that are there but could not be read, or read as their format, or list more keys, or a longer name, than
+        /// the import shows.
         public var unreadable: [(source: Source, reason: String)] = []
         /// The files that were read.
         public var read: [Source] = []
@@ -236,6 +245,17 @@ public enum SecretImport {
     /// project file could list a hundred thousand).
     static let maxListed = 1_000
     static let tooManyReason = "it lists more than 1,000 keys or servers, more than Next Term shows"
+    /// The longest name of a server or project (a part of a `Location`) the import lists: past it, the file is reported.
+    /// The sheet shows the name in each key's row and works out each key's place from it on the main thread, so a crafted
+    /// name of millions of characters would hold the sheet for minutes.
+    static let maxNameLength = 1_000
+    public static let longNameReason = "a server or project in it has a name longer than the 1,000 characters Next Term shows"
+
+    /// A server's name as a row shows it: cut at 60 characters, with "…" after.
+    public static func shownServer(_ server: String) -> String {
+        let long: Bool = server.prefix(61).count > 60
+        return long ? String(server.prefix(60)) + "…" : server
+    }
 
     /// Every finding in `sources`. `inGitWorkTree` and `isOpen` (a bundle identifier's app is running) are the
     /// caller's; values stay in memory. `stop` (by default, the task is cancelled) is asked between files, between a
@@ -271,6 +291,12 @@ public enum SecretImport {
             let appOpen = source.readOnceBy.map(isOpen) ?? false
             guard entries.reduce(0, { $0 + ($1.isWrapped ? 1 : $1.detected.count) }) <= maxListed else {
                 scan.unreadable.append((source, tooManyReason))
+                continue
+            }
+            // Only a listed entry's name is shown: one with no key in it may be as long as it likes.
+            let tooLong: Bool = entries.contains { ($0.isWrapped || !$0.detected.isEmpty) && $0.location.isTooLong }
+            guard !tooLong else {
+                scan.unreadable.append((source, longNameReason))
                 continue
             }
             for entry in entries {
@@ -1508,8 +1534,7 @@ public enum SecretImport {
             let names: [String] = entry.variables
             let head: String = names.dropLast().joined(separator: ", ")
             let listed: String = names.count <= 2 ? SecretRun.keysText(names) : head + " and " + names[names.count - 1]
-            let long: Bool = entry.server.prefix(61).count > 60
-            let server: String = long ? String(entry.server.prefix(60)) + "…" : entry.server
+            let server: String = shownServer(entry.server)
             places.append("\(listed) from “\(server)”")
             count += names.count
         }
@@ -1547,8 +1572,7 @@ public enum SecretImport {
     public static func droppedWarning(_ dropped: [(variable: String, server: String)]) -> String? {
         guard !dropped.isEmpty else { return nil }
         let places: [String] = dropped.prefix(3).map { item in
-            let long: Bool = item.server.prefix(61).count > 60
-            let server: String = long ? String(item.server.prefix(60)) + "…" : item.server
+            let server: String = shownServer(item.server)
             return "\(item.variable) in “\(server)”"
         }
         let more: Int = dropped.count - places.count

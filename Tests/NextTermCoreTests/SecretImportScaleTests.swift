@@ -281,22 +281,43 @@ import Testing
 }
 
 extension SecretImportScaleTests {
-    /// A server named with millions of characters: where its entry is ("mcpServers.…") is worked out once for the entry,
-    /// not again for each of its keys, and each key's id is what it was. Worked out for each key, a thousand keys under
-    /// such a name read it a thousand times, with no stop asked in between.
-    @Test func aLongServerNameIsReadOnceForItsEntry() throws {
+    /// A server named with millions of characters: the file is reported, as one that lists too many keys is, and none of
+    /// its keys is listed. Listed, the sheet would read the name again for each key's row, place and group, on the main
+    /// thread. A name of 1,000 characters is listed, its entry's place worked out once, each key's id what it was.
+    @Test func aNameTooLongToShowIsReported() throws {
         let home = F.Home()
         defer { home.remove() }
-        let name = String(repeating: "s", count: 6_000_000)
+        let long = String(repeating: "s", count: 6_000_000)
         let env = (0..<1_000).map { "\"K\($0)_TOKEN\": \"made-up-value-\($0)\"" }.joined(separator: ", ")
-        home.write("proj/.mcp.json", "{\"mcpServers\": {\"" + name + "\": {\"command\": \"x\", \"env\": {" + env + "}}}}\n")
-        let sources = F.sources(home, projects: [home.path + "/proj"])
-        var found = SecretImport.Scan()
-        let scanning = clock.measure { found = SecretImport.scan(sources) }
-        #expect(scanning < limit, "the scan took \(scanning)")
-        #expect(found.findings.count == 1_000 && found.unreadable.isEmpty)
-        let first = try #require(found.findings.first)
+        let crowded = home.write("proj/.mcp.json", "{\"mcpServers\": {\"" + long + "\": {\"command\": \"x\", \"env\": {" + env + "}}}}\n")
+        // A wrapped entry is listed too, and a project's path is part of a place.
+        let wrapped = "{\"command\": \"/usr/local/bin/nxtrm\", \"args\": [\"secret\", \"run\", \"A_TOKEN\", \"--\", \"x\"]}"
+        let cursor = home.write("proj/.cursor/mcp.json", "{\"mcpServers\": {\"" + String(long.prefix(1_001)) + "\": " + wrapped + "}}\n")
+        let project = "/" + String(repeating: "p", count: 1_001)
+        let claude = home.write(".claude.json", "{\"projects\": {\"" + project + "\": {\"mcpServers\": {\"a\": "
+            + "{\"command\": \"x\", \"env\": {\"API_TOKEN\": \"made-up-value-1\"}}}}}}\n")
+        let found = SecretImport.scan(F.sources(home, projects: [home.path + "/proj"]))
+        for path in [crowded, cursor, claude] {
+            #expect(found.unreadable.contains { $0.source.path == path && $0.reason == SecretImport.longNameReason }, "\(path)")
+        }
+        #expect(found.findings.isEmpty && found.wrapped.isEmpty)
+
+        // At the limit, listed; a long name with no key in it is never shown, so the file is read.
+        let named = String(long.prefix(1_000))
+        home.write("proj/.mcp.json", "{\"mcpServers\": {\"" + named + "\": {\"command\": \"x\", \"env\": {" + env + "}}}}\n")
+        home.write("proj/.cursor/mcp.json", "{\"mcpServers\": {\"" + long + "\": {\"command\": \"x\"}}}\n")
+        home.write(".claude.json", "{}\n")
+        let listed = SecretImport.scan(F.sources(home, projects: [home.path + "/proj"]))
+        #expect(listed.findings.count == 1_000 && listed.unreadable.isEmpty, "\(listed.unreadable)")
+        let first = try #require(listed.findings.first)
         let id: String = [first.source.path, first.location.description, "\(first.field)"].joined(separator: "\u{0}")
-        #expect(first.id == SecretRun.digest(Data(id.utf8)) && Set(found.findings.map(\.id)).count == 1_000)
+        #expect(first.id == SecretRun.digest(Data(id.utf8)) && Set(listed.findings.map(\.id)).count == 1_000)
+    }
+
+    /// A row's server name is cut at 60 characters, as the confirm's are.
+    @Test func aRowShowsAServerNameCut() {
+        let sixty = String(repeating: "n", count: 60)
+        #expect(SecretImport.shownServer(sixty) == sixty && SecretImport.shownServer("github") == "github")
+        #expect(SecretImport.shownServer(sixty + "xyz") == sixty + "…")
     }
 }

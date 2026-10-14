@@ -45,7 +45,8 @@ import Testing
     /// `mcp_servers = {…}`. With the name hashed again for each key under it, each of these took about 10 seconds in a
     /// debug build, four times as long for each doubling of the file, and nothing could stop it.
     ///
-    /// Each is read in time, and the token is listed under its own name and does not move.
+    /// Each is read in time, and the token is listed under its own name and does not move. A file naming a server that
+    /// long is reported instead (`longNameReason`): the sheet shows the name in each key's row.
     @Test func aLongDottedKeyWithManyKeysBesideItIsReadInTime() {
         let path = long(250_000)
         let value = beside(125_000)
@@ -75,6 +76,11 @@ import Testing
         for (name, text) in files {
             let (found, took) = scanned(text)
             #expect(took < limit, "\(name): the scan took \(took)")
+            if name.hasPrefix("a long name") {
+                let reasons: [String] = found.unreadable.map(\.reason)
+                #expect(reasons == [SecretImport.longNameReason] && found.findings.isEmpty && found.read.count == 1, "\(name)")
+                continue
+            }
             let finding = found.findings.first { $0.variable == "GITHUB_TOKEN" }
             #expect(finding?.value.utf8String() == F.github && finding?.movable == false, "\(name)")
             #expect(found.findings.count == 1 && found.read.count == 1 && found.unreadable.isEmpty, "\(name)")

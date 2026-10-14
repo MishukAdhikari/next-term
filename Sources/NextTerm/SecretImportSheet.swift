@@ -203,7 +203,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             rows.addArrangedSubview(Self.small(text, color: .secondaryLabelColor))
         }
         for (source, location) in found.wrapped {
-            let text = "\(source.client.name), \(Self.file(source.path)), “\(location.server)”: uses Next Term's Secrets"
+            let server: String = SecretImport.shownServer(location.server)
+            let text = "\(source.client.name), \(Self.file(source.path)), “\(server)”: uses Next Term's Secrets"
             listed.append(text)
             rows.addArrangedSubview(Self.small(text, color: .secondaryLabelColor))
         }
@@ -260,9 +261,10 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         groupRows.append(GroupRow(group: group, box: box, nameField: nameField, nameNote: nameNote, result: result))
     }
 
-    /// "Codex, ~/.codex/config.toml, “github”, GITHUB_TOKEN".
+    /// "Codex, ~/.codex/config.toml, “github”, GITHUB_TOKEN", the server's name cut at 60 characters.
     static func place(_ finding: SecretImport.Finding) -> String {
-        "\(finding.source.client.name), \(file(finding.source.path)), “\(finding.location.server)”, \(finding.variable)"
+        let server: String = SecretImport.shownServer(finding.location.server)
+        return "\(finding.source.client.name), \(file(finding.source.path)), “\(server)”, \(finding.variable)"
     }
 
     static func file(_ path: String) -> String { (path as NSString).abbreviatingWithTildeInPath }
