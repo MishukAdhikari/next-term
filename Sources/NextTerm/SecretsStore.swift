@@ -243,10 +243,13 @@ final class SecretsStore {
         // The code hash a wrapper must have is read now, at launch, from the program that is running, not at the first
         // request, when the file at its path may have been replaced.
         _ = PeerCode.current
+        // The date before the read: a file another copy writes in between is read again at the next check, never
+        // taken as seen.
+        let date = folder.modificationDate(of: SecretFolder.vaultName)
         guard folder.exists, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
               let index = try? SecretVault.index(from: data) else { return }
         self.index = index
-        indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+        indexDate = date
         publishMarks()
     }
 
@@ -265,26 +268,28 @@ final class SecretsStore {
     func load() async {
         let folder = folder
         let keyring = keyring
-        let found = await onQueue { () -> (SecretVault.Index?, Protection, Data, Bool) in
+        let found = await onQueue { () -> (SecretVault.Index?, Protection, Data, Bool, Date?) in
             let audit = folder.exists ? folder.readAudit() : Data()
-            guard folder.exists else { return (nil, .none, audit, false) }
+            guard folder.exists else { return (nil, .none, audit, false, nil) }
+            // The date before the read: a file another copy writes in between is read again at the next check.
+            let date = folder.modificationDate(of: SecretFolder.vaultName)
             let data: Data?
             do {
                 data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
             } catch {
-                return (nil, .tampered, audit, SecretVault.isTooLarge(error))
+                return (nil, .tampered, audit, SecretVault.isTooLarge(error), date)
             }
-            guard let data else { return (nil, .none, audit, false) }
-            guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit, false) }
+            guard let data else { return (nil, .none, audit, false, date) }
+            guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit, false, date) }
             let opens = keyring(index).check(publicKey: index.publicKey)
-            return (index, opens ? Self.protection(of: index) : .cantOpen, audit, false)
+            return (index, opens ? Self.protection(of: index) : .cantOpen, audit, false, date)
         }
         index = found.0
         protection = found.1
         isUnlisted = false
         isTooLarge = found.3
         lastUse = SecretAudit.lastUse(in: found.2)
-        indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+        indexDate = found.4
         publishMarks()
         if !SelfTest.isRequested { startObserving() }
         NotificationCenter.default.post(name: Self.changed, object: self)
@@ -329,19 +334,18 @@ final class SecretsStore {
             tooLarge = SecretVault.isTooLarge(error)
         }
         let earlier = index
-        let changedNames: [String]
-        if let data, let read = try? SecretVault.index(from: data) {
+        let read: SecretVault.Index? = data.flatMap { try? SecretVault.index(from: $0) }
+        if let read {
             index = read
             if protection == .none { protection = Self.protection(of: read) }
-            changedNames = earlier.map { read.changedNames(since: $0) } ?? []
         } else {
             protection = .tampered
             isUnlisted = false
             isTooLarge = tooLarge
-            changedNames = earlier?.names ?? []
         }
         publishMarks()
         NotificationCenter.default.post(name: Self.changed, object: self)
+        let changedNames = SecretVault.Index.changedNames(from: earlier, to: read)
         if !changedNames.isEmpty {
             NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": changedNames])
         }
@@ -401,27 +405,59 @@ final class SecretsStore {
         let keyring = keyring
         let newKeyring = newKeyring
         let record = record
+        #if DEBUG
+        let afterLock = afterLockForSelfTest
+        #endif
         let result = await onQueue { () -> Result<Work, Error> in
-            Result {
+            let result = Result {
                 try Self.work(action, facts: facts, folder: folder, keyring: keyring, newKeyring: newKeyring, record: record,
                               token: token)
             }
+            #if DEBUG
+            afterLock?()
+            #endif
+            return result
         }
         setWaitingForKeychain(false)
         switch result {
         case .success(let work):
-            if let changed = work.index { index = changed }
-            if protection == .none, let index { protection = Self.protection(of: index) }
-            indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+            let earlier = index
+            took(work)
             if action.event == .use, let line = work.line { for name in action.names { lastUse[name] = line } }
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
-            if let names = action.changedNames { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": names]) }
+            postKeysChanged(action.changedNames ?? [], since: earlier)
             return work.values
         case .failure(let error):
             reloadIfChanged() // new marks for a mask.key made again stay, even when the action failed
             throw handle(error, action: action, facts: facts)
         }
+    }
+
+    #if DEBUG
+    /// The self-test's: runs on the store's queue once a perform has let the vault's lock go, before the main actor
+    /// takes its result, where another copy's write may land.
+    var afterLockForSelfTest: (() -> Void)?
+    #endif
+
+    /// The index a change left under the vault's lock, with vault.json's date taken there too: a write by another copy
+    /// after the lock was let go has another date, so the next check reads it.
+    private func took(_ work: Work) {
+        if let changed = work.index {
+            index = changed
+            indexDate = work.date
+        }
+        if protection == .none, let index { protection = Self.protection(of: index) }
+    }
+
+    /// `keysChanged` for `names` (what this change replaced, renamed or deleted) and for the keys another copy changed
+    /// since this copy had `earlier` (while Touch ID was asked, before this change took the lock), so the grants
+    /// holding any of them end.
+    private func postKeysChanged(_ names: [String], since earlier: SecretVault.Index?) {
+        var all = names
+        for name in SecretVault.Index.changedNames(from: earlier, to: index) where !all.contains(name) { all.append(name) }
+        guard !all.isEmpty else { return }
+        NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": all])
     }
 
     /// What a failed perform says, and what it leaves: a tampered or unlisted vault is noted, with a `tamper` line, and a
@@ -461,6 +497,8 @@ final class SecretsStore {
     /// What a perform did, off the main thread.
     struct Work {
         var index: SecretVault.Index?
+        /// vault.json's modification date, taken under the lock after the change.
+        var date: Date?
         var values: [String: SecretBytes] = [:]
         var line: SecretAudit.Line?
     }
@@ -568,6 +606,7 @@ final class SecretsStore {
                 }
                 return data
             }
+            work.date = folder.modificationDate(of: SecretFolder.vaultName)
         }
         work.index = vault?.index
         return work
@@ -678,12 +717,12 @@ final class SecretsStore {
         setWaitingForKeychain(false)
         switch result {
         case .success(let work):
-            if let changed = work.index { index = changed }
-            if protection == .none, let index { protection = Self.protection(of: index) }
-            indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+            let earlier = index
+            took(work)
             try? folder.appendAudit(SecretAudit.encode(line(), masking: { SecretMask.current.mask($0) }))
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
+            postKeysChanged([], since: earlier)
         case .failure(let error):
             reloadIfChanged()
             throw handle(error, action: .use(names: names), facts: Facts())

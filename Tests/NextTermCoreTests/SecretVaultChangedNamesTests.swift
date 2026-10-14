@@ -51,6 +51,19 @@ import Testing
         #expect(added == [])
     }
 
+    /// From the index this copy had to the one it holds now, after a reload or after its own change under the lock
+    /// (which may follow another copy's change made while Touch ID was asked): what the other copy deleted is among
+    /// them; every key when vault.json can't be read any more; none when this copy had no index.
+    @Test func fromTheIndexThisCopyHadToTheOneItHoldsNow() throws {
+        let (earlier, other) = try Self.twoCopies()
+        _ = try other.delete("OTHER_TOKEN")
+        let now = try SecretVault.index(from: other.edit("SERVICE_TOKEN", purpose: "Another service"))
+        #expect(SecretVault.Index.changedNames(from: earlier, to: now) == ["OTHER_TOKEN"])
+        #expect(SecretVault.Index.changedNames(from: earlier, to: nil) == ["SERVICE_TOKEN", "OTHER_TOKEN"])
+        #expect(SecretVault.Index.changedNames(from: nil, to: now) == [])
+        #expect(SecretVault.Index.changedNames(from: nil, to: nil) == [])
+    }
+
     /// Another vault at the same place (Start Over and an add, in another copy): every key of the old one changed.
     @Test func anotherVaultChangesEveryKey() throws {
         let (earlier, _) = try Self.twoCopies()

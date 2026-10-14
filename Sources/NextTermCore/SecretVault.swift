@@ -401,6 +401,15 @@ public final class SecretVault {
                 return nil
             }
         }
+
+        /// `changedNames(since:)` from the index this copy had (`earlier`) to the one it holds now: after a reload, or
+        /// after its own change under the vault's lock, which may follow another copy's change made while Touch ID was
+        /// asked. Every key of `earlier` when there is no index now (vault.json can't be read); none without `earlier`.
+        public static func changedNames(from earlier: Index?, to now: Index?) -> [String] {
+            guard let earlier else { return [] }
+            guard let now else { return earlier.names }
+            return now.changedNames(since: earlier)
+        }
     }
 
     /// vault.json's outer object.

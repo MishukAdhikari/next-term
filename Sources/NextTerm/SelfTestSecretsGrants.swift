@@ -35,6 +35,7 @@ extension SelfTest {
               secretsJSON(toolAnswer))
         await secretsLeftCallerChecks()
         await secretsGrantEndChecks(store)
+        await secretsOtherCopyGrantChecks()
         _ = try? await store.perform(.delete(name: "PANEL_KEY"))
     }
 
