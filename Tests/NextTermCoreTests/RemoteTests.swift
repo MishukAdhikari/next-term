@@ -383,9 +383,18 @@ import Testing
         old.tmux = "tmux next-3.5"
         #expect(old.tmuxUsable)
 
-        let listed = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nsession\tnt-x-1\t0\t/srv\tzsh\n\(RemoteShell.herdrMarker)\n{\"agents\":[]}\n"))
+        let section = "\(RemoteShell.herdrMarker)\nwhere\t/usr/local/bin/herdr\tpath\nexit\t0\tagent\nout\t{\"agents\":[]}\n\(RemoteShell.herdrEndMarker)\n"
+        let listed = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nsession\tnt-x-1\t0\t/srv\tzsh\n" + section))
         #expect(listed.sessions.map(\.name) == ["nt-x-1"])
-        #expect(listed.herdr == [])
+        #expect(listed.herdr?.listing == .agents([]))
+
+        // herdr where a tab finds it: version, path, and how; or where the check looked.
+        let found = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nherdr\therdr 0.9.4\t/home/me/.local/share/mise/installs/herdr/0.9.4/herdr\tlogin\n"))
+        #expect(found.herdrSummary == "herdr 0.9.4 at /home/me/.local/share/mise/installs/herdr/0.9.4/herdr (found on your login shell’s PATH)")
+        let missing = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nherdr-missing\t/x/herdr did not run (herdr --version said: no)\n"))
+        #expect(missing.herdr == nil && missing.herdrMissing && missing.herdrBroken == "/x/herdr did not run (herdr --version said: no)")
+        #expect(missing.herdrSummary?.hasPrefix("/x/herdr did not run (herdr --version said: no); herdr not found: looked on your login shell’s PATH") == true)
+        #expect(probe.herdrSummary == "herdr 0.9.3")
     }
 
     @Test func changesSplitIntoStatusStatAndDiff() throws {
