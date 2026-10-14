@@ -6,7 +6,9 @@ import NextTermCore
 ///
 /// - **Copy** prepares the pasteboard for this Mac only (`.currentHostOnly`), then writes the value and the concealed
 ///   and transient markers in one item, in one write, so clipboard managers and Universal Clipboard are asked to leave
-///   it and none sees the value without them. After 60 seconds, when nothing else was copied since, Next Term clears it.
+///   it and none sees the value without them. After 60 seconds, when nothing else was copied since, Next Term clears it,
+///   by the wall clock, so a clear that comes due while the Mac sleeps runs on wake. Quitting (an update's restart too), or
+///   the Mac locking or going to sleep, clears it sooner, when it is still there.
 /// - **A paste into a value field** records the pasteboard's change count. On Save the pasteboard is cleared only when
 ///   that count is unchanged. Next Term never reads the pasteboard, so macOS's paste alert never shows.
 @MainActor
@@ -22,8 +24,12 @@ final class SecretClipboard {
     let pasteboard: NSPasteboard
     /// How long a copied key stays (the self-test shortens it).
     var clearAfter: TimeInterval = 60
+    /// The copy whose clear is due, by the change count Copy left.
+    private var pending = SecretCopyClear()
     /// The change count Copy left, while its clear is due.
-    private(set) var copiedCount: Int?
+    var copiedCount: Int? { pending.copiedCount }
+    /// The quit's and the lock's observers, added at the first Copy.
+    private var observers: [NSObjectProtocol] = []
     /// The last Copy asked for this Mac only (`.currentHostOnly`), for the self-test: macOS gives no way to read it back.
     private(set) var preparedForThisMacOnly = false
     #if DEBUG
@@ -48,11 +54,25 @@ final class SecretClipboard {
         preparedForThisMacOnly = true
         let wrote = write([Self.markedItem(text)])
         let count = pasteboard.changeCount
-        copiedCount = count
-        DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) { [weak self] in
+        pending.copied(count)
+        startObserving()
+        DispatchQueue.main.asyncAfter(wallDeadline: .now() + clearAfter) { [weak self] in
             MainActor.assumeIsolated { self?.clearCopy(ifStill: count) }
         }
         return wrote
+    }
+
+    /// Clears a copied key at quit, and when the Mac locks or goes to sleep (Secrets' `locked`). The quit's observer runs
+    /// on the posting thread, the main one, since the app exits right after it.
+    private func startObserving() {
+        guard observers.isEmpty else { return }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clearPendingCopy() }
+        })
+        observers.append(center.addObserver(forName: SecretsStore.locked, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clearPendingCopy() }
+        })
     }
 
     /// Copy's one write. A debug build reads back what the pasteboard holds just before and just after it, for the
@@ -79,9 +99,13 @@ final class SecretClipboard {
 
     /// The copy's clear: only when the pasteboard still holds what Copy put there.
     func clearCopy(ifStill count: Int) {
-        guard copiedCount == count else { return }
-        copiedCount = nil
-        if pasteboard.changeCount == count { pasteboard.clearContents() }
+        if pending.due(count, current: pasteboard.changeCount) { pasteboard.clearContents() }
+    }
+
+    /// Before its 60 seconds are up: clears a copied key still on the pasteboard, and its timer then does nothing.
+    /// Something copied since is kept.
+    func clearPendingCopy() {
+        if pending.now(current: pasteboard.changeCount) { pasteboard.clearContents() }
     }
 
     /// A paste into a value field: the change count to compare on Save. The pasteboard's contents are not read.

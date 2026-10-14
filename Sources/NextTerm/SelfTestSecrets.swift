@@ -1623,6 +1623,18 @@ extension SelfTest {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         check(clipboard.pasteboard.string(forType: .string) == "something else" && NSPasteboard.general.changeCount == general,
               "secrets: what was copied since is kept, and the general pasteboard was never touched")
+        // The quit's (and a lock's) clear, within the window: the copy still there goes, something copied over it stays.
+        clipboard.clearAfter = 60
+        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-quit-0123"))
+        clipboard.clearPendingCopy()
+        let clearedAtQuit: Bool = clipboard.pasteboard.string(forType: .string) == nil && clipboard.copiedCount == nil
+        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-quit-4567"))
+        clipboard.pasteboard.clearContents()
+        clipboard.pasteboard.setString("something else", forType: .string)
+        clipboard.clearPendingCopy()
+        let keptAtQuit: Bool = clipboard.pasteboard.string(forType: .string) == "something else" && clipboard.copiedCount == nil
+        check(clearedAtQuit && keptAtQuit, "secrets: quitting within the 60 seconds clears a copied key still on the clipboard, and keeps "
+              + "what was copied over it")
 
         // Reveal shows the value in a field that can't be selected: only Copy puts a value on a pasteboard.
         view.select("SHOWN_KEY")
