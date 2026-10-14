@@ -353,9 +353,15 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let moves = self.moves
         let files = Array(Set(moves.flatMap { $0.findings.map(\.source.path) })).sorted()
         let count = moves.count
+        // A value not ticked that a wrapped entry drops, since the wrapper would take it out at start: named before the write.
+        let stored: [String] = SecretsStore.shared.index?.names ?? []
+        let dropped = SecretImport.droppedFindings(moves, among: scan?.findings ?? [], stored: stored)
+        let droppedPlaces: [(variable: String, server: String)] = dropped.map { ($0.variable, $0.location.server) }
+        var listed: String = files.map { "• " + Self.file($0) }.joined(separator: "\n")
+        if let warning = SecretImport.droppedWarning(droppedPlaces) { listed += "\n\n" + warning }
         let alert = NSAlert()
         alert.messageText = "Move \(count) \(count == 1 ? "key" : "keys") into Secrets?"
-        alert.informativeText = files.map { "• " + Self.file($0) }.joined(separator: "\n") + "\n\n" + Self.keepsCopies + "\n\n" + Self.startsAfter
+        alert.informativeText = listed + "\n\n" + Self.keepsCopies + "\n\n" + Self.startsAfter
         alert.addButton(withTitle: "Move Keys")
         alert.addButton(withTitle: "Cancel")
         confirmAlert = alert

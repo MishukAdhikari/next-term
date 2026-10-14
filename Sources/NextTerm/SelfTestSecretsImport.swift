@@ -78,6 +78,9 @@ extension SelfTest {
               "\(status) | \(unchecked.listed)")
         unchecked.closeSheet()
         _ = await wait(5) { view.importSheet == nil }
+
+        // A variable named like a key in Secrets leaves the entry it wraps, named before and after the write (finding #18).
+        await secretsImportDroppedChecks(view: view, home: home)
     }
 }
 #endif

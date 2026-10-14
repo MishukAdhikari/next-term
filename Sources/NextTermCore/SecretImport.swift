@@ -1437,6 +1437,56 @@ public enum SecretImport {
         return opening + places.joined(separator: "; ") + ". " + undo
     }
 
+    /// Before the plan, for the confirm: the values the scan found (`findings`) that a wrapped entry would drop although no
+    /// move takes them (rows not ticked), in the scan's order. Each is in an entry a move wraps, under a variable that
+    /// entry doesn't ask for, named like a key the wrapper takes out at start: the vault's (`stored`) or a move's. After the
+    /// write, such a value is only in the entry's backup. A file that then fails to plan keeps what it holds.
+    public static func droppedFindings(_ moves: [Move], among findings: [Finding], stored: [String]) -> [Finding] {
+        func entry(_ finding: Finding) -> String { finding.source.path + "\u{0}" + finding.location.description }
+        var asked: [String: Set<String>] = [:]
+        var moved: Set<String> = []
+        for move in moves {
+            for finding in move.findings where finding.movable {
+                asked[entry(finding), default: []].insert(finding.variable)
+                moved.insert(finding.id)
+            }
+        }
+        let movedNames: [String] = moves.filter { $0.findings.contains(where: \.movable) }.map(\.name)
+        let taken: Set<String> = Set(stored).union(movedNames)
+        return findings.filter { finding in
+            guard case .env(let name) = finding.field, !moved.contains(finding.id), let wanted = asked[entry(finding)] else { return false }
+            return taken.contains(name) && !wanted.contains(name)
+        }
+    }
+
+    /// The confirm's paragraph for `droppedFindings` (a variable and its server's name, cut at 60 characters): where each
+    /// is, that its server would never get it, that its value is then only in the backup, and how to keep it. Three are
+    /// named, the rest counted. Nil when there are none.
+    public static func droppedWarning(_ dropped: [(variable: String, server: String)]) -> String? {
+        guard !dropped.isEmpty else { return nil }
+        let places: [String] = dropped.prefix(3).map { item in
+            let long: Bool = item.server.prefix(61).count > 60
+            let server: String = long ? String(item.server.prefix(60)) + "…" : item.server
+            return "\(item.variable) in “\(server)”"
+        }
+        let more: Int = dropped.count - places.count
+        let listed: String
+        if more > 0 {
+            listed = places.joined(separator: ", ") + " and \(more) more"
+        } else if places.count == 1 {
+            listed = places[0]
+        } else {
+            listed = places.dropLast().joined(separator: ", ") + " and " + places[places.count - 1]
+        }
+        let days = Int(keptFor / (24 * 3600))
+        let one: Bool = dropped.count == 1
+        let reach: String = one ? "so the server would never get it, and after this its value is only in the backup"
+            : "so the servers would never get them, and after this their values are only in the backups"
+        let keep: String = one ? "To keep it in Secrets, tick its row too." : "To keep them in Secrets, tick their rows too."
+        return "Not ticked, but taken out too: \(listed). nxtrm secret run removes the name of every key in Secrets that a server "
+            + "doesn’t ask for, \(reach) Next Term keeps for \(days) days. \(keep)"
+    }
+
     /// What an Undo's "Also delete these keys" deletes: only keys the undone moves stored themselves, and none that
     /// entries it doesn't put back still name (another import's in the list, or one of its own left wrapped). A key a
     /// move used because an earlier move had stored it stays, since other entries may use it, even once that earlier
