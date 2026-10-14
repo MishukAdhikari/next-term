@@ -81,9 +81,58 @@ import Testing
             _ = try vault.edit("SMALL", purpose: "A purpose that makes the file longer")
         }
         _ = try vault.remark(maskKey: SymmetricKey(size: .bits256))
+        let recovery = SecretVault.randomBytes(SecretVault.recoveryKeyLength)
+        let recovered = try vault.addRecovery(key: recovery)
+        #expect(recovered.count > vault.writeCap)
+        let newKeyring = SoftwareKeyring(kind: .secureEnclave)
+        _ = try vault.rewrap(under: newKeyring)
         _ = try vault.makeWriteOnly("SMALL")
         let file = try vault.delete("BIG_0")
         #expect(try SecretVault.index(from: file).entry(named: "BIG_0") == nil)
-        #expect(try SecretVault.unlock(file, keyring: keyring, context: nil).value(of: "SMALL") == Self.small)
+        #expect(try SecretVault.unlock(file, keyring: newKeyring, context: nil).value(of: "SMALL") == Self.small)
+        #expect(try SecretVault.unlock(file, recovery: recovery).index.names == vault.index.names)
+    }
+
+    /// A vault.json past the read cap is too large, not changed outside Next Term: Settings and every action say so,
+    /// and Start Over or an older copy is the way out. A file that doesn't decode is not too large.
+    @Test func aFilePastTheReadCapIsTooLargeNotTampered() throws {
+        let base = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+            .appendingPathComponent("nt-secrets-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = SecretFolder(applicationSupport: base)
+        try folder.ensure()
+        try folder.write(SecretFolder.vaultName, data: Data(repeating: UInt8(ascii: "x"), count: 64))
+        func failure(_ body: () throws -> Void) -> Error? {
+            do { try body() } catch { return error }
+            return nil
+        }
+        let read = failure { _ = try folder.read(SecretFolder.vaultName, cap: 32) }
+        let decoded = failure { _ = try SecretVault.index(from: Data(count: SecretVault.maxFileSize + 1)) }
+        let garbled = failure { _ = try SecretVault.index(from: Data("{}".utf8)) }
+        #expect(read.map(SecretVault.isTooLarge) == true)
+        #expect(decoded.map(SecretVault.isTooLarge) == true)
+        #expect(garbled.map(SecretVault.isTooLarge) == false)
+        #expect(!SecretVault.isTooLarge(SecretFolder.Failure.notPrivate))
+        #expect(!SecretVault.isTooLarge(SecretVault.Failure.tampered))
+    }
+
+    /// A vault already past the cap (written before there was one, or grown by upkeep) still takes a change that
+    /// doesn't make its file larger: a leaked key replaced in place with a value of the same length, or a shorter one.
+    /// A change that makes it larger is still refused.
+    @Test func aChangeThatDoesNotGrowAFullVaultIsSaved() throws {
+        let keyring = SoftwareKeyring()
+        let (vault, _) = try Self.filled(keyring)
+        vault.writeCap = vault.file.count / 2
+        let rotated = SecretBytes(utf8: "made-up-value-9876543210")
+        let before = vault.file.count
+        let file = try vault.replace("SMALL", value: rotated, writeOnly: false)
+        #expect(file.count == before)
+        #expect(try SecretVault.unlock(file, keyring: keyring, context: nil).value(of: "SMALL") == rotated)
+        let shorter = SecretBytes(utf8: "made-up-value-0")
+        let smaller = try vault.replace("SMALL", value: shorter, writeOnly: false)
+        #expect(smaller.count < before)
+        #expect(throws: SecretVault.Failure.full) { _ = try vault.replace("SMALL", value: rotated, writeOnly: false) }
+        #expect(try vault.value(of: "SMALL") == shorter && vault.file == smaller)
     }
 }

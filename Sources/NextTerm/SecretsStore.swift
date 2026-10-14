@@ -272,7 +272,7 @@ final class SecretsStore {
             do {
                 data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
             } catch {
-                return (nil, .tampered, audit, Self.isTooLarge(error))
+                return (nil, .tampered, audit, SecretVault.isTooLarge(error))
             }
             guard let data else { return (nil, .none, audit, false) }
             guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit, false) }
@@ -288,11 +288,6 @@ final class SecretsStore {
         publishMarks()
         if !SelfTest.isRequested { startObserving() }
         NotificationCenter.default.post(name: Self.changed, object: self)
-    }
-
-    /// A read refused for its size: vault.json past the read cap.
-    nonisolated static func isTooLarge(_ error: Error) -> Bool {
-        (error as? SecretFolder.Failure) == .tooLarge || (error as? SecretVault.Failure) == .tooLarge
     }
 
     /// What an action on a vault refused at load or since throws.
@@ -331,7 +326,7 @@ final class SecretsStore {
         do {
             data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
         } catch {
-            tooLarge = Self.isTooLarge(error)
+            tooLarge = SecretVault.isTooLarge(error)
         }
         let earlier = index
         let changedNames: [String]

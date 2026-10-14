@@ -245,10 +245,10 @@ public final class SecretVault {
     public static let maxPurposeLength = 200
     /// The read cap: a vault.json past it is refused unread.
     public static let maxFileSize = 8 * 1024 * 1024
-    /// The write cap: a change whose vault.json would be larger is refused (`full`), so a file Next Term writes always
-    /// reads back. The 1 MB between it and the read cap is for upkeep, which may use it: new marks after `mask.key` was
-    /// made again, the second wrap, a new keyring, a key made write-only, a key deleted. So a full vault can still be
-    /// opened, marked, rescued and emptied.
+    /// The write cap: a change that makes vault.json larger than this is refused (`full`), so a file Next Term writes
+    /// always reads back. One that doesn't make it larger is saved, past the cap too. The 1 MB between it and the read
+    /// cap is for upkeep, which may use it: new marks after `mask.key` was made again, the second wrap, a new keyring, a
+    /// key made write-only, a key deleted. So a full vault can still be opened, marked, rescued and emptied.
     public static let maxWriteSize = 7 * 1024 * 1024
     /// The length of `mask.key`.
     public static let maskKeyLength = 32
@@ -292,7 +292,7 @@ public final class SecretVault {
         case badValue(String)
         case badPurpose
         case writeOnly(String)
-        /// The change would make vault.json larger than `maxWriteSize`, so nothing was saved.
+        /// The change would make vault.json larger, and larger than `maxWriteSize`, so nothing was saved.
         case full
 
         public var errorDescription: String? {
@@ -411,6 +411,12 @@ public final class SecretVault {
     }
 
     public private(set) var index: Index
+    /// Whether `error` is a read refused for its size: vault.json past the read cap. Settings says the file is too
+    /// large, not that it changed.
+    public static func isTooLarge(_ error: Error) -> Bool {
+        (error as? SecretFolder.Failure) == .tooLarge || (error as? Failure) == .tooLarge
+    }
+
     /// vault.json's bytes as they are now: what was read, or what the last change made.
     public private(set) var file: Data
     private var vaultKey: SymmetricKey?
@@ -685,13 +691,16 @@ public final class SecretVault {
     }
 
     /// The index changed by `change`, then the new file's bytes, for the caller to write. When anything fails, a file
-    /// past `cap` (`writeCap` unless given) included, the index and the file are left as they were.
+    /// that grows past `cap` (`writeCap` unless given) included, the index and the file are left as they were. A file
+    /// past the cap already (written before there was one, or grown by upkeep) still takes a change that doesn't make
+    /// it larger, such as a leaked key replaced in place.
     private func written(_ key: SymmetricKey, cap: Int? = nil, _ change: () throws -> Void) throws -> Data {
         let before = index
         do {
             try change()
             let new = try Self.encodeFile(index, key: key)
-            guard new.count <= cap ?? writeCap else { throw Failure.full }
+            let fits: Bool = new.count <= cap ?? writeCap
+            guard fits || new.count <= file.count else { throw Failure.full }
             file = new
             return new
         } catch {
