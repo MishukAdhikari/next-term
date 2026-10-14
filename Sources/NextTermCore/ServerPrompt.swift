@@ -19,7 +19,8 @@ public struct ServerPrompt: Equatable, Sendable {
     public var inMode: Bool
     /// The terminal shows its alternate screen.
     public var alternateScreen: Bool
-    /// Status reports since the last Return, ^C or ^D (and since the connection came back).
+    /// Status reports since the last Return, ^C or ^D (and since the connection came back, or the mouse wheel went to
+    /// Next Term's tmux).
     public var reportsSinceReturn: Int
 
     public init(keep: KeepMode, fellBack: Bool = false, connected: Bool, shellReported: Bool, running: Bool = false,

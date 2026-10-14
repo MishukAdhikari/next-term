@@ -199,7 +199,8 @@ final class CompletionSession {
         let scan = InputScan.scan(data, inPaste: &inPaste)
         lastInputAt = TerminalTab.now
         queue.typed()
-        if scan.disarms { reportsSinceReturn = 0 }
+        // A wheel report to Next Term's tmux may put its pane in copy mode, which the status checks see only later.
+        if scan.disarms || (inTmux && InputScan.isWheelReport(data)) { reportsSinceReturn = 0 }
         state.input(scan)
         if open, !isListOpen {
             listClosed()

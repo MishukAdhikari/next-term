@@ -577,6 +577,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             disconnected = false
             remoteConnected = false
             remoteReady = false
+            // The tab script tries tmux or herdr again: whether this connection fell back, or its pane is in copy mode,
+            // is for its own reports to say (a .plain file comes back if the tool is still missing).
+            fellBack = false
+            paneInMode = false
             loginPrompt = false
             connectionToken = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased()
             view.interceptInput = nil

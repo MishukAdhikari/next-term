@@ -35,6 +35,8 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     private var commandsAtStart = 0
     /// The answer waits for the server's status reports to be fresh before it goes on the line (putWhenReady).
     private var waitsForReports = false
+    /// A held answer is looked at again while the server's reports are stale (recheck): one tick at a time.
+    private var rechecking = false
 
     enum Stage {
         case asking
@@ -154,7 +156,9 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         }
         let list = parts.dropLast().joined(separator: ", ") + " and " + (parts.last ?? "")
         let local = choice == CompletionPreferences.onDevice ? " It stays on this Mac." : " It runs with no tools, in an empty folder."
-        return "Sent to \(who) with your words: \(list).\(local) The command goes on the line; nothing runs."
+        // A tab that shows herdr takes nothing on its line from here (whyNot): its answer is copied into a pane.
+        let lands = tab?.serverPrompt?.showsHerdr == true ? "The command is shown here to copy" : "The command goes on the line"
+        return "Sent to \(who) with your words: \(list).\(local) \(lands); nothing runs."
     }
 
     var contextShown: String { context.stringValue }
@@ -238,6 +242,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
             if !made.hasHidden, made.notes.isEmpty { return putWhenReady(made, until: TerminalTab.now + 10) }
             refresh()
             CompletionPopup.announce("Suggested: \(made.shown)")
+            recheck(made)
         }
     }
 
@@ -260,6 +265,22 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         if unchanged, Self.canPut(made, on: tab), put(force: false) { return }
         refresh()
         CompletionPopup.announce("Suggested: \(made.shown)")
+        recheck(made)
+    }
+
+    /// A held answer whose server reports are still stale: Put on Line shows once they come. Nothing else refreshes
+    /// the panel, so it looks again on the same tick as putWhenReady; a shell no longer in front gets its own note.
+    private func recheck(_ made: CommandSuggestion.Suggestion) {
+        guard !rechecking, let tab, suggestion == made, stage == .answered, Self.current === self,
+              tab.serverPrompt?.awaitsReports == true else { return }
+        rechecking = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.rechecking = false
+            guard let tab = self.tab, self.suggestion == made, self.stage == .answered else { return }
+            if tab.serverPrompt?.awaitsReports == true { return self.recheck(made) }
+            self.refresh()
+        }
     }
 
     /// The tab is as it was when the request went out: no key or text sent to it, no command started.
@@ -274,6 +295,8 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         guard let tab, let made = suggestion, Self.canPut(made, on: tab) else {
             NSSound.beep()
             refresh()
+            // Refused for stale reports (a wheel scroll in tmux): the panel says what the next one finds.
+            if let made = suggestion { recheck(made) }
             return false
         }
         guard force || unchanged else { return false }
