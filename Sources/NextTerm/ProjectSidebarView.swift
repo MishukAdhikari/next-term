@@ -105,6 +105,21 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     let header = SidebarHeaderView()
     /// "Files on this Mac", while the active tab runs on a server.
     let remoteNote = RemoteFilesNote()
+    /// "No project open", in place of the files, while a window with no project has its tab in none (`showNoProject`).
+    let noProject = NoProjectView()
+    /// Open as Project Window, while a window with no project shows the project its tab is in (`offerProjectWindow`).
+    let projectOffer = ProjectOfferNote()
+    /// "No project open"'s Browse Home Folder was clicked: the window shows the home folder's tree (`setRoot(browsing:)`).
+    var onBrowseHome: (() -> Void)?
+    /// The tree shows a folder that is no project (the home folder, after Browse Home Folder): its files only, each folder
+    /// read as the user opens it, with no git, Databases, Services or Agent Sessions, so nothing reads the protected
+    /// places in it until the user opens one.
+    private(set) var browsingOnly = false
+    /// The line in each folder macOS refused, by folder.
+    private var deniedEntries: [ObjectIdentifier: DeniedFolderEntry] = [:]
+    /// Links into a protected place whose look macOS refused (`settleKind`): they go on as their names suggest until the
+    /// window comes to the front again (`retryDenied`), the place perhaps allowed since.
+    private let kindRefused = NSHashTable<FileNode>.weakObjects()
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?
@@ -208,7 +223,20 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         addSubview(header)
         remoteNote.isHidden = true
         addSubview(remoteNote)
+        projectOffer.isHidden = true
+        projectOffer.onOpen = { [weak self] folder in
+            guard let self else { return }
+            self.delegate?.sidebar(self, openProject: folder)
+        }
+        addSubview(projectOffer)
         addSubview(scrollView)
+        noProject.isHidden = true
+        noProject.onOpen = { [weak self] folder in
+            guard let self else { return }
+            self.delegate?.sidebar(self, openProject: folder)
+        }
+        noProject.onBrowseHome = { [weak self] in self?.onBrowseHome?() }
+        addSubview(noProject)
         // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -247,10 +275,23 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         super.layout()
         header.inset = headerInset
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: TabBarView.height)
-        let top = TabBarView.height + (remoteNote.isHidden ? 0 : RemoteFilesNote.height)
-        remoteNote.frame = NSRect(x: 0, y: TabBarView.height, width: bounds.width, height: RemoteFilesNote.height)
+        var top = TabBarView.height
+        remoteNote.frame = NSRect(x: 0, y: top, width: bounds.width, height: RemoteFilesNote.height)
+        if !remoteNote.isHidden { top += RemoteFilesNote.height }
+        projectOffer.frame = NSRect(x: 0, y: top, width: bounds.width, height: ProjectOfferNote.height)
+        if !projectOffer.isHidden { top += ProjectOfferNote.height }
         scrollView.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
+        noProject.frame = scrollView.frame
         updateToolTips()
+    }
+
+    /// Open as Project Window under the header, for `folder`; nil takes it away. A window with no project offers it for
+    /// the project its tab is in.
+    func offerProjectWindow(_ folder: String?) {
+        if let folder { projectOffer.show(folder) }
+        guard projectOffer.isHidden != (folder == nil) else { return }
+        projectOffer.isHidden = folder == nil
+        needsLayout = true
     }
 
     /// The active tab's server, if it runs on one: the tree then says its files are this Mac's.
@@ -277,16 +318,54 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return cell.tip(at: cell.convert(point, from: outline))
         }
         if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionRowCellView { return cell.tipText }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DeniedFolderCellView { return cell.tipText }
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
         return cell.tipText
     }
 
     // MARK: root
 
-    /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background.
-    func setRoot(_ path: String) {
+    /// Whether it shows "No project open" in place of the files.
+    var showsNoProject: Bool { !noProject.isHidden }
+
+    /// "No project open" in place of the files, with `recent` (Recent Projects) to open: the tree is put away, and
+    /// nothing is listed, watched or scanned until `setRoot` shows a project again (the tree it showed comes back as it
+    /// was). A window with no project shows it while its tab is in no project (ProjectRoot.project).
+    func showNoProject(recent: [String]) {
+        noProject.show(recent: recent)
+        offerProjectWindow(nil)
+        guard !closed, root != nil || noProject.isHidden else { return }
+        if isRenaming { window?.makeFirstResponder(outline) }
+        runHeld()
+        saveCurrentTree()
+        rowCache.removeAll()
+        servicesGroup.clear()
+        root = nil
+        browsingOnly = false
+        outline.reloadData()
+        watcher = nil
+        gitDirWatcher = nil
+        gitEvents = nil
+        git.stop()
+        gitChanged(nil)
+        databaseScanToken += 1 // a scan still reading is dropped
+        databaseScans.cancel()
+        showDatabases(DatabaseScan())
+        sessionsGroup.token += 1
+        showSessions([], tabs: SessionTabs())
+        scrollView.isHidden = true
+        noProject.isHidden = false
+        updateToolTips()
+    }
+
+    /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background. `browsing`: a folder
+    /// that is no project (`browsingOnly`), its files and nothing more.
+    func setRoot(_ path: String, browsing: Bool = false) {
         let canonical = canonicalPath(path)
+        noProject.isHidden = true
+        scrollView.isHidden = false
         guard canonical != root?.path, !closed else { return }
+        browsingOnly = browsing
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
@@ -313,7 +392,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         watcher = DirectoryWatcher(path: canonical) { [weak self] paths in self?.filesChanged(paths) }
         gitDirWatcher = nil
         gitEvents = nil
-        git.watch(canonical)
+        if browsing {
+            git.stop()
+            gitChanged(nil)
+        } else {
+            git.watch(canonical)
+        }
         showDatabases(DatabaseScan())
         databaseScans.cancel() // the old folder's
         scanDatabases()
@@ -326,7 +410,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Reads the project's files for databases and services, off the main thread: one read for both groups, shown
     /// together, each redrawn only if what it shows changed (ProjectScan).
     func scanDatabases() {
-        guard let root else { return }
+        guard let root, !browsingOnly else { return }
         let path = root.path
         databaseScanToken += 1
         let token = databaseScanToken
@@ -404,7 +488,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// scan again when the gate says. Dependency, build and deep folders, and hidden ones other than those the
     /// readers look in (.vercel, .ddev, supabase/.temp), set off nothing (Databases.scanMayChange).
     private func scheduleDatabaseScan(for paths: [String]) {
-        guard let root, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
+        guard let root, !browsingOnly, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
         databaseScans.changed()
     }
 
@@ -457,7 +541,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     /// Reads the folder's agent sessions, and the tabs any are open in, off the main thread.
     func loadSessions() {
-        guard let root else { return }
+        guard let root, !browsingOnly else { return }
         let path = root.path
         sessionsGroup.token += 1
         let token = sessionsGroup.token
@@ -602,7 +686,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         loading.insert(id)
         let url = node.url, hiding = fileHiding
         DispatchQueue.global(qos: .userInitiated).async {
-            let listing = FileNode.readChildren(of: url, hiding: hiding)
+            let listing = FileNode.read(url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 self?.whenNotRenaming("load \(id)") { [weak self] in
                     guard let self else { return }
@@ -639,7 +723,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         reading.insert(id)
         let url = node.url, hiding = fileHiding, renamesAtRead = renames
         DispatchQueue.global(qos: .utility).async {
-            let listing = FileNode.readChildren(of: url, hiding: hiding)
+            let listing = FileNode.read(url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.reading.remove(id)
@@ -650,7 +734,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 if self.isRenaming { return self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in self?.refresh(node) } }
                 if self.renames != renamesAtRead { return self.refresh(node) } // read before a name given since
                 self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
-                    guard let self, node.install(listing) else { return }
+                    guard let self else { return }
+                    let wasDenied: Bool = node.accessDenied
+                    guard node.install(listing) else { return }
+                    if wasDenied, !node.accessDenied, self.isShowing(node), !self.browsingOnly {
+                        // Allowed in System Settings since: git and the Databases scan were refused with it.
+                        self.git.refresh()
+                        self.scanDatabases()
+                    }
                     self.syncHiddenRow(for: node)
                     self.rowCache[ObjectIdentifier(node)] = nil
                     if self.isShowing(node) { self.outline.reloadItem(node, reloadChildren: true) }
@@ -662,6 +753,24 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private func refreshLoadedFolders(of node: FileNode) {
         refresh(node)
         node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(refreshLoadedFolders(of:))
+    }
+
+    /// The folders macOS refused, read again: the user may have allowed them in System Settings since. As the window comes
+    /// to the front; a read macOS refused once is refused again without a prompt, so nothing asks twice.
+    func retryDenied() {
+        guard let root else { return }
+        kindRefused.removeAllObjects() // their next open looks again
+        func visit(_ node: FileNode) {
+            if node.accessDenied, node.kindSettled {
+                refresh(node)
+            } else if node.accessDenied {
+                // A link refused while its kind was its name's guess: what it is comes first (a file has nothing to
+                // read), and only a folder is read again.
+                settleKind(of: node) { [weak self] in if node.isDirectory { self?.refresh(node) } }
+            }
+            node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(visit)
+        }
+        visit(root)
     }
 
     /// Whether the node belongs to the tree on screen (the root may have changed while it loaded).
@@ -693,6 +802,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Changes in the work tree or its .git: a refresh soon, unless none can change git's status (a writer in
     /// `.next/` or `node_modules/`, git's own objects, a nested worktree).
     private func gitFilesChanged(_ paths: [String]) {
+        guard !browsingOnly else { return }
         if let filter = gitEvents {
             let matters = paths.contains { filter.matters($0, isRepository: isNestedRepository) }
             guard matters else { return }
@@ -794,7 +904,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let node = item as? FileNode {
             let children = node.children ?? []
             let gone = node.isLoaded ? deleted(in: node) : []
-            if gone.isEmpty {
+            if node.accessDenied {
+                rows = [deniedEntry(for: node)] // macOS refused it: one line saying so, with the way to change that
+            } else if gone.isEmpty {
                 rows = children
             } else {
                 let all: [(name: String, folder: Bool, item: AnyObject)] = children.map { ($0.name, $0.isDirectory, $0) } + gone.map { ($0.name, $0.isDirectory, $0) }
@@ -819,6 +931,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         rowCache[id] = (item, rows)
         return rows
+    }
+
+    /// The line in a folder macOS refused, the same object each time, so the outline keeps its row.
+    private func deniedEntry(for node: FileNode) -> DeniedFolderEntry {
+        let id = ObjectIdentifier(node)
+        if let entry = deniedEntries[id], entry.folder === node { return entry }
+        // A link's pane is the one of the place it leads to (~/mail to ~/Library/Mail is Full Disk Access's), and so is
+        // a folder's below a link (~/lib/Mail, ~/lib a link to ~/Library).
+        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.refusedPlace))
+        deniedEntries[id] = entry
+        return entry
     }
 
     private func deleted(in node: FileNode) -> [DeletedEntry] {
@@ -863,9 +986,46 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
         if item is DeletedEntry || item is DatabasesGroup || item is SessionsGroup || item is ServicesGroup { return true }
         guard let node = item as? FileNode else { return false }
-        if node.isLoaded { return true }
+        if needsKind(node) {
+            // A link into a protected place, a folder by its name's guess: the expand looks, and expands what is one.
+            settleKind(of: node) { [weak self] in if node.isDirectory { self?.outline.expandItem(node) } }
+            return false
+        }
+        if node.isLoaded {
+            if node.accessDenied { refresh(node) } // opened again: allowed in System Settings since, perhaps
+            return true
+        }
         load(node) { [weak self] in self?.outline.expandItem(node) }
         return false
+    }
+
+    /// `node` is a link into a protected place the user had not opened, its kind its name's guess (FileNode.kindSettled),
+    /// and no look at what it is was refused since the window last came to the front.
+    private func needsKind(_ node: FileNode) -> Bool {
+        !node.kindSettled && !kindRefused.contains(node)
+    }
+
+    /// The user opened a link whose kind is its name's guess: what it is, read past it off the main thread (macOS may ask
+    /// for the place, holding the look until the user answers), takes the guess's place in its row, and `then` acts on
+    /// the node as it now is. A look macOS refused keeps the guess (`kindRefused`), and `then` acts on that.
+    private func settleKind(of node: FileNode, then: @escaping () -> Void) {
+        let url = node.url
+        DispatchQueue.global(qos: .userInitiated).async {
+            let folder: Bool? = FileNode.isFolder(followingLinkAt: url)
+            DispatchQueue.main.async { [weak self] in
+                self?.whenNotRenaming("kind \(ObjectIdentifier(node))") { [weak self] in
+                    guard let self, self.isShowing(node) else { return }
+                    if folder == nil { self.kindRefused.add(node) }
+                    if node.settleKind(folder) {
+                        let parent: FileNode = node.parent ?? node
+                        self.rowCache[ObjectIdentifier(parent)] = nil
+                        self.rowCache[ObjectIdentifier(node)] = nil
+                        self.outline.reloadItem(parent, reloadChildren: true)
+                    }
+                    then()
+                }
+            }
+        }
     }
 
     // MARK: delegate
@@ -926,6 +1086,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return sessionCell(for: item)
         }
         if ServicesGroup.holds(item) { return serviceCell(for: item) }
+        if let entry = item as? DeniedFolderEntry {
+            let id = NSUserInterfaceItemIdentifier("denied")
+            let cell = outlineView.makeView(withIdentifier: id, owner: self) as? DeniedFolderCellView ?? DeniedFolderCellView()
+            cell.identifier = id
+            cell.configure(entry)
+            return cell
+        }
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCellView ?? FileCellView()
         cell.identifier = id
@@ -966,8 +1133,16 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                        option: flags.contains(.option), control: flags.contains(.control),
                                        row: row, mouseDownRow: outline.mouseDownRow, selection: outline.selectedRowIndexes,
                                        dragBegan: outline.dragBegan, wasRenaming: outline.mouseDownWhileRenaming, kind: kind(of: item))
-        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode,
-              SidebarClick.opensOnSingleClick(node.url.path) else { return }
+        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode else { return }
+        if needsKind(node) {
+            // A file by its name's guess, a link into a protected place: the click looks first, off the main thread, and
+            // previews only a file. macOS has its answer by then, so the single-click check after asks nothing again.
+            return settleKind(of: node) { [weak self] in
+                guard let self, !node.isDirectory, SidebarClick.opensOnSingleClick(node.url.path) else { return }
+                self.delegate?.sidebar(self, previewFile: node.url)
+            }
+        }
+        guard SidebarClick.opensOnSingleClick(node.url.path) else { return }
         delegate?.sidebar(self, previewFile: node.url)
     }
 
@@ -994,6 +1169,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return outline.isItemExpanded(sessionsGroup) ? outline.collapseItem(sessionsGroup) : outline.expandItem(sessionsGroup)
         }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
+        // A link whose kind is its name's guess: the double-click looks first, then opens a file or a folder.
+        if needsKind(node) { return settleKind(of: node) { [weak self] in self?.openOrToggle(node) } }
+        openOrToggle(node)
+    }
+
+    /// A double-click's: a folder opens or closes, a file opens in the editor.
+    private func openOrToggle(_ node: FileNode) {
         if node.isDirectory {
             outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
         } else {
@@ -1005,7 +1187,16 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// first: opening a file shows it in the tree, which selects its row alone.
     private func openSelected() {
         let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) }
-        for case let node as FileNode in items where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
+        for case let node as FileNode in items {
+            if needsKind(node) {
+                settleKind(of: node) { [weak self] in
+                    guard let self, !node.isDirectory else { return }
+                    self.delegate?.sidebar(self, openFile: node.url)
+                }
+            } else if !node.isDirectory {
+                delegate?.sidebar(self, openFile: node.url)
+            }
+        }
         for case let entry as DeletedEntry in items where !entry.isDirectory { openDeleted(entry) }
         for case let item as DatabaseItem in items { openDatabase(item.database) }
         for case let item as ServiceItem in items { openService(item.row) }
@@ -1213,7 +1404,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     var selection: [(url: URL, isFolder: Bool)] { selectedNodes.map { ($0.url, $0.isDirectory) } }
 
     @objc private func openNode() {
-        if let node = menuNodes.first { delegate?.sidebar(self, openFile: node.url) }
+        // The node is taken now: the menu's row is gone by the time a look past a link comes back.
+        guard let node = menuNodes.first else { return }
+        guard needsKind(node) else { return delegate?.sidebar(self, openFile: node.url) ?? () }
+        // A link whose kind is its name's guess: Open looks first, off the main thread, and opens only a file.
+        settleKind(of: node) { [weak self] in
+            guard let self, !node.isDirectory else { return }
+            self.delegate?.sidebar(self, openFile: node.url)
+        }
     }
 
     @objc private func revealNode() {
@@ -1464,9 +1662,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        // The line in a folder macOS refused is no place to drop: not the tree's root, and macOS would refuse the folder.
+        if item is DeniedFolderEntry { return [] }
         guard let target = item as? FileNode ?? (item as? DeletedEntry)?.realFolder ?? root, let root else { return [] }
         // Dropping on or between files means their folder.
         let folder = target.isDirectory ? target : (target.parent ?? root)
+        if folder.accessDenied { return [] }
         if folder !== target || index != NSOutlineViewDropOnItemIndex {
             outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
         }

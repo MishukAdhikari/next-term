@@ -175,7 +175,8 @@ extension SelfTest {
         // Flags in the test folder: "deny" makes ssh refuse the login (a wrong password), "unreachable"
         // fails the network, "drop" ends a tab's connection (255) once its remote command ends. Only a
         // tab's ssh (-t) takes "drop": a status check (-T) running at that moment must not use it up.
-        // "slow" holds each check (not a tab's ssh) 2 s before it runs.
+        // "slow" holds each check (not a tab's ssh) 2 s before it runs. "loginsh" makes the host's login shell a stand-in
+        // that runs what it is given (the herdr checks, SelfTestRemoteHerdr).
         let fakeSSH = bin.appendingPathComponent("ssh")
         let script = """
             #!/bin/bash
@@ -196,6 +197,7 @@ extension SelfTest {
             if [ -e "$B/unreachable" ]; then echo 'ssh: connect to host selftest.invalid port 22: Connection refused' >&2; exit 255; fi
             if [ -z "$tty" ] && [ -e "$B/slow" ]; then sleep 2; fi
             export HOME=\(RemoteShell.quote(home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR="$B/tmux"
+            if [ -e "$B/loginsh" ]; then SHELL="$B/shells/zsh"; fi
             unset ZDOTDIR NEXTTERM_USER_ZDOTDIR
             cd "$HOME"
             /bin/zsh -f -c "$cmd"
@@ -273,6 +275,7 @@ extension SelfTest {
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
         check(!plain.view.opensFiles, "remote: ⌘-click does not open this Mac's files from a remote tab")
+        check(plain.view.passesOtherButtons(), "remote: a plain remote tab passes right and middle clicks to a program that reads the mouse")
         // Its right-click menu: a web link's items, never a path's (a path there names a file on the host).
         let onPath = c.terminalMenu(for: plain, link: "/etc/hosts").items.first?.title
         let onWeb = c.terminalMenu(for: plain, link: "https://example.com/docs").items.first?.title
@@ -452,6 +455,7 @@ extension SelfTest {
             check(false, "remote MCP: `nxtrm mcp` starts")
         }
         c.remove(plain)
+        await remoteHerdrChecks(c, host: host, base: base, home: home, bin: bin, flag: flag)
 
         // tmux: the session outlives the connection, and the tab reattaches to it by itself.
         guard tmux != nil else {
@@ -467,6 +471,8 @@ extension SelfTest {
         kept.view.send(txt: "export NT_MARK=kept-\(getpid()); echo $NT_MARK\r")
         check(await wait(8) { kept.screenTail(20).contains { $0.contains("kept-\(getpid())") } }, "remote tmux: typed commands run in the session")
         check(sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session), "remote tmux: the session is on the host's private tmux server")
+        // Its `mouse on` is for the wheel: tmux's own right-click menu (splits, kills) never opens in a tab.
+        check(!kept.view.passesOtherButtons(), "remote tmux: right and middle clicks stay Next Term's in a tab its own tmux keeps")
         await pause(10.5) // a connection that worked for a while reconnects by itself when it drops
         var clientPID: Int32?
         _ = await wait(10) {

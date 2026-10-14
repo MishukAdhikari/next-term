@@ -54,28 +54,22 @@ extension SwitcherWayIn {
     }
 }
 
-/// What a way-in row and a first-launch card share: a button that draws only a fill in its shape, under the pointer or
-/// while pressed, over labels that take no clicks and that VoiceOver never reads on their own. The button's title stays
-/// the visible title, which VoiceOver reads, and its tooltip names what it opens and the key it shows. It never has a
-/// key equivalent, so Return stays the selection's, and it is never the default button.
-class WayInButton: NSButton {
-    let way: SwitcherWayIn
-
-    init(_ way: SwitcherWayIn) {
-        self.way = way
+/// A button that draws only a fill in its shape, under the pointer or while pressed, over labels that take no clicks and
+/// that VoiceOver never reads on their own: the ways in, and the recent projects a window with no project lists in its
+/// sidebar (NoProjectView). Its title stays the visible title, which VoiceOver reads. It never has a key equivalent, so
+/// Return stays the selection's, and it is never the default button.
+class FillButton: NSButton {
+    init(title name: String) {
         super.init(frame: .zero)
-        title = way.title
+        title = name
         // The labels draw it: image only, with no image, so the cell draws nothing, pressed or not.
         imagePosition = .imageOnly
         isBordered = false
         bezelStyle = .regularSquare
         keyEquivalent = ""
-        target = NSApp.delegate
-        action = way.action
-        setAccessibilityLabel(way.title)
+        setAccessibilityLabel(name)
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentHuggingPriority(.defaultLow, for: .vertical)
-        showTip(nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -88,17 +82,6 @@ class WayInButton: NSButton {
             (view as? NSControl)?.cell?.setAccessibilityElement(false)
             addSubview(view)
         }
-    }
-
-    /// The tooltip, in `ShortcutToolTip`'s form, "Open a window with a shell (⌘N)", with the key the row shows: the
-    /// menus' key, unless the Welcome window takes that key first (`SwitcherWaysIn.notTaken(by:)`), then none.
-    func showTip(_ chord: KeyChord?) {
-        guard let chord else {
-            toolTip = way.help
-            return
-        }
-        let key: String = chord.display
-        toolTip = "\(way.help) (\(key))"
     }
 
     /// The fill's shape.
@@ -149,6 +132,33 @@ class WayInButton: NSButton {
     }
 }
 
+/// What a way-in row and a first-launch card share: a fill button that does what its way in does, and whose tooltip
+/// names what it opens and the key it shows. `title`: in place of the way's own ("Open Folder…" in a sidebar).
+class WayInButton: FillButton {
+    let way: SwitcherWayIn
+
+    init(_ way: SwitcherWayIn, title name: String? = nil) {
+        self.way = way
+        super.init(title: name ?? way.title)
+        target = NSApp.delegate
+        action = way.action
+        showTip(nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The tooltip, in `ShortcutToolTip`'s form, "Open a window with a shell (⌘N)", with the key the row shows: the
+    /// menus' key, unless the Welcome window takes that key first (`SwitcherWaysIn.notTaken(by:)`), then none.
+    func showTip(_ chord: KeyChord?) {
+        guard let chord else {
+            toolTip = way.help
+            return
+        }
+        let key: String = chord.display
+        toolTip = "\(way.help) (\(key))"
+    }
+}
+
 /// One of the three ways in as a row at the foot of the Welcome list, in the list's geometry: its symbol in the gutter,
 /// its title where the names start, and at the right the key its menu command has now.
 final class WayInRow: WayInButton {
@@ -157,12 +167,12 @@ final class WayInRow: WayInButton {
     private let label = NSTextField(labelWithString: "")
     private let key = WayInButton.keyLabel()
 
-    override init(_ way: SwitcherWayIn) {
-        super.init(way)
+    override init(_ way: SwitcherWayIn, title name: String? = nil) {
+        super.init(way, title: name)
         icon.image = NSImage(systemSymbolName: way.symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
         icon.contentTintColor = Theme.textDim
-        label.stringValue = way.title
+        label.stringValue = title
         label.font = .systemFont(ofSize: 13)
         label.textColor = Theme.text
         Typography.singleLine(label, truncation: .byTruncatingTail)
@@ -242,8 +252,8 @@ final class WayInCard: WayInButton {
     private let sentence = NSTextField(wrappingLabelWithString: "")
     private let key = WayInButton.keyLabel()
 
-    override init(_ way: SwitcherWayIn) {
-        super.init(way)
+    override init(_ way: SwitcherWayIn, title name: String? = nil) {
+        super.init(way, title: name)
         icon.image = NSImage(systemSymbolName: way.symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = .init(pointSize: 20, weight: .regular)
         icon.contentTintColor = Theme.textDim

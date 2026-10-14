@@ -283,19 +283,31 @@ public enum GitRunner {
         return nil
     }
 
-    /// The repository state for the work tree containing `directory`, or nil if there is none.
-    public static func snapshot(for directory: String, git: String, timeout: TimeInterval = 15) -> GitSnapshot? {
+    /// The repository state for the work tree containing `directory`, or nil if there is none. A work tree whose top is
+    /// never a project (dotfiles in ~: ProjectRoot.isNeverRoot) counts as none from a folder inside it, so nothing shown
+    /// there reads the whole home folder; asked for that top itself (a project the user opened there) it is read. Status
+    /// and the lines changed never go into a protected place below the top (ProtectedPlaces): git is told to leave them
+    /// out. Listing untracked files, git would still open each folder on its way to a file tracked in one, so from a top
+    /// with places below it (the home folder) status reads the tracked files alone, and shows no untracked or ignored ones.
+    public static func snapshot(for directory: String, git: String, timeout: TimeInterval = 15,
+                                protected: ProtectedPlaces = .current) -> GitSnapshot? {
         guard let top = run(git, ["-C", directory, "rev-parse", "--show-toplevel"], timeout: timeout),
               let root = String(data: top, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !root.isEmpty else { return nil }
-        guard let status = run(git, ["-C", root, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z",
-                                     "--untracked-files=normal", "--ignored=matching"], timeout: timeout) else { return nil }
+        if protected.isNeverRoot(root), canonicalPath(directory) != canonicalPath(root) { return nil }
+        let walk = protected.walk(from: root)
+        let listed: [String] = walk.skipped.isEmpty ? ["--untracked-files=normal", "--ignored=matching"] : ["--untracked-files=no"]
+        let statusArguments = ["-C", root, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z"] + listed + walk.gitPathspecs
+        guard let status = run(git, statusArguments, timeout: timeout) else { return nil }
         var snapshot = GitSnapshot.parse(root: root, status: status, numstat: Data())
         // Lines changed against HEAD (staged and unstaged together); before the first commit, against nothing.
         let base = snapshot.head == nil ? emptyTree(git: git, root: root) : "HEAD"
         // Plumbing, not `git diff`: the porcelain refreshes and rewrites .git/index (taking index.lock) even
         // with --no-optional-locks, which can make an agent's `git commit` fail mid-refresh.
-        let numstat = base.flatMap { run(git, ["-C", root, "--no-optional-locks", "diff-index", "--numstat", "-z", "-M", $0, "--"], timeout: timeout) } ?? Data()
+        let numstat = base.flatMap { (tree: String) -> Data? in
+            let arguments: [String] = ["-C", root, "--no-optional-locks", "diff-index", "--numstat", "-z", "-M", tree, "--"]
+            return run(git, arguments + walk.gitPathspecs, timeout: timeout)
+        } ?? Data()
         snapshot = GitSnapshot.parse(root: root, status: status, numstat: numstat)
         snapshot.addUntrackedLines(countLines(of: snapshot.files.filter { $0.value == .untracked }.map(\.key), in: root))
         if snapshot.upstream != nil { snapshot.lastFetch = lastSuccessfulFetch(root: root) }

@@ -81,20 +81,22 @@ extension TerminalWindowController {
 }
 
 extension AppDelegate {
-    /// Where ⌘T with no window open starts the window it opens: the home folder or a folder chosen in Settings ›
-    /// Terminal › New tabs. The project's and the current tab's folders have neither here, so the shell's own.
-    var newTabWindowDirectory: String? {
-        Preferences.terminalStartFolder.localDirectory(project: nil, current: nil)
+    /// Where a window with no project starts (New Terminal, ⌘N, "Open a new terminal" at launch, ⌘T with no window
+    /// open): the home folder or a folder chosen in Settings › Terminal › New tabs (StartFolder.newWindowDirectory).
+    var newWindowDirectory: String? {
+        Preferences.terminalStartFolder.newWindowDirectory(home: NSHomeDirectory(), exists: StartFolder.isLocalFolder)
     }
 }
 
 extension StartFolder {
     /// `directory`, with a chosen folder used while it is a folder on this Mac.
     func localDirectory(project: String?, current: String?) -> String? {
-        directory(project: project, current: current, home: NSHomeDirectory()) { path in
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
-        }
+        directory(project: project, current: current, home: NSHomeDirectory(), exists: Self.isLocalFolder)
+    }
+
+    static func isLocalFolder(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 }
 
@@ -127,7 +129,8 @@ final class TerminalBehaviourControls: NSObject {
         scrollback.toolTip = "Lines each terminal keeps above the screen. Fewer lines drops the oldest in open terminals at once."
         startFolder.target = self
         startFolder.action = #selector(startFolderChanged)
-        startFolder.toolTip = "Where ⌘T opens a tab. Splits open in the folder of the pane they split from."
+        startFolder.toolTip = "Where ⌘T opens a tab, and New Terminal (⌘N) a window: a folder chosen here, else your home folder. "
+            + "Splits open in the folder of the pane they split from."
         for place in TerminalPosition.allCases {
             position.addItem(withTitle: place.title)
             position.lastItem?.representedObject = place.rawValue

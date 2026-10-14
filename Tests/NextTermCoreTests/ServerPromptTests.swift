@@ -95,7 +95,7 @@ import Testing
         #expect(KeepMode.tmux.shown(fellBack: true) == .off)
         #expect(KeepMode.herdr.shown(fellBack: false) == .herdr)
         #expect(KeepMode.off.shown(fellBack: false) == .off)
-        #expect(KeepMode.herdr.keptLine(fellBack: true) == "Sessions kept: Off (herdr isn’t on the host)")
+        #expect(KeepMode.herdr.keptLine(fellBack: true) == "Sessions kept: Off (herdr wasn’t found on the host)")
         #expect(KeepMode.tmux.keptLine(fellBack: false) == "Sessions kept: tmux")
         #expect(KeepMode.off.keptLine(fellBack: false) == "Sessions kept: Off")
     }

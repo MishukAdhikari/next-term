@@ -255,17 +255,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own root): Gemini CLI and
-    /// Qwen Code connect only from inside one of these.
+    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own project): Gemini CLI and
+    /// Qwen Code connect only from inside one of these. Never a folder that is never a project (the home folder, /:
+    /// ProjectRoot.isNeverRoot), from which they would connect wherever they start.
     var agentWorkspaces: [String] {
         var roots: [String] = []
         for controller in controllers {
             if let project = controller.project { roots.append(project) }
             if let root = controller.sidebar.root?.path { roots.append(root) }
-            roots += controller.tabs.map { ProjectRoot.find(from: $0.directory) }
+            roots += controller.tabs.compactMap { (tab: TerminalTab) -> String? in ProjectRoot.project(from: tab.directory) }
         }
         var seen = Set<String>()
-        return roots.map(canonicalPath).filter { seen.insert($0).inserted }
+        return roots.map(canonicalPath).filter { !ProjectRoot.isNeverRoot($0) && seen.insert($0).inserted }
     }
 
     /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
@@ -550,7 +551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
-        case .newTerminal: openWindow(directory: nil)
+        case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
         }
     }
 
@@ -623,7 +624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
-    /// on the file's project (its git root, or its folder).
+    /// on the file's project (its git root, or its folder), or one with no project when its folder is never one.
     /// `forAgent`: open_in_editor. The file opens without taking the keyboard, and its window comes forward as
     /// AgentArrival says, not as a window the user went to.
     func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool, forAgent: Bool = false) {
@@ -634,10 +635,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let target: TerminalWindowController
         if !newWindow, let window = owner ?? front {
             target = window
-        } else {
-            let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
+        } else if let root = ProjectRoot.project(from: (path as NSString).deletingLastPathComponent) {
             recent.add(root)
             target = openWindow(directory: root, project: root, forAgent: forAgent)
+        } else {
+            // A file in a folder that is never a project (~/notes.txt): a window with no project, in that folder.
+            target = openWindow(directory: (path as NSString).deletingLastPathComponent, forAgent: forAgent)
         }
         closeWelcome(forAgent: forAgent)
         if forAgent {
@@ -1023,8 +1026,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// New Terminal (File › New Window, ⌘N, the Welcome window's row): a window with no project, its shell where Settings ›
+    /// Terminal › New tabs says, as ⌘T with no window open (the home folder unless a folder is chosen there).
     @objc func newWindow(_ sender: Any?) {
-        openWindow(directory: nil)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// A worktree's own window, with one shell tab in its folder, titled "xCloud ▸ 7027-sso": the window
@@ -1069,6 +1074,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
             // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
             if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+            // And every window's "No project open", which otherwise refreshes only when its window becomes key.
+            let showing: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+                controller.sidebar.showsNoProject
+            }
+            guard !showing.isEmpty else { return }
+            let shown: [String] = newValue.existing()
+            for controller in showing { controller.sidebar.noProject.show(recent: shown) }
         }
     }
 
@@ -1123,19 +1135,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
     /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
     @objc func chooseProjectFolder(_ sender: Any?) {
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
+        chooseProjectFolder(from: from, over: overWelcome)
+    }
+
+    /// The same panel for a window that asked itself, not the key one (a notice in it, which can't be key): over `sheet`,
+    /// else over `from`'s window, or on its own with neither; the folder chosen opens as if from `from`.
+    func chooseProjectFolder(from: TerminalWindowController?, over sheet: NSWindow? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
-        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = sheet ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
 
     /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen
@@ -1317,7 +1335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// ⌘T with no window open (every window closed, app still running), where Settings › Terminal › New tabs says.
     @objc func newTab(_ sender: Any?) {
-        openWindow(directory: newTabWindowDirectory)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,

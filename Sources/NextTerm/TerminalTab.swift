@@ -128,7 +128,8 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         answering = true
         defer { answering = false }
-        super.send(source: source, data: data)
+        // A right or middle release being reported: SwiftTerm 1.20 sends every SGR release as the left button's.
+        super.send(source: source, data: releasing.map { MouseReport.sgrRelease(data, button: $0) } ?? data)
     }
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
@@ -364,6 +365,55 @@ final class NextTermView: LocalProcessTerminalView {
         super.mouseUp(with: event)
     }
 
+    /// SwiftTerm 1.20 snaps its cell width to the pixel grid only when the font (or the line spacing) is set, at the
+    /// scale of the window then, or of the main screen before there is one: on a screen of another scale it drew and
+    /// hit-tested cells snapped for the old one, and a table's box lines drifted from its text a little more each column.
+    /// Setting the font again snaps them for this screen. AppKit calls this also when the view first goes into a window
+    /// of another scale (a tab's font is set before it has one); SelfTestCellSnap checks both.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor else { return }
+        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
+        let snapped = max(1, (advance * scale).rounded() / scale)
+        // Only when it differs: setting the font clears the selection.
+        if abs(snapped - cellSize.width) > 0.001 { font = font }
+    }
+
+    // MARK: right and middle buttons, for a program that reads the mouse (TerminalMouse.swift)
+
+    /// False for a tab Next Term's own tmux keeps: its `mouse on` is there for the wheel, and tmux's menu (splits,
+    /// kills) has no place in a tab, so a right-click there stays Next Term's menu.
+    var passesOtherButtons: () -> Bool = { true }
+    /// The buttons (xterm's numbers) whose press went to the program: only their drags and release follow it.
+    var pressedForProgram: Set<Int> = []
+    /// The button a release is being sent for: send(source: Terminal) puts it back into the SGR release.
+    var releasing: Int?
+
+    // super: Next Term's menu (through menu(for:)) for a right-click, nothing for a middle one.
+    override func rightMouseDown(with event: NSEvent) {
+        if !reportOther(event, .press) { super.rightMouseDown(with: event) }
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        if !reportOther(event, .drag) { super.rightMouseDragged(with: event) }
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        if !reportOther(event, .release) { super.rightMouseUp(with: event) }
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if !reportOther(event, .press) { super.otherMouseDown(with: event) }
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        if !reportOther(event, .drag) { super.otherMouseDragged(with: event) }
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        if !reportOther(event, .release) { super.otherMouseUp(with: event) }
+    }
+
     // MARK: right-click
 
     /// The window's right-click menu for this terminal, with the link or path under the pointer if there is
@@ -385,13 +435,9 @@ final class NextTermView: LocalProcessTerminalView {
     func link(at point: NSPoint) -> String? {
         let terminal = getTerminal()
         guard terminal.rows > 0, terminal.cols > 0 else { return nil }
-        // SwiftTerm keeps its cell size to itself: the height from the rows, the width from the font, as it does.
-        let cellHeight = getOptimalFrameSize().height / CGFloat(terminal.rows)
-        let scale = window?.backingScaleFactor ?? 2
-        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
-        let cellWidth = max(1, (advance * scale).rounded() / scale)
-        let row = Int((frame.height - point.y) / cellHeight)
-        let col = Int(point.x / cellWidth)
+        let cell = cellSize
+        let row = Int((frame.height - point.y) / cell.height)
+        let col = Int(point.x / cell.width)
         guard row >= 0, row < terminal.rows, col >= 0, col < terminal.cols else { return nil }
         return terminal.link(at: .screen(Position(col: col, row: row)), mode: .explicitAndImplicit)
     }
@@ -449,6 +495,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var remoteReady = false
     /// tmux or herdr was missing on the host, so this tab is a plain shell that nothing keeps.
     private(set) var fellBack = false
+    /// Why, when a copy was on the host but did not run ("herdr at … did not run (…)"); nil when none was found.
+    private(set) var fellBackReason: String?
     /// The last status report said this tab's tmux pane is in one of tmux's modes (copy mode): keys go to tmux.
     private(set) var paneInMode = false
     /// The folder asked for was not on the host (the tab opened in the home folder).
@@ -470,8 +518,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var controlPath: String? { remote.flatMap { remote in controlSlot.map { RemoteConnection.controlPath(remote.host, slot: $0) } } }
     /// Lost its connection when the master went too: reconnect as soon as a master is up again (once).
     private(set) var wakesWithMaster = false
-    /// herdr's agents, last reported (a herdr tab).
-    private(set) var herdrAgents: [HerdrAgent] = []
+    /// What herdr's lists said (a herdr tab): its agents, and a note when it doesn't answer.
+    private(set) var herdrWatch = HerdrWatch()
+    /// herdr's agents, last reported (a herdr tab); none while herdr doesn't answer.
+    var herdrAgents: [HerdrAgent] { herdrWatch.agents ?? [] }
     private var connectedAt: TimeInterval = 0
     private var reconnectAttempts = 0
     private var reconnectWork: DispatchWorkItem?
@@ -531,6 +581,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onWrite = { [weak self] data in self?.history.input(data) }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
+        // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
+        view.passesOtherButtons = { [weak self] in !(self?.remote?.keep == .tmux && self?.isKept == true) }
 
         let terminal = view.getTerminal()
         terminal.registerOscHandler(code: ShellIntegration.oscCode) { [weak self] payload in
@@ -594,6 +646,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             // The tab script tries tmux or herdr again: whether this connection fell back, or its pane is in copy mode,
             // is for its own reports to say (a .plain file comes back if the tool is still missing).
             fellBack = false
+            fellBackReason = nil
+            herdrWatch = HerdrWatch()
             paneInMode = false
             loginPrompt = false
             connectionToken = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased()
@@ -1190,7 +1244,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if let openedBy, let opener = AppDelegate.shared?.controllers.flatMap(\.tabs).first(where: { $0.id == openedBy }) {
             lines.append("Started by “\(opener.title)”")
         }
-        if let remote { lines.append(remote.keep.keptLine(fellBack: fellBack)) }
+        if let remote {
+            lines.append(remote.keep.keptLine(fellBack: fellBack))
+            if fellBack, let fellBackReason { lines.append(fellBackReason) }
+            if let note = herdrWatch.note { lines.append(note) }
+        }
         lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")
     }
@@ -1437,7 +1495,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             reconnectAttempts = 0
         }
         guard remoteConnected else { return } // files on the host from another connection prove nothing
-        if report.plain { fellBack = true }
+        if report.plain {
+            fellBack = true
+            fellBackReason = report.plainReason
+        }
         if report.folderMissing { remoteFolderMissing = true }
         paneInMode = report.inMode
         // A herdr tab shows herdr: its state comes from herdr's agents (applyHerdr), not from what runs in front.
@@ -1463,11 +1524,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                             reportsSinceReturn: completion.reportsSinceReturn)
     }
 
-    /// herdr's agents on the host: the tab shows the one that most needs you. Only once this tab's own
-    /// connection is up (herdr's list says nothing about this tab's ssh).
-    func applyHerdr(_ agents: [HerdrAgent]) {
-        guard remote?.keep == .herdr, remoteConnected, !fellBack, !exited, !disconnected else { return }
-        herdrAgents = agents
+    /// What herdr said on the host: the tab shows the agent that most needs you, or says why herdr doesn't answer
+    /// (HerdrWatch). Only once this tab's own connection is up (herdr's list says nothing about this tab's ssh). A tab
+    /// that fell back only learns whether herdr is on the host now.
+    func applyHerdr(_ report: HerdrReport) {
+        guard remote?.keep == .herdr, remoteConnected, !exited, !disconnected else { return }
+        let note = herdrWatch.note
+        let listed = herdrWatch.observe(report, showsHerdr: !fellBack)
+        if herdrWatch.note != note { delegate?.tabDidChange(self) }
+        guard let agents = listed else { return }
         let before = (status.state, status.question)
         status.observeAgentHost("herdr", at: Self.now)
         status.observe(agentScreen: HerdrAgent.activity(agents), at: Self.now)
@@ -1493,7 +1558,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
-        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
+        // Its project, or its own folder where it has none (the home folder: ProjectRoot.project).
+        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.project(from: directory) ?? directory))
         // `nxtrm mcp`, started by an agent in this tab, reaches this copy of Next Term.
         if MCPControlServer.shared.isRunning { env[MCPServer.socketVariable] = MCPControlServer.shared.path }
         // `nxtrm` works in every tab from the first launch, with no install step.

@@ -185,13 +185,16 @@ extension Databases {
     /// only for those: the project's own folder (env files, ORM configs, artisan), `.vercel` (the project link), the
     /// folders the services' readers look in, hidden ones too (`ServiceCatalog.watchedFolders`: `supabase/.temp`,
     /// `.ddev`), and the folders the SQLite search lists, three deep at most and never hidden, a dependency or a build
-    /// folder. Laravel's storage/framework, written on every request, is left out too.
-    public static func scanMayChange(after folder: String, root: String) -> Bool {
+    /// folder. Laravel's storage/framework, written on every request, is left out too, and so is a protected place below
+    /// the root (`protected`), which the search never lists: ~/Library, which changes all the time, sets off nothing.
+    public static func scanMayChange(after folder: String, root: String, protected: ProtectedPlaces = .current) -> Bool {
         let path = folder.count > 1 && folder.hasSuffix("/") ? String(folder.dropLast()) : folder
         let root = root.count > 1 && root.hasSuffix("/") ? String(root.dropLast()) : root
         if path == root { return true }
         guard path.hasPrefix(root + "/") else { return false }
         let names = path.dropFirst(root.count + 1).split(separator: "/").map(String.init)
+        let below = root == "/" ? "/" : root + "/"
+        if protected.places.contains(where: { $0.hasPrefix(below) && (path == $0 || path.hasPrefix($0 + "/")) }) { return false }
         if names == [".vercel"] { return true }
         if ServiceCatalog.watchedFolders.contains(names.joined(separator: "/")) { return true }
         guard names.count <= 3 else { return false }
@@ -199,23 +202,28 @@ extension Databases {
         return !names.contains { $0.hasPrefix(".") || skippedFolders.contains($0) }
     }
 
-    /// SQLite files in the project, three folders deep at most, never through a symlink or into a
-    /// dependency folder, and only files that start with SQLite's header.
+    /// SQLite files in the project, three folders deep at most, never through a symlink, into a
+    /// dependency folder or into a protected place below the root (ProtectedPlaces: a project inside one is
+    /// searched as any other), and only files that start with SQLite's header.
     static func sqliteFiles(_ context: Context) -> [String] {
         var result: [String] = []
         var budget = 20_000
         let fm = FileManager.default
-        func walk(_ folder: String, depth: Int) {
-            guard budget > 0, let names = try? fm.contentsOfDirectory(atPath: folder) else { return }
+        let protected = context.protected.walk(from: context.root)
+        func walk(_ folder: String, relative: String, depth: Int) {
+            guard budget > 0 else { return }
+            ProtectedPlaces.noteListed(folder)
+            guard let names = try? fm.contentsOfDirectory(atPath: folder) else { return }
             for name in names.sorted() {
                 budget -= 1
                 guard budget > 0 else { return }
                 let path = (folder as NSString).appendingPathComponent(name)
+                let inside = relative.isEmpty ? name : relative + "/" + name
                 var info = stat()
                 guard lstat(path, &info) == 0 else { continue }
                 switch info.st_mode & S_IFMT {
-                case S_IFDIR where depth < 3 && !name.hasPrefix(".") && !skippedFolders.contains(name):
-                    walk(path, depth: depth + 1)
+                case S_IFDIR where depth < 3 && !name.hasPrefix(".") && !skippedFolders.contains(name) && protected.mayEnter(inside):
+                    walk(path, relative: inside, depth: depth + 1)
                 case S_IFREG where sqliteExtensions.contains((name as NSString).pathExtension.lowercased()):
                     if Databases.isSQLiteFile(path) { result.append(canonicalPath(path)) }
                 default:
@@ -223,7 +231,7 @@ extension Databases {
                 }
             }
         }
-        walk(context.root, depth: 0)
+        walk(context.root, relative: "", depth: 0)
         return result
     }
 }

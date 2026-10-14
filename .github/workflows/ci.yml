@@ -38,12 +38,60 @@ jobs:
         # 150 ms window, and a failure here is a real one.
         run: python3 -u scripts/zsh-integration-test.py
 
+      # Releases are signed with one self-signed certificate (docs/signing.md), so macOS keeps a user's privacy answers
+      # from one update to the next. Its .p12 goes into a keychain of this job's own, deleted below even on a failure.
+      # Without the secrets (a fork's pull request) the build is signed ad hoc, as before.
+      - name: Signing identity
+        id: signing
+        env:
+          P12: ${{ secrets.NEXTTERM_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.NEXTTERM_SIGNING_P12_PASSWORD }}
+        run: |
+          if [[ -z "$P12" || -z "$P12_PASSWORD" ]]; then
+            echo "No signing secrets: the build is signed ad hoc."
+            # A copy signed with the release identity refuses an ad-hoc update.
+            if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+              echo "::warning::$GITHUB_REF_NAME is signed ad hoc: copies signed with the release identity can't update to it (docs/signing.md)."
+            fi
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/nextterm-signing.keychain-db"
+          p12="$RUNNER_TEMP/nextterm-signing.p12"
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          (umask 077; base64 --decode <<<"$P12" > "$p12")
+          security import "$p12" -k "$keychain" -f pkcs12 -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$p12"
+          # codesign may use the key without a prompt, and finds it in the search list.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # The certificate's SHA-1 is public (every signed copy carries the certificate), so it is not masked.
+          ids="$(security find-identity -p codesigning "$keychain" | grep -oE '[0-9A-F]{40}' | sort -u || true)"
+          if [[ ! "$ids" =~ ^[0-9A-F]{40}$ ]]; then
+            echo "::error::The signing .p12 holds no code-signing identity, or more than one."
+            exit 1
+          fi
+          echo "Signing with the release identity, SHA-1 $ids"
+          echo "sign_id=$ids" >> "$GITHUB_OUTPUT"
+
       - name: Build DMG
         timeout-minutes: 40 # two release builds (arm64, x86_64): about 22 minutes on a slow runner, 13 on a fast one
+        env:
+          SIGN_ID: ${{ steps.signing.outputs.sign_id }} # empty: ad hoc
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="0.0.0-dev"
           VERSION="$VERSION" scripts/build-dmg.sh
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/nextterm-signing.p12"
+          keychain="$RUNNER_TEMP/nextterm-signing.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
