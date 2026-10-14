@@ -12,7 +12,7 @@ public enum ZshHistoryScript {
 # private key is bound in every keymap and a `hist` mark says so; just before Next Term's own Return, that key names the
 # line. The next line zsh adds to its history is kept out of it if it is that line to the byte, and the name is dropped
 # there whatever the line was, and at each new line and prompt: so it can never hide a line typed later. Nothing here
-# changes a history option, writes the history file, starts a process, or evaluates a line.
+# sets a history option or variable, writes the history file, starts a process, or evaluates a line.
 zmodload zsh/zleparameter 2>/dev/null || return 0
 builtin autoload -Uz add-zsh-hook add-zle-hook-widget
 
@@ -39,9 +39,10 @@ __nextterm_hkeywidget() {
   return 0
 }
 
-# zshaddhistory: the line named goes into a history list of its own (fc -p), which zsh drops as soon as it has handled
-# the line. So it is in neither the history (↑, zsh-autosuggestions) nor the file, not even until the next line, as a
-# line kept out by status 1 alone would be. Any other line goes in as it always does.
+# zshaddhistory: the line named is kept out the way zsh offers this hook (zshmisc): `fc -p` gives it a history list of
+# its own, which zsh drops as soon as it has handled the line, the user's list and history file coming back as they
+# were. So it is in neither the history (↑, zsh-autosuggestions) nor the file, not even until the next line, as a line
+# kept out by status 1 alone would be, and an earlier line like it stays. Any other line goes in as it always does.
 __nextterm_haddhistory() {
   emulate -L zsh
   local named=$__nextterm_hnamed line=$__nextterm_hline

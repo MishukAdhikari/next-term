@@ -678,7 +678,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.programTitle = nil
             self.status.shellReplaced()
             self.completion.shellReplaced()
-            self.history.disarm()
+            self.history.shellReplaced()
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -797,14 +797,29 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
-    /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, runWhenReady,
-    /// a restore's resume). Where the tab's zsh can take history's key now, the key names the line first, in the same
-    /// write, so zsh keeps the line out of its history, ↑ and autosuggestions (ShellHistory). Anywhere else (bash, fish,
-    /// a server, a program in front, a zsh without the hook) a plain Return, as before; and zsh keeps out only that line
-    /// to the byte, so one the user typed on too goes in as theirs.
-    func submitOwnLine(_ typed: String) {
+    /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, run_with_secrets,
+    /// runWhenReady's resumes and clients, a restore's resume). Where the tab's zsh can take history's key now, the key
+    /// names the line first, in the same write, so zsh keeps the line out of its history, ↑ and autosuggestions
+    /// (ShellHistory). Anywhere else (bash, fish, a server, a program in front, a zsh without the hook) a plain Return, as
+    /// before; and zsh keeps out only that line to the byte, so one the user typed on too goes in as theirs.
+    ///
+    /// Typed as a new prompt comes (a new tab's first, or just after a command ended), the line gets its Return once the
+    /// hook has marked it, a moment later at most. zsh's line editor turns bracketed paste on just after that mark: on,
+    /// the mark has come or never will. `then` runs once the Return went, or once the tab can no longer take it.
+    func submitOwnLine(_ typed: String, then: (() -> Void)? = nil) {
+        if history.awaitsMark(at: Self.now), !view.getTerminal().bracketedPasteMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, !self.exited, self.view.acceptsInput else {
+                    then?()
+                    return
+                }
+                self.submitOwnLine(typed, then: then)
+            }
+            return
+        }
         let bytes = ShellHistory.submit(typed: typed, armed: history.armed)
         view.send(data: bytes[...])
+        then?()
     }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
@@ -1275,6 +1290,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             onCommandMark?(event)
+            history.prompted(at: Self.now)
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)

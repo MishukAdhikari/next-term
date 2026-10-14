@@ -4924,6 +4924,29 @@ enum SelfTest {
         let unknown = await tool("send_to_tab", ["tab_id": "no-such-tab", "text": "x"])
         check(unknown.isError, "MCP: an unknown tab is an error, not a guess")
 
+        // Lines an agent submits stay out of the shell's history (ShellHistory): new_tab's command, the two-line prompt,
+        // `sleep 30`, and text sent with no Return that press_keys' Return then submits. A line typed as the user types it
+        // goes in. The worker's zsh reads the self-test's own config, so its history is the test's, never the user's.
+        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo tied-line", "submit": false])
+        _ = await tool("press_keys", ["tab_id": workerID, "keys": ["enter"]])
+        _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("tied-line") } }
+        worker.view.send(txt: "\u{15}echo typed-by-hand\r")
+        _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("typed-by-hand") } }
+        let historyFile = proj.appendingPathComponent(".mcp-history.txt")
+        worker.view.send(txt: "\u{15}fc -ln -100 > \(ShellQuote.quote(historyFile.path))\r")
+        func listedHistory() -> [String] {
+            let text: String = (try? String(contentsOf: historyFile, encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").map { (line: Substring) -> String in line.trimmingCharacters(in: .whitespaces) }
+        }
+        _ = await wait(10) { listedHistory().contains("echo typed-by-hand") }
+        let history: [String] = listedHistory()
+        let agents: [String] = history.filter { (line: String) -> Bool in
+            line.contains("mcp-%s") || line.contains("multi-") || line == "sleep 30" || line.contains("tied-line")
+        }
+        check(history.contains("echo typed-by-hand") && agents.isEmpty, "MCP: lines an agent submits stay out of zsh's history; the user's go in",
+              history.suffix(8).joined(separator: " | "))
+        try? FileManager.default.removeItem(at: historyFile)
+
         // The caller's own tab is marked, and it cannot type into itself.
         let out = proj.appendingPathComponent(".mcp-self.json")
         let binary = ShellQuote.quote(Bundle.main.executablePath ?? CommandLine.arguments[0])

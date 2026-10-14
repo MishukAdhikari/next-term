@@ -211,7 +211,10 @@ How it knows, most reliable first:
 1. **zsh integration.** Next Term starts zsh with its own `ZDOTDIR` holding a tiny `.zshenv`. That file
    points `ZDOTDIR` back at your real config, loads your `.zshenv`, and adds `preexec`/`precmd` hooks that
    report each command (as typed and with aliases expanded), its exit code, the working directory and any
-   suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before.
+   suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before. A
+   command Next Term or an agent runs by itself (MCP's `new_tab` and `send_to_tab`, a resume) stays out of
+   zsh's history, so ↑ and autosuggestions never offer it; a line Next Term only puts on your prompt is yours
+   once you press Return.
 2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
    Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
    with choices means it is waiting on you, anything else means idle. These hints are checked against

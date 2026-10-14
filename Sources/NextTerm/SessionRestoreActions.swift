@@ -194,9 +194,11 @@ final class RestoreActions {
             }
             if !self.isWaiting { self.finished() }
         }
-        tab.submitOwnLine(held.command)
-        MCPRestoredTabs.started(tab, StartWatch.Report(verdict: .watching))
-        watcher.begin()
+        // The watch counts the tab's writes from its Return on as the user's, so it starts once the Return went.
+        tab.submitOwnLine(held.command) {
+            MCPRestoredTabs.started(tab, StartWatch.Report(verdict: .watching))
+            watcher.begin()
+        }
     }
 
     /// Whether anything but the restore reached the tab's line since `line` was taken.

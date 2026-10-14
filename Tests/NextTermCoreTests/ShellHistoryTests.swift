@@ -99,6 +99,47 @@ import Testing
         #expect(!ready.armed)
     }
 
+    /// A line typed as a new prompt comes gets its Return once the hook has marked that line, `markWait` at most.
+    @Test func aReturnWaitsForTheNewLinesMark() {
+        var ready = ShellHistory.Readiness()
+        #expect(!ready.awaitsMark(at: 0))
+        // The first prompt: the hook loads at it, so its mark is waited for, until it comes.
+        ready.prompted(at: 10)
+        #expect(ready.awaitsMark(at: 10.2) && !ready.armed)
+        ready.marked(version: 1)
+        #expect(!ready.awaitsMark(at: 10.3) && ready.armed)
+        // A command ran and ended: the next prompt's mark is waited for, but never past markWait.
+        ready.input([0x0D])
+        ready.disarm()
+        ready.prompted(at: 20)
+        #expect(ready.awaitsMark(at: 20.5) && !ready.armed)
+        #expect(!ready.awaitsMark(at: 20 + ShellHistory.markWait))
+        // Anything that ends the line meanwhile ends the wait: the Return that comes is a plain one.
+        ready.prompted(at: 30)
+        ready.input(Array("x".utf8))
+        #expect(ready.awaitsMark(at: 30.1))
+        ready.input([0x03])
+        #expect(!ready.awaitsMark(at: 30.1))
+        ready.prompted(at: 40)
+        ready.disarm()
+        #expect(!ready.awaitsMark(at: 40.1))
+    }
+
+    /// A shell whose first prompt brought no mark (no hook) is never waited for again; a new shell starts over.
+    @Test func aShellWithoutTheHookIsWaitedForOnce() {
+        var ready = ShellHistory.Readiness()
+        ready.prompted(at: 1)
+        #expect(ready.awaitsMark(at: 1.1))
+        ready.prompted(at: 1.2)
+        #expect(!ready.awaitsMark(at: 1.3))
+        // The hook marks a later line after all (a plugin had taken zle-line-init at the first prompt): from then on.
+        ready.marked(version: 1)
+        ready.prompted(at: 9)
+        #expect(ready.awaitsMark(at: 9.1))
+        ready.shellReplaced()
+        #expect(ready == ShellHistory.Readiness())
+    }
+
     @Test func parsesTheHistMark() {
         #expect(parse("\(n);hist;1") == .history(version: 1))
         #expect(parse("\(n);hist;2") == .history(version: 2))

@@ -192,8 +192,8 @@ enum MCPControl {
         var sawWork = false
     }
     private static var lastSent: [UUID: Sent] = [:]
-    /// Text send_to_tab typed with no Return, as typed, and the tab's write count just after it: a press_keys Return that
-    /// comes next, with nothing written meanwhile, submits that line (TerminalTab.submitOwnLine).
+    /// Text send_to_tab typed with no Return, as typed, and the tab's write count just after it: a press_keys Return or
+    /// more text that comes next, with nothing written meanwhile, carries on that line (TerminalTab.submitOwnLine).
     private static var unsubmitted: [UUID: (typed: String, writes: Int)] = [:]
 
     /// Tabs an agent drives over MCP: opened with new_tab, or given input with send_to_tab, press_keys or
@@ -612,12 +612,13 @@ enum MCPControl {
     /// with the history hook keeps the line out of its history (TerminalTab.submitOwnLine).
     static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
         guard canType(tab) else { return }
-        let typed = tab.view.typeText(text)
+        // Text an earlier send_to_tab left with no Return, nothing written since, is the start of this line.
+        let earlier = unsubmitted.removeValue(forKey: tab.id).flatMap { $0.writes == tab.view.inputWrites ? $0.typed : nil }
+        let typed = (earlier ?? "") + tab.view.typeText(text)
         guard submit else {
             unsubmitted[tab.id] = (typed: typed, writes: tab.view.inputWrites)
             return
         }
-        unsubmitted[tab.id] = nil
         sent(to: tab)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard canType(tab) else { return } // the connection may have dropped in between
@@ -688,14 +689,15 @@ enum MCPControl {
             guard canType(tab) else {
                 return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
             }
-            // A Return right after send_to_tab's text, with nothing written since, submits that line.
+            let next = { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) } }
+            // A Return right after send_to_tab's text, with nothing written since, submits that line: the next key waits
+            // for it, which can wait a moment for the shell's new line (TerminalTab.submitOwnLine).
             let pending = unsubmitted.removeValue(forKey: tab.id)
             if sequences[index] == "\r", let pending, pending.writes == tab.view.inputWrites {
-                tab.submitOwnLine(pending.typed)
-            } else {
-                tab.view.send(txt: sequences[index])
+                return tab.submitOwnLine(pending.typed, then: next)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) }
+            tab.view.send(txt: sequences[index])
+            next()
         }
         sent(to: tab)
         press(0)
