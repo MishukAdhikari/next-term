@@ -208,9 +208,27 @@ public struct TabListLayout: Equatable, Sendable {
     /// row out of view counts for nothing, since its tab's row carries its mark. Working and idle never raise a
     /// chip: a list cut off shows it has more by its last row, and only what needs a look is pointed at.
     public func hidden(states: [TabState], visible: CGRect) -> TabListChips {
+        let out = outOfView(tabCount: states.count, visible: visible)
+        // Nearest the edge first, so a click on the chip scrolls the least.
+        let aboveChip: TabListChip? = Self.chip(tabs: out.above.reversed(), states: states)
+        let belowChip: TabListChip? = Self.chip(tabs: out.below, states: states)
+        return TabListChips(above: aboveChip, below: belowChip)
+    }
+
+    /// What each chip says to VoiceOver and in its tooltip, the most urgent first: "2 tabs below: 1 needs you,
+    /// 1 done". nil on a side with nothing that needs a look, as the chip itself.
+    public func chipWords(states: [TabState], visible: CGRect) -> (above: String?, below: String?) {
+        let out = outOfView(tabCount: states.count, visible: visible)
+        let above: String? = Self.words(tabs: out.above, states: states, side: "above")
+        let below: String? = Self.words(tabs: out.below, states: states, side: "below")
+        return (above, below)
+    }
+
+    /// The tabs whose own row is not wholly in view, above it and below it, in tab order.
+    private func outOfView(tabCount: Int, visible: CGRect) -> (above: [Int], below: [Int]) {
         var above: [Int] = []
         var below: [Int] = []
-        for tab in 0..<min(states.count, blocks.count) {
+        for tab in 0..<min(tabCount, blocks.count) {
             let row: CGRect = frames[blocks[tab].lowerBound]
             if row.minY < visible.minY - 0.5 {
                 above.append(tab)
@@ -218,10 +236,27 @@ public struct TabListLayout: Equatable, Sendable {
                 below.append(tab)
             }
         }
-        // Nearest the edge first, so a click on the chip scrolls the least.
-        let aboveChip: TabListChip? = Self.chip(tabs: above.reversed(), states: states)
-        let belowChip: TabListChip? = Self.chip(tabs: below, states: states)
-        return TabListChips(above: aboveChip, below: belowChip)
+        return (above, below)
+    }
+
+    private static func words(tabs: [Int], states: [TabState], side: String) -> String? {
+        let looks: [TabState] = tabs.map { states[$0] }.filter(chipUrgency.contains)
+        guard !looks.isEmpty else { return nil }
+        let parts: [String] = chipUrgency.compactMap { state -> String? in
+            let count: Int = looks.filter { $0 == state }.count
+            guard count > 0 else { return nil }
+            return "\(count) \(word(for: state, count: count))"
+        }
+        let noun: String = looks.count == 1 ? "tab" : "tabs"
+        return "\(looks.count) \(noun) \(side): " + parts.joined(separator: ", ")
+    }
+
+    private static func word(for state: TabState, count: Int) -> String {
+        switch state {
+        case .attention: return count == 1 ? "needs you" : "need you"
+        case .failed: return "failed"
+        default: return "done"
+        }
     }
 
     /// The bar's order for what it hides, without working: needs you, failed, done.

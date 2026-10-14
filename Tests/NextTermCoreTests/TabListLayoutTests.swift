@@ -232,6 +232,39 @@ import Testing
         #expect(list.hidden(states: states, visible: visible(0, 256)).below == nil) // nine rows
     }
 
+    @Test func aChipSaysWhatItCountsInWords() {
+        let list = layout(plain(14))
+        var states = Array(repeating: TabState.idle, count: 14)
+        states[10] = .attention
+        states[12] = .done
+        states[11] = .working
+        let top = list.chipWords(states: states, visible: visible(0, 256))
+        #expect(top.above == nil)
+        #expect(top.below == "2 tabs below: 1 needs you, 1 done")
+        // Needs you, then failed, then done, whatever their order in the list.
+        var early = Array(repeating: TabState.idle, count: 14)
+        early[0] = .done
+        early[1] = .failed
+        early[2] = .failed
+        let bottom = list.chipWords(states: early, visible: visible(140, 256))
+        #expect(bottom.above == "3 tabs above: 2 failed, 1 done")
+        #expect(bottom.below == nil)
+        var asking = Array(repeating: TabState.idle, count: 14)
+        asking[12] = .attention
+        #expect(list.chipWords(states: asking, visible: visible(0, 256)).below == "1 tab below: 1 needs you")
+        asking[13] = .attention
+        #expect(list.chipWords(states: asking, visible: visible(0, 256)).below == "2 tabs below: 2 need you")
+    }
+
+    @Test func aChipWithNothingToCountSaysNothing() {
+        let list = layout(plain(14))
+        var states = Array(repeating: TabState.idle, count: 14)
+        states[12] = .working
+        let words = list.chipWords(states: states, visible: visible(0, 256))
+        #expect(words.above == nil)
+        #expect(words.below == nil)
+    }
+
     // MARK: collapsed
 
     @Test func collapsedTheMarksAre24PointSlotsUnderTheChevron() {
