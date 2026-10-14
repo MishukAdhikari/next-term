@@ -870,7 +870,7 @@ public final class SecretVault {
 // MARK: the folder
 
 /// `Application Support/Next Term/Secrets.noindex`: `vault.json` (the index and every sealed value), `mask.key`,
-/// `vault.lock`, `audit.log` and `audit.log.1`, and `imports/`.
+/// `vault.lock`, `audit.log` and `audit.log.1` with `audit.log.lock`, and `imports/`.
 ///
 /// - **Private.** Made 0700 with `PrivateFolder.make(at:)`, and checked with `PrivateFolder.isPrivate` before each
 ///   use: a link, a file or another user's folder at its name is refused, never followed. Its `.noindex` name keeps
@@ -886,6 +886,8 @@ public final class SecretFolder: @unchecked Sendable {
     public static let vaultName = "vault.json"
     public static let maskKeyName = "mask.key"
     public static let lockName = "vault.lock"
+    /// Held across the audit log's rotate and append, in this copy of Next Term and in others.
+    public static let auditLockName = "audit.log.lock"
     public static let auditName = "audit.log"
     public static let olderAuditName = "audit.log.1"
     public static let importsName = "imports"
@@ -922,6 +924,8 @@ public final class SecretFolder: @unchecked Sendable {
     let owner: uid_t
     /// Runs just before a write: the tests change the file there.
     var beforeWrite: ((String) -> Void)?
+    /// Runs when an append is about to rotate the audit log: the tests start a second append there.
+    var beforeRotate: (() -> Void)?
 
     /// The folder for the Application Support folder `applicationSupport`.
     public convenience init(applicationSupport: URL, owner: uid_t = geteuid()) {
@@ -1013,12 +1017,12 @@ public final class SecretFolder: @unchecked Sendable {
         if name == Self.maskKeyName { exclude(name) }
     }
 
-    /// Runs `body` holding `flock(LOCK_EX)` on `vault.lock`, waiting for another copy of Next Term to let it go. Not
-    /// to be nested: a second lock in the same process waits for the first.
+    /// Runs `body` holding `flock(LOCK_EX)` on `name` (`vault.lock` unless given), waiting for another thread or copy
+    /// of Next Term to let it go. Not to be nested on one name: a second lock in the same process waits for the first.
     @discardableResult
-    public func withLock<T>(_ body: () throws -> T) throws -> T {
+    public func withLock<T>(_ name: String = SecretFolder.lockName, _ body: () throws -> T) throws -> T {
         try checkPrivate()
-        let descriptor = open(path(Self.lockName), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let descriptor = open(path(name), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw errno == ELOOP ? Failure.refused : Failure.system(errno) }
         defer { close(descriptor) }
         var info = stat()
@@ -1051,15 +1055,20 @@ public final class SecretFolder: @unchecked Sendable {
     }
 
     /// Appends one line to `audit.log`, 0600, with `O_APPEND`. At 1 MB the log becomes `audit.log.1` first, replacing
-    /// the older one.
+    /// the older one. The size check, the rotation and the write are one step under `audit.log.lock`, so two appends that
+    /// both find the log full rotate it once: the second sees the new log, and the older megabyte stays.
     public func appendAudit(_ line: Data) throws {
-        try checkPrivate()
+        try withLock(Self.auditLockName) { try appendAuditLocked(line) }
+    }
+
+    private func appendAuditLocked(_ line: Data) throws {
         let target = path(Self.auditName)
         var info = stat()
         var isNew = true
         if lstat(target, &info) == 0 {
             guard isOwnFile(info) else { throw Failure.refused }
             if SecretAudit.needsRotation(size: Int(info.st_size), adding: line.count) {
+                beforeRotate?()
                 guard rename(target, path(Self.olderAuditName)) == 0 else { throw Failure.system(errno) }
             } else {
                 isNew = false

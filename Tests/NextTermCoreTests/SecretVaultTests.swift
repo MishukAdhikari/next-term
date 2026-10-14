@@ -526,7 +526,7 @@ private final class FolderFixture {
         let line = Data((String(repeating: "x", count: 1023) + "\n").utf8)
         for _ in 0..<(1024 * 2 + 10) { try f.folder.appendAudit(line) }
         let names = try FileManager.default.contentsOfDirectory(atPath: f.folder.url.path).sorted()
-        #expect(names == ["audit.log", "audit.log.1"])
+        #expect(names == ["audit.log", "audit.log.1", "audit.log.lock"])
         let older = try #require(FileManager.default.attributesOfItem(atPath: f.folder.path(SecretFolder.olderAuditName))[.size] as? Int)
         let current = try #require(FileManager.default.attributesOfItem(atPath: f.folder.path(SecretFolder.auditName))[.size] as? Int)
         // 1,024 lines fill 1 MB: the log rotated twice, and the older file holds the second 1,024.
