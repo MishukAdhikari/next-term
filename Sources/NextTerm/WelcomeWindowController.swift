@@ -777,36 +777,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             project.path == path
         }
         guard let project, !project.isOpen else { return }
-        forget(project.path, title: project.title)
-    }
-
-    /// Forgets the project, with Edit › Undo (⌘Z) to put it back: “Undo Forget “docs””. Redo forgets it again.
-    private func forget(_ path: String, title: String) {
-        guard let forgotten = ProjectHistoryRecorder.shared.forget(path) else { return }
-        if let undo = window?.undoManager {
-            undo.registerUndo(withTarget: self) { (target: WelcomeWindowController) in
-                target.unforget(forgotten, title: title)
-            }
-            undo.setActionName(SwitcherText.forgetAction(title))
-        }
+        guard ProjectHistoryRecorder.shared.forget(project.path) != nil else { return }
         // While the window shows, the recorder and Recent Projects tell it as they change.
         if window?.isVisible != true { reloadProjects() }
-    }
-
-    /// Undo of a forget: the project back in this list at its last use and in File › Open Recent where it stood, and
-    /// selected, as before the forget.
-    private func unforget(_ forgotten: ProjectHistory.Forgotten, title: String) {
-        ProjectHistoryRecorder.shared.restore(forgotten)
-        if let undo = window?.undoManager {
-            undo.registerUndo(withTarget: self) { (target: WelcomeWindowController) in
-                target.forget(forgotten.path, title: title)
-            }
-            undo.setActionName(SwitcherText.forgetAction(title))
-        }
-        guard window?.isVisible == true else { return reloadProjects() }
-        // Told as it changed; read here when it was not, so the project is there to select.
-        if switcher.shown.index(of: .project(forgotten.path)) == nil { reloadProjects() }
-        select(project: forgotten.path)
     }
 
     // MARK: the switcher's keys
