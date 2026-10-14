@@ -1290,9 +1290,13 @@ extension SelfTest {
               "\(tab?.userTitle ?? "no title"), driven \(isDriven), opened by \(tab?.openedBy?.uuidString ?? "none")")
         let panel = requests.showing?.panel
         let title = panel?.window?.title ?? ""
+        // Under the command, the line that any program running as the user can read the key while it runs (review finding #14).
+        let panelTexts: String = texts(panel?.window?.contentView)
+        let saysReadable: Bool = panelTexts.contains(SecretRun.environmentNote(keys: 1))
         check(title == "A program outside Next Term's tabs asks to run printf with TOOL_KEY"
-              && texts(panel?.window?.contentView).contains("Runs as a shell command") && panel?.durationChoice[.untilLock] == nil,
-              "secrets: the panel shows the command as a shell command, with no until-the-Mac-locks choice", title)
+              && panelTexts.contains("Runs as a shell command") && panel?.durationChoice[.untilLock] == nil && saysReadable,
+              "secrets: the panel shows the command as a shell command, says any program running as you can read the key while "
+                  + "it runs, and has no until-the-Mac-locks choice", title)
         panel?.allowButton.performClick(nil)
         let started = await call.value
         let length = String(value.utf8.count)

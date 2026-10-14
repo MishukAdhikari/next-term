@@ -370,6 +370,13 @@ public enum SecretRun {
         }
     }
 
+    /// The approval panel's line under the command: the keys reach it in its environment, which any program running as
+    /// the user can read while it runs (`ps -E`), an agent's own shell tool too.
+    public static func environmentNote(keys count: Int) -> String {
+        let keys: String = count == 1 ? "this key" : "these keys"
+        return "The command, and any program running as you, can read \(keys) while it runs."
+    }
+
     /// "GITHUB_TOKEN", "A and B", or "5 keys" for three or more.
     public static func keysText(_ names: [String]) -> String {
         switch names.count {
