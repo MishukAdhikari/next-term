@@ -59,6 +59,15 @@ import Testing
         #expect(claude.first { $0.variable == "OTHER_KEY" }?.movable == true)
     }
 
+    /// The reason holds in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in none, so
+    /// it says some agents fill a reference in, not that this one would have.
+    @Test func theReasonHoldsInAClientThatFillsInNoReference() {
+        let reason = SecretImport.referenceReason
+        #expect(reason.contains("some agents fill in"))
+        #expect(reason.contains("Secrets would keep it as written"))
+        #expect(!reason.contains("not filled in"))
+    }
+
     /// Many openings and no close: read once, not once per opening.
     @Test func aCraftedValueIsReadOnce() {
         let value = "a" + String(repeating: "${", count: 200_000) + "{env:" + String(repeating: "x", count: 100_000)

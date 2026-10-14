@@ -362,7 +362,10 @@ public enum SecretImport {
         return prefixes.contains { value.hasPrefix($0) }
     }
 
-    static let referenceReason = "the value has a reference such as ${…} in it, which Secrets would keep as written, not filled in"
+    /// True in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in neither, so it doesn't
+    /// say this file's agent would have.
+    static let referenceReason = "the value has a reference such as ${…} in it, which some agents fill in when they start "
+        + "the server; Secrets would keep it as written"
 
     /// `value` with each reference inside it taken out (`${X}`, `{env:X}`, `{file:x}`, `${input:x}`, `${user_config.x}`),
     /// or nil when it holds none. The agent fills those in when it starts the server, so the rest is what the file holds.
