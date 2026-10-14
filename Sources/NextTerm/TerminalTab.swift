@@ -357,7 +357,9 @@ final class NextTermView: LocalProcessTerminalView {
 
     /// SwiftTerm 1.20 snaps its cell width to the pixel grid only when the font (or the line spacing) is set, at the
     /// scale of the window then, or of the main screen before there is one: on a screen of another scale it drew and
-    /// hit-tested cells snapped for the old one. Setting the font again snaps them for this screen.
+    /// hit-tested cells snapped for the old one, and a table's box lines drifted from its text a little more each column.
+    /// Setting the font again snaps them for this screen. AppKit calls this also when the view first goes into a window
+    /// of another scale (a tab's font is set before it has one); SelfTestCellSnap checks both.
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         guard let scale = window?.backingScaleFactor else { return }
