@@ -17,7 +17,7 @@ extension SelfTest {
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard
-        let saved = (position: app.terminalPosition, side: app.sidebarSide, fraction: defaults.object(forKey: "editorFraction"),
+        let saved = (position: app.terminalPosition, side: app.sidebarSide, shares: savedEditorShares(),
                      width: defaults.object(forKey: "sidebarWidth"), sidebar: c.isSidebarVisible, frame: window.frame)
         func restore(_ key: String, _ value: Any?) {
             if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
@@ -29,7 +29,7 @@ extension SelfTest {
         // The reporter's layout: the sidebar on the left, the terminal on the right, the editor's share 0.3185.
         app.terminalPosition = .right
         app.sidebarSide = .left
-        app.editorFraction = 0.3185279187817259
+        app.setEditorFraction(0.3185279187817259, sideBySide: true)
         c.applyLayout()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -205,7 +205,7 @@ extension SelfTest {
         if c.isSidebarVisible != saved.sidebar { c.toggleProjectSidebar(nil) }
         restore("sidebarWidth", saved.width)
         c.applyLayout()
-        restore("editorFraction", saved.fraction)
+        restoreEditorShares(saved.shares)
         restore("sidebarWidth", saved.width) // laying out saves the width it placed
     }
 

@@ -199,8 +199,9 @@ import Testing
         }
         print("Tab completion: 1,000 entries listed and ranked in \(String(format: "%.1f", elapsed)) ms of CPU time")
         #expect(listing.entries.count == 1000 && !result.candidates.isEmpty)
-        // Under 20 ms on a Mac; CI machines are slower and busier.
-        #expect(elapsed < (ProcessInfo.processInfo.environment["CI"] == nil ? 20 : 200))
+        // About 9 ms on a Mac alone; inside the whole parallel test run on a loaded Mac it has reached 20, so 30 still
+        // catches a real slowdown (three times as slow) without failing on load. CI machines are slower and busier.
+        #expect(elapsed < (ProcessInfo.processInfo.environment["CI"] == nil ? 30 : 200))
     }
 }
 

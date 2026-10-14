@@ -29,7 +29,7 @@ final class MoreButton: NSButton {
 }
 
 enum LayoutMenu {
-    /// The terminal's ⋯: split the terminal, where the terminal goes, and the sidebar's side.
+    /// The terminal's ⋯: split the terminal, where the terminal and its tabs go, and the sidebar's side.
     static func terminal() -> NSMenu {
         let menu = NSMenu(title: "Terminal")
         for (title, action, id) in [("Split Right", #selector(TerminalWindowController.splitRight(_:)), "splitRight:"),
@@ -46,6 +46,8 @@ enum LayoutMenu {
             item.representedObject = position.rawValue
             item.indentationLevel = 1
         }
+        menu.addItem(.separator())
+        TabListMenus.items(into: menu) // where its tabs go
         menu.addItem(.separator())
         sidebarItems(into: menu)
         return menu

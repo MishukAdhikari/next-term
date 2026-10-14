@@ -192,8 +192,8 @@ final class FontFamilyPopup: NSPopUpButton {
     }
 }
 
-/// Settings › Terminal: the terminal's font and colours, its cursor, scrollback and where new tabs open.
-/// Applied as they change.
+/// Settings › Terminal: the terminal's font and colours, its cursor, scrollback, where new tabs open and where
+/// the terminal sits. Applied as they change.
 final class TerminalSettingsView: NSView {
     /// Where LangGraph Studio's links open (WebLinks): the last row, before the note.
     let studioLinks = StudioLinksCheckbox.make()

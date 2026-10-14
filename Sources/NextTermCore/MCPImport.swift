@@ -123,6 +123,7 @@ public enum MCPImport {
         ("optionAsMeta", "on or off"),
         ("terminalPosition", "bottom, right, left or top"),
         ("sidebarSide", "left or right"),
+        (TerminalTabsSetting.key, "a list of the terminal’s tabs down its left or right, with the project sidebar’s side and Show Folders"),
         ("editorFontFamily", "an installed monospaced font"),
         ("terminalFontFamily", "an installed monospaced font"),
         ("terminalPalette", "16 colours with the text, background, cursor and selection colours"),
