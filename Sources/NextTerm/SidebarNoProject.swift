@@ -17,6 +17,8 @@ final class NoProjectView: NSView {
     private let heading = NSTextField(labelWithString: "")
     private let recentRows = NSStackView()
     private let stack = NSStackView()
+    /// The stack scrolls in a short window, so the ways in below the recent projects stay in reach.
+    private let scroll = NSScrollView()
     /// Open Folder… (the folder panel, as the Welcome window's Open…) and Connect to Server….
     let openRow = WayInRow(.open, title: "Open Folder…")
     let connectRow = WayInRow(.connect)
@@ -81,12 +83,29 @@ final class NoProjectView: NSView {
         stack.addArrangedSubview(ways)
         for row in [text, recentRows, ways] { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         for row in [openRow, connectRow, browseRow] as [NSView] { row.widthAnchor.constraint(equalTo: ways.widthAnchor).isActive = true }
+        let document = FlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        document.addSubview(stack)
+        scroll.documentView = document
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scroll)
+        let clip: NSClipView = scroll.contentView
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            document.topAnchor.constraint(equalTo: clip.topAnchor),
+            document.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            document.widthAnchor.constraint(equalTo: clip.widthAnchor),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 16),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -8),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -136,6 +155,11 @@ final class NoProjectView: NSView {
 
     /// For the self-test: the rows of the recent projects.
     var recentProjectRows: [RecentProjectRow] { recentRows.arrangedSubviews.compactMap { $0 as? RecentProjectRow } }
+}
+
+/// The scroll's document: its content from the top down.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// A recent project in a window's empty sidebar: a folder in the gutter, its name where the names start, and at the

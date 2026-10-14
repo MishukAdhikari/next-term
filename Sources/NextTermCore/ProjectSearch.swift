@@ -114,11 +114,13 @@ public enum ProjectSearch {
     /// Files to search: git's tracked and untracked-but-not-ignored files when `root` is in a repository,
     /// else a walk that skips the usual dependency and build folders. Paths relative to `root`. Neither goes
     /// into a protected place below `root` (ProtectedPlaces), so a search from the home folder never sets off
-    /// macOS's prompts for Desktop, Documents or ~/Library; a root inside one is searched as any other.
+    /// macOS's prompts for Desktop, Documents or ~/Library; a root inside one is searched as any other. From a root
+    /// with a protected place below it (the home folder, kept as a repository of dotfiles) git is not asked: its walk
+    /// opens every folder on the way to a file it tracks, an excluded one too (ProtectedPlaces.Walk.gitPathspecs).
     public static func files(in root: String, git: String?, protected: ProtectedPlaces = .current) -> [String] {
         let walk = protected.walk(from: root)
-        let listing = ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"] + walk.gitPathspecs
-        if let git, let data = GitRunner.run(git, listing, timeout: 30) {
+        let listing = ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+        if let git, walk.skipped.isEmpty, let data = GitRunner.run(git, listing, timeout: 30) {
             let paths = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
             if !paths.isEmpty { return Array(Set(paths)).sorted() }
         }

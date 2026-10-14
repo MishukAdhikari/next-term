@@ -1074,6 +1074,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
             // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
             if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+            // And every window's "No project open", which otherwise refreshes only when its window becomes key.
+            let showing: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+                controller.sidebar.showsNoProject
+            }
+            guard !showing.isEmpty else { return }
+            let shown: [String] = newValue.existing()
+            for controller in showing { controller.sidebar.noProject.show(recent: shown) }
         }
     }
 

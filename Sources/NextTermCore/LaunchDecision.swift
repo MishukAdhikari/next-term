@@ -83,9 +83,12 @@ public enum LaunchDecision {
             return .reopen([recent])
         }
         // Rows 6 to 8: no restore built a window. Under Resume, the projects open at the last quit, each with one
-        // fresh shell.
-        let saved = existing(input.sessionProjects, exists: exists)
-        if reopens && !saved.isEmpty { return .reopen(saved) }
+        // fresh shell. Only then are their folders checked: under any other setting a look at one in ~/Documents would
+        // set off macOS's prompt for a project the user is not reopening.
+        if reopens {
+            let saved = existing(input.sessionProjects, exists: exists)
+            if !saved.isEmpty { return .reopen(saved) }
+        }
         // Nothing to reopen: no fallback to the most recent project.
         return input.kind == .normal && input.mayOfferImport ? .importThenWelcome : .welcome
     }

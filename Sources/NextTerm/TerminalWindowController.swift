@@ -887,7 +887,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard !agents.isEmpty else { return }
         let home: String = ProtectedPlaces.current.home
         let rows: [HomeAgentOffer.Tab] = agents.map { (tab: TerminalTab) -> HomeAgentOffer.Tab in
-            HomeAgentOffer.Tab(directory: canonicalPath(tab.directory), runsAgent: true, remote: tab.remote != nil)
+            // The agent's own folder: `cd ~/app && claude` runs in app, though the tab's folder is still the prompt's
+            // until the next precmd. While the shell is still in front, no folder yet: a later tick asks again.
+            let pgid: pid_t = tcgetpgrp(tab.view.process.childfd)
+            let leads: Bool = pgid > 0 && pgid != tab.view.process.shellPid
+            let folder: String = leads ? (ProcessInspector.currentDirectory(of: pgid) ?? "") : ""
+            let local: String = folder.isEmpty ? "" : canonicalPath(folder)
+            return HomeAgentOffer.Tab(directory: tab.remote != nil ? tab.directory : local, runsAgent: true, remote: tab.remote != nil)
         }
         let on: Bool = HomeAgentOffer.isOn(.standard)
         guard HomeAgentOffer.offers(on: on, windowProject: project, offered: false, tabs: rows, home: home) else { return }

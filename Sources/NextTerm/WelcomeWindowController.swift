@@ -699,12 +699,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Reads `path`'s sessions after `delay`, while it is still the project shown; a read asked for since takes its
     /// place. Reads run one at a time off the main thread, so one per project passed would queue up behind each other.
+    /// They come from the agents' own folders; the project's is not looked at while the list may not look in it
+    /// (`mayLook`: one in ~/Documents that no window has open, which the list may have selected by itself).
     private func readSessions(of path: String, after delay: TimeInterval) {
         pendingSessionRead?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.selectedProject == path else { return }
             self.pendingSessionRead = nil
-            SessionStore.load(path) { [weak self] listing, tabs in
+            let resolving: Bool = Self.mayLook(inside: path, open: Self.openProjects())
+            SessionStore.load(path, resolving: resolving) { [weak self] listing, tabs in
                 guard let self else { return }
                 self.cache[path] = listing.sessions
                 guard self.selectedProject == path else { return }

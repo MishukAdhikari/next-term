@@ -10,10 +10,15 @@ import Foundation
 public struct ProtectedPlaces: Sendable, Equatable {
     /// The home folder, as the kernel spells it.
     public let home: String
-    /// Every protected place, absolute: those in `homeFolders` under `home`, then `systemFolders`.
+    /// Every protected place, absolute: those in `homeFolders` under `home`, then `systemFolders`, then each spelled
+    /// through the data volume (/System/Volumes/Data/Users/me/Desktop is ~/Desktop, by its firmlink).
     public let places: [String]
-    /// The folders that are never a project (ProjectRoot.isNeverRoot): /, /Volumes, the home folder and its ~/Library.
+    /// The folders that are never a project (ProjectRoot.isNeverRoot): /, /Volumes, the data volume, the home folder and
+    /// its ~/Library, each spelled through the data volume too.
     public let neverRoots: [String]
+    /// Each home folder, every spelling: in one, only its own places (`homeFolders`) are protected, even when it is on a
+    /// disk in /Volumes.
+    let homeRoots: [String]
 
     /// Under the home folder: the folders macOS asks about, and ~/Library, which holds what it asks about too (Calendars,
     /// Contacts, other apps' data), with iCloud Drive (Mobile Documents) and the cloud-storage folders (Dropbox, Google
@@ -22,6 +27,11 @@ public struct ProtectedPlaces: Sendable, Equatable {
                                      "Library/Mobile Documents", "Library/CloudStorage"]
     /// Outside it: other disks, removable and network volumes.
     public static let systemFolders = ["/Volumes"]
+    /// The data volume. /Users and /Volumes are firmlinks into it, so a folder spelled through it is the same folder, and
+    /// realpath(3) keeps that spelling as typed.
+    static let dataVolume = "/System/Volumes/Data"
+    /// `systemFolders`, spelled both ways.
+    static let systemPlaces: [String] = systemFolders + systemFolders.map { (place: String) -> String in dataVolume + place }
 
     /// `home` is spelled as the kernel spells it (`/tmp` is `/private/tmp`); the places in it are never looked at.
     public init(home: String) { self.init(homes: [home]) }
@@ -35,13 +45,20 @@ public struct ProtectedPlaces: Sendable, Equatable {
         }
         // The standardized spellings after, for `holds`: `below` and the walks start from the kernel's spelling.
         let standardHomes: [String] = inHomes.map(Self.standardized).filter { (place: String) -> Bool in !inHomes.contains(place) }
-        places = inHomes + Self.systemFolders + standardHomes
+        // And through the data volume, matched by their spelling as the others: a shell's $PWD keeps what was typed, and
+        // a walk from / reaches each place that way too (System/Volumes/Data/Users/me/Desktop).
+        let firmlinked: [String] = (inHomes + Self.systemFolders).map { (place: String) -> String in Self.dataVolume + place }
+        places = inHomes + Self.systemFolders + standardHomes + firmlinked
         // Both spellings of each: the kernel's (/private/var/…), and Foundation's standardized one (/var/…), which
-        // ProjectRoot.find gives.
+        // ProjectRoot.find gives; then the data volume's.
         let roots: [String] = homes.flatMap { (home: String) -> [String] in [home, home + "/Library"] }
         let spelled: [String] = roots + roots.map(Self.standardized)
+        let dataRoots: [String] = (["/Volumes"] + roots).map { (root: String) -> String in Self.dataVolume + root }
         var seen: Set<String> = []
-        neverRoots = (["/", "/Volumes"] + spelled).filter { (root: String) -> Bool in seen.insert(root).inserted }
+        let never: [String] = ["/", "/Volumes", Self.dataVolume] + spelled + dataRoots
+        neverRoots = never.filter { (root: String) -> Bool in seen.insert(root).inserted }
+        let dataHomes: [String] = homes.map { (home: String) -> String in Self.dataVolume + home }
+        homeRoots = homes + homes.map(Self.standardized) + dataHomes
     }
 
     /// The user's.
@@ -56,10 +73,13 @@ public struct ProtectedPlaces: Sendable, Equatable {
         return user
     }
 
-    /// `path` is never a project: /, /Volumes, the home folder or its ~/Library (ProjectRoot.isNeverRoot), however it is
-    /// spelled.
+    /// `path` is never a project: /, /Volumes, the data volume, the home folder or its ~/Library (ProjectRoot.isNeverRoot),
+    /// however it is spelled.
     public func isNeverRoot(_ path: String) -> Bool {
-        neverRoots.contains(Self.trimmed(path)) || neverRoots.contains(Self.standardized(path))
+        if neverRoots.contains(Self.trimmed(path)) || neverRoots.contains(Self.standardized(path)) { return true }
+        // A differently cased spelling (/users/me, as typed, on a case-insensitive disk) is the home folder too: the
+        // kernel's spelling says so. Each folder asked about is one a tab is in, or one about to be read.
+        return neverRoots.contains(Self.trimmed(canonicalPath(path)))
     }
 
     /// Foundation's spelling of `path`: `.` and `..` resolved, /private/var as /var, no trailing slash.
@@ -75,9 +95,56 @@ public struct ProtectedPlaces: Sendable, Equatable {
 
     /// `path` is a protected place, or inside one. Read from its spelling alone: nothing on disk is looked at, as a look
     /// is what macOS asks about.
-    public func holds(_ path: String) -> Bool {
+    public func holds(_ path: String) -> Bool { place(holding: path) != nil }
+
+    /// The innermost protected place that is `path` or holds it, nil when none does; from its spelling alone, as `holds`.
+    /// A home folder on another disk (/Volumes/Data/me) is not a protected place as a whole: in a home, only its own are.
+    func place(holding path: String) -> String? {
         let path: String = Self.trimmed(path)
-        return places.contains { (place: String) -> Bool in path == place || path.hasPrefix(place + "/") }
+        let inside: (String) -> Bool = { (place: String) -> Bool in path == place || path.hasPrefix(place + "/") }
+        let inHome: Bool = homeRoots.contains(where: inside)
+        let holding: [String] = places.filter { (place: String) -> Bool in
+            inside(place) && !(inHome && Self.systemPlaces.contains(place))
+        }
+        return holding.max { (a: String, b: String) -> Bool in a.count < b.count }
+    }
+
+    /// A look at `target`, where the link at `link` points, is one macOS asks about and the user has not asked for:
+    /// `target` is in a protected place that `link` is not in (a link in ~ to ~/Documents/notes). From the spellings
+    /// alone. A link inside the same place (one the user opened) may be followed, as the place's own files are read.
+    public func isUnopened(_ target: String, from link: String) -> Bool {
+        guard let place: String = place(holding: target) else { return false }
+        let link: String = Self.trimmed(link)
+        return !(link == place || link.hasPrefix(place + "/"))
+    }
+
+    /// Whether a saved project at `path`, in a protected place, is listed as there without a look in it. One on a disk
+    /// in /Volumes is there while that disk is mounted (`mounted`, as `mountPoints` reads them), so one on an unplugged
+    /// disk is left out and comes back with the disk; one in a place of the home folder is, and is checked when it is
+    /// opened.
+    public static func seemsThere(_ path: String, mounted: Set<String>) -> Bool {
+        guard path.hasPrefix("/Volumes/") else { return true }
+        let name: String = path.dropFirst("/Volumes/".count).split(separator: "/").first.map(String.init) ?? ""
+        return mounted.contains("/Volumes/" + name)
+    }
+
+    /// The folders volumes are mounted on (/, /Volumes/Backup, …), from the kernel's mount table: nothing on any volume
+    /// is read, so no disk's prompt comes from it.
+    public static func mountPoints() -> Set<String> {
+        let count: Int32 = getfsstat(nil, 0, MNT_NOWAIT)
+        guard count > 0 else { return [] }
+        let entries = UnsafeMutablePointer<statfs>.allocate(capacity: Int(count))
+        defer { entries.deallocate() }
+        let size: Int32 = Int32(MemoryLayout<statfs>.stride) * count
+        let filled: Int32 = getfsstat(entries, size, MNT_NOWAIT)
+        var points: Set<String> = []
+        for index in 0..<Int(max(0, min(filled, count))) {
+            let point: String = withUnsafeBytes(of: entries[index].f_mntonname) { (raw: UnsafeRawBufferPointer) -> String in
+                String(decoding: raw.prefix { (byte: UInt8) -> Bool in byte != 0 }, as: UTF8.self)
+            }
+            points.insert(point)
+        }
+        return points
     }
 
     /// The protected places below `root`, relative to it: "Desktop" from the home folder, "me/Desktop" from /Users.
@@ -107,8 +174,11 @@ public struct ProtectedPlaces: Sendable, Equatable {
             return !skipped.contains { (place: String) -> Bool in relative.hasPrefix(place + "/") }
         }
 
-        /// git's pathspecs for the same rule, from the root: "." and an exclude for each place below it, so git never
-        /// opens them (an excluded folder is not read at all). Empty when nothing is left out, as git then needs none.
+        /// git's pathspecs for the same rule, from the root: "." and an exclude for each place below it. Empty when
+        /// nothing is left out, as git then needs none. They keep git out of an excluded place only while it lists no
+        /// untracked files there or nothing in the place is tracked: listing them (`--others`, `--untracked-files`), git
+        /// opens every folder on its way to a tracked file, an excluded one too. So from a root with places left out, git
+        /// lists no untracked files, and every command it runs there gets these.
         public var gitPathspecs: [String] {
             guard !skipped.isEmpty else { return [] }
             return ["."] + skipped.sorted().map { (place: String) -> String in ":(exclude,literal)" + place }

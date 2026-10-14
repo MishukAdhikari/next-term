@@ -38,6 +38,11 @@ public final class FileNode {
     public let name: String
     public let isDirectory: Bool
     public let isSymlink: Bool
+    /// A symlink's target, absolute, as the link itself says (read from the link, nothing past it); nil for anything else.
+    public let linkTarget: String?
+    /// The link's target is in a protected place the link is not in (ProtectedPlaces.isUnopened: a link in ~ to
+    /// ~/Documents/notes). Nothing past the link is looked at until the user opens it: macOS would ask for that place.
+    public let targetUnopened: Bool
     public private(set) weak var parent: FileNode?
     /// nil until loaded.
     public private(set) var children: [FileNode]?
@@ -49,19 +54,44 @@ public final class FileNode {
     /// Never shown: version-control internals and Finder litter.
     public static let hiddenNames: Set<String> = [".git", ".DS_Store", ".svn", ".hg"]
 
-    public init(url: URL, parent: FileNode? = nil) {
+    public init(url: URL, parent: FileNode? = nil, protected: ProtectedPlaces = .current) {
         self.url = url
         self.parent = parent
         name = url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isPackageKey])
         isSymlink = values?.isSymbolicLink ?? false
         var isDir = values?.isDirectory ?? false
-        if isSymlink {
-            var target: ObjCBool = false
-            isDir = FileManager.default.fileExists(atPath: url.path, isDirectory: &target) && target.boolValue
+        let target: String? = isSymlink ? Self.target(ofLink: url) : nil
+        let unopened: Bool = target.map { (destination: String) -> Bool in protected.isUnopened(destination, from: url.path) } ?? false
+        if let target, unopened {
+            // A look past the link would ask for that place, though the user opened neither it nor the link: its name
+            // tells a folder ("notes") from a file ("notes.txt"), and the user's expand or open makes the real look.
+            isDir = URL(fileURLWithPath: target).pathExtension.isEmpty
+        } else if isSymlink {
+            var folder: ObjCBool = false
+            isDir = FileManager.default.fileExists(atPath: url.path, isDirectory: &folder) && folder.boolValue
         }
+        linkTarget = target
+        targetUnopened = unopened
         // App bundles and other packages behave as files, as in Finder.
         isDirectory = isDir && !(values?.isPackage ?? false)
+    }
+
+    /// Where the link at `url` points, absolute (a relative target is from the link's folder) with `.` and `..`
+    /// resolved: read from the link itself, so nothing past it is looked at. nil when it can't be read.
+    static func target(ofLink url: URL) -> String? {
+        guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { return nil }
+        let absolute: String = destination.hasPrefix("/") ? destination : url.deletingLastPathComponent().path + "/" + destination
+        // By the spelling alone: Foundation's standardizing looks on disk to spell /private/var as /var.
+        var parts: [Substring] = []
+        for part in absolute.split(separator: "/") where part != "." {
+            if part == ".." {
+                if !parts.isEmpty { parts.removeLast() }
+            } else {
+                parts.append(part)
+            }
+        }
+        return "/" + parts.joined(separator: "/")
     }
 
     public var path: String { url.path }
@@ -93,7 +123,7 @@ public final class FileNode {
             return Listing(nodes: [], hidden: 0, denied: FolderAccess.isPrivacyDenial(error, path: url.path, protected: protected))
         }
         let nodes = names.filter { !hiddenNames.contains($0) }
-            .map { FileNode(url: url.appendingPathComponent($0)) }
+            .map { FileNode(url: url.appendingPathComponent($0), protected: protected) }
             .filter { hiding?.hides($0.path, isDirectory: $0.isDirectory) != true }
             .sorted { a, b in
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
