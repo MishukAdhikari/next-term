@@ -34,9 +34,9 @@ private func showsAny(of value: String, in text: String) -> Bool {
         let from = json(MCPProjectTools.readFile(["path": "src/config.ts", "project": "api", "offset": 2], in: f.both, mask: .empty))
         #expect(from["text"] as? String == "  \"•••\";\nexport default apiKey;" && from["redacted"] as? Int == 1)
 
-        try f.write("api/deploy.yaml", "database:\n  password:\n\n    Tr0ub4dor3horse\n  port: 5432\n")
+        try f.write("api/deploy.yaml", "database:\n  password:\n\n    \"Tr0ub4dor3horse\"\n  port: 5432\n")
         let yaml = json(MCPProjectTools.readFile(["path": "deploy.yaml", "project": "api", "offset": 4], in: f.both, mask: .empty))
-        #expect(yaml["text"] as? String == "    •••\n  port: 5432" && yaml["redacted"] as? Int == 1)
+        #expect(yaml["text"] as? String == "    \"•••\"\n  port: 5432" && yaml["redacted"] as? Int == 1)
     }
 
     /// find_in_files: a match's line was redacted alone, so a value on the line after its name came back as it is,
@@ -52,12 +52,12 @@ private func showsAny(of value: String, in text: String) -> Bool {
         #expect(match["line"] as? Int == 2 && match["column"] as? Int == 4 && short["redacted"] as? Int == 1)
 
         let long = hexLine(1500)
-        try f.write("api/deploy.yaml", "password:\n  " + long + "\n")
+        try f.write("api/deploy.yaml", "password:\n  \"" + long + "\"\n")
         for probe in [String(long.prefix(12)), String(long.dropFirst(700).prefix(12)), String(long.suffix(12))] {
             let found = json(MCPProjectTools.findInFiles(["query": probe, "glob": "deploy.yaml", "project": "api"], in: f.both,
                                                          git: nil, mask: .empty))
             let text = try #require((found["matches"] as? [[String: Any]])?.first?["text"] as? String)
-            #expect(text == "•••" && !showsAny(of: long, in: text), "\(text.prefix(80))")
+            #expect(text == "\"•••\"" && !showsAny(of: long, in: text), "\(text.prefix(80))")
         }
 
         let quoted = hexLine(900)

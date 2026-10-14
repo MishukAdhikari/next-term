@@ -55,8 +55,9 @@ extension NamedValueBytes {
         return holds(first..<close, atLeast: 4) ? first..<close : nil
     }
 
-    /// `bareValue`: at a line's start, maybe a diff's + or -, spaces, `export`, then a name, `=` or `:` with spaces
-    /// around, and a value of 6 characters at least with no space, quote or `#` in it, and only spaces after it.
+    /// `bareValue`: at a line's start, maybe a diff's + or -, spaces, `export`, then a name, `=` or `:` with spaces and
+    /// tabs around on the name's line, and a value of 6 characters at least with no space, quote or `#` in it, and only
+    /// spaces after it.
     func bareValues() -> [Found] {
         var found: [Found] = []
         var lineStart = 0
@@ -97,9 +98,9 @@ extension NamedValueBytes {
         while case let length = foldedName(at), length > 0 { at += length }
         guard at > start else { return nil }
         let name = start..<at
-        at = skipSpaces(at)
+        at = skipBlanks(at)
         guard at < count, bytes[at] == 0x3D || bytes[at] == 0x3A else { return nil }
-        let first = skipSpaces(at + 1)
+        let first = skipBlanks(at + 1)
         var end = first
         while end < count, space(end) == 0, !Self.endsABareValue(bytes[end]) { end += 1 }
         guard holds(first..<end, atLeast: 6) else { return nil }
@@ -107,6 +108,13 @@ extension NamedValueBytes {
         while lineEnd(rest) == 0, case let length = space(rest), length > 0 { rest += length }
         guard rest == count || lineEnd(rest) > 0, MCPRedaction.isSecretName(text(name)) else { return nil }
         return (first..<end, rest)
+    }
+
+    /// Past the spaces and tabs at `index` (`[ \t]*+`): they never run past the line's end.
+    private func skipBlanks(_ index: Int) -> Int {
+        var at = index
+        while at < count, bytes[at] == 0x20 || bytes[at] == 0x09 { at += 1 }
+        return at
     }
 
     /// A quote or a `#`, which a bare value cannot hold.

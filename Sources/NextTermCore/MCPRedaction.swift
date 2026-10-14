@@ -31,9 +31,10 @@ public enum MCPRedaction {
         pattern: assignedName + #"["']?\s*+(?:=>|:=|[:=])\s*+(?:"([^"\n]{4,}+)"|'([^'\n]{4,}+)'|`([^`\n]{4,}+)`)"#)
 
     /// `API_KEY=…` or `password: …` on a line of its own (env, YAML, INI): the bare value. In a diff the
-    /// line starts with its + or -.
+    /// line starts with its + or -. The spaces around the `=` or `:` are spaces and tabs on the name's line: an empty
+    /// value (`DB_PASSWORD=`) never takes the next line with text as its value.
     static let bareValue = try! NSRegularExpression(
-        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"\s*+[:=]\s*+([^\s"'`#]{6,}+)\s*$"#,
+        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"[ \t]*+[:=][ \t]*+([^\s"'`#]{6,}+)\s*$"#,
         options: [.caseInsensitive, .anchorsMatchLines])
 
     /// A run long enough to be a key; masked only if it looks random (see `looksRandom`).

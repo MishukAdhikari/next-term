@@ -2,8 +2,9 @@ import Foundation
 
 extension MCPRedaction {
     /// The values `redact` masks for a name on a line before their own: `const apiKey =` with the value on the next
-    /// line, as a formatter writes a long assignment, or a YAML key with its value on the line under it. The patterns
-    /// read across lines, so `redact` masks such a value in the text whole. But read_file's cut and find_in_files'
+    /// line, as a formatter writes a long assignment, a YAML key with its quoted value on the line under it, or `export`
+    /// on a line before a bare value's name. The patterns read across lines there (a bare value's `=` or `:` stays on its
+    /// name's line), so `redact` masks such a value in the text whole. But read_file's cut and find_in_files'
     /// snippet look at the value's line alone, and read_file from an offset may start after the name: the line on its
     /// own showed the value. Such a value is made ••• in its line first, and the line goes on as any other.
     struct CarriedValues {
