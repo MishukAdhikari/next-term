@@ -1,0 +1,19 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "type": "agent_list",
+    "agents": [
+      {
+        "terminal_id": "t1",
+        "agent": "claude",
+        "agent_status": "blocked",
+        "workspace_id": "w1",
+        "tab_id": "w1:t1",
+        "pane_id": "w1:p1",
+        "focused": true,
+        "cwd": "/home/me/api",
+        "revision": 2
+      }
+    ]
+  }
+}

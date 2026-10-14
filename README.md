@@ -67,7 +67,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
   the server except the Tab hook you allow, and no password is stored. Agents get seven MCP tools to open tabs
-  there and read the changes.
+  there and read the changes. To find herdr, a herdr tab uses the copy your running herdr server runs, or may
+  run your login shell on the server once (no terminal, 3 seconds at most) to read its PATH; when herdr isn't
+  there, the tab says where it looked and links herdr's install page.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
   first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,
@@ -256,6 +258,10 @@ In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-clic
 Editor › Open files with a single click). Right-click for Open in New Tab, Open as Project, Reveal in Finder,
 Insert Path in Terminal, Copy Path and Copy Relative Path. Tabs can be dragged to reorder; middle-click
 closes; tabs that don't fit go behind the » button.
+
+In a terminal, when a program reads the mouse (herdr, tmux, vim with the mouse on), right and middle clicks go to
+it; Shift-right-click or Control-click opens Next Term's menu. A tab Next Term's own tmux keeps on a server keeps
+Next Term's menu.
 
 ## Security
 

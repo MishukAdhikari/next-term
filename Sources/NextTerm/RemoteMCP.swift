@@ -99,6 +99,9 @@ enum RemoteMCP {
                                        "sessions": probe.sessions.map(describe)]
             info["tmux"] = probe.tmux ?? NSNull()
             info["herdr"] = probe.herdr ?? NSNull()
+            if let path = probe.herdrPath { info["herdr_path"] = path }
+            if let how = RemoteProbe.foundHow(probe.herdrHow) { info["herdr_found"] = how }
+            if let summary = probe.herdrSummary { info["herdr_summary"] = summary }
             info["git"] = probe.git ?? NSNull()
             if let linger = probe.linger { info["linger"] = linger }
             var notes: [String] = []
@@ -108,7 +111,8 @@ enum RemoteMCP {
                 notes.append("tmux on this host is older than 3.2: tabs use it, but Next Term is tested with 3.2 and later.")
             }
             if found.keep == .herdr && probe.herdr == nil {
-                notes.append("keep is herdr but herdr is not on this host (herdr.dev). Next Term never installs it.")
+                let looked = probe.herdrSummary ?? "herdr is not on this host"
+                notes.append("keep is herdr, but \(looked). Next Term never installs it; the user can install it from \(RemoteShell.herdrInstallPage).")
             }
             if probe.linger == "no" {
                 notes.append("systemd linger is off for this user: on hosts that end a user's processes at logout (KillUserProcesses), kept sessions can stop when the last connection closes. The user can run `sudo loginctl enable-linger $USER` on the host.")
@@ -223,7 +227,8 @@ enum RemoteMCP {
                 if let tab = openTabs[session.name] { entry["tab_id"] = tab }
                 return entry
             }]
-            if let agents = listed.herdr {
+            if let report = listed.herdr, report.listing != .missing, let problem = report.problem { info["herdr"] = problem }
+            if let report = listed.herdr, case .agents(let agents) = report.listing {
                 info["herdr_agents"] = agents.map { agent -> [String: Any] in
                     var entry: [String: Any] = ["pane": agent.paneID, "agent": agent.name, "state": agent.status.rawValue]
                     if let title = agent.title { entry["title"] = title }

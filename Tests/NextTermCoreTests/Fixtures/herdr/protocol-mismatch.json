@@ -1,0 +1,1 @@
+{"id":"cli:agent:list","error":{"code":"protocol_mismatch","message":"client protocol 7 is newer than server protocol 6; restart the Herdr server to use this client"}}

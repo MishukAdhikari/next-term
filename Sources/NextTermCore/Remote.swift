@@ -42,11 +42,11 @@ public enum KeepMode: String, Codable, Sendable, CaseIterable {
     /// the host and it fell back.
     public func shown(fellBack: Bool) -> KeepMode { fellBack ? .off : self }
 
-    /// The tab's tooltip line: "Sessions kept: tmux", or for a tab that fell back "Sessions kept: Off (herdr isn’t
-    /// on the host)".
+    /// The tab's tooltip line: "Sessions kept: tmux", or for a tab that fell back "Sessions kept: Off (herdr wasn’t
+    /// found on the host)".
     public func keptLine(fellBack: Bool) -> String {
         guard fellBack, self != .off else { return "Sessions kept: \(label)" }
-        return "Sessions kept: Off (\(label) isn’t on the host)"
+        return "Sessions kept: Off (\(label) wasn’t found on the host)"
     }
 }
 
@@ -344,27 +344,6 @@ public enum RemoteShell {
     /// Where Next Term keeps its few files on the host (tab pid files, the tmux config).
     static let cacheDir = "\"$HOME/.cache/next-term\""
 
-    /// Finds the user's herdr: on PATH or in its usual install folders. Sets H.
-    static let findHerdr = """
-        H=$(command -v herdr 2>/dev/null)
-        if [ -z "$H" ]; then
-          for p in "$HOME/.local/bin/herdr" "$HOME/.cargo/bin/herdr" /opt/homebrew/bin/herdr /usr/local/bin/herdr; do
-            if [ -x "$p" ]; then H=$p; break; fi
-          done
-        fi
-        """
-
-    /// Finds tmux: on PATH, or where Homebrew, Linuxbrew and user installs put it (a non-login shell's
-    /// PATH often lacks them). Sets T.
-    static let findTmux = """
-        T=$(command -v tmux 2>/dev/null)
-        if [ -z "$T" ]; then
-          for p in "$HOME/.local/bin/tmux" /home/linuxbrew/.linuxbrew/bin/tmux /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
-            if [ -x "$p" ]; then T=$p; break; fi
-          done
-        fi
-        """
-
     /// Settings for Next Term's own tmux server (`-L nextterm`), never the user's default server.
     /// Next Term's tab bar replaces tmux's status line; the mouse wheel scrolls tmux's history; titles
     /// (Claude Code names its task) reach the tab; Escape is not delayed (agents use it to interrupt).
@@ -396,8 +375,8 @@ public enum RemoteShell {
     /// or tmux tab starts its shell through the hook's start command while the hook's files are there.
     public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String, token: String = "",
                                  completionHook: Bool = false) -> String {
-        // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell.
-        // K.nodir: the folder was not there.
+        // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell (it holds why,
+        // when a copy was there but did not run). K.nodir: the folder was not there.
         var lines = [
             "C=\(cacheDir)",
             "K=\"$C/tabs/\(safeName(tabID))\"",
@@ -419,7 +398,7 @@ public enum RemoteShell {
             lines.append(completionHook ? RemoteCompletionHook.offLaunch : plainShell(nil))
         case .tmux:
             lines += [
-                findTmux,
+                tmuxFinder(checked: true),
                 "if [ -z \"$T\" ]; then",
                 "  : > \"$K.plain\" 2>/dev/null",
                 plainShell("tmux is not installed on this host: this is a plain shell, and what runs in it stops if the connection drops."),
@@ -429,11 +408,13 @@ public enum RemoteShell {
                     : "exec \"$T\" -L nextterm -f \"$C/tmux.conf\" new-session -A -s \(quote(safeName(session))) -c \"$PWD\"",
             ]
         case .herdr:
+            // herdr's own socket variables (its running server's, or the login shell's) are exported by the finder, so
+            // the tab attaches to the session the user has. A copy that answered --version is what runs.
             lines += [
-                findHerdr,
+                herdrTabFinder(),
                 "if [ -z \"$H\" ]; then",
-                "  : > \"$K.plain\" 2>/dev/null",
-                plainShell("herdr is not installed on this host (see herdr.dev). Next Term uses your own herdr and never installs it: this is a plain shell."),
+                herdrMissingNote,
+                "  exec \"${SHELL:-/bin/sh}\" -l",
                 "fi",
                 "exec \"$H\"",
             ]
@@ -442,8 +423,9 @@ public enum RemoteShell {
     }
 
     /// One status check for every tab on a host: what runs in front of each tab's shell, its folder, and
-    /// (if a tab uses herdr) herdr's list of agents.
-    public static func pollScript(tabs: [(id: String, keep: KeepMode, session: String)]) -> String {
+    /// (if a tab uses herdr) herdr's list of agents. `herdr`: a tab was opened with herdr, even one that fell back to a
+    /// plain shell (checked as one), which then learns when herdr is there.
+    public static func pollScript(tabs: [(id: String, keep: KeepMode, session: String)], herdr: Bool = false) -> String {
         var lines = [
             "C=\(cacheDir)",
             findTmux,
@@ -499,40 +481,50 @@ public enum RemoteShell {
                 "printf '%s\\t' \(quote(id)); nt_fg \"$p\"",
                 "d=$(nt_clean \"$d\" 1024); [ -n \"$d\" ] && printf '%s\\tdir\\t%s\\n' \(quote(id)) \"$d\"",
                 "if [ -n \"$p\" ] && [ -n \"$g\" ]; then j=$(nt_jobs \"$p\" \"$g\"); [ -n \"$j\" ] && printf '%s\\tjobs\\t%s\\n' \(quote(id)) \"$j\"; fi",
-                "[ -e \"$C/tabs/\(id).plain\" ] && printf '%s\\tplain\\n' \(quote(id))",
+                // Why it fell back, when a copy was there but did not run (one line, cut).
+                "[ -e \"$C/tabs/\(id).plain\" ] && printf '%s\\tplain\\t%s\\n' \(quote(id)) \"$(nt_clean \"$(head -n 1 \"$C/tabs/\(id).plain\" 2>/dev/null)\" 300)\"",
                 "[ -e \"$C/tabs/\(id).nodir\" ] && printf '%s\\tnodir\\n' \(quote(id))",
             ]
         }
-        if tabs.contains(where: { $0.keep == .herdr }) {
-            lines += [findHerdr, "if [ -n \"$H\" ]; then printf '\\n%s\\n' \(quote(herdrMarker)); \"$H\" agent list 2>/dev/null | tr -d '\\000-\\037' | head -c 1000000; echo; fi"]
+        if herdr || tabs.contains(where: { $0.keep == .herdr }) {
+            lines += [findHerdr, herdrSection]
         }
         return lines.joined(separator: "\n")
     }
 
-    /// What the host has: for check_host and the sheet.
-    public static let probeScript = """
+    /// What the host has: for check_host and the sheet. herdr is looked for as a tab looks (the login shell's PATH
+    /// too), and the cache the status checks read is written again.
+    public static var probeScript: String { """
+        C=\(cacheDir)
         printf '\\n%s\\n' \(quote(marker))
         printf 'os\\t%s\\n' "$(uname -sm 2>/dev/null)"
         printf 'shell\\t%s\\n' "${SHELL:-}"
         printf 'home\\t%s\\n' "$HOME"
         \(findTmux)
         [ -n "$T" ] && printf 'tmux\\t%s\\n' "$("$T" -V 2>/dev/null)"
-        \(findHerdr)
-        [ -n "$H" ] && printf 'herdr\\t%s\\n' "$("$H" --version 2>/dev/null | head -n 1)"
+        \(herdrTabFinder())
+        if [ -n "$H" ]; then
+          v=$("$H" --version 2>/dev/null </dev/null | head -n 1 | tr -d '\\000-\\037\\177' | cut -c 1-200)
+          printf 'herdr\\t%s\\t%s\\t%s\\n' "$v" "$(printf '%s' "$H" | tr -d '\\000-\\037\\177' | cut -c 1-1024)" "$HW"
+        else
+          printf 'herdr-missing\\t%s\\n' "${nt_bad:+$nt_bad did not run (herdr --version said: $nt_said)}"
+        fi
         command -v git >/dev/null 2>&1 && printf 'git\\t%s\\n' "$(git --version 2>/dev/null)"
         for a in claude codex gemini; do command -v "$a" >/dev/null 2>&1 && printf 'agent\\t%s\\n' "$a"; done
         command -v loginctl >/dev/null 2>&1 && printf 'linger\\t%s\\n' "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
         [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         true
         """
+    }
 
     /// The kept sessions on a host: Next Term's tmux sessions, and herdr's agents.
     public static let sessionsScript = """
+        C=\(cacheDir)
         printf '\\n%s\\n' \(quote(marker))
         \(findTmux)
         [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         \(findHerdr)
-        if [ -n "$H" ]; then printf '\\n%s\\n' \(quote(herdrMarker)); "$H" agent list 2>/dev/null | tr -d '\\000-\\037' | head -c 1000000; echo; fi
+        \(herdrSection)
         true
         """
 
@@ -604,6 +596,8 @@ public struct RemoteTabReport: Equatable, Sendable {
     public var jobSummary = ""
     /// tmux or herdr was missing: the tab is a plain shell, kept by nothing.
     public var plain = false
+    /// Why, when a copy was there but did not run ("herdr at /x did not run (…)"); nil when none was found.
+    public var plainReason: String?
     /// The folder asked for was not there; the tab opened in the home folder.
     public var folderMissing = false
     /// A tmux tab's pane is in one of tmux's modes (copy mode): what is typed goes to tmux, not to the shell.
@@ -612,8 +606,8 @@ public struct RemoteTabReport: Equatable, Sendable {
 
 public struct RemotePoll: Equatable, Sendable {
     public var tabs: [String: RemoteTabReport] = [:]
-    /// herdr's agents, when a tab on this host uses herdr and herdr answered.
-    public var herdr: [HerdrAgent]?
+    /// What herdr said, when a tab on this host was opened with herdr: its agents, or why there are none.
+    public var herdr: HerdrReport?
 
     public init() {}
 
@@ -625,8 +619,9 @@ public struct RemotePoll: Equatable, Sendable {
             let line = lines[index]
             index += 1
             if line == RemoteShell.herdrMarker {
-                if index < lines.count { poll.herdr = HerdrAgent.parseList(String(lines[index])) }
-                index += 1
+                let (report, consumed) = HerdrReport.parse(section: lines[index...])
+                poll.herdr = report
+                index += consumed
                 continue
             }
             let fields = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
@@ -640,6 +635,7 @@ public struct RemotePoll: Equatable, Sendable {
                 report.jobSummary = fields.count > 3 ? fields[3].split(separator: ";").map(String.init).joined(separator: "\n") : ""
             case "plain":
                 report.plain = true
+                if fields.count >= 3, !fields[2].isEmpty { report.plainReason = fields[2...].joined(separator: " ") }
             case "nodir":
                 report.folderMissing = true
             case "mode":
@@ -666,57 +662,19 @@ public struct RemotePoll: Equatable, Sendable {
     }
 }
 
-/// An agent as herdr lists it (`herdr agent list`).
-public struct HerdrAgent: Equatable, Sendable {
-    public enum Status: String, Sendable {
-        case idle, working, blocked, done, unknown
-    }
-    public var paneID: String
-    public var name: String
-    public var status: Status
-    public var title: String?
-    public var directory: String?
-
-    /// herdr's JSON (`{"result": {"agents": [...]}}`, or the bare result): unknown fields are ignored.
-    public static func parseList(_ json: String) -> [HerdrAgent]? {
-        guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) else { return nil }
-        func agents(in value: Any) -> [[String: Any]]? {
-            guard let dict = value as? [String: Any] else { return nil }
-            if let list = dict["agents"] as? [[String: Any]] { return list }
-            if let result = dict["result"] { return agents(in: result) }
-            return nil
-        }
-        guard let list = agents(in: object) else { return nil }
-        return list.map { item in
-            let label = [item["name"], item["display_agent"], item["agent"]].compactMap { $0 as? String }.first { !$0.isEmpty }
-            return HerdrAgent(
-                paneID: String((item["pane_id"] as? String ?? "").prefix(80)),
-                name: String((label ?? "agent").prefix(80)),
-                status: Status(rawValue: item["agent_status"] as? String ?? "") ?? .unknown,
-                title: (item["terminal_title_stripped"] as? String) ?? (item["title"] as? String),
-                directory: (item["foreground_cwd"] as? String) ?? (item["cwd"] as? String)
-            )
-        }
-    }
-
-    /// What a tab showing herdr reports for all its agents together: a decision first, then work.
-    public static func activity(_ agents: [HerdrAgent]) -> AgentActivity {
-        if let blocked = agents.first(where: { $0.status == .blocked }) {
-            let others = agents.filter { $0.status == .blocked }.count - 1
-            return .asking("\(blocked.name) (\(blocked.paneID)) needs a decision" + (others > 0 ? ", and \(others) more" : ""))
-        }
-        if agents.contains(where: { $0.status == .working }) { return .working }
-        return .idle
-    }
-}
-
 /// What check_host found.
 public struct RemoteProbe: Equatable, Sendable {
     public var os = ""
     public var shell = ""
     public var home = ""
     public var tmux: String?
+    /// herdr's version ("herdr 0.9.4"), where it is, and how it was found (see HerdrReport.how).
     public var herdr: String?
+    public var herdrPath: String?
+    public var herdrHow: String?
+    /// No herdr was found; `herdrBroken` names a copy that was there but did not run.
+    public var herdrMissing = false
+    public var herdrBroken: String?
     public var git: String?
     public var agents: [String] = []
     /// systemd's linger for the user: "yes" keeps their processes after logout on hosts that kill them.
@@ -734,6 +692,32 @@ public struct RemoteProbe: Equatable, Sendable {
         return major > 3 || (major == 3 && (parts.dropFirst().first ?? 0) >= 2)
     }
 
+    /// How the finder found herdr, in words for check_host.
+    public static func foundHow(_ how: String?) -> String? {
+        switch how {
+        case "running": return "the executable of your running herdr server"
+        case "login": return "on your login shell’s PATH"
+        case "path": return "on /bin/sh’s PATH"
+        case "known": return "in one of herdr’s usual install folders"
+        case "cache": return "where a tab found it before"
+        default: return nil
+        }
+    }
+
+    /// check_host's line on herdr: "herdr 0.9.4 at /home/u/.local/bin/herdr (found on your login shell’s PATH)", or
+    /// where Next Term looked; nil when the host said nothing of herdr (an older Next Term's check).
+    public var herdrSummary: String? {
+        if let herdr {
+            let at = herdrPath.map { " at \($0)" } ?? ""
+            let how = Self.foundHow(herdrHow).map { " (found \($0))" } ?? ""
+            return (herdr.isEmpty ? "herdr" : herdr) + at + how
+        }
+        guard herdrMissing else { return nil }
+        let broken = herdrBroken.map { "\($0); " } ?? ""
+        return broken + "herdr not found: looked on your login shell’s PATH and /bin/sh’s PATH, and in ~/.local/bin, ~/bin, "
+            + "~/.cargo/bin and the Homebrew, mise, asdf and Nix folders"
+    }
+
     public static func parse(_ output: String) -> RemoteProbe? {
         guard let lines = RemoteShell.payload(output) else { return nil }
         var probe = RemoteProbe()
@@ -745,7 +729,13 @@ public struct RemoteProbe: Equatable, Sendable {
             case "shell": probe.shell = fields[1]
             case "home": probe.home = fields[1]
             case "tmux": probe.tmux = fields[1]
-            case "herdr": probe.herdr = fields[1]
+            case "herdr":
+                probe.herdr = fields[1]
+                probe.herdrPath = fields.count > 2 && !fields[2].isEmpty ? fields[2] : nil
+                probe.herdrHow = fields.count > 3 && !fields[3].isEmpty ? fields[3] : nil
+            case "herdr-missing":
+                probe.herdrMissing = true
+                probe.herdrBroken = fields[1].isEmpty ? nil : fields[1]
             case "git": probe.git = fields[1]
             case "agent": probe.agents.append(fields[1])
             case "linger": probe.linger = fields[1]
@@ -773,17 +763,18 @@ public struct RemoteSession: Equatable, Sendable {
         program = fields[4]
     }
 
-    public static func parseList(_ output: String) -> (sessions: [RemoteSession], herdr: [HerdrAgent]?)? {
+    public static func parseList(_ output: String) -> (sessions: [RemoteSession], herdr: HerdrReport?)? {
         guard let lines = RemoteShell.payload(output) else { return nil }
         var sessions: [RemoteSession] = []
-        var herdr: [HerdrAgent]?
+        var herdr: HerdrReport?
         var index = 0
         while index < lines.count {
             let line = lines[index]
             index += 1
             if line == RemoteShell.herdrMarker {
-                if index < lines.count { herdr = HerdrAgent.parseList(String(lines[index])) }
-                index += 1
+                let (report, consumed) = HerdrReport.parse(section: lines[index...])
+                herdr = report
+                index += consumed
                 continue
             }
             if let session = RemoteSession(fields: line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)) {
