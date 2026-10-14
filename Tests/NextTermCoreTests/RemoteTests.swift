@@ -357,6 +357,13 @@ import Testing
         #expect(listed.herdr == [])
     }
 
+    /// check_host looks for OpenCode on the host's PATH beside Claude Code, Codex and Gemini CLI.
+    @Test func theProbeLooksForOpencode() throws {
+        #expect(RemoteShell.probeScript.contains("for a in claude codex gemini opencode; do command -v \"$a\""))
+        let probe = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nos\tLinux aarch64\nagent\tclaude\nagent\topencode\n"))
+        #expect(probe.agents == ["claude", "opencode"])
+    }
+
     @Test func changesSplitIntoStatusStatAndDiff() throws {
         let output = """
             \(RemoteShell.marker)

@@ -58,15 +58,23 @@ public enum MCPRegistrar {
     static let claudeAppFolder = "Library/Application Support/Claude"
 
     /// The agents, from claudedocs/research_next-term-mcp-registration (paths and shapes checked against
-    /// each agent's source). Claude Code is registered through its own command line instead.
-    public static func targets(home: String = NSHomeDirectory()) -> [Target] {
+    /// each agent's source). Claude Code is registered through its own command line instead. `environment`: the
+    /// variables that move OpenCode's config folder (`OpencodePaths`); nil takes the login shell's for the user's own
+    /// home, and none for another.
+    public static func targets(home: String = NSHomeDirectory(), environment: [String: String]? = nil) -> [Target] {
         func path(_ relative: String) -> String { (home as NSString).appendingPathComponent(relative) }
         func existing(_ candidates: [String]) -> String {
             candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
         }
         let standard: @Sendable (String) -> [String: Any] = { ["command": $0, "args": ["mcp"]] }
-        // opencode reads opencode.json, then opencode.jsonc (later wins): write the one that exists.
-        let opencode = existing([path(".config/opencode/opencode.jsonc"), path(".config/opencode/opencode.json")])
+        // OpenCode reads opencode.json, then opencode.jsonc (later wins), in its config folder, which XDG_CONFIG_HOME
+        // moves: write the one that exists.
+        let variables = environment ?? OpencodePaths.environment(home: home)
+        let opencodeFolder = OpencodePaths.configFolder(home: home, environment: variables) as NSString
+        let opencodeFiles = ["opencode.jsonc", "opencode.json"].map { (name: String) -> String in
+            opencodeFolder.appendingPathComponent(name)
+        }
+        let opencode = existing(opencodeFiles)
         let amp = existing([path(".config/amp/settings.json"), path(".config/amp/settings.jsonc")])
         return [
             Target(id: "codex", name: "Codex", programs: ["codex"], markers: [path(".codex")], apps: ["com.openai.codex"],

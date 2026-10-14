@@ -32,6 +32,15 @@ import Testing
         }
     }
 
+    /// OpenCode is named beside Claude Code and Codex wherever the server gives agents as examples.
+    @Test func theAgentExamplesNameOpencode() throws {
+        #expect(MCPServer.instructions.contains(#"a command such as "claude", "codex" or "opencode""#))
+        for name in ["new_tab", "check_host", "new_remote_tab"] {
+            let tool = try #require(MCPServer.tools.first { $0.name == name })
+            #expect(tool.description.contains("opencode"), "\(name)")
+        }
+    }
+
     /// A 2026-07-28 client first asks `server/discover` (Claude Code 2.1.295 does); "method not found" sends it
     /// back to the 2025 handshake at once.
     @Test func discoverIsNotFoundSoTheClientShakesHandsThe2025Way() {
@@ -304,6 +313,33 @@ import Testing
         let opencode = try target("opencode", home: home)
         #expect(MCPRegistrar.isOurs(command: MCPRegistrar.command(of: opencode.entry(command))))
         #expect(try read(try target("qwen", home: home).file).contains("\"$version\": 4"))
+    }
+
+    /// OpenCode reads its config folder by XDG (`$XDG_CONFIG_HOME/opencode`), opencode.json then opencode.jsonc there,
+    /// the later winning: Next Term's entry goes in the one that exists, the .jsonc when both or neither do.
+    @Test func opencodeIsRegisteredInTheConfigFolderXDGMoves() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let folder = home + "/xdg/opencode"
+        let moved = ["XDG_CONFIG_HOME": home + "/xdg"]
+        func opencode(_ environment: [String: String]) throws -> MCPRegistrar.Target {
+            try #require(MCPRegistrar.targets(home: home, environment: environment).first { $0.id == "opencode" })
+        }
+        #expect(try opencode(moved).file == folder + "/opencode.jsonc")
+        try write("{}\n", folder + "/opencode.json")
+        #expect(try opencode(moved).file == folder + "/opencode.json")
+        try write("{\n  // mine\n}\n", folder + "/opencode.jsonc")
+        #expect(try opencode(moved).file == folder + "/opencode.jsonc")
+        // No variable: ~/.config/opencode, as before.
+        #expect(try opencode([:]).file == home + "/.config/opencode/opencode.jsonc")
+        // Registered in the moved folder, and nothing written under ~/.config.
+        let inFolder = try opencode(moved)
+        #expect(MCPRegistrar.register(inFolder, command: command, programInstalled: true) == .registered)
+        let servers = json(folder + "/opencode.jsonc")?["mcp"] as? [String: Any]
+        #expect(MCPRegistrar.command(of: servers?["next-term"]) == command)
+        #expect(!FileManager.default.fileExists(atPath: home + "/.config"))
+        // A home that is not the user's own never takes the login shell's variables (a test's made-up home).
+        #expect(try target("opencode", home: home).file == home + "/.config/opencode/opencode.jsonc")
     }
 
     @Test func commentsAndOtherServersSurvive() throws {

@@ -505,7 +505,7 @@ public enum RemoteShell {
         \(findHerdr)
         [ -n "$H" ] && printf 'herdr\\t%s\\n' "$("$H" --version 2>/dev/null | head -n 1)"
         command -v git >/dev/null 2>&1 && printf 'git\\t%s\\n' "$(git --version 2>/dev/null)"
-        for a in claude codex gemini; do command -v "$a" >/dev/null 2>&1 && printf 'agent\\t%s\\n' "$a"; done
+        for a in claude codex gemini opencode; do command -v "$a" >/dev/null 2>&1 && printf 'agent\\t%s\\n' "$a"; done
         command -v loginctl >/dev/null 2>&1 && printf 'linger\\t%s\\n' "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)"
         [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         true
