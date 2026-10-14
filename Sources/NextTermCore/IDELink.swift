@@ -44,6 +44,26 @@ public enum IDELink {
         return Mention(filePath: path, lineStart: lines.lowerBound - shift, lineEnd: lines.upperBound - shift)
     }
 
+    /// The mentions Send to Agent puts into a linked agent's prompt for `items`, in order, or nil when any of them has to be
+    /// typed: a mention carries only a file and its lines, so a folder, a note ("as staged", "deleted") or code that is not
+    /// on disk is typed, and so is a file without lines for OpenCode. All or none, so the items stay in one prompt.
+    public static func mentions(_ items: [ContextItem], opencode: Bool) -> [Mention]? {
+        var mentions: [Mention] = []
+        for item in items {
+            guard !item.isFolder, item.note == nil, item.code == nil else { return nil }
+            guard let mention = mention(path: item.path, lines: item.lines, opencode: opencode) else { return nil }
+            mentions.append(mention)
+        }
+        return mentions
+    }
+
+    /// Whether a client of the Claude Code link is OpenCode, which counts a mention's lines from 1 and takes none without
+    /// lines: it names itself "opencode" in its handshake, or it came in without the token, which only an opencode process
+    /// running in one of this app's tabs can (IDEPeer), whatever name it then gives.
+    public static func isOpencode(clientName: String?, tokenless: Bool) -> Bool {
+        tokenless || clientName == "opencode"
+    }
+
     /// What a linked OpenCode is told once the editor shows no file it may share (none open, or one that holds secrets):
     /// the last file shared with it, with no text and no range, which OpenCode tells its model only as an open file. The
     /// clearing message Claude Code takes (a selection with no file and no text) fails OpenCode's check, and OpenCode

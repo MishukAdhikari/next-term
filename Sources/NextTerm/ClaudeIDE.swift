@@ -32,7 +32,7 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         var client = ""
         /// Came in without the token, and passed the peer check (opencode in a tab).
         var tokenless = false
-        /// opencode, which never sends ide_connected (with or without the token).
+        /// opencode, which never sends ide_connected (with or without the token): named so in its handshake, or tokenless.
         var opencode = false
         /// OpenCode: the last file whose selection it was sent, named again once the editor shows no file it may share.
         var lastShared: String?
@@ -291,7 +291,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
             let known = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
             let asked = params["protocolVersion"] as? String ?? ""
             sessions[client]?.client = ((params["clientInfo"] as? [String: Any])?["version"] as? String).map { "claude-code " + $0 } ?? ""
-            sessions[client]?.opencode = (params["clientInfo"] as? [String: Any])?["name"] as? String == "opencode"
+            let name = (params["clientInfo"] as? [String: Any])?["name"] as? String
+            sessions[client]?.opencode = IDELink.isOpencode(clientName: name, tokenless: tokenless)
             reply(connection, id, result: [
                 "protocolVersion": known.contains(asked) ? asked : "2025-06-18",
                 "capabilities": ["tools": ["listChanged": true]],
@@ -391,8 +392,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         }
     }
 
-    /// Whether `client` named itself OpenCode in its handshake: it counts a mention's lines from 1 and takes none without
-    /// lines (IDELink.mention).
+    /// Whether `client` is OpenCode (named so in its handshake, or in without the token: IDELink.isOpencode). It counts a
+    /// mention's lines from 1 and takes none without lines (IDELink.mention).
     func isOpencode(_ client: ClientID) -> Bool {
         queue.sync { sessions[client]?.opencode ?? false }
     }

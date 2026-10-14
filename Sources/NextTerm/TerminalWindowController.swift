@@ -1800,12 +1800,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // Claude connected to Next Term: the mentions go into its prompt directly, as from VS Code. A mention
         // carries only the file and its lines, so anything with more to say ("as staged", "deleted") is typed.
         // OpenCode takes a mention only with lines: a whole file is typed too, in its own form.
-        if let client = AppDelegate.shared.claudeClient(for: tab), items.allSatisfy({ !$0.isFolder && $0.code == nil && $0.note == nil }) {
-            let opencode = ClaudeIDEServer.shared.isOpencode(client)
-            let mentions = items.compactMap { item -> IDELink.Mention? in
-                IDELink.mention(path: canonicalPath(item.path), lines: item.lines, opencode: opencode)
+        if let client = AppDelegate.shared.claudeClient(for: tab) {
+            let canonical = items.map { item -> ContextItem in
+                var item = item
+                item.path = canonicalPath(item.path)
+                return item
             }
-            if mentions.count == items.count {
+            if let mentions = IDELink.mentions(canonical, opencode: ClaudeIDEServer.shared.isOpencode(client)) {
                 for mention in mentions { ClaudeIDEServer.shared.notify("at_mentioned", mention.params, to: [client]) }
                 return
             }

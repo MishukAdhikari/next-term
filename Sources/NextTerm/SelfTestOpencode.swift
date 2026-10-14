@@ -393,16 +393,21 @@ extension SelfTest {
 /// ⌥⌘K into OpenCode linked to the editor, through the stand-in client opencodeLinkChecks runs (this app's binary as
 /// `opencode.exe`, saying it is "opencode"). Selected lines go in as a mention counted from 1; a file from the sidebar is
 /// typed in OpenCode's own form, with no mention; a .env in front leaves OpenCode the last file with no text, never its
-/// old lines. The stand-in lives six seconds, so each case starts its own.
+/// old lines. The stand-in lives eight seconds once it is in, so each case starts its own.
 extension SelfTest {
     static func opencodeSendChecks(_ c: TerminalWindowController, dir: URL, port: UInt16) async {
-        guard let window = c.window else { return }
+        guard let window = c.window else { return check(false, "OpenCode ⌥⌘K: the window is there") }
         let source = dir.appendingPathComponent("app.ts")
         let numbered = (1...30).map { "const line\($0) = \($0)" }.joined(separator: "\n") + "\n"
         let secrets = dir.appendingPathComponent(".env")
         try? numbered.write(to: source, atomically: true, encoding: .utf8)
         try? "EXAMPLE_SETTING=made-up\n".write(to: secrets, atomically: true, encoding: .utf8)
         let tab = c.addTab(directory: dir.path)
+        defer {
+            if let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(secrets.path) { c.editorArea.close(editor) }
+            if let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(source.path) { c.editorArea.close(editor) }
+            c.remove(tab)
+        }
         guard await wait(20, { tab.status.integrated }) else { return check(false, "OpenCode ⌥⌘K: the stand-in's tab starts its shell") }
         func received(_ name: String) -> [[String: Any]] {
             let text = (try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)) ?? ""
@@ -415,14 +420,9 @@ extension SelfTest {
         func link(_ name: String) async -> Bool {
             _ = await wait(10) { !tab.status.running && AppDelegate.shared.claudeClient(for: tab) == nil }
             tab.view.send(txt: "\u{15}./opencode.exe --cli --self-test-ide-client \(port) \(name)\r")
-            let linked = await wait(5) { tab.status.running && AppDelegate.shared.claudeClient(for: tab) != nil }
+            let linked = await wait(10) { tab.status.running && AppDelegate.shared.claudeClient(for: tab) != nil }
             guard linked, let client = AppDelegate.shared.claudeClient(for: tab) else { return false }
             return ClaudeIDEServer.shared.isOpencode(client)
-        }
-        defer {
-            if let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(secrets.path) { c.editorArea.close(editor) }
-            if let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(source.path) { c.editorArea.close(editor) }
-            c.remove(tab)
         }
 
         c.openFile(source)
@@ -471,6 +471,10 @@ extension SelfTest {
         }
         check(!named, "OpenCode .env: and never the .env's name")
         _ = await wait(10) { !tab.status.running }
+
+        // Not linked: the lines are typed, in OpenCode's own form.
+        let unlinked = c.agentText([ContextItem(path: "src/app.ts", lines: 10...20)], for: "opencode")
+        check(unlinked == "@src/app.ts#10-20 ", "OpenCode not linked: ⌥⌘K types @src/app.ts#10-20", unlinked)
     }
 
     /// ⌥⌘K as the keyboard sends it: a key down made from a CGEvent (K is key 40), so AppKit reads its characters off the

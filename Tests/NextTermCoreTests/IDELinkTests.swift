@@ -298,6 +298,42 @@ import Testing
         #expect(IDELink.mention(path: "/work/demo/src/app.ts", lines: nil, opencode: false) == IDELink.Mention(filePath: "/work/demo/src/app.ts"))
     }
 
+    /// Send to Agent mentions all of its items or none: one item that has to be typed makes it type them all, in one prompt.
+    @Test func mentionsAreAllOrNone() throws {
+        let lines = ContextItem(path: "/work/demo/src/app.ts", lines: 10...20)
+        let file = ContextItem(path: "/work/demo/src/util.ts")
+        // OpenCode drops a mention without lines: a list with a whole file is typed, both items, and nothing is mentioned.
+        #expect(IDELink.mentions([lines, file], opencode: true) == nil)
+        #expect(IDELink.mentions([file, lines], opencode: true) == nil)
+        #expect(IDELink.mentions([file], opencode: true) == nil)
+        let both = try #require(IDELink.mentions([lines, ContextItem(path: "/work/demo/src/b.ts", lines: 7...7)], opencode: true))
+        #expect(both == [IDELink.Mention(filePath: "/work/demo/src/app.ts", lineStart: 10, lineEnd: 20),
+                         IDELink.Mention(filePath: "/work/demo/src/b.ts", lineStart: 7, lineEnd: 7)])
+        // Claude Code takes a whole file.
+        let claude = try #require(IDELink.mentions([lines, file], opencode: false))
+        #expect(claude == [IDELink.Mention(filePath: "/work/demo/src/app.ts", lineStart: 9, lineEnd: 19),
+                           IDELink.Mention(filePath: "/work/demo/src/util.ts")])
+        // More to say than a file and its lines (a folder, a note, code not on disk): typed, for either agent.
+        for opencode in [true, false] {
+            #expect(IDELink.mentions([lines, ContextItem(path: "/work/demo/src", isFolder: true)], opencode: opencode) == nil)
+            #expect(IDELink.mentions([ContextItem(path: "/work/demo/src/app.ts", lines: 1...2, note: "as staged")], opencode: opencode) == nil)
+            #expect(IDELink.mentions([ContextItem(path: "/work/demo/src/app.ts", lines: 1...2, code: "x = 1")], opencode: opencode) == nil)
+        }
+        #expect(IDELink.mentions([], opencode: true) == [])
+    }
+
+    /// OpenCode by its handshake's name, or by the peer check: only opencode running in a tab gets in without the token, so
+    /// such a client is OpenCode whatever it calls itself.
+    @Test func opencodeIsKnownByNameOrByThePeerCheck() {
+        #expect(IDELink.isOpencode(clientName: "opencode", tokenless: false))
+        #expect(IDELink.isOpencode(clientName: "opencode", tokenless: true))
+        #expect(IDELink.isOpencode(clientName: "opencode-cli", tokenless: true))
+        #expect(IDELink.isOpencode(clientName: nil, tokenless: true))
+        #expect(!IDELink.isOpencode(clientName: "claude-code", tokenless: false))
+        #expect(!IDELink.isOpencode(clientName: "opencode-cli", tokenless: false))
+        #expect(!IDELink.isOpencode(clientName: nil, tokenless: false))
+    }
+
     @Test func aMentionsParamsAreWhatTheLinkSends() throws {
         let lines = try #require(IDELink.mention(path: "/w/a.ts", lines: 10...20, opencode: true)).params
         #expect(lines["filePath"] as? String == "/w/a.ts" && lines["lineStart"] as? Int == 10 && lines["lineEnd"] as? Int == 20)

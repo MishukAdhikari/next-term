@@ -374,7 +374,8 @@ extension SelfTest {
     /// opencode's editor client, as the self-test's stand-in (`<copy named opencode.exe> --cli
     /// --self-test-ide-client <port> <file>`, run in a tab): connects the way opencode does from a Next Term
     /// tab (no token, no subprotocol), asks for a tool it must not get, and writes every message it gets to
-    /// <file>, one per line, for 6 seconds.
+    /// <file>, one per line, for 8 seconds once it is in, however long getting in took (10 seconds at most while it is
+    /// not), or until it is turned away.
     nonisolated static func runIDEStandIn(port: String, output: String) -> Never {
         guard let port = UInt16(port) else { exit(2) }
         let client = ClaudeTestClient(port: port, token: nil, subprotocol: false)
@@ -385,11 +386,12 @@ extension SelfTest {
             try? Data(lines.joined(separator: "\n").utf8).write(to: URL(fileURLWithPath: output), options: .atomic)
         }
         var initialized = false
-        let end = Date().addingTimeInterval(6)
+        var end = Date().addingTimeInterval(10)
         while Date() < end && !client.closed {
             usleep(200_000)
             if !initialized, client.received.contains(where: { $0["id"] as? Int == 1 }) {
                 initialized = true
+                end = Date().addingTimeInterval(8)
                 client.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
                 client.send(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "openDiff", "arguments": [
                     "old_file_path": "/tmp/x", "new_file_path": "/tmp/x", "new_file_contents": "x", "tab_name": "x"]]])
