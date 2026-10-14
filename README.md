@@ -283,8 +283,10 @@ Next Term's menu.
   by the login keychain, which Settings calls less protected); the names and what each key is for are not
   encrypted. Agents use a key by name, after Next Term's own panel shows who asks, which keys and the
   command, and you approve with Touch ID or your password; no MCP tool returns a value. Stored keys are
-  masked, best effort, in what agents read through Next Term. A command you approve gets the key and can
-  send it on, and Secrets can't stop malware already running as you.
+  masked, best effort, in what agents read through Next Term. A command you approve gets the key in its
+  environment, and for as long as it runs, any program running as you can read it there (`ps -E` shows it),
+  an agent's own shell tool included, which Next Term's masks never see. The command can also send the key
+  on, and Secrets can't stop malware already running as you.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes

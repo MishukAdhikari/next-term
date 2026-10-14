@@ -39,4 +39,13 @@ import Testing
         #expect(description.contains("selected (whether it was the selected tab in its window when it opened)"))
         #expect(!description.contains("opens without taking the keyboard"))
     }
+
+    /// The keys sit in the command's environment, where any program running as the user can read them while it runs:
+    /// the description says so, and no longer says "environment only" (review finding #14).
+    @Test func runWithSecretsSaysWhoCanReadItsEnvironment() throws {
+        let description = try #require(MCPServer.tool(named: "run_with_secrets")).description
+        #expect(!description.contains("environment only"))
+        #expect(description.contains("in that command's environment, never the tab's shell's"))
+        #expect(description.contains("While the command runs, any program running as the user can read that environment"))
+    }
 }

@@ -44,6 +44,13 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
 
     static let fifteenMinutesNote = "Only this agent, these keys, this exact command and folder. Anything different asks again."
     static let wrapperRestartNote = "Covers starting it again. A server already running keeps going."
+
+    /// Under the command: the keys reach it in its environment, which any program running as the user can read while
+    /// it runs (`ps -E`), an agent's own shell tool too.
+    static func environmentNote(keys count: Int) -> String {
+        let keys = count == 1 ? "this key" : "these keys"
+        return "The command, and any program running as you, can read \(keys) while it runs."
+    }
     static let cardText = "This MCP server stopped waiting. Allow it, then restart it in your agent (in Claude Code: /mcp, then Reconnect)."
     static let stoppedDuringApprovalText = "This MCP server stopped waiting. Restart it within 2 minutes to use this approval."
 
@@ -227,6 +234,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             shell.textColor = .secondaryLabelColor
             views.append(shell)
         }
+        let readable = Self.label(Self.environmentNote(keys: content.keys.count), size: 11)
+        readable.textColor = .secondaryLabelColor
+        views.append(readable)
         return views
     }
 
