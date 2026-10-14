@@ -910,13 +910,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     var isSidebarVisible: Bool { !sidebar.isHidden }
 
-    /// A project window's tree stays on its project. Otherwise it follows the active tab: its git work
-    /// tree, or its folder when outside one.
+    /// A project window's tree stays on its project. Otherwise it follows the active tab into the project it is in (its
+    /// git work tree, or its folder when outside one), offering Open as Project Window; in a folder that is never a
+    /// project (the home folder, /: ProjectRoot.project) it shows "No project open", and nothing there is read.
     private func updateProjectRoot() {
         guard isSidebarVisible else { return }
         if let project {
             guard projectKey != project else { return }
             projectKey = project
+            sidebar.offerProjectWindow(nil)
             sidebar.setRoot(project)
             return
         }
@@ -925,15 +927,23 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let key = tab.id.uuidString + "\u{0}" + tab.directory
         guard key != projectKey else { return }
         projectKey = key
-        sidebar.setRoot(ProjectRoot.find(from: tab.directory))
+        if let root = ProjectRoot.project(from: tab.directory) {
+            sidebar.setRoot(root)
+            sidebar.offerProjectWindow(sidebar.root?.path ?? root)
+        } else {
+            sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
+        }
         AppDelegate.shared.projectsChanged()
     }
 
     // MARK: find and replace in files
 
-    /// The folder searches cover: the project, else what the sidebar shows, else the tab's git root.
+    /// The folder searches cover: the project, else what the sidebar shows, else the project the tab is in, else its
+    /// folder (the home folder, whose protected places the searches leave out: ProtectedPlaces).
     var searchRoot: String {
-        project ?? sidebar.root?.path ?? activeTab.flatMap { $0.remote == nil ? ProjectRoot.find(from: $0.directory) : nil } ?? NSHomeDirectory()
+        if let root = project ?? sidebar.root?.path { return root }
+        guard let tab = activeTab, tab.remote == nil else { return NSHomeDirectory() }
+        return ProjectRoot.project(from: tab.directory) ?? tab.directory
     }
 
     @objc func findInFiles(_ sender: Any?) {
@@ -2346,6 +2356,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
         refreshVisibility()
         refresh()
+        // Another window may have opened a project since: "No project open" lists it.
+        if sidebar.showsNoProject { sidebar.noProject.show(recent: AppDelegate.shared.recentProjects) }
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)

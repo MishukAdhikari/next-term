@@ -255,17 +255,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own root): Gemini CLI and
-    /// Qwen Code connect only from inside one of these.
+    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own project): Gemini CLI and
+    /// Qwen Code connect only from inside one of these. Never a folder that is never a project (the home folder, /:
+    /// ProjectRoot.isNeverRoot), from which they would connect wherever they start.
     var agentWorkspaces: [String] {
         var roots: [String] = []
         for controller in controllers {
             if let project = controller.project { roots.append(project) }
             if let root = controller.sidebar.root?.path { roots.append(root) }
-            roots += controller.tabs.map { ProjectRoot.find(from: $0.directory) }
+            roots += controller.tabs.compactMap { (tab: TerminalTab) -> String? in ProjectRoot.project(from: tab.directory) }
         }
         var seen = Set<String>()
-        return roots.map(canonicalPath).filter { seen.insert($0).inserted }
+        return roots.map(canonicalPath).filter { !ProjectRoot.isNeverRoot($0) && seen.insert($0).inserted }
     }
 
     /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
@@ -550,7 +551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
-        case .newTerminal: openWindow(directory: nil)
+        case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
         }
     }
 
@@ -623,7 +624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
-    /// on the file's project (its git root, or its folder).
+    /// on the file's project (its git root, or its folder), or one with no project when its folder is never one.
     /// `forAgent`: open_in_editor. The file opens without taking the keyboard, and its window comes forward as
     /// AgentArrival says, not as a window the user went to.
     func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool, forAgent: Bool = false) {
@@ -634,10 +635,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let target: TerminalWindowController
         if !newWindow, let window = owner ?? front {
             target = window
-        } else {
-            let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
+        } else if let root = ProjectRoot.project(from: (path as NSString).deletingLastPathComponent) {
             recent.add(root)
             target = openWindow(directory: root, project: root, forAgent: forAgent)
+        } else {
+            // A file in a folder that is never a project (~/notes.txt): a window with no project, in that folder.
+            target = openWindow(directory: (path as NSString).deletingLastPathComponent, forAgent: forAgent)
         }
         closeWelcome(forAgent: forAgent)
         if forAgent {
@@ -1023,8 +1026,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// New Terminal (File › New Window, ⌘N, the Welcome window's row): a window with no project, its shell where Settings ›
+    /// Terminal › New tabs says, as ⌘T with no window open (the home folder unless a folder is chosen there).
     @objc func newWindow(_ sender: Any?) {
-        openWindow(directory: nil)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// A worktree's own window, with one shell tab in its folder, titled "xCloud ▸ 7027-sso": the window
@@ -1317,7 +1322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// ⌘T with no window open (every window closed, app still running), where Settings › Terminal › New tabs says.
     @objc func newTab(_ sender: Any?) {
-        openWindow(directory: newTabWindowDirectory)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,

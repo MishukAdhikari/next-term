@@ -1464,7 +1464,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
-        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
+        // Its project, or its own folder where it has none (the home folder: ProjectRoot.project).
+        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.project(from: directory) ?? directory))
         // `nxtrm mcp`, started by an agent in this tab, reaches this copy of Next Term.
         if MCPControlServer.shared.isRunning { env[MCPServer.socketVariable] = MCPControlServer.shared.path }
         // `nxtrm` works in every tab from the first launch, with no install step.

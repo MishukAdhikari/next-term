@@ -105,6 +105,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     let header = SidebarHeaderView()
     /// "Files on this Mac", while the active tab runs on a server.
     let remoteNote = RemoteFilesNote()
+    /// "No project open", in place of the files, while a window with no project has its tab in none (`showNoProject`).
+    let noProject = NoProjectView()
+    /// Open as Project Window, while a window with no project shows the project its tab is in (`offerProjectWindow`).
+    let projectOffer = ProjectOfferNote()
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?
@@ -208,7 +212,19 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         addSubview(header)
         remoteNote.isHidden = true
         addSubview(remoteNote)
+        projectOffer.isHidden = true
+        projectOffer.onOpen = { [weak self] folder in
+            guard let self else { return }
+            self.delegate?.sidebar(self, openProject: folder)
+        }
+        addSubview(projectOffer)
         addSubview(scrollView)
+        noProject.isHidden = true
+        noProject.onOpen = { [weak self] folder in
+            guard let self else { return }
+            self.delegate?.sidebar(self, openProject: folder)
+        }
+        addSubview(noProject)
         // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -247,10 +263,23 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         super.layout()
         header.inset = headerInset
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: TabBarView.height)
-        let top = TabBarView.height + (remoteNote.isHidden ? 0 : RemoteFilesNote.height)
-        remoteNote.frame = NSRect(x: 0, y: TabBarView.height, width: bounds.width, height: RemoteFilesNote.height)
+        var top = TabBarView.height
+        remoteNote.frame = NSRect(x: 0, y: top, width: bounds.width, height: RemoteFilesNote.height)
+        if !remoteNote.isHidden { top += RemoteFilesNote.height }
+        projectOffer.frame = NSRect(x: 0, y: top, width: bounds.width, height: ProjectOfferNote.height)
+        if !projectOffer.isHidden { top += ProjectOfferNote.height }
         scrollView.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
+        noProject.frame = scrollView.frame
         updateToolTips()
+    }
+
+    /// Open as Project Window under the header, for `folder`; nil takes it away. A window with no project offers it for
+    /// the project its tab is in.
+    func offerProjectWindow(_ folder: String?) {
+        if let folder { projectOffer.show(folder) }
+        guard projectOffer.isHidden != (folder == nil) else { return }
+        projectOffer.isHidden = folder == nil
+        needsLayout = true
     }
 
     /// The active tab's server, if it runs on one: the tree then says its files are this Mac's.
@@ -283,9 +312,43 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     // MARK: root
 
+    /// Whether it shows "No project open" in place of the files.
+    var showsNoProject: Bool { !noProject.isHidden }
+
+    /// "No project open" in place of the files, with `recent` (Recent Projects) to open: the tree is put away, and
+    /// nothing is listed, watched or scanned until `setRoot` shows a project again (the tree it showed comes back as it
+    /// was). A window with no project shows it while its tab is in no project (ProjectRoot.project).
+    func showNoProject(recent: [String]) {
+        noProject.show(recent: recent)
+        offerProjectWindow(nil)
+        guard !closed, root != nil || noProject.isHidden else { return }
+        if isRenaming { window?.makeFirstResponder(outline) }
+        runHeld()
+        saveCurrentTree()
+        rowCache.removeAll()
+        servicesGroup.clear()
+        root = nil
+        outline.reloadData()
+        watcher = nil
+        gitDirWatcher = nil
+        gitEvents = nil
+        git.stop()
+        gitChanged(nil)
+        databaseScanToken += 1 // a scan still reading is dropped
+        databaseScans.cancel()
+        showDatabases(DatabaseScan())
+        sessionsGroup.token += 1
+        showSessions([], tabs: SessionTabs())
+        scrollView.isHidden = true
+        noProject.isHidden = false
+        updateToolTips()
+    }
+
     /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background.
     func setRoot(_ path: String) {
         let canonical = canonicalPath(path)
+        noProject.isHidden = true
+        scrollView.isHidden = false
         guard canonical != root?.path, !closed else { return }
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
