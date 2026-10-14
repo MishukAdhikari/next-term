@@ -80,8 +80,11 @@ public enum MCPRedaction {
         count += replace(urlPassword, in: &result, complete: &complete) { match, ns in
             ns.substring(with: match.range(at: 1)) + mask + "@"
         }
-        // Each with the group of its name; the value's groups come after it (`indentedValue` has the key's indent first).
-        let named: [(expression: NSRegularExpression, name: Int)] = [(quotedValue, 1), (bareValue, 1), (indentedValue, 2)]
+        // Each with the group of its name; the value's groups come after it (the indented values' key has its sign, indent
+        // and list item's dash first). A diff's added side, then its removed side: a rotated value is masked in each.
+        let named: [(expression: NSRegularExpression, name: Int)] = [
+            (quotedValue, 1), (bareValue, 1), (indentedValue, indentedName), (removedIndentedValue, indentedName),
+        ]
         for (expression, name) in named {
             count += replace(expression, in: &result, complete: &complete) { match, ns in
                 guard isSecretName(ns.substring(with: match.range(at: name))) else { return nil }

@@ -40,6 +40,7 @@ private func hexCarried(_ count: Int) -> String {
             ("token =>\r\n `Tr0ub4dor&3!horse`,", ["token =>", " `•••`,"]),
             ("password:\n\n    Tr0ub4dor3horse\n  port: 5432", ["password:", "", "    •••", "  port: 5432"]),
             ("database:\n  password:\n    Tr0ub4dor3horse\n", ["database:", "  password:", "    •••"]),
+            ("+password:\n+  Tr0ub4dor3horse", ["+password:", "+  •••"]),
             ("export\n\n  API_KEY=Tr0ub4dor3horse", ["export", "", "  API_KEY=•••"]),
             ("export\n\u{3000}API_KEY=Tr0ub4dor3horse", ["export", "\u{3000}API_KEY=•••"]), // alone, the line keeps it
         ]
@@ -63,7 +64,8 @@ private func hexCarried(_ count: Int) -> String {
             "apiKey\nfoo\n= \"Tr0ub4dor&3!horse\"",
             "x = 1\napiKey = \"Tr0ub4dor&3!horse\"",
             "password:\n  - Tr0ub4dor3horse",
-            "+password:\n+  Tr0ub4dor3horse",
+            "+password:\n+Tr0ub4dor3horse",
+            "+password:\n-  Tr0ub4dor3horse",
             "export\n\n  API_KEY\n\n=\n \nTr0ub4dor3horse",
             "password:\nTr0ub4dor3horse\n  port: 5432",
             "database:\n  password:\n  Tr0ub4dor3horse\n",

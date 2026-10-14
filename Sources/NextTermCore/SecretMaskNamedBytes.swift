@@ -1,7 +1,8 @@
 import Foundation
 
-/// A line's UTF-8 bytes as `quotedValue` and `bareValue` read them in `MCPRedaction.redact`, for
-/// `MCPRedaction.NamedValues`: what ICU takes a space (`\s`), a line's end (`^`, `$`) and a name's character to be.
+/// A line's UTF-8 bytes as `quotedValue`, `bareValue` and the indented values (`indentedValue`, `removedIndentedValue`)
+/// read them in `MCPRedaction.redact`, for `MCPRedaction.NamedValues`: what ICU takes a space (`\s`), a line's end (`^`,
+/// `$`) and a name's character to be.
 struct NamedValueBytes {
     /// An opaque run's first byte, which counts as the three characters of •••, and its other bytes, which count as none:
     /// what `redact` made ••• before those patterns run (`opaqueCopy`). Neither is UTF-8, so neither is a space, a quote,

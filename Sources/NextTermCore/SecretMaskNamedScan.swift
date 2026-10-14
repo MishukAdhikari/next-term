@@ -1,20 +1,22 @@
 import Foundation
 
 extension NamedValueBytes {
-    /// A value `quotedValue` or `bareValue` masks for its name, in UTF-8 offsets: where the match starts (the name; a bare
-    /// value's line start), the value alone, and where the text the pattern needs to mask it ends: past a quoted value's
-    /// closing quote; past the line's end after a bare value and its spaces, or at the text's end. Text kept up to the
-    /// value's end or into its spaces, with read_file's "…" after it, has no line's end there.
+    /// A value `quotedValue`, `bareValue` or an indented value (`indentedValue`, `removedIndentedValue`) masks for its
+    /// name, in UTF-8 offsets: where the match starts (the name; a bare value's line start; an indented value's key's line
+    /// start, lines before the value's), the value alone, and where the text the pattern needs to mask it ends: past a
+    /// quoted value's closing quote; past the line's end after a bare or an indented value and its spaces (and an indented
+    /// value's comment), or at the text's end. Text kept up to the value's end or into its spaces, with read_file's "…"
+    /// after it, has no line's end there.
     struct Found: Equatable {
         let start: Int
         let value: Range<Int>
         let end: Int
     }
 
-    /// Every value the patterns (`quotedValue`, `bareValue`, `indentedValue`) mask for its name, and maybe a few more,
-    /// never fewer: each place a match could start is tried on its own (the patterns, taking matches left to right, skip
-    /// one that starts inside another), a name of any length counts (they read 256 characters at most), and a placeholder
-    /// counts as a value (`isValue`).
+    /// Every value the patterns (`quotedValue`, `bareValue`, `indentedValue`, `removedIndentedValue`) mask for its name,
+    /// and maybe a few more, never fewer: each place a match could start is tried on its own (the patterns, taking matches
+    /// left to right, skip one that starts inside another), a name of any length counts (they read 256 characters at
+    /// most), and a placeholder counts as a value (`isValue`).
     func namedValues() -> [Found] {
         // The patterns need an `=` or a `:` before the value: most lines have neither.
         guard bytes.contains(where: { $0 == 0x3D || $0 == 0x3A }) else { return [] }

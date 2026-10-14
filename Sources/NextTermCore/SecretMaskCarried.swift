@@ -15,8 +15,10 @@ extension MCPRedaction {
 
         /// The values in `lines[range]` named on a line before their own. The lines are read from the third line before
         /// the range with text in it: no match reaches further back, a name, its operator and `export` each taking a
-        /// line at most, with only spaces and blank lines between. The values are found as `NamedValues` finds them, with
-        /// what `redact` has made ••• by then opaque; a placeholder is left, as `redact` leaves it.
+        /// line at most, with only spaces and blank lines between, and an indented value's key with two lines with text
+        /// at most between it and its value (comments, a diff's other side: `indentedValue`). The values are found as
+        /// `NamedValues` finds them, with what `redact` has made ••• by then opaque; a placeholder is left, as `redact`
+        /// leaves it.
         init(_ lines: [String], in range: Range<Int>, mask secrets: SecretMask) {
             let range = range.clamped(to: 0..<lines.count)
             var first = range.lowerBound
