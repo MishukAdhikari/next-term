@@ -50,7 +50,7 @@ final class GeneralSettingsView: NSView {
             note.preferredMaxLayoutWidth = noteWidth
             return note
         }
-        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project.")
+        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project; with “Open a new terminal” chosen, it opens a shell window.")
         let askNote = note("Asks only when a terminal window is open. Unsaved files and running work are always asked about.")
         let scrollbackNote = note("Brings shell output back when windows resume after a quit or an update. It is kept in private files, with secrets masked on a best-effort basis, until Next Term next opens.")
         // VoiceOver reads each note with the controls it is about.
@@ -94,8 +94,9 @@ final class GeneralSettingsView: NSView {
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
         ])
         refresh()
-        // An import or its Undo can change what reopens at launch.
+        // An import or its Undo can change what reopens at launch, and so can the Welcome window's At launch pop-up.
         NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: ImportCoordinator.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: LaunchSettings.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -128,6 +129,7 @@ final class GeneralSettingsView: NSView {
         settings.opens = choices[sender.tag]
         settings.save(.opens, to: defaults)
         for radio in opens { radio.state = radio === sender ? .on : .off }
+        NotificationCenter.default.post(name: LaunchSettings.changed, object: self)
     }
 
     @objc private func askToResumeChanged() {
@@ -141,4 +143,9 @@ final class GeneralSettingsView: NSView {
         settings.keepScrollback = keepScrollback.state == .on
         settings.save(.keepScrollback, to: defaults)
     }
+}
+
+extension LaunchSettings {
+    /// "At launch" was chosen here or in the Welcome window's footer: the other shows it at once.
+    static let changed = Notification.Name("NextTermLaunchSettingsChanged")
 }
