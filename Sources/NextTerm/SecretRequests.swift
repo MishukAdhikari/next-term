@@ -215,6 +215,9 @@ final class SecretRequests {
     /// of now, before its leaving reaches here.
     @discardableResult
     func ask(_ request: Request, left: @escaping () -> Bool = { false }, reply: @escaping (Decision) -> Void) -> Waiting? {
+        // A key another copy of Next Term replaced, renamed or deleted ends the grants holding it (`keysChanged`) before
+        // a grant can answer with its old value.
+        SecretsStore.shared.reloadIfChanged()
         let now = now()
         expire(at: now)
         if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {

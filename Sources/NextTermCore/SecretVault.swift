@@ -390,6 +390,17 @@ public final class SecretVault {
 
         public func entry(named name: String) -> Entry? { entries.first { $0.name == name } }
         public var names: [String] { entries.map(\.name) }
+
+        /// The keys of `earlier` that this index no longer holds as they were: gone, renamed, deleted and added again
+        /// (another id), or sealed again (a new value, or made write-only). What a key is for, changed alone, keeps its
+        /// seal, so it is not among them. For vault.json written by another copy of Next Term: the grants holding these
+        /// keys end, as they do after the same change here.
+        public func changedNames(since earlier: Index) -> [String] {
+            earlier.entries.compactMap { old in
+                guard let now = entry(named: old.name), now.id == old.id, now.box == old.box else { return old.name }
+                return nil
+            }
+        }
     }
 
     /// vault.json's outer object.

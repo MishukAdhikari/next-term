@@ -132,6 +132,9 @@ enum SecretSocket {
     private static func ask(_ request: SecretRun.Request, pid: pid_t, full: (path: String, arguments: [String]), agent: Agent?,
                             envDigest: String, warnings: [String], waiter: Waiter) {
         let store = SecretsStore.shared
+        // vault.json as it is now: a key another copy of Next Term deleted is unknown here too, and grants holding a key
+        // it replaced end before one answers.
+        store.reloadIfChanged()
         if request.argv.contains(where: { SecretMask.current.masked($0).count > 0 }) {
             return waiter.set(SecretRun.Answer(status: .valueInCommand, names: request.names))
         }

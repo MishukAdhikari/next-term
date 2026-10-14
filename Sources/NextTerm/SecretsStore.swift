@@ -309,7 +309,9 @@ final class SecretsStore {
     }
 
     /// `vault.json` read again when its modification date changed (another copy of Next Term saved it): before each
-    /// operation, and when Next Term becomes active.
+    /// operation, before a grant answers, and when Next Term becomes active. Keys the other copy replaced, renamed or
+    /// deleted are posted in `keysChanged`, as a change here posts them, so the grants holding them end; all of them when
+    /// the file can no longer be read. The check is one `lstat` while the date is the same.
     func reloadIfChanged() {
         let date = folder.modificationDate(of: SecretFolder.vaultName)
         guard date != indexDate else { return }
@@ -331,16 +333,23 @@ final class SecretsStore {
         } catch {
             tooLarge = Self.isTooLarge(error)
         }
+        let earlier = index
+        let changedNames: [String]
         if let data, let read = try? SecretVault.index(from: data) {
             index = read
             if protection == .none { protection = Self.protection(of: read) }
+            changedNames = earlier.map { read.changedNames(since: $0) } ?? []
         } else {
             protection = .tampered
             isUnlisted = false
             isTooLarge = tooLarge
+            changedNames = earlier?.names ?? []
         }
         publishMarks()
         NotificationCenter.default.post(name: Self.changed, object: self)
+        if !changedNames.isEmpty {
+            NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": changedNames])
+        }
     }
 
     /// The observers of the Mac locking, sleeping and the session resigning, and of Next Term becoming active. Not in
