@@ -800,6 +800,9 @@ enum SelfTest {
         await gutterAndCollapseChecks(c, proj: proj)
         await railChecks(c, proj: proj)
         await terminalPositionChecks(c, proj: proj)
+        // The checks below read the project in the sidebar: a part before them that leaves another tab in front fails here.
+        check(await wait(4) { c.sidebar.root?.path == proj.path }, "the window's sidebar is on the test project again after the layout checks",
+              c.sidebar.root?.path ?? "nil")
         await blameChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
