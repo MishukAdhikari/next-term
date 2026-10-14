@@ -761,7 +761,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         guard let root else { return }
         kindRefused.removeAllObjects() // their next open looks again
         func visit(_ node: FileNode) {
-            if node.accessDenied { refresh(node) }
+            if node.accessDenied, node.kindSettled {
+                refresh(node)
+            } else if node.accessDenied {
+                // A link refused while its kind was its name's guess: what it is comes first (a file has nothing to
+                // read), and only a folder is read again.
+                settleKind(of: node) { [weak self] in if node.isDirectory { self?.refresh(node) } }
+            }
             node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(visit)
         }
         visit(root)
@@ -931,8 +937,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private func deniedEntry(for node: FileNode) -> DeniedFolderEntry {
         let id = ObjectIdentifier(node)
         if let entry = deniedEntries[id], entry.folder === node { return entry }
-        // A link's pane is the one of the place it leads to (~/mail to ~/Library/Mail is Full Disk Access's).
-        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.linkTarget ?? node.path))
+        // A link's pane is the one of the place it leads to (~/mail to ~/Library/Mail is Full Disk Access's), and so is
+        // a folder's below a link (~/lib/Mail, ~/lib a link to ~/Library).
+        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.refusedPlace))
         deniedEntries[id] = entry
         return entry
     }
@@ -1126,14 +1133,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                        option: flags.contains(.option), control: flags.contains(.control),
                                        row: row, mouseDownRow: outline.mouseDownRow, selection: outline.selectedRowIndexes,
                                        dragBegan: outline.dragBegan, wasRenaming: outline.mouseDownWhileRenaming, kind: kind(of: item))
-        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode,
-              SidebarClick.opensOnSingleClick(node.url.path) else { return }
-        // A file by its name's guess, a link into a protected place: the click looks first, and previews only a file.
-        guard needsKind(node) else { return delegate?.sidebar(self, previewFile: node.url) ?? () }
-        settleKind(of: node) { [weak self] in
-            guard let self, !node.isDirectory else { return }
-            self.delegate?.sidebar(self, previewFile: node.url)
+        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode else { return }
+        if needsKind(node) {
+            // A file by its name's guess, a link into a protected place: the click looks first, off the main thread, and
+            // previews only a file. macOS has its answer by then, so the single-click check after asks nothing again.
+            return settleKind(of: node) { [weak self] in
+                guard let self, !node.isDirectory, SidebarClick.opensOnSingleClick(node.url.path) else { return }
+                self.delegate?.sidebar(self, previewFile: node.url)
+            }
         }
+        guard SidebarClick.opensOnSingleClick(node.url.path) else { return }
+        delegate?.sidebar(self, previewFile: node.url)
     }
 
     private func kind(of item: Any?) -> SidebarClick.Row {
@@ -1394,7 +1404,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     var selection: [(url: URL, isFolder: Bool)] { selectedNodes.map { ($0.url, $0.isDirectory) } }
 
     @objc private func openNode() {
-        if let node = menuNodes.first { delegate?.sidebar(self, openFile: node.url) }
+        // The node is taken now: the menu's row is gone by the time a look past a link comes back.
+        guard let node = menuNodes.first else { return }
+        guard needsKind(node) else { return delegate?.sidebar(self, openFile: node.url) ?? () }
+        // A link whose kind is its name's guess: Open looks first, off the main thread, and opens only a file.
+        settleKind(of: node) { [weak self] in
+            guard let self, !node.isDirectory else { return }
+            self.delegate?.sidebar(self, openFile: node.url)
+        }
     }
 
     @objc private func revealNode() {

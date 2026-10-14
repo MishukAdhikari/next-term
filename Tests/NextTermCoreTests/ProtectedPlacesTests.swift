@@ -367,7 +367,7 @@ final class FixtureHome {
         #expect(!app.targetUnopened && app.kindSettled && app.isDirectory && app.linkTarget == fixture.path("Code/app"))
         let gone = node("gone")
         #expect(!gone.targetUnopened && !gone.isDirectory && gone.linkTarget == fixture.path("Code/missing"))
-        #expect(node("loop1").targetUnopened) // a loop is not followed
+        #expect(!node("loop1").targetUnopened && !node("loop1").isDirectory) // a loop is not followed: ELOOP, a file
         // Every spelling a walk looks at is outside the places: it stops at the first one.
         var looked: [String] = []
         let walked = FileNode.resolved(fixture.path("Dropbox/dotfiles/zshrc")) { (spelling: String) -> Bool in

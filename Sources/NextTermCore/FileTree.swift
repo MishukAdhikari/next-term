@@ -113,7 +113,8 @@ public final class FileNode {
     /// never into a spelling `stops` turns down: there the walk ends, with that spelling and what was left of the path
     /// (`stopped`), and nothing in it is looked at. `.` and `..` are taken in turn, after the links before them, as the
     /// kernel takes them. A component that is not there ends the walk too (not stopped): a dangling link leads nowhere
-    /// further. So does a loop, or a link that can't be read (stopped: neither is followed).
+    /// further. So does a loop, or a link that can't be read (not stopped either: neither is followed, and the kernel's
+    /// own look gets ELOOP, not a folder).
     static func resolved(_ path: String, stoppingAt stops: (String) -> Bool) -> (path: String, stopped: Bool) {
         // What is left, the next component last; and the walk so far, a real folder, "" for /.
         var left: [Substring] = path.split(separator: "/").reversed()
@@ -137,7 +138,7 @@ public final class FileNode {
             }
             links += 1
             guard links <= maxLinks, let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: next) else {
-                return (rest(after: next), true)
+                return (rest(after: next), false) // the kernel answers ELOOP here: not a folder, and no protected place on the way
             }
             if destination.hasPrefix("/") { done = "" }
             left.append(contentsOf: destination.split(separator: "/").reversed())
@@ -199,6 +200,15 @@ public final class FileNode {
 
     public var path: String { url.path }
     public var isLoaded: Bool { children != nil }
+
+    /// Where a read of this folder that macOS refused was refused, as `isPrivacyDenial(_:reading:protected:)` finds it: a
+    /// link's is where it leads (`linkTarget`), and a folder below a link (~/lib/Mail, ~/lib a link to ~/Library) is where
+    /// its links lead, followed link by link (`resolved(_:stoppingAt:)`) up to the first protected place it is not in.
+    public var refusedPlace: String {
+        if let linkTarget { return linkTarget }
+        let places: ProtectedPlaces = .current
+        return Self.resolved(path) { (spelling: String) -> Bool in places.isUnopened(spelling, from: path) }.path
+    }
 
     /// A folder's entries as fresh nodes, folders first, in Finder order ("file2" before "file10"), without the
     /// ones `hiding` leaves out. Safe on any thread.
