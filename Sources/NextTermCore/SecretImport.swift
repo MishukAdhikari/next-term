@@ -1490,8 +1490,9 @@ public enum SecretImport {
     static func keptMarker(_ index: Int) -> String { "\(marker)kept:\(index)⟧" }
 
     /// One `FileEdit` per file the chosen moves touch. `nxtrm` is the wrapper's command: the `nxtrm` path, or the app's
-    /// binary and `--cli`. `stored` is the vault's names: with the names this import stores, what the wrapper takes out
-    /// of a server's environment unless the entry asks for it, so a wrapped entry drops a variable of that name too.
+    /// binary and `--cli`. `stored` is the vault's names: with the names this import stores (the moves of the files that
+    /// plan), what the wrapper takes out of a server's environment unless the entry asks for it, so a wrapped entry drops
+    /// a variable of that name too.
     public static func plan(_ moves: [Move], nxtrm: [String], stored: [String] = [], read: (String) -> Data? = readFile,
                             now: Date = Date()) -> (edits: [FileEdit], failures: [PlanFailure]) {
         var byFile: [String: (Source, [Move])] = [:]
@@ -1505,18 +1506,45 @@ public enum SecretImport {
                 byFile[finding.source.path]?.1.append(Move(name: move.name, findings: [finding]))
             }
         }
-        var edits: [FileEdit] = []
-        var failures: [PlanFailure] = []
-        let batch = String(UUID().uuidString.lowercased().prefix(12))
-        let movedNames: [String] = moves.filter { $0.findings.contains(where: \.movable) }.map(\.name)
-        let taken: Set<String> = Set(stored).union(movedNames)
+        // Each file read once: a second pass plans from the same bytes.
+        var unreadable: [PlanFailure] = []
+        var files: [(source: Source, moves: [Move], data: Data)] = []
         for path in order {
             guard let (source, fileMoves) = byFile[path] else { continue }
             guard let data = read(path) else {
-                failures.append(PlanFailure(path: path, reason: "it can't be read"))
+                unreadable.append(PlanFailure(path: path, reason: "it can't be read"))
                 continue
             }
-            switch planFile(source, moves: fileMoves, nxtrm: nxtrm, data: data, now: now, batch: batch, taken: taken) {
+            files.append((source, fileMoves, data))
+        }
+        let batch = String(UUID().uuidString.lowercased().prefix(12))
+        let movedNames: [String] = moves.filter { $0.findings.contains(where: \.movable) }.map(\.name)
+        var taken: Set<String> = Set(stored).union(movedNames)
+        var planned = planFiles(files, nxtrm: nxtrm, now: now, batch: batch, taken: taken)
+        // The import stores only the keys of the files that planned (the sheet's `move`): a move whose every file failed
+        // stores nothing, and the wrapper takes out no variable of its name. Planned again without it, until none is
+        // left; the names only ever shrink, so it stops.
+        for _ in moves.indices {
+            let plannedNames: [String] = planned.edits.flatMap(\.names)
+            let kept: Set<String> = taken.intersection(Set(stored).union(plannedNames))
+            if kept == taken { break }
+            taken = kept
+            planned = planFiles(files, nxtrm: nxtrm, now: now, batch: batch, taken: taken)
+        }
+        // The failures in the files' order, as one pass gave them.
+        let place: [String: Int] = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let failures: [PlanFailure] = (unreadable + planned.failures).sorted { (place[$0.path] ?? 0) < (place[$1.path] ?? 0) }
+        return (planned.edits, failures)
+    }
+
+    /// `plan`'s pass over the files it read, in order.
+    static func planFiles(_ files: [(source: Source, moves: [Move], data: Data)], nxtrm: [String], now: Date, batch: String,
+                          taken: Set<String>) -> (edits: [FileEdit], failures: [PlanFailure]) {
+        var edits: [FileEdit] = []
+        var failures: [PlanFailure] = []
+        for file in files {
+            let result = planFile(file.source, moves: file.moves, nxtrm: nxtrm, data: file.data, now: now, batch: batch, taken: taken)
+            switch result {
             case .success(let edit): edits.append(edit)
             case .failure(let failure): failures.append(failure)
             }
