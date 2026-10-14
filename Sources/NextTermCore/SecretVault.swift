@@ -243,7 +243,13 @@ public final class SecretVault {
     public static let maxEntries = 500
     public static let maxValueBytes = 16 * 1024
     public static let maxPurposeLength = 200
+    /// The read cap: a vault.json past it is refused unread.
     public static let maxFileSize = 8 * 1024 * 1024
+    /// The write cap: a change whose vault.json would be larger is refused (`full`), so a file Next Term writes always
+    /// reads back. The 1 MB between it and the read cap is for upkeep, which may use it: new marks after `mask.key` was
+    /// made again, the second wrap, a new keyring, a key made write-only, a key deleted. So a full vault can still be
+    /// opened, marked, rescued and emptied.
+    public static let maxWriteSize = 7 * 1024 * 1024
     /// The length of `mask.key`.
     public static let maskKeyLength = 32
     /// The length of the recovery key, for a copy of the vault key in the login keychain.
@@ -286,6 +292,8 @@ public final class SecretVault {
         case badValue(String)
         case badPurpose
         case writeOnly(String)
+        /// The change would make vault.json larger than `maxWriteSize`, so nothing was saved.
+        case full
 
         public var errorDescription: String? {
             switch self {
@@ -308,6 +316,10 @@ public final class SecretVault {
             case .badValue(let name): return "\(name) is empty, or holds a line break or a NUL character, or is not text."
             case .badPurpose: return "What a key is for is one line of at most \(SecretVault.maxPurposeLength) characters."
             case .writeOnly(let name): return "\(name) is write-only: Next Term never shows it again."
+            case .full:
+                let megabytes = SecretVault.maxWriteSize / (1024 * 1024)
+                return "Secrets is full, so nothing was saved: its file can’t grow past \(megabytes) MB. Delete keys you no longer "
+                    + "use, then try again."
             }
         }
     }
@@ -391,6 +403,8 @@ public final class SecretVault {
     /// vault.json's bytes as they are now: what was read, or what the last change made.
     public private(set) var file: Data
     private var vaultKey: SymmetricKey?
+    /// `maxWriteSize`; the tests lower it.
+    var writeCap = SecretVault.maxWriteSize
 
     private init(index: Index, file: Data, vaultKey: SymmetricKey) {
         self.index = index
@@ -492,8 +506,7 @@ public final class SecretVault {
         let marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         let entry = Entry(id: id, name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly,
                           created: date, changed: date, box: box, marks: marks)
-        index.entries.append(entry)
-        return try written(key)
+        return try written(key) { index.entries.append(entry) }
     }
 
     /// Renames a key, changes what it is for, or both. A new name seals the value again, since the name is in its seal.
@@ -513,8 +526,7 @@ public final class SecretVault {
             entry.purposeBy = purposeBy ?? .user
         }
         entry.changed = Self.whole(now)
-        index.entries[position] = entry
-        return try written(key)
+        return try written(key) { index.entries[position] = entry }
     }
 
     /// A new value for a key, write-only or not. `origin`, when given, is who replaced it (`agent` for an agent's
@@ -530,8 +542,7 @@ public final class SecretVault {
         entry.writeOnly = writeOnly
         entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         entry.changed = Self.whole(now)
-        index.entries[position] = entry
-        return try written(key)
+        return try written(key) { index.entries[position] = entry }
     }
 
     /// Makes a normal key write-only, one way: its value is sealed again with the flag.
@@ -543,25 +554,24 @@ public final class SecretVault {
         entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: true, origin: entry.origin)
         entry.writeOnly = true
         entry.changed = Self.whole(now)
-        index.entries[position] = entry
-        return try written(key)
+        return try written(key, cap: Self.maxFileSize) { index.entries[position] = entry }
     }
 
     public func delete(_ name: String) throws -> Data {
         let key = try unlockedKey()
         let (position, _) = try find(name)
-        index.entries.remove(at: position)
-        return try written(key)
+        return try written(key, cap: Self.maxFileSize) { _ = index.entries.remove(at: position) }
     }
 
     /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again.
     public func remark(maskKey: SymmetricKey) throws -> Data {
         let key = try unlockedKey()
-        for position in index.entries.indices {
-            let value = try Self.open(index.entries[position], key: key)
-            index.entries[position].marks = SecretMask.marks(for: value, key: maskKey)
+        return try written(key, cap: Self.maxFileSize) {
+            for position in index.entries.indices {
+                let value = try Self.open(index.entries[position], key: key)
+                index.entries[position].marks = SecretMask.marks(for: value, key: maskKey)
+            }
         }
-        return try written(key)
     }
 
     // MARK: values
@@ -625,8 +635,7 @@ public final class SecretVault {
         let sealed = try AES.GCM.seal(Self.bytes(of: key), using: Self.recoveryKey(recovery),
                                       authenticating: Self.wrapData(Self.recoveryLabel))
         guard let combined = sealed.combined else { throw Failure.tampered }
-        index.recovery = Recovery(box: combined)
-        return try written(key)
+        return try written(key, cap: Self.maxFileSize) { index.recovery = Recovery(box: combined) }
     }
 
     /// Wraps the vault key under a new keyring: the rescue with the recovery key, after the old Secure Enclave key
@@ -634,11 +643,13 @@ public final class SecretVault {
     public func rewrap(under keyring: VaultKeyring) throws -> Data {
         let key = try unlockedKey()
         let publicKey = try keyring.publicKey()
-        index.wrapped = try Self.wrap(key, for: publicKey, kind: keyring.kind)
-        index.keyring = keyring.kind
-        index.keyBlob = keyring.keyBlob
-        index.publicKey = publicKey
-        return try written(key)
+        let wrapped = try Self.wrap(key, for: publicKey, kind: keyring.kind)
+        return try written(key, cap: Self.maxFileSize) {
+            index.wrapped = wrapped
+            index.keyring = keyring.kind
+            index.keyBlob = keyring.keyBlob
+            index.publicKey = publicKey
+        }
     }
 
     // MARK: the crypto
@@ -653,9 +664,20 @@ public final class SecretVault {
         return (position, index.entries[position])
     }
 
-    private func written(_ key: SymmetricKey) throws -> Data {
-        file = try Self.encodeFile(index, key: key)
-        return file
+    /// The index changed by `change`, then the new file's bytes, for the caller to write. When anything fails, a file
+    /// past `cap` (`writeCap` unless given) included, the index and the file are left as they were.
+    private func written(_ key: SymmetricKey, cap: Int? = nil, _ change: () throws -> Void) throws -> Data {
+        let before = index
+        do {
+            try change()
+            let new = try Self.encodeFile(index, key: key)
+            guard new.count <= cap ?? writeCap else { throw Failure.full }
+            file = new
+            return new
+        } catch {
+            index = before
+            throw error
+        }
     }
 
     static func wrap(_ vaultKey: SymmetricKey, for publicKey: Data, kind: VaultKeyringKind) throws -> Wrapped {

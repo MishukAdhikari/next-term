@@ -173,6 +173,9 @@ final class SecretsStore {
     /// With `protection` `.tampered`: the vault was refused because this Mac has no record of the vaults Next Term made,
     /// not because its file changed, so Settings says that instead of the tamper text.
     private(set) var isUnlisted = false
+    /// With `protection` `.tampered`: vault.json is larger than Next Term reads (a copy before the write cap wrote it),
+    /// not changed, so Settings says that instead of the tamper text.
+    private(set) var isTooLarge = false
     private var indexDate: Date?
     private var observers: [NSObjectProtocol] = []
 
@@ -262,28 +265,40 @@ final class SecretsStore {
     func load() async {
         let folder = folder
         let keyring = keyring
-        let found = await onQueue { () -> (SecretVault.Index?, Protection, Data) in
+        let found = await onQueue { () -> (SecretVault.Index?, Protection, Data, Bool) in
             let audit = folder.exists ? folder.readAudit() : Data()
-            guard folder.exists else { return (nil, .none, audit) }
+            guard folder.exists else { return (nil, .none, audit, false) }
             let data: Data?
             do {
                 data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
             } catch {
-                return (nil, .tampered, audit)
+                return (nil, .tampered, audit, Self.isTooLarge(error))
             }
-            guard let data else { return (nil, .none, audit) }
-            guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit) }
+            guard let data else { return (nil, .none, audit, false) }
+            guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit, false) }
             let opens = keyring(index).check(publicKey: index.publicKey)
-            return (index, opens ? Self.protection(of: index) : .cantOpen, audit)
+            return (index, opens ? Self.protection(of: index) : .cantOpen, audit, false)
         }
         index = found.0
         protection = found.1
         isUnlisted = false
+        isTooLarge = found.3
         lastUse = SecretAudit.lastUse(in: found.2)
         indexDate = folder.modificationDate(of: SecretFolder.vaultName)
         publishMarks()
         if !SelfTest.isRequested { startObserving() }
         NotificationCenter.default.post(name: Self.changed, object: self)
+    }
+
+    /// A read refused for its size: vault.json past the read cap.
+    nonisolated static func isTooLarge(_ error: Error) -> Bool {
+        (error as? SecretFolder.Failure) == .tooLarge || (error as? SecretVault.Failure) == .tooLarge
+    }
+
+    /// What an action on a vault refused at load or since throws.
+    private var refusal: Failure {
+        if isTooLarge { return .vault(.tooLarge) }
+        return .vault(isUnlisted ? .unlisted : .tampered)
     }
 
     nonisolated static func protection(of index: SecretVault.Index) -> Protection {
@@ -304,17 +319,25 @@ final class SecretsStore {
             index = nil
             protection = .none
             isUnlisted = false
+            isTooLarge = false
             NotificationCenter.default.post(name: Self.changed, object: self)
             NotificationCenter.default.post(name: Self.startedOver, object: self)
             return
         }
-        let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
+        var data: Data?
+        var tooLarge = false
+        do {
+            data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
+        } catch {
+            tooLarge = Self.isTooLarge(error)
+        }
         if let data, let read = try? SecretVault.index(from: data) {
             index = read
             if protection == .none { protection = Self.protection(of: read) }
         } else {
             protection = .tampered
             isUnlisted = false
+            isTooLarge = tooLarge
         }
         publishMarks()
         NotificationCenter.default.post(name: Self.changed, object: self)
@@ -358,7 +381,7 @@ final class SecretsStore {
     @discardableResult
     func perform(_ action: Action, reason: String? = nil, facts: Facts = Facts()) async throws -> [String: SecretBytes] {
         reloadIfChanged()
-        if protection == .tampered { throw Failure.vault(isUnlisted ? .unlisted : .tampered) }
+        if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !action.isAdd { throw Failure.vault(.noSuchKey(action.names.first ?? "")) }
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
@@ -413,6 +436,7 @@ final class SecretsStore {
         if failure == .vault(.tampered) || failure == .vault(.unlisted) {
             protection = .tampered
             isUnlisted = failure == .vault(.unlisted)
+            isTooLarge = false
             let outcome = isUnlisted ? "refused: no record of this Mac's vaults" : "refused"
             let line = SecretAudit.Line(event: .tamper, names: action.names, who: facts.who, command: facts.command,
                                         folder: facts.folder, outcome: outcome)
@@ -620,7 +644,7 @@ final class SecretsStore {
     private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
                      line: @escaping () -> SecretAudit.Line) async throws {
         reloadIfChanged()
-        if protection == .tampered { throw Failure.vault(isUnlisted ? .unlisted : .tampered) }
+        if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !makes { throw Failure.vault(.noSuchKey(names.first ?? "")) }
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
@@ -748,6 +772,7 @@ final class SecretsStore {
         index = nil
         protection = .none
         isUnlisted = false
+        isTooLarge = false
         lastUse = [:]
         indexDate = nil
         publishMarks()
