@@ -78,7 +78,10 @@ extension MCPProgress {
         public func answer(_ message: [String: Any], in group: DispatchGroup,
                            respond: @escaping () -> [String: Any]?) {
             let ticker = begin(message) // now, on the reading thread
-            DispatchQueue.global().async(group: group) {
+            // A queue of its own: a private serial queue gets a thread even when the shared global ones are all busy
+            // (GCD lets these go past its thread limit), so a long call never waits for one.
+            let queue = DispatchQueue(label: "nextterm.mcp.call", qos: .userInitiated)
+            queue.async(group: group) {
                 let response = respond()
                 if let ticker { self.end(ticker) }
                 if let response { self.send(response) }
@@ -156,7 +159,8 @@ extension MCPProgress {
             lock.lock()
             defer { lock.unlock() }
             guard timer == nil, !stopped else { return }
-            let source = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            // Its own serial queue, for the same reason as a call's: a tick never waits for a busy shared thread.
+            let source = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "nextterm.mcp.progress", qos: .utility))
             source.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(20))
             source.setEventHandler { [weak self] in self?.tick() }
             timer = source
