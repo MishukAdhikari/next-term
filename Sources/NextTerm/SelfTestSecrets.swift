@@ -1662,6 +1662,8 @@ extension SelfTest {
         await secretsRevealEndChecks(presence: presence, shownValue: shownValue)
         // A paste counts for a value field only when it reaches it (review finding #24).
         await secretsPasteFieldChecks(view: view)
+        // A reload keeps the selected key by its name (review finding #25).
+        await secretsSelectionChecks(view: view)
         #endif
 
         // Allowed now lists a grant, and Revoke ends it.

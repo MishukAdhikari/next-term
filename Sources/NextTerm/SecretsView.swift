@@ -242,11 +242,14 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     @objc func reload() {
         let store = SecretsStore.shared
-        entries = store.index?.entries ?? []
+        // The selected key, by name, before the list changes: its row may hold another key after a delete elsewhere.
         let selected = selectedEntry?.name
+        entries = store.index?.entries ?? []
         table.reloadData()
         if let selected, let row = entries.firstIndex(where: { $0.name == selected }) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        } else {
+            table.deselectAll(nil)
         }
         statusLabel.stringValue = Self.statusText(store.protection, waitingForKeychain: store.isWaitingForKeychain,
                                                   unlisted: store.isUnlisted, tooLarge: store.isTooLarge)
