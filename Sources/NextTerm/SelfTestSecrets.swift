@@ -1660,6 +1660,8 @@ extension SelfTest {
         view.closeReveal()
         #if DEBUG
         await secretsRevealEndChecks(presence: presence, shownValue: shownValue)
+        // A paste counts for a value field only when it reaches it (review finding #24).
+        await secretsPasteFieldChecks(view: view)
         #endif
 
         // Allowed now lists a grant, and Revoke ends it.

@@ -52,11 +52,12 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     private let shortLabel = NSTextField(wrappingLabelWithString: SecretRequestWindow.shortLine)
     private(set) var statusLabel = NSTextField(wrappingLabelWithString: "")
     private var purposeEdited = false
+    /// The pastes that reach the value field (`SecretPasteWatch`).
+    private var pasteWatch: SecretPasteWatch?
     /// The pasteboard's change count at the last paste into the value field.
-    private(set) var pastedAt: Int?
+    var pastedAt: Int? { pasteWatch?.pastedAt }
     private var answered = false
     private(set) var isBusy = false
-    private var menuObserver: NSObjectProtocol?
 
     init(_ content: Content, onSave: @escaping (Form) -> Void, onDecline: @escaping (_ stopAsking: Bool) -> Void) {
         self.content = content
@@ -70,20 +71,10 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         window.delegate = self
         build()
         // A paste into the value field, by ⌘V, Edit › Paste or the field's menu: its change count, never its contents.
-        menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didSendActionNotification, object: nil, queue: .main) { [weak self] note in
-            let item = note.userInfo?["MenuItem"] as? NSMenuItem
-            MainActor.assumeIsolated {
-                guard let self, item?.action == #selector(NSText.paste(_:)), self.isEditingValue else { return }
-                self.recordPaste()
-            }
-        }
+        pasteWatch = SecretPasteWatch(valueField)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    deinit {
-        if let menuObserver { NotificationCenter.default.removeObserver(menuObserver) }
-    }
 
     // MARK: building
 
@@ -194,14 +185,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
 
     var name: String { Self.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
 
-    private var isEditingValue: Bool {
-        guard let window, window.isKeyWindow, let editor = window.firstResponder as? NSText else { return false }
-        return editor.delegate === valueField || window.firstResponder === valueField
-    }
-
     /// A paste into the value field: the change count it is compared with on Save.
     func recordPaste() {
-        pastedAt = SecretClipboard.shared.recordPaste()
+        pasteWatch?.record()
     }
 
     func controlTextDidChange(_ notification: Notification) {
