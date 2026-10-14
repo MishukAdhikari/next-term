@@ -23,22 +23,23 @@ extension NextTermView {
         }
     }
 
-    /// The cell SwiftTerm draws (its cellDimension is internal): the height from the rows (getOptimalFrameSize is the
-    /// cell times the grid, plus the scroller's width), the width from the font, snapped to the pixel grid as
-    /// SwiftTerm's computeFontDimensions snaps it.
+    /// The cell SwiftTerm draws and hit-tests the left button with (its cellDimension is internal): getOptimalFrameSize
+    /// is that cell times the grid, plus the scroller SwiftTerm reserves (1.20 never hides it). Not the font's advance
+    /// snapped again: SwiftTerm snapped it at the scale of the screen the font was set on, which may not be this one.
     var cellSize: CGSize {
-        let rows = max(getTerminal().rows, 1)
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
-        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
-        let width = max(1, (advance * scale).rounded() / scale)
-        return CGSize(width: width, height: getOptimalFrameSize().height / CGFloat(rows))
+        let terminal = getTerminal()
+        let frame = getOptimalFrameSize()
+        let scroller = NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollerStyle)
+        let width = max(1, (frame.width - scroller) / CGFloat(max(terminal.cols, 1)))
+        return CGSize(width: width, height: frame.height / CGFloat(max(terminal.rows, 1)))
     }
 
-    /// The program takes this right or middle click: it reads the mouse, this tab passes the buttons on, and neither
-    /// Shift (unless the program took it) nor ⌘ keeps the click for Next Term.
+    /// The program takes this right or middle click: it reads the mouse, the tab still takes input (a shell, or a herdr
+    /// tab's ssh, can end with the mouse mode still on, and then nothing reads the report), this tab passes the buttons
+    /// on, and neither Shift (unless the program took it) nor ⌘ keeps the click for Next Term.
     func programTakes(_ event: NSEvent) -> Bool {
         let terminal = getTerminal()
-        guard allowMouseReporting, terminal.mouseMode != .off, passesOtherButtons() else { return false }
+        guard allowMouseReporting, acceptsInput, terminal.mouseMode != .off, passesOtherButtons() else { return false }
         let flags = event.modifierFlags
         if flags.contains(.shift), !terminal.mouseShiftCapture { return false }
         return !flags.contains(.command)

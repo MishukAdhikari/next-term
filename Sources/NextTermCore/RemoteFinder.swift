@@ -7,7 +7,7 @@ import Foundation
 // HERDR_INSTALL_DIR) is not there: a tool that runs in the user's own terminal can be missing from /bin/sh's PATH.
 // herdr is looked for in this order:
 // 1. the executable of the user's running herdr server, so the client and the CLI speak its protocol (and, on Linux,
-//    the socket variables it runs with);
+//    when it is the only one, the socket variables it runs with: of several, herdr picks the session, as it would);
 // 2. where a tab opens or check_host asks, and no server runs: the PATH the user's login shell sets, run without a
 //    terminal for 3 seconds at most, nothing of it shown;
 // 3. /bin/sh's PATH;
@@ -34,8 +34,8 @@ extension RemoteShell {
 
     /// The finder's own functions. nt_ok: `$1` is a file that can run (and with nt_check set, answers it; the first one
     /// that doesn't is nt_bad, and its first line nt_said). nt_on_path NAME LIST: the first copy on a PATH list, a mise or
-    /// asdf shim only when nothing else runs. nt_known NAME: the install folders. Each sets NTF to what it found. All
-    /// their variables start with nt_, so a script's own (C, H, K, T, p, s…) are left alone.
+    /// asdf shim (the first one there) only when nothing else runs. nt_known NAME: the install folders. Each sets NTF to
+    /// what it found. All their variables start with nt_, so a script's own (C, H, K, T, p, s…) are left alone.
     static let finderFunctions = #"""
         nt_nl='
         '
@@ -56,7 +56,9 @@ extension RemoteShell {
             IFS=$nt_ifs
             case $nt_d in /*) ;; *) continue ;; esac
             case $nt_d/$1 in
-              */mise/shims/*|*/asdf/shims/*|*/.asdf/shims/*) [ -n "$nt_shim" ] || nt_shim=$nt_d/$1; continue ;;
+              */mise/shims/*|*/asdf/shims/*|*/.asdf/shims/*)
+                if [ -z "$nt_shim" ] && [ -f "$nt_d/$1" ] && [ -x "$nt_d/$1" ]; then nt_shim=$nt_d/$1; fi
+                continue ;;
             esac
             if nt_ok "$nt_d/$1"; then set +f; NTF=$nt_d/$1; return 0; fi
           done
@@ -98,12 +100,13 @@ extension RemoteShell {
         }
         """#
 
-    /// herdr's own: nt_running (the executable of a `herdr server` this user runs: /proc on Linux, ps elsewhere), the
-    /// socket variables it runs with (nt_server_env, Linux), nt_use_env (exports those three, and only those), and the
-    /// cache a tab writes (nt_herdr_save) and the status checks read (nt_herdr_cached).
+    /// herdr's own: nt_running (the executable of a `herdr server` this user runs: /proc on Linux, ps elsewhere; NTS, its
+    /// pid, only when it is the only server, since which of several started first says nothing of the session wanted),
+    /// the socket variables it runs with (nt_server_env, Linux), nt_use_env (exports those three, and only those), and
+    /// the cache a tab writes (nt_herdr_save) and the status checks read (nt_herdr_cached).
     static let herdrFunctions = #"""
         nt_running() {
-          NTS=
+          NTS=; nt_first=; nt_firstpid=; nt_count=0
           command -v pgrep >/dev/null 2>&1 || return 1
           for nt_q in $(pgrep -u "$(id -u)" -x "$1" 2>/dev/null); do
             nt_e=
@@ -116,9 +119,13 @@ extension RemoteShell {
               nt_e=$(ps -o comm= -p "$nt_q" 2>/dev/null)
             fi
             case $nt_e in /*) ;; *) continue ;; esac
-            if nt_ok "$nt_e"; then NTF=$nt_e; NTS=$nt_q; return 0; fi
+            nt_count=$((nt_count + 1))
+            if [ -z "$nt_first" ] && nt_ok "$nt_e"; then nt_first=$nt_e; nt_firstpid=$nt_q; fi
           done
-          return 1
+          [ -n "$nt_first" ] || return 1
+          NTF=$nt_first
+          if [ "$nt_count" -eq 1 ]; then NTS=$nt_firstpid; fi
+          return 0
         }
         nt_server_env() {
           [ -n "$NTS" ] && [ -r "/proc/$NTS/environ" ] || return 0
@@ -259,9 +266,10 @@ extension RemoteShell {
 
     /// The status check's herdr section, after findHerdr: where herdr is and what `herdr agent list` said, stdout and
     /// stderr together (herdr prints one JSON object on one of them), its exit status, and an end marker. herdr before
-    /// 0.5.10 has no `agent` command: then `pane list`. Line breaks become spaces (pretty-printed JSON reads the same,
-    /// and noise stays apart from it); escape sequences stay for HerdrAgent.listing to read past, other control
-    /// characters go; 1 MB at most.
+    /// 0.5.10 has no `agent` command: then, when `agent list` failed saying so (an agent's title may say it too),
+    /// `pane list`. Line breaks become spaces (pretty-printed JSON reads the same, and noise stays apart from it);
+    /// escape sequences, and BEL, which ends an OSC, stay for HerdrAgent.listing to read past, other control characters
+    /// go; 1 MB at most.
     static var herdrSection: String {
         [
             "printf '\\n%s\\n' \(quote(herdrMarker))",
@@ -270,11 +278,13 @@ extension RemoteShell {
             "else",
             "  printf 'where\\t%s\\t%s\\n' \"$(printf '%s' \"$H\" | tr -d '\\000-\\037\\177' | cut -c 1-1024)\" \"$HW\"",
             "  nt_out=$(\"$H\" agent list 2>&1 </dev/null); nt_x=$?; nt_cmd=agent",
-            "  case $nt_out in",
-            "    *'unknown command'*|*'unrecognized subcommand'*) nt_out=$(\"$H\" pane list 2>&1 </dev/null); nt_x=$?; nt_cmd=pane ;;",
-            "  esac",
+            "  if [ \"$nt_x\" -ne 0 ]; then",
+            "    case $nt_out in",
+            "      *'unknown command'*|*'unrecognized subcommand'*) nt_out=$(\"$H\" pane list 2>&1 </dev/null); nt_x=$?; nt_cmd=pane ;;",
+            "    esac",
+            "  fi",
             "  printf 'exit\\t%s\\t%s\\n' \"$nt_x\" \"$nt_cmd\"",
-            "  printf 'out\\t'; printf '%s' \"$nt_out\" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\032\\034-\\037\\177' | head -c 1000000; echo",
+            "  printf 'out\\t'; printf '%s' \"$nt_out\" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\006\\010-\\032\\034-\\037\\177' | head -c 1000000; echo",
             "fi",
             "printf '%s\\n' \(quote(herdrEndMarker))",
         ].joined(separator: "\n")

@@ -30,7 +30,9 @@ public enum MouseReport {
 
     /// The cell (0-based, clamped to the grid; a row of the screen) and the pixel (0-based points from the top left,
     /// clamped to the view) of view point `x`, `y` (origin at the bottom left), as SwiftTerm 1.20's calculateMouseHit
-    /// and sharedMouseEvent compute them for the left button, so every button lands on the same cell.
+    /// and sharedMouseEvent compute them for the left button, so every button lands on the same cell. Except in a row
+    /// SwiftTerm lays out as BiDi (Hebrew or Arabic text): there it reports the logical column and this the visual one
+    /// (its mapping is internal); 1.99's own right and middle clicks remove the difference.
     public static func position(x: Double, y: Double, width: Double, height: Double, cellWidth: Double, cellHeight: Double,
                                 cols: Int, rows: Int) -> (col: Int, row: Int, pixelX: Int, pixelY: Int) {
         let col = min(max(Int(x / max(cellWidth, 1)), 0), max(cols - 1, 0))

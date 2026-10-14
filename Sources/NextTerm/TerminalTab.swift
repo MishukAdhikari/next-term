@@ -355,6 +355,18 @@ final class NextTermView: LocalProcessTerminalView {
         super.mouseUp(with: event)
     }
 
+    /// SwiftTerm 1.20 snaps its cell width to the pixel grid only when the font (or the line spacing) is set, at the
+    /// scale of the window then, or of the main screen before there is one: on a screen of another scale it drew and
+    /// hit-tested cells snapped for the old one. Setting the font again snaps them for this screen.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor else { return }
+        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
+        let snapped = max(1, (advance * scale).rounded() / scale)
+        // Only when it differs: setting the font clears the selection.
+        if abs(snapped - cellSize.width) > 0.001 { font = font }
+    }
+
     // MARK: right and middle buttons, for a program that reads the mouse (TerminalMouse.swift)
 
     /// False for a tab Next Term's own tmux keeps: its `mouse on` is there for the wheel, and tmux's menu (splits,

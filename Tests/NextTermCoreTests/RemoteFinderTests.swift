@@ -151,6 +151,17 @@ import Testing
         #expect(try tabFinder(path: path)["H"] == shims + "/herdr")
     }
 
+    @Test func aShimFolderWithoutHerdrDoesNotHideALaterOne() throws {
+        // mise's shims first on PATH but herdr managed by asdf, in a folder of its own (not ~/.asdf, which the install
+        // folders would find anyway).
+        let mise = home + "/.local/share/mise/shims"
+        let asdf = base + "/opt/asdf/shims"
+        try FileManager.default.createDirectory(atPath: mise, withIntermediateDirectories: true)
+        try herdr(at: asdf + "/herdr")
+        let found = try tabFinder(path: bin + ":" + mise + ":" + asdf + ":/usr/bin:/bin")
+        #expect(found["H"] == asdf + "/herdr" && found["HW"] == "path", "\(found)")
+    }
+
     @Test func copiesThatCannotRunArePassedOverAndTheBrokenOneIsNamed() throws {
         guard !Self.herdrOnThisMac else { return }
         // A folder named herdr, a file that cannot run, and one whose --version fails, before one that works.
@@ -265,6 +276,20 @@ import Testing
         #expect(text.contains("/proc/$NTS/environ") && text.contains("HERDR_SESSION|HERDR_SOCKET_PATH|XDG_CONFIG_HOME"))
     }
 
+    @Test func aSessionIsCarriedOverOnlyFromTheOnlyServer() throws {
+        // Which of several servers started first says nothing of the session wanted: then none is read (NTS, whose
+        // /proc environ nt_server_env reads), and herdr picks, as it does in the user's own terminal.
+        let server = base + "/server/herdr"
+        try herdr(at: server)
+        try script(bin + "/ps", "case \"$*\" in *args=*) echo 'herdr server' ;; *comm=*) echo \(RemoteShell.quote(server)) ;; esac")
+        let probe = [RemoteShell.finderFunctions, RemoteShell.herdrFunctions,
+                     "nt_check=; nt_bad=; NTF=", "nt_running herdr; printf '%s|%s\\n' \"$NTF\" \"$NTS\""].joined(separator: "\n")
+        try script(bin + "/pgrep", "echo 4242")
+        #expect(try run(probe) == "\(server)|4242\n")
+        try script(bin + "/pgrep", "printf '4242\\n4243\\n'")
+        #expect(try run(probe) == "\(server)|\n")
+    }
+
     // MARK: the status check
 
     @Test func theStatusCheckReadsTheCacheAndNeverRunsTheLoginShell() throws {
@@ -305,6 +330,20 @@ import Testing
         guard !Self.herdrOnThisMac else { return }
         let gone = try RemotePoll.parse(try run(poll))?.herdr?.listing
         #expect(gone == .missing)
+    }
+
+    @Test func theStatusCheckReadsAnAnswerThatWorkedAsHerdrGaveIt() throws {
+        let poll = RemoteShell.pollScript(tabs: [], herdr: true)
+        let list = #"{"result":{"agents":[{"pane_id":"p1","name":"claude","agent_status":"working","title":"Fix unknown command error"}]}}"#
+        let agent = HerdrAgent(paneID: "p1", name: "claude", status: .working, title: "Fix unknown command error")
+        // An agent's title that says "unknown command", in an answer that worked: `pane list` is not asked.
+        try herdr(at: home + "/.local/bin/herdr", list: list, paneList: #"{"result":{"panes":[]}}"#)
+        let listed = try #require(RemotePoll.parse(try run(poll))?.herdr)
+        #expect(listed.listing == .agents([agent]), "\(listed.listing)")
+        // A wrapper that sets the title first: BEL, which ends its OSC, is kept, so the answer after it is read.
+        try herdr(at: home + "/.local/bin/herdr", list: "\u{1b}]0;herdr\u{07}" + list)
+        let titled = try #require(RemotePoll.parse(try run(poll))?.herdr)
+        #expect(titled.listing == .agents([agent]), "\(titled.listing)")
     }
 
     // MARK: the tab
