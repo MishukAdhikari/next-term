@@ -2,7 +2,8 @@ import AppKit
 import NextTermCore
 
 /// `request_secret`'s window: an agent asks the user to type or paste a key into Next Term. The agent gets
-/// back only the status and the name.
+/// back only the status and the name. "Where it came from" starts empty and only the user fills it: no argument of the
+/// agent's reaches it.
 ///
 /// It is an ordinary window, listed in the Window menu and in the ⌘` cycle, but it never takes the keyboard on
 /// its own: it opens in front without becoming key, and clicking a field makes it key. It has no default button, even
@@ -30,6 +31,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         var purposeBy: SecretVault.PurposeBy
         var value: SecretBytes
         var writeOnly: Bool
+        /// "Where it came from", as the user typed it or took a suggestion; nil for none.
+        var link: String?
+        var linkFrom: SecretVault.LinkFrom?
     }
 
     static let writeOnlyLine = "Next Term never shows or copies this key again. Commands you allow still get it. "
@@ -51,6 +55,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     private let replaceLabel = NSTextField(wrappingLabelWithString: "")
     private let shortLabel = NSTextField(wrappingLabelWithString: SecretRequestWindow.shortLine)
     private(set) var statusLabel = NSTextField(wrappingLabelWithString: "")
+    private(set) var linkField = SecretLinkField()
     private var purposeEdited = false
     /// The pastes that reach the value field (`SecretPasteWatch`).
     private var pasteWatch: SecretPasteWatch?
@@ -140,8 +145,11 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         writeOnlyBox.state = .off
         let writeOnlyLine = SecretApprovalPanel.label(Self.writeOnlyLine, size: 11)
         writeOnlyLine.textColor = .secondaryLabelColor
+        linkField.onChange = { [weak self] in self?.refreshName() }
+        linkField.value = { [weak self] in self.map { SecretBytes(utf8: $0.valueField.stringValue) } }
+        linkField.suggest(value: nil, name: content.name)
         return [Self.caption("Name"), nameField, savedAsLabel, replaceLabel, Self.caption("What it's for"), purposeField,
-                Self.caption("Value"), valueField, shortLabel, writeOnlyBox, writeOnlyLine]
+                linkField, Self.caption("Value"), valueField, shortLabel, writeOnlyBox, writeOnlyLine]
     }
 
     private static func caption(_ text: String) -> NSTextField {
@@ -199,6 +207,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         } else if field === purposeField {
             purposeEdited = true
         }
+        if field === nameField || field === valueField {
+            linkField.suggest(value: SecretBytes(utf8: valueField.stringValue), name: name)
+        }
         refreshName()
     }
 
@@ -214,11 +225,14 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         replaceLabel.stringValue = stored.map { Self.replaceLine($0) } ?? ""
         replaceLabel.isHidden = stored == nil
         replaceLabel.setAccessibilityLabel(stored == nil ? nil : "Warning: \(replaceLabel.stringValue)")
-        // A stored key keeps what it's for: Save replaces only its value.
-        purposeField.isEnabled = stored == nil
+        // A stored key keeps what it's for and its page: Save replaces only its value.
+        purposeField.isEnabled = stored == nil && !isBusy
+        linkField.setEnabled(stored == nil && !isBusy && !answered)
+        linkField.refresh()
+        let linkOK: Bool = stored != nil || !linkField.blocksSave
         let length = valueField.stringValue.trimmingCharacters(in: .whitespaces).utf8.count
         shortLabel.isHidden = length == 0 || length >= SecretMask.minimumLength
-        saveButton?.isEnabled = !isBusy && !answered && valid && length > 0
+        saveButton?.isEnabled = !isBusy && !answered && valid && length > 0 && linkOK
     }
 
     /// The line for a name already stored.
@@ -237,8 +251,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         guard StoredSecretName.isValid(name) else { return }
         let value = SecretBytes(utf8: valueField.stringValue)
         let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let link: String? = linkField.text.isEmpty ? nil : linkField.text
         onSave(Form(name: name, purpose: purpose, purposeBy: purposeEdited ? .user : .agent, value: value,
-                    writeOnly: writeOnlyBox.state == .on))
+                    writeOnly: writeOnlyBox.state == .on, link: link, linkFrom: link == nil ? nil : linkField.linkFrom))
     }
 
     @objc private func decline() { answer(stopAsking: false) }
@@ -274,6 +289,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         isBusy = false
         valueField.stringValue = ""
         for field in [nameField, purposeField, valueField] { field.isEnabled = false }
+        linkField.setEnabled(false)
         for button in [stopButton, declineButton, writeOnlyBox] { button?.isHidden = true }
         saveButton.title = "Close"
         saveButton.isEnabled = true

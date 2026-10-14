@@ -128,6 +128,12 @@ enum SecretReason {
     static func makeWriteOnly(_ name: String) -> String { "make \(name) write-only" }
     static func changePurpose(_ name: String) -> String { "change what \(name) is for" }
     static func rename(_ name: String, to newName: String) -> String { "rename \(name) to \(newName)" }
+    static func changeLink(_ name: String) -> String { "change \(name)’s page" }
+    static func changeReminder(_ name: String) -> String { "change when to remind you to rotate \(name)" }
+    /// More than one of what it's for, its page and its reminder.
+    static func changeDetails(_ name: String) -> String { "change \(name)’s details" }
+    /// Opening a key's page after vault.json changed since Next Term last wrote or checked it.
+    static func checkLink(_ name: String) -> String { "check \(name)’s page" }
     static func replace(_ name: String) -> String { "replace \(name)" }
     static func replaceWithAgentsKey(_ name: String) -> String { "replace \(name) with the agent’s key" }
     static func moveOut(_ count: Int) -> String { "move \(count) \(count == 1 ? "key" : "keys") out of your MCP configs" }

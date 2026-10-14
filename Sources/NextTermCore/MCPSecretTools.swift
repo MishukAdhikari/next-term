@@ -16,7 +16,7 @@ extension MCPServer {
 
     public static let secretTools: [Tool] = [
         Tool(name: "list_secrets", title: "List stored keys",
-             description: "The user's keys stored in Next Term's Secrets, by name: what each is for (and whether the user or an agent wrote that), whether the user or an agent added it, whether it is write-only, and when it was last used. vault is ok, none (nothing stored yet), cant_open or tampered. No tool returns a key's value: use run_with_secrets, or nxtrm secret run in an MCP server's config.",
+             description: "The user's keys stored in Next Term's Secrets, by name: what each is for (and whether the user or an agent wrote that), whether the user or an agent added it, whether it is write-only, when it was last used, service (the provider whose key page the user linked it to, such as OpenAI; never the link itself), rotated (the day its value was last set, YYYY-MM-DD) and rotate_due (whether the rotation reminder the user set for it has passed). vault is ok, none (nothing stored yet), cant_open or tampered. No tool returns a key's value: use run_with_secrets, or nxtrm secret run in an MCP server's config.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "request_secret", title: "Ask the user to add a key",
@@ -32,6 +32,30 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {"secrets": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "pattern": "\#(secretPairPattern)"}, "description": "The keys, as NAME or NAME=ENVNAME."}, "command": {"type": "string", "maxLength": 2000, "description": "One line, run with /bin/sh -c."}, "directory": {"type": "string", "description": "The absolute folder it runs in."}, "tab_id": {"type": "string", "description": "A local tab's id from list_tabs, at its shell's prompt and not your own: the command runs there. Default: a new tab."}, \#(secretReason), \#(secretRequestID)}, "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 60),
     ]
+
+    /// What `list_secrets` says of a key's page and age, beside its name: `service`, the provider whose key page its
+    /// "Where it came from" link is on (null when it has none, or one on a host no key page has); `rotated`, the day
+    /// its value was last set; `rotate_due`, whether its rotation reminder has passed. Never the link: a full URL can
+    /// carry an organization's or a project's id, and only the user's hands set or open one.
+    public static func secretSourceFacts(_ entry: SecretVault.Entry, now: Date,
+                                         calendar: Calendar = .current) -> [String: Any] {
+        let service: Any = secretService(ofLink: entry.link) ?? NSNull()
+        return [
+            "service": service,
+            "rotated": SecretAge.day(entry.lastSet, calendar: calendar),
+            "rotate_due": SecretAge.due(entry: entry, now: now, calendar: calendar),
+        ]
+    }
+
+    /// The provider a stored link's host belongs to (`SecretKeyPages.page(forHost:)`), for a link that still passes
+    /// the link rules; nil for none. The index is read with no MAC check, as lists read it, so the rules run again here.
+    public static func secretService(ofLink link: String?) -> String? {
+        guard let link else { return nil }
+        let none: (String) -> Bool = { (_: String) -> Bool in false }
+        guard case .success(let url) = SecretLink.check(link, mask: none, value: nil),
+              let host = SecretLink.host(of: url) else { return nil }
+        return SecretKeyPages.page(forHost: host)?.provider
+    }
 
     /// An answer of run_with_secrets for a tab it opened, as new_tab answers: `selected`, whether the tab was the
     /// selected one in its window when it opened (the user may have chosen it, or closed it, since; the answer comes

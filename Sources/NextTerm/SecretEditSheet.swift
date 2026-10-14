@@ -3,12 +3,13 @@ import NextTermCore
 
 /// Add…, Edit… and Replace… in Settings › Secrets and Window › Secrets. Save asks for Touch ID or the Mac
 /// password once; cancelling it leaves the sheet as it was. A paste into the value field is cleared from the
-/// clipboard on Save, when nothing was copied since.
+/// clipboard on Save, when nothing was copied since. Add… and Edit… also set "Where it came from" (`SecretLinkField`)
+/// and "Remind me to rotate".
 @MainActor
 final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     enum Mode {
         case add
-        /// The name and what it's for.
+        /// The name, what it's for, its page and its reminder.
         case edit(SecretVault.Entry)
         /// A new value, and the write-only flag.
         case replace(SecretVault.Entry)
@@ -33,6 +34,10 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     private let savedAsLabel = NSTextField(labelWithString: "")
     private let shortLabel = NSTextField(wrappingLabelWithString: SecretRequestWindow.shortLine)
     private(set) var statusLabel = NSTextField(wrappingLabelWithString: "")
+    /// "Where it came from", in Add… and Edit….
+    private(set) var linkField: SecretLinkField?
+    /// "Remind me to rotate", in Add… and Edit…: each item's tag is its days, 0 for Never.
+    private(set) var remindPopUp: NSPopUpButton?
     /// The pastes that reach the value field (`SecretPasteWatch`), when the sheet has one.
     private var pasteWatch: SecretPasteWatch?
     /// The pasteboard's change count at the last paste into the value field.
@@ -90,6 +95,11 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             purposeField.delegate = self
             purposeField.setAccessibilityLabel("What it's for")
             views += [Self.caption("What it's for"), purposeField]
+            let link = SecretLinkField(stored: entry?.link, from: entry?.linkFrom)
+            link.onChange = { [weak self] in self?.refresh() }
+            link.value = { [weak self] in self.flatMap { $0.hasValue ? $0.typedValue : nil } }
+            linkField = link
+            views += [link, reminderRow(entry?.remindDays)]
         }
         if hasValue {
             valueField.placeholderString = "Paste or type the key"
@@ -133,8 +143,41 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         ]
         for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
         NSLayoutConstraint.activate(constraints)
+        suggestLink()
         refresh()
     }
+
+    /// "Remind me to rotate" and its pop-up: Never, or 30, 90, 180 or 365 days; a key saved with another age keeps it
+    /// as an item of its own.
+    private func reminderRow(_ days: Int?) -> NSView {
+        let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        var choices: [Int] = SecretEditSheet.remindChoices
+        if let days, !choices.contains(days) { choices.append(days) }
+        for choice in choices.sorted() {
+            popUp.addItem(withTitle: choice == 0 ? "Never" : "\(choice) days")
+            popUp.lastItem?.tag = choice
+        }
+        popUp.selectItem(withTag: days ?? 0)
+        popUp.target = self
+        popUp.action = #selector(changed)
+        popUp.setAccessibilityLabel("Remind me to rotate")
+        remindPopUp = popUp
+        let row = NSStackView(views: [Self.caption("Remind me to rotate"), popUp, NSView()])
+        row.spacing = 8
+        return row
+    }
+
+    /// The reminder's choices, in days; 0 is Never.
+    static let remindChoices = [0, 30, 90, 180, 365]
+
+    /// The reminder chosen: nil for Never.
+    var remindDays: Int? {
+        guard let tag = remindPopUp?.selectedTag(), tag > 0 else { return nil }
+        return tag
+    }
+
+    /// The value as typed, for the link's suggestion and its check: never kept.
+    private var typedValue: SecretBytes { SecretBytes(utf8: valueField.stringValue) }
 
     private static func caption(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
@@ -158,11 +201,18 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     var name: String { SecretRequestWindow.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
 
     func controlTextDidChange(_ notification: Notification) {
-        if (notification.object as? NSTextField) === nameField {
+        let field = notification.object as? NSTextField
+        if field === nameField {
             let shown = SecretRequestWindow.normalized(nameField.stringValue)
             if shown != nameField.stringValue { nameField.stringValue = shown }
         }
+        if field === nameField || field === valueField { suggestLink() }
         refresh()
+    }
+
+    /// The link's suggestion, off the value's first bytes and the name; the field keeps a link the user typed.
+    func suggestLink() {
+        linkField?.suggest(value: hasValue ? typedValue : nil, name: name)
     }
 
     @objc private func changed() { refresh() }
@@ -184,7 +234,10 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         let length = valueField.stringValue.trimmingCharacters(in: .whitespaces).utf8.count
         shortLabel.isHidden = !hasValue || length == 0 || length >= SecretMask.minimumLength
         let purposeOK = purposeField.stringValue.count <= SecretVault.maxPurposeLength
-        saveButton?.isEnabled = !isBusy && StoredSecretName.isValid(name) && !taken && purposeOK && (!hasValue || length > 0)
+        linkField?.refresh()
+        let linkOK: Bool = linkField?.blocksSave != true
+        let valueOK: Bool = !hasValue || length > 0
+        saveButton?.isEnabled = !isBusy && StoredSecretName.isValid(name) && !taken && purposeOK && linkOK && valueOK
     }
 
     // MARK: saving
@@ -194,17 +247,31 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         switch mode {
         case .add:
+            let link: String? = linkField.map { $0.text.isEmpty ? nil : $0.text } ?? nil
             return .add(name: name, purpose: purpose, purposeBy: .user, origin: .settings, writeOnly: writeOnlyBox.state == .on,
-                        value: SecretBytes(utf8: valueField.stringValue))
+                        value: SecretBytes(utf8: valueField.stringValue), link: link, linkFrom: link == nil ? nil : linkField?.linkFrom,
+                        remindDays: remindDays)
         case .edit(let entry):
             let newName = name == entry.name ? nil : name
             let newPurpose = purpose == entry.purpose ? nil : purpose
-            guard newName != nil || newPurpose != nil else { return nil }
-            return .edit(name: entry.name, newName: newName, purpose: newPurpose, purposeBy: .user)
+            let change = linkChange()
+            let newRemind: Int?? = remindDays == entry.remindDays ? nil : .some(remindDays)
+            let changes: [Bool] = [newName != nil, newPurpose != nil, change.link != nil, newRemind != nil]
+            guard changes.contains(true) else { return nil }
+            return .edit(name: entry.name, newName: newName, purpose: newPurpose, purposeBy: .user, link: change.link,
+                         linkFrom: change.from, remindDays: newRemind)
         case .replace(let entry):
             return .replace(name: entry.name, value: SecretBytes(utf8: valueField.stringValue), writeOnly: writeOnlyBox.state == .on,
                             origin: .settings)
         }
+    }
+
+    /// Edit's link: nil when it is as stored, `.some(nil)` to clear it, or the new link and where it came from.
+    private func linkChange() -> (link: String??, from: SecretVault.LinkFrom?) {
+        guard let linkField, linkField.isChanged else { return (nil, nil) }
+        let text = linkField.text
+        guard !text.isEmpty else { return (.some(nil), nil) }
+        return (.some(text), linkField.linkFrom)
     }
 
     @objc func save() {
@@ -242,6 +309,8 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         isBusy = busy
         for field in [nameField, purposeField, valueField] { field.isEnabled = !busy }
         writeOnlyBox?.isEnabled = !busy
+        linkField?.setEnabled(!busy)
+        remindPopUp?.isEnabled = !busy
         cancelButton.isEnabled = !busy
         setStatus(busy ? "Waiting for Touch ID or your password…" : "")
         refresh()

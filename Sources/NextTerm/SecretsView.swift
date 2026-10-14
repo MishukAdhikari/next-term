@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 /// The list of stored keys, shared by Settings › Secrets and Window › Secrets: what guards them, each key with what
-/// it's for, its write-only badge and its last use; the key buttons; the approvals in force; what is paused; and the
-/// limits, said plainly. Each change asks for Touch ID or the Mac password once.
+/// it's for, its page's host, its write-only badge, when its value was set and its last use; the key buttons; the
+/// approvals in force; what is paused; and the limits, said plainly. Each change asks for Touch ID or the Mac password
+/// once.
 @MainActor
 final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     /// Whether "Let agents control Next Term" is on (the self-test sets its own, so the socket stays up).
@@ -214,8 +215,9 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     }
 
     private func buildTable() {
-        let columns: [(String, String, CGFloat)] = [("name", "Name", 160), ("purpose", "What it's for", 190), ("writeOnly", "Write-only", 80),
-                                                    ("used", "Last used", 150)]
+        let columns: [(String, String, CGFloat)] = [("name", "Name", 150), ("purpose", "What it's for", 160),
+                                                    ("page", "Page", 140), ("writeOnly", "Write-only", 72),
+                                                    ("rotated", "Rotated", 110), ("used", "Last used", 140)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -228,7 +230,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         table.usesAlternatingRowBackgroundColors = true
         table.allowsMultipleSelection = false
         table.target = self
-        table.doubleAction = #selector(edit)
+        table.doubleAction = #selector(doubleClicked)
         table.setAccessibilityLabel("Stored keys")
         let menu = NSMenu()
         menu.delegate = self
@@ -319,15 +321,36 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case "purpose":
             cell.stringValue = entry.purpose + (entry.purposeBy == .agent ? " (an agent wrote this)" : "")
             cell.toolTip = cell.stringValue
+        case "page":
+            Self.fillPageCell(cell, SecretsStore.shared.pageLink(of: entry.name))
         case "writeOnly":
             cell.stringValue = entry.writeOnly ? "Write-only" : ""
             cell.textColor = .secondaryLabelColor
             if entry.writeOnly { cell.setAccessibilityLabel("Write-only") }
+        case "rotated":
+            cell.stringValue = SecretAge.text(entry: entry, now: Date())
+            cell.textColor = .secondaryLabelColor
         default:
             cell.stringValue = SecretsStore.shared.lastUse[entry.name].map(Self.lastUsedText) ?? "Never used"
             cell.textColor = .secondaryLabelColor
         }
         return cell
+    }
+
+    /// The Page cell: the host a key's link opens (`platform.openai.com`), with the whole link as its tooltip; for a
+    /// stored link that fails the link rules, that it can't be opened, and why.
+    static func fillPageCell(_ cell: NSTextField, _ page: Result<URL, SecretLink.Refusal>?) {
+        switch page {
+        case .success(let url):
+            cell.stringValue = SecretLink.host(of: url) ?? ""
+            cell.toolTip = url.absoluteString
+        case .failure(let refusal):
+            cell.stringValue = SecretLink.cantOpen
+            cell.textColor = .systemOrange
+            cell.toolTip = refusal.sentence
+        case nil:
+            cell.stringValue = ""
+        }
     }
 
     /// "5 min ago by Claude Code in “api”".
@@ -349,12 +372,33 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         guard entries.indices.contains(row) else { return }
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         refreshButtons()
+        if let item = pageItem(for: entries[row]) {
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
         for button in [editButton, replaceButton, revealButton, copyButton, writeOnlyButton, deleteButton] {
             let item = NSMenuItem(title: button.title, action: button.action, keyEquivalent: "")
             item.target = self
             item.isEnabled = button.isEnabled
             menu.addItem(item)
         }
+    }
+
+    /// "Open platform.openai.com", naming the host before it opens; for a link that can't be opened, Open Page, off,
+    /// with the reason as its tooltip. Nil for a key with no link.
+    func pageItem(for entry: SecretVault.Entry) -> NSMenuItem? {
+        guard let page = SecretsStore.shared.pageLink(of: entry.name) else { return nil }
+        let item = NSMenuItem(title: "Open Page", action: #selector(openPage), keyEquivalent: "")
+        item.target = self
+        switch page {
+        case .success(let url):
+            item.title = "Open " + (SecretLink.host(of: url) ?? "Page")
+        case .failure(let refusal):
+            item.action = nil // off, whatever the menu enables by itself
+            item.isEnabled = false
+            item.toolTip = refusal.sentence
+        }
+        return item
     }
 
     // MARK: approvals and pauses
@@ -477,6 +521,31 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     @objc func edit() {
         guard let entry = selectedEntry else { return }
         openSheet(.edit(entry))
+    }
+
+    /// A double-click on a Page cell opens the page; anywhere else on a row, Edit….
+    @objc func doubleClicked() {
+        let column = table.clickedColumn
+        let isPage: Bool = table.tableColumns.indices.contains(column) && table.tableColumns[column].identifier.rawValue == "page"
+        guard isPage, let entry = selectedEntry, entry.link != nil else { return edit() }
+        openPage()
+    }
+
+    /// Opens the selected key's page in the browser, once the store has checked vault.json's bytes are the ones Next Term
+    /// wrote or checked (an unlock first when they aren't) and the link passes the rules again.
+    @objc func openPage() {
+        guard let entry = selectedEntry else { return }
+        Task { @MainActor in
+            do {
+                let url = try await SecretsStore.shared.checkedPage(of: entry.name)
+                ServiceLinks.open(url, from: self.window)
+            } catch SecretsStore.Failure.cancelled {
+                self.say("Not approved.")
+            } catch {
+                self.say((error as? LocalizedError)?.errorDescription ?? "Next Term couldn’t open the page.")
+            }
+            self.reload()
+        }
     }
 
     @objc func replace() {

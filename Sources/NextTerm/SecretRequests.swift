@@ -451,7 +451,8 @@ final class SecretRequests {
         }
     }
 
-    /// request_secret's Save: the key the user typed. A stored name has its value replaced, and keeps what it's for.
+    /// request_secret's Save: the key the user typed. A stored name has its value replaced, and keeps what it's for and
+    /// its page. A new key's page is the one the user gave in the window, never the agent.
     private func save(_ request: Request, form: SecretRequestWindow.Form) {
         guard !request.isAnswered, let window = request.requestWindow else { return }
         let store = SecretsStore.shared
@@ -461,7 +462,7 @@ final class SecretRequests {
             action = .replace(name: form.name, value: form.value, writeOnly: form.writeOnly, origin: .request)
         } else {
             action = .add(name: form.name, purpose: form.purpose, purposeBy: form.purposeBy, origin: .request, writeOnly: form.writeOnly,
-                          value: form.value)
+                          value: form.value, link: form.link, linkFrom: form.linkFrom)
         }
         let reason = stored == nil ? SecretReason.save(form.name) : SecretReason.replace(form.name)
         let pasted = window.pastedAt

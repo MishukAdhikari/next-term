@@ -88,8 +88,9 @@ enum SecretsMCP {
         default: break
         }
         let time = ISO8601DateFormatter()
-        let secrets: [[String: Any]] = index.entries.map { entry in
-            [
+        let now = Date()
+        let secrets: [[String: Any]] = index.entries.map { (entry: SecretVault.Entry) -> [String: Any] in
+            let row: [String: Any] = [
                 "name": entry.name,
                 "for": entry.purpose,
                 "purpose_by": entry.purposeBy.rawValue,
@@ -97,6 +98,9 @@ enum SecretsMCP {
                 "write_only": entry.writeOnly,
                 "last_used": store.lastUse[entry.name].map { time.string(from: $0.time) } as Any? ?? NSNull(),
             ]
+            // The page's provider, never its link; the day the value was set, and whether its reminder has passed.
+            let source: [String: Any] = MCPServer.secretSourceFacts(entry, now: now)
+            return row.merging(source) { (kept: Any, _: Any) -> Any in kept }
         }
         let protectedBy: String
         switch SecretsStore.protection(of: index) {

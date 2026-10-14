@@ -54,10 +54,40 @@ final class SecretsStore {
         case displaySleep
     }
 
+    /// A key Add… saves, with its facts. A new fact is a member here, with a default, so no match on `Action` changes.
+    struct NewKey {
+        var name: String
+        var purpose: String
+        var purposeBy: SecretVault.PurposeBy
+        var origin: SecretVault.Origin
+        var writeOnly: Bool
+        var value: SecretBytes
+        /// "Where it came from", checked against the stored keys and the value before Touch ID is asked.
+        var link: String?
+        var linkFrom: SecretVault.LinkFrom?
+        var remindDays: Int?
+    }
+
+    /// What Edit… changes. Nil leaves a fact as it is; for `link` and `remindDays`, `.some(nil)` clears it.
+    struct KeyEdit {
+        var name: String
+        var newName: String?
+        var purpose: String?
+        var purposeBy: SecretVault.PurposeBy
+        var link: String??
+        var linkFrom: SecretVault.LinkFrom?
+        var remindDays: Int??
+
+        /// How many of what it's for, its page and its reminder this changes.
+        var factsChanged: Int {
+            let changes: [Bool] = [purpose != nil, link != nil, remindDays != nil]
+            return changes.filter { (changed: Bool) -> Bool in changed }.count
+        }
+    }
+
     enum Action {
-        case add(name: String, purpose: String, purposeBy: SecretVault.PurposeBy, origin: SecretVault.Origin, writeOnly: Bool,
-                 value: SecretBytes)
-        case edit(name: String, newName: String?, purpose: String?, purposeBy: SecretVault.PurposeBy)
+        case add(NewKey)
+        case edit(KeyEdit)
         case replace(name: String, value: SecretBytes, writeOnly: Bool, origin: SecretVault.Origin?)
         case makeWriteOnly(name: String)
         case delete(name: String)
@@ -65,10 +95,24 @@ final class SecretsStore {
         case copy(name: String)
         case use(names: [String])
 
+        static func add(name: String, purpose: String, purposeBy: SecretVault.PurposeBy, origin: SecretVault.Origin,
+                        writeOnly: Bool, value: SecretBytes, link: String? = nil, linkFrom: SecretVault.LinkFrom? = nil,
+                        remindDays: Int? = nil) -> Action {
+            .add(NewKey(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value,
+                        link: link, linkFrom: linkFrom, remindDays: remindDays))
+        }
+
+        static func edit(name: String, newName: String?, purpose: String?, purposeBy: SecretVault.PurposeBy,
+                         link: String?? = nil, linkFrom: SecretVault.LinkFrom? = nil, remindDays: Int?? = nil) -> Action {
+            .edit(KeyEdit(name: name, newName: newName, purpose: purpose, purposeBy: purposeBy, link: link, linkFrom: linkFrom,
+                          remindDays: remindDays))
+        }
+
         var names: [String] {
             switch self {
-            case .add(let name, _, _, _, _, _), .edit(let name, _, _, _), .replace(let name, _, _, _), .makeWriteOnly(let name),
-                 .delete(let name), .reveal(let name), .copy(let name):
+            case .add(let key): return [key.name]
+            case .edit(let change): return [change.name]
+            case .replace(let name, _, _, _), .makeWriteOnly(let name), .delete(let name), .reveal(let name), .copy(let name):
                 return [name]
             case .use(let names):
                 return names
@@ -91,9 +135,13 @@ final class SecretsStore {
         /// The sheet's reason when the caller gives none.
         var reason: String {
             switch self {
-            case .add(let name, _, _, _, _, _): return SecretReason.save(name)
-            case .edit(let name, let newName, _, _):
-                if let newName, newName != name { return SecretReason.rename(name, to: newName) }
+            case .add(let key): return SecretReason.save(key.name)
+            case .edit(let change):
+                let name = change.name
+                if let newName = change.newName, newName != name { return SecretReason.rename(name, to: newName) }
+                if change.factsChanged > 1 { return SecretReason.changeDetails(name) }
+                if change.link != nil { return SecretReason.changeLink(name) }
+                if change.remindDays != nil { return SecretReason.changeReminder(name) }
                 return SecretReason.changePurpose(name)
             case .replace(let name, _, _, _): return SecretReason.replace(name)
             case .makeWriteOnly(let name): return SecretReason.makeWriteOnly(name)
@@ -109,13 +157,34 @@ final class SecretsStore {
             return false
         }
 
+        /// Why a link this sets can't be kept, checked on the Mac before Touch ID is asked: the vault checks it again
+        /// with no stored keys at hand, so the stored keys (`holdsStoredKey`) and the value being added are looked for
+        /// here.
+        var linkRefusal: SecretLink.Refusal? {
+            let text: String?
+            var value: SecretBytes?
+            switch self {
+            case .add(let key):
+                text = key.link
+                value = key.value
+            case .edit(let change):
+                text = change.link ?? nil
+            default:
+                return nil
+            }
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            let mask: (String) -> Bool = { (candidate: String) -> Bool in SecretsStore.holdsStoredKey(candidate) }
+            guard case .failure(let refusal) = SecretLink.check(text, mask: mask, value: value) else { return nil }
+            return refusal
+        }
+
         /// The keys whose value or name this changes, so the grants holding them end.
         var changedNames: [String]? {
             switch self {
             case .replace(let name, _, _, _), .delete(let name): return [name]
-            case .edit(let name, let newName, _, _):
-                guard let newName, newName != name else { return nil }
-                return [name]
+            case .edit(let change):
+                guard let newName = change.newName, newName != change.name else { return nil }
+                return [change.name]
             default: return nil
             }
         }
@@ -142,9 +211,12 @@ final class SecretsStore {
         case vault(SecretVault.Failure)
         case folder(SecretFolder.Failure)
         case keyring
+        /// The key has no "Where it came from" link (any more).
+        case noPage(String)
 
         var errorDescription: String? {
             switch self {
+            case .noPage(let name): return "\(name) has no page."
             case .cancelled: return "Not approved."
             case .unavailable: return UserPresence.Failure.unavailable.errorDescription
             case .vault(let failure): return failure.errorDescription
@@ -177,6 +249,10 @@ final class SecretsStore {
     /// not changed, so Settings says that instead of the tamper text.
     private(set) var isTooLarge = false
     private var indexDate: Date?
+    /// The bytes of vault.json Next Term last wrote, or last read and MAC-checked in an unlock. A link opens with no
+    /// unlock only from those bytes: lists read the index with no MAC check, and any process of the user's can write
+    /// the file and set its date.
+    private var vouch: SecretLink.Vouch?
     private var observers: [NSObjectProtocol] = []
 
     init(folder: SecretFolder, presence: PresenceCheck, newKeyring: @escaping () throws -> VaultKeyring,
@@ -392,6 +468,7 @@ final class SecretsStore {
         if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !action.isAdd { throw Failure.vault(.noSuchKey(action.names.first ?? "")) }
+        if let refusal = action.linkRefusal { throw Failure.vault(.badLink(refusal)) }
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
         let token: AnyObject
         do {
@@ -447,6 +524,7 @@ final class SecretsStore {
             index = changed
             indexDate = work.date
         }
+        if let vouched = work.vouch { vouch = vouched }
         if protection == .none, let index { protection = Self.protection(of: index) }
     }
 
@@ -501,6 +579,8 @@ final class SecretsStore {
         var date: Date?
         var values: [String: SecretBytes] = [:]
         var line: SecretAudit.Line?
+        /// The bytes the unlock MAC-checked, or the change wrote.
+        var vouch: SecretLink.Vouch?
     }
 
     /// Under the vault's lock: unlock (or make the vault, for the first add), the change, the write; then the audit line.
@@ -609,6 +689,8 @@ final class SecretsStore {
             work.date = folder.modificationDate(of: SecretFolder.vaultName)
         }
         work.index = vault?.index
+        // Unlocked, its MAC checked, and written when the change made a new file: those are the bytes on disk now.
+        work.vouch = vault.map { (opened: SecretVault) -> SecretLink.Vouch in SecretLink.Vouch(file: opened.file) }
         return work
     }
 
@@ -625,6 +707,51 @@ final class SecretsStore {
         }
         if let current, (try? SecretVault.index(from: current))?.publicKey == publicKey { return }
         made.discard()
+    }
+
+    // MARK: a key's page
+
+    /// Whether a text holds a stored key's value, as masking finds them: a link must not.
+    nonisolated static func holdsStoredKey(_ text: String) -> Bool {
+        SecretMask.current.masked(text).count > 0
+    }
+
+    /// The link a key's row shows and its menu names, checked again as it is shown: nil when it has none. The index
+    /// it reads had no MAC check, so opening it goes through `checkedPage(of:)`.
+    func pageLink(of name: String) -> Result<URL, SecretLink.Refusal>? {
+        guard let link = index?.entry(named: name)?.link else { return nil }
+        let mask: (String) -> Bool = { (candidate: String) -> Bool in Self.holdsStoredKey(candidate) }
+        return SecretLink.check(link, mask: mask, value: nil)
+    }
+
+    /// The page to open for a key, from vault.json's bytes as Next Term last wrote or checked them: read now, and when
+    /// they are still those, its index is read from them. When they aren't (another process wrote the file since, or
+    /// none was checked since launch), an unlock checks them first: one Touch ID, "check NAME's page", whose MAC check
+    /// either vouches for the file or reports it as changed outside Next Term. The link is checked again before it is
+    /// handed back; the caller opens it with `ServiceLinks.open`.
+    func checkedPage(of name: String) async throws -> URL {
+        reloadIfChanged()
+        if protection == .tampered { throw refusal }
+        if protection == .cantOpen { throw Failure.vault(.cantOpen) }
+        var checked: SecretVault.Index? = vouchedIndex()
+        if checked == nil {
+            try await run(makes: false, names: [name], reason: SecretReason.checkLink(name),
+                          change: { (_: SecretVault, _: SymmetricKey?) -> Data? in nil }, line: nil)
+            checked = index // read from the bytes that unlock MAC-checked
+        }
+        guard let link = checked?.entry(named: name)?.link else { throw Failure.noPage(name) }
+        let mask: (String) -> Bool = { (candidate: String) -> Bool in Self.holdsStoredKey(candidate) }
+        switch SecretLink.check(link, mask: mask, value: nil) {
+        case .success(let url): return url
+        case .failure(let refusal): throw Failure.vault(.badLink(refusal))
+        }
+    }
+
+    /// The index of vault.json as it is now, when its bytes are the ones Next Term vouches for; else nil.
+    private func vouchedIndex() -> SecretVault.Index? {
+        guard let vouch, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
+              vouch.covers(data) else { return nil }
+        return try? SecretVault.index(from: data)
     }
 
     // MARK: the import
@@ -691,9 +818,10 @@ final class SecretsStore {
         if !deleted.isEmpty { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": deleted]) }
     }
 
-    /// A presence check, then `change` on the unlocked vault off the main thread, then `line` in the audit log.
+    /// A presence check, then `change` on the unlocked vault off the main thread, then `line`, when given, in the audit
+    /// log.
     private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
-                     line: @escaping () -> SecretAudit.Line) async throws {
+                     line: (() -> SecretAudit.Line)?) async throws {
         reloadIfChanged()
         if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
@@ -723,7 +851,7 @@ final class SecretsStore {
         case .success(let work):
             let earlier = index
             took(work)
-            try? folder.appendAudit(SecretAudit.encode(line(), masking: { SecretMask.current.mask($0) }))
+            if let line { try? folder.appendAudit(SecretAudit.encode(line(), masking: { SecretMask.current.mask($0) })) }
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
             postKeysChanged([], since: earlier)
@@ -780,11 +908,13 @@ final class SecretsStore {
     nonisolated private static func apply(_ action: Action, to vault: SecretVault, maskKey: SymmetricKey?,
                                           values: inout [String: SecretBytes], earlier: inout SecretVault.Origin?) throws -> Data? {
         switch action {
-        case .add(let name, let purpose, let purposeBy, let origin, let writeOnly, let value):
-            return try vault.add(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value,
-                                 maskKey: maskKey)
-        case .edit(let name, let newName, let purpose, let purposeBy):
-            return try vault.edit(name, newName: newName, purpose: purpose, purposeBy: purposeBy)
+        case .add(let key):
+            return try vault.add(name: key.name, purpose: key.purpose, purposeBy: key.purposeBy, origin: key.origin,
+                                 writeOnly: key.writeOnly, value: key.value, link: key.link, linkFrom: key.linkFrom,
+                                 remindDays: key.remindDays, maskKey: maskKey)
+        case .edit(let change):
+            return try vault.edit(change.name, newName: change.newName, purpose: change.purpose, purposeBy: change.purposeBy,
+                                  link: change.link, linkFrom: change.linkFrom, remindDays: change.remindDays)
         case .replace(let name, let value, let writeOnly, let origin):
             earlier = vault.index.entry(named: name)?.origin
             return try vault.replace(name, value: value, writeOnly: writeOnly, origin: origin, maskKey: maskKey)
@@ -826,6 +956,7 @@ final class SecretsStore {
         isTooLarge = false
         lastUse = [:]
         indexDate = nil
+        vouch = nil
         publishMarks()
         let line = SecretAudit.Line(event: .startOver, names: [], outcome: kept.map { "kept \($0.lastPathComponent)" })
         try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
