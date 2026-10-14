@@ -102,7 +102,7 @@ protocol ProjectGlowing: AnyObject {
 /// editor's and the terminal's tab bars, a folded terminal's rail) paints the part it covers, placed by where it is in
 /// the window, so the glow runs on across whichever bars hold the corner. Painted in the bar's own draw, over the bar's
 /// own colour: no layer of its own and no animation; the bar is drawn again only when the colour or the window's activity
-/// changes, or it moves within the glow's reach.
+/// changes, it joins or leaves the top row, or it moves within the glow's reach.
 final class ProjectGlow {
     private unowned let view: NSView
     /// The colour at the corner; nil, none.
@@ -112,6 +112,11 @@ final class ProjectGlow {
     /// The window is not the one in use: the glow at 0.55 of its strength.
     var dimmed = false {
         didSet { if dimmed != oldValue, peak != nil { changed() } }
+    }
+    /// The bar runs along the window's top (updateInsets): a tab bar lower down, below the editor or the terminal, paints
+    /// none of the glow, nor do its keys.
+    var onTopRow = true {
+        didSet { if onTopRow != oldValue, peak != nil { changed() } }
     }
     /// Where in the window the bar's left edge was when it last drew; nil, not yet.
     private var drawnFrom: CGFloat?
@@ -125,6 +130,8 @@ final class ProjectGlow {
     private func changed() {
         gradient = nil
         view.needsDisplay = true
+        // A key shown over the bar (KeyHintOverlay) paints its own piece of the glow: drawn again with it.
+        for overlay in view.subviews where overlay is KeyHintOverlay { overlay.needsDisplay = true }
     }
 
     /// The bar's left edge, in its window.
@@ -133,7 +140,7 @@ final class ProjectGlow {
     /// The bar may have moved in its window (a pane resized, shown or hidden, the sidebar moved): drawn again only if the
     /// glow reaches where it was or where it is.
     func moved() {
-        guard peak != nil, view.window != nil, let drawn = drawnFrom else { return }
+        guard onTopRow, peak != nil, view.window != nil, let drawn = drawnFrom else { return }
         let x: CGFloat = windowX(of: view)
         if x != drawn, min(x, drawn) < Self.reach { view.needsDisplay = true }
     }
@@ -147,7 +154,7 @@ final class ProjectGlow {
     /// Paints the glow over `rect` of `target`, a view in the same row (the bar, or a key's backdrop over it), at its place
     /// in the window.
     func paint(_ rect: NSRect, in target: NSView) {
-        guard let peak else { return }
+        guard onTopRow, let peak else { return }
         let x: CGFloat = windowX(of: target) - target.bounds.minX
         let start: CGFloat = -x, end: CGFloat = Self.reach - x
         let width: CGFloat = min(rect.maxX, end) - rect.minX

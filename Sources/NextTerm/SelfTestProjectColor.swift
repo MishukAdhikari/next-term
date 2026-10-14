@@ -149,10 +149,11 @@ extension SelfTest {
         await welcomeDotChecks(app, repo: repo, tree: tree, color: chosen)
     }
 
-    /// The glow along the top row in three layouts: the sidebar on the left with the terminal below (the header holds the
+    /// The glow along the top row in four layouts: the sidebar on the left with the terminal below (the header holds the
     /// corner), the sidebar on the right with a file open and the terminal on the left (the terminal's bar has it, the
-    /// editor's runs on from it), and that terminal folded (its rail has it). Each bar, at each point it covers, paints
-    /// what the window's place there says, to within a step of 8-bit colour.
+    /// editor's runs on from it), that terminal folded (its rail has it), and the terminal below the editor (the editor's
+    /// bar has it; the terminal's, lower down at the window's left edge, paints none). Each bar, at each point it covers,
+    /// paints what the window's place there says, to within a step of 8-bit colour.
     private static func glowLayoutChecks(_ c: TerminalWindowController, app: AppDelegate, repo: String) async {
         guard let peak = c.projectColor?.glowColor.rgbHex else { return check(false, "project colour: the window has a colour to check") }
         let sidebarWas: Bool = c.isSidebarVisible
@@ -179,6 +180,15 @@ extension SelfTest {
         glowAlongTheRow(c, peak: peak, layout: "the terminal folded on the left")
         c.expandTerminal()
         layOut(c)
+
+        app.moveTerminal(to: .bottom)
+        layOut(c)
+        let lower: UInt32? = painted(c.tabBar, atWindowX: 2)
+        let plain: Bool = lower.map { (drawn: UInt32) -> Bool in close(drawn, Theme.bar.rgbHex) } ?? false
+        check(cornerBar(c) === c.editorArea.tabBar && !c.tabBar.projectGlow.onTopRow && plain,
+              "project colour: with the terminal below the editor, the editor's bar holds the corner and the terminal's has no glow",
+              "\(cornerBar(c).map { String(describing: type(of: $0)) } ?? "none"), the terminal's bar #\(String(lower ?? 0, radix: 16))")
+        glowAlongTheRow(c, peak: peak, layout: "the terminal below the editor")
     }
 
     private static func layOut(_ c: TerminalWindowController) {

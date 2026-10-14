@@ -1353,7 +1353,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// The traffic lights sit over whichever pane is top-left; full screen has none. Tab bars along the
-    /// top of the window drag it, like a title bar; one lower down does not.
+    /// top of the window drag it, like a title bar, and have the project's glow; one lower down has neither.
     private func updateInsets() {
         let lights: CGFloat = isFullScreen ? 8 : 78
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
@@ -1368,11 +1368,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let editorAtTop = terminalPosition != .top
         tabBar.leadingInset = terminalAtCorner ? corner : 8
         tabBar.dragsWindow = terminalAtTop
+        tabBar.projectGlow.onTopRow = terminalAtTop
         let afterRail = max(8, corner - TerminalRail.width - workSplit.dividerThickness)
         editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : (railedLeft ? afterRail : corner)
         // The rail itself under the traffic lights: its arrow goes below them.
         terminalRail.topInset = railedLeft && corner > 8 ? TabBarView.height : 0
         editorArea.tabBar.dragsWindow = editorAtTop
+        editorArea.tabBar.projectGlow.onTopRow = editorAtTop
         // The sidebar hidden: the bar at the top-left corner offers it back.
         tabBar.showsSidebarButton = !isSidebarVisible && terminalAtCorner
         editorArea.tabBar.showsSidebarButton = !isSidebarVisible && !terminalAtCorner
