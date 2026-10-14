@@ -78,10 +78,14 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   right, with split panes as rows under each tab (View › Terminal Tabs). From the ⋯ buttons, the View
   menu or Settings › Terminal. ⌘J folds the terminal away so the editor gets the room, and brings it back
   at its size.
-- **Projects.** ⌘O brings up the Welcome window with your recent projects; ⌘O again there (or Open…)
-  opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in it by
-  default. Next Term opens to a Welcome window, or reopens your last projects if you choose,
-  like an IDE. Open Recent and Close Project too.
+- **Projects.** ⌘O brings up the Welcome window with the keyboard in its search: type a few letters, and
+  Return goes to the window of an open project, opens a closed one, or connects to a saved server. Open
+  projects come first, each marked with a dot and counted, then the ones you used last, including those an
+  agent, a worktree window or a restore opened. ⌘1–⌘9 jump to the first nine projects, and ⌘Return opens
+  one in a new window. The list keeps your last 50 projects; Open Recent shows 10. ⌘O again there (or
+  Open…) opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in
+  it by default. Next Term opens to the Welcome window, reopens your last projects, or opens a new
+  terminal, as you choose. Open Recent and Close Project too.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
   button when the upstream has commits you don't (Next Term fetches every 10 minutes, so it appears
@@ -215,7 +219,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New tab (in the project, or the current tab's folder) | ⌘T |
 | New window | ⌘N |
 | New remote tab (on one of your servers) | ⌥⌘T |
-| Open project (the Welcome window; ⌘O again there for any folder) / Close project | ⌘O / File menu |
+| Switch to or open a project (the Welcome window: ↩ go there, ⌘↩ new window, ⌘1–⌘9 the first nine; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |

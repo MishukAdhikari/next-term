@@ -32,6 +32,14 @@ public struct RecentProjects: Equatable, Sendable {
         paths.removeAll { $0 == path }
     }
 
+    /// Undo of a forget: the path back at `index`, where it stood, or at the end when the list is shorter now. One
+    /// listed again since stays where it is. Past the limit the last one goes, as for an open.
+    public mutating func restore(_ path: String, at index: Int) {
+        guard !paths.contains(path) else { return }
+        paths.insert(path, at: min(max(index, 0), paths.count))
+        if paths.count > Self.limit { paths.removeLast(paths.count - Self.limit) }
+    }
+
     public mutating func clear() {
         paths.removeAll()
     }

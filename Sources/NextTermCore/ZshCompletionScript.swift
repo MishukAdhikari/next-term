@@ -204,6 +204,7 @@ __nextterm_cframe() {
 __nextterm_ckeywidget() {
   emulate -L zsh -o extendedglob
   __nextterm_cframe || return 0
+  local before=$BUFFER at=$CURSOR
   case $__nextterm_ck in
     (t) __nextterm_ctab $__nextterm_cid ;;
     (k) if [[ ${__nextterm_cf[1]-} == l ]]; then __nextterm_ctakeline
@@ -214,6 +215,12 @@ __nextterm_ckeywidget() {
     (c) __nextterm_cconfig ;;
     (s) __nextterm_csync $__nextterm_cid ;;
   esac
+  # zsh-autosuggestions never wraps these widgets, so a line changed here keeps the old suggestion, which → would then
+  # put into the line: it is asked for one that fits the new line (never autosuggest-clear: a lookup still running would
+  # then add the whole old suggestion).
+  if [[ $BUFFER != $before || $CURSOR != $at ]] && (( ${+widgets[autosuggest-fetch]} && ! ${+_ZSH_AUTOSUGGEST_DISABLED} )); then
+    zle autosuggest-fetch
+  fi
   return 0
 }
 
