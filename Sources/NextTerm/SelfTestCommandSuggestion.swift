@@ -56,12 +56,23 @@ extension SelfTest {
         UserDefaults.standard.set("some-agent", forKey: CompletionPreferences.suggestionKey)
         check(CompletionPreferences.suggestion == nil, "Suggest a Command: an unknown stored choice is Off")
         CompletionPreferences.suggestion = nil
-        // And the menu item is off.
+        // Off is never a silent beep: the menu item stays on, and opens Settings › Terminal at Suggestions, which says
+        // it is off and how to turn it on, until Settings closes.
         guard let tab = await completionTab(c, in: dir, zshrc: plainZshrc, name: "suggest") else { return }
         defer { c.remove(tab) }
         let item = NSMenuItem(title: "Suggest a Command…", action: #selector(CommandSuggestionController.suggestCommand(_:)), keyEquivalent: "")
         let controller = CommandSuggestionController.shared
-        check(!controller.validateMenuItem(item), "Suggest a Command: off by default, its menu item is off")
+        check(controller.validateMenuItem(item), "Suggest a Command: off by default, its menu item stays on")
+        controller.suggestCommand(nil)
+        let app: AppDelegate = AppDelegate.shared
+        let onTerminal = await wait(3) { app.openSettings?.shownTab == "terminal" }
+        let pane = app.openSettings?.terminalSettings?.completionPane
+        check(onTerminal && pane?.rows.suggestions.pointsOut == true && pane?.suggestionsInSight == true && CommandSuggestionPanel.current == nil,
+              "Suggest a Command: off, it opens Settings › Terminal at Suggestions, saying how to turn it on",
+              "tab \(app.openSettings?.shownTab ?? "none"), note \(pane?.rows.suggestions.pointsOut == true), in sight \(pane?.suggestionsInSight == true)")
+        app.openSettings?.close()
+        check(pane?.rows.suggestions.pointsOut == false, "and the note goes when Settings closes")
+        _ = await focus(c, tab)
 
         // The last command, with a password in it, is shown masked before anything is sent.
         CompletionPreferences.suggestion = CommandSuggestion.claude.id

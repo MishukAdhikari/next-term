@@ -217,6 +217,110 @@ import Testing
         #expect(reasons(missing)["theme Gone"] == "custom theme file not found in ~/.warp/themes")
     }
 
+    // MARK: the vertical tab panel
+
+    /// A font size, then the vertical tab panel's table with `lines` in it.
+    func panel(_ lines: String) -> String {
+        "[appearance.text]\nfont_size = 14.0\n\n[appearance.vertical_tabs]\n" + lines
+    }
+
+    func otherSettings(_ plan: ImportPlan) -> String? {
+        plan.skipped.first { $0.reason == "no matching Next Term setting yet" }?.item
+    }
+
+    /// The panel on: the list on the left with the project files on the right, ticked, and the first setting row,
+    /// since it is why someone moves.
+    @Test func thePanelOnIsTheListOnTheLeftWithTheFilesOnTheRight() throws {
+        let plan = try plan(panel("enabled = true # on\ndisplay_granularity = \"panes\""))
+        let row = PlannedSetting(.tabList(TabListImport(tabs: "left", sidebarSide: "right")), source: "vertical_tabs.enabled true")
+        let settings: [ImportedSetting] = [.tabList(TabListImport(tabs: "left", sidebarSide: "right")), .terminalFontSize(14)]
+        #expect(plan.settings.first == row)
+        #expect(plan.settings.first?.ticked == true && plan.settings.first?.note == nil)
+        #expect(plan.settings.map(\.setting) == settings)
+        // The values it doesn't read are counted, as before.
+        #expect(otherSettings(plan) == "1 other setting")
+    }
+
+    /// Expanded view shows details under each tab: Show Folders too, and the note says why. Compact view is the list's
+    /// own one line.
+    @Test func expandedViewAlsoShowsEachTabsFolder() throws {
+        let expanded = try plan(panel("enabled = true\nview_mode = \"expanded\""))
+        let folders = TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true)
+        #expect(expanded.settings.first == PlannedSetting(.tabList(folders), source: "vertical_tabs.enabled true",
+                                                          note: "with each tab’s folder under it, as expanded view had it"))
+        let compact = try plan(panel("view_mode = 'compact'\nenabled = true"))
+        #expect(compact.settings.first == PlannedSetting(.tabList(TabListImport(tabs: "left", sidebarSide: "right")),
+                                                         source: "vertical_tabs.enabled true"))
+        // Both were read, so neither is among the other settings.
+        #expect(otherSettings(expanded) == nil && otherSettings(compact) == nil)
+    }
+
+    /// A side the settings name: on the right, the list on the right and the files on the left; on the left, or a
+    /// side the list can't take, the panel's own left.
+    @Test func aPanelOnTheRightIsTheListOnTheRightWithTheFilesOnTheLeft() throws {
+        let right = try plan(panel("enabled = true\nside = \"right\""))
+        #expect(right.settings.first == PlannedSetting(.tabList(TabListImport(tabs: "right", sidebarSide: "left")),
+                                                       source: "vertical_tabs.enabled true, side right"))
+        let position = try plan(panel("position = \"Right\"\nenabled = true\nview_mode = \"expanded\""))
+        let mirrored = TabListImport(tabs: "right", sidebarSide: "left", showsFolders: true)
+        #expect(position.settings.first?.setting == .tabList(mirrored))
+        #expect(position.settings.first?.source == "vertical_tabs.enabled true, position right")
+        for side in ["left", "bottom", "3"] {
+            let other = try plan(panel("enabled = true\nside = \"\(side)\""))
+            #expect(other.settings.first?.setting == .tabList(TabListImport(tabs: "left", sidebarSide: "right")), "\(side)")
+            #expect(otherSettings(other) == nil, "\(side)")
+        }
+        #expect(try plan(panel("enabled = true\nside = \"left\"")).settings.first?.source == "vertical_tabs.enabled true, side left")
+    }
+
+    /// Off, missing or not a yes or no: no row, and nothing else moves. The panel's values read with it off count
+    /// among the other settings, as they would have unread.
+    @Test func thePanelOffOrMissingPlansNoRow() throws {
+        func hasRow(_ plan: ImportPlan) -> Bool {
+            plan.settings.contains { if case .tabList = $0.setting { return true } else { return false } }
+        }
+        let off = try plan(panel("enabled = false"))
+        #expect(!hasRow(off) && off.settings.map(\.setting) == [.terminalFontSize(14)])
+        #expect(otherSettings(off) == nil)
+        let offCompact = try plan(panel("enabled = false\nview_mode = \"compact\""))
+        #expect(!hasRow(offCompact) && otherSettings(offCompact) == "1 other setting")
+        let offBoth = try plan(panel("enabled = false\nview_mode = \"expanded\"\nside = \"right\"\nshow_close = true"))
+        #expect(!hasRow(offBoth) && otherSettings(offBoth) == "3 other settings")
+        let missing = try plan("[appearance.text]\nfont_size = 14.0")
+        #expect(!hasRow(missing) && otherSettings(missing) == nil)
+        let alone = try plan(panel("view_mode = \"expanded\""))
+        #expect(!hasRow(alone) && otherSettings(alone) == "1 other setting")
+        let odd = try plan(panel("enabled = \"yes\""))
+        #expect(!hasRow(odd))
+        #expect(reasons(odd)["vertical_tabs.enabled"] == "value not recognised")
+    }
+
+    /// The panel read beside the secrets the file holds: the never-read tables stay unread and the other counts stay
+    /// as they were. A table under the panel's whose name says it can hold secrets is never read either.
+    @Test func thePanelBesideSecretsReadsNothingMore() throws {
+        let text = settings + "\n\n[appearance.vertical_tabs]\nenabled = true\n\n[appearance.vertical_tabs.auth]\nside = \"right\"\n"
+            + "token = \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"\n"
+        let plan = try plan(text, files: ["themes/my_theme.yaml": theme])
+        #expect(plan.settings.first?.setting == .tabList(TabListImport(tabs: "left", sidebarSide: "right")))
+        #expect(plan.settings.count == 5)
+        #expect(otherSettings(plan) == "2 other settings")
+        #expect(reasons(plan)["[appearance.vertical_tabs.auth]"] == "never imported: can hold secrets or configures agents")
+        let shown = "\(plan)"
+        for value in ["sk-proj", "ghp_", "AKIA", "prod-db"] { #expect(!shown.contains(value), "\(value) reached the plan") }
+    }
+
+    /// How the preview and a one-click import word the row.
+    @Test func theRowSaysWhereTheTabsAndFilesGo() {
+        let left = TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true)
+        #expect(left.title == "Tabs on the left, project files on the right")
+        #expect(left.movedLine == "Tabs moved to the left, project files to the right.")
+        let right = TabListImport(tabs: "right", sidebarSide: "left")
+        #expect(right.title == "Tabs on the right, project files on the left")
+        #expect(right.movedLine == "Tabs moved to the right, project files to the left.")
+        let alone = TabListImport(tabs: "left")
+        #expect(alone.title == "Tabs on the left" && alone.movedLine == "Tabs moved to the left.")
+    }
+
     @Test func tomlAndYAMLSubsets() {
         #expect(TOML.string(#""a \"b\" c" # note"#) == #"a "b" c"#)
         #expect(TOML.string("'C:\\path'") == "C:\\path")

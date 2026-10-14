@@ -107,8 +107,8 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "set_layout", title: "Set the layout",
-             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top) and sidebar_side (left or right) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
-             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
+             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right) and terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
+             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
              description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner, agents_offer_tabs and agents_bring_tabs_forward. Other settings are not listed.",
@@ -729,17 +729,31 @@ public enum MCPSettings {
 public struct MCPLayoutChange: Equatable, Sendable {
     public var terminalPosition: String?
     public var sidebarSide: String?
+    /// top, left or right, as `TerminalTabsSetting` stores it.
+    public var terminalTabs: String?
     public var sidebarShown: Bool?
     public var terminalFolded: Bool?
 
-    public init(terminalPosition: String? = nil, sidebarSide: String? = nil, sidebarShown: Bool? = nil, terminalFolded: Bool? = nil) {
+    public init(terminalPosition: String? = nil, sidebarSide: String? = nil, terminalTabs: String? = nil, sidebarShown: Bool? = nil,
+                terminalFolded: Bool? = nil) {
         self.terminalPosition = terminalPosition
         self.sidebarSide = sidebarSide
+        self.terminalTabs = terminalTabs
         self.sidebarShown = sidebarShown
         self.terminalFolded = terminalFolded
     }
 
-    public var isEmpty: Bool { terminalPosition == nil && sidebarSide == nil && sidebarShown == nil && terminalFolded == nil }
+    public var isEmpty: Bool {
+        let everyWindow: Bool = terminalPosition == nil && sidebarSide == nil && terminalTabs == nil
+        return everyWindow && sidebarShown == nil && terminalFolded == nil
+    }
+
+    /// Whether terminal_folded needs a step of its own: the terminal is not folded or unfolded as asked, or a new
+    /// terminal position unfolds it, so one asked folded folds again after the move. Moving the sidebar to its
+    /// other side leaves the terminal as it is, so it needs none for that.
+    public static func needsFoldStep(wanted: Bool, folded: Bool, newPosition: Bool) -> Bool {
+        wanted != folded || (wanted && newPosition)
+    }
 
     public static func parse(_ arguments: [String: Any]) -> Result<MCPLayoutChange, MCPToolError> {
         MCPFileTools.catching {
@@ -749,10 +763,14 @@ public struct MCPLayoutChange: Equatable, Sendable {
                 change.terminalPosition = try args.choice("terminal_position", of: ["bottom", "right", "left", "top"], default: "bottom")
             }
             if arguments["sidebar_side"] != nil { change.sidebarSide = try args.choice("sidebar_side", of: ["left", "right"], default: "left") }
+            if arguments["terminal_tabs"] != nil {
+                let sides: [String] = TerminalTabsSetting.allCases.map(\.rawValue)
+                change.terminalTabs = try args.choice("terminal_tabs", of: sides, default: TerminalTabsSetting.top.rawValue)
+            }
             if arguments["sidebar"] != nil { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
             if arguments["terminal_folded"] != nil { change.terminalFolded = try args.bool("terminal_folded", default: false) }
             guard !change.isEmpty else {
-                throw MCPToolError("Give at least one of terminal_position, sidebar_side, sidebar and terminal_folded.")
+                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, sidebar and terminal_folded.")
             }
             return change
         }

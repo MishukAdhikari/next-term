@@ -296,7 +296,34 @@ extension SelfTest {
             let foldedNow = pc.terminalCollapsed
             let unfolded = await client.asked("set_layout", ["terminal_folded": false, "project": proj.path], .approve)
             check(folded.approvedOnMac && foldedNow && unfolded.approvedOnMac && !pc.terminalCollapsed, "MCP writes: set_layout folds and unfolds the terminal", folded.text)
+            // Folded, then the sidebar moved with terminal_folded true: it stays folded, and the answer says so.
+            let side = app.sidebarSide.rawValue, otherSide = app.sidebarSide == .left ? "right" : "left"
+            let foldedFirst = await client.asked("set_layout", ["terminal_folded": true, "project": proj.path], .approve)
+            let moved = await client.asked("set_layout", ["sidebar_side": otherSide, "terminal_folded": true, "project": proj.path], .approve)
+            let stillFolded = pc.terminalCollapsed && json(moved.text)?["terminal_folded"] as? Bool == true
+            let back = await client.asked("set_layout", ["sidebar_side": side, "terminal_folded": false, "project": proj.path], .approve)
+            check(foldedFirst.approvedOnMac && moved.approvedOnMac && stillFolded && back.approvedOnMac && !pc.terminalCollapsed
+                  && app.sidebarSide.rawValue == side,
+                  "MCP writes: set_layout moving the sidebar with terminal_folded true leaves a folded terminal folded, and says so", moved.text)
         }
+        // terminal_tabs: asked with its line, applied in every window and reported; the same again asks nothing, and a
+        // word that is no place is refused before anything is asked.
+        let tabsBefore = app.terminalTabs
+        let wantedTabs: TerminalTabsSetting = tabsBefore == .left ? .right : .left
+        let toList = await client.asked("set_layout", ["terminal_tabs": wantedTabs.rawValue, "project": proj.path], .approve)
+        let toldWhy: Bool = toList.shown.contains(wantedTabs.approvalLine)
+        let tabsSaid: Bool = toList.json?["terminal_tabs"] as? String == wantedTabs.rawValue
+        let changedSaid: Bool = (toList.json?["changed"] as? [String]) == ["terminal_tabs"]
+        let tabsMoved: Bool = app.terminalTabs == wantedTabs && pc.tabListSide == wantedTabs.listSide
+        let sameTabs = await client.call("set_layout", ["terminal_tabs": wantedTabs.rawValue, "project": proj.path])
+        let tabsAtOnce: Bool = (json(sameTabs.text)?["changed"] as? [String])?.isEmpty == true && MCPWriteControl.pending == nil
+        let noPlace = await client.call("set_layout", ["terminal_tabs": "side", "project": proj.path])
+        let refused: Bool = noPlace.isError && noPlace.text.contains("terminal_tabs is one of top, left, right.") && MCPWriteControl.pending == nil
+        app.moveTerminalTabs(to: tabsBefore)
+        let asked: Bool = toList.approvedOnMac && toldWhy && tabsSaid && changedSaid
+        check(asked && tabsMoved && tabsAtOnce && refused,
+              "MCP writes: set_layout terminal_tabs asks with its line, moves the tabs in every window and says so; again it asks nothing, and a word that is no place is refused",
+              toList.text + " / " + noPlace.text)
         if let editor { pc.editorArea.close(editor) }
         if pc.isSidebarVisible != sidebarWasShown { pc.setSidebarVisible(sidebarWasShown) }
 

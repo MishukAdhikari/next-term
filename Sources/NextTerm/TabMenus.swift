@@ -169,7 +169,9 @@ extension TerminalWindowController {
             guard let self else { return }
             self.closeTabs(self.groups.filter { $0 !== group })
         }
-        menu.addCommand("Close Tabs to the Right", "closeTabsToTheRight:", enabled: index < groups.count - 1) { [weak self] in
+        // Down a tab list, the tabs after it are below it: the same command, named for where they are.
+        let after = barShowsTabs ? "Close Tabs to the Right" : "Close Tabs Below"
+        menu.addCommand(after, "closeTabsToTheRight:", enabled: index < groups.count - 1) { [weak self] in
             self?.closeTabs(toTheRightOf: group)
         }
         return menu
@@ -177,7 +179,7 @@ extension TerminalWindowController {
 
     private func rename(_ group: PaneGroup) {
         guard let index = groups.firstIndex(where: { $0 === group }) else { return }
-        tabBar.beginRename(at: index)
+        tabStrip.beginRename(at: index)
     }
 
     /// A split of the tab's pane with the keyboard, the tab brought to the front first.

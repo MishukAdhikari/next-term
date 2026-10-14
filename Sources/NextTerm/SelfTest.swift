@@ -643,7 +643,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode or welcome), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, welcome, tabList, terminalPosition, completion, mouse or remote), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -665,6 +665,11 @@ enum SelfTest {
         case "secrets": return await secretsChecks(c, proj: proj)
         case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
+        case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
+        case "terminalPosition": return await terminalPositionChecks(c, proj: proj) // a position chosen again, folds, shares
+        case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
+        case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
+        case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
         default: break
         }
         #endif
@@ -793,6 +798,7 @@ enum SelfTest {
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
         await railChecks(c, proj: proj)
+        await terminalPositionChecks(c, proj: proj)
         await blameChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
@@ -972,6 +978,7 @@ enum SelfTest {
         let a = c.tabs[0], b = c.tabs[1]
         c.tabBar(c.tabBar, didMove: 0, to: 1)
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
+        await tabListChecks(c, proj: proj)
 
         await endStrayQuestions(after: "the project and window checks")
         await paneChecks(c)
@@ -1000,6 +1007,7 @@ enum SelfTest {
         AppDelegate.shared.fontSize = size
 
         await linkChecks(c)
+        await mouseReportChecks(c)
         await notificationChecks(c)
         await opencodeScreenChecks(c)
         notificationsMenuChecks()
@@ -3500,12 +3508,12 @@ enum SelfTest {
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard
-        let saved = (position: app.terminalPosition, side: app.sidebarSide, fraction: defaults.object(forKey: "editorFraction"),
+        let saved = (position: app.terminalPosition, side: app.sidebarSide, shares: savedEditorShares(),
                      width: defaults.object(forKey: "sidebarWidth"), sidebar: c.isSidebarVisible, frame: window.frame)
         func restore(_ key: String, _ value: Any?) {
             if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
-        func restoreFraction() { restore("editorFraction", saved.fraction) }
+        func restoreFraction() { restoreEditorShares(saved.shares) }
         let readme = proj.appendingPathComponent("README.md")
         area.closeAll()
         c.show(tab) // in the git project: the sidebar has its branch
@@ -3540,7 +3548,7 @@ enum SelfTest {
         let unproven = "the drag on the visible line did not move it, so these presses prove nothing"
         area.closeAll()
         restoreFraction()
-        let fraction = app.editorFraction
+        let fractions = [app.editorFraction(sideBySide: true), app.editorFraction(sideBySide: false)]
 
         /// What is wrong while nothing is open: an editor showing, a terminal short of the whole work area.
         func problems() -> String {
@@ -3553,7 +3561,8 @@ enum SelfTest {
             let (start, size) = work.isVertical ? (frame.minX, frame.width) : (frame.minY, frame.height)
             if abs(start) > 0.5 || abs(size - length) > 0.5 { found.append("the terminal has \(size) of \(length) from \(start)") }
             if c.tabBar.onToggleCollapse != nil { found.append("the terminal offers to collapse beside it") }
-            if app.editorFraction != fraction { found.append("the editor's share went from \(fraction) to \(app.editorFraction)") }
+            let shares = [app.editorFraction(sideBySide: true), app.editorFraction(sideBySide: false)]
+            if shares != fractions { found.append("the editor's shares went from \(fractions) to \(shares)") }
             return found.joined(separator: "; ")
         }
         var shot = false

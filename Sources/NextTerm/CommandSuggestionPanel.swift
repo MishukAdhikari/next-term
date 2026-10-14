@@ -33,6 +33,10 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     /// on the user's word.
     private var writesAtStart = 0
     private var commandsAtStart = 0
+    /// The answer waits for the server's status reports to be fresh before it goes on the line (putWhenReady).
+    private var waitsForReports = false
+    /// A held answer is looked at again while the server's reports are stale (recheck): one tick at a time.
+    private var rechecking = false
 
     enum Stage {
         case asking
@@ -126,7 +130,9 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
 
     private var request: CommandSuggestion.Request? {
         guard let tab else { return nil }
-        let last = tab.status.commandsStarted > 0 ? tab.status.command : ""
+        // A tab that shows herdr has herdr itself as its "command": no last command of the shell's to tell.
+        let herdr = tab.serverPrompt?.showsHerdr == true
+        let last = tab.status.commandsStarted > 0 && !herdr ? tab.status.command : ""
         return CommandSuggestion.Request(sentence: field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
                                          directory: tab.remote == nil ? tab.liveDirectory : tab.directory,
                                          shell: Self.shell(of: tab), lastCommand: last.isEmpty ? nil : last,
@@ -150,7 +156,9 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         }
         let list = parts.dropLast().joined(separator: ", ") + " and " + (parts.last ?? "")
         let local = choice == CompletionPreferences.onDevice ? " It stays on this Mac." : " It runs with no tools, in an empty folder."
-        return "Sent to \(who) with your words: \(list).\(local) The command goes on the line; nothing runs."
+        // A tab that shows herdr takes nothing on its line from here (whyNot): its answer is copied into a pane.
+        let lands = tab?.serverPrompt?.showsHerdr == true ? "The command is shown here to copy" : "The command goes on the line"
+        return "Sent to \(who) with your words: \(list).\(local) \(lands); nothing runs."
     }
 
     var contextShown: String { context.stringValue }
@@ -202,6 +210,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         writesAtStart = tab.completion.writes
         commandsAtStart = tab.status.commandsStarted
         suggestion = nil
+        waitsForReports = false
         status.stringValue = "Asking \(CompletionPreferences.suggestionName(choice))…"
         stage = .waiting
         refresh()
@@ -229,10 +238,48 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
             suggestion = made
             stage = .answered
             status.stringValue = ""
-            // Unchanged, and nothing hidden in it: it goes on the line now. Otherwise it waits here for the user.
-            if !made.hasHidden, made.notes.isEmpty, unchanged, put(force: false) { return }
+            // Nothing hidden in it, nothing to say: it goes on the line by itself. Otherwise it waits here for the user.
+            if !made.hasHidden, made.notes.isEmpty { return putWhenReady(made, until: TerminalTab.now + 10) }
             refresh()
             CompletionPopup.announce("Suggested: \(made.shown)")
+            recheck(made)
+        }
+    }
+
+    /// An answer goes on the line by itself only while the tab is as it was when asked. A server's shell is trusted
+    /// at its prompt from the second status report after the last Return (ServerPrompt), which a quick answer can
+    /// beat: then it waits for those here, up to `deadline` (10 s), and is left to copy or put by hand if they don't
+    /// come. Anywhere it can't go (herdr's screen, a program in front) it waits for the user at once.
+    private func putWhenReady(_ made: CommandSuggestion.Suggestion, until deadline: TimeInterval) {
+        guard let tab, suggestion == made, stage == .answered, Self.current === self else { return }
+        let awaits = !made.multiline && tab.serverPrompt?.awaitsReports == true
+        if unchanged, awaits, TerminalTab.now < deadline {
+            if !waitsForReports {
+                waitsForReports = true
+                refresh()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.putWhenReady(made, until: deadline) }
+            return
+        }
+        waitsForReports = false
+        if unchanged, Self.canPut(made, on: tab), put(force: false) { return }
+        refresh()
+        CompletionPopup.announce("Suggested: \(made.shown)")
+        recheck(made)
+    }
+
+    /// A held answer whose server reports are still stale: Put on Line shows once they come. Nothing else refreshes
+    /// the panel, so it looks again on the same tick as putWhenReady; a shell no longer in front gets its own note.
+    private func recheck(_ made: CommandSuggestion.Suggestion) {
+        guard !rechecking, let tab, suggestion == made, stage == .answered, Self.current === self,
+              tab.serverPrompt?.awaitsReports == true else { return }
+        rechecking = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.rechecking = false
+            guard let tab = self.tab, self.suggestion == made, self.stage == .answered else { return }
+            if tab.serverPrompt?.awaitsReports == true { return self.recheck(made) }
+            self.refresh()
         }
     }
 
@@ -248,6 +295,8 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         guard let tab, let made = suggestion, Self.canPut(made, on: tab) else {
             NSSound.beep()
             refresh()
+            // Refused for stale reports (a wheel scroll in tmux): the panel says what the next one finds.
+            if let made = suggestion { recheck(made) }
             return false
         }
         guard force || unchanged else { return false }
@@ -318,14 +367,23 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         if made.hasHidden { said.insert("It holds invisible or direction-changing characters, spelled out above.", at: 0) }
         let fits = Self.canPut(made, on: tab)
         if fits, !unchanged { said.append("Something was typed in the tab, or a command started, while it was asked.") }
-        if !fits {
-            said.append(made.multiline ? "It has more than one line, which only a zsh tab with Tab completion takes as one edit: copy it."
-                        : "The tab isn’t at a shell prompt now: copy it.")
-        }
+        if !fits { said.append(Self.whyNot(made, on: tab, waiting: waitsForReports)) }
         notes.stringValue = said.joined(separator: " ")
         primary.isHidden = !fits
         // Only the shell's hook replaces the line; elsewhere it is typed in where the cursor is.
         primary.title = unchanged || !tab.completion.takesLine ? "Put on Line" : "Replace Line"
+    }
+
+    /// Why `made` can't go on `tab`'s line from here, for the panel's notes.
+    private static func whyNot(_ made: CommandSuggestion.Suggestion, on tab: TerminalTab, waiting: Bool) -> String {
+        let server = tab.serverPrompt
+        // herdr's panes, and which has the keys, are out of Next Term's sight.
+        if server?.showsHerdr == true { return "This tab shows herdr: copy it into the pane you want." }
+        if made.multiline { return "It has more than one line, which only a zsh tab with Tab completion takes as one edit: copy it." }
+        if waiting { return "It goes on the line once the server reports its shell at the prompt again." }
+        if server?.inMode == true { return "The tab’s tmux pane is in copy mode (q leaves it): copy it, or leave copy mode and ask again." }
+        if server?.awaitsReports == true { return "The server hasn’t reported its shell at the prompt since the last Return: copy it." }
+        return "The tab isn’t at a shell prompt now: copy it."
     }
 
     /// Below the caret's line, on the caret's screen.
@@ -351,31 +409,44 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     var notesShown: String { notes.isHidden ? "" : notes.stringValue }
 }
 
-/// Agents › Suggest a Command…: on only when it is on in Settings and the tab in front is at a shell prompt.
+/// Agents › Suggest a Command…: while it is off in Settings, it opens Settings › Terminal at Suggestions, saying how to
+/// turn it on (never a silent beep); on, it is on where the tab in front may be asked (mayAsk).
 final class CommandSuggestionController: NSObject, NSMenuItemValidation {
     static let shared = CommandSuggestionController()
 
     @objc func suggestCommand(_ sender: Any?) {
-        guard let choice = CompletionPreferences.suggestion, let tab = Self.frontTab, Self.atPrompt(tab) else { return NSSound.beep() }
+        guard let choice = CompletionPreferences.suggestion else { return AppDelegate.shared.showSuggestionSettings() }
+        guard let tab = Self.frontTab, Self.mayAsk(tab) else { return NSSound.beep() }
         CommandSuggestionPanel.show(for: tab, choice: choice)
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(suggestCommand(_:)) else { return true }
-        guard CompletionPreferences.suggestion != nil, let tab = Self.frontTab else { return false }
-        return Self.atPrompt(tab)
+        guard CompletionPreferences.suggestion != nil else { return true } // it opens Settings
+        guard let tab = Self.frontTab else { return false }
+        return Self.mayAsk(tab)
     }
 
     static var frontTab: TerminalTab? {
         (NSApp.keyWindow?.windowController as? TerminalWindowController)?.activeTab
     }
 
-    /// A shell waits at its prompt: nothing runs in front (no agent, no editor, no full-screen program, nothing a key
-    /// binding started), and a server tab is connected.
+    /// The panel may open for `tab`: at its shell's prompt; on a server, by what the status checks said last, fresh or
+    /// not (nothing is typed in until they are), and in a tab that shows herdr once it is connected, its answer to copy.
+    static func mayAsk(_ tab: TerminalTab) -> Bool {
+        guard !tab.exited else { return false }
+        if let server = tab.serverPrompt { return server.mayAsk }
+        return atPrompt(tab)
+    }
+
+    /// A shell waits at its prompt, so a command can be typed in: nothing runs in front (no agent, no editor, no
+    /// full-screen program, nothing a key binding started). On a server, by the rule Tab completion's screen follows
+    /// too (ServerPrompt): connected, the shell in front by two status reports since the last Return, not in tmux's
+    /// copy mode, and never in a tab that shows herdr.
     static func atPrompt(_ tab: TerminalTab) -> Bool {
-        guard !tab.exited, !tab.status.running, tab.shellAlone else { return false }
-        guard !tab.view.getTerminal().isCurrentBufferAlternate || tab.completion.inTmux else { return false }
-        if tab.remote != nil { return tab.remoteConnected && tab.remoteReady && !tab.disconnected }
-        return true
+        guard !tab.exited else { return false }
+        if let server = tab.serverPrompt { return server.atPrompt }
+        guard !tab.status.running, tab.shellAlone else { return false }
+        return !tab.view.getTerminal().isCurrentBufferAlternate
     }
 }

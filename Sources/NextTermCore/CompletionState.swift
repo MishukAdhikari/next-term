@@ -310,6 +310,35 @@ public struct InputScan: Equatable, Sendable {
         return result
     }
 
+    /// `bytes` hold a mouse wheel report, as the SGR (`ESC [ < Cb ; x ; y M`) or X10 (`ESC [ M b x y`, b is Cb + 32)
+    /// mouse modes send it: the wheel is a button with 64 set. A click is not one.
+    public static func isWheelReport(_ bytes: some Collection<UInt8>) -> Bool {
+        let data = Array(bytes)
+        var i = 0
+        while i + 2 < data.count {
+            if data[i] == 0x1B, data[i + 1] == UInt8(ascii: "[") {
+                let kind = data[i + 2]
+                if kind == UInt8(ascii: "M"), i + 5 < data.count, data[i + 3] >= 32 {
+                    let button = Int(data[i + 3]) - 32
+                    if button & 64 != 0 { return true }
+                }
+                if kind == UInt8(ascii: "<"), let button = sgrButton(data, from: i + 3), button & 64 != 0 { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
+    /// The button of an SGR mouse report whose fields start at `start` (`Cb;x;yM`), or nil if they make none.
+    private static func sgrButton(_ data: [UInt8], from start: Int) -> Int? {
+        var end = start
+        while end < data.count, data[end] == UInt8(ascii: ";") || (0x30...0x39).contains(data[end]) { end += 1 }
+        guard end < data.count, data[end] == UInt8(ascii: "M") else { return nil }
+        let fields = data[start..<end].split(separator: UInt8(ascii: ";"), omittingEmptySubsequences: false)
+        guard fields.count == 3 else { return nil }
+        return Int(String(decoding: fields[0], as: UTF8.self))
+    }
+
     /// Where an escape sequence starting at `start` ends: a CSI's final byte, an SS3 key's, or the byte after ESC.
     private static func sequenceEnd(_ data: [UInt8], from start: Int) -> Int {
         var i = start + 1

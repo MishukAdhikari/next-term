@@ -692,6 +692,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(secretsTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(closing), name: NSWindow.willCloseNotification, object: window)
         window.contentView = tabs
         shortcutsContent = keysTab.view
         build()
@@ -705,6 +706,24 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     func showTab(_ identifier: String) {
         (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
+    }
+
+    /// Settings › Terminal.
+    var terminalSettings: TerminalSettingsView? {
+        let tabs = window?.contentView as? NSTabView
+        return tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+    }
+
+    /// Settings › Terminal at its Suggestions row, which says Suggest a Command is off and how to turn it on.
+    func showSuggestions() {
+        showTab("terminal")
+        window?.layoutIfNeeded()
+        terminalSettings?.completionPane.pointOutSuggestions()
+    }
+
+    /// The Suggestions row's note is for the visit Agents › Suggest a Command… began.
+    @objc private func closing() {
+        terminalSettings?.completionPane.rows.suggestions.pointOut(false)
     }
 
     /// The tab shown, by its identifier (for the self-test of show_settings).

@@ -97,6 +97,18 @@ import Testing
         #expect(!scan("\u{1b}[97;5u").disarms) // ^A, kitty-encoded
     }
 
+    @Test func wheelReportsAreToldFromClicks() {
+        func wheel(_ text: String) -> Bool { InputScan.isWheelReport(Array(text.utf8)) }
+        // SGR: buttons 64 and 65 are the wheel up and down, with modifiers added (64 + 16 is ⌃ and the wheel).
+        #expect(wheel("\u{1b}[<64;10;5M") && wheel("\u{1b}[<65;1;1M") && wheel("\u{1b}[<80;3;4M"))
+        // X10: the button byte is Cb + 32, so ` (96) and a (97) are the wheel.
+        #expect(wheel("\u{1b}[M`!!") && wheel("\u{1b}[Ma+,"))
+        // Clicks, releases and drags are not, nor a report cut short, nor plain keys.
+        #expect(!wheel("\u{1b}[<0;10;5M") && !wheel("\u{1b}[<0;10;5m") && !wheel("\u{1b}[<32;2;2M"))
+        #expect(!wheel("\u{1b}[M !!") && !wheel("\u{1b}[M`!") && !wheel("\u{1b}[<64;10M"))
+        #expect(!wheel("ls\r") && !wheel("\u{1b}[A") && !wheel(""))
+    }
+
     @Test func eventsWhileDisarmedAreIgnored() {
         var s = CompletionState()
         s.answered(1, .open)

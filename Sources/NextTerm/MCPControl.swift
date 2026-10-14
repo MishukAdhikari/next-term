@@ -385,11 +385,19 @@ enum MCPControl {
             if let refusal = RemoteConnection.refusal(remote.host) { info["host_problem"] = refusal }
             info["host"] = remote.host.name
             info["host_id"] = remote.host.id
-            info["keep"] = remote.keep.rawValue
-            if remote.keep == .tmux { info["session"] = remote.session }
+            // A tab whose tmux or herdr was missing on the host is a plain shell that nothing keeps: off, not as opened.
+            info["keep"] = remote.keep.shown(fellBack: tab.fellBack).rawValue
+            if tab.fellBack { info["fell_back"] = true }
+            if tab.fellBack, remote.keep == .herdr {
+                let why = tab.fellBackReason ?? "herdr wasn’t found on the host"
+                info["herdr_missing_reason"] = "\(why). Next Term never installs it: \(RemoteShell.herdrInstallPage)"
+            }
+            if remote.keep == .tmux, tab.isKept { info["session"] = remote.session }
             if remote.keep == .herdr, !tab.herdrAgents.isEmpty {
                 info["herdr_agents"] = tab.herdrAgents.map { ["pane": $0.paneID, "agent": $0.name, "state": $0.status.rawValue] }
             }
+            // herdr doesn't answer (or needs a restart, or is on the host now): its agents' states are unknown.
+            if remote.keep == .herdr, let note = tab.herdrWatch.note { info["herdr_note"] = note }
         }
         return info
     }

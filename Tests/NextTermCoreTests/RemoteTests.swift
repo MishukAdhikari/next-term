@@ -212,6 +212,33 @@ import Testing
         let poll = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
         #expect(poll.tabs["tab1"]?.token == "abc123")
     }
+
+    @Test func aTmuxTabSaysWhenItsPaneIsInCopyMode() throws {
+        // A stand-in tmux where findTmux looks (~/.local/bin), answering display-message for the tab's pane.
+        let home = try temporaryHome()
+        try FileManager.default.createDirectory(atPath: home + "/.local/bin", withIntermediateDirectories: true)
+        let tmux = home + "/.local/bin/tmux"
+        func standIn(mode: String) throws {
+            let answers = "case \"$f\" in '#{pane_in_mode}') echo \(mode) ;; '#{pane_current_path}') echo /srv/app ;; esac"
+            try "#!/bin/sh\nfor a; do f=$a; done\n\(answers)\n".write(toFile: tmux, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmux)
+        }
+        let script = RemoteShell.pollScript(tabs: [(id: "tab1", keep: .tmux, session: "nt-app-123456")])
+        #expect(script.contains("-t '=nt-app-123456:' '#{pane_in_mode}'"))
+        try standIn(mode: "1")
+        let copying = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
+        #expect(copying.tabs["tab1"]?.inMode == true)
+        #expect(copying.tabs["tab1"]?.directory == "/srv/app")
+        // Out of copy mode, or an answer that is not exactly 1: no mode line.
+        for answer in ["0", "1x", ""] {
+            try standIn(mode: answer)
+            let back = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
+            #expect(back.tabs["tab1"]?.inMode == false, "\(answer)")
+        }
+        // Only a tmux tab asks.
+        #expect(!RemoteShell.pollScript(tabs: [(id: "tab1", keep: .off, session: "s")]).contains("pane_in_mode"))
+        #expect(!RemoteShell.pollScript(tabs: [(id: "tab1", keep: .herdr, session: "s")]).contains("pane_in_mode"))
+    }
 }
 
 @Suite struct RemoteParsingTests {
@@ -230,6 +257,8 @@ import Testing
             f6\tshell
             f6\tup\t0123abcd
             f6\tjobs\t2\tsleep (running);vim (suspended);
+            g7\tmode
+            g7\tshell
             """
         let poll = try #require(RemotePoll.parse(output))
         #expect(poll.tabs["a1"]?.foreground?.isShell == true)
@@ -245,6 +274,8 @@ import Testing
         #expect(poll.tabs["f6"]?.plain == true && poll.tabs["f6"]?.folderMissing == true && poll.tabs["f6"]?.started == true)
         #expect(poll.tabs["f6"]?.token == "0123abcd")
         #expect(poll.tabs["f6"]?.jobs == 2 && poll.tabs["f6"]?.jobSummary == "sleep (running)\nvim (suspended)")
+        #expect(poll.tabs["g7"]?.inMode == true && poll.tabs["g7"]?.foreground?.isShell == true)
+        #expect(poll.tabs["a1"]?.inMode == false)
         #expect(RemotePoll.parse("no marker at all") == nil)
     }
 
@@ -352,9 +383,18 @@ import Testing
         old.tmux = "tmux next-3.5"
         #expect(old.tmuxUsable)
 
-        let listed = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nsession\tnt-x-1\t0\t/srv\tzsh\n\(RemoteShell.herdrMarker)\n{\"agents\":[]}\n"))
+        let section = "\(RemoteShell.herdrMarker)\nwhere\t/usr/local/bin/herdr\tpath\nexit\t0\tagent\nout\t{\"agents\":[]}\n\(RemoteShell.herdrEndMarker)\n"
+        let listed = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nsession\tnt-x-1\t0\t/srv\tzsh\n" + section))
         #expect(listed.sessions.map(\.name) == ["nt-x-1"])
-        #expect(listed.herdr == [])
+        #expect(listed.herdr?.listing == .agents([]))
+
+        // herdr where a tab finds it: version, path, and how; or where the check looked.
+        let found = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nherdr\therdr 0.9.4\t/home/me/.local/share/mise/installs/herdr/0.9.4/herdr\tlogin\n"))
+        #expect(found.herdrSummary == "herdr 0.9.4 at /home/me/.local/share/mise/installs/herdr/0.9.4/herdr (found on your login shell’s PATH)")
+        let missing = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nherdr-missing\t/x/herdr did not run (herdr --version said: no)\n"))
+        #expect(missing.herdr == nil && missing.herdrMissing && missing.herdrBroken == "/x/herdr did not run (herdr --version said: no)")
+        #expect(missing.herdrSummary?.hasPrefix("/x/herdr did not run (herdr --version said: no); herdr not found: looked on your login shell’s PATH") == true)
+        #expect(probe.herdrSummary == "herdr 0.9.3")
     }
 
     /// check_host looks for OpenCode beside Claude Code, Codex and Gemini CLI: on the PATH a command over ssh gets, or

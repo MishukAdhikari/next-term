@@ -73,7 +73,7 @@ enum SessionCapture {
         var pane = SessionSnapshot.Pane(id: tab.id, userTitle: tab.userTitle, command: command(tab), stateBefore: state(tab),
                                         interrupted: interrupted(tab), lastSelected: tab.lastSelected, scrollback: scrollback)
         if let remote = tab.remote {
-            let keep: KeepMode = tab.fellBack ? .off : remote.keep
+            let keep = remote.keep.shown(fellBack: tab.fellBack)
             pane.remote = RemoteTabRecord(hostID: remote.host.id, destination: remote.host.destination, port: remote.host.port,
                                           directory: keep == .tmux ? remote.directory : tab.directory, session: remote.session,
                                           keep: keep, project: project, title: tab.userTitle)

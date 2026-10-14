@@ -60,15 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Where the terminal sits relative to the editor.
-    enum TerminalPosition: String, CaseIterable {
-        case bottom, right, left, top
-        var title: String { rawValue.capitalized }
-    }
+    typealias TerminalPosition = NextTermCore.TerminalPosition
 
     enum SidebarSide: String { case left, right }
 
     var terminalPosition: TerminalPosition {
-        get { TerminalPosition(rawValue: UserDefaults.standard.string(forKey: "terminalPosition") ?? "") ?? .bottom }
+        get { TerminalPosition(stored: UserDefaults.standard.string(forKey: "terminalPosition")) }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "terminalPosition") }
     }
 
@@ -77,10 +74,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "sidebarSide") }
     }
 
+    /// Where the terminal's tabs show: along its bar at the top, or in a list down its left or right.
+    var terminalTabs: TerminalTabsSetting {
+        get { TerminalTabsSetting(stored: UserDefaults.standard.string(forKey: TerminalTabsSetting.key)) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: TerminalTabsSetting.key) }
+    }
+
+    /// Show Folders: every row of the tab list gets a second line, the tab's folder or the question its agent asks.
+    var tabListShowsFolders: Bool {
+        get { UserDefaults.standard.bool(forKey: "tabListShowsFolders") }
+        set { UserDefaults.standard.set(newValue, forKey: "tabListShowsFolders") }
+    }
+
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
+        moveTerminal(to: position, announce: true)
+    }
+
+    /// Settings › Terminal › Position follows the menus.
+    static let terminalPositionChanged = Notification.Name("NextTermTerminalPositionChanged")
+
+    /// Moves the terminal in every window. The position it has already changes nothing: no window is laid out
+    /// again, so a folded terminal stays folded and no divider moves. `announce`: the user chose it (a menu,
+    /// Settings); with no file open in the window in front its terminal fills it, so a notice says where the
+    /// terminal goes once a file opens, rather than the choice seeming ignored.
+    func moveTerminal(to position: TerminalPosition, announce: Bool = false) {
+        guard position != terminalPosition else { return }
         terminalPosition = position
         controllers.forEach { $0.applyLayout() }
+        NotificationCenter.default.post(name: Self.terminalPositionChanged, object: nil)
+        guard announce, let front = TerminalWindow.front, let controller = front.windowController as? TerminalWindowController,
+              controller.editorArea.isHidden else { return }
+        GitToast.show(position.noticeWithNoFileOpen, in: front)
     }
 
     /// The editor's line height, as a multiple of the font's natural line height (1.35: readable code).
@@ -360,13 +385,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.applyLayout() }
     }
 
-    /// How much of the work area open files get; the terminal has the rest.
-    var editorFraction: CGFloat {
-        get {
-            let saved = UserDefaults.standard.double(forKey: "editorFraction")
-            return saved >= 0.15 && saved <= 0.9 ? CGFloat(saved) : 0.62
-        }
-        set { UserDefaults.standard.set(Double(min(0.9, max(0.15, newValue))), forKey: "editorFraction") }
+    @objc func setTerminalTabs(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let tabs = TerminalTabsSetting(rawValue: raw) else { return }
+        moveTerminalTabs(to: tabs)
+    }
+
+    /// Settings › Terminal › Tabs follows the menus.
+    static let terminalTabsChanged = Notification.Name("NextTermTerminalTabsChanged")
+
+    /// Puts the terminal's tabs on top, or in a list down its left or right, in every window. Only the tabs move: the
+    /// sidebar, the editor, the terminal's position and every split stay where they are, and a folded terminal stays
+    /// folded. The place they have already changes nothing.
+    func moveTerminalTabs(to tabs: TerminalTabsSetting) {
+        guard tabs != terminalTabs else { return }
+        terminalTabs = tabs
+        controllers.forEach { $0.applyTerminalTabs() }
+        NotificationCenter.default.post(name: Self.terminalTabsChanged, object: nil)
+    }
+
+    /// View › Terminal Tabs › Show Folders, in every window.
+    @objc func toggleTabListFolders(_ sender: Any?) {
+        tabListShowsFolders.toggle()
+        controllers.forEach { $0.refresh() }
+    }
+
+    /// How much of the work area open files get; the terminal has the rest. Kept apart for the terminal beside
+    /// the editor and above or below it, as a width dragged for one is no height for the other.
+    func editorFraction(sideBySide: Bool) -> CGFloat {
+        let defaults = UserDefaults.standard
+        let own = defaults.object(forKey: EditorShare.key(sideBySide: sideBySide)) as? Double
+        return EditorShare.share(own: own, shared: defaults.object(forKey: EditorShare.sharedKey) as? Double)
+    }
+
+    func setEditorFraction(_ share: CGFloat, sideBySide: Bool) {
+        UserDefaults.standard.set(Double(EditorShare.kept(share)), forKey: EditorShare.key(sideBySide: sideBySide))
     }
 
     /// Notifications need a real bundle (`swift run` has none).
@@ -626,6 +678,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         settings?.showWindow(nil)
         settings?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// What Agents › Suggest a Command… does while it is off: Settings › Terminal at its Suggestions row, which says so
+    /// and how to turn it on.
+    func showSuggestionSettings() {
+        showSettings(tab: "terminal")
+        settings?.showSuggestions()
     }
 
     @objc func checkForUpdates(_ sender: Any?) {
@@ -1337,6 +1396,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
+        if item.action == #selector(setTerminalTabs(_:)) {
+            item.state = item.representedObject as? String == terminalTabs.rawValue ? .on : .off
+        }
+        if item.action == #selector(toggleTabListFolders(_:)) {
+            item.state = tabListShowsFolders ? .on : .off
+            return terminalTabs.listSide != nil // a second line for the list's rows: the bar has none
+        }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
@@ -1677,6 +1743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             entry.representedObject = position.rawValue
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
+        view.addItem(withTitle: "Terminal Tabs", action: nil, keyEquivalent: "").submenu = TabListMenus.view(target: self)
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
         // ⌃⌘ as Git Diff's ⌃⌘G: U for Unified. The blame toggles are A for Annotate (Xcode's Authors key) and L for Line.
         item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "u", [.command, .control], target: DiffLayoutMenu.shared) // checked: one column

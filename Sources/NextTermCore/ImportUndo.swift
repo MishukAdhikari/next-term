@@ -116,6 +116,8 @@ public struct ImportSnapshot: Codable, Equatable, Sendable {
         case "optionAsMeta": return "Option as Meta"
         case "terminalPosition": return "Terminal position"
         case "sidebarSide": return "Project sidebar side"
+        case TerminalTabsSetting.key: return "Terminal tabs"
+        case TabListImport.showsFoldersKey: return "Folders in the tab list"
         case "editorFontFamily": return "Editor font"
         case "terminalFontFamily": return "Terminal font"
         case "terminalPalette", "customTerminalPalette": return "Terminal colours"

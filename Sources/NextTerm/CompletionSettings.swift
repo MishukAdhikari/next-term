@@ -5,6 +5,8 @@ import NextTermCore
 /// remembered where a plugin owns Tab, each with Ask Again. Its own row (TerminalSettingsView's `row` is local
 /// to it), with the same 110 pt right-aligned label.
 final class CompletionSettingsView: NSStackView {
+    /// The Suggestions row (Suggest a Command), below Tab completion's.
+    let suggestions = CommandSuggestionSettingsView()
     private let mode = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
     private let choices = NSStackView()
@@ -44,7 +46,7 @@ final class CompletionSettingsView: NSStackView {
         indented.edgeInsets = NSEdgeInsets(top: 0, left: 120, bottom: 0, right: 0)
         addArrangedSubview(line)
         addArrangedSubview(indented)
-        addArrangedSubview(CommandSuggestionSettingsView())
+        addArrangedSubview(suggestions)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: CompletionPreferences.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: RemoteCompletionConsent.changed, object: nil)
         refresh()
@@ -184,6 +186,21 @@ final class CompletionSettingsPane: NSView {
 
     /// For the self-test: the rows reach past what shows, so they scroll.
     var scrolls: Bool { (scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height + 1 }
+
+    /// Agents › Suggest a Command… while it is off: the Suggestions row scrolled into sight (the rows scroll at the
+    /// window's smaller sizes), saying it is off and how to turn it on.
+    func pointOutSuggestions() {
+        rows.suggestions.pointOut(true)
+        layoutSubtreeIfNeeded()
+        rows.suggestions.scrollToVisible(rows.suggestions.bounds)
+    }
+
+    /// For the self-test: the Suggestions row shows whole.
+    var suggestionsInSight: Bool {
+        guard let document = scroll.documentView else { return false }
+        let row = rows.suggestions.convert(rows.suggestions.bounds, to: document)
+        return scroll.documentVisibleRect.insetBy(dx: -1, dy: -1).contains(row)
+    }
 }
 
 extension CompletionPreferences {
@@ -203,6 +220,9 @@ extension CompletionPreferences {
 final class CommandSuggestionSettingsView: NSStackView {
     private let choice = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
+    /// Said while Agents › Suggest a Command…, with Suggestions off, brought the user here (pointOut): until something
+    /// is chosen, or Settings closes.
+    private let offNote = NSTextField(wrappingLabelWithString: "Suggest a Command is off: choose who answers it here to turn it on.")
 
     init() {
         super.init(frame: .zero)
@@ -222,7 +242,14 @@ final class CommandSuggestionSettingsView: NSStackView {
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 330
-        let indented = NSStackView(views: [note])
+        offNote.textColor = .controlAccentColor
+        offNote.font = .systemFont(ofSize: 11, weight: .semibold)
+        offNote.preferredMaxLayoutWidth = 330
+        offNote.isHidden = true
+        let indented = NSStackView(views: [offNote, note])
+        indented.orientation = .vertical
+        indented.alignment = .leading
+        indented.spacing = 4
         indented.edgeInsets = NSEdgeInsets(top: 0, left: 120, bottom: 0, right: 0)
         addArrangedSubview(line)
         addArrangedSubview(indented)
@@ -261,6 +288,16 @@ final class CommandSuggestionSettingsView: NSStackView {
             if item.id == current { choice.select(choice.lastItem) }
         }
         note.stringValue = Self.note(current)
+        if current != nil { offNote.isHidden = true }
+    }
+
+    /// Shows (while Suggestions is off) or hides the note that Suggest a Command is off and how to turn it on;
+    /// VoiceOver hears it as it shows.
+    func pointOut(_ shown: Bool) {
+        offNote.isHidden = !shown || CompletionPreferences.suggestion != nil
+        guard !offNote.isHidden else { return }
+        NSAccessibility.post(element: offNote, notification: .announcementRequested,
+                             userInfo: [.announcement: offNote.stringValue, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
     }
 
     static func note(_ current: String?) -> String {
@@ -283,5 +320,6 @@ final class CommandSuggestionSettingsView: NSStackView {
     /// For the self-test.
     var titles: [String] { choice.itemTitles }
     var noteText: String { note.stringValue }
+    var pointsOut: Bool { !offNote.isHidden }
 }
 

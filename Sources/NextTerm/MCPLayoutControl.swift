@@ -148,6 +148,7 @@ extension MCPWriteControl {
         let app = AppDelegate.shared!
         var layout: [String: Any] = [
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
+            "terminal_tabs": app.terminalTabs.rawValue,
             "sidebar": controller.isSidebarVisible ? "shown" : "hidden", "terminal_folded": controller.terminalCollapsed,
         ]
         if let project = controller.project { layout["project"] = project }
@@ -176,6 +177,10 @@ extension MCPWriteControl {
             change.sidebarSide = side
             lines.append("The project sidebar moves to the \(side), in every window.")
         }
+        if let tabs = wanted.terminalTabs, tabs != app.terminalTabs.rawValue {
+            change.terminalTabs = tabs
+            lines.append(TerminalTabsSetting(stored: tabs).approvalLine)
+        }
         if let shown = wanted.sidebarShown, shown != controller.isSidebarVisible {
             change.sidebarShown = shown
             lines.append("The project sidebar is \(shown ? "shown" : "hidden") in \(place(controller)).")
@@ -184,8 +189,8 @@ extension MCPWriteControl {
             if folded, controller.editorArea.isHidden {
                 return reply(MCPControl.fail("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
             }
-            // A new terminal position unfolds it: fold again after the move.
-            if folded != controller.terminalCollapsed || (folded && change.terminalPosition != nil) {
+            // A new terminal position unfolds it: fold again after the move. Moving the sidebar leaves it as it is.
+            if MCPLayoutChange.needsFoldStep(wanted: folded, folded: controller.terminalCollapsed, newPosition: change.terminalPosition != nil) {
                 change.terminalFolded = folded
                 lines.append("The terminal is \(folded ? "folded" : "unfolded") in \(place(controller)).")
             }
@@ -205,6 +210,11 @@ extension MCPWriteControl {
             if let side = change.sidebarSide {
                 app.applyImported(.sidebarSide(side))
                 changed.append("sidebar_side")
+            }
+            // Only the tabs move: a folded terminal stays folded, so terminal_folded needs no step for it.
+            if let tabs = change.terminalTabs {
+                app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
+                changed.append("terminal_tabs")
             }
             let open = AppDelegate.shared.controllers.contains { $0 === controller }
             if open, let shown = change.sidebarShown {

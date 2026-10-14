@@ -548,13 +548,17 @@ final class RemotePoller {
         for (path, hostTabs) in Dictionary(grouping: tabs, by: { $0.controlPath! }) where !inFlight.contains(path) {
             guard let host = hostTabs.first?.remote?.host, RemoteConnection.masterAlive(path: path) else { continue }
             inFlight.insert(path)
-            let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep, session: $0.remote!.session) }
-            RemoteConnection.run(host, path: path, script: RemoteShell.pollScript(tabs: specs), timeout: 10) { [weak self] result in
+            // A tab that fell back is checked as the plain shell it is (its folder too), and herdr is still asked
+            // for, so a herdr tab that fell back learns when herdr is there.
+            let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep.shown(fellBack: $0.fellBack), session: $0.remote!.session) }
+            let herdr = hostTabs.contains { $0.remote?.keep == .herdr }
+            let script = RemoteShell.pollScript(tabs: specs, herdr: herdr)
+            RemoteConnection.run(host, path: path, script: script, timeout: 10) { [weak self] result in
                 self?.inFlight.remove(path)
                 guard let poll = RemotePoll.parse(result.output) else { return }
                 for tab in hostTabs {
                     if let report = poll.tabs[tab.remoteKey] { tab.applyRemote(report) }
-                    if tab.remote?.keep == .herdr, let agents = poll.herdr { tab.applyHerdr(agents) }
+                    if tab.remote?.keep == .herdr, let report = poll.herdr { tab.applyHerdr(report) }
                 }
             }
         }
