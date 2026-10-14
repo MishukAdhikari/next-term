@@ -134,9 +134,10 @@ import Testing
 
     @Test func everyNewSettingHasATitle() {
         let settings: [ImportedSetting] = [.sidebarSingleClick(true), .backgroundFetch("5"), .diffLayout("unified"), .currentLineBlame(true),
-                                           .openProjectsIn("ask"), .launchOpens("welcome"), .terminalFontSize(12)]
+                                           .openProjectsIn("ask"), .launchOpens("welcome"), .terminalFontSize(12),
+                                           .tabList(TabListImport(tabs: "right", sidebarSide: "left", showsFolders: true))]
         for key in settings.flatMap(\.keys) { #expect(ImportSnapshot.title(of: key) != key, "\(key)") }
-        #expect(ImportedSetting.boolKeys.isSuperset(of: ["sidebarSingleClickOpens", "currentLineBlame"]))
+        #expect(ImportedSetting.boolKeys.isSuperset(of: ["sidebarSingleClickOpens", "currentLineBlame", "tabListShowsFolders"]))
         #expect(ImportedSetting.launchOpens("welcome").key == LaunchSettings.Key.opens)
     }
 }

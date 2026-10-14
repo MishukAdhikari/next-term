@@ -199,6 +199,7 @@ public enum ImportedSetting: Equatable, Sendable {
     case currentLineBlame(Bool)           // the caret line's last commit, after its text
     case openProjectsIn(String)           // where Open Project goes when the window is in use: ask, thisWindow, newWindow
     case launchOpens(String)              // a LaunchOpens: welcome or lastProjects
+    case tabList(TabListImport)           // the terminal's tabs in a list down one side, with the sidebar's side
 
     /// The UserDefaults key the app keeps it under.
     public var key: String {
@@ -226,17 +227,19 @@ public enum ImportedSetting: Equatable, Sendable {
         case .currentLineBlame: return "currentLineBlame"
         case .openProjectsIn: return "openProjectsIn"
         case .launchOpens: return LaunchSettings.Key.opens
+        case .tabList: return TerminalTabsSetting.key
         }
     }
 
     /// The keys that hold a Bool (UserDefaults hands a number back for those too).
     public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline",
-                                               "sidebarSingleClickOpens", "currentLineBlame"]
+                                               "sidebarSingleClickOpens", "currentLineBlame", TabListImport.showsFoldersKey]
 
     /// Every key applying it writes, for the snapshot Undo restores: custom colours are also kept for
-    /// Settings to offer again.
+    /// Settings to offer again, and the tab list's row writes the sidebar's side and Show Folders too.
     public var keys: [String] {
         if case .terminalPalette = self { return [key, "customTerminalPalette"] }
+        if case .tabList(let list) = self { return list.keys }
         return [key]
     }
 
@@ -251,6 +254,54 @@ public enum ImportedSetting: Equatable, Sendable {
     }
 
     public static func scrollback(clamping lines: Int) -> ImportedSetting { .terminalScrollback(Scrollback.clamped(lines)) }
+}
+
+/// The terminal's tabs in a list down one side, set by one row together with the project sidebar's side and Show
+/// Folders, so Apply keeps all three for Undo and a window is laid out once for them. Nil leaves that one as it is.
+public struct TabListImport: Equatable, Sendable {
+    /// The side the list goes, as Settings › Terminal › Tabs keeps it: left or right.
+    public let tabs: String
+    /// The project sidebar's side: left or right.
+    public let sidebarSide: String?
+    /// Show Folders: each row's second line, the tab's folder.
+    public let showsFolders: Bool?
+
+    public init(tabs: String, sidebarSide: String? = nil, showsFolders: Bool? = nil) {
+        self.tabs = tabs
+        self.sidebarSide = sidebarSide
+        self.showsFolders = showsFolders
+    }
+
+    /// Where Show Folders is kept.
+    public static let showsFoldersKey = "tabListShowsFolders"
+
+    /// Every key it writes.
+    public var keys: [String] {
+        var keys: [String] = [TerminalTabsSetting.key]
+        if sidebarSide != nil { keys.append("sidebarSide") }
+        if showsFolders != nil { keys.append(Self.showsFoldersKey) }
+        return keys
+    }
+
+    /// The preview's row: "Tabs on the left, project files on the right".
+    public var title: String {
+        guard let sidebarSide else { return "Tabs on the \(tabs)" }
+        return "Tabs on the \(tabs), project files on the \(sidebarSide)"
+    }
+
+    /// What a one-click import says it did, so the layout never changes unannounced.
+    public var movedLine: String {
+        guard let sidebarSide else { return "Tabs moved to the \(tabs)." }
+        return "Tabs moved to the \(tabs), project files to the \(sidebarSide)."
+    }
+
+    /// Next Term has it already: the tabs on that side, and the sidebar and Show Folders as it names them.
+    public func isSet(tabs current: String, sidebarSide side: String, showsFolders folders: Bool) -> Bool {
+        let sameTabs: Bool = current == tabs
+        let sameSide: Bool = sidebarSide.map { $0 == side } ?? true
+        let sameFolders: Bool = showsFolders.map { $0 == folders } ?? true
+        return sameTabs && sameSide && sameFolders
+    }
 }
 
 /// Rows for the settings several importers read the same way.

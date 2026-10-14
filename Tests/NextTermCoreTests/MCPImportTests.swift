@@ -143,6 +143,7 @@ import Testing
             .terminalScrollback(1_000), .terminalStartFolder("project"), .terminalCursorShape("bar"), .terminalCursorBlink(true),
             .trimTrailingWhitespace(true), .insertFinalNewline(true), .hiddenFiles([]), .sidebarSingleClick(true), .backgroundFetch("5"),
             .diffLayout("unified"), .currentLineBlame(true), .openProjectsIn("ask"), .launchOpens("welcome"),
+            .tabList(TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true)),
         ]
         let keys: [String] = MCPImport.settingTargets.map(\.key)
         #expect(Set(keys) == Set(settings.map(\.key)))
@@ -319,6 +320,24 @@ import Testing
         let expected: [String] = ["recents ticked", "set:softWrap unticked"]
         #expect(changed == expected)
         #expect(MCPImport.userChanged(asked: ["preset"], applied: ["preset"]).isEmpty)
+    }
+
+    /// The tab list row is `set:terminalTabs` to an agent, ticked as the window ticks it, and already set only when the
+    /// tabs, and the sidebar and Show Folders where it names them, are as it would put them.
+    @Test func theTabListRowIsTerminalTabsToAnAgent() {
+        let list = TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true)
+        let plan = ImportPlan(preset: .nextTerm, settings: [PlannedSetting(.tabList(list), source: "vertical_tabs.enabled true")])
+        let ids: [String] = MCPImport.rowIDs(plan).settings
+        #expect(ids == ["set:terminalTabs"])
+        #expect(MCPImport.defaultTicks(plan, currentPreset: .nextTerm, newRecents: []).contains("set:terminalTabs"))
+        #expect(list.isSet(tabs: "left", sidebarSide: "right", showsFolders: true))
+        #expect(!list.isSet(tabs: "top", sidebarSide: "right", showsFolders: true))
+        #expect(!list.isSet(tabs: "left", sidebarSide: "left", showsFolders: true))
+        #expect(!list.isSet(tabs: "left", sidebarSide: "right", showsFolders: false))
+        // What it doesn't name, it leaves as it is: any value of it is already right.
+        let tabsOnly = TabListImport(tabs: "right")
+        #expect(tabsOnly.isSet(tabs: "right", sidebarSide: "left", showsFolders: false) && tabsOnly.isSet(tabs: "right", sidebarSide: "right", showsFolders: true))
+        #expect(!tabsOnly.isSet(tabs: "left", sidebarSide: "left", showsFolders: false))
     }
 
     @Test func rowIDsAreUniqueInAPlan() {

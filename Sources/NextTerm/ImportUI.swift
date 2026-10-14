@@ -221,8 +221,27 @@ extension AppDelegate {
         case .openProjectsIn(let raw): if let target = ProjectTarget(rawValue: raw) { projectTarget = target }
         case .launchOpens(let raw):
             if LaunchOpens(rawValue: raw) != nil { UserDefaults.standard.set(raw, forKey: LaunchSettings.Key.opens) }
+        case .tabList(let list): applyTabList(list)
         default: break
         }
+    }
+
+    /// The tabs' side, the sidebar's and Show Folders set together, then each window laid out once: in full when the
+    /// sidebar moves, else only where its tabs show. What is already so changes nothing.
+    private func applyTabList(_ list: TabListImport) {
+        guard let tabs = TerminalTabsSetting(rawValue: list.tabs) else { return }
+        let side: SidebarSide? = list.sidebarSide.flatMap(SidebarSide.init(rawValue:))
+        let movesTabs: Bool = tabs != terminalTabs
+        let movesSidebar: Bool = side.map { $0 != sidebarSide } ?? false
+        let foldersChange: Bool = list.showsFolders.map { $0 != tabListShowsFolders } ?? false
+        if movesTabs { terminalTabs = tabs }
+        if movesSidebar, let side { sidebarSide = side }
+        if foldersChange, let folders = list.showsFolders { tabListShowsFolders = folders }
+        for controller in controllers {
+            if movesSidebar { controller.applyLayout() } else if movesTabs { controller.applyTerminalTabs() }
+            if foldersChange { controller.refresh() }
+        }
+        if movesTabs { NotificationCenter.default.post(name: Self.terminalTabsChanged, object: nil) }
     }
 
     /// Undo: a setting back to its value before the import (nil: it had none, so the default returns).
@@ -300,6 +319,24 @@ extension AppDelegate {
             defaults.removeObject(forKey: key)
         case ("openProjectsIn", nil), (LaunchSettings.Key.opens, nil):
             defaults.removeObject(forKey: key)
+        default: restoreTabListSetting(key, to: value)
+        }
+    }
+
+    /// Undo for where the terminal's tabs show and Show Folders: the value before, or none, so the top and off return.
+    private func restoreTabListSetting(_ key: String, to value: ImportCoordinator.Snapshot.Value?) {
+        let defaults = UserDefaults.standard
+        switch (key, value) {
+        case (TerminalTabsSetting.key, .string(let raw)?): moveTerminalTabs(to: TerminalTabsSetting(stored: raw))
+        case (TerminalTabsSetting.key, nil):
+            moveTerminalTabs(to: .top)
+            defaults.removeObject(forKey: key)
+        case (TabListImport.showsFoldersKey, .bool(let on)?):
+            tabListShowsFolders = on
+            controllers.forEach { $0.refresh() }
+        case (TabListImport.showsFoldersKey, nil):
+            defaults.removeObject(forKey: key)
+            controllers.forEach { $0.refresh() }
         default: break
         }
     }
@@ -554,17 +591,23 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         app = found
         self.source = source
         self.plan = plan
+        // A layout the import moves is named, so it never changes unannounced.
+        let moved: [String] = ImportCoordinator.changing(choice.settings).compactMap { (planned: PlannedSetting) -> String? in
+            guard case .tabList(let list) = planned.setting else { return nil }
+            return list.movedLine
+        }
         let snapshot = ImportCoordinator.count(choice, plan: plan) > 0
             ? ImportCoordinator.shared.apply(choice, plan: plan, from: found.name) : nil
-        showImported(from: found, snapshot: snapshot, skipped: plan.skipped.count)
+        showImported(from: found, snapshot: snapshot, skipped: plan.skipped.count, moved: moved)
     }
 
     /// After one click: what came over (or that nothing would change), and Undo Import; Done closes the window.
-    private func showImported(from found: DetectedApp, snapshot: ImportSnapshot?, skipped: Int) {
+    private func showImported(from found: DetectedApp, snapshot: ImportSnapshot?, skipped: Int, moved: [String] = []) {
         var rows: [NSView] = []
         if let snapshot {
             rows.append(Self.label("Brought over from \(found.name)", size: 20, weight: .semibold))
             rows.append(Self.wrapping(snapshot.summary.prefix(1).uppercased() + snapshot.summary.dropFirst() + "."))
+            for line in moved { rows.append(Self.wrapping(line)) }
             rows.append(Self.wrapping("Undo Import puts all of it back, here or in Settings › Import.", secondary: true, size: 12))
         } else {
             rows.append(Self.label("Nothing to bring over from \(found.name)", size: 20, weight: .semibold))
@@ -1117,6 +1160,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             default: return "Ask where to open projects"
             }
         case .launchOpens(let raw): return "At launch: " + lowerFirst((LaunchOpens(rawValue: raw) ?? .standard).title)
+        case .tabList(let list): return list.title
         default: return ""
         }
     }

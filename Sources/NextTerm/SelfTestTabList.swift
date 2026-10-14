@@ -7,8 +7,9 @@ import NextTermCore
 /// and selection; Right mirrors Left; a split tab's panes are rows, and a pane's row gives that pane the keyboard;
 /// Rename Tab… opens on the list's row; the tab's menu says Close Tabs Below; the ⋯ menu lists Top, Left and Right;
 /// Collapse Tab List and Show Folders; folded to its bar the bar has the tabs back, beside the editor the rail; a
-/// narrow window collapses it by itself. Top puts every tab back in the bar. The tabs go back on top at the end, and
-/// the widths kept are put back as they were.
+/// narrow window collapses it by itself. Top puts every tab back in the bar. An import from a terminal whose vertical
+/// tabs were on brings the list with the files on the right, and Undo Import takes it back. The tabs go back on top at
+/// the end, and the widths kept and the last import are put back as they were.
 extension SelfTest {
     static func tabListChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let window = c.window, let app = AppDelegate.shared else { return check(false, "tab list: the window is open") }
@@ -232,12 +233,76 @@ extension SelfTest {
               "\(c.tabBar.items.map(\.title)), terminals \(c.container.frame)")
         c.groups.first?.focused.userTitle = nil
         c.refresh()
+        await tabListImportChecks(c, app: app)
 
         for tab in opened { c.requestClose(tab) }
         _ = await wait(3) { opened.allSatisfy { tab in !c.tabs.contains { $0 === tab } } }
         _ = await endSheets(over: window)
         app.moveTerminal(to: saved.position)
         if app.sidebarSide != saved.side { app.toggleSidebarSide(nil) }
+    }
+
+    /// An import from a terminal whose vertical tab panel was on, in expanded view: the preview's row reads as the list
+    /// on the left with the project files on the right, ticked, with its note; one click applies it in every window,
+    /// two lines a row, and says so; Undo Import puts the top, the sidebar on the left and one line back. The settings
+    /// file is made up, in a temporary folder.
+    private static func tabListImportChecks(_ c: TerminalWindowController, app: AppDelegate) async {
+        let coordinator = ImportCoordinator.shared
+        let lastBefore = coordinator.last
+        let window = ImportWindowController.shared
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-import-tabs-\(getpid())")
+        defer {
+            window.window?.close()
+            c.window?.makeKeyAndOrderFront(nil)
+            coordinator.last = lastBefore
+            try? FileManager.default.removeItem(atPath: root)
+        }
+        app.moveTerminalTabs(to: .top)
+        if app.sidebarSide != .left { app.toggleSidebarSide(nil) }
+        app.tabListShowsFolders = false
+        c.refresh()
+        do {
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+            let text = "[appearance.vertical_tabs]\nenabled = true\nview_mode = \"expanded\"\n"
+            try text.write(toFile: (root as NSString).appendingPathComponent("settings.toml"), atomically: true, encoding: .utf8)
+        } catch {
+            return check(false, "tab list import: a made-up settings file to read", "\(error)")
+        }
+        let found = DetectedApp(kind: .warp, name: "Self-test terminal", configPath: root, lastUsed: nil)
+        let planned = ImportSources.plan(for: found).settings.first
+        let expected = ImportedSetting.tabList(TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true))
+        let title: String = planned.map { ImportWindowController.describe($0.setting) } ?? "no row"
+        check(planned?.setting == expected && planned?.ticked == true && title == "Tabs on the left, project files on the right"
+              && planned?.note == "with each tab’s folder under it, as expanded view had it",
+              "tab list import: the preview offers the list on the left with the project files on the right, ticked, with its note",
+              "\(title): \(planned?.note ?? "no note")")
+
+        let resizes = TerminalResizes(c.tabs.map(\.view))
+        window.importRecommended(from: found)
+        await pause(0.3)
+        c.window?.layoutIfNeeded()
+        resizes.stop()
+        let everyWindow: Bool = app.controllers.allSatisfy { $0.tabListSide == .left }
+        let twoLines: Bool = abs((c.tabList.tabRowView(at: 0)?.frame.height ?? 0) - TabListLayout.twoLineHeight) < 1
+        let sidebarAt: NSRect = c.sidebar.convert(c.sidebar.bounds, to: nil)
+        let sidebarRight: Bool = !c.isSidebarVisible || sidebarAt.minX > c.terminalPane.convert(c.terminalPane.bounds, to: nil).minX
+        check(app.terminalTabs == .left && app.sidebarSide == .right && app.tabListShowsFolders && everyWindow && c.listShowsTabs
+              && twoLines && sidebarRight,
+              "tab list import: one click puts every window's tabs in the list on the left, two lines a row, and the sidebar on the right",
+              "tabs \(app.terminalTabs), sidebar \(app.sidebarSide), folders \(app.tabListShowsFolders), sidebar at \(sidebarAt)")
+        let texts: [String] = importWindowTexts(window)
+        check(texts.contains("Tabs moved to the left, project files to the right."), "tab list import: the result names the layout it moved",
+              texts.joined(separator: " | "))
+        note("tab list import: the most any terminal changed size while the import moved its tabs and the sidebar: \(resizes.most)")
+        let changed = coordinator.changedSinceImport()
+        check(changed.isEmpty, "tab list import: nothing is named as changed since the import", changed.joined(separator: ", "))
+
+        coordinator.undo()
+        c.window?.layoutIfNeeded()
+        let backOnTop: Bool = app.controllers.allSatisfy { $0.tabListSide == nil } && c.barShowsTabs && c.tabList.isHidden
+        check(app.terminalTabs == .top && app.sidebarSide == .left && !app.tabListShowsFolders && backOnTop,
+              "tab list import: Undo Import puts the tabs on top, the sidebar on the left and one line a row back",
+              "tabs \(app.terminalTabs), sidebar \(app.sidebarSide), folders \(app.tabListShowsFolders)")
     }
 
     /// A View menu item by its title.
