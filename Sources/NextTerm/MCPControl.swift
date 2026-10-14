@@ -694,7 +694,13 @@ enum MCPControl {
             // for it, which can wait a moment for the shell's new line (TerminalTab.submitOwnLine).
             let pending = unsubmitted.removeValue(forKey: tab.id)
             if sequences[index] == "\r", let pending, pending.writes == tab.view.inputWrites {
-                return tab.submitOwnLine(pending.typed, then: next)
+                return tab.submitOwnLine(pending.typed) {
+                    // The Return waited for the shell's new line: a tab that ended meanwhile never got it.
+                    guard canType(tab) else {
+                        return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
+                    }
+                    next()
+                }
             }
             tab.view.send(txt: sequences[index])
             next()

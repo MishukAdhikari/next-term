@@ -260,11 +260,12 @@ def own_line(shell, line, wait=1.0):
     shell.send(name_key(line) + b"\r", wait)
 
 def history_rc(extra):
-    """A zsh config folder of its own, with a history file of its own (never the user's), and `extra`."""
+    """A zsh config folder of its own, with a history file of its own (never the user's), exported as hstr's setup
+    exports it, and `extra`."""
     folder = tempfile.mkdtemp()
     hist = os.path.join(folder, "history")
     open(os.path.join(folder, ".zshrc"), "w").write(
-        f"HISTFILE={shlex.quote(hist)}\nHISTSIZE=200\nSAVEHIST=200\nPS1='$ '\n{extra}\n")
+        f"export HISTFILE={shlex.quote(hist)}\nHISTSIZE=200\nSAVEHIST=200\nPS1='$ '\n{extra}\n")
     return folder, hist
 
 def listed(shell, name):
@@ -1305,7 +1306,7 @@ def history_checks(label, extra, completion_on):
     check(marks and all(n == NONCE and f == ["1"] for n, f in marks), f"[history {label}] the hook marks the line, with the nonce",
           str(marks[:2]))
     out = os.path.join(sh.zdot, "vars")
-    sh.send(f"setopt > {out}; print -r -- $HISTFILE:$HISTSIZE:$SAVEHIST >> {out}\r", 0.8)
+    sh.send(f"setopt > {out}; print -r -- ${{(t)HISTFILE}}:$HISTFILE:$HISTSIZE:$SAVEHIST >> {out}\r", 0.8)
     _, before = listed(sh, "vars")
     sh.send("echo user-one\r", 0.6)
     mark = len(sh.buf)
@@ -1336,9 +1337,14 @@ def history_checks(label, extra, completion_on):
     sh.send("\x15", 0.3)
     sh.send("echo pasted\r", 0.6)
     own_line(sh, "echo own-last")
-    sh.send(f"setopt > {out}.after; print -r -- $HISTFILE:$HISTSIZE:$SAVEHIST >> {out}.after\r", 0.8)
+    # HISTFILE stays exported (`fc -p` drops the export; the hook puts it back), for a line kept out too.
+    own_line(sh, f"printenv HISTFILE > {out}.own-env")
+    _, env = listed(sh, "vars.own-env")
+    check(env.strip() == hist, f"[history {label}] a line Next Term submits still sees HISTFILE exported", repr(env))
+    sh.send(f"setopt > {out}.after; print -r -- ${{(t)HISTFILE}}:$HISTFILE:$HISTSIZE:$SAVEHIST >> {out}.after\r", 0.8)
     _, after = listed(sh, "vars.after")
-    check(before and before == after, f"[history {label}] the history options and variables are as they were", after[-120:])
+    check(before and before == after and "-export" in before, f"[history {label}] the history options and variables are as they were",
+          after[-120:])
     sh.send(f"fc -ln -200 > {sh.zdot}/listed\r", 0.8)
     _, lines = listed(sh, "listed")
     kept = [l.strip() for l in lines.splitlines()]

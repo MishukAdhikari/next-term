@@ -1306,12 +1306,14 @@ extension SelfTest {
         if let tab {
             _ = await wait(10) { !tab.status.running }
             // zsh's fc lists the lines before the one running it. The bracket in each pattern keeps this line's own
-            // text from matching: none of the last nine holds the command, and the last one is the ticket line.
+            // text from matching. None of the last nine holds the command or the ticket line: Next Term's own Return
+            // keeps the ticket line out.
             let ticketPattern = "[-]-ticket " + (ticket?.id ?? "none")
-            let history = "echo HIST$(fc -ln -9 | grep -c 'w[c] -c')LAST$(fc -ln -1 | grep -c '\(ticketPattern)')"
+            let history = "echo HIST$(fc -ln -9 | grep -c 'w[c] -c')LAST$(fc -ln -9 | grep -c '\(ticketPattern)')"
             tab.view.send(txt: "if [ -z \"${K+x}\" ]; then echo NO\"\"K; fi; \(history)\r")
-            let clean = await wait(10) { screen(tab).contains("NOK") && secretsUnwrapped(screen(tab)).contains("HIST0LAST1") }
-            check(clean, "secrets: the tab's shell has no K after the run, and its history holds only the ticket line", String(screen(tab).suffix(200)))
+            let clean = await wait(10) { screen(tab).contains("NOK") && secretsUnwrapped(screen(tab)).contains("HIST0LAST0") }
+            check(clean, "secrets: the tab's shell has no K after the run, and its history holds neither the command nor the ticket line",
+                  String(screen(tab).suffix(200)))
         }
         // A used ticket can't be used again.
         let ticketID = ticket?.id ?? ""

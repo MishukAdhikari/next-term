@@ -166,9 +166,16 @@ import Testing
         #expect(script.contains("add-zsh-hook zshaddhistory __nextterm_haddhistory"))
         #expect(script.contains(#"[[ -n $named && ${1%$'\n'} == "$line" ]] || return 0"#) && script.contains("  fc -p\n  return 1\n"))
         // It never changes the user's history options or files, and never evaluates text.
-        for word in ["setopt", "unsetopt", "HISTFILE", "SAVEHIST", "HISTSIZE", "fc -W", "fc -A", "fc -P", "print -s"] {
+        for word in ["setopt", "unsetopt", "SAVEHIST", "HISTSIZE", "fc -W", "fc -A", "fc -P", "print -s"] {
             #expect(!script.contains(word), "the hook says \(word)")
         }
+        // HISTFILE only for its export, which `fc -p` drops and preexec puts back: never its value.
+        let lines = script.split(separator: "\n").filter { !$0.drop(while: { $0 == " " }).hasPrefix("#") }
+        let code = lines.joined(separator: "\n")
+        let uses = code.components(separatedBy: "HISTFILE").count - 1
+        #expect(uses == 2 && code.contains("[[ ${(t)HISTFILE-} == *-export* ]] && __nextterm_hexport=1\n  fc -p\n"))
+        #expect(code.contains("[[ -n $__nextterm_hexport ]] && export HISTFILE\n"))
+        #expect(script.contains("add-zsh-hook preexec __nextterm_hpreexec"))
         #expect(script.range(of: #"\beval\b"#, options: .regularExpression) == nil, "the hook evaluates text")
     }
 

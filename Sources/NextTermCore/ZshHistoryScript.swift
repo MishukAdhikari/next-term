@@ -12,7 +12,8 @@ public enum ZshHistoryScript {
 # private key is bound in every keymap and a `hist` mark says so; just before Next Term's own Return, that key names the
 # line. The next line zsh adds to its history is kept out of it if it is that line to the byte, and the name is dropped
 # there whatever the line was, and at each new line and prompt: so it can never hide a line typed later. Nothing here
-# sets a history option or variable, writes the history file, starts a process, or evaluates a line.
+# sets a history option or variable (it only puts back HISTFILE's export, which `fc -p` drops), writes the history file,
+# starts a process, or evaluates a line.
 zmodload zsh/zleparameter 2>/dev/null || return 0
 builtin autoload -Uz add-zsh-hook add-zle-hook-widget
 
@@ -21,6 +22,8 @@ typeset -g __nextterm_hkey=$'\e[6974~'
 typeset -g __nextterm_hline= __nextterm_hnamed=
 # The line just kept out, for the integration's preexec: zsh gives preexec no typed text for a line not in its history.
 typeset -g __nextterm_hran=
+# Whether HISTFILE was exported when `fc -p` unset it: zsh's pop brings back its value alone, so preexec exports it again.
+typeset -g __nextterm_hexport=
 
 # The private key's widget: a kind letter, a 6-digit length and the payload, escaped as Tab completion's fields are and
 # decoded with printf %b. `h` names the line about to be submitted. Anything else (a kind this version doesn't know, a
@@ -49,8 +52,18 @@ __nextterm_haddhistory() {
   __nextterm_hline= __nextterm_hnamed=
   [[ -n $named && ${1%$'\n'} == "$line" ]] || return 0
   __nextterm_hran=$line
+  [[ ${(t)HISTFILE-} == *-export* ]] && __nextterm_hexport=1
   fc -p
   return 1
+}
+
+# Before the command runs (zsh has popped `fc -p`'s list by then): HISTFILE exported again if it was, so the line kept out
+# and every program after it see it as before (hstr finds the history file through it).
+__nextterm_hpreexec() {
+  emulate -L zsh
+  [[ -n $__nextterm_hexport ]] && export HISTFILE
+  __nextterm_hexport=
+  return 0
 }
 
 # At each new line: the key bound in every keymap, nothing named yet, and the mark that says Next Term may name the line
@@ -70,6 +83,8 @@ __nextterm_hready() {
 __nextterm_hprecmd() {
   emulate -L zsh
   __nextterm_hline= __nextterm_hnamed= __nextterm_hran=
+  # A line kept out that never got to preexec (it did not parse): HISTFILE exported again here.
+  __nextterm_hpreexec
   local -a list
   zstyle -g list zle-line-init widgets
   [[ ${widgets[zle-line-init]-} == user:azhw:zle-line-init && -n ${(M)list:#<->:__nextterm_hready} ]] && return 0
@@ -80,6 +95,7 @@ __nextterm_hprecmd() {
 zle -N __nextterm_hkeywidget
 zle -N __nextterm_hready
 add-zsh-hook zshaddhistory __nextterm_haddhistory
+add-zsh-hook preexec __nextterm_hpreexec
 typeset -ga precmd_functions
 precmd_functions=(${precmd_functions:#__nextterm_hprecmd} __nextterm_hprecmd)
 __nextterm_hprecmd

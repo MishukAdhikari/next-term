@@ -817,7 +817,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             }
             return
         }
-        let bytes = ShellHistory.submit(typed: typed, armed: history.armed)
+        // zle names the line only while it has the tty to itself: not under a program a widget started (^X^E's editor,
+        // fzf's or atuin's ^R), which would read the name as typed keys.
+        let pid = view.process.shellPid
+        let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd, shellPid: pid, shellName: shellName)
+        let inFront = foreground?.isShell == true
+        // A widget's $(...) (fzf, atuin) runs in the shell's own group: a child there means a program reads the tty.
+        let substituting = ProcessInspector.children(of: pid).contains { getpgid($0) == pid }
+        let bytes = ShellHistory.submit(typed: typed, armed: history.armed && inFront && !substituting)
         view.send(data: bytes[...])
         then?()
     }
