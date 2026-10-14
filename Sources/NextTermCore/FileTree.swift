@@ -8,11 +8,13 @@ public func canonicalPath(_ path: String) -> String {
     return String(cString: resolved)
 }
 
-/// The project a directory belongs to: the nearest enclosing git work tree, else the directory itself.
+/// The project a directory belongs to: the nearest enclosing git work tree, else the directory itself. The look up stops
+/// at the home folder (`home`, the user's when nil). What may be a project at all is `project(from:)`'s
+/// (ProtectedPlaces.swift).
 public enum ProjectRoot {
-    public static func find(from directory: String, fileManager: FileManager = .default) -> String {
+    public static func find(from directory: String, home: String? = nil, fileManager: FileManager = .default) -> String {
         var url = URL(fileURLWithPath: directory).standardizedFileURL
-        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let home = home.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
         while true {
             // `.git` is a directory in a clone and a file in a worktree or submodule.
             if fileManager.fileExists(atPath: url.appendingPathComponent(".git").path) { return url.path }

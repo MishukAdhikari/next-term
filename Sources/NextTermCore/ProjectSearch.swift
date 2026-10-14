@@ -112,20 +112,29 @@ public enum ProjectSearch {
                                               ".langgraph_api", "mlruns", "mlartifacts", ".ipynb_checkpoints", "wandb"]
 
     /// Files to search: git's tracked and untracked-but-not-ignored files when `root` is in a repository,
-    /// else a walk that skips the usual dependency and build folders. Paths relative to `root`.
-    public static func files(in root: String, git: String?) -> [String] {
-        if let git, let data = GitRunner.run(git, ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], timeout: 30) {
+    /// else a walk that skips the usual dependency and build folders. Paths relative to `root`. Neither goes
+    /// into a protected place below `root` (ProtectedPlaces), so a search from the home folder never sets off
+    /// macOS's prompts for Desktop, Documents or ~/Library; a root inside one is searched as any other.
+    public static func files(in root: String, git: String?, protected: ProtectedPlaces = .current) -> [String] {
+        let walk = protected.walk(from: root)
+        let listing = ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"] + walk.gitPathspecs
+        if let git, let data = GitRunner.run(git, listing, timeout: 30) {
             let paths = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
             if !paths.isEmpty { return Array(Set(paths)).sorted() }
         }
         // Paths relative to the root as the walk itself gives them: comparing a root reached through a
         // symlink (/var is /private/var) with the real paths it reports would lose the folders.
         var result: [String] = []
+        ProtectedPlaces.noteListed(root)
         guard let walker = FileManager.default.enumerator(atPath: root) else { return [] }
         while let path = walker.nextObject() as? String {
             let type = walker.fileAttributes?[.type] as? FileAttributeType
             if type == .typeDirectory {
-                if skippedFolders.contains((path as NSString).lastPathComponent) { walker.skipDescendants() }
+                if skippedFolders.contains((path as NSString).lastPathComponent) || !walk.mayEnter(path) {
+                    walker.skipDescendants()
+                } else {
+                    ProtectedPlaces.noteListed((root as NSString).appendingPathComponent(path))
+                }
                 continue
             }
             guard type == .typeRegular else { continue }

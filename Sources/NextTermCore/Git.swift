@@ -283,13 +283,20 @@ public enum GitRunner {
         return nil
     }
 
-    /// The repository state for the work tree containing `directory`, or nil if there is none.
-    public static func snapshot(for directory: String, git: String, timeout: TimeInterval = 15) -> GitSnapshot? {
+    /// The repository state for the work tree containing `directory`, or nil if there is none. A work tree whose top is
+    /// never a project (dotfiles in ~: ProjectRoot.isNeverRoot) counts as none from a folder inside it, so nothing shown
+    /// there reads the whole home folder; asked for that top itself (a project the user opened there) it is read. Status
+    /// never goes into a protected place below the top (ProtectedPlaces): git is told to leave them out, and does not
+    /// open them.
+    public static func snapshot(for directory: String, git: String, timeout: TimeInterval = 15,
+                                protected: ProtectedPlaces = .current) -> GitSnapshot? {
         guard let top = run(git, ["-C", directory, "rev-parse", "--show-toplevel"], timeout: timeout),
               let root = String(data: top, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !root.isEmpty else { return nil }
-        guard let status = run(git, ["-C", root, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z",
-                                     "--untracked-files=normal", "--ignored=matching"], timeout: timeout) else { return nil }
+        if protected.isNeverRoot(root), canonicalPath(directory) != canonicalPath(root) { return nil }
+        let statusArguments = ["-C", root, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z",
+                               "--untracked-files=normal", "--ignored=matching"] + protected.walk(from: root).gitPathspecs
+        guard let status = run(git, statusArguments, timeout: timeout) else { return nil }
         var snapshot = GitSnapshot.parse(root: root, status: status, numstat: Data())
         // Lines changed against HEAD (staged and unstaged together); before the first commit, against nothing.
         let base = snapshot.head == nil ? emptyTree(git: git, root: root) : "HEAD"

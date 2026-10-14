@@ -14,8 +14,9 @@ public enum Databases {
         FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Application Support/Herd")
     }
 
-    public static func scan(root: String, herdInstalled: Bool = herdIsInstalled) -> DatabaseScan {
-        let context = Context(root: canonicalPath(root), herdInstalled: herdInstalled)
+    /// `protected`: the places the SQLite search never lists below the root (ProtectedPlaces).
+    public static func scan(root: String, herdInstalled: Bool = herdIsInstalled, protected: ProtectedPlaces = .current) -> DatabaseScan {
+        let context = Context(root: canonicalPath(root), herdInstalled: herdInstalled, protected: protected)
         var env = gather(context, live: true)
         if env.isEmpty { env = gather(context, live: false) } // a fresh clone: what .env.example expects
         var all = env + others(context)
@@ -73,6 +74,8 @@ public enum Databases {
     struct Context {
         let root: String
         let herdInstalled: Bool
+        /// The places below the root the SQLite search leaves out.
+        let protected: ProtectedPlaces
         var vercelProject: String?
         var isLaravel = false
         /// A `fly.toml` beside the project's files: its `.internal` hosts are Fly.io's private network.
@@ -80,9 +83,10 @@ public enum Databases {
         var appURLHost: String?
         var hints: [OrmHint] = []
 
-        init(root: String, herdInstalled: Bool) {
+        init(root: String, herdInstalled: Bool, protected: ProtectedPlaces = .current) {
             self.root = root
             self.herdInstalled = herdInstalled
+            self.protected = protected
             let fm = FileManager.default
             isLaravel = fm.fileExists(atPath: root + "/artisan")
             hasFlyConfig = fm.fileExists(atPath: root + "/fly.toml")

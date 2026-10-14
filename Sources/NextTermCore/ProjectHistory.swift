@@ -172,9 +172,11 @@ public struct ProjectHistory: Equatable, Sendable {
     }
 
     /// The ones whose folder still exists. The history keeps the others, so a folder on a drive that is not mounted
-    /// now is listed again when it is back.
-    public func existing(fileManager: FileManager = .default) -> [Entry] {
+    /// now is listed again when it is back. One in a protected place (ProtectedPlaces) is listed without a look, as
+    /// RecentProjects.existing lists it.
+    public func existing(fileManager: FileManager = .default, protected: ProtectedPlaces = .current) -> [Entry] {
         entries.filter { entry in
+            if protected.holds(entry.path) { return true }
             var isDir: ObjCBool = false
             return fileManager.fileExists(atPath: entry.path, isDirectory: &isDir) && isDir.boolValue
         }
