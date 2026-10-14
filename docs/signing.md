@@ -27,17 +27,21 @@ It is the same for every build the certificate signs, so your answers carry over
 - **The first update to a signed release**, from one signed ad hoc, installs as updates always have. Your earlier
   answers were for the ad-hoc build, so macOS may ask once more for each folder or device you had allowed, the first
   time Next Term or a command in it uses it again. On a Mac without a Secure Enclave, where Secrets keeps its key in
-  the login keychain, macOS may also ask once whether Next Term may use that key: choose **Always Allow**. Settings
+  the login keychain, macOS also asks for your login keychain password the first time Secrets opens after this
+  update, and again after every later one. The keychain knows an app by its Apple team ID, and this certificate has
+  none, so it knows each build only by that build's hash. **Always Allow** lasts until the next update. Settings
   macOS never asks about, such as Full Disk Access, stop applying: if you turned one on for Next Term, remove Next
   Term from that list in **System Settings → Privacy & Security** with **−** and add it again with **+**, once.
-- **Every update after that** asks nothing. A copy signed with the certificate installs an update only when it is
-  signed with the same certificate, besides its checksum being signed with the release key.
+- **Every update after that** asks nothing about folders, devices or controlling another app (the keychain question
+  above still comes back). A copy signed with the certificate installs an update only when it is signed with the same
+  certificate, besides its checksum being signed with the release key.
 
 For the first signed release's notes:
 
 > Next Term is now signed with its own certificate, so macOS remembers what you allow (folders, the camera, the
-> microphone and the rest) from one update to the next. After this update it may ask you once more. If you turned on
-> Full Disk Access for Next Term, remove it from that list in System Settings → Privacy & Security and add it again.
+> microphone and controlling other apps) from one update to the next. After this update it may ask you once more. If
+> you turned on Full Disk Access for Next Term, remove it from that list in System Settings → Privacy & Security and
+> add it again.
 
 ## For the maintainer
 
