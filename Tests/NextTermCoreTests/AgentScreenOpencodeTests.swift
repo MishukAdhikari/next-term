@@ -480,7 +480,7 @@ extension AgentScreenOpencodeTests {
         // OpenCode 2.x with nothing to save: Allow once and Reject. 2.x draws each button on a background of its own, the
         // selected one on action.primary.focused and the other on action.primary.base, over a row on a third
         // (permission.tsx, SessionQuestion): two backgrounds, neither the row's, do not say which is selected. So Allow
-        // once is refused, and Reject is Esc (H2 checks this on real OpenCode).
+        // once is refused, and Reject is Esc (a hand check confirms this on real OpenCode).
         let labels = ["Allow once", "Reject"]
         var two = OpencodeScreens.shellPermission2
         two[two.count - 2] = "  ┃   Allow once   Reject                       ctrl+f fullscreen  ⇆ select  enter confirm"
@@ -598,7 +598,7 @@ extension AgentScreenOpencodeTests {
     }
 }
 
-/// The review of U2: a fullscreen prompt on a tall pane, Esc on 2.x's fullscreen prompt, a digit and an answer of your own.
+/// The question form's harder cases: a fullscreen prompt on a tall pane, Esc on 2.x's fullscreen prompt, a digit and an answer of your own.
 extension OpencodeScreens {
     /// `lines` as OpenCode 1.19 colours its question form: the option numbered `selected + 1`, from its number to the end
     /// of its label, on the selected option's background (`backgroundElement`), every other cell on the box's own.

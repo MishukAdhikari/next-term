@@ -139,7 +139,7 @@ extension SelfTest {
         let skills = listed["skills"] as? [[String: Any]] ?? []
         let notes = skills.first { $0["name"] as? String == "notes-helper" }
         check((notes?["agents"] as? [String: String])?["claude-code"] == "loads", "skills mcp: list_skills shows each skill and which agent loads it", "\(listed)")
-        // AE11: OpenCode loads the shared skill and one in its own folder (in this home's ~/.config/opencode, made up
+        // OpenCode loads the shared skill and one in its own folder (in this home's ~/.config/opencode, made up
         // here); Codex doesn't read OpenCode's folder.
         let opencodeFolder = (home as NSString).appendingPathComponent(".config/opencode/skills/oc-notes")
         try? manager.createDirectory(atPath: opencodeFolder, withIntermediateDirectories: true)

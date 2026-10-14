@@ -43,6 +43,11 @@ import Testing
         #expect(lowercase.isEmpty)
     }
 
+    /// The name worktrees, the branch popup and Secrets give the agent a program runs as.
+    @Test func theProgramsAgentNameIsOpenCode() {
+        #expect(AgentName.of(program: "opencode") == "OpenCode")
+    }
+
     @Test func theSettingsSummaryNamesOpenCode() {
         let one = MCPRegistrar.summary(["opencode": .registered], apps: [], home: home)
         #expect(one == "Registered in OpenCode.")
