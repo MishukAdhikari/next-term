@@ -50,6 +50,7 @@ extension SelfTest {
         await secretsReplacedVaultRemarkChecks(base)
         #if DEBUG
         await secretsOtherCopyChecks(base)
+        await secretsTooLargeChecks(base)
         #endif
         secretsPinnedKeychainChecks()
     }
