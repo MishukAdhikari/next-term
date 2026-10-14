@@ -182,6 +182,25 @@ public struct TabListLayout: Equatable, Sendable {
         return top...lowest
     }
 
+    /// Every row's frame, in the rows' own order, with tab `from` and its pane rows moved to tab place `to` and the
+    /// other tabs closed up around it: where the others slide while a tab is dragged, and where it settles.
+    public func frames(movingTab from: Int, to: Int) -> [CGRect] {
+        guard from != to, blocks.indices.contains(from), blocks.indices.contains(to) else { return frames }
+        var order: [Int] = Array(blocks.indices)
+        order.remove(at: from)
+        order.insert(from, at: to)
+        var moved: [CGRect] = frames
+        var y: CGFloat = top
+        for tab in order {
+            for row in blocks[tab] {
+                let frame: CGRect = frames[row]
+                moved[row] = CGRect(x: frame.minX, y: y, width: frame.width, height: frame.height)
+                y += frame.height
+            }
+        }
+        return moved
+    }
+
     /// How far each event of a drag scrolls the list (negative: up), with the pointer at `pointerY`: nothing
     /// outside the bands along its top and bottom, faster toward the edge, the fastest at it and past it. Nothing
     /// past either end of the rows.
@@ -194,6 +213,17 @@ public struct TabListLayout: Equatable, Sendable {
             return fromTop < Self.autoscrollBand && canGoUp ? -Self.autoscrollStep(fromTop) : 0
         }
         return fromBottom < Self.autoscrollBand && canGoDown ? Self.autoscrollStep(fromBottom) : 0
+    }
+
+    /// Where the visible part's top goes after one event of a drag held at `pointerY`: `autoscrollSpeed` further,
+    /// never past either end of the rows. nil when it does not move, so a drag held still away from the edges does
+    /// nothing.
+    public func autoscrolled(pointerY: CGFloat, visible: CGRect) -> CGFloat? {
+        let speed: CGFloat = autoscrollSpeed(pointerY: pointerY, visible: visible)
+        guard speed != 0 else { return nil }
+        let most: CGFloat = max(0, contentHeight - visible.height)
+        let next: CGFloat = min(most, max(0, visible.minY + speed))
+        return abs(next - visible.minY) < 0.5 ? nil : next
     }
 
     private static func autoscrollStep(_ distance: CGFloat) -> CGFloat {

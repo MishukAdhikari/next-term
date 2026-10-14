@@ -73,16 +73,24 @@ final class TabListView: NSView {
     private var revealPending: Bool?
     private var toolTipsScheduled = false
 
-    /// What `update` was last given while a row was dragged: the views are in drag order, not the model's, until
-    /// the drop, which applies it.
+    /// What `update` was last given while a row was dragged: the rows show in the drag's order, not the model's,
+    /// until the drop, which applies it.
     struct Update {
         var rows: [TabListRow]
         var selectedIndex: Int
         var density: TabListDensity
         var collapsed: Bool
     }
-    var isDragging = false
+    /// A tab's row being dragged, and its edge being dragged (TabListDrag.swift); set by the drags alone.
+    var rowDrag: TabListRowDrag?
+    var widthDrag: TabListWidthDrag?
+    var isDragging: Bool { rowDrag != nil }
     var pendingUpdate: Update?
+    /// The edge that drags the width, along the side that meets the terminal.
+    let divider = TabListDivider()
+    /// The list's width, which the window activates with its other constraints and sets to what shows; while the
+    /// edge is dragged, the drag moves it.
+    private(set) lazy var widthConstraint: NSLayoutConstraint = widthAnchor.constraint(equalToConstant: openWidth)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -130,6 +138,8 @@ final class TabListView: NSView {
             chip.action = #selector(chipClicked(_:))
             addSubview(chip) // over the rows
         }
+        divider.list = self
+        addSubview(divider) // over everything, so its strip always takes the press
 
         setAccessibilityElement(true)
         setAccessibilityRole(.tabGroup)
@@ -145,11 +155,13 @@ final class TabListView: NSView {
     // MARK: update
 
     /// Called several times a second: only what changed is touched.
-    func update(rows newRows: [TabListRow], selectedIndex newSelected: Int, density newDensity: TabListDensity, collapsed newCollapsed: Bool) {
+    func update(rows newRows: [TabListRow], selectedIndex newSelected: Int, density newDensity: TabListDensity, collapsed fedCollapsed: Bool) {
         if isDragging {
-            pendingUpdate = Update(rows: newRows, selectedIndex: newSelected, density: newDensity, collapsed: newCollapsed)
+            pendingUpdate = Update(rows: newRows, selectedIndex: newSelected, density: newDensity, collapsed: fedCollapsed)
             return
         }
+        // While its edge is dragged the list shows the form the drag gives it; the window learns it on release.
+        let newCollapsed: Bool = widthDrag == nil ? fedCollapsed : isCollapsed
         let rowsChanged: Bool = newRows.count != rows.count || zip(newRows, rows).contains { new, old in new.key != old.key || new.kind != old.kind }
         if rowsChanged { match(newRows) }
         // A server mark before some title moves every title of its kind over, so they line up; with two lines a
@@ -226,9 +238,20 @@ final class TabListView: NSView {
         if !isCollapsed { moreButton.isHidden = true }
     }
 
+    /// Collapsed or open as the edge's drag shows it, before the window is told on release.
+    func showsCollapsed(_ collapsed: Bool) {
+        guard collapsed != isCollapsed else { return }
+        rowViews.forEach { $0.collapsed = collapsed }
+        isCollapsed = collapsed
+        collapsedChanged()
+        revealPending = false
+        needsLayout = true
+    }
+
     private func sideChanged() {
         rowViews.forEach { $0.side = side }
         updateChevron()
+        needsLayout = true // the edge goes to the other side
     }
 
     /// The chevron points the way the list opens: toward the terminal.
@@ -252,6 +275,13 @@ final class TabListView: NSView {
             scrollView.tile() // its content size, which the rows' width comes from, at once
         }
         if isCollapsed { layoutColumn() } else { layoutRows() }
+        let edge: CGRect = side.dividerFrame(width: bounds.width, height: bounds.height)
+        if divider.frame != edge {
+            divider.frame = edge
+            window?.invalidateCursorRects(for: divider)
+        } else {
+            divider.refreshCursor()
+        }
         CATransaction.commit()
         if let animated = revealPending {
             revealPending = nil
@@ -268,9 +298,11 @@ final class TabListView: NSView {
         rowLayout = layout
         let size = NSSize(width: width, height: max(layout.contentHeight, scrollView.contentSize.height))
         if document.frame.size != size { document.setFrameSize(size) }
+        // While a tab is dragged the others keep the places they slid to, around the one it would drop into.
+        let frames: [CGRect] = rowDrag.map { (drag: TabListRowDrag) -> [CGRect] in layout.frames(movingTab: drag.from, to: drag.to) } ?? layout.frames
         for (index, view) in rowViews.enumerated() where !view.isDragging {
             view.isHidden = false
-            view.frame = layout.frames[index]
+            view.frame = frames[index]
         }
         chevron.isHidden = true
         moreButton.isHidden = true
@@ -453,7 +485,9 @@ final class TabListView: NSView {
             view.beginRename()
             return
         }
+        // Selected on the press, as on the top bar; held and moved, it drags.
         delegate?.tabList(self, didSelect: place.tab)
+        trackDrag(of: view, from: event)
     }
 
     /// VoiceOver's press: as a click.
@@ -525,9 +559,12 @@ final class TabListView: NSView {
     #if DEBUG
     /// How often the list laid out, for the self-test's budget.
     private(set) var layoutCount = 0
+    /// The last tab drag's events, timed (TabListDrag.swift).
+    var dragTimings: [TabListDragTiming] = []
 
     func resetCounters() {
         layoutCount = 0
+        dragTimings = []
         rowViews.forEach { $0.resetCounters() }
     }
     #endif

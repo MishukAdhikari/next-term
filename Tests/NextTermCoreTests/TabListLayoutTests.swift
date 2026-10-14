@@ -131,6 +131,42 @@ import Testing
         #expect(list.dragRange(tab: 0) == 4...108)
     }
 
+    @Test func whileATabIsDraggedTheOthersCloseUpAroundIt() {
+        // T0 (4–32), T1 split (32–108), T2 (108–136).
+        let list = layout([.tab] + split2 + [.tab])
+        // T0 dropped after T1: T1 and its panes move up a row, T0 goes under them, T2 stays.
+        let down = list.frames(movingTab: 0, to: 1)
+        #expect(down.map(\.minY) == [80, 4, 32, 56, 108])
+        #expect(down.map(\.height) == list.frames.map(\.height))
+        #expect(down.allSatisfy { $0.minX == 0 && $0.width == 220 })
+        // T1 dropped first: its block at the top, T0 under it.
+        #expect(list.frames(movingTab: 1, to: 0).map(\.minY) == [80, 4, 32, 56, 108])
+        // T1 dropped last: T2 comes up under T0.
+        #expect(list.frames(movingTab: 1, to: 2).map(\.minY) == [4, 60, 88, 112, 32])
+        // At rest, or no such tab: where they are.
+        #expect(list.frames(movingTab: 2, to: 2) == list.frames)
+        #expect(list.frames(movingTab: 5, to: 0) == list.frames)
+        #expect(list.frames(movingTab: 0, to: 7) == list.frames)
+    }
+
+    @Test func aTabSettlesWhereItsRowsWouldBeInTheNewOrder() {
+        let kinds: [TabListRow.Kind] = [.tab] + split2 + [.tab] + split2
+        let list = layout(kinds)
+        // Each row keyed by its place, to follow it through a move.
+        let rows: [TabListRow] = kinds.enumerated().map { (place: Int, kind: TabListRow.Kind) -> TabListRow in
+            TabListRow(key: String(place), kind: kind, title: "")
+        }
+        for from in 0..<list.tabCount {
+            for to in 0..<list.tabCount {
+                // A row's moved frame is its frame among the rows in their new order.
+                let order: [Int] = TabListRows.moving(rows, tab: from, to: to).compactMap { (row: TabListRow) -> Int? in Int(row.key) }
+                let reordered = layout(order.map { kinds[$0] })
+                let moved = list.frames(movingTab: from, to: to)
+                for (place, row) in order.enumerated() { #expect(moved[row] == reordered.frames[place]) }
+            }
+        }
+    }
+
     @Test func dragsNearTheEdgesScroll() {
         let list = layout(plain(14)) // 396 high
         let shown = visible(70, 256) // 70 to 326
@@ -159,6 +195,21 @@ import Testing
         let short = layout(plain(3))
         #expect(short.autoscrollSpeed(pointerY: 0, visible: visible(0, 500)) == 0)
         #expect(short.autoscrollSpeed(pointerY: 500, visible: visible(0, 500)) == 0)
+    }
+
+    @Test func eachEventOfADragHeldAtAnEdgeScrollsOnUpToTheEnd() {
+        let list = layout(plain(14)) // 396 high; with 256 in view it scrolls to 140 at most
+        #expect(list.autoscrolled(pointerY: 326, visible: visible(70, 256)) == 82)
+        #expect(list.autoscrolled(pointerY: 76, visible: visible(70, 256)) == 61)
+        // Away from the edges: nothing moves.
+        #expect(list.autoscrolled(pointerY: 198, visible: visible(70, 256)) == nil)
+        // Near either end, no further than it.
+        #expect(list.autoscrolled(pointerY: 396, visible: visible(135, 256)) == 140)
+        #expect(list.autoscrolled(pointerY: 5, visible: visible(5, 256)) == 0)
+        #expect(list.autoscrolled(pointerY: 396, visible: visible(140, 256)) == nil)
+        #expect(list.autoscrolled(pointerY: 0, visible: visible(0, 256)) == nil)
+        // A list that fits never scrolls.
+        #expect(layout(plain(3)).autoscrolled(pointerY: 500, visible: visible(0, 500)) == nil)
     }
 
     // MARK: the edge chips

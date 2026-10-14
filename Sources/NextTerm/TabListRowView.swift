@@ -66,7 +66,12 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     /// A tab row: its tab is the selected one. A pane row: its tab is.
     private var selected = false
     private var hovering = false { didSet { if hovering != oldValue { refresh() } } }
-    var isDragging = false { didSet { alphaValue = isDragging ? 0.85 : 1; layer?.zPosition = isDragging ? 10 : 0 } }
+    var isDragging = false {
+        didSet {
+            alphaValue = isDragging ? TabListMotion.draggedAlpha : 1
+            layer?.zPosition = isDragging ? TabListMotion.draggedZ : 0
+        }
+    }
 
     var density: TabListDensity = .oneLine { didSet { if density != oldValue { needsLayout = true } } }
     var collapsed = false {

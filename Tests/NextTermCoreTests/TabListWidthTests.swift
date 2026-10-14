@@ -49,6 +49,38 @@ import Testing
         #expect(TabListWidth.dragged(from: 300, by: -400, side: .right) == .width(400))
     }
 
+    @Test func aDragShowsItsWidthAndKeepsItWhenLetGo() {
+        #expect(TabListWidth.Drag.width(300).shownWidth == 300)
+        #expect(TabListWidth.Drag.collapsed.shownWidth == 24)
+        let open = TabListWidth.Drag.width(300).kept(openWidth: 220)
+        #expect(open.width == 300 && !open.collapsed)
+        // Snapped collapsed: it keeps the width it had, to open at again.
+        let collapsed = TabListWidth.Drag.collapsed.kept(openWidth: 220)
+        #expect(collapsed.width == 220 && collapsed.collapsed)
+        #expect(TabListWidth.Drag.collapsed.kept(openWidth: 50).width == 160)
+    }
+
+    @Test func aDragLeavesTheTerminalItsRoom() {
+        // 640 across leaves room for 400; 560 for 320; 400 for 160; under that, none.
+        #expect(TabListWidth.widest(paneWidth: 640) == 400)
+        #expect(TabListWidth.widest(paneWidth: 1200) == 400)
+        #expect(TabListWidth.widest(paneWidth: 560) == 320)
+        #expect(TabListWidth.widest(paneWidth: 560, terminalMinimum: 300) == 260)
+        #expect(TabListWidth.widest(paneWidth: 0) == 400) // not measured: no limit
+        let widest = TabListWidth.widest(paneWidth: 560)
+        #expect(TabListWidth.dragged(from: 220, by: 300, side: .left, widest: widest) == .width(320))
+        #expect(TabListWidth.dragged(from: 220, by: -300, side: .right, widest: widest) == .width(320))
+        #expect(TabListWidth.dragged(from: 220, by: 50, side: .left, widest: widest) == .width(270))
+        // Dragged as wide as it goes, the list is still open once let go.
+        #expect(!TabListWidth.shown(paneWidth: 560, width: 320, userCollapsed: false).collapsed)
+        // The snap is the same whatever the room.
+        #expect(TabListWidth.dragged(from: 220, by: -110, side: .left, widest: widest) == .collapsed)
+        // No room to open: a drag out of the column of marks leaves it collapsed.
+        let none = TabListWidth.widest(paneWidth: 380)
+        #expect(TabListWidth.dragged(from: TabListWidth.collapsedWidth, by: 200, side: .left, widest: none) == .collapsed)
+        #expect(TabListWidth.dragged(from: TabListWidth.collapsedWidth, by: -200, side: .right, widest: none) == .collapsed)
+    }
+
     @Test func aDoubleClickCollapsesAndOpensAtTheSameWidth() {
         let collapsed = TabListWidth.toggled(width: 300, shownCollapsed: false)
         #expect(collapsed.width == 300 && collapsed.collapsed)
@@ -110,6 +142,11 @@ import Testing
         // At 400, only narrower: away from it.
         #expect(TabListWidth.cursor(width: 400, collapsed: false, side: .left) == .left)
         #expect(TabListWidth.cursor(width: 400, collapsed: false, side: .right) == .right)
+        // Where the terminal leaves less room, that is the widest.
+        #expect(TabListWidth.cursor(width: 320, collapsed: false, side: .left, widest: 320) == .left)
+        #expect(TabListWidth.cursor(width: 320, collapsed: false, side: .right, widest: 320) == .right)
+        #expect(TabListWidth.cursor(width: 300, collapsed: false, side: .left, widest: 320) == .leftRight)
+        #expect(TabListWidth.cursor(width: 400, collapsed: false, side: .left, widest: 900) == .left)
     }
 }
 

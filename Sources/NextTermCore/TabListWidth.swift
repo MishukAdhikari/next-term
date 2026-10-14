@@ -27,6 +27,23 @@ public enum TabListWidth {
     public enum Drag: Equatable, Sendable {
         case collapsed
         case width(CGFloat)
+
+        /// How wide the list shows, while the edge is dragged here.
+        public var shownWidth: CGFloat {
+            switch self {
+            case .collapsed: return TabListWidth.collapsedWidth
+            case .width(let width): return width
+            }
+        }
+
+        /// What the window keeps when the edge is let go here: the width the list opens at, and whether it is
+        /// collapsed. Collapsed, it keeps `openWidth`, the width it had before the drag, to open at again.
+        public func kept(openWidth: CGFloat) -> (width: CGFloat, collapsed: Bool) {
+            switch self {
+            case .collapsed: return (TabListWidth.clamp(openWidth), true)
+            case .width(let width): return (width, false)
+            }
+        }
     }
 
     /// The list as a drag leaves it at `width`: collapsed under `snapBelow`, else within `range`. Shown live while
@@ -36,10 +53,23 @@ public enum TabListWidth {
     }
 
     /// The list as a drag leaves it: pressed at `pressWidth` (the collapsed width when it was collapsed), the
-    /// pointer moved `dx` across, rightward positive. The side says which way widens it.
-    public static func dragged(from pressWidth: CGFloat, by dx: CGFloat, side: TabListSide) -> Drag {
+    /// pointer moved `dx` across, rightward positive. The side says which way widens it. Never wider than
+    /// `widest` (see `widest(paneWidth:)`); with no room to open at all, it stays collapsed.
+    public static func dragged(from pressWidth: CGFloat, by dx: CGFloat, side: TabListSide,
+                               widest: CGFloat = TabListWidth.range.upperBound) -> Drag {
         let width: CGFloat = pressWidth + side.widthChange(pointerMoved: dx)
-        return afterDrag(width)
+        let drag: Drag = afterDrag(width)
+        guard case .width(let open) = drag, open > widest else { return drag }
+        return widest < range.lowerBound ? .collapsed : .width(widest)
+    }
+
+    /// The widest a drag can make the list in a terminal pane `paneWidth` across (the list and the terminal
+    /// together): 400, or less where the terminal beside it would be left narrower than `terminalMinimum`, which
+    /// would collapse the list for want of room the moment it is let go. Under 160 there is no room to open it. A
+    /// pane not measured yet limits nothing.
+    public static func widest(paneWidth: CGFloat, terminalMinimum: CGFloat = TabListWidth.terminalMinimum) -> CGFloat {
+        guard paneWidth > 0 else { return range.upperBound }
+        return min(range.upperBound, paneWidth - terminalMinimum)
     }
 
     /// A double-click on the edge, or Collapse Tab List and Expand Tab List: collapsed if it shows open, open if it
@@ -82,12 +112,15 @@ public enum TabListWidth {
     }
 
     /// Which way the edge's resize cursor points: both ways between the ends (in from 160 still collapses it), only
-    /// toward the terminal while collapsed, only away from it at the widest.
-    public static func cursor(width: CGFloat, collapsed: Bool, side: TabListSide) -> TabListCursor {
+    /// toward the terminal while collapsed, only away from it at the widest: 400, or `widest` where the terminal
+    /// leaves less room.
+    public static func cursor(width: CGFloat, collapsed: Bool, side: TabListSide,
+                              widest: CGFloat = TabListWidth.range.upperBound) -> TabListCursor {
         let widens: TabListCursor = side.terminalIsLeft ? .left : .right
         let narrows: TabListCursor = side.terminalIsLeft ? .right : .left
         if collapsed { return widens }
-        return width >= range.upperBound ? narrows : .leftRight
+        let most: CGFloat = max(range.lowerBound, min(range.upperBound, widest))
+        return width >= most ? narrows : .leftRight
     }
 }
 
