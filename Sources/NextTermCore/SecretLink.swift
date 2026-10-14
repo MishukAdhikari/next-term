@@ -6,13 +6,16 @@ import Foundation
 /// user's hands set a link; Next Term never fetches it, and opening it is the browser's job.
 ///
 /// In order, stopping at the first refusal:
-/// 1. trimmed, one address with no space or control character, at most 2048 characters;
-/// 2. `https`, or `http` only to this Mac; no user or password; a plain ASCII host with no `xn--` label; no `.` or `..`
-///    step in the path; then `SafeWebLink.isAllowed`, the gate every web link Next Term opens passes;
+/// 1. trimmed, one address with no space or control character, at most 2048 characters, each `%` escape decoding as
+///    UTF-8 (one that doesn't would keep the text from being decoded for steps 3 and 4);
+/// 2. `https`, or `http` only to this Mac's loopback (`localhost`, `127.x.x.x`, `[::1]`; not a `.test` or `.localhost`
+///    name, which DNS answers); no user or password; a plain ASCII host with no `xn--` label; no `.` or `..` step in
+///    the path; then `SafeWebLink.isAllowed`, the gate every web link Next Term opens passes;
 /// 3. no token shape masking knows (`MCPRedaction.tokens`), as typed, as stored or percent-decoded;
 /// 4. no stored value (`mask`, which the app gives as the current mask's finder), and not the value being saved;
-/// 5. no query or fragment parameter whose name is a secret's (`SecretName.isSecret`: `token`, `api_key`,
-///    `access_token`, but not `authuser`), or is `sig`, `signature`, `code` or `key`.
+/// 5. no query, fragment or path (`;name=`) parameter whose name is a secret's (`SecretName.isSecret`: `token`,
+///    `api_key`, `access_token`, but not `authuser`), has a `sig` or `signature` part (`X-Amz-Signature`), or is
+///    `code`, `key` or `pw`.
 ///
 /// A key in the link says so ahead of its parameter's name: `?token=` and a token's shape is "can't hold a key".
 public enum SecretLink {
@@ -59,7 +62,8 @@ public enum SecretLink {
         case .failure(let refusal): return .failure(refusal)
         }
         let written = url.absoluteString
-        let decoded = written.removingPercentEncoding ?? written
+        // Never the undecoded text in its place: one bad escape would let a key with an escaped character through.
+        guard let decoded = written.removingPercentEncoding else { return .failure(.notALink) }
         var texts: [String] = [typed]
         for candidate in [written, decoded] where !texts.contains(candidate) { texts.append(candidate) }
         let shaped = texts.contains { (candidate: String) -> Bool in holdsTokenShape(candidate) }
@@ -99,7 +103,10 @@ public enum SecretLink {
 
 extension SecretLink {
     /// The address checked and tidied: the scheme and host lower-cased, letters from another script in the path, query
-    /// or fragment percent-encoded, and `https://` before a bare host with a dot (`dashboard.example.com/apikeys`).
+    /// or fragment percent-encoded, and `https://` before a bare host with a dot (`dashboard.example.com/apikeys`), or
+    /// `http://` before a bare loopback host (`localhost:3000/settings`). Every `%` escape must decode as UTF-8, and
+    /// URLComponents must read the path, query and fragment back as they were written: it re-encodes every `%` of a
+    /// part with a bad escape or a second `#`, which would hide an escaped key from the checks.
     static func parsed(_ typed: String) -> Result<URL, Refusal> {
         guard !typed.isEmpty else { return .failure(.notALink) }
         guard typed.unicodeScalars.count <= maxLength else { return .failure(.tooLong) }
@@ -120,33 +127,50 @@ extension SecretLink {
         guard let rest = String(full[end...]).addingPercentEncoding(withAllowedCharacters: restCharacters) else {
             return .failure(.notALink)
         }
+        guard rest.removingPercentEncoding != nil else { return .failure(.notALink) }
         let encoded = String(full[..<end]) + rest
         guard encoded.utf8.count <= maxLength else { return .failure(.tooLong) }
-        guard let parts = URLComponents(string: encoded) else { return .failure(.notALink) }
+        guard let parts = URLComponents(string: encoded), tail(of: parts) == rest else { return .failure(.notALink) }
         return checked(parts, bare: scheme == nil)
     }
 
+    /// The path, query and fragment as URLComponents reads them, written out again.
+    private static func tail(of parts: URLComponents) -> String {
+        var text = parts.percentEncodedPath
+        if let query = parts.percentEncodedQuery { text += "?" + query }
+        if let fragment = parts.percentEncodedFragment { text += "#" + fragment }
+        return text
+    }
+
+    /// This Mac's loopback, the only place plain `http` goes: `localhost`, `127.0.0.0/8` as four numbers, `[::1]`.
+    /// `SafeWebLink` also lets a project's links use `*.localhost` and `*.test`, but those names are looked up, and a
+    /// network's DNS can answer for them with a sign-in page that has no TLS.
+    static func isLoopback(_ host: String) -> Bool {
+        host == "localhost" || host == "[::1]" || DatabaseEnvironment.isLoopbackIPv4(host)
+    }
+
     /// The parts read back: no user or password, a host a link may name, a port from 1 to 65535, `http` only to this
-    /// Mac, a path that never steps out; then the address written again from them and passed through
-    /// `SafeWebLink.isAllowed`.
+    /// Mac's loopback (which a bare loopback host is given), a path that never steps out; then the address written
+    /// again from them and passed through `SafeWebLink.isAllowed`.
     private static func checked(_ parts: URLComponents, bare: Bool) -> Result<URL, Refusal> {
         guard parts.percentEncodedUser == nil, parts.percentEncodedPassword == nil else {
             return .failure(.userOrPassword)
         }
-        guard let scheme = parts.scheme?.lowercased(), let raw = parts.percentEncodedHost, !raw.isEmpty else {
+        guard let given = parts.scheme?.lowercased(), let raw = parts.percentEncodedHost, !raw.isEmpty else {
             return .failure(.notALink)
         }
         guard raw != "0.0.0.0", let host = SafeWebLink.checkedHost(raw) else { return .failure(.host) }
         let named: Bool = host.contains(".") || host == "localhost" || host == "[::1]"
         guard SafeWebLink.isPort(parts.port), !bare || named else { return .failure(.notALink) }
+        let loopback: Bool = isLoopback(host)
+        let scheme: String = bare && loopback ? "http" : given
+        guard scheme == "https" || loopback else { return .failure(.scheme) }
         guard SafeWebLink.mayOpen(scheme: scheme, host: host) else { return .failure(.scheme) }
         let path = parts.percentEncodedPath
         guard !SafeWebLink.isUnsafe(path: path) else { return .failure(.path) }
         var written = scheme + "://" + host
         if let port = parts.port { written += ":" + String(port) }
-        written += path
-        if let query = parts.percentEncodedQuery { written += "?" + query }
-        if let fragment = parts.percentEncodedFragment { written += "#" + fragment }
+        written += tail(of: parts)
         guard written.utf8.count <= maxLength else { return .failure(.tooLong) }
         guard let url = URL(string: written), SafeWebLink.isAllowed(url) else { return .failure(.notALink) }
         return .success(url)
@@ -177,15 +201,25 @@ extension SecretLink {
 // MARK: - Keys in a link
 
 extension SecretLink {
-    /// Parameter names refused although no secret word is in them: a signature, an OAuth code, a bare key.
-    static let refusedNames: Set<String> = ["sig", "signature", "code", "key"]
+    /// Parameter names refused although no secret word is in them: a signature, an OAuth code, a bare key, a password.
+    static let refusedNames: Set<String> = ["sig", "signature", "code", "key", "pw"]
 
-    /// Whether the query or the fragment names a parameter as a secret's. Both are read as `name=value` pieces split at
-    /// `&`, `;` and `?`, so a hash route's own query (`#/keys?token=…`) and OAuth's `#access_token=…` are read too. A
-    /// piece with no `=` (`#/settings/api-keys`) names nothing.
+    /// Parts of a name (`SecretName.segments`) that make it a signature's: `X-Amz-Signature`, `X-Goog-Signature`.
+    static let signatureParts: Set<String> = ["SIG", "SIGNATURE"]
+
+    /// Whether the query, the fragment or a path segment's parameters name one as a secret's. The query and fragment
+    /// are read as `name=value` pieces split at `&`, `;` and `?`, so a hash route's own query (`#/keys?token=…`) and
+    /// OAuth's `#access_token=…` are read too; a path segment from its first `;` (`/a;token=…`). A piece with no `=`
+    /// (`#/settings/api-keys`) names nothing.
     static func hasSecretParameter(_ url: URL) -> Bool {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return true }
-        let places: [String] = [parts.percentEncodedQuery, parts.percentEncodedFragment].compactMap { $0 }
+        let segments = parts.percentEncodedPath.split(separator: "/")
+        let pathPlaces: [String] = segments.compactMap { (segment: Substring) -> String? in
+            guard let semicolon = segment.firstIndex(of: ";") else { return nil }
+            return String(segment[semicolon...])
+        }
+        let after: [String] = [parts.percentEncodedQuery, parts.percentEncodedFragment].compactMap { $0 }
+        let places: [String] = after + pathPlaces
         return places.contains { (place: String) -> Bool in
             parameterNames(in: place).contains { (name: String) -> Bool in isSecretParameter(name) }
         }
@@ -202,7 +236,10 @@ extension SecretLink {
 
     static func isSecretParameter(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        return refusedNames.contains(trimmed.lowercased()) || SecretName.isSecret(trimmed)
+        let parts: [String] = SecretName.segments(of: trimmed)
+        let signature: Bool = parts.contains { (part: String) -> Bool in signatureParts.contains(part) }
+        let refused: Bool = refusedNames.contains(trimmed.lowercased())
+        return refused || signature || SecretName.isSecret(trimmed)
     }
 
     /// Whether a text holds a token shape masking hides.

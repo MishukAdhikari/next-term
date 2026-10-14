@@ -233,6 +233,22 @@ private let newMembers = ["link", "linkFrom", "valueSet", "remindDays", "retired
         #expect(f.vault.file == before)
     }
 
+    /// The Edit sheet sends its field's text each time: the same link again keeps where it came from, unless a
+    /// source is given; a changed link is the user's.
+    @Test func savingTheSameLinkAgainKeepsWhereItCameFrom() throws {
+        let f = try FactsFixture(link: "https://dashboard.example.com/apikeys", linkFrom: .suggested)
+        _ = try f.vault.edit("SOURCE_KEY", purpose: "from the sheet", link: "https://dashboard.example.com/apikeys")
+        #expect(f.vault.index.entries[0].linkFrom == .suggested)
+        // As typed, before it is tidied, it is still the same link.
+        _ = try f.vault.edit("SOURCE_KEY", link: " Dashboard.Example.com/apikeys ")
+        #expect(f.vault.index.entries[0].link == "https://dashboard.example.com/apikeys")
+        #expect(f.vault.index.entries[0].linkFrom == .suggested)
+        _ = try f.vault.edit("SOURCE_KEY", link: "https://dashboard.example.com/apikeys", linkFrom: .imported)
+        #expect(f.vault.index.entries[0].linkFrom == .imported)
+        _ = try f.vault.edit("SOURCE_KEY", link: "https://dashboard.example.com/apikeys/new")
+        #expect(f.vault.index.entries[0].linkFrom == .user)
+    }
+
     @Test func theReminderIsFrom1To3650Days() throws {
         let f = try FactsFixture(remindDays: 90)
         #expect(f.vault.index.entries[0].remindDays == 90)
@@ -279,6 +295,38 @@ private let newMembers = ["link", "linkFrom", "valueSet", "remindDays", "retired
             #expect(throws: SecretVault.Failure.tampered, "\(label)") { _ = try f.unlock(file) }
             #expect(throws: SecretVault.Failure.tampered, "\(label)") { _ = try SecretVault.index(from: file) }
         }
+    }
+
+    @Test func aStoredLinkHasAtMost2048Bytes() throws {
+        let f = try FactsFixture()
+        let start = "https://x.example.com/"
+        let longest = start + String(repeating: "a", count: SecretLink.maxLength - start.utf8.count)
+        let fits = try f.edited(f.file) { $0["link"] = longest }
+        #expect(try f.unlock(fits).index.entries[0].link == longest)
+        let over = try f.edited(f.file) { $0["link"] = longest + "a" }
+        #expect(throws: SecretVault.Failure.tampered) { _ = try f.unlock(over) }
+        // Bytes, not characters: 2,047 characters with one of two bytes is over.
+        let wide = String(longest.dropLast()) + "\u{E9}"
+        let overByOne = try f.edited(f.file) { $0["link"] = wide }
+        #expect(throws: SecretVault.Failure.tampered) { _ = try f.unlock(overByOne) }
+    }
+
+    /// Every save is checked as the read checks it, so no write path can save a file this build would then read as
+    /// changed outside Next Term (and offer Start Over); it is refused and nothing is saved.
+    @Test func aSaveTheReadWouldRefuseIsRefused() throws {
+        let f = try FactsFixture()
+        var index = f.vault.index
+        let marks = index.entries[0].marks
+        let first = try #require(marks.first)
+        let until = FactsFixture.made.addingTimeInterval(86_400)
+        index.entries[0].retired = SecretVault.Retired(marks: marks, until: until)
+        try SecretVault.checkReadable(index)
+        let most = Array(repeating: first, count: SecretVault.maxRetiredMarks)
+        index.entries[0].retired = SecretVault.Retired(marks: most, until: until)
+        try SecretVault.checkReadable(index)
+        index.entries[0].retired = SecretVault.Retired(marks: most + [first], until: until)
+        #expect(throws: SecretVault.Failure.unreadable) { try SecretVault.checkReadable(index) }
+        #expect(SecretVault.Failure.unreadable.errorDescription?.hasSuffix("so nothing was saved.") == true)
     }
 
     @Test func aLinkTheRulesRefuseStillReads() throws {

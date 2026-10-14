@@ -303,6 +303,9 @@ public final class SecretVault {
         case badLink(SecretLink.Refusal)
         /// A rotation reminder outside `remindRange`.
         case badReminder
+        /// The change would save an index the read refuses (`isWellFormed`), so the file would then read as changed
+        /// outside Next Term; nothing was saved.
+        case unreadable
 
         public var errorDescription: String? {
             switch self {
@@ -331,6 +334,8 @@ public final class SecretVault {
                     + "use, then try again."
             case .badLink(let refusal): return refusal.sentence
             case .badReminder: return "A reminder to rotate a key is from 1 to 3,650 days."
+            case .unreadable:
+                return "This change would leave Secrets’ file in a shape Next Term can’t read, so nothing was saved."
             }
         }
     }
@@ -605,7 +610,8 @@ public final class SecretVault {
     /// Renames a key, changes what it is for, its link, its reminder, or any of them. A new name seals the value again,
     /// since the name is in its seal; the others need no new seal. For `link` and `remindDays`, nil leaves them as they
     /// are and `.some(nil)` clears them (so does an empty link); a new link is checked as `add` checks one, with
-    /// `linkFrom` (`user` unless given). When the value was set stays as it is.
+    /// `linkFrom` (`user` unless given). The same link saved again with no `linkFrom`, as the Edit sheet sends its
+    /// field each time, keeps where it came from. When the value was set stays as it is.
     public func edit(_ name: String, newName: String? = nil, purpose: String? = nil, purposeBy: PurposeBy? = nil,
                      link: String?? = nil, linkFrom: LinkFrom? = nil, remindDays: Int?? = nil,
                      now: Date = Date()) throws -> Data {
@@ -613,8 +619,11 @@ public final class SecretVault {
         var (position, entry) = try find(name)
         if let link {
             let source = try Self.checkedLink(link, from: linkFrom, value: nil)
-            entry.link = source?.link
-            entry.linkFrom = source?.from
+            let same: Bool = linkFrom == nil && source != nil && source?.link == entry.link
+            if !same {
+                entry.link = source?.link
+                entry.linkFrom = source?.from
+            }
         }
         if let remindDays {
             entry.remindDays = try Self.checkedReminder(remindDays)
@@ -793,7 +802,8 @@ public final class SecretVault {
     /// that grows past `cap` (`writeCap` unless given) included, the index and the file are left as they were. A file
     /// past the cap already (written before there was one, or grown by upkeep) still takes a change that doesn't make
     /// it larger, such as a leaked key replaced in place. Retired marks whose date has passed by `now` go, so the file
-    /// shrinks.
+    /// shrinks. The index is checked as the read checks it first (`checkReadable`), so no change saves a file that
+    /// would then read as changed outside Next Term.
     private func written(_ key: SymmetricKey, cap: Int? = nil, now: Date = Date(),
                          _ change: () throws -> Void) throws -> Data {
         let before = index
@@ -803,6 +813,7 @@ public final class SecretVault {
                 guard let until = index.entries[position].retired?.until, until <= now else { continue }
                 index.entries[position].retired = nil
             }
+            try Self.checkReadable(index)
             let new = try Self.encodeFile(index, key: key)
             let fits: Bool = new.count <= cap ?? writeCap
             guard fits || new.count <= file.count else { throw Failure.full }
@@ -928,6 +939,11 @@ public final class SecretVault {
             throw Failure.tampered
         }
         return (file, index)
+    }
+
+    /// Refuses an index the read would refuse (`unreadable`): what a write checks before it saves.
+    static func checkReadable(_ index: Index) throws {
+        guard isWellFormed(index) else { throw Failure.unreadable }
     }
 
     static func isWellFormed(_ index: Index) -> Bool {
