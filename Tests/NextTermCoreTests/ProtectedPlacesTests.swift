@@ -59,15 +59,18 @@ final class FixtureHome {
         fixture.folder("Code/app/src/deep")
         fixture.folder("Code/app/.git")
         fixture.folder("Library/Caches")
-        #expect(ProjectRoot.project(from: home, home: home) == nil)
-        #expect(ProjectRoot.project(from: home + "/", home: home) == nil)
-        #expect(ProjectRoot.project(from: "/", home: home) == nil)
-        #expect(ProjectRoot.project(from: "/Volumes", home: home) == nil)
-        #expect(ProjectRoot.project(from: home + "/Library", home: home) == nil)
-        #expect(ProjectRoot.project(from: home + "/Library/Caches", home: home) == home + "/Library/Caches") // gone there on purpose
-        #expect(ProjectRoot.project(from: home + "/Code/notes", home: home) == home + "/Code/notes")
-        #expect(ProjectRoot.project(from: home + "/Code/app/src/deep", home: home) == home + "/Code/app")
-        #expect(ProjectRoot.project(from: fixture.outer, home: home) == fixture.outer)
+        // As the kernel spells it: ProjectRoot spells /private/var as /var, as Foundation does.
+        func project(_ directory: String) -> String? { ProjectRoot.project(from: directory, home: home).map(canonicalPath) }
+        #expect(project(home) == nil)
+        #expect(project(home + "/") == nil)
+        #expect(project(ProtectedPlaces.standardized(home)) == nil) // spelled /var/…
+        #expect(project("/") == nil)
+        #expect(project("/Volumes") == nil)
+        #expect(project(home + "/Library") == nil)
+        #expect(project(home + "/Library/Caches") == home + "/Library/Caches") // gone there on purpose
+        #expect(project(home + "/Code/notes") == home + "/Code/notes")
+        #expect(project(home + "/Code/app/src/deep") == home + "/Code/app")
+        #expect(project(fixture.outer) == fixture.outer)
     }
 
     /// Dotfiles kept in a repository at ~ make the home folder a work tree: still never a project, and a folder in it
@@ -78,10 +81,11 @@ final class FixtureHome {
         fixture.folder(".git")
         fixture.folder("Code/notes")
         fixture.folder("Code/app/.git")
-        #expect(ProjectRoot.find(from: home + "/Code/notes", home: home) == home) // the work tree
-        #expect(ProjectRoot.project(from: home, home: home) == nil)
-        #expect(ProjectRoot.project(from: home + "/Code/notes", home: home) == home + "/Code/notes")
-        #expect(ProjectRoot.project(from: home + "/Code/app", home: home) == home + "/Code/app")
+        func project(_ directory: String) -> String? { ProjectRoot.project(from: directory, home: home).map(canonicalPath) }
+        #expect(canonicalPath(ProjectRoot.find(from: home + "/Code/notes", home: home)) == home) // the work tree
+        #expect(project(home) == nil)
+        #expect(project(home + "/Code/notes") == home + "/Code/notes")
+        #expect(project(home + "/Code/app") == home + "/Code/app")
     }
 
     // MARK: protected places

@@ -33,8 +33,15 @@ public struct ProtectedPlaces: Sendable, Equatable {
         let inHomes: [String] = homes.flatMap { (home: String) -> [String] in
             Self.homeFolders.map { (folder: String) -> String in home + "/" + folder }
         }
-        places = inHomes + Self.systemFolders
-        neverRoots = ["/", "/Volumes"] + homes.flatMap { (home: String) -> [String] in [home, home + "/Library"] }
+        // The standardized spellings after, for `holds`: `below` and the walks start from the kernel's spelling.
+        let standardHomes: [String] = inHomes.map(Self.standardized).filter { (place: String) -> Bool in !inHomes.contains(place) }
+        places = inHomes + Self.systemFolders + standardHomes
+        // Both spellings of each: the kernel's (/private/var/…), and Foundation's standardized one (/var/…), which
+        // ProjectRoot.find gives.
+        let roots: [String] = homes.flatMap { (home: String) -> [String] in [home, home + "/Library"] }
+        let spelled: [String] = roots + roots.map(Self.standardized)
+        var seen: Set<String> = []
+        neverRoots = (["/", "/Volumes"] + spelled).filter { (root: String) -> Bool in seen.insert(root).inserted }
     }
 
     /// The user's.
@@ -49,10 +56,15 @@ public struct ProtectedPlaces: Sendable, Equatable {
         return user
     }
 
-    /// `path` is never a project: /, /Volumes, the home folder or its ~/Library (ProjectRoot.isNeverRoot).
+    /// `path` is never a project: /, /Volumes, the home folder or its ~/Library (ProjectRoot.isNeverRoot), however it is
+    /// spelled.
     public func isNeverRoot(_ path: String) -> Bool {
-        let path: String = Self.trimmed(URL(fileURLWithPath: path).standardizedFileURL.path)
-        return neverRoots.contains(path)
+        neverRoots.contains(Self.trimmed(path)) || neverRoots.contains(Self.standardized(path))
+    }
+
+    /// Foundation's spelling of `path`: `.` and `..` resolved, /private/var as /var, no trailing slash.
+    static func standardized(_ path: String) -> String {
+        trimmed(URL(fileURLWithPath: path).standardizedFileURL.path)
     }
 
     #if DEBUG
