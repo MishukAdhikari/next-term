@@ -344,6 +344,51 @@ public enum SecretImport {
         return prefixes.contains { value.hasPrefix($0) }
     }
 
+    static let referenceReason = "the value has a reference such as ${…} in it, which Secrets would keep as written, not filled in"
+
+    /// `value` with each reference inside it taken out (`${X}`, `{env:X}`, `{file:x}`, `${input:x}`, `${user_config.x}`),
+    /// or nil when it holds none. The agent fills those in when it starts the server, so the rest is what the file holds.
+    /// A bare `$X` inside a value is not one: passwords have `$` in them. Each byte is read once, so a crafted value of
+    /// many openings and no `}` takes no longer than its length.
+    static func withoutReferences(_ value: String) -> String? {
+        let bytes: [UInt8] = Array(value.utf8)
+        let close = UInt8(ascii: "}")
+        var kept: [UInt8] = []
+        var copied = 0
+        var index = 0
+        while index < bytes.count {
+            guard let opening = referenceOpening(bytes, at: index) else {
+                index += 1
+                continue
+            }
+            let start = index + opening
+            // No `}` after this opening: none after a later one either.
+            guard let end = bytes[start...].firstIndex(of: close) else { break }
+            guard end > start else {
+                index += 1
+                continue
+            }
+            kept.append(contentsOf: bytes[copied..<index])
+            index = end + 1
+            copied = index
+        }
+        guard copied > 0 else { return nil }
+        kept.append(contentsOf: bytes[copied...])
+        return String(decoding: kept, as: UTF8.self)
+    }
+
+    static let referenceOpenings: [[UInt8]] = [Array("${".utf8), Array("{env:".utf8), Array("{file:".utf8)]
+
+    /// The length of a reference's opening at `index` (`${`, `{env:`, `{file:`), or nil.
+    static func referenceOpening(_ bytes: [UInt8], at index: Int) -> Int? {
+        let first = bytes[index]
+        guard first == UInt8(ascii: "$") || first == UInt8(ascii: "{") else { return nil }
+        for opening in referenceOpenings where bytes.count - index >= opening.count {
+            if bytes[index..<(index + opening.count)].elementsEqual(opening) { return opening.count }
+        }
+        return nil
+    }
+
     static let kinds = ["Anthropic key", "OpenAI key", "GitHub token", "GitHub token", "Slack token", "AWS access key", "Google API key",
                         "JSON web token", "private key", "LangSmith key", "Hugging Face token", "Groq key", "Tavily key", "Replicate token",
                         "xAI key", "Pinecone key"]
@@ -358,9 +403,11 @@ public enum SecretImport {
     }
 
     /// Whether `value` under `name` is a key the import lists, and what kind. Nil for a reference, an empty or short
-    /// value, or a value that only looks like a setting.
+    /// value, or a value that only looks like a setting, once the references in it are taken out (`withoutReferences`).
     static func detect(name: String, value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        let whole = value.trimmingCharacters(in: .whitespaces)
+        // The agent fills a reference in at start: a value is judged by the rest, which is what the file holds.
+        let trimmed = withoutReferences(whole)?.trimmingCharacters(in: .whitespaces) ?? whole
         guard !trimmed.isEmpty, !isReference(trimmed), MCPRedaction.isValue(trimmed) else { return nil }
         if let kind = tokenKind(trimmed) { return kind }
         if trimmed.count >= 20, MCPRedaction.looksRandom(trimmed) { return "a key, by its shape" }
@@ -370,6 +417,7 @@ public enum SecretImport {
 
     /// Why a detected env value can't be moved: one Secrets can't keep, or a variable `nxtrm secret run` can't set.
     static func valueRefusal(variable: String, value: String) -> String? {
+        if withoutReferences(value) != nil { return referenceReason }
         // By scalar: "\r\n" is one Character, equal to neither "\r" nor "\n".
         if value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return "the value has line breaks, which Secrets can't keep yet" }
         if value.utf8.count > SecretVault.maxValueBytes { return "the value is over 16 KB" }
