@@ -7,7 +7,9 @@ import NextTermCore
 /// project's tree with Open as Project Window, and back home the tree goes again. From a folder above the home, whose
 /// tree the window shows, no walk it starts on its own (the Databases scan, Go to File) lists a protected place, by the
 /// walks' own record of what they list (ProtectedPlaces.listed, debug builds only), while it does list the home's other
-/// folders. NEXTTERM_SELFTEST_ONLY=newTerminal runs it alone.
+/// folders. Back home, Browse Home Folder shows the home folder's tree, with Desktop and Documents as rows that are read
+/// only when opened, and nothing else there: no git, no scan, never a project. NEXTTERM_SELFTEST_ONLY=newTerminal runs it
+/// alone.
 extension SelfTest {
     static func newTerminalChecks() async {
         #if DEBUG
@@ -104,6 +106,53 @@ extension SelfTest {
         check(listedFiles && walked && entered.isEmpty,
               "new terminal: no scan the window started listed a protected place (Desktop, Documents, Downloads, Pictures, ~/Library)",
               entered.isEmpty ? "walked the others: \(walked), Go to File listed: \(listedFiles)" : entered.joined(separator: ", "))
+        await browseHomeChecks(w, app: app, home: home, places: places)
         #endif
     }
+
+    #if DEBUG
+    /// Browse Home Folder, clicked: the home folder's tree, its folders listed as rows and none of them read; no git, no
+    /// Databases or Agent Sessions, and the home folder in no agent's workspaces. Desktop is read when the user opens it.
+    private static func browseHomeChecks(_ w: TerminalWindowController, app: AppDelegate, home: String, places: ProtectedPlaces) async {
+        guard let tab = w.activeTab else { return }
+        let sidebar = w.sidebar
+        tab.view.send(txt: "cd \(ShellQuote.quote(home))\r")
+        let empty = await wait(10) { () -> Bool in
+            w.refresh()
+            return sidebar.showsNoProject
+        }
+        guard empty else { return check(false, "browse home folder: back home, “No project open” offers it") }
+        check(sidebar.noProject.browseRow.title == "Browse Home Folder" && !sidebar.noProject.browseRow.isHidden,
+              "browse home folder: “No project open” offers Browse Home Folder")
+        ProtectedPlaces.listed.start()
+        sidebar.noProject.browseRow.performClick(nil)
+        let shown = await wait(10) { sidebar.root?.path == home && sidebar.root?.children?.isEmpty == false }
+        let names: [String] = sidebar.root?.children?.map(\.name) ?? []
+        let rows: Bool = ["Code", "Desktop", "Documents", "Downloads"].allSatisfy(names.contains)
+        check(shown && rows && sidebar.browsingOnly && w.browsesHome,
+              "browse home folder: a click shows the home folder's tree, Desktop and Documents among its rows", "\(names)")
+        await pause(1.5) // a scan or a git read would have started by now
+        let unread: Bool = sidebar.root?.children?.filter { places.holds($0.path) }.allSatisfy { !$0.isLoaded } ?? false
+        let listed: [String] = ProtectedPlaces.listed.stop()
+        let entered: [String] = listed.filter { (folder: String) -> Bool in places.holds(folder) }
+        check(unread && entered.isEmpty && listed.contains(home),
+              "browse home folder: only the home folder itself is read; Desktop, Documents and the others wait to be opened",
+              entered.isEmpty ? "listed \(listed.count) folders" : entered.joined(separator: ", "))
+        let quiet: Bool = sidebar.git.snapshot == nil && sidebar.databaseScan == DatabaseScan() && sidebar.projectOffer.isHidden
+        let workspaces: Bool = !w.copilotFolders.contains(home) && !app.agentWorkspaces.contains(home)
+        check(quiet && workspaces, "browse home folder: never a project: no git, no Databases, no Open as Project Window, in no agent's workspaces",
+              "git \(sidebar.git.snapshot != nil), databases \(sidebar.databaseScan.databases.count), workspaces \(workspaces)")
+        // The user opens Desktop: now it is read, because they asked.
+        ProtectedPlaces.listed.start()
+        guard let desktop = sidebar.root?.children?.first(where: { $0.name == "Desktop" }) else {
+            _ = ProtectedPlaces.listed.stop()
+            return check(false, "browse home folder: Desktop is a row")
+        }
+        sidebar.outline.expandItem(desktop)
+        let opened = await wait(5) { desktop.isLoaded && desktop.children?.map(\.name) == ["notes.db"] }
+        let read: [String] = ProtectedPlaces.listed.stop()
+        check(opened && read.contains(desktop.path) && !desktop.accessDenied,
+              "browse home folder: opening Desktop reads it then, and lists its files", "\(desktop.children?.map(\.name) ?? [])")
+    }
+    #endif
 }
