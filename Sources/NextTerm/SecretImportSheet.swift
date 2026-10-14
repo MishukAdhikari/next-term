@@ -373,9 +373,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         guard let nxtrm = setup.nxtrm else { return }
         setBusy(true, Self.readingLine)
         let setup = setup
+        // The vault's names: what nxtrm secret run takes out of a server's environment unless the entry asks for it.
+        let stored: [String] = SecretsStore.shared.index?.names ?? []
         Task { @MainActor in
             let planned = await Task.detached { () -> (edits: [SecretImport.FileEdit], failures: [SecretImport.PlanFailure], onMain: Bool) in
-                let plan = SecretImport.plan(moves, nxtrm: nxtrm)
+                let plan = SecretImport.plan(moves, nxtrm: nxtrm, stored: stored)
                 return (plan.edits, plan.failures, pthread_main_np() != 0)
             }.value
             #if DEBUG
@@ -454,6 +456,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             summary += " \(SecretRun.keysText(stayed)) \(stayed.count == 1 ? "is" : "are") in Secrets, but no file was changed for "
                 + (stayed.count == 1 ? "it." : "them.")
         }
+        // What the written entries dropped with their keys, since the wrapper would take it out at start.
+        if let dropped = SecretImport.droppedText(written.flatMap(\.dropped)) { summary += "\n\n" + dropped }
         summaryLabel.stringValue = summary + "\n\n" + Self.rotate + "\n\n" + Self.restart
         summaryLabel.isHidden = false
         moveButton.isEnabled = false
