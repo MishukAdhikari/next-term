@@ -10,18 +10,24 @@ public struct SecretReminder: Equatable, Sendable {
         case due
         /// Remind Me Tomorrow, after a rotation: delete or deactivate the old key.
         case deleteOld
+        /// More than `mostApart` keys due at once, in one notification: `name` is the first in the list's order.
+        case severalDue
     }
 
     public let name: String
     public let kind: Kind
+    /// For `severalDue`: how many other keys are due with `name`. Not carried by a click, which reads them again.
+    public let others: Int
 
-    public init(name: String, kind: Kind) {
+    public init(name: String, kind: Kind, others: Int = 0) {
         self.name = name
         self.kind = kind
+        self.others = others
     }
 
-    /// The notification's identifier: one per key, so a newer reminder about it replaces an older one.
-    public var identifier: String { "secret-rotate-" + name }
+    /// The notification's identifier: one per key, so a newer reminder about it replaces an older one. Several keys'
+    /// one has its own, in lowercase, which no key's name can be.
+    public var identifier: String { "secret-rotate-" + (kind == .severalDue ? "several" : name) }
 
     /// What the notification carries, for its click: the key's name and the reminder's kind.
     public var userInfo: [String: String] { ["secret": name, "secretReminder": kind.rawValue] }
@@ -38,11 +44,16 @@ public struct SecretReminder: Equatable, Sendable {
         switch kind {
         case .due: return "Time to rotate a key"
         case .deleteOld: return "Delete an old key"
+        case .severalDue: return "Time to rotate keys"
         }
     }
 
     /// "OPENAI_API_KEY was last rotated 92 days ago": the name and the age, from the entry as stored now.
     public func body(entry: SecretVault.Entry?, now: Date, calendar: Calendar = .current) -> String {
+        if kind == .severalDue {
+            let others: String = self.others == 1 ? "1 other key" : "\(self.others) other keys"
+            return "\(name) and \(others) are past their \u{201C}Remind me to rotate\u{201D} age"
+        }
         guard kind == .due, let entry else {
             return "Delete or deactivate the old \(name) where you made it, if you haven\u{2019}t yet"
         }
@@ -85,5 +96,44 @@ public struct SecretReminder: Equatable, Sendable {
             kept[newName] = other.map { (seen: Date) -> Date in max(seen, date) } ?? date
         }
         return kept
+    }
+}
+
+extension SecretReminder {
+    /// More due keys than this in one check get one notification for all of them, not one each.
+    public static let mostApart = 3
+
+    /// The reminders as posted: past `mostApart` due keys at once, one `severalDue` reminder for all of them, where the
+    /// first stood. Remind Me Tomorrow's stay one each, since the user asked for each.
+    public static func folded(_ reminders: [SecretReminder]) -> [SecretReminder] {
+        let due: [SecretReminder] = reminders.filter { (reminder: SecretReminder) -> Bool in reminder.kind == .due }
+        guard due.count > mostApart, let first = due.first else { return reminders }
+        let several = SecretReminder(name: first.name, kind: .severalDue, others: due.count - 1)
+        var posted: [SecretReminder] = []
+        for reminder in reminders {
+            if reminder.kind != .due {
+                posted.append(reminder)
+            } else if reminder == first {
+                posted.append(several)
+            }
+        }
+        return posted
+    }
+
+    /// The names whose posted reminder no longer holds, from the keys `earlier` held to the keys `later` holds: a key
+    /// renamed (its old name), deleted, or given a new value since (rotated, replaced or imported over). A name that
+    /// now holds another key (deleted and added again) is one of them. Nothing without an earlier list.
+    public static func withdrawn(from earlier: [SecretVault.Entry]?, to later: [SecretVault.Entry]) -> [String] {
+        guard let earlier else { return [] }
+        var byID: [String: SecretVault.Entry] = [:]
+        for entry in later { byID[entry.id] = entry }
+        var names: [String] = []
+        for entry in earlier {
+            let holds: Bool = byID[entry.id].map { (key: SecretVault.Entry) -> Bool in
+                key.name == entry.name && key.lastSet <= entry.lastSet
+            } ?? false
+            if !holds { names.append(entry.name) }
+        }
+        return names
     }
 }

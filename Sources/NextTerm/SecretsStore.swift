@@ -256,6 +256,8 @@ final class SecretsStore {
     /// The names, what each is for, flags and dates, read with no key.
     private(set) var index: SecretVault.Index?
     private(set) var protection: Protection = .none
+    /// Whether `load()` has run: until then `protection` hasn't said whether the keys open on this Mac.
+    private(set) var hasLoaded = false
     /// For each name, its newest `use` line.
     private(set) var lastUse: [String: SecretAudit.Line] = [:]
     /// True while an action uses the login keychain, which every one does: an unlock reads the record, a first add
@@ -385,6 +387,7 @@ final class SecretsStore {
         isTooLarge = found.3
         lastUse = SecretAudit.lastUse(in: found.2)
         indexDate = found.4
+        hasLoaded = true
         publishMarks()
         if !SelfTest.isRequested { startObserving() }
         NotificationCenter.default.post(name: Self.changed, object: self)

@@ -100,6 +100,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretsStore.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(reload), name: SecretRequests.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshAges), name: SecretReminders.checked, object: nil)
         for name in [SecretsStore.locked, NSApplication.willHideNotification] {
             endObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.endReveal() }
@@ -409,6 +410,14 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// The Rotated cell's badge for a key whose reminder is due.
     static let dueBadge = "Due"
 
+    /// The Rotated column read again after a reminders check, the rest of the list left as it is: a key may have come
+    /// due since midnight while the window stayed open.
+    @objc func refreshAges() {
+        let column: Int? = table.tableColumns.firstIndex { (column: NSTableColumn) -> Bool in column.identifier.rawValue == "rotated" }
+        guard let column, !entries.isEmpty else { return }
+        table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<entries.count), columnIndexes: IndexSet(integer: column))
+    }
+
     /// "5 min ago by Claude Code in “api”".
     static func lastUsedText(_ line: SecretAudit.Line) -> String {
         let text = SecretApprovalPanel.lastUsedText(line)
@@ -618,12 +627,19 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         openRotateSheet(entry)
     }
 
-    /// Rotate… for the key named `name`, selected first: for a rotation reminder.
-    func openRotate(named name: String) {
+    /// Rotate… for the key named `name`, selected first: for a rotation reminder. Only as its button would open it:
+    /// not over an open sheet, and not while Secrets can't change its keys. Whether it opened.
+    @discardableResult
+    func openRotate(named name: String) -> Bool {
+        guard !hasOpenSheet else { return false }
         select(name)
-        guard let entry = selectedEntry, entry.name == name else { return }
+        guard let entry = selectedEntry, entry.name == name, rotateButton.isEnabled else { return false }
         openRotateSheet(entry)
+        return rotateSheet != nil
     }
+
+    /// Whether a sheet is open on the list's window: Add…, Edit…, Replace…, Rotate…, or a question.
+    var hasOpenSheet: Bool { sheet != nil || rotateSheet != nil || window?.attachedSheet != nil }
 
     private func openRotateSheet(_ entry: SecretVault.Entry) {
         guard sheet == nil, rotateSheet == nil, let window else { return }

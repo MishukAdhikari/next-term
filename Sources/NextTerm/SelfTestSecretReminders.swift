@@ -6,8 +6,9 @@ import UserNotifications
 /// Key rotation reminders, on the self-test's temporary vault and a defaults suite of the run's own: the settings under
 /// the list and the reminder Add… starts with; a key past its "Remind me to rotate" age shows Due; one check posts one
 /// notification (into `testNotifications`, never Notification Center) and the next posts none until a week has passed;
-/// the switch off posts no due one; a click opens Rotate…; Remind Me Tomorrow's day posts its one reminder. Days ahead
-/// are the `now` the checks are given, never the clock. The value is made up at run time.
+/// the switch off posts no due one; a click opens Rotate…; Remind Me Tomorrow's day posts its one reminder; then the
+/// launch's own path (`secretReminderLaunchChecks`). Days ahead are the `now` the checks are given, counted from when the
+/// key's value was set, never the clock. The value is made up at run time.
 extension SelfTest {
     static func secretReminderChecks() async {
         let store = SecretsStore.shared
@@ -34,13 +35,19 @@ extension SelfTest {
         } catch {
             return check(false, "secret reminders: a made-up key with a 30-day reminder is saved", "\(error)")
         }
-        let calendar = Calendar.current
-        let due: Date = calendar.date(byAdding: .day, value: 31, to: Date()) ?? Date()
-        secretReminderBadgeCheck(name, due)
+        guard let entry = store.index?.entry(named: name) else {
+            return check(false, "secret reminders: the key is listed")
+        }
+        // 31 days from when its value was set, not from the clock now: a run across midnight still counts 31.
+        let due: Date = Calendar.current.date(byAdding: .day, value: 31, to: entry.lastSet) ?? entry.lastSet
+        secretReminderBadgeCheck(entry, due)
         secretReminderPostChecks(name, due)
         await secretReminderOpenCheck(view, name)
         secretReminderTomorrowChecks(name, due)
-        _ = try? await store.perform(.delete(name: name))
+        await secretReminderLaunchChecks(name, due)
+        for left in [name, secretReminderRenamed(name)] where store.index?.entry(named: left) != nil {
+            _ = try? await store.perform(.delete(name: left))
+        }
     }
 
     /// The posted reminders about `name`, newest last.
@@ -72,13 +79,11 @@ extension SelfTest {
               "secret reminders: Add… starts with the reminder set for new keys", "\(String(describing: starts))")
     }
 
-    /// The Rotated cell: today, the age alone; past the key's 30 days, led by Due, which a screen reader says too.
-    static func secretReminderBadgeCheck(_ name: String, _ due: Date) {
-        guard let entry = SecretsStore.shared.index?.entry(named: name) else {
-            return check(false, "secret reminders: the key is listed")
-        }
+    /// The Rotated cell: the day it was set, the age alone; past the key's 30 days, led by Due, which a screen reader
+    /// says too.
+    static func secretReminderBadgeCheck(_ entry: SecretVault.Entry, _ due: Date) {
         let today = NSTextField(labelWithString: "")
-        SecretsView.fillRotatedCell(today, entry, now: Date())
+        SecretsView.fillRotatedCell(today, entry, now: entry.lastSet)
         let later = NSTextField(labelWithString: "")
         SecretsView.fillRotatedCell(later, entry, now: due)
         let spoken: String = later.accessibilityLabel() ?? ""
