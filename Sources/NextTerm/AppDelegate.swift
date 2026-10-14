@@ -1135,19 +1135,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
     /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
     @objc func chooseProjectFolder(_ sender: Any?) {
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
+        chooseProjectFolder(from: from, over: overWelcome)
+    }
+
+    /// The same panel for a window that asked itself, not the key one (a notice in it, which can't be key): over `sheet`,
+    /// else over `from`'s window, or on its own with neither; the folder chosen opens as if from `from`.
+    func chooseProjectFolder(from: TerminalWindowController?, over sheet: NSWindow? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
-        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = sheet ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
 
     /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen

@@ -117,6 +117,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private(set) var browsingOnly = false
     /// The line in each folder macOS refused, by folder.
     private var deniedEntries: [ObjectIdentifier: DeniedFolderEntry] = [:]
+    /// Links into a protected place whose look macOS refused (`settleKind`): they go on as their names suggest until the
+    /// window comes to the front again (`retryDenied`), the place perhaps allowed since.
+    private let kindRefused = NSHashTable<FileNode>.weakObjects()
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?
@@ -731,7 +734,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 if self.isRenaming { return self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in self?.refresh(node) } }
                 if self.renames != renamesAtRead { return self.refresh(node) } // read before a name given since
                 self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
-                    guard let self, node.install(listing) else { return }
+                    guard let self else { return }
+                    let wasDenied: Bool = node.accessDenied
+                    guard node.install(listing) else { return }
+                    if wasDenied, !node.accessDenied, self.isShowing(node), !self.browsingOnly {
+                        // Allowed in System Settings since: git and the Databases scan were refused with it.
+                        self.git.refresh()
+                        self.scanDatabases()
+                    }
                     self.syncHiddenRow(for: node)
                     self.rowCache[ObjectIdentifier(node)] = nil
                     if self.isShowing(node) { self.outline.reloadItem(node, reloadChildren: true) }
@@ -749,6 +759,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// to the front; a read macOS refused once is refused again without a prompt, so nothing asks twice.
     func retryDenied() {
         guard let root else { return }
+        kindRefused.removeAllObjects() // their next open looks again
         func visit(_ node: FileNode) {
             if node.accessDenied { refresh(node) }
             node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(visit)
@@ -920,7 +931,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private func deniedEntry(for node: FileNode) -> DeniedFolderEntry {
         let id = ObjectIdentifier(node)
         if let entry = deniedEntries[id], entry.folder === node { return entry }
-        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.path))
+        // A link's pane is the one of the place it leads to (~/mail to ~/Library/Mail is Full Disk Access's).
+        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.linkTarget ?? node.path))
         deniedEntries[id] = entry
         return entry
     }
@@ -967,12 +979,46 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
         if item is DeletedEntry || item is DatabasesGroup || item is SessionsGroup || item is ServicesGroup { return true }
         guard let node = item as? FileNode else { return false }
+        if needsKind(node) {
+            // A link into a protected place, a folder by its name's guess: the expand looks, and expands what is one.
+            settleKind(of: node) { [weak self] in if node.isDirectory { self?.outline.expandItem(node) } }
+            return false
+        }
         if node.isLoaded {
             if node.accessDenied { refresh(node) } // opened again: allowed in System Settings since, perhaps
             return true
         }
         load(node) { [weak self] in self?.outline.expandItem(node) }
         return false
+    }
+
+    /// `node` is a link into a protected place the user had not opened, its kind its name's guess (FileNode.kindSettled),
+    /// and no look at what it is was refused since the window last came to the front.
+    private func needsKind(_ node: FileNode) -> Bool {
+        !node.kindSettled && !kindRefused.contains(node)
+    }
+
+    /// The user opened a link whose kind is its name's guess: what it is, read past it off the main thread (macOS may ask
+    /// for the place, holding the look until the user answers), takes the guess's place in its row, and `then` acts on
+    /// the node as it now is. A look macOS refused keeps the guess (`kindRefused`), and `then` acts on that.
+    private func settleKind(of node: FileNode, then: @escaping () -> Void) {
+        let url = node.url
+        DispatchQueue.global(qos: .userInitiated).async {
+            let folder: Bool? = FileNode.isFolder(followingLinkAt: url)
+            DispatchQueue.main.async { [weak self] in
+                self?.whenNotRenaming("kind \(ObjectIdentifier(node))") { [weak self] in
+                    guard let self, self.isShowing(node) else { return }
+                    if folder == nil { self.kindRefused.add(node) }
+                    if node.settleKind(folder) {
+                        let parent: FileNode = node.parent ?? node
+                        self.rowCache[ObjectIdentifier(parent)] = nil
+                        self.rowCache[ObjectIdentifier(node)] = nil
+                        self.outline.reloadItem(parent, reloadChildren: true)
+                    }
+                    then()
+                }
+            }
+        }
     }
 
     // MARK: delegate
@@ -1082,7 +1128,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                        dragBegan: outline.dragBegan, wasRenaming: outline.mouseDownWhileRenaming, kind: kind(of: item))
         guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode,
               SidebarClick.opensOnSingleClick(node.url.path) else { return }
-        delegate?.sidebar(self, previewFile: node.url)
+        // A file by its name's guess, a link into a protected place: the click looks first, and previews only a file.
+        guard needsKind(node) else { return delegate?.sidebar(self, previewFile: node.url) ?? () }
+        settleKind(of: node) { [weak self] in
+            guard let self, !node.isDirectory else { return }
+            self.delegate?.sidebar(self, previewFile: node.url)
+        }
     }
 
     private func kind(of item: Any?) -> SidebarClick.Row {
@@ -1108,6 +1159,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return outline.isItemExpanded(sessionsGroup) ? outline.collapseItem(sessionsGroup) : outline.expandItem(sessionsGroup)
         }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
+        // A link whose kind is its name's guess: the double-click looks first, then opens a file or a folder.
+        if needsKind(node) { return settleKind(of: node) { [weak self] in self?.openOrToggle(node) } }
+        openOrToggle(node)
+    }
+
+    /// A double-click's: a folder opens or closes, a file opens in the editor.
+    private func openOrToggle(_ node: FileNode) {
         if node.isDirectory {
             outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
         } else {
@@ -1119,7 +1177,16 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// first: opening a file shows it in the tree, which selects its row alone.
     private func openSelected() {
         let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) }
-        for case let node as FileNode in items where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
+        for case let node as FileNode in items {
+            if needsKind(node) {
+                settleKind(of: node) { [weak self] in
+                    guard let self, !node.isDirectory else { return }
+                    self.delegate?.sidebar(self, openFile: node.url)
+                }
+            } else if !node.isDirectory {
+                delegate?.sidebar(self, openFile: node.url)
+            }
+        }
         for case let entry as DeletedEntry in items where !entry.isDirectory { openDeleted(entry) }
         for case let item as DatabaseItem in items { openDatabase(item.database) }
         for case let item as ServiceItem in items { openService(item.row) }
@@ -1578,9 +1645,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        // The line in a folder macOS refused is no place to drop: not the tree's root, and macOS would refuse the folder.
+        if item is DeniedFolderEntry { return [] }
         guard let target = item as? FileNode ?? (item as? DeletedEntry)?.realFolder ?? root, let root else { return [] }
         // Dropping on or between files means their folder.
         let folder = target.isDirectory ? target : (target.parent ?? root)
+        if folder.accessDenied { return [] }
         if folder !== target || index != NSOutlineViewDropOnItemIndex {
             outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
         }

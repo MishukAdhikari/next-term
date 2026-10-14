@@ -15,15 +15,17 @@ import Testing
     }
 
     /// A refused folder sends the user where a switch for it is: Files and Folders for Desktop, Documents, Downloads,
-    /// iCloud Drive, cloud storage and the volumes; Full Disk Access for the rest of ~/Library, which has none there.
+    /// iCloud Drive, cloud storage and the volumes; Full Disk Access for the Trash and the rest of ~/Library, which have
+    /// none there.
     @Test func whereARefusedFolderIsAllowed() {
         func pane(_ path: String) -> PrivacySettings.Pane { PrivacySettings.pane(forDenied: path, protected: places) }
         for path in ["/Users/ada/Desktop", "/Users/ada/Documents/site", "/Users/ada/Downloads/", "/Volumes/Backup",
                      "/Users/ada/Library/Mobile Documents/com~apple~CloudDocs", "/Users/ada/Library/CloudStorage/Dropbox",
-                     "/Users/ada/Pictures"] {
+                     "/Users/ada/Pictures", "/Users/ada/.Trashcan"] {
             #expect(pane(path) == .filesAndFolders, "\(path)")
         }
-        for path in ["/Users/ada/Library", "/Users/ada/Library/Mail", "/Users/ada/Library/Containers/com.apple.x"] {
+        for path in ["/Users/ada/Library", "/Users/ada/Library/Mail", "/Users/ada/Library/Containers/com.apple.x",
+                     "/Users/ada/.Trash", "/Users/ada/.Trash/", "/Users/ada/.Trash/old notes"] {
             #expect(pane(path) == .fullDiskAccess, "\(path)")
         }
     }
@@ -43,6 +45,7 @@ import Testing
         #expect(denial(cocoa(NSFileReadNoPermissionError))) // no code under it, in a protected place
         #expect(denial(cocoa(NSFileReadNoPermissionError, under: posix(EPERM)), "/Users/ada/Desktop/notes"))
         #expect(denial(posix(EPERM), "/Volumes/Backup"))
+        #expect(denial(posix(EPERM), "/Users/ada/.Trash")) // without Full Disk Access
         #expect(!denial(posix(EACCES)))
         #expect(!denial(cocoa(NSFileReadNoPermissionError, under: posix(EACCES))))
         #expect(!denial(cocoa(NSFileReadNoSuchFileError, under: posix(ENOENT))))
@@ -72,5 +75,41 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: documents.path)
         #expect(node.install(FileNode.read(documents, protected: fixture.places)))
         #expect(!node.accessDenied && node.children?.map(\.name) == ["letter.txt"])
+    }
+
+    /// A folder reached through a link (~/notes to ~/Documents/notes, ~/mail to ~/Library/Mail): macOS's refusal is of the
+    /// place the link leads to, so it is one though the link's own spelling is in no protected place, and its pane is
+    /// that place's. Where the link leads is read from the links alone.
+    @Test func aRefusalThroughALinkIsMacOSs() throws {
+        let fixture = FixtureHome()
+        fixture.folder("Documents/notes/sub")
+        fixture.folder("Library/Mail")
+        fixture.folder("Code/app")
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: fixture.path("notes"), withDestinationPath: fixture.path("Documents/notes"))
+        try manager.createSymbolicLink(atPath: fixture.path("mail"), withDestinationPath: "Library/Mail")
+        try manager.createSymbolicLink(atPath: fixture.path("app"), withDestinationPath: fixture.path("Code/app"))
+        // A link to a link: ~/papers to ~/notes/sub, which is in Documents through ~/notes.
+        try manager.createSymbolicLink(atPath: fixture.path("papers"), withDestinationPath: fixture.path("notes/sub"))
+        let refused = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+                              userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM))])
+        func denial(_ relative: String) -> Bool {
+            FileNode.isPrivacyDenial(refused, reading: URL(fileURLWithPath: fixture.path(relative)), protected: fixture.places)
+        }
+        #expect(denial("notes"))
+        #expect(denial("notes/sub")) // in a folder reached through the link
+        #expect(denial("papers"))
+        #expect(denial("mail"))
+        #expect(!denial("app"))
+        #expect(!denial("Code/app"))
+        #expect(!FileNode.isPrivacyDenial(NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES)),
+                                          reading: URL(fileURLWithPath: fixture.path("notes")), protected: fixture.places))
+        // The line's pane: the place the link leads to.
+        func pane(_ relative: String) -> PrivacySettings.Pane {
+            let node = FileNode(url: URL(fileURLWithPath: fixture.path(relative)), protected: fixture.places)
+            return PrivacySettings.pane(forDenied: node.linkTarget ?? node.path, protected: fixture.places)
+        }
+        #expect(pane("notes") == .filesAndFolders)
+        #expect(pane("mail") == .fullDiskAccess)
     }
 }

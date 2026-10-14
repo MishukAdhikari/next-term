@@ -900,7 +900,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         offeredProjectForAgent = true
         let tab: TerminalTab? = zip(agents, rows).first { $0.1.directory == home && !$0.1.remote }?.0
         let text: String = HomeAgentOffer.text(agent: tab.map(Self.agentName(of:)) ?? "An agent")
-        GitToast.show(text, in: window, button: "Choose Folder…", action: { AppDelegate.shared.chooseProjectFolder(nil) },
+        // The panel comes over this window, not the key one: the notice can't be key, so a click on it leaves another
+        // window key, or none. Weak, as the notice keeps its action while it shows.
+        let choose: () -> Void = { [weak self] in AppDelegate.shared.chooseProjectFolder(from: self) }
+        GitToast.show(text, in: window, button: "Choose Folder…", action: choose,
                       other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) })
     }
 
@@ -979,6 +982,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func browseHomeFolder() {
         browsesHome = true
         projectKey = nil
+        // With a remote tab in front the tree stays as it was (updateProjectRoot), but this click asks for it to change.
+        // The next local tab is placed afresh: in the home folder it keeps this tree, in a project it shows that one.
+        if activeTab?.remote != nil {
+            sidebar.offerProjectWindow(nil)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+            return
+        }
         updateProjectRoot()
     }
 

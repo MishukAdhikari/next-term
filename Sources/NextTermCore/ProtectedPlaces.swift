@@ -22,9 +22,10 @@ public struct ProtectedPlaces: Sendable, Equatable {
 
     /// Under the home folder: the folders macOS asks about, and ~/Library, which holds what it asks about too (Calendars,
     /// Contacts, other apps' data), with iCloud Drive (Mobile Documents) and the cloud-storage folders (Dropbox, Google
-    /// Drive, OneDrive) in it. Photos and the Music library are in Pictures and Music.
+    /// Drive, OneDrive) in it. Photos and the Music library are in Pictures and Music. And the Trash, which macOS opens
+    /// only to an app with Full Disk Access.
     public static let homeFolders = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Library",
-                                     "Library/Mobile Documents", "Library/CloudStorage"]
+                                     "Library/Mobile Documents", "Library/CloudStorage", ".Trash"]
     /// Outside it: other disks, removable and network volumes.
     public static let systemFolders = ["/Volumes"]
     /// The data volume. /Users and /Volumes are firmlinks into it, so a folder spelled through it is the same folder, and

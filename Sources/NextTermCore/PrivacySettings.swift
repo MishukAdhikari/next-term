@@ -25,10 +25,12 @@ public enum PrivacySettings {
     }
 
     /// Where the user can let Next Term into `path` after macOS refused it. Files and Folders has a switch for the places
-    /// it lists: Desktop, Documents, Downloads, iCloud Drive, cloud storage, and the volumes. The rest of ~/Library (Mail,
-    /// Safari, other apps' data) has none there: only Full Disk Access opens it.
+    /// it lists: Desktop, Documents, Downloads, iCloud Drive, cloud storage, and the volumes. The Trash and the rest of
+    /// ~/Library (Mail, Safari, other apps' data) have none there: only Full Disk Access opens them.
     public static func pane(forDenied path: String, protected: ProtectedPlaces = .current) -> Pane {
         let path: String = ProtectedPlaces.trimmed(path)
+        let trash: String = protected.home + "/.Trash"
+        if path == trash || path.hasPrefix(trash + "/") { return .fullDiskAccess }
         let library: String = protected.home + "/Library"
         let inLibrary: Bool = path == library || path.hasPrefix(library + "/")
         guard inLibrary else { return .filesAndFolders }

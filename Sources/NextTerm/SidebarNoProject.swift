@@ -84,6 +84,13 @@ final class NoProjectView: NSView {
         for row in [text, recentRows, ways] { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         for row in [openRow, connectRow, browseRow] as [NSView] { row.widthAnchor.constraint(equalTo: ways.widthAnchor).isActive = true }
         let document = FlippedView()
+        // The sentence wraps at the clip's width, less its insets: the document's, which a scroll bar shown always
+        // (System Settings › Show scroll bars) narrows, while this view's width stays the sidebar's.
+        document.onWidth = { [weak self] (width: CGFloat) in
+            guard let self else { return }
+            let wrap: CGFloat = max(0, width - 28)
+            if self.sentence.preferredMaxLayoutWidth != wrap { self.sentence.preferredMaxLayoutWidth = wrap }
+        }
         document.translatesAutoresizingMaskIntoConstraints = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(stack)
@@ -116,13 +123,6 @@ final class NoProjectView: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
-
-    /// The wrapping sentence wraps at the sidebar's width, less its insets.
-    override func layout() {
-        let width: CGFloat = max(0, bounds.width - 28)
-        if sentence.preferredMaxLayoutWidth != width { sentence.preferredMaxLayoutWidth = width }
-        super.layout()
-    }
 
     @objc private func shortcutsChanged() {
         connectRow.show(key: KeyboardShortcuts.shared.chord(for: SwitcherWayIn.connect.command))
@@ -157,9 +157,16 @@ final class NoProjectView: NSView {
     var recentProjectRows: [RecentProjectRow] { recentRows.arrangedSubviews.compactMap { $0 as? RecentProjectRow } }
 }
 
-/// The scroll's document: its content from the top down.
+/// The scroll's document: its content from the top down. Its width is the clip's, told before each layout (`onWidth`),
+/// so what wraps in it wraps at the width it really has.
 private final class FlippedView: NSView {
+    var onWidth: ((CGFloat) -> Void)?
     override var isFlipped: Bool { true }
+
+    override func layout() {
+        onWidth?(bounds.width)
+        super.layout()
+    }
 }
 
 /// A recent project in a window's empty sidebar: a folder in the gutter, its name where the names start, and at the

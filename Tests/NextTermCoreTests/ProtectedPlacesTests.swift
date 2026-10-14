@@ -118,10 +118,12 @@ final class FixtureHome {
         let held = ["/Users/ada/Desktop", "/Users/ada/Documents/site", "/Users/ada/Downloads/sdk/bin", "/Users/ada/Pictures",
                     "/Users/ada/Pictures/Photos Library.photoslibrary", "/Users/ada/Movies", "/Users/ada/Music/Music",
                     "/Users/ada/Library", "/Users/ada/Library/Mobile Documents/com~apple~CloudDocs",
-                    "/Users/ada/Library/CloudStorage/Dropbox", "/Volumes", "/Volumes/Backup/project", "/Users/ada/Documents/"]
+                    "/Users/ada/Library/CloudStorage/Dropbox", "/Volumes", "/Volumes/Backup/project", "/Users/ada/Documents/",
+                    "/Users/ada/.Trash", "/Users/ada/.Trash/old notes"]
         for path in held { #expect(places.holds(path), "\(path)") }
         let free = ["/Users/ada", "/Users/ada/Code", "/Users/ada/Documents-old", "/Users/ada/Desktopper", "/Users/ada/.config",
-                    "/Users/ada/Code/Library", "/Users/ada/Code/app/Documents", "/Users", "/", "/tmp", "/VolumesX"]
+                    "/Users/ada/Code/Library", "/Users/ada/Code/app/Documents", "/Users", "/", "/tmp", "/VolumesX",
+                    "/Users/ada/.Trashcan", "/Users/ada/Code/.Trash"]
         for path in free { #expect(!places.holds(path), "\(path)") }
         // Spelled through the data volume, the same places.
         for path in ["/System/Volumes/Data/Users/ada/Desktop", "/System/Volumes/Data/Volumes/Backup"] { #expect(places.holds(path), "\(path)") }
@@ -165,7 +167,8 @@ final class FixtureHome {
 
         let walk = fixture.places.walk(from: home)
         for folder in ["Code", "Code/app", ".config", "Public", "Documents-old"] { #expect(walk.mayEnter(folder), "\(folder)") }
-        for folder in ["Desktop", "Documents", "Documents/site", "Library", "Library/Caches", "Pictures/Photos Library.photoslibrary"] {
+        for folder in ["Desktop", "Documents", "Documents/site", "Library", "Library/Caches", "Pictures/Photos Library.photoslibrary",
+                       ".Trash"] {
             #expect(!walk.mayEnter(folder), "\(folder)")
         }
         #expect(fixture.places.walk(from: home + "/Documents/site").mayEnter("src"))
@@ -324,6 +327,114 @@ final class FixtureHome {
         let names: [String] = listing.nodes.map(\.name)
         #expect(names.contains("notes") && names.contains("letter"))
         #expect(listing.nodes.first { $0.name == "notes" }?.isDirectory == true)
+    }
+
+    /// A link that reaches a protected place through other links (~/.zshrc to ~/Dropbox/dotfiles/zshrc, ~/Dropbox a link
+    /// into ~/Library/CloudStorage, as Dropbox leaves it) is not followed there either: each link on the way is read by
+    /// itself, and the walk stops at the place. `..` comes after the link before it, as the kernel takes it.
+    @Test func aLinkThroughOtherLinksIsNotFollowedIntoAProtectedPlace() throws {
+        let fixture = FixtureHome()
+        fixture.write("Library/CloudStorage/Dropbox/dotfiles/zshrc")
+        fixture.folder("Documents/sub")
+        fixture.folder("Code/app")
+        let manager = FileManager.default
+        func link(_ relative: String, _ destination: String) throws {
+            try manager.createSymbolicLink(atPath: fixture.path(relative), withDestinationPath: destination)
+        }
+        try link("Dropbox", fixture.path("Library/CloudStorage/Dropbox"))
+        try link(".zshrc", fixture.path("Dropbox/dotfiles/zshrc"))
+        try link("b", fixture.path("Documents"))
+        try link("a", "b/x")
+        try link("Code/inner", fixture.path("Documents/sub"))
+        try link("up", "Code/inner/../notes") // ~/Documents/notes, not ~/Code/notes
+        try link("app", "Code/app")
+        try link("gone", "Code/missing")
+        try link("loop1", "loop2")
+        try link("loop2", "loop1")
+        // The places refused, as macOS refuses them until the user answers: a look in one would fail.
+        for place in ["Documents", "Library"] { chmod(fixture.path(place), 0) }
+        defer { for place in ["Documents", "Library"] { chmod(fixture.path(place), 0o755) } }
+        func node(_ relative: String) -> FileNode { FileNode(url: URL(fileURLWithPath: fixture.path(relative)), protected: fixture.places) }
+        let zshrc = node(".zshrc")
+        #expect(zshrc.targetUnopened && !zshrc.kindSettled)
+        #expect(zshrc.linkTarget == fixture.path("Library/CloudStorage/Dropbox/dotfiles/zshrc"))
+        let a = node("a")
+        #expect(a.targetUnopened && a.linkTarget == fixture.path("Documents/x"))
+        let up = node("up")
+        #expect(up.targetUnopened && up.linkTarget == fixture.path("Documents/notes"))
+        // Elsewhere followed to the end, as before.
+        let app = node("app")
+        #expect(!app.targetUnopened && app.kindSettled && app.isDirectory && app.linkTarget == fixture.path("Code/app"))
+        let gone = node("gone")
+        #expect(!gone.targetUnopened && !gone.isDirectory && gone.linkTarget == fixture.path("Code/missing"))
+        #expect(node("loop1").targetUnopened) // a loop is not followed
+        // Every spelling a walk looks at is outside the places: it stops at the first one.
+        var looked: [String] = []
+        let walked = FileNode.resolved(fixture.path("Dropbox/dotfiles/zshrc")) { (spelling: String) -> Bool in
+            let stops: Bool = fixture.places.holds(spelling)
+            if !stops { looked.append(spelling) }
+            return stops
+        }
+        #expect(walked.stopped && walked.path == fixture.path("Library/CloudStorage/Dropbox/dotfiles/zshrc"))
+        #expect(!looked.contains { fixture.places.holds($0) } && looked.contains(fixture.path("Dropbox")), "\(looked)")
+        let dotted = FileNode.resolved(fixture.path("Code/app/../app/.")) { _ in false }
+        #expect(dotted.path == fixture.path("Code/app") && !dotted.stopped)
+    }
+
+    /// In a folder the user opened through a link (~/notes to ~/Documents/notes), a link is in the place the folder really
+    /// is in: one to a file beside it is followed, as in Documents itself; one to another place is not.
+    @Test func aLinkInAFolderReachedThroughALinkIsInThatFoldersPlace() throws {
+        let fixture = FixtureHome()
+        fixture.write("Documents/notes/letter.txt")
+        fixture.folder("Desktop")
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: fixture.path("notes"), withDestinationPath: fixture.path("Documents/notes"))
+        try manager.createSymbolicLink(atPath: fixture.path("Documents/notes/latest"), withDestinationPath: "letter.txt")
+        try manager.createSymbolicLink(atPath: fixture.path("Documents/notes/todo"), withDestinationPath: fixture.path("Desktop/todo"))
+        let listing = FileNode.read(URL(fileURLWithPath: fixture.path("notes")), protected: fixture.places)
+        let latest = try #require(listing.nodes.first { $0.name == "latest" })
+        #expect(!latest.targetUnopened && latest.kindSettled && !latest.isDirectory)
+        #expect(latest.linkTarget == fixture.path("Documents/notes/letter.txt"))
+        let todo = try #require(listing.nodes.first { $0.name == "todo" })
+        #expect(todo.targetUnopened && todo.linkTarget == fixture.path("Desktop/todo"))
+    }
+
+    /// A link into a protected place has its name's guess for a kind until the user opens it: that look tells what it is,
+    /// and the tree keeps it over the next read's guess, in its place among the files.
+    @Test func theUsersOpenSettlesALinksKind() throws {
+        let fixture = FixtureHome()
+        fixture.write("Documents/dotfiles/zshrc")
+        fixture.folder("Documents/example.com")
+        fixture.folder("Code")
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: fixture.path("zshrc"), withDestinationPath: fixture.path("Documents/dotfiles/zshrc"))
+        try manager.createSymbolicLink(atPath: fixture.path("site"), withDestinationPath: fixture.path("Documents/example.com"))
+        let home = FileNode(url: URL(fileURLWithPath: fixture.home), protected: fixture.places)
+        #expect(home.install(FileNode.read(home.url, protected: fixture.places)))
+        func child(_ name: String) throws -> FileNode { try #require(home.children?.first { $0.name == name }) }
+        let zshrc = try child("zshrc")
+        let site = try child("site")
+        // Guessed from their names: "zshrc" a folder, "example.com" a file.
+        #expect(zshrc.isDirectory && !zshrc.kindSettled && !site.isDirectory && !site.kindSettled)
+        #expect(home.children?.map(\.name) == ["Code", "Documents", "zshrc", "site"])
+        // The user opens them: what is there.
+        #expect(FileNode.isFolder(followingLinkAt: zshrc.url) == false)
+        #expect(FileNode.isFolder(followingLinkAt: site.url) == true)
+        #expect(zshrc.settleKind(false) && !zshrc.isDirectory && zshrc.kindSettled)
+        #expect(site.settleKind(true) && site.isDirectory && site.kindSettled)
+        #expect(!site.settleKind(false)) // settled once, for good
+        #expect(home.children?.map(\.name) == ["Code", "Documents", "site", "zshrc"])
+        // The next read guesses again; the settled nodes stay, in order.
+        home.install(FileNode.read(home.url, protected: fixture.places))
+        let zshrcAgain = try child("zshrc")
+        let siteAgain = try child("site")
+        #expect(zshrcAgain === zshrc && !zshrc.isDirectory)
+        #expect(siteAgain === site && site.isDirectory)
+        #expect(home.children?.map(\.name) == ["Code", "Documents", "site", "zshrc"])
+        // A look macOS refused leaves the guess.
+        let fresh = FileNode(url: zshrc.url, protected: fixture.places)
+        #expect(!fresh.settleKind(nil) && fresh.isDirectory && !fresh.kindSettled)
+        #expect(FileNode.isFolder(followingLinkAt: URL(fileURLWithPath: fixture.path("nothing"))) == false)
     }
 
     /// The PATH probe for `nxtrm` at launch passes over a folder in Downloads (a tool unzipped there), as unseen.
