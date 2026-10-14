@@ -21,6 +21,7 @@ extension SelfTest {
         await secretSourcesVouchChecks(base)
         await secretSourcesRequestChecks()
         await secretSourcesRequestUseChecks()
+        await secretRotateChecks()
     }
 
     /// Add… suggests the page from the value's head, Use fills it, Save keeps it; a link with a user and password, or

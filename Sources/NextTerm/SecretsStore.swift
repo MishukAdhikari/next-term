@@ -85,10 +85,22 @@ final class SecretsStore {
         }
     }
 
+    /// What Rotate… saves: the new value, made at the provider, and the page and reminder set in its sheet. For `link`
+    /// and `remindDays`, nil leaves them as they are and `.some(nil)` clears them.
+    struct KeyRotation {
+        var name: String
+        var value: SecretBytes
+        var link: String?? = nil
+        var linkFrom: SecretVault.LinkFrom? = nil
+        var remindDays: Int?? = nil
+    }
+
     enum Action {
         case add(NewKey)
         case edit(KeyEdit)
         case replace(name: String, value: SecretBytes, writeOnly: Bool, origin: SecretVault.Origin?)
+        /// A key rotation: the old value stays masked for 30 days.
+        case rotate(KeyRotation)
         case makeWriteOnly(name: String)
         case delete(name: String)
         case reveal(name: String)
@@ -112,6 +124,7 @@ final class SecretsStore {
             switch self {
             case .add(let key): return [key.name]
             case .edit(let change): return [change.name]
+            case .rotate(let change): return [change.name]
             case .replace(let name, _, _, _), .makeWriteOnly(let name), .delete(let name), .reveal(let name), .copy(let name):
                 return [name]
             case .use(let names):
@@ -124,6 +137,7 @@ final class SecretsStore {
             case .add: return .add
             case .edit: return .edit
             case .replace: return .replace
+            case .rotate: return .rotate
             case .makeWriteOnly: return .writeOnly
             case .delete: return .delete
             case .reveal: return .reveal
@@ -144,6 +158,7 @@ final class SecretsStore {
                 if change.remindDays != nil { return SecretReason.changeReminder(name) }
                 return SecretReason.changePurpose(name)
             case .replace(let name, _, _, _): return SecretReason.replace(name)
+            case .rotate(let change): return SecretReason.rotate(change.name)
             case .makeWriteOnly(let name): return SecretReason.makeWriteOnly(name)
             case .delete(let name): return SecretReason.delete(name)
             case .reveal(let name): return SecretReason.show(name)
@@ -169,6 +184,9 @@ final class SecretsStore {
                 value = key.value
             case .edit(let change):
                 text = change.link ?? nil
+            case .rotate(let change):
+                text = change.link ?? nil
+                value = change.value
             default:
                 return nil
             }
@@ -182,6 +200,7 @@ final class SecretsStore {
         var changedNames: [String]? {
             switch self {
             case .replace(let name, _, _, _), .delete(let name): return [name]
+            case .rotate(let change): return [change.name]
             case .edit(let change):
                 guard let newName = change.newName, newName != change.name else { return nil }
                 return [change.name]
@@ -921,6 +940,10 @@ final class SecretsStore {
         case .replace(let name, let value, let writeOnly, let origin):
             earlier = vault.index.entry(named: name)?.origin
             return try vault.replace(name, value: value, writeOnly: writeOnly, origin: origin, maskKey: maskKey)
+        case .rotate(let change):
+            earlier = vault.index.entry(named: change.name)?.origin
+            return try vault.rotate(change.name, value: change.value, origin: .settings, link: change.link,
+                                    linkFrom: change.linkFrom, remindDays: change.remindDays, maskKey: maskKey)
         case .makeWriteOnly(let name):
             return try vault.makeWriteOnly(name)
         case .delete(let name):

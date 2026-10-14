@@ -98,9 +98,15 @@ public final class SecretMask: @unchecked Sendable {
         (minimumLength...maximumLength).contains(mark.length) && mark.tag.count == tagLength
     }
 
-    /// The mask for every entry of an index.
-    public convenience init(key: SymmetricKey, index: SecretVault.Index) {
-        self.init(key: key, marks: index.entries.flatMap(\.marks))
+    /// The mask for every entry of an index: each key's value, and after a key rotation its old value too, until its
+    /// retired marks' date passes `now`, while the old key may still work.
+    public convenience init(key: SymmetricKey, index: SecretVault.Index, now: Date = Date()) {
+        let current: [SecretVault.Mark] = index.entries.flatMap(\.marks)
+        let retired: [SecretVault.Mark] = index.entries.flatMap { (entry: SecretVault.Entry) -> [SecretVault.Mark] in
+            guard let old = entry.retired, old.until > now else { return [] }
+            return old.marks
+        }
+        self.init(key: key, marks: current + retired)
     }
 
     public var isEmpty: Bool { marks.isEmpty }

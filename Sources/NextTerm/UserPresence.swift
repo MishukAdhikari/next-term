@@ -135,6 +135,8 @@ enum SecretReason {
     /// Opening a key's page after vault.json changed since Next Term last wrote or checked it.
     static func checkLink(_ name: String) -> String { "check \(name)’s page" }
     static func replace(_ name: String) -> String { "replace \(name)" }
+    /// A key rotation: Rotate…'s Save.
+    static func rotate(_ name: String) -> String { "rotate \(name)" }
     static func replaceWithAgentsKey(_ name: String) -> String { "replace \(name) with the agent’s key" }
     static func moveOut(_ count: Int) -> String { "move \(count) \(count == 1 ? "key" : "keys") out of your MCP configs" }
     static func putBack(_ count: Int) -> String { "put \(count) \(count == 1 ? "key" : "keys") back into your MCP configs" }

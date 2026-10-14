@@ -259,6 +259,8 @@ public final class SecretVault {
     /// The most retired marks one key keeps: the forms of a few old values (five each today), with room for forms a
     /// later release may mark, so a vault it saved still reads here.
     public static let maxRetiredMarks = 32
+    /// How long a key rotation keeps the old value's marks, while the old key may still work at its provider.
+    public static let retiredDays = 30
 
     static let wrapSalt = Data("NextTerm Secrets wrap 1".utf8)
     static let wrapLabel = "nextterm-wrap/1"
@@ -303,6 +305,8 @@ public final class SecretVault {
         case badLink(SecretLink.Refusal)
         /// A rotation reminder outside `remindRange`.
         case badReminder
+        /// A key rotation's new value is the one the key has now.
+        case sameValue(String)
         /// The change would save an index the read refuses (`isWellFormed`), so the file would then read as changed
         /// outside Next Term; nothing was saved.
         case unreadable
@@ -334,6 +338,7 @@ public final class SecretVault {
                     + "use, then try again."
             case .badLink(let refusal): return refusal.sentence
             case .badReminder: return "A reminder to rotate a key is from 1 to 3,650 days."
+            case .sameValue: return "That\u{2019}s the key you have now."
             case .unreadable:
                 return "This change would leave Secrets’ file in a shape Next Term can’t read, so nothing was saved."
             }
@@ -657,6 +662,40 @@ public final class SecretVault {
         entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         entry.changed = Self.whole(now)
         entry.valueSet = entry.changed
+        return try written(key, now: now) { index.entries[position] = entry }
+    }
+
+    /// A key rotation: `replace` for a new value made at the provider, while the old key may still work there for a
+    /// while. The new value must differ from the one the key has now (`sameValue`), compared inside the vault in
+    /// constant time. The old value's marks are kept as `retired` for `retiredDays`, so it stays masked; only the most
+    /// recent old value is kept. The key stays write-only or not, as it was; `origin`, when given, is who rotated it.
+    /// `link` and `remindDays` are saved in the same write, as `edit` takes them (nil leaves them as they are), with
+    /// the link checked against the new value too.
+    public func rotate(_ name: String, value: SecretBytes, origin: Origin? = nil, link: String?? = nil,
+                       linkFrom: LinkFrom? = nil, remindDays: Int?? = nil, maskKey: SymmetricKey? = nil,
+                       now: Date = Date()) throws -> Data {
+        let key = try unlockedKey()
+        var (position, entry) = try find(name)
+        let value = try Self.normalized(value, name: name)
+        let current = try Self.open(entry, key: key)
+        guard !(current == value) else { throw Failure.sameValue(name) }
+        if let link {
+            let source = try Self.checkedLink(link, from: linkFrom, value: value)
+            entry.link = source?.link
+            entry.linkFrom = source?.from
+        }
+        if let remindDays {
+            entry.remindDays = try Self.checkedReminder(remindDays)
+        }
+        let origin = origin ?? entry.origin
+        let date = Self.whole(now)
+        let kept: TimeInterval = TimeInterval(Self.retiredDays) * 86_400
+        entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: entry.writeOnly, origin: origin)
+        entry.origin = origin
+        entry.retired = entry.marks.isEmpty ? nil : Retired(marks: entry.marks, until: date.addingTimeInterval(kept))
+        entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
+        entry.changed = date
+        entry.valueSet = date
         return try written(key, now: now) { index.entries[position] = entry }
     }
 

@@ -58,6 +58,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var addButton = NSButton(title: "Add…", target: nil, action: nil)
     private(set) var editButton = NSButton(title: "Edit…", target: nil, action: nil)
     private(set) var replaceButton = NSButton(title: "Replace…", target: nil, action: nil)
+    private(set) var rotateButton = NSButton(title: "Rotate…", target: nil, action: nil)
     private(set) var deleteButton = NSButton(title: "Delete…", target: nil, action: nil)
     private(set) var revealButton = NSButton(title: "Reveal", target: nil, action: nil)
     private(set) var copyButton = NSButton(title: "Copy", target: nil, action: nil)
@@ -76,6 +77,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     /// The confirm on screen (Make Write-Only…, Delete…, Start Over…), for the self-test.
     private(set) var alert: NSAlert?
     private(set) var sheet: SecretEditSheet?
+    private(set) var rotateSheet: SecretRotateSheet?
     private(set) var revealPopover: NSPopover?
     private(set) var revealField: NSTextField?
     private(set) var importSheet: SecretImportSheet?
@@ -182,15 +184,16 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         actionLabel.font = .systemFont(ofSize: 12)
         actionLabel.isHidden = true
         let keyActions: [(NSButton, Selector)] = [(addButton, #selector(add)), (editButton, #selector(edit)), (replaceButton, #selector(replace)),
-                                                  (deleteButton, #selector(deleteKey)), (revealButton, #selector(reveal)),
-                                                  (copyButton, #selector(copyKey)), (writeOnlyButton, #selector(makeWriteOnly)),
+                                                  (rotateButton, #selector(rotateKey)), (deleteButton, #selector(deleteKey)),
+                                                  (revealButton, #selector(reveal)), (copyButton, #selector(copyKey)),
+                                                  (writeOnlyButton, #selector(makeWriteOnly)),
                                                   (importButton, #selector(importKeys)), (revokeAllButton, #selector(revokeAll))]
         for (button, action) in keyActions {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
         }
-        let keyButtons = NSStackView(views: [addButton, editButton, replaceButton, deleteButton])
+        let keyButtons = NSStackView(views: [addButton, editButton, replaceButton, rotateButton, deleteButton])
         keyButtons.spacing = 8
         let valueButtons = NSStackView(views: [revealButton, copyButton, writeOnlyButton, NSView(), importButton])
         valueButtons.spacing = 8
@@ -323,7 +326,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let usable = store.protection != .cantOpen && store.protection != .tampered
         let entry = selectedEntry
         let shown = entry.map { !$0.writeOnly } ?? false
-        for button in [editButton, replaceButton, deleteButton] { button.isEnabled = usable && entry != nil }
+        for button in [editButton, replaceButton, rotateButton, deleteButton] { button.isEnabled = usable && entry != nil }
         for button in [revealButton, copyButton, writeOnlyButton] { button.isEnabled = usable && shown }
         writeOnlyLabel.isHidden = entry?.writeOnly != true
     }
@@ -400,7 +403,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             menu.addItem(item)
             menu.addItem(.separator())
         }
-        for button in [editButton, replaceButton, revealButton, copyButton, writeOnlyButton, deleteButton] {
+        for button in [editButton, replaceButton, rotateButton, revealButton, copyButton, writeOnlyButton, deleteButton] {
             let item = NSMenuItem(title: button.title, action: button.action, keyEquivalent: "")
             item.target = self
             item.isEnabled = button.isEnabled
@@ -580,8 +583,33 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         openSheet(.replace(entry))
     }
 
+    /// Rotate…: the selected key's page, the paste field and what to do after, in one sheet.
+    @objc func rotateKey() {
+        guard let entry = selectedEntry else { return }
+        openRotateSheet(entry)
+    }
+
+    /// Rotate… for the key named `name`, selected first: for a rotation reminder.
+    func openRotate(named name: String) {
+        select(name)
+        guard let entry = selectedEntry, entry.name == name else { return }
+        openRotateSheet(entry)
+    }
+
+    private func openRotateSheet(_ entry: SecretVault.Entry) {
+        guard sheet == nil, rotateSheet == nil, let window else { return }
+        let opened = SecretRotateSheet(entry) { [weak self] said in
+            guard let self else { return }
+            self.rotateSheet = nil
+            if let said, !said.isEmpty { self.say(said) }
+            self.reload()
+        }
+        rotateSheet = opened
+        opened.begin(on: window)
+    }
+
     private func openSheet(_ mode: SecretEditSheet.Mode) {
-        guard sheet == nil, let window else { return }
+        guard sheet == nil, rotateSheet == nil, let window else { return }
         let opened = SecretEditSheet(mode) { [weak self] saved in
             guard let self else { return }
             self.sheet = nil
