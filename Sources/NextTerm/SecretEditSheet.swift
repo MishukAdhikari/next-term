@@ -157,11 +157,6 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
 
     var name: String { SecretRequestWindow.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
 
-    /// A paste into the value field: the change count it is compared with on Save.
-    func recordPaste() {
-        pasteWatch?.record()
-    }
-
     func controlTextDidChange(_ notification: Notification) {
         if (notification.object as? NSTextField) === nameField {
             let shown = SecretRequestWindow.normalized(nameField.stringValue)

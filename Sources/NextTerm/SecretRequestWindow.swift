@@ -185,7 +185,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
 
     var name: String { Self.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
 
-    /// A paste into the value field: the change count it is compared with on Save.
+    /// A paste into the value field, as the self-test makes one (it runs in release builds too): the change count it is
+    /// compared with on Save. A real paste is recorded by `pasteWatch` when it reaches the field.
     func recordPaste() {
         pasteWatch?.record()
     }

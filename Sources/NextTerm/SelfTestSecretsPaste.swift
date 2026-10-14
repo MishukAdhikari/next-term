@@ -32,11 +32,15 @@ extension SelfTest {
         other.close()
         sheetWindow.makeKey()
         sheetWindow.makeFirstResponder(sheet.valueField)
-        // Only when this Mac lets the sheet be key (Next Term in front): then a paste is the field's.
+        // Only when this Mac lets the sheet be key (Next Term in front): then a paste is the field's. Otherwise the run
+        // says the check was skipped, so a paste never counted doesn't pass unseen.
         if sheetWindow.isKeyWindow {
             sendPaste()
             let reached = await wait(2) { sheet.pastedAt != nil }
             check(reached, "secrets: a paste into Add…'s value field, its sheet key, is counted")
+        } else {
+            note("secrets: the check that a paste into Add…'s value field is counted is skipped, its sheet can't be key: "
+                 + notFrontmost(sheetWindow))
         }
         sheet.cancel()
         _ = await wait(5) { view.sheet == nil }
