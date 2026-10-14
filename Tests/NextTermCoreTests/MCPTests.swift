@@ -279,6 +279,35 @@ import Testing
         #expect(MCPServer.keyBytes("\u{1b}") == nil) // no raw control characters
         #expect(MCPServer.keyBytes("rm") == nil)
     }
+
+    /// OpenCode reads a word after its options as the project folder: new_tab gives it the prompt with --prompt, unless
+    /// the command takes a prompt already (--prompt, or `run` and its message). Every other agent's line is as before.
+    @Test func newTabGivesOpencodeItsPromptWithPromptOption() throws {
+        let prompt = "Fix the login test"
+        #expect(MCPServer.commandLine("opencode", prompt: prompt) == "opencode --prompt 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode2", prompt: prompt) == "opencode2 --prompt 'Fix the login test'")
+        #expect(MCPServer.commandLine("/opt/homebrew/bin/opencode", prompt: prompt) == "/opt/homebrew/bin/opencode --prompt 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode -m anthropic/claude-sonnet-4 --agent plan", prompt: prompt)
+            == "opencode -m anthropic/claude-sonnet-4 --agent plan --prompt 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode -c", prompt: prompt) == "opencode -c --prompt 'Fix the login test'")
+        // A prompt option already there: the prompt follows it as typed.
+        #expect(MCPServer.commandLine("opencode --prompt", prompt: prompt) == "opencode --prompt 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode -m x --prompt", prompt: prompt) == "opencode -m x --prompt 'Fix the login test'")
+        // `run` takes its message as words, after its options too.
+        #expect(MCPServer.commandLine("opencode run", prompt: prompt) == "opencode run 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode -m x run", prompt: prompt) == "opencode -m x run 'Fix the login test'")
+        // No prompt, nothing added; other agents, and words that only start like OpenCode's, unchanged.
+        #expect(MCPServer.commandLine("opencode", prompt: nil) == "opencode" && MCPServer.commandLine("opencode", prompt: "") == "opencode")
+        #expect(MCPServer.commandLine("claude", prompt: prompt) == "claude 'Fix the login test'")
+        #expect(MCPServer.commandLine("codex", prompt: prompt) == "codex 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencoder", prompt: prompt) == "opencoder 'Fix the login test'")
+        #expect(MCPServer.commandLine("claude --model opus", prompt: prompt) == "claude --model opus 'Fix the login test'")
+        // What new_tab and the skills tell agents.
+        let tool = try #require(MCPServer.tools.first { (tool: MCPServer.Tool) -> Bool in tool.name == "new_tab" })
+        #expect(tool.inputSchema.contains("opencode --prompt 'Fix the login test'"))
+        #expect(BuiltInSkill.tabs.text.contains("`opencode`") && BuiltInSkill.worktrees.text.contains("`opencode`"))
+        #expect(BuiltInSkill.tabs.text.contains("`--prompt`") && BuiltInSkill.worktrees.text.contains("`--prompt`"))
+    }
 }
 
 @Suite struct MCPRegistrarTests {
