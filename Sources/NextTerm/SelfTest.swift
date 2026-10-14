@@ -4913,7 +4913,7 @@ enum SelfTest {
               lines.suffix(6).joined(separator: " | "))
 
         // Keys: Ctrl-C stops what runs; closing a busy tab needs force.
-        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "sleep 30"])
+        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "sleep 30 # agent-sleep"])
         _ = await wait(5) { worker.status.running }
         let refused = await tool("close_tab", ["tab_id": workerID])
         check(refused.isError && refused.text.contains("force"), "MCP: close_tab will not stop a running command unless forced", refused.text)
@@ -4926,7 +4926,8 @@ enum SelfTest {
 
         // Lines an agent submits stay out of the shell's history (ShellHistory): new_tab's command, the two-line prompt,
         // `sleep 30`, and text sent with no Return that press_keys' Return then submits. A line typed as the user types it
-        // goes in. The worker's zsh reads the self-test's own config, so its history is the test's, never the user's.
+        // goes in. The worker's zsh reads the self-test's own config, so its history is the test's, never the user's; that
+        // history is shared with the test's other tabs, where `sleep 30` is typed by hand, so the agent's line has a mark.
         _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo tied-line", "submit": false])
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["enter"]])
         _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("tied-line") } }
@@ -4941,7 +4942,7 @@ enum SelfTest {
         _ = await wait(10) { listedHistory().contains("echo typed-by-hand") }
         let history: [String] = listedHistory()
         let agents: [String] = history.filter { (line: String) -> Bool in
-            line.contains("mcp-%s") || line.contains("multi-") || line == "sleep 30" || line.contains("tied-line")
+            line.contains("mcp-%s") || line.contains("multi-") || line.contains("agent-sleep") || line.contains("tied-line")
         }
         check(history.contains("echo typed-by-hand") && agents.isEmpty, "MCP: lines an agent submits stay out of zsh's history; the user's go in",
               history.suffix(8).joined(separator: " | "))
