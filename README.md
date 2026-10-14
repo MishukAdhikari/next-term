@@ -180,6 +180,10 @@ Next Term is not notarized by Apple, so with the disk image macOS blocks the fir
   Privacy & Security**, scroll down, click **Open Anyway** next to Next Term, and confirm.
 - **macOS 13 and 14:** right-click Next Term in Applications, choose **Open**, then **Open** again.
 
+Releases are signed with Next Term's own certificate, so what you allow (a folder, the camera, the microphone) stays
+allowed from one update to the next. The first update to a signed release may ask once more, and Full Disk Access, if
+you gave it, needs giving again once; see [Release signing](docs/signing.md).
+
 Each release includes `NextTerm-x.y.z.dmg.sha256`. Check the download with `shasum -a 256 -c
 NextTerm-x.y.z.dmg.sha256` before allowing it.
 
@@ -300,7 +304,8 @@ swift run NextTerm            # run a debug build
 scripts/build-dmg.sh          # universal app + DMG + checksum in dist/, and NextTerm.dSYM for crash reports
 ```
 
-To sign and notarize for distribution:
+To sign with the release identity, as CI signs releases ([Release signing](docs/signing.md)):
+`SIGN_ID=<its SHA-1> scripts/build-dmg.sh`. To sign and notarize for distribution:
 `SIGN_ID="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=<notarytool profile> scripts/build-dmg.sh`.
 
 ## Tests
@@ -332,7 +337,8 @@ Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects,
                         notifications, self-test
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme
 Tests/                  unit tests (swift-testing)
-scripts/                build, test and icon scripts
+scripts/                build, test, signing and icon scripts
+docs/                   release signing (signing.md)
 ```
 
 `NextTermCore` has no AppKit dependency, so another front end can reuse it. An iPad or iPhone app
