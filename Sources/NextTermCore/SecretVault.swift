@@ -391,6 +391,14 @@ public final class SecretVault {
         public func entry(named name: String) -> Entry? { entries.first { $0.name == name } }
         public var names: [String] { entries.map(\.name) }
 
+        /// The row of the key whose id is `id`, for a list that keeps its selection across a reload: a rename or a new
+        /// value keeps the key's id, so it stays selected; a key deleted and added again under its name has another id,
+        /// so nothing does. Nil for no id, or a key this index no longer holds.
+        public func row(of id: String?) -> Int? {
+            guard let id else { return nil }
+            return entries.firstIndex { $0.id == id }
+        }
+
         /// The keys of `earlier` that this index no longer holds as they were: gone, renamed, deleted and added again
         /// (another id), or sealed again (a new value, or made write-only). What a key is for, changed alone, keeps its
         /// seal, so it is not among them. For vault.json written by another copy of Next Term: the grants holding these

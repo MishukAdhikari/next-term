@@ -242,11 +242,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     @objc func reload() {
         let store = SecretsStore.shared
-        // The selected key, by name, before the list changes: its row may hold another key after a delete elsewhere.
-        let selected = selectedEntry?.name
+        // The selected key, by its id, before the list changes: its row may hold another key after a delete elsewhere,
+        // and a rename keeps the id, not the name.
+        let selected = selectedEntry?.id
         entries = store.index?.entries ?? []
         table.reloadData()
-        if let selected, let row = entries.firstIndex(where: { $0.name == selected }) {
+        if let row = store.index?.row(of: selected) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         } else {
             table.deselectAll(nil)
