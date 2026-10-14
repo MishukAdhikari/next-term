@@ -11,13 +11,14 @@ extension NamedValueBytes {
         let end: Int
     }
 
-    /// Every value the two patterns mask for its name, and maybe a few more, never fewer: each place a match could start
-    /// is tried on its own (the patterns, taking matches left to right, skip one that starts inside another), a name of
-    /// any length counts (they read 256 characters at most), and a placeholder counts as a value (`isValue`).
+    /// Every value the patterns (`quotedValue`, `bareValue`, `indentedValue`) mask for its name, and maybe a few more,
+    /// never fewer: each place a match could start is tried on its own (the patterns, taking matches left to right, skip
+    /// one that starts inside another), a name of any length counts (they read 256 characters at most), and a placeholder
+    /// counts as a value (`isValue`).
     func namedValues() -> [Found] {
-        // Both patterns need an `=` or a `:` before the value: most lines have neither.
+        // The patterns need an `=` or a `:` before the value: most lines have neither.
         guard bytes.contains(where: { $0 == 0x3D || $0 == 0x3A }) else { return [] }
-        return quotedValues() + bareValues()
+        return quotedValues() + bareValues() + indentedValues()
     }
 
     /// `quotedValue`: a name, maybe its closing quote, `=`, `:`, `=>` or `:=` with spaces around, and a value in quotes
@@ -117,14 +118,14 @@ extension NamedValueBytes {
     }
 
     /// Past the spaces at `index` that are not a line's end (`\h*+`: a tab and the space separators).
-    private func skipBlanks(_ index: Int) -> Int {
+    func skipBlanks(_ index: Int) -> Int {
         var at = index
         while lineEnd(at) == 0, case let length = space(at), length > 0 { at += length }
         return at
     }
 
     /// A quote or a `#`, which a bare value cannot hold.
-    private static func endsABareValue(_ byte: UInt8) -> Bool {
+    static func endsABareValue(_ byte: UInt8) -> Bool {
         byte == 0x22 || byte == 0x27 || byte == 0x60 || byte == 0x23
     }
 }

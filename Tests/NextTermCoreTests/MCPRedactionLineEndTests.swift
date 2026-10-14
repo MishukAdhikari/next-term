@@ -11,17 +11,19 @@ private func carriedLines(_ text: String) -> [String] {
 
 /// A bare value (`API_KEY=…`, `password: …`) is on its name's line: the spaces around its `=` or `:` never run past the
 /// line's end. An empty value (`DB_PASSWORD=`) took the next line with text as its value, which masked a harmless line
-/// under it, or kept a password under a name that is no secret's.
+/// under it, or kept a password under a name that is no secret's. (A YAML key's value indented more on a line under it
+/// is YAML's own rule: `IndentedValueTests`.)
 @Suite struct BareValueLineEndTests {
-    /// The line under a name with no value is read on its own: masked for its own name, or kept.
+    /// The line under a name with no value, at the name's own indent, is read on its own: masked for its own name, or
+    /// kept.
     @Test func anEmptyValueNeverTakesTheNextLine() {
         let forms: [(text: String, redacted: String)] = [
             ("db.user=\ndb.password=Tr0ub4dor3horse", "db.user=\ndb.password=•••"),
             ("db.user =\n\ndb.password = Tr0ub4dor3horse\n", "db.user =\n\ndb.password = •••\n"),
             ("DB_PASSWORD=\n\nSESSION_DRIVER=database", "DB_PASSWORD=\n\nSESSION_DRIVER=database"),
             ("DB_PASSWORD=\r\nSESSION_DRIVER=database\r\n", "DB_PASSWORD=\r\nSESSION_DRIVER=database\r\n"),
-            ("password:\n  Tr0ub4dor3horse", "password:\n  Tr0ub4dor3horse"),
-            ("api_key:\n\tmade-up-value-123\n", "api_key:\n\tmade-up-value-123\n"),
+            ("password:\nTr0ub4dor3horse", "password:\nTr0ub4dor3horse"),
+            ("  api_key:\n  made-up-value-123\n", "  api_key:\n  made-up-value-123\n"),
             ("+DB_PASSWORD=\n+SESSION_DRIVER=database", "+DB_PASSWORD=\n+SESSION_DRIVER=database"),
             ("API_TOKEN\n=Tr0ub4dor3horse", "API_TOKEN\n=Tr0ub4dor3horse"),
         ]

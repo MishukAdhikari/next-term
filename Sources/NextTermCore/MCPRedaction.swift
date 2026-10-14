@@ -80,11 +80,13 @@ public enum MCPRedaction {
         count += replace(urlPassword, in: &result, complete: &complete) { match, ns in
             ns.substring(with: match.range(at: 1)) + mask + "@"
         }
-        for expression in [quotedValue, bareValue] {
+        // Each with the group of its name; the value's groups come after it (`indentedValue` has the key's indent first).
+        let named: [(expression: NSRegularExpression, name: Int)] = [(quotedValue, 1), (bareValue, 1), (indentedValue, 2)]
+        for (expression, name) in named {
             count += replace(expression, in: &result, complete: &complete) { match, ns in
-                guard isSecretName(ns.substring(with: match.range(at: 1))) else { return nil }
+                guard isSecretName(ns.substring(with: match.range(at: name))) else { return nil }
                 let whole = ns.substring(with: match.range)
-                for group in 2..<match.numberOfRanges where match.range(at: group).location != NSNotFound {
+                for group in name + 1..<match.numberOfRanges where match.range(at: group).location != NSNotFound {
                     let value = ns.substring(with: match.range(at: group))
                     guard isValue(value) else { return nil }
                     let offset = match.range(at: group).location - match.range.location

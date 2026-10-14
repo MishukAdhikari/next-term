@@ -28,8 +28,8 @@ private func hexCarried(_ count: Int) -> String {
 }
 
 @Suite struct CarriedValueTests {
-    /// A name, its operator and its quoted value on lines of their own, as a formatter writes a long assignment or YAML
-    /// puts a quoted value under its key, or `export` on a line before a bare value's name: `redact` masks the value in
+    /// A name, its operator and its value on lines of their own, as a formatter writes a long assignment or YAML puts a
+    /// value under its key, indented more, or `export` on a line before a bare value's name: `redact` masks the value in
     /// the text whole, and the value's line, read alone, shows ••• for it too, from an offset at that line as well. A
     /// name on the value's own line is that line's to mask.
     @Test func aValueNamedOnALineBeforeItsOwnIsMaskedInIt() {
@@ -38,7 +38,8 @@ private func hexCarried(_ count: Int) -> String {
             ("let apiKey\n  = 'Tr0ub4dor&3!horse';", ["let apiKey", "  = '•••';"]),
             ("{\n  \"password\":\n    \"Tr0ub4dor&3!horse\"\n}", ["{", "  \"password\":", "    \"•••\"", "}"]),
             ("token =>\r\n `Tr0ub4dor&3!horse`,", ["token =>", " `•••`,"]),
-            ("password:\n\n    \"Tr0ub4dor3horse\"\n  port: 5432", ["password:", "", "    \"•••\"", "  port: 5432"]),
+            ("password:\n\n    Tr0ub4dor3horse\n  port: 5432", ["password:", "", "    •••", "  port: 5432"]),
+            ("database:\n  password:\n    Tr0ub4dor3horse\n", ["database:", "  password:", "    •••"]),
             ("export\n\n  API_KEY=Tr0ub4dor3horse", ["export", "", "  API_KEY=•••"]),
             ("export\n\u{3000}API_KEY=Tr0ub4dor3horse", ["export", "\u{3000}API_KEY=•••"]), // alone, the line keeps it
         ]
@@ -54,7 +55,7 @@ private func hexCarried(_ count: Int) -> String {
 
     /// What `redact` keeps in the text whole stays: a placeholder, a name that is no secret's, a name with other text
     /// between it and the value, a value on its name's own line, which that line masks, and a bare value on a line after
-    /// its name's: the spaces around a bare value's `=` or `:` stay on its name's line.
+    /// its name's: an `=` stays on its name's line, and a `:` reaches only a line indented more than its key's.
     @Test func whatTheWholeTextKeepsStays() {
         for text in [
             "apiKey =\n  \"${API_KEY}\"",
@@ -63,9 +64,9 @@ private func hexCarried(_ count: Int) -> String {
             "x = 1\napiKey = \"Tr0ub4dor&3!horse\"",
             "password:\n  - Tr0ub4dor3horse",
             "+password:\n+  Tr0ub4dor3horse",
-            "password:\n\n    Tr0ub4dor3horse\n  port: 5432",
-            "database:\n  password:\n    Tr0ub4dor3horse\n",
             "export\n\n  API_KEY\n\n=\n \nTr0ub4dor3horse",
+            "password:\nTr0ub4dor3horse\n  port: 5432",
+            "database:\n  password:\n  Tr0ub4dor3horse\n",
         ] {
             let lines = ProjectSearch.splitLines(text).map(\.0)
             let values = MCPRedaction.CarriedValues(lines, in: 0..<lines.count, mask: .empty)
