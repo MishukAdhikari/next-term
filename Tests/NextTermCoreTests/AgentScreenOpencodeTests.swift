@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NextTermCore
@@ -708,5 +709,104 @@ extension AgentScreenOpencodeTests {
         #expect(menu.choices.count == 2 && menu.choices[1] == "SQLite")
         #expect(!menu.choices[0].contains("ghp_abcdefghij") && menu.choices[0].contains(MCPRedaction.mask), "\(menu.choices[0])")
         #expect(menu.keys(toPick: 0) == ["1"])
+    }
+}
+
+/// A stored key that OpenCode's box breaks mid-token, its halves on two rows: each under the 32 characters a long run
+/// needs to be masked by its shape alone, so only the stored key's exact value masks it, and only over the rows before
+/// they are joined (joined first, the key has a space in it and no mark matches).
+extension AgentScreenOpencodeTests {
+    /// A made-up 40-character key, built here in no service's key shape: 40 different characters.
+    static let storedKey: String = {
+        let alphabet: [Character] = Array("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        let picked: [Character] = (0..<40).map { (index: Int) -> Character in alphabet[(index * 17 + 5) % alphabet.count] }
+        return String(picked)
+    }()
+    static let keyHead = String(storedKey.prefix(18))
+    static let keyTail = String(storedKey.dropFirst(18))
+
+    /// A mask with the key's marks, as the app makes it from vault.json. Never `SecretMask.current`: tests run in parallel.
+    static func storedMask() -> SecretMask {
+        let key = SymmetricKey(size: .bits256)
+        return SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: storedKey), key: key))
+    }
+
+    /// Whether `text` shows any 6 characters in a row of the stored key.
+    static func showsKey(_ text: String) -> Bool {
+        let characters: [Character] = Array(storedKey)
+        return (0...(characters.count - 6)).contains { (start: Int) -> Bool in text.contains(String(characters[start..<start + 6])) }
+    }
+
+    @Test func aKeyTheBoxWrapsInACommandIsMaskedBeforeItsRowsAreJoined() throws {
+        let mask = Self.storedMask()
+        let shell = OpencodeScreens.shell(["$ ./deploy.sh --channel beta " + Self.keyHead, Self.keyTail + " --region eu"])
+        let command = "$ ./deploy.sh --channel beta ••• --region eu"
+        let asked = "Permission required: Shell command (" + command + ")"
+        for lines in [shell, OpencodeScreens.withSidebar(shell)] {
+            #expect(AgentScreen.activity(screenLines: lines, opencode: true, mask: mask) == .asking(asked))
+            let header = try #require(lines.firstIndex { (line: String) -> Bool in line.contains("Permission required") })
+            let buttons = try #require(lines.lastIndex { (line: String) -> Bool in line.contains("Allow once") })
+            let text = try #require(AgentScreen.Opencode.commandText(from: header + 1, above: buttons, in: lines, mask: mask))
+            #expect(text == command && !Self.showsKey(text), "\(text)")
+            let rows: [ScreenRow] = OpencodeScreens.rows(lines, selected: 0)
+            let menu = try #require(AgentScreen.menu(screenRows: rows, opencode: true, mask: mask))
+            #expect(menu.question == asked && menu.choices == ["Allow once", "Allow always", "Reject"])
+            let given = try #require(AgentScreen.menu(asking: asked, screenRows: rows, shown: mask.mask(rows: lines), mask: mask))
+            #expect(given == menu)
+        }
+        // A title the box wraps (a fetched address) is masked the same way.
+        var fetch = OpencodeScreens.editPermission
+        fetch[6] = "  ┃    % WebFetch https://hooks.example.com/build/" + Self.keyHead
+        fetch.insert("  ┃    " + Self.keyTail + "/run", at: 7)
+        let fetched = try #require(AgentScreen.Opencode.permission(in: fetch, mask: mask))
+        #expect(fetched == "Permission required: WebFetch https://hooks.example.com/build/•••", "\(fetched)")
+    }
+
+    @Test func aKeyTheBoxWrapsInAFormIsMaskedInItsQuestionAndOptions() throws {
+        let mask = Self.storedMask()
+        let form: [String] = OpencodeScreens.transcript + [
+            "  ┃",
+            "  ┃  Should the deploy use the key " + Self.keyHead,
+            "  ┃  " + Self.keyTail + " from the vault?",
+            "  ┃",
+            "  ┃  1. Yes, use " + Self.keyHead,
+            "  ┃     " + Self.keyTail,
+            "  ┃  2. No",
+            "  ┃  3. Type your own answer",
+            "  ┃",
+            "  ┃  ↑↓ select  enter submit  esc dismiss",
+            "  ┃",
+        ]
+        let question = "Should the deploy use the key ••• from the vault?"
+        for lines in [form, OpencodeScreens.withSidebar(form)] {
+            #expect(AgentScreen.activity(screenLines: lines, opencode: true, mask: mask) == .asking(question))
+            #expect(AgentScreen.Opencode.form(in: lines, mask: mask) == question)
+            let single = try #require(AgentScreen.Opencode.singleForm(in: lines, mask: mask))
+            #expect(single.options == ["Yes, use •••", "No"])
+            let rows: [ScreenRow] = OpencodeScreens.form(lines, selected: 1)
+            let menu = try #require(AgentScreen.menu(screenRows: rows, opencode: true, mask: mask))
+            #expect(menu.question == question && menu.choices == ["Yes, use •••", "No"] && menu.keys(toPick: 1) == ["2"])
+            // As MCP gives it: the colours from the rows, the words from the rows masked over whole lines (beside the
+            // sidebar those keep the halves, which the form's own cells mask).
+            let given = try #require(AgentScreen.menu(asking: question, screenRows: rows, shown: mask.mask(rows: lines), mask: mask))
+            #expect(given == menu)
+            #expect(!Self.showsKey(menu.question + " " + menu.choices.joined(separator: " ")))
+            #expect(AgentScreen.menu(asking: "Should the deploy stop?", screenRows: rows, shown: lines, mask: mask) == nil)
+        }
+        // Its review, a wrapped answer on two rows: no part of the key either.
+        let review: [String] = OpencodeScreens.transcript + [
+            "  ┃",
+            "  ┃   Key   Review",
+            "  ┃",
+            "  ┃  Review",
+            "  ┃",
+            "  ┃  Key: " + Self.keyHead,
+            "  ┃  " + Self.keyTail,
+            "  ┃",
+            "  ┃  ⇆ tab  enter submit  esc dismiss",
+            "  ┃",
+        ]
+        let reviewed = try #require(AgentScreen.Opencode.form(in: review, mask: mask))
+        #expect(reviewed.hasPrefix("Review: Key: •••") && !Self.showsKey(reviewed), "\(reviewed)")
     }
 }

@@ -78,11 +78,12 @@ public enum AgentScreen {
     /// prompt while its own footer or question is there.
     ///
     /// The host passes an OpenCode tab's whole screen (at least `scannedLines`), so a fullscreen prompt's header, at its
-    /// top, is read with its buttons at the bottom; every agent's shapes still read only the last `scannedLines`.
-    public static func activity(screenLines lines: [String], opencode: Bool) -> AgentActivity {
-        guard opencode else { return activity(screenLines: lines) }
-        let own = Opencode.activity(lines)
-        return own == .idle ? activity(screenLines: lines) : own
+    /// top, is read with its buttons at the bottom; every agent's shapes still read only the last `scannedLines`. `mask`
+    /// masks stored keys over the rows of OpenCode's question too, before they are joined.
+    public static func activity(screenLines lines: [String], opencode: Bool, mask: SecretMask = .current) -> AgentActivity {
+        guard opencode else { return activity(screenLines: lines, mask: mask) }
+        let own = Opencode.activity(lines, mask: mask)
+        return own == .idle ? activity(screenLines: lines, mask: mask) : own
     }
 
     /// A question with fixed words ("Do you want to…?") and its choices, in the last `promptLines`

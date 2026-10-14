@@ -114,8 +114,8 @@ extension AgentScreen {
 extension AgentScreen.Opencode {
     /// What OpenCode's screen says, in the rows the host passes (its whole screen): a question, its working hint, its
     /// footer alone (ready), or nothing of its own (idle, for every agent's shapes to read).
-    static func activity(_ lines: [String]) -> AgentActivity {
-        if let asked = permission(in: lines) ?? form(in: lines) { return .asking(shown(asked)) }
+    static func activity(_ lines: [String], mask: SecretMask = .current) -> AgentActivity {
+        if let asked = permission(in: lines, mask: mask) ?? form(in: lines, mask: mask) { return .asking(shown(asked, mask: mask)) }
         let bottom = lines.suffix(AgentScreen.promptLines)
         if bottom.contains(where: { found(working, in: $0) }) { return .working }
         if bottom.contains(where: { found(ready, in: $0) }) { return .ready }
@@ -124,9 +124,11 @@ extension AgentScreen.Opencode {
 
     /// A question's words as Next Term passes them on (the decision notification, list_tabs, read_tab, wait_for_tab):
     /// secrets masked (`CommandSecrets.mask`: auth headers, tokens, URL passwords in a command or a WebFetch URL),
-    /// before the cut, so no part of one is left; at most `longest` characters, a cut one ending in "…".
-    static func shown(_ words: String) -> String {
-        let masked = CommandSecrets.mask(words)
+    /// before the cut, so no part of one is left; at most `longest` characters, a cut one ending in "…". Stored keys
+    /// were masked over the rows `words` was read from before they were joined (`mask`), so a key OpenCode's box wraps
+    /// mid-token shows in neither row.
+    static func shown(_ words: String, mask: SecretMask = .current) -> String {
+        let masked = CommandSecrets.mask(words, mask: mask)
         guard masked.count > longest else { return masked }
         return String(masked.prefix(longest - 1)) + "…"
     }
@@ -135,21 +137,22 @@ extension AgentScreen.Opencode {
 
     /// The permission prompt, or a step after it, whose buttons (or the reject step's hints) are in the last
     /// `promptLines` of `lines`: its words, read from its header down.
-    static func permission(in lines: [String]) -> String? {
-        permissionPrompt(in: lines)?.words
+    static func permission(in lines: [String], mask: SecretMask = .current) -> String? {
+        permissionPrompt(in: lines, mask: mask)?.words
     }
 
     /// `permission(in:)`, with the row of its buttons and their labels; no labels for the reject step, which has none.
-    static func permissionPrompt(in lines: [String]) -> (row: Int, labels: [String]?, words: String)? {
+    static func permissionPrompt(in lines: [String], mask: SecretMask = .current) -> (row: Int, labels: [String]?, words: String)? {
         let start = max(0, lines.count - AgentScreen.promptLines)
         for row in (start..<lines.count).reversed() {
             if let labels = buttons(at: row, in: lines) {
                 let header = labels == confirmButtons ? alwaysHeader : permissionHeader
-                guard let asked = words(under: header, above: row, in: lines) else { return nil }
+                guard let asked = words(under: header, above: row, in: lines, mask: mask) else { return nil }
                 return (row, labels, asked)
             }
             // Other dialogs show these hints too: only under its own header is it the reject step.
-            if rejectHints.allSatisfy({ lines[row].contains($0) }), let asked = words(under: rejectHeader, above: row, in: lines) {
+            if rejectHints.allSatisfy({ lines[row].contains($0) }),
+               let asked = words(under: rejectHeader, above: row, in: lines, mask: mask) {
                 return (row, nil, asked)
             }
         }
@@ -170,12 +173,14 @@ extension AgentScreen.Opencode {
     /// the command alone where no title is drawn; with 2.0's "Always allow" selected and no title, the first line of
     /// what it would save (`alwaysShown`). A step: its header and its first line. Without its header in the rows read,
     /// the header's words alone, a question of its own; nil for the reject step, which only its header tells from other
-    /// dialogs.
-    static func words(under header: String, above row: Int, in lines: [String]) -> String? {
+    /// dialogs. The body's rows are masked together first (`SecretMask.mask(rows:)`), so a stored key the box wraps
+    /// shows in neither.
+    static func words(under header: String, above row: Int, in lines: [String], mask: SecretMask = .current) -> String? {
         guard let top = (0..<row).reversed().first(where: { headerText(cell(lines[$0])) == header }) else {
             return header == rejectHeader ? nil : header
         }
-        let body: [String] = ((top + 1)..<row).map { cell(lines[$0]) }
+        let cells: [String] = ((top + 1)..<row).map { (index: Int) -> String in cell(lines[index]) }
+        let body: [String] = mask.mask(rows: cells)
         guard header == permissionHeader else {
             guard let first = body.first(where: { !$0.isEmpty }) else { return header }
             return header + ": " + first
@@ -183,7 +188,7 @@ extension AgentScreen.Opencode {
         let line = body.first ?? ""
         let title = line.hasPrefix(command) ? "" : withoutIcon(line)
         var shell = ""
-        if title.isEmpty || title == shellTitle { shell = commandText(from: top + 1, above: row, in: lines) ?? "" }
+        if title.isEmpty || title == shellTitle { shell = commandText(from: top + 1, above: row, in: lines, mask: mask) ?? "" }
         if title.isEmpty, shell.isEmpty, let saved = body.first(where: { $0.hasPrefix(alwaysBody) }) {
             return header + ": " + saved
         }
@@ -210,15 +215,16 @@ extension AgentScreen.Opencode {
 
     /// The command of a shell request, from its "$ " row (at `first` or below) down to the buttons at `buttons`: a long
     /// command wraps and one with line breaks takes a row for each, all in one text (permission.tsx, `"$ " + command`),
-    /// so every row with text is joined, with spaces. Less than `boxPadding` blank rows above the buttons, and the
-    /// command runs on under them: it ends in "…". Nil without a "$ " row.
-    static func commandText(from first: Int, above buttons: Int, in lines: [String]) -> String? {
+    /// so every row with text is joined, with spaces, stored keys masked over the rows first (`AgentScreen.maskedQuestion`):
+    /// a key the box wraps mid-token is one "•••". Less than `boxPadding` blank rows above the buttons, and the command
+    /// runs on under them: it ends in "…". Nil without a "$ " row.
+    static func commandText(from first: Int, above buttons: Int, in lines: [String], mask: SecretMask = .current) -> String? {
         let sidebar = sidebarColumn(in: lines)
         let rows: [String] = (first..<buttons).map { commandCell(lines[$0], sidebar: sidebar) }
         guard let start = rows.firstIndex(where: { $0.hasPrefix(command) }) else { return nil }
         let shown = rows[start...].filter { !$0.isEmpty }
         let last = rows.lastIndex(where: { !$0.isEmpty }) ?? start
-        let text = shown.joined(separator: " ")
+        let text = AgentScreen.maskedQuestion(Array(shown), mask: mask)
         return rows.count - 1 - last < boxPadding ? text + " …" : text
     }
 
@@ -271,12 +277,13 @@ extension AgentScreen.Opencode {
     // MARK: the question form
 
     /// The question form whose hint row is in the last `promptLines` of `lines`, with option 1 above it: its question
-    /// (lines joined, without " (select all that apply)"); or its last tab, which has no options: what it reviews.
-    /// Hint words without either are the transcript's, not the form.
-    static func form(in lines: [String]) -> String? {
+    /// (lines joined, stored keys masked over them first as `AgentScreen.maskedQuestion` does, without " (select all that
+    /// apply)"); or its last tab, which has no options: what it reviews. Hint words without either are the transcript's,
+    /// not the form.
+    static func form(in lines: [String], mask: SecretMask = .current) -> String? {
         let start = max(0, lines.count - AgentScreen.promptLines)
         guard let hint = (start..<lines.count).last(where: { isFormHint(lines[$0]) }) else { return nil }
-        guard cell(lines[hint]).contains(formSelect) else { return reviewed(above: hint, in: lines) }
+        guard cell(lines[hint]).contains(formSelect) else { return reviewed(above: hint, in: lines, mask: mask) }
         guard let first = firstOption(above: hint, in: lines) else { return nil }
         var above = first - 1
         while above >= 0, cell(lines[above]).isEmpty { above -= 1 }
@@ -287,7 +294,7 @@ extension AgentScreen.Opencode {
             words.insert(text, at: 0)
             above -= 1
         }
-        var asked = words.joined(separator: " ")
+        var asked = AgentScreen.maskedQuestion(words, mask: mask)
         if asked.hasSuffix(selectAll) { asked.removeLast(selectAll.count) }
         return asked.isEmpty ? AgentScreen.formFallback : asked
     }
@@ -323,10 +330,12 @@ extension AgentScreen.Opencode {
         return Int(ns.substring(with: match.range(at: 1)))
     }
 
-    /// The last tab of a form with several questions: "Review: " and each answer under it ("Database: SQLite").
-    static func reviewed(above hint: Int, in lines: [String]) -> String? {
+    /// The last tab of a form with several questions: "Review: " and each answer under it ("Database: SQLite"), stored
+    /// keys masked over the answers' rows first.
+    static func reviewed(above hint: Int, in lines: [String], mask: SecretMask = .current) -> String? {
         guard lines[hint].contains(formTabs), let top = (0..<hint).last(where: { cell(lines[$0]) == review }) else { return nil }
-        let answers = ((top + 1)..<hint).map { cell(lines[$0]) }.filter { !$0.isEmpty }
+        let cells: [String] = ((top + 1)..<hint).map { (index: Int) -> String in cell(lines[index]) }
+        let answers: [String] = mask.mask(rows: cells).filter { (text: String) -> Bool in !text.isEmpty }
         return answers.isEmpty ? review : review + ": " + answers.joined(separator: "; ")
     }
 
@@ -384,11 +393,32 @@ extension AgentScreen {
     /// The menu under the question a tab's agent asks, read from its rows, colours and all. In a tab that shows OpenCode
     /// (`opencode`), OpenCode's own buttons and options, the selected button told by its background; an OpenCode tab that
     /// shows none of OpenCode's shapes, and every other tab, reads its rows' text as `menu(screenLines:)` does.
-    public static func menu(screenRows rows: [ScreenRow], opencode: Bool) -> AgentMenu? {
+    public static func menu(screenRows rows: [ScreenRow], opencode: Bool, mask: SecretMask = .current) -> AgentMenu? {
         let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
-        guard opencode else { return menu(screenLines: lines) }
-        guard Opencode.activity(lines) != .idle else { return menu(screenLines: lines) }
-        return Opencode.menu(rows)
+        guard opencode else { return menu(screenLines: lines, mask: mask) }
+        guard Opencode.activity(lines, mask: mask) != .idle else { return menu(screenLines: lines, mask: mask) }
+        return Opencode.menu(rows, mask: mask)
+    }
+
+    /// The menu under `question` in a tab that shows OpenCode, for an agent to read, as `menu(asking:screenLines:shown:)`
+    /// gives every other tab's: read from `rows`, colours and all (`menu(screenRows:opencode:)`), its question matched on
+    /// them, with its options' words from `shown`, the same rows' text with stored keys masked over whole lines
+    /// (`SecretMask.mask(window:rows:text:)`), so a key that starts above the rows read shows none of it either. A
+    /// permission prompt's buttons are OpenCode's own words. A screen that shows none of OpenCode's shapes is read as
+    /// every other tab's. Nil when either reads no menu, its question is another, or the two count different options.
+    public static func menu(asking question: String, screenRows rows: [ScreenRow], shown: [String],
+                            mask: SecretMask = .current) -> AgentMenu? {
+        let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
+        let masked: [String] = Array(shown.suffix(lines.count))
+        guard Opencode.activity(lines, mask: mask) != .idle else {
+            return menu(asking: question, screenLines: lines, shown: masked, mask: mask)
+        }
+        guard let read = Opencode.menu(rows, mask: mask), read.asks(question) else { return nil }
+        guard read.style == .digits else { return read }
+        guard let form = Opencode.singleForm(in: masked, mask: mask), form.options.count == read.choices.count else { return nil }
+        let choices: [String] = form.options.map { (label: String) -> String in CommandSecrets.mask(label, mask: mask) }
+        return AgentMenu(question: question, style: read.style, choices: choices, highlighted: read.highlighted,
+                         escape: read.escape, shrinksFirst: read.shrinksFirst, blocked: read.blocked)
     }
 
     /// Why the question in a tab that shows OpenCode has no menu to pick from, said for the caller: a form with several
@@ -422,20 +452,20 @@ extension AgentScreen.Opencode {
     ///   digit unless the digit could go into an answer of your own (`digitsRefusal`).
     ///
     /// Nil for the reject step and for a form with several questions or answers (`refusal` says why).
-    static func menu(_ rows: [ScreenRow]) -> AgentMenu? {
+    static func menu(_ rows: [ScreenRow], mask: SecretMask = .current) -> AgentMenu? {
         let lines: [String] = rows.map { (row: ScreenRow) -> String in row.text }
-        if let prompt = permissionPrompt(in: lines) {
+        if let prompt = permissionPrompt(in: lines, mask: mask) {
             guard let labels = prompt.labels else { return nil }
             let selected: Int? = rows[prompt.row].selected(among: labels)
             let escape: Int? = labels.firstIndex { (label: String) -> Bool in escapeChoices.contains(label) }
             let shrinks: Bool = shrinkingRows.contains(labels) && fullscreen(at: prompt.row, in: lines)
-            return AgentMenu(question: shown(prompt.words), style: .row, choices: labels, highlighted: selected,
+            return AgentMenu(question: shown(prompt.words, mask: mask), style: .row, choices: labels, highlighted: selected,
                              escape: escape, shrinksFirst: shrinks)
         }
-        guard let asked = form(in: lines), let single = singleForm(in: lines) else { return nil }
-        let choices: [String] = single.options.map { (label: String) -> String in CommandSecrets.mask(label) }
+        guard let asked = form(in: lines, mask: mask), let single = singleForm(in: lines, mask: mask) else { return nil }
+        let choices: [String] = single.options.map { (label: String) -> String in CommandSecrets.mask(label, mask: mask) }
         let held: String? = digitsRefusal(rows, single)
-        return AgentMenu(question: shown(asked), style: .digits, choices: choices, highlighted: nil, blocked: held)
+        return AgentMenu(question: shown(asked, mask: mask), style: .digits, choices: choices, highlighted: nil, blocked: held)
     }
 
     /// Whether the prompt whose buttons are at `row` shows fullscreen: its hints, beside the buttons or under them, say
@@ -448,17 +478,19 @@ extension AgentScreen.Opencode {
     /// A form that asks one question with one answer, from option 1 down to its hint row (`hint`): its options without
     /// the row for an answer of your own, the row of each, and that row's (`own`), when it has one. Nil for a form that
     /// shows "⇆ tab" (several questions, or one with several answers, as question.tsx draws it), or options with
-    /// checkboxes.
-    static func singleForm(in lines: [String]) -> SingleForm? {
+    /// checkboxes. The labels are cut from the rows with stored keys masked over them first (`SecretMask.mask(rows:)`),
+    /// so a key an option's row wraps onto the next shows no half.
+    static func singleForm(in lines: [String], mask: SecretMask = .current) -> SingleForm? {
         let start = max(0, lines.count - AgentScreen.promptLines)
         guard let hint = (start..<lines.count).last(where: { isFormHint(lines[$0]) }), !lines[hint].contains(formTabs),
               cell(lines[hint]).contains(formSelect), let first = firstOption(above: hint, in: lines) else { return nil }
+        let cells: [String] = (first..<hint).map { (row: Int) -> String in cell(lines[row]) }
+        let masked: [String] = mask.mask(rows: cells)
         var options: [String] = []
         var rows: [Int] = []
         for row in first..<hint {
-            let text = cell(lines[row])
-            guard let number = optionNumber(text), number == options.count + 1 else { continue }
-            options.append(optionLabel(text))
+            guard let number = optionNumber(cells[row - first]), number == options.count + 1 else { continue }
+            options.append(optionLabel(masked[row - first]))
             rows.append(row)
         }
         var own: Int?

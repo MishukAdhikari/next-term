@@ -256,8 +256,11 @@ enum MCPControl {
     /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
     static func fieldMenu(_ tab: TerminalTab, question: String) -> AgentMenu? {
         // OpenCode marks its selected button only by its background: its menu is read from its rows with their colours,
-        // and its choices are masked where they are given out (`field`).
-        if tab.isOpencodeScreen { return tab.agentMenu().flatMap { $0.asks(question) ? $0 : nil } }
+        // and its options' words from the same rows masked over whole lines, as every other tab's choices are.
+        if tab.isOpencodeScreen {
+            let count: Int = tab.agentScreenLines
+            return AgentScreen.menu(asking: question, screenRows: tab.liveRows(count), shown: fieldTail(tab, count))
+        }
         return AgentScreen.menu(asking: question, screenLines: tab.screenTail(), shown: fieldTail(tab))
     }
     /// A tab's restored details (MCPRestoredTabs), masked: their note can quote a command line or a resume's screen, saved
