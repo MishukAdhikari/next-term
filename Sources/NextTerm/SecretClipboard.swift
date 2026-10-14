@@ -38,8 +38,13 @@ final class SecretClipboard {
     private(set) var lastCopyWrite: (before: [NSPasteboard.PasteboardType], after: [NSPasteboard.PasteboardType])?
     #endif
 
-    init(pasteboard: NSPasteboard) {
+    /// Where the quit and the lock are heard: the app's own center, or a stand-in clipboard's in the self-test, which
+    /// posts a quit there that nothing else hears.
+    private let center: NotificationCenter
+
+    init(pasteboard: NSPasteboard, center: NotificationCenter = .default) {
         self.pasteboard = pasteboard
+        self.center = center
     }
 
     /// Puts `value` on the pasteboard for this Mac only, marked concealed and transient, and clears it after
@@ -66,7 +71,6 @@ final class SecretClipboard {
     /// on the posting thread, the main one, since the app exits right after it.
     private func startObserving() {
         guard observers.isEmpty else { return }
-        let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
             MainActor.assumeIsolated { self?.clearPendingCopy() }
         })

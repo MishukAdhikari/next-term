@@ -1627,18 +1627,29 @@ extension SelfTest {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         check(clipboard.pasteboard.string(forType: .string) == "something else" && NSPasteboard.general.changeCount == general,
               "secrets: what was copied since is kept, and the general pasteboard was never touched")
-        // The quit's (and a lock's) clear, within the window: the copy still there goes, something copied over it stays.
+        // A lock's and the quit's clear, within the window, through what the clipboard hears (review finding #11): the copy
+        // still there goes, something copied over it stays. The lock is Secrets' own lock event. The quit is posted to a
+        // stand-in clipboard's own notification center, on its own pasteboard, so nothing else hears it.
         clipboard.clearAfter = 60
-        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-quit-0123"))
-        clipboard.clearPendingCopy()
-        let clearedAtQuit: Bool = clipboard.pasteboard.string(forType: .string) == nil && clipboard.copiedCount == nil
-        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-quit-4567"))
+        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-lock-0123"))
+        SecretsStore.shared.handleLockEvent(.screenLocked)
+        let clearedAtLock: Bool = await wait(5) { clipboard.pasteboard.string(forType: .string) == nil && clipboard.copiedCount == nil }
+        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-lock-4567"))
         clipboard.pasteboard.clearContents()
         clipboard.pasteboard.setString("something else", forType: .string)
-        clipboard.clearPendingCopy()
-        let keptAtQuit: Bool = clipboard.pasteboard.string(forType: .string) == "something else" && clipboard.copiedCount == nil
-        check(clearedAtQuit && keptAtQuit, "secrets: quitting within the 60 seconds clears a copied key still on the clipboard, and keeps "
-              + "what was copied over it")
+        SecretsStore.shared.handleLockEvent(.systemSleep)
+        _ = await wait(2) { clipboard.copiedCount == nil }
+        let keptAtLock: Bool = clipboard.pasteboard.string(forType: .string) == "something else" && clipboard.copiedCount == nil
+        check(clearedAtLock && keptAtLock, "secrets: the Mac locking or sleeping within the 60 seconds clears a copied key still on the "
+              + "clipboard, and keeps what was copied over it")
+        let center = NotificationCenter()
+        let quitting = SecretClipboard(pasteboard: NSPasteboard(name: NSPasteboard.Name("NextTermSelfTest-\(UUID().uuidString)")), center: center)
+        defer { quitting.pasteboard.releaseGlobally() }
+        quitting.copy(SecretBytes(utf8: "selftest-copied-at-quit-0123"))
+        let copiedBeforeQuit: Bool = quitting.pasteboard.string(forType: .string) != nil && quitting.copiedCount != nil
+        center.post(name: NSApplication.willTerminateNotification, object: NSApp)
+        let clearedAtQuit: Bool = quitting.pasteboard.string(forType: .string) == nil && quitting.copiedCount == nil
+        check(copiedBeforeQuit && clearedAtQuit, "secrets: quitting within the 60 seconds clears a copied key still on the clipboard")
 
         // Reveal shows the value in a field that can't be selected: only Copy puts a value on a pasteboard.
         view.select("SHOWN_KEY")
