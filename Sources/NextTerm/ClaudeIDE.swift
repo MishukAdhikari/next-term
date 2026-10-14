@@ -34,6 +34,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         var tokenless = false
         /// opencode, which never sends ide_connected (with or without the token).
         var opencode = false
+        /// OpenCode: the last file whose selection it was sent, named again once the editor shows no file it may share.
+        var lastShared: String?
     }
 
     let token: String
@@ -373,13 +375,26 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         queue.sync { sessions.map { ($0.key, $0.value.claudePid, $0.value.ready) } }
     }
 
-    /// `selection_changed` / `at_mentioned` to these clients (nil: all ready clients).
+    /// `selection_changed` / `at_mentioned` to these clients (nil: all ready clients). OpenCode ignores the clearing
+    /// selection (no file, no text) and would keep the old lines: it is told the last file shared with it, with no text.
     func notify(_ method: String, _ params: [String: Any], to clients: Set<ClientID>? = nil) {
         queue.async {
             for (id, session) in self.sessions where session.ready && (clients?.contains(id) ?? true) {
-                self.send(["jsonrpc": "2.0", "method": method, "params": params], on: session.connection)
+                var sent = params
+                if session.opencode, method == "selection_changed" {
+                    guard let selection = IDELink.opencodeSelection(params, lastShared: session.lastShared) else { continue }
+                    self.sessions[id]?.lastShared = selection.lastShared
+                    sent = selection.params
+                }
+                self.send(["jsonrpc": "2.0", "method": method, "params": sent], on: session.connection)
             }
         }
+    }
+
+    /// Whether `client` named itself OpenCode in its handshake: it counts a mention's lines from 1 and takes none without
+    /// lines (IDELink.mention).
+    func isOpencode(_ client: ClientID) -> Bool {
+        queue.sync { sessions[client]?.opencode ?? false }
     }
 
     private func reply(_ connection: NWConnection, _ id: Any, result: [String: Any]? = nil, error: [String: Any]? = nil) {

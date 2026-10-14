@@ -387,3 +387,98 @@ extension SelfTest {
     }
 }
 #endif
+
+// MARK: Send to Agent into a linked OpenCode
+
+/// ⌥⌘K into OpenCode linked to the editor, through the stand-in client opencodeLinkChecks runs (this app's binary as
+/// `opencode.exe`, saying it is "opencode"). Selected lines go in as a mention counted from 1; a file from the sidebar is
+/// typed in OpenCode's own form, with no mention; a .env in front leaves OpenCode the last file with no text, never its
+/// old lines. The stand-in lives six seconds, so each case starts its own.
+extension SelfTest {
+    static func opencodeSendChecks(_ c: TerminalWindowController, dir: URL, port: UInt16) async {
+        guard let window = c.window else { return }
+        let source = dir.appendingPathComponent("app.ts")
+        let numbered = (1...30).map { "const line\($0) = \($0)" }.joined(separator: "\n") + "\n"
+        let secrets = dir.appendingPathComponent(".env")
+        try? numbered.write(to: source, atomically: true, encoding: .utf8)
+        try? "EXAMPLE_SETTING=made-up\n".write(to: secrets, atomically: true, encoding: .utf8)
+        let tab = c.addTab(directory: dir.path)
+        guard await wait(20, { tab.status.integrated }) else { return check(false, "OpenCode ⌥⌘K: the stand-in's tab starts its shell") }
+        func received(_ name: String) -> [[String: Any]] {
+            let text = (try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+        }
+        func last(_ method: String, _ name: String) -> [String: Any]? {
+            received(name).last { $0["method"] as? String == method }?["params"] as? [String: Any]
+        }
+        // A stand-in that writes what it gets to `name`, linked to its tab as OpenCode.
+        func link(_ name: String) async -> Bool {
+            _ = await wait(10) { !tab.status.running && AppDelegate.shared.claudeClient(for: tab) == nil }
+            tab.view.send(txt: "\u{15}./opencode.exe --cli --self-test-ide-client \(port) \(name)\r")
+            let linked = await wait(5) { tab.status.running && AppDelegate.shared.claudeClient(for: tab) != nil }
+            guard linked, let client = AppDelegate.shared.claudeClient(for: tab) else { return false }
+            return ClaudeIDEServer.shared.isOpencode(client)
+        }
+        defer {
+            if let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(secrets.path) { c.editorArea.close(editor) }
+            if let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(source.path) { c.editorArea.close(editor) }
+            c.remove(tab)
+        }
+
+        c.openFile(source)
+        guard let editor = c.editorArea.activeEditor, editor.document.path == canonicalPath(source.path),
+              editor.document.lines.count > 21 else { return check(false, "OpenCode ⌥⌘K: a file of 30 lines opens") }
+        let starts = editor.document.lines.starts
+        // Lines 10 to 20 as the editor numbers them: from the start of line 10 to the start of line 21.
+        editor.textView.setSelectedRange(NSRange(location: starts[9], length: starts[20] - starts[9]))
+        guard await link("send-lines.jsonl") else {
+            return check(false, "OpenCode ⌥⌘K: the stand-in links from its tab as OpenCode", tab.screenTail(3).joined(separator: " | "))
+        }
+        check(c.agentTab === tab, "OpenCode ⌥⌘K: its tab is the one Send to Agent types into", c.agentTab?.title ?? "none")
+        let chord = KeyboardShortcuts.shared.key(for: #selector(TerminalWindowController.sendToAgent(_:)))
+        check(chord == KeyChord(key: "k", command: true, option: true), "OpenCode ⌥⌘K: Send to Agent is on ⌥⌘K", chord?.display ?? "no key")
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(editor.textView)
+        let screen = tab.screenTail(3).joined()
+        pressSendToAgentKey()
+        let mentioned = await wait(4) { last("at_mentioned", "send-lines.jsonl")?["lineStart"] as? Int == 10 }
+        let mention = last("at_mentioned", "send-lines.jsonl")
+        let exact = mention?["lineEnd"] as? Int == 20 && mention?["filePath"] as? String == editor.document.path
+        check(mentioned && exact, "OpenCode ⌥⌘K: lines 10-20 go in as a mention of lines 10 to 20, counted from 1", "\(mention ?? [:])")
+        check(tab.screenTail(3).joined() == screen, "OpenCode ⌥⌘K: and nothing is typed into its tab", tab.screenTail(3).joined(separator: " | "))
+
+        // A whole file has no lines, which OpenCode's mention needs: it is typed, in OpenCode's own form.
+        guard await link("send-file.jsonl") else { return check(false, "OpenCode sidebar: the stand-in links again") }
+        c.sidebar(c.sidebar, sendToAgent: [(url: source, isFolder: false)])
+        let typed = await wait(4) { tab.screenTail(3).joined().contains("@app.ts") }
+        await pause(0.5) // a mention would be written by now
+        check(typed && last("at_mentioned", "send-file.jsonl") == nil, "OpenCode sidebar: a whole file is typed as @app.ts, with no mention",
+              tab.screenTail(3).joined(separator: " | "))
+
+        // It starts with what the editor shows (app.ts), then a .env comes in front.
+        guard await link("send-env.jsonl") else { return check(false, "OpenCode .env: the stand-in links again") }
+        let shared = await wait(3) { last("selection_changed", "send-env.jsonl")?["filePath"] as? String == editor.document.path }
+        c.openFile(secrets)
+        let told = await wait(4) {
+            let params = last("selection_changed", "send-env.jsonl")
+            let front = c.editorArea.activeEditor?.document.holdsSecrets == true
+            return front && params?["filePath"] as? String == editor.document.path && params?["text"] as? String == ""
+        }
+        check(shared && told, "OpenCode .env: with a .env in front it is told the last file with no text, so the old lines go",
+              "\(last("selection_changed", "send-env.jsonl") ?? [:])")
+        let named = received("send-env.jsonl").contains { message in
+            (message["params"] as? [String: Any])?["filePath"] as? String == canonicalPath(secrets.path)
+        }
+        check(!named, "OpenCode .env: and never the .env's name")
+        _ = await wait(10) { !tab.status.running }
+    }
+
+    /// ⌥⌘K as the keyboard sends it: a key down made from a CGEvent (K is key 40), so AppKit reads its characters off the
+    /// keyboard layout as it does a real key's, and it goes to the window that has the keyboard (SelfTestGitKeys.pressKey).
+    private static func pressSendToAgentKey() {
+        guard let key = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: 40, keyDown: true) else { return }
+        key.flags = [.maskCommand, .maskAlternate]
+        guard let event = NSEvent(cgEvent: key) else { return }
+        NSApp.sendEvent(event)
+    }
+}

@@ -539,7 +539,7 @@ import Testing
     /// The paste dialect each program gets (AgentPrompt) is the same for every name the table runs its agent by, so a name
     /// the table adds is not pasted to as another program.
     @Test func thePasteDialectIsTheSameForEveryNameOfAnAgent() {
-        let expected: [RestoreAgent: AgentDialect] = [.claude: .atHash, .opencode: .atHash, .copilot: .atColon, .gemini: .atProse,
+        let expected: [RestoreAgent: AgentDialect] = [.claude: .atHash, .opencode: .atRange, .copilot: .atColon, .gemini: .atProse,
                                                       .qwen: .atProse]
         for agent in RestoreAgent.allCases {
             let dialects: [AgentDialect] = agent.cli.programs.map(AgentDialect.forProgram)

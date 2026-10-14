@@ -368,6 +368,7 @@ extension SelfTest {
         check(await wait(3) { elsewhere.last("selection_changed")?["filePath"] as? String == editor.document.path },
               "opencode started elsewhere, with the token, sees the selection too")
         elsewhere.close()
+        await opencodeSendChecks(c, dir: dir, port: port)
     }
 
     /// opencode's editor client, as the self-test's stand-in (`<copy named opencode.exe> --cli
