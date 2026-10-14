@@ -587,6 +587,8 @@ enum SelfTest {
         await pause(0.2)
         check(asked.contains("sleep 30") && c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
         c.closeTab(nil)
+        // On a slow machine the sheet comes a moment later: wait for it, or it stays up over the window.
+        _ = await wait(2) { window.attachedSheet != nil }
         if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
         check(await wait(2) { !c.tabs.contains { $0 === busy } }, "Close Tab removes it")
         check(await wait(4) { kill(shellPid, 0) != 0 }, "its shell is stopped and reaped")
@@ -641,7 +643,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets or opencode), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode or welcome), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -662,6 +664,7 @@ enum SelfTest {
         case "services": return await serviceChecks(c)
         case "secrets": return await secretsChecks(c, proj: proj)
         case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
+        case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
         default: break
         }
         #endif
@@ -1300,10 +1303,12 @@ enum SelfTest {
         // window closes: the same project, every session listed.
         welcome.sessionQuery = "loop fix"
         app.showWelcome(nil)
+        welcome.select(project: project) // a show starts on the other project used last (the Welcome switcher)
         check(await wait(5) { welcome.sessionQuery.isEmpty && welcome.shownSessionTitles.count == 3 },
               "the Welcome window shown again empties the sessions search, and lists every session",
               "“\(welcome.sessionQuery)”, \(welcome.shownSessionTitles.count) shown, project \(welcome.selectedProject ?? "none")")
         welcome.close()
+        await welcomeSwitcherChecks() // the switcher: its list, marks, order and keys (SelfTestWelcomeSwitcher)
 
         guard let holder = app.controllers.first(where: { $0.project == project }) ?? app.controllers.first(where: { $0.tabs.contains { $0 === tab } }),
               let window = holder.window else { return check(false, "a window for the project") }

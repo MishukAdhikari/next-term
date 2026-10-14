@@ -274,6 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
         updateCopilotFolders()
         RemoteConnection.projectsChanged()
+        MainActor.assumeIsolated { ProjectHistoryRecorder.shared.update(controllers) }
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -504,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
+        case .newTerminal: openWindow(directory: nil)
         }
     }
 
@@ -1039,6 +1041,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         var list = recent
         for project in list.paths where places.contains(where: { project == $0 || project.hasPrefix($0 + "/") }) { list.remove(project) }
         if list.paths != recent.paths { recent = list }
+        // The Welcome window's history too, so a removed worktree is not kept there as a folder gone for now.
+        MainActor.assumeIsolated { ProjectHistoryRecorder.shared.forget(under: places) }
     }
 
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
@@ -1096,6 +1100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func clearRecentProjects(_ sender: Any?) {
+        MainActor.assumeIsolated { ProjectHistoryRecorder.shared.clear() }
         recent = RecentProjects()
     }
 
@@ -1243,7 +1248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 item.toolTip = path
             }
             if !projects.isEmpty { menu.addItem(.separator()) }
-            let clear = menu.addItem(withTitle: "Clear Menu", action: projects.isEmpty ? nil : #selector(clearRecentProjects(_:)), keyEquivalent: "")
+            // On while the Welcome window lists a closed project too: Recent Projects can be empty while it does.
+            let clears: Bool = !projects.isEmpty || MainActor.assumeIsolated { ProjectHistoryRecorder.shared.canClear }
+            let clearAction: Selector? = clears ? #selector(clearRecentProjects(_:)) : nil
+            let clear = menu.addItem(withTitle: "Clear Menu", action: clearAction, keyEquivalent: "")
             clear.target = self
         } else if menu.title == "Open Projects In" {
             for (title, value) in [("Ask Each Time", ProjectTarget.ask), ("This Window", .thisWindow), ("New Window", .newWindow)] {

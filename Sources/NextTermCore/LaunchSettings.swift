@@ -5,17 +5,20 @@ import Foundation
 
 /// "At launch:".
 public enum LaunchOpens: String, CaseIterable, Sendable {
-    case welcome, lastProjects
+    /// In the order of the radio buttons. "Open a new terminal" is kept as `newTerminal`: a build from before it reads that
+    /// as any value it does not know, the Welcome window.
+    case welcome, lastProjects, newTerminal
 
     /// For new users, and for existing users after the update that brought the choice.
     public static let standard = LaunchOpens.welcome
 
     /// "Resume where I left off" keeps 0.10's stored value, `lastProjects`, so a choice of "Reopen the projects that were
-    /// open" carries over.
+    /// open" carries over. "Open a new terminal" is for the user who wants a shell at once and never the Welcome window.
     public var title: String {
         switch self {
         case .welcome: return "Show the Welcome window"
         case .lastProjects: return "Resume where I left off"
+        case .newTerminal: return "Open a new terminal"
         }
     }
 }

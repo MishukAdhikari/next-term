@@ -193,6 +193,9 @@ import Testing
         // Every placeholder has a use, and none is left once filled.
         #expect(values.keys.allSatisfy { ZshCompletionScript.template.contains($0) })
         #expect(!ZshCompletionScript.script.contains("@NT_"))
+        // A line Next Term changes gets a fresh suggestion from zsh-autosuggestions, when it is there and on, never a clear.
+        #expect(ZshCompletionScript.script.contains("(( ${+widgets[autosuggest-fetch]} && ! ${+_ZSH_AUTOSUGGEST_DISABLED} )); then\n    zle autosuggest-fetch"))
+        #expect(!ZshCompletionScript.script.contains("zle autosuggest-clear"))
     }
 
     /// The prefix is never the start of a reply a terminal sends (DA, CPR, DECRQSS, window reports, kitty
