@@ -4,12 +4,13 @@ import NextTermCore
 #if DEBUG
 /// Rotate…, on the self-test's temporary vault only: step 1 opens GitHub's new-token form (recorded by
 /// `ServiceLinks.recordsOnly`, never opened; nothing is fetched), the key the user has now is refused as it is typed, a
-/// new one is saved with the stand-in's Touch ID, the old one stays masked, grants end, the clipboard is cleared, and
+/// new one is saved with the stand-in's Touch ID, the old one stays masked (in a tab's read_tab too), grants end, the
+/// clipboard is cleared, and
 /// Remind Me Tomorrow keeps its day in a defaults suite of the run's own. Every value is made up at run time.
 extension SelfTest {
     static let rotatePage = "https://github.com/settings/personal-access-tokens"
 
-    static func secretRotateChecks() async {
+    static func secretRotateChecks(_ c: TerminalWindowController, base: URL) async {
         let store = SecretsStore.shared
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible,
@@ -41,6 +42,7 @@ extension SelfTest {
         guard let sheet = view.rotateSheet else { return check(false, "secret rotate: Rotate… opens its sheet") }
         await secretRotateOpenChecks(sheet, presence)
         await secretRotateSaveChecks(view, sheet, presence, old: old)
+        await secretRotateTabCheck(c, base: base, old: old)
         _ = try? await store.perform(.delete(name: name))
         await secretRotateNoPageChecks(view)
     }
@@ -84,6 +86,10 @@ extension SelfTest {
             for changed in note.userInfo?["names"] as? [String] ?? [] { ended.append(changed) }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
+        // The vault keeps times to the second, and the stand-in's Touch ID is instant: Save in the second the key was
+        // added would set its value at the time it was made, which reads "Added today", never "Today".
+        let created: Date = SecretsStore.shared.index?.entry(named: name)?.created ?? Date()
+        _ = await wait(3) { Date().timeIntervalSince(created) >= 1 }
         sheet.saveButton.performClick(nil)
         _ = await wait(10) { sheet.isSaved }
         let entry = SecretsStore.shared.index?.entry(named: name)
@@ -115,6 +121,25 @@ extension SelfTest {
         let tomorrow: Date? = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))
         check(view.rotateSheet == nil && SecretReminderRecords.remindOn[name] == tomorrow,
               "secret rotate: Remind Me Tomorrow closes the sheet and keeps tomorrow for that key")
+    }
+
+    /// After the rotation, a tab that prints the old value shows it masked to an agent's read_tab. The value goes
+    /// through a file in the run's folder, never a command line, and the file is removed after.
+    static func secretRotateTabCheck(_ c: TerminalWindowController, base: URL, old: String) async {
+        let file = base.appendingPathComponent("rotated-old.txt")
+        try? old.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let tab = c.addTab(directory: base.path, select: false)
+        defer { closeSecretsTabs([tab], "rotate") }
+        guard await wait(20, { tab.status.integrated }) else {
+            return check(false, "secret rotate: a tab for the old key's masking check")
+        }
+        tab.view.send(txt: "cat \(ShellQuote.quote(file.path)); echo\r")
+        let printed: Bool = await wait(10) { tab.screenTail().joined().contains(old) }
+        let read = await secretsTool("read_tab", ["tab_id": tab.id.uuidString.lowercased()])
+        let screen: String = read["screen"] as? String ?? ""
+        check(printed && screen.contains("•••") && !screen.contains(old),
+              "secret rotate: read_tab of a tab that prints the old key shows •••", String(screen.suffix(120)))
     }
 
     /// A key with no page: step 1 is "Where it came from", Open names the page typed there, a key that looks like

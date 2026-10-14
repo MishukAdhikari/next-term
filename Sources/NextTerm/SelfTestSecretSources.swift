@@ -8,7 +8,7 @@ import NextTermCore
 extension SelfTest {
     static let sourcesOpenAIPage = "https://platform.openai.com/settings/organization/api-keys"
 
-    static func secretSourcesChecks(base: URL) async {
+    static func secretSourcesChecks(_ c: TerminalWindowController, base: URL) async {
         let recording = ServiceLinks.recordsOnly
         ServiceLinks.recordsOnly = true
         ServiceLinks.opened = []
@@ -21,7 +21,7 @@ extension SelfTest {
         await secretSourcesVouchChecks(base)
         await secretSourcesRequestChecks()
         await secretSourcesRequestUseChecks()
-        await secretRotateChecks()
+        await secretRotateChecks(c, base: base)
     }
 
     /// Add… suggests the page from the value's head, Use fills it, Save keeps it; a link with a user and password, or

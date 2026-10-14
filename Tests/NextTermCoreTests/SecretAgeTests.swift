@@ -88,4 +88,28 @@ import Testing
         #expect(SecretAge.day(Self.date(2026, 10, 12, hour: 23, minute: 30), calendar: Self.calendar) == "2026-10-12")
         #expect(SecretAge.day(Self.date(2026, 1, 5), calendar: Self.calendar) == "2026-01-05")
     }
+
+    /// A Mac set to the Buddhist or Japanese calendar still gets the Gregorian year, as GitHub's new-token form and
+    /// list_secrets need, on the day of that calendar's time zone.
+    @Test func theDayIsGregorianWhateverTheMacsCalendar() {
+        let late: Date = Self.date(2026, 10, 12, hour: 23, minute: 30)
+        for identifier in [Calendar.Identifier.buddhist, .japanese, .islamicUmmAlQura, .hebrew] {
+            var other = Calendar(identifier: identifier)
+            other.timeZone = Self.calendar.timeZone
+            #expect(SecretAge.day(late, calendar: other) == "2026-10-12", "\(identifier)")
+        }
+        var ahead = Calendar(identifier: .buddhist)
+        ahead.timeZone = TimeZone(secondsFromGMT: 3 * 3600) ?? Self.calendar.timeZone
+        #expect(SecretAge.day(late, calendar: ahead) == "2026-10-13")
+    }
+
+    /// list_secrets' `rotated` is that same Gregorian day.
+    @Test func listSecretsRotatedIsGregorian() {
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = Self.calendar.timeZone
+        let set: Date = Self.date(2026, 10, 9)
+        let entry: SecretVault.Entry = Self.entry(created: set, valueSet: set)
+        let facts: [String: Any] = MCPServer.secretSourceFacts(entry, now: Self.now, calendar: buddhist)
+        #expect(facts["rotated"] as? String == "2026-10-09")
+    }
 }

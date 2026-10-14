@@ -52,7 +52,7 @@ extension SelfTest {
         await secretsSettingsChecks(base: base)
         await secretsImportChecks(base: base)
         #if DEBUG
-        await secretSourcesChecks(base: base)
+        await secretSourcesChecks(c, base: base)
         #endif
         await secretsRemoteChecks(proj: proj)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",

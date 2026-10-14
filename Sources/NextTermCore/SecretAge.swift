@@ -39,10 +39,10 @@ public enum SecretAge {
         return days(from: entry.lastSet, to: now, calendar: calendar) >= remind
     }
 
-    /// The day as `list_secrets` gives it: `2026-10-12`.
+    /// The day as `list_secrets` gives it and GitHub's new-token form names it: `2026-10-12`, always in the Gregorian
+    /// calendar, on the day of `calendar`'s time zone. A Mac set to the Buddhist or Japanese calendar still gets 2026.
     public static func day(_ date: Date, calendar: Calendar = .current) -> String {
-        let parts: DateComponents = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        SecretFolder.day(of: date, timeZone: calendar.timeZone)
     }
 
     private static func ageText(since date: Date, now: Date, calendar: Calendar) -> String {
