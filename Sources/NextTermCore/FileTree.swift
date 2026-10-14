@@ -43,6 +43,8 @@ public final class FileNode {
     public private(set) var children: [FileNode]?
     /// Entries left out because the folder is larger than `maxChildren`.
     public private(set) var hiddenCount = 0
+    /// macOS refused to list it (FolderAccess.isPrivacyDenial): it shows a line saying so in place of its entries.
+    public private(set) var accessDenied = false
 
     /// Never shown: version-control internals and Finder litter.
     public static let hiddenNames: Set<String> = [".git", ".DS_Store", ".svn", ".hg"]
@@ -68,7 +70,28 @@ public final class FileNode {
     /// A folder's entries as fresh nodes, folders first, in Finder order ("file2" before "file10"), without the
     /// ones `hiding` leaves out. Safe on any thread.
     public static func readChildren(of url: URL, hiding: FileHiding? = nil) -> (nodes: [FileNode], hidden: Int) {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return ([], 0) }
+        let listing = read(url, hiding: hiding)
+        return (listing.nodes, listing.hidden)
+    }
+
+    /// What one read of a folder found: its entries, how many were left out, and whether macOS refused it.
+    public struct Listing {
+        public var nodes: [FileNode]
+        public var hidden: Int
+        public var denied: Bool
+    }
+
+    /// `readChildren`, saying too whether macOS's privacy protection refused the folder (FolderAccess.isPrivacyDenial), so
+    /// the tree can say so where the user asked for it. Only the folder itself is listed: a tree is read a folder at a
+    /// time, as the user opens them.
+    public static func read(_ url: URL, hiding: FileHiding? = nil, protected: ProtectedPlaces = .current) -> Listing {
+        ProtectedPlaces.noteListed(url.path)
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: url.path)
+        } catch {
+            return Listing(nodes: [], hidden: 0, denied: FolderAccess.isPrivacyDenial(error, path: url.path, protected: protected))
+        }
         let nodes = names.filter { !hiddenNames.contains($0) }
             .map { FileNode(url: url.appendingPathComponent($0)) }
             .filter { hiding?.hides($0.path, isDirectory: $0.isDirectory) != true }
@@ -76,7 +99,16 @@ public final class FileNode {
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
-        return (Array(nodes.prefix(maxChildren)), max(0, nodes.count - maxChildren))
+        return Listing(nodes: Array(nodes.prefix(maxChildren)), hidden: max(0, nodes.count - maxChildren), denied: false)
+    }
+
+    /// Installs a read (`install`), and whether macOS refused it. Returns true if anything changed.
+    @discardableResult
+    public func install(_ listing: Listing) -> Bool {
+        let deniedChanged = accessDenied != listing.denied
+        accessDenied = listing.denied
+        let changed = install((listing.nodes, listing.hidden))
+        return changed || deniedChanged
     }
 
     /// Installs a listing, keeping the existing node (and so its expanded state and loaded children)
