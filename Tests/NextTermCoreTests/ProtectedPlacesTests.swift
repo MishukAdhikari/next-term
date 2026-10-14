@@ -251,4 +251,30 @@ final class FixtureHome {
         #expect(start(.folder("/Users/ada/Code")) == "/Users/ada/Code")
         #expect(start(.folder("/Users/ada/gone"), exists: false) == nil)
     }
+
+    /// An agent in a window with no project, in the home folder: offered once, never while off, in a project window, on
+    /// a server, or in another folder.
+    @Test func theOfferForAnAgentInTheHomeFolder() throws {
+        let home = "/Users/ada"
+        let agent = HomeAgentOffer.Tab(directory: home, runsAgent: true)
+        func offers(on: Bool = true, project: String? = nil, offered: Bool = false, _ tabs: [HomeAgentOffer.Tab]) -> Bool {
+            HomeAgentOffer.offers(on: on, windowProject: project, offered: offered, tabs: tabs, home: home)
+        }
+        #expect(offers([agent]))
+        #expect(offers([HomeAgentOffer.Tab(directory: home + "/", runsAgent: true)]))
+        #expect(offers([HomeAgentOffer.Tab(directory: home + "/Code", runsAgent: true), agent]))
+        #expect(!offers(on: false, [agent]))
+        #expect(!offers(offered: true, [agent]))
+        #expect(!offers(project: home + "/Code/app", [agent]))
+        #expect(!offers([HomeAgentOffer.Tab(directory: home, runsAgent: false)]))
+        #expect(!offers([HomeAgentOffer.Tab(directory: home, runsAgent: true, remote: true)]))
+        #expect(!offers([HomeAgentOffer.Tab(directory: home + "/Code", runsAgent: true)]))
+        #expect(HomeAgentOffer.text(agent: "Claude Code") == "Claude Code is working in your home folder. Open a project for it?")
+        // On until Don't Ask Again.
+        let (defaults, name) = try TestDefaults.make("home-agent-offer")
+        defer { TestDefaults.remove(defaults, name) }
+        #expect(HomeAgentOffer.isOn(defaults))
+        HomeAgentOffer.turnOff(defaults)
+        #expect(!HomeAgentOffer.isOn(defaults))
+    }
 }

@@ -216,6 +216,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
+    /// The offer to open a project for an agent in the home folder came up here (offerProjectForHomeAgent): once a window.
+    private(set) var offeredProjectForAgent = false
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
@@ -869,6 +871,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         updateProjectRoot()
         updateTabPlace()
         noteAgentTabs()
+        offerProjectForHomeAgent()
+    }
+
+    /// An agent Next Term recognises runs here, in a window with no project, in the home folder: once in this window, a
+    /// notice offers to open a project for it (Choose Folder…, as Open… does), with Don’t Ask Again for every window
+    /// (HomeAgentOffer). The agent is never held: the notice only offers.
+    private func offerProjectForHomeAgent() {
+        guard project == nil, !offeredProjectForAgent else { return }
+        let agents: [TerminalTab] = tabs.filter { (tab: TerminalTab) -> Bool in tab.status.running && tab.status.kind == .agent }
+        guard !agents.isEmpty else { return }
+        let home: String = ProtectedPlaces.current.home
+        let rows: [HomeAgentOffer.Tab] = agents.map { (tab: TerminalTab) -> HomeAgentOffer.Tab in
+            HomeAgentOffer.Tab(directory: canonicalPath(tab.directory), runsAgent: true, remote: tab.remote != nil)
+        }
+        let on: Bool = HomeAgentOffer.isOn(.standard)
+        guard HomeAgentOffer.offers(on: on, windowProject: project, offered: false, tabs: rows, home: home) else { return }
+        offeredProjectForAgent = true
+        let tab: TerminalTab? = zip(agents, rows).first { $0.1.directory == home && !$0.1.remote }?.0
+        let text: String = HomeAgentOffer.text(agent: tab.map(Self.agentName(of:)) ?? "An agent")
+        GitToast.show(text, in: window, button: "Choose Folder…", action: { AppDelegate.shared.chooseProjectFolder(nil) },
+                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) })
     }
 
     /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never
