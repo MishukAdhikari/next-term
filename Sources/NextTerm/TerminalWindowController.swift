@@ -218,6 +218,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var projectKey: String?
     /// The offer to open a project for an agent in the home folder came up here (offerProjectForHomeAgent): once a window.
     private(set) var offeredProjectForAgent = false
+    /// Browse Home Folder was clicked in this window's "No project open": while its tab is in no project, the tree shows
+    /// the home folder, as files only (ProjectSidebarView.browsingOnly).
+    private(set) var browsesHome = false
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
@@ -344,6 +347,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.header.onSummaryClick = { [weak self] in self?.showUncommittedChanges() }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
+        sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         // Lines selected in a diff go to the agents, as the editor's selection does.
@@ -942,7 +946,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             guard projectKey != project else { return }
             projectKey = project
             sidebar.offerProjectWindow(nil)
-            sidebar.setRoot(project)
+            // A folder that is never a project (the home folder opened as one): its files, and nothing scanned there.
+            sidebar.setRoot(project, browsing: ProjectRoot.isNeverRoot(project))
             return
         }
         // A remote tab's folder is on its host, not this Mac: the tree stays where it was.
@@ -953,10 +958,22 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if let root = ProjectRoot.project(from: tab.directory) {
             sidebar.setRoot(root)
             sidebar.offerProjectWindow(sidebar.root?.path ?? root)
+        } else if browsesHome {
+            sidebar.offerProjectWindow(nil)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
         } else {
             sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
         }
         AppDelegate.shared.projectsChanged()
+    }
+
+    /// Browse Home Folder: the home folder's tree in this window, while its tab is in no project. Never a project: no git,
+    /// Databases, Services or Agent Sessions there, and each folder in it, Desktop and Documents too, read only as the user
+    /// opens it (when macOS asks for those, it is because the user did).
+    func browseHomeFolder() {
+        browsesHome = true
+        projectKey = nil
+        updateProjectRoot()
     }
 
     // MARK: find and replace in files
@@ -2381,6 +2398,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         refresh()
         // Another window may have opened a project since: "No project open" lists it.
         if sidebar.showsNoProject { sidebar.noProject.show(recent: AppDelegate.shared.recentProjects) }
+        sidebar.retryDenied() // back from System Settings, perhaps, with a folder allowed
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)

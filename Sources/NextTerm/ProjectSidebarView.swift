@@ -109,6 +109,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     let noProject = NoProjectView()
     /// Open as Project Window, while a window with no project shows the project its tab is in (`offerProjectWindow`).
     let projectOffer = ProjectOfferNote()
+    /// "No project open"'s Browse Home Folder was clicked: the window shows the home folder's tree (`setRoot(browsing:)`).
+    var onBrowseHome: (() -> Void)?
+    /// The tree shows a folder that is no project (the home folder, after Browse Home Folder): its files only, each folder
+    /// read as the user opens it, with no git, Databases, Services or Agent Sessions, so nothing reads the protected
+    /// places in it until the user opens one.
+    private(set) var browsingOnly = false
+    /// The line in each folder macOS refused, by folder.
+    private var deniedEntries: [ObjectIdentifier: DeniedFolderEntry] = [:]
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?
@@ -224,6 +232,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             guard let self else { return }
             self.delegate?.sidebar(self, openProject: folder)
         }
+        noProject.onBrowseHome = { [weak self] in self?.onBrowseHome?() }
         addSubview(noProject)
         // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
@@ -306,6 +315,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return cell.tip(at: cell.convert(point, from: outline))
         }
         if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionRowCellView { return cell.tipText }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DeniedFolderCellView { return cell.tipText }
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
         return cell.tipText
     }
@@ -328,6 +338,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         rowCache.removeAll()
         servicesGroup.clear()
         root = nil
+        browsingOnly = false
         outline.reloadData()
         watcher = nil
         gitDirWatcher = nil
@@ -344,12 +355,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         updateToolTips()
     }
 
-    /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background.
-    func setRoot(_ path: String) {
+    /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background. `browsing`: a folder
+    /// that is no project (`browsingOnly`), its files and nothing more.
+    func setRoot(_ path: String, browsing: Bool = false) {
         let canonical = canonicalPath(path)
         noProject.isHidden = true
         scrollView.isHidden = false
         guard canonical != root?.path, !closed else { return }
+        browsingOnly = browsing
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
@@ -376,7 +389,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         watcher = DirectoryWatcher(path: canonical) { [weak self] paths in self?.filesChanged(paths) }
         gitDirWatcher = nil
         gitEvents = nil
-        git.watch(canonical)
+        if browsing {
+            git.stop()
+            gitChanged(nil)
+        } else {
+            git.watch(canonical)
+        }
         showDatabases(DatabaseScan())
         databaseScans.cancel() // the old folder's
         scanDatabases()
@@ -389,7 +407,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Reads the project's files for databases and services, off the main thread: one read for both groups, shown
     /// together, each redrawn only if what it shows changed (ProjectScan).
     func scanDatabases() {
-        guard let root else { return }
+        guard let root, !browsingOnly else { return }
         let path = root.path
         databaseScanToken += 1
         let token = databaseScanToken
@@ -467,7 +485,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// scan again when the gate says. Dependency, build and deep folders, and hidden ones other than those the
     /// readers look in (.vercel, .ddev, supabase/.temp), set off nothing (Databases.scanMayChange).
     private func scheduleDatabaseScan(for paths: [String]) {
-        guard let root, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
+        guard let root, !browsingOnly, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
         databaseScans.changed()
     }
 
@@ -520,7 +538,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     /// Reads the folder's agent sessions, and the tabs any are open in, off the main thread.
     func loadSessions() {
-        guard let root else { return }
+        guard let root, !browsingOnly else { return }
         let path = root.path
         sessionsGroup.token += 1
         let token = sessionsGroup.token
@@ -665,7 +683,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         loading.insert(id)
         let url = node.url, hiding = fileHiding
         DispatchQueue.global(qos: .userInitiated).async {
-            let listing = FileNode.readChildren(of: url, hiding: hiding)
+            let listing = FileNode.read(url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 self?.whenNotRenaming("load \(id)") { [weak self] in
                     guard let self else { return }
@@ -702,7 +720,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         reading.insert(id)
         let url = node.url, hiding = fileHiding, renamesAtRead = renames
         DispatchQueue.global(qos: .utility).async {
-            let listing = FileNode.readChildren(of: url, hiding: hiding)
+            let listing = FileNode.read(url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.reading.remove(id)
@@ -725,6 +743,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private func refreshLoadedFolders(of node: FileNode) {
         refresh(node)
         node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(refreshLoadedFolders(of:))
+    }
+
+    /// The folders macOS refused, read again: the user may have allowed them in System Settings since. As the window comes
+    /// to the front; a read macOS refused once is refused again without a prompt, so nothing asks twice.
+    func retryDenied() {
+        guard let root else { return }
+        func visit(_ node: FileNode) {
+            if node.accessDenied { refresh(node) }
+            node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(visit)
+        }
+        visit(root)
     }
 
     /// Whether the node belongs to the tree on screen (the root may have changed while it loaded).
@@ -756,6 +785,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Changes in the work tree or its .git: a refresh soon, unless none can change git's status (a writer in
     /// `.next/` or `node_modules/`, git's own objects, a nested worktree).
     private func gitFilesChanged(_ paths: [String]) {
+        guard !browsingOnly else { return }
         if let filter = gitEvents {
             let matters = paths.contains { filter.matters($0, isRepository: isNestedRepository) }
             guard matters else { return }
@@ -857,7 +887,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let node = item as? FileNode {
             let children = node.children ?? []
             let gone = node.isLoaded ? deleted(in: node) : []
-            if gone.isEmpty {
+            if node.accessDenied {
+                rows = [deniedEntry(for: node)] // macOS refused it: one line saying so, with the way to change that
+            } else if gone.isEmpty {
                 rows = children
             } else {
                 let all: [(name: String, folder: Bool, item: AnyObject)] = children.map { ($0.name, $0.isDirectory, $0) } + gone.map { ($0.name, $0.isDirectory, $0) }
@@ -882,6 +914,15 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         rowCache[id] = (item, rows)
         return rows
+    }
+
+    /// The line in a folder macOS refused, the same object each time, so the outline keeps its row.
+    private func deniedEntry(for node: FileNode) -> DeniedFolderEntry {
+        let id = ObjectIdentifier(node)
+        if let entry = deniedEntries[id], entry.folder === node { return entry }
+        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.path))
+        deniedEntries[id] = entry
+        return entry
     }
 
     private func deleted(in node: FileNode) -> [DeletedEntry] {
@@ -926,7 +967,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
         if item is DeletedEntry || item is DatabasesGroup || item is SessionsGroup || item is ServicesGroup { return true }
         guard let node = item as? FileNode else { return false }
-        if node.isLoaded { return true }
+        if node.isLoaded {
+            if node.accessDenied { refresh(node) } // opened again: allowed in System Settings since, perhaps
+            return true
+        }
         load(node) { [weak self] in self?.outline.expandItem(node) }
         return false
     }
@@ -989,6 +1033,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             return sessionCell(for: item)
         }
         if ServicesGroup.holds(item) { return serviceCell(for: item) }
+        if let entry = item as? DeniedFolderEntry {
+            let id = NSUserInterfaceItemIdentifier("denied")
+            let cell = outlineView.makeView(withIdentifier: id, owner: self) as? DeniedFolderCellView ?? DeniedFolderCellView()
+            cell.identifier = id
+            cell.configure(entry)
+            return cell
+        }
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCellView ?? FileCellView()
         cell.identifier = id

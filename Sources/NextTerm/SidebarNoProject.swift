@@ -4,9 +4,10 @@ import NextTermCore
 // MARK: - a window with no project, its tab in none
 
 /// The sidebar of a window with no project while its tab is in no project (the home folder, /: ProjectRoot.project):
-/// "No project open", the projects used last, Open Folder… and Connect to Server…, the Welcome window's ways in. No file
-/// is listed and nothing is read or watched, so a New Terminal window sets off none of macOS's privacy prompts. The tree
-/// comes back as the tab goes into a project.
+/// "No project open", the projects used last, Open Folder… and Connect to Server…, the Welcome window's ways in, and
+/// Browse Home Folder, which shows the home folder's tree in this window (each folder read as the user opens it). No file
+/// is listed and nothing is read or watched until then, so a New Terminal window sets off none of macOS's privacy
+/// prompts. The tree comes back as the tab goes into a project.
 final class NoProjectView: NSView {
     /// At most this many recent projects, the newest first.
     static let recentLimit = 5
@@ -19,8 +20,12 @@ final class NoProjectView: NSView {
     /// Open Folder… (the folder panel, as the Welcome window's Open…) and Connect to Server….
     let openRow = WayInRow(.open, title: "Open Folder…")
     let connectRow = WayInRow(.connect)
+    /// The home folder's files, in this window.
+    let browseRow = SidebarActionRow(symbol: "house", title: "Browse Home Folder")
     /// A recent project was chosen.
     var onOpen: ((String) -> Void)?
+    /// Browse Home Folder was clicked.
+    var onBrowseHome: (() -> Void)?
     /// The projects listed, for the self-test.
     private(set) var listed: [String] = []
 
@@ -42,7 +47,10 @@ final class NoProjectView: NSView {
         recentRows.setAccessibilityElement(true)
         recentRows.setAccessibilityRole(.group)
         recentRows.setAccessibilityLabel("Recent projects")
-        let ways = NSStackView(views: [openRow, connectRow])
+        browseRow.target = self
+        browseRow.action = #selector(browseHome)
+        browseRow.toolTip = "Show your home folder’s files here. Desktop, Documents and the other folders macOS protects are read only when you open one."
+        let ways = NSStackView(views: [openRow, connectRow, browseRow])
         ways.orientation = .vertical
         ways.alignment = .leading
         ways.spacing = 0
@@ -67,10 +75,12 @@ final class NoProjectView: NSView {
         headingRow.edgeInsets = NSEdgeInsets(top: 0, left: 14, bottom: 6, right: 14)
         stack.addArrangedSubview(headingRow)
         stack.addArrangedSubview(recentRows)
+        headingRow.isHidden = true // until there is a recent project to list
+        recentRows.isHidden = true
         stack.setCustomSpacing(12, after: recentRows)
         stack.addArrangedSubview(ways)
         for row in [text, recentRows, ways] { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
-        for row in [openRow, connectRow] { row.widthAnchor.constraint(equalTo: ways.widthAnchor).isActive = true }
+        for row in [openRow, connectRow, browseRow] as [NSView] { row.widthAnchor.constraint(equalTo: ways.widthAnchor).isActive = true }
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -121,6 +131,8 @@ final class NoProjectView: NSView {
     }
 
     @objc private func chosen(_ sender: RecentProjectRow) { onOpen?(sender.path) }
+
+    @objc private func browseHome() { onBrowseHome?() }
 
     /// For the self-test: the rows of the recent projects.
     var recentProjectRows: [RecentProjectRow] { recentRows.arrangedSubviews.compactMap { $0 as? RecentProjectRow } }
@@ -176,6 +188,110 @@ final class RecentProjectRow: FillButton {
 
     /// VoiceOver hears the name, then where it is.
     override func accessibilityHelp() -> String? { "In " + folder.stringValue }
+}
+
+/// A row that does one thing, in the ways in's geometry: a symbol in the gutter, its title where the names start.
+final class SidebarActionRow: FillButton {
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+
+    init(symbol: String, title name: String) {
+        super.init(title: name)
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
+        icon.contentTintColor = Theme.textDim
+        label.stringValue = name
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = Theme.text
+        Typography.singleLine(label, truncation: .byTruncatingTail)
+        add([icon, label])
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: WayInRow.height),
+            icon.centerXAnchor.constraint(equalTo: leadingAnchor, constant: SwitcherRowStyle.gutterCenter),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SwitcherRowStyle.nameX),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The Welcome list's selection shape, as the ways in beside it.
+    override var shape: NSBezierPath {
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5)
+    }
+}
+
+// MARK: - a folder macOS refused
+
+/// The one row in a folder macOS's privacy protection refused (FileNode.accessDenied): it says so, plainly, with the
+/// button that opens the System Settings pane where the user can allow it (PrivacySettings.pane(forDenied:)).
+final class DeniedFolderEntry {
+    /// The folder it is in.
+    weak var folder: FileNode?
+    let pane: PrivacySettings.Pane
+
+    init(folder: FileNode, pane: PrivacySettings.Pane) {
+        self.folder = folder
+        self.pane = pane
+    }
+}
+
+/// "macOS hasn’t given Next Term access to this folder." and Open Settings, on one line: the words give way first, and
+/// the tooltip says it in full, with the pane's name. No alert, and nothing comes back by itself once the row is there.
+final class DeniedFolderCellView: NSTableCellView {
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: FolderAccess.deniedLine)
+    let button = NSButton(title: "Open Settings", target: nil, action: nil)
+    private var pane: PrivacySettings.Pane = .filesAndFolders
+    /// The tooltip: the line in full, and where to allow it.
+    private(set) var tipText = ""
+
+    init() {
+        super.init(frame: .zero)
+        icon.image = NSImage(systemSymbolName: "lock", accessibilityDescription: nil)
+        icon.symbolConfiguration = .init(pointSize: 11, weight: .regular)
+        icon.contentTintColor = Theme.textDim
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = Theme.textDim
+        Typography.singleLine(label, truncation: .byTruncatingTail)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        button.target = self
+        button.action = #selector(openSettings)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for view in [icon, label, button] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            button.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func configure(_ entry: DeniedFolderEntry) {
+        pane = entry.pane
+        let name: String = entry.folder?.name ?? "this folder"
+        tipText = FolderAccess.deniedHelp(folder: name, pane: entry.pane)
+        label.setAccessibilityLabel(tipText)
+        button.toolTip = "Open System Settings › Privacy & Security › \(entry.pane.title)"
+        button.setAccessibilityLabel("Open \(entry.pane.title) in System Settings")
+    }
+
+    @objc private func openSettings() {
+        NSWorkspace.shared.open(PrivacySettings.url(pane))
+    }
 }
 
 // MARK: - a window with no project, its tab in one
