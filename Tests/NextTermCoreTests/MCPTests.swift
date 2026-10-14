@@ -41,6 +41,13 @@ import Testing
         }
     }
 
+    /// list_skills names the folders it reads and the agents it says load each skill: OpenCode's among them.
+    @Test func listSkillsNamesOpencodesFolders() throws {
+        let tool = try #require(MCPServer.tools.first { $0.name == "list_skills" })
+        #expect(tool.description.contains(".opencode/skills") && tool.description.contains("~/.config/opencode/skills"))
+        #expect(tool.description.contains("Claude Code, Codex, Command Code and OpenCode"))
+    }
+
     /// A 2026-07-28 client first asks `server/discover` (Claude Code 2.1.295 does); "method not found" sends it
     /// back to the 2025 handshake at once.
     @Test func discoverIsNotFoundSoTheClientShakesHandsThe2025Way() {

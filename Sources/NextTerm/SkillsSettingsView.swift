@@ -1,8 +1,8 @@
 import AppKit
 import NextTermCore
 
-/// Settings › Skills › Personal: every personal skill on this Mac, and what Claude Code, Codex and Command Code
-/// each load for it. Copies of one skill that drifted apart, or that an agent ignores, are marked, and
+/// Settings › Skills › Personal: every personal skill on this Mac, and what Claude Code, Codex, Command Code and
+/// OpenCode each load for it. Copies of one skill that drifted apart, or that an agent ignores, are marked, and
 /// Unify turns them into one shared copy every agent sees (with Undo). Read-only until the user acts. A project's
 /// skills are Settings › Skills › Project's (ProjectSkillsView).
 final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
@@ -67,9 +67,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         filter.target = self
         filter.action = #selector(filterChanged)
 
-        let columns: [(String, String, CGFloat)] = [("name", "Skill", 190), (SkillAgent.claudeCode.rawValue, "Claude Code", 110),
-                                                    (SkillAgent.codex.rawValue, "Codex", 110), (SkillAgent.commandCode.rawValue, "Command Code", 120),
-                                                    ("state", "State", 150)]
+        let columns: [(String, String, CGFloat)] = [("name", "Skill", 170), (SkillAgent.claudeCode.rawValue, "Claude Code", 100),
+                                                    (SkillAgent.codex.rawValue, "Codex", 95), (SkillAgent.commandCode.rawValue, "Command Code", 110),
+                                                    (SkillAgent.opencode.rawValue, "OpenCode", 95), ("state", "State", 140)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -132,14 +132,16 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     /// Where agents load skills from, and who reads which folder (SkillReaders, as of October 2026).
     static var introText: String {
-        let folders = "Skills your agents load from ~/.agents/skills (shared), ~/.claude/skills, ~/.codex/skills and ~/.commandcode/skills."
-        let readers = "Claude Code reads only its own folder. Codex, Command Code and most other agents read the shared one."
-        return folders + " " + readers + " " + SkillPackage.list(SkillReaders.claude) + " also read ~/.claude/skills."
+        let folders = "Skills your agents load from ~/.agents/skills (shared), ~/.claude/skills, ~/.codex/skills, ~/.commandcode/skills "
+            + "and OpenCode's ~/.config/opencode/skills."
+        let readers = "Claude Code reads only its own folder. Codex, Command Code, OpenCode and most other agents read the shared one."
+        let alsoClaude: [String] = ["OpenCode"] + SkillReaders.claude
+        return "\(folders) \(readers) \(SkillPackage.list(alsoClaude)) also read ~/.claude/skills."
     }
 
     /// Every agent that reads the shared folder, by name.
     static var introTip: String {
-        let names = ["Codex", "Command Code"] + SkillReaders.shared
+        let names = ["Codex", "Command Code", "OpenCode"] + SkillReaders.shared
         return "Agents that read ~/.agents/skills, as of October 2026: " + SkillPackage.list(names) + "."
     }
 
@@ -247,6 +249,12 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         if load.switchedOff { return ("off", "\(agent.title)'s own settings switch this skill off (\(SkillStep.short(used.realPath))).") }
         var text = used.root.kind == .shared ? "● shared" : used.isLink ? "● link" : "● own copy"
         var tip = "\(agent.title) loads \(SkillStep.short(used.realPath))"
+        // OpenCode reads Claude Code's folder too: a copy there is Claude Code's, not its own.
+        if agent != .claudeCode, used.root.kind == .claude {
+            text = "● Claude's"
+            tip += ", from Claude Code's folder"
+        }
+        if let listed = load.listedAs { tip += ", and lists it as “\(SkillReview.oneLine(listed, limit: 80))”, the name its SKILL.md gives" }
         if !load.others.isEmpty {
             text += " + \(load.others.count)"
             let others = load.others.map { SkillStep.short($0.path) }.joined(separator: ", ")
@@ -281,6 +289,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
         table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         updateButtons()
     }
+
+    /// For the self-test: the table's column titles, in order.
+    var columnTitlesForTest: [String] { table.tableColumns.map(\.title) }
 
     /// For the self-test: each condition Link waits for, by name.
     var linkStateForTest: String {
@@ -386,6 +397,9 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             let removed = Set(shown.compactMap { step -> String? in if case .trash(let path) = step { return path }; return nil })
             let others = row.copies.filter { ($0.root.kind == .codex || $0.root.kind == .commandCode) && !removed.contains($0.path) }
             if !others.isEmpty { lines.append("Copies in \(others.map { SkillStep.short($0.path) }.joined(separator: ", ")) are not part of it and stay.") }
+            if let sharedRoot = inventory?.root(.shared), let left = SkillInstall.opencodeLeft(row, sharedRoot: sharedRoot, removing: true) {
+                lines.append(left)
+            }
             lines.append("Undo puts it back.")
             alert.informativeText = lines.joined(separator: "\n")
             alert.addButton(withTitle: installed ? "Remove" : "Move to Trash")
@@ -604,6 +618,7 @@ final class SkillsUnifySheet: NSObject {
         for agent in SkillUnify.switchesLost(row, winner: winner, in: inventory, claude: claudeLink) {
             lines.append("\(agent.title) switches this skill off under its old name or place: after Unify it loads it again, until you switch it off there")
         }
+        if let sharedRoot = inventory.root(.shared), let left = SkillInstall.opencodeLeft(row, sharedRoot: sharedRoot) { lines.append(left) }
         let gained = SkillUnify.gained(row, in: inventory).filter { claudeLink == .link || $0 != .claudeCode }
         if !gained.isEmpty {
             let names = gained.map(\.title).joined(separator: " and ")

@@ -38,6 +38,10 @@ extension SelfTest {
               "skills: Settings › Skills marks it as needing attention", SkillsSettingsView.stateText(sync!))
         check(SkillsSettingsView.cellText(inventory.rows.first { $0.name == "tidy-prose" }!, agent: .claudeCode).0 == "—",
               "skills: a shared skill without a link is not seen by Claude Code, and says so")
+        let columns: [String] = view.columnTitlesForTest
+        let opencodeCell: String = SkillsSettingsView.cellText(inventory.rows.first { $0.name == "tidy-prose" }!, agent: .opencode).0
+        check(columns.contains("OpenCode") && opencodeCell == "● shared", "skills: Settings › Skills has an OpenCode column, and OpenCode loads a shared skill",
+              columns.joined(separator: ", ") + "; " + opencodeCell)
         // It fits the Settings window (620 pt) without widening it, laid out as Settings shows it: a tab.
         let tabs = NSTabView()
         let tab = NSTabViewItem(identifier: "skills")

@@ -10,27 +10,34 @@ import Foundation
 // - Codex reads ~/.agents/skills and its older ~/.codex/skills; a name in both is listed twice.
 // - Command Code reads ~/.commandcode/skills and ~/.agents/skills; its own folder wins a name, and it
 //   skips a skill whose `name` differs from its folder name.
-// So one real copy in ~/.agents/skills plus a link in ~/.claude/skills reaches all three.
+// - OpenCode reads ~/.claude/skills, then ~/.agents/skills, then `skills` and `skill` in its config folder
+//   (~/.config/opencode, or where XDG_CONFIG_HOME puts it), and keeps the copy it reads last. It names a skill by
+//   its front matter's `name`, and skips a SKILL.md without one.
+// So one real copy in ~/.agents/skills plus a link in ~/.claude/skills reaches all four.
 
 /// The agents the library manages skills for.
 public enum SkillAgent: String, CaseIterable, Codable, Sendable {
     case claudeCode = "claude-code"
     case codex
     case commandCode = "command-code"
+    case opencode
 
     public var title: String {
         switch self {
         case .claudeCode: return "Claude Code"
         case .codex: return "Codex"
         case .commandCode: return "Command Code"
+        case .opencode: return "OpenCode"
         }
     }
 
-    /// How a skill is used by name in that agent.
+    /// How a skill is used by name in that agent. OpenCode has no command for one: it is asked for by name in a
+    /// prompt (or its model picks it itself).
     public func trigger(_ name: String) -> String {
         switch self {
         case .claudeCode, .commandCode: return "/\(name)"
         case .codex: return "$\(name)"
+        case .opencode: return name
         }
     }
 
@@ -39,7 +46,7 @@ public enum SkillAgent: String, CaseIterable, Codable, Sendable {
         switch self {
         case .claudeCode: return "seen at once"
         case .codex: return "seen at once (or in a new session)"
-        case .commandCode: return "seen in a new session"
+        case .commandCode, .opencode: return "seen in a new session"
         }
     }
 }
@@ -55,6 +62,8 @@ public struct SkillRoot: Equatable, Hashable, Sendable {
         case codex
         /// ~/.commandcode/skills
         case commandCode
+        /// `skills`, or the older `skill`, in OpenCode's config folder (~/.config/opencode/skills)
+        case opencode
     }
 
     public let kind: Kind
@@ -75,10 +84,11 @@ public struct SkillRoot: Equatable, Hashable, Sendable {
     public var readers: [SkillAgent] {
         var agents: [SkillAgent]
         switch kind {
-        case .shared: agents = [.codex, .commandCode]
-        case .claude: agents = [.claudeCode]
+        case .shared: agents = [.codex, .commandCode, .opencode]
+        case .claude: agents = [.claudeCode, .opencode]
         case .codex: agents = [.codex]
         case .commandCode: agents = [.commandCode]
+        case .opencode: agents = [.opencode]
         }
         return agents + alsoReadBy.filter { !agents.contains($0) }
     }
@@ -89,18 +99,26 @@ public struct SkillRoot: Equatable, Hashable, Sendable {
         case .claude: return "~/.claude/skills"
         case .codex: return "~/.codex/skills"
         case .commandCode: return "~/.commandcode/skills"
+        case .opencode: return SkillStep.short(path) // wherever XDG_CONFIG_HOME puts it
         }
     }
 
-    /// The personal skill folders, in a home folder.
-    public static func personal(home: String) -> [SkillRoot] {
+    /// The personal skill folders, in a home folder. OpenCode's are in its config folder (OpencodePaths), as the
+    /// login shell's XDG_CONFIG_HOME puts it for the user's own home (`environment`: those variables instead), and
+    /// count only where they are: `skills` first, then the older `skill`.
+    public static func personal(home: String, environment: [String: String]? = nil) -> [SkillRoot] {
         func at(_ path: String) -> String { (home as NSString).appendingPathComponent(path) }
+        let config = OpencodePaths.configFolder(home: home, environment: environment ?? OpencodePaths.environment(home: home))
+        let opencode = ["skills", "skill"].map { (config as NSString).appendingPathComponent($0) }.filter { (path: String) -> Bool in
+            var isFolder: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && isFolder.boolValue
+        }
         return [
             SkillRoot(kind: .shared, path: at(".agents/skills")),
             SkillRoot(kind: .claude, path: at(".claude/skills")),
             SkillRoot(kind: .codex, path: at(".codex/skills")),
             SkillRoot(kind: .commandCode, path: at(".commandcode/skills")),
-        ]
+        ] + opencode.map { SkillRoot(kind: .opencode, path: $0) }
     }
 }
 
@@ -253,7 +271,15 @@ public struct SkillCopy: Equatable, Sendable {
         case .claudeCode: return frontMatter?.userInvocable == false ? nil : agent.trigger(name)
         case .codex: return pluginName.map { "$\($0):\(name)" } ?? agent.trigger(name)
         case .commandCode: return agent.trigger(name)
+        case .opencode: return opencodeName.map(agent.trigger)
         }
+    }
+
+    /// The name OpenCode lists the skill by: its front matter's `name`, whatever the folder is called. Nil when it
+    /// has none, and OpenCode skips it.
+    public var opencodeName: String? {
+        guard let name = frontMatter?.name, !name.isEmpty else { return nil }
+        return name
     }
 }
 
@@ -440,13 +466,14 @@ public struct SkillInventory: Sendable {
 }
 
 extension SkillRoot.Kind {
-    /// Shared first, then Claude Code, Codex, Command Code.
+    /// Shared first, then Claude Code, Codex, Command Code, OpenCode.
     public var order: Int {
         switch self {
         case .shared: return 0
         case .claude: return 1
         case .codex: return 2
         case .commandCode: return 3
+        case .opencode: return 4
         }
     }
 }
@@ -479,10 +506,13 @@ public struct SkillRow: Equatable, Sendable {
         public let used: SkillCopy?
         /// Copies the agent also has but ignores for this name (shadowed), or lists a second time (Codex).
         public let others: [SkillCopy]
-        /// Why the agent skips its copy (Command Code's strict name check), or nil.
+        /// Why the agent skips its copy (Command Code's strict name check, OpenCode's need of a name), or nil.
         public let skippedBecause: String?
         /// The agent's own settings switch the skill off: it has a copy but does not load it.
         public var switchedOff = false
+        /// The name the agent lists the copy it uses by, when that is not the folder's: OpenCode goes by the front
+        /// matter's `name`.
+        public var listedAs: String?
     }
 
     public func load(for agent: SkillAgent) -> Load {
@@ -523,7 +553,29 @@ public struct SkillRow: Equatable, Sendable {
                 return Load(used: nil, others: [used] + shadowed, skippedBecause: problem)
             }
             return Load(used: used, others: shadowed, skippedBecause: nil)
+        case .opencode:
+            return opencodeLoad(readable)
         }
+    }
+
+    /// OpenCode keeps the copy it reads last: its own folder's (`skills` before the older `skill`), then the shared
+    /// one's, then Claude Code's. A copy whose SKILL.md names no skill is skipped, so the next one is used; the same
+    /// folder reached twice (Claude Code's link to the shared copy) is one copy, loaded once.
+    func opencodeLoad(_ readable: [SkillCopy]) -> Load {
+        let own: [SkillCopy] = readable.filter { $0.root.kind == .opencode }
+        var ranked: [SkillCopy] = own.filter { $0.root.path.hasSuffix("/skills") }
+        ranked += own.filter { !$0.root.path.hasSuffix("/skills") }
+        ranked += readable.filter { $0.root.kind == .shared }
+        ranked += readable.filter { $0.root.kind == .claude }
+        var distinct: [SkillCopy] = []
+        for copy in ranked where !distinct.contains(where: { sameFolder($0, copy) }) { distinct.append(copy) }
+        guard let index = distinct.firstIndex(where: { $0.opencodeName != nil }) else {
+            return Load(used: nil, others: distinct, skippedBecause: distinct.isEmpty ? nil : "SKILL.md has no name.")
+        }
+        var others = distinct
+        let used = others.remove(at: index)
+        let listedAs = used.opencodeName == name ? nil : used.opencodeName
+        return Load(used: used, others: others, skippedBecause: nil, listedAs: listedAs)
     }
 
     /// The distinct copies: links to one folder, and the folder itself, count once.
@@ -548,7 +600,9 @@ public struct SkillRow: Equatable, Sendable {
     }
 
     /// Already the library's shape: one real copy in the shared folder, and Claude Code (if it has the
-    /// skill) through a link to it; nothing in ~/.codex/skills or ~/.commandcode/skills.
+    /// skill) through a link to it; nothing in ~/.codex/skills or ~/.commandcode/skills. OpenCode's folder is
+    /// not part of it: Next Term never changes it, so a copy there is shown (health, OpenCode's column) but
+    /// never asks for Unify.
     public var isUnified: Bool {
         // The shared entry is a real folder, or a link to the developer's own folder elsewhere.
         guard let shared = copies.first(where: { $0.root.kind == .shared && !$0.broken }) else { return false }
@@ -557,6 +611,7 @@ public struct SkillRow: Equatable, Sendable {
             case .shared: return copy == shared
             case .claude: return copy.isLink && copy.realPath == shared.realPath
             case .codex, .commandCode: return false
+            case .opencode: return true
             }
         }
     }
@@ -611,6 +666,7 @@ public enum SkillStep: Equatable, Sendable {
 public enum SkillUnify {
     /// The steps that leave one copy of `row` in the shared folder, with `winner`'s content, linked for
     /// Claude Code when Claude Code had the skill, and nothing in ~/.codex/skills or ~/.commandcode/skills.
+    /// OpenCode's folder is left as it is (SkillInstall.opencodeLeft says so).
     /// `winner` must be one of the row's copies, and one `row.cannotWin` accepts. Steps are in a safe
     /// order: the new shared copy exists before anything goes.
     ///
@@ -663,7 +719,8 @@ public enum SkillUnify {
                 steps.append(.link(at: claudePath, to: shared))
             }
         }
-        // Codex and Command Code read the shared folder: their own copies (or links) go.
+        // Codex and Command Code read the shared folder: their own copies (or links) go. OpenCode's stay: Next
+        // Term never writes in OpenCode's config folder.
         for copy in row.copies where copy.root.kind == .codex || copy.root.kind == .commandCode {
             steps.append(.trash(copy.path))
         }
@@ -718,7 +775,7 @@ public enum SkillUnify {
 /// (keyed by the skill's name, "off"), its `enabledPlugins` keys "<plugin>@skills-dir" set to false (a
 /// skill folder that is also that plugin then loads nothing, not even its skill: hand check H4), and
 /// Codex's `[[skills.config]]` tables in ~/.codex/config.toml (a `path` or `name` with `enabled = false`).
-/// Command Code's store is not read yet.
+/// Command Code's store and OpenCode's permission rules are not read yet.
 public struct SkillSwitches: Sendable {
     public var claudeOff: Set<String> = []
     /// `enabledPlugins` keys of skills-dir plugins set to false, as written ("writing-helper@skills-dir").

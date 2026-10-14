@@ -2,7 +2,7 @@ import Foundation
 
 /// What installing (or removing) a reviewed skill does on disk, worked out before anything is written,
 /// so the review sheet can show it. A skill is installed once, in the shared folder, under its `name`;
-/// Codex and Command Code read it there, Claude Code through a link when the developer wants one.
+/// Codex, Command Code and OpenCode read it there, Claude Code through a link when the developer wants one.
 public struct SkillInstallPlan: Equatable, Sendable {
     public enum Existing: Equatable, Sendable {
         /// Nothing of that name in the personal folders: a plain install.
@@ -143,7 +143,8 @@ public enum SkillInstall {
 
         let keptLink = copies.first { $0.root.kind == .claude && linksToShared($0, sharedRoot: sharedRoot) }
         let keptOther = copies.filter { $0.root.kind != .claude && $0.root.kind != .shared && linksToShared($0, sharedRoot: sharedRoot) }
-        var replaced = copies.filter { $0 != keptLink && !keptOther.contains($0) }
+        // OpenCode's own copies stay whatever they are: Next Term never writes in OpenCode's config folder.
+        var replaced = copies.filter { $0 != keptLink && !keptOther.contains($0) && $0.root.kind != .opencode }
         let sharedCopy = copies.first { $0.root.kind == .shared }
         // Something the inventory leaves out (a stray file) at the place the skill goes is in the way too.
         var stray: [String] = []
@@ -170,6 +171,9 @@ public enum SkillInstall {
         if dropsLink, let keptLink { steps.append(.trash(keptLink.path)) }
         steps.append(.move(from: staging, to: shared))
         var agents = sharedRoot.readers
+        let opencodeNote = row.flatMap { opencodeLeft($0, sharedRoot: sharedRoot) }
+        // OpenCode goes on loading its own copy, which wins over the shared one.
+        if opencodeNote != nil { agents.removeAll { $0 == .opencode } }
         if let claudeRoot {
             let wantsLink = claude == .link || (keptLink != nil && !dropsLink)
             if wantsLink {
@@ -189,12 +193,15 @@ public enum SkillInstall {
             untouched.append("Codex has its own built-in “\(name)” (~/.codex/skills/.system); it stays, and Codex lists both.")
         }
         for project in projects {
-            for folder in [".claude/skills", ".agents/skills", ".codex/skills", ".commandcode/skills"] {
+            let folders = [".claude/skills", ".agents/skills", ".codex/skills", ".commandcode/skills", ".opencode/skills", ".opencode/skill"]
+            for folder in folders {
                 let path = ((project as NSString).appendingPathComponent(folder) as NSString).appendingPathComponent(name)
                 guard manager.fileExists(atPath: path) else { continue }
-                untouched.append("The project skill \(SkillStep.short(path)) stays. In that project Claude Code prefers your personal copy, Command Code the project's, and Codex lists both.")
+                let prefer = "In that project Claude Code prefers your personal copy, Command Code and OpenCode the project's, and Codex lists both."
+                untouched.append("The project skill \(SkillStep.short(path)) stays. " + prefer)
             }
         }
+        if let opencodeNote { untouched.append(opencodeNote) }
         if claudeCommands.contains(name), agents.contains(.claudeCode) {
             untouched.append("Claude Code has its own /\(name) command: this skill would take its place.")
         }
@@ -368,13 +375,36 @@ public enum SkillInstall {
         return copies + rest
     }
 
+    /// What Unify, an install or Remove says of OpenCode's own copies of a skill, which they leave as they are: Next Term
+    /// never writes in OpenCode's config folder. A link there to the shared copy needs no word, except when the shared
+    /// copy goes (`removing`): it is then a link to nothing. Nil when there is nothing to say.
+    public static func opencodeLeft(_ row: SkillRow, sharedRoot: SkillRoot, removing: Bool = false) -> String? {
+        let own = row.copies.filter { $0.root.kind == .opencode }
+        let links = own.filter { linksToShared($0, sharedRoot: sharedRoot) }
+        let copies = own.filter { (copy: SkillCopy) -> Bool in !links.contains(copy) }
+        func listed(_ list: [SkillCopy]) -> String { SkillPackage.list(list.map { SkillStep.short($0.path) }) }
+        var said: [String] = []
+        if !copies.isEmpty {
+            let stays = copies.count == 1 ? "stays as it is" : "stay as they are"
+            let rather = removing ? "" : " rather than the shared one"
+            said.append("OpenCode's \(listed(copies)) \(stays), and OpenCode goes on loading that copy\(rather).")
+        }
+        if removing, !links.isEmpty {
+            let stays = links.count == 1 ? "stays, a link" : "stay, links"
+            said.append("OpenCode's \(listed(links)) \(stays) to nothing once the shared copy goes.")
+        }
+        guard !said.isEmpty else { return nil }
+        return said.joined(separator: " ") + " Next Term never changes OpenCode's folder."
+    }
+
     /// Removing a skill's shared copy and every agent folder's link to it (Claude Code's, and the ones
     /// `npx skills` makes in ~/.commandcode/skills), so no link is left pointing at nothing. Copies of
     /// that name made by hand in an agent's own folder are not part of it and stay.
     public static func removal(name: String, inventory: SkillInventory) -> [SkillStep] {
         guard let sharedRoot = inventory.root(.shared), let row = inventory.rows.first(where: { $0.name == name }) else { return [] }
         var steps: [SkillStep] = []
-        for copy in row.copies where copy.root.kind != .shared && linksToShared(copy, sharedRoot: sharedRoot) {
+        // Not OpenCode's: Next Term never writes in OpenCode's config folder (opencodeLeft says what stays).
+        for copy in row.copies where copy.root.kind != .shared && copy.root.kind != .opencode && linksToShared(copy, sharedRoot: sharedRoot) {
             steps.append(.trash(copy.path))
         }
         if row.copies.contains(where: { $0.root.kind == .shared }) {

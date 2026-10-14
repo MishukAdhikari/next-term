@@ -596,8 +596,11 @@ extension SkillReview {
     // in front of the words, or the look-behind for the program's name in front of `mcp`, it tried every
     // position: about a second per MB. And `\b[a-z][a-z0-9_-]*\s+mcp` read a run such as `a-a-a-…` again
     // from each part, in time that grew with the square of its length.
-    /// A slash command has no word boundary before it.
-    static let pluginInstall = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add)|/plugin\s+install)\b"#
+    /// A slash command has no word boundary before it. OpenCode's is `opencode plugin <module>` (or `plug`), or
+    /// `opencode plugin add`: a module is told from prose by a scope, a version, a hyphen or a slash in its name, or a
+    /// flag after it, each read within one word.
+    static let pluginInstall = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add|"#
+        + #"opencode\s+plug(?:in)?\s+(?:add|(?:@|[a-z0-9_.]+[@/-])[\w./@-]*|[\w.]+\s+--?(?:g|global|force)))|/plugin\s+install)\b"#
     /// `curl … | sh`, `wget -qO- … | sudo bash`: read from the last `curl` or `wget` before the pipe. Read on
     /// past the next one, a line of many took time that grew with the square of its length (40 s for 100 KB).
     static let downloadAndRun = #"(?:curl|wget)(?:(?!curl|wget)[^\n|])*+\|\s*+(?:sudo\s+)?(?:sh|bash|zsh|python3?)\b"#

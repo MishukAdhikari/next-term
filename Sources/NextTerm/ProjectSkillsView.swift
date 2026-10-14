@@ -1,8 +1,8 @@
 import AppKit
 import NextTermCore
 
-/// Settings › Skills › Project: a project's own skills, and for Claude Code, Codex and Command Code the copy each loads
-/// there. Found by SkillLibrary as list_skills finds them for an agent at the project's top, so Settings and what agents
+/// Settings › Skills › Project: a project's own skills, and for Claude Code, Codex, Command Code and OpenCode the copy each
+/// loads there. Found by SkillLibrary as list_skills finds them for an agent at the project's top, so Settings and what agents
 /// are told never disagree. Read-only: a project's skills are usually its team's, in git. The last row is Next Term's
 /// own next-term-tabs, which agents get over MCP and which is never written.
 ///
@@ -84,9 +84,9 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
         summary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         intro.toolTip = Self.rulesTip
 
-        let columns: [(String, String, CGFloat)] = [("name", "Skill", 150), ("where", "Where", 130),
-                                                    (SkillAgent.claudeCode.rawValue, "Claude Code", 95), (SkillAgent.codex.rawValue, "Codex", 85),
-                                                    (SkillAgent.commandCode.rawValue, "Command Code", 100)]
+        let columns: [(String, String, CGFloat)] = [("name", "Skill", 135), ("where", "Where", 120),
+                                                    (SkillAgent.claudeCode.rawValue, "Claude Code", 90), (SkillAgent.codex.rawValue, "Codex", 80),
+                                                    (SkillAgent.commandCode.rawValue, "Command Code", 100), (SkillAgent.opencode.rawValue, "OpenCode", 85)]
         for (id, title, width) in columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
@@ -158,6 +158,8 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
     static let rulesTip = """
         Claude Code reads .claude/skills and takes your copy of a skill over the project's. Codex reads .agents/skills \
         and lists both copies. Command Code reads .commandcode/skills, then .agents/skills, and takes the project's copy. \
+        OpenCode reads .opencode/skills, .agents/skills and .claude/skills: a copy in its own folder wins (the project's, \
+        then yours in ~/.config/opencode/skills), else the project's. \
         An agent in a Next Term tab can also use the others through Next Term's skill library (list_skills, get_skill).
         """
 
@@ -246,7 +248,7 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
         summary.stringValue = "\(count) \(count == 1 ? "skill" : "skills") · read-only"
         summary.toolTip = Self.totals(overview, reachable: AppDelegate.shared.agentControl)
         intro.stringValue = count == 0
-            ? "No skills in \(name). Agents here look in .agents/skills, .claude/skills, .codex/skills and .commandcode/skills, in its folder and each one above it up to the repository's top. They still get your \(overview.personal) personal skills."
+            ? "No skills in \(name). Agents here look in .agents/skills, .claude/skills, .codex/skills, .commandcode/skills and .opencode/skills, in its folder and each one above it up to the repository's top. They still get your \(overview.personal) personal skills."
             : "Skills that come with \(name), in its folder and each one above it up to the repository's top. Each agent's column shows the copy it loads."
         personalButton.isHidden = count != 0
         table.reloadData()
