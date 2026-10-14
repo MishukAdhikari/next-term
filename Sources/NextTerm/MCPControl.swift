@@ -382,8 +382,10 @@ enum MCPControl {
             if let refusal = RemoteConnection.refusal(remote.host) { info["host_problem"] = refusal }
             info["host"] = remote.host.name
             info["host_id"] = remote.host.id
-            info["keep"] = remote.keep.rawValue
-            if remote.keep == .tmux { info["session"] = remote.session }
+            // A tab whose tmux or herdr was missing on the host is a plain shell that nothing keeps: off, not as opened.
+            info["keep"] = remote.keep.shown(fellBack: tab.fellBack).rawValue
+            if tab.fellBack { info["fell_back"] = true }
+            if remote.keep == .tmux, tab.isKept { info["session"] = remote.session }
             if remote.keep == .herdr, !tab.herdrAgents.isEmpty {
                 info["herdr_agents"] = tab.herdrAgents.map { ["pane": $0.paneID, "agent": $0.name, "state": $0.status.rawValue] }
             }

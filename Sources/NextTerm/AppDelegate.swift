@@ -673,6 +673,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         settings?.window?.makeKeyAndOrderFront(nil)
     }
 
+    /// What Agents › Suggest a Command… does while it is off: Settings › Terminal at its Suggestions row, which says so
+    /// and how to turn it on.
+    func showSuggestionSettings() {
+        showSettings(tab: "terminal")
+        settings?.showSuggestions()
+    }
+
     @objc func checkForUpdates(_ sender: Any?) {
         MainActor.assumeIsolated { Updater.shared.check(userInitiated: true) }
     }
