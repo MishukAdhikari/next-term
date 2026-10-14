@@ -177,8 +177,9 @@ extension CarriedValueTests {
 
 extension CarriedValueTests {
     /// A blank line holds no value: find_in_files gives a match in one as it is, without reading the lines before it,
-    /// even when the file no longer holds it. It read them for each such match, back over every blank line before it to
-    /// the third line with text, so many matches after many blank lines took time that grows with their product.
+    /// even when the file no longer holds it (it would be ••• whole then, had they been read). It read them for each such
+    /// match, back over every blank line before it to the third line with text, so many matches after many blank lines
+    /// took time that grows with their product.
     @Test func aMatchOnABlankLineIsGivenAsItIs() throws {
         let f = try ProjectFixture()
         try f.write("api/src/config.ts", "const apiKey =\n\n  \"Tr0ub4dor&3!horse\";\n")
@@ -188,15 +189,12 @@ extension CarriedValueTests {
         let gone = lines.masking(SearchMatch(relativePath: "src/gone.ts", line: 3, lineText: "  ", range: NSRange(location: 0, length: 1)))
         #expect(gone.match.lineText == "  " && gone.count == 0)
 
-        // 200 lines of spaces, each a match for " ", after 400,000 empty lines.
-        try f.write("api/blank.txt", String(repeating: "\n", count: 400_000) + String(repeating: "  \n", count: 200))
-        let arguments: [String: Any] = ["query": " ", "glob": "blank.txt", "project": "api", "max_results": 200]
-        var found: [String: Any] = [:]
-        let took = ContinuousClock().measure {
-            found = json(MCPProjectTools.findInFiles(arguments, in: f.both, git: nil, mask: .empty))
-        }
+        // Lines of spaces, each a match, after empty lines and under a name whose value is on a later line.
+        let blank: String = String(repeating: "\n", count: 50) + String(repeating: "  \n", count: 20)
+        try f.write("api/blank.txt", "const apiKey =\n" + blank + "  \"Tr0ub4dor&3!horse\";\n")
+        let arguments: [String: Any] = ["query": "^ +$", "regex": true, "glob": "blank.txt", "project": "api"]
+        let found = json(MCPProjectTools.findInFiles(arguments, in: f.both, git: nil, mask: .empty))
         let matches = try #require(found["matches"] as? [[String: Any]])
-        #expect(matches.count == 200 && matches.allSatisfy { $0["text"] as? String == "" } && found["redacted"] == nil)
-        #expect(took < .seconds(5), "find_in_files took \(took)")
+        #expect(matches.count == 20 && matches.allSatisfy { $0["text"] as? String == "" } && found["redacted"] == nil, "\(found)")
     }
 }

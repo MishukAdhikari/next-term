@@ -21,7 +21,8 @@ extension NamedValueBytes {
     }
 
     /// `quotedValue`: a name, maybe its closing quote, `=`, `:`, `=>` or `:=` with spaces around, and a value in quotes
-    /// of one kind, 4 characters at least, on one line.
+    /// of one kind, 4 characters at least, on one line. On a line under the `=` or `:`, one with its own `:` or `=` after
+    /// it is a key, not the value.
     func quotedValues() -> [Found] {
         var found: [Found] = []
         var next = NextByte()
@@ -47,16 +48,21 @@ extension NamedValueBytes {
         case 0x3A: at += at + 1 < count && bytes[at + 1] == 0x3D ? 2 : 1 // : or :=
         default: return nil
         }
+        // The spaces on the operator's line stop before a line's end: past it, the value is on a line under it.
+        let lineUnder = skipBlanks(at) < skipSpaces(at)
         at = skipSpaces(at)
         guard at < count, bytes[at] == 0x22 || bytes[at] == 0x27 || bytes[at] == 0x60 else { return nil }
         let first = at + 1
         guard let close = next.position(of: bytes[at], from: first, in: bytes) else { return nil }
         if let feed = next.position(of: 0x0A, from: first, in: bytes), feed < close { return nil }
+        if lineUnder, case let after = skipBlanks(close + 1), after < count, bytes[after] == 0x3A || bytes[after] == 0x3D {
+            return nil
+        }
         return holds(first..<close, atLeast: 4) ? first..<close : nil
     }
 
-    /// `bareValue`: at a line's start, maybe a diff's + or -, spaces, `export`, then a name, `=` or `:` with spaces and
-    /// tabs around on the name's line, and a value of 6 characters at least with no space, quote or `#` in it, and only
+    /// `bareValue`: at a line's start, maybe a diff's + or -, spaces, `export`, then a name, `=` or `:` with spaces
+    /// around on the name's line, and a value of 6 characters at least with no space, quote or `#` in it, and only
     /// spaces after it.
     func bareValues() -> [Found] {
         var found: [Found] = []
@@ -110,10 +116,10 @@ extension NamedValueBytes {
         return (first..<end, rest)
     }
 
-    /// Past the spaces and tabs at `index` (`[ \t]*+`): they never run past the line's end.
+    /// Past the spaces at `index` that are not a line's end (`\h*+`: a tab and the space separators).
     private func skipBlanks(_ index: Int) -> Int {
         var at = index
-        while at < count, bytes[at] == 0x20 || bytes[at] == 0x09 { at += 1 }
+        while lineEnd(at) == 0, case let length = space(at), length > 0 { at += length }
         return at
     }
 

@@ -26,15 +26,26 @@ public enum MCPRedaction {
     /// for a secret word: a long run of names is read once, not again from each place a name could start.
     static let assignedName = #"(?<![A-Za-z0-9_.\-])([A-Za-z0-9_.\-]{1,256}+)"#
 
-    /// `api_key = "…"`, `"password": "…"`, `'token' => '…'`: the quoted value.
-    static let quotedValue = try! NSRegularExpression(
-        pattern: assignedName + #"["']?\s*+(?:=>|:=|[:=])\s*+(?:"([^"\n]{4,}+)"|'([^'\n]{4,}+)'|`([^`\n]{4,}+)`)"#)
+    /// A value in quotes of one kind, 4 characters at least, on one line: its text is the group of its quote.
+    static let quotedText = #"(?:"([^"\n]{4,}+)"|'([^'\n]{4,}+)'|`([^`\n]{4,}+)`)"#
+
+    /// `api_key = "…"`, `"password": "…"`, `'token' => '…'`: the quoted value. It may be on a line under the `=` or `:`
+    /// (`password:` then `"…"`), but there one with its own `:` or `=` after it is a key (`production:` then
+    /// `"password": "…"`), not the value above it: taken as one, the match ran past that key's name, and its own value
+    /// was never matched.
+    static let quotedValue: NSRegularExpression = {
+        let named: String = assignedName + #"["']?\s*+(?:=>|:=|[:=])"#
+        let sameLine: String = #"\h*+"# + quotedText
+        let lineUnder: String = #"\s*+"# + quotedText + #"(?!\h*+[:=])"#
+        let value: String = "(?:" + sameLine + "|" + lineUnder + ")"
+        return try! NSRegularExpression(pattern: named + value)
+    }()
 
     /// `API_KEY=…` or `password: …` on a line of its own (env, YAML, INI): the bare value. In a diff the
-    /// line starts with its + or -. The spaces around the `=` or `:` are spaces and tabs on the name's line: an empty
-    /// value (`DB_PASSWORD=`) never takes the next line with text as its value.
+    /// line starts with its + or -. The spaces around the `=` or `:` are those on the name's line (ICU's `\h`: a tab and
+    /// the space separators): an empty value (`DB_PASSWORD=`) never takes the next line with text as its value.
     static let bareValue = try! NSRegularExpression(
-        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"[ \t]*+[:=][ \t]*+([^\s"'`#]{6,}+)\s*$"#,
+        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"\h*+[:=]\h*+([^\s"'`#]{6,}+)\s*$"#,
         options: [.caseInsensitive, .anchorsMatchLines])
 
     /// A run long enough to be a key; masked only if it looks random (see `looksRandom`).
