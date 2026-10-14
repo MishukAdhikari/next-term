@@ -3,8 +3,8 @@ import NextTermCore
 import SwiftTerm
 
 // Settings › Terminal: the cursor, the scrollback a tab keeps, where ⌘T opens a tab (NextTermCore/
-// TerminalSettings.swift) and where the terminal sits around the editor. Applied at once to every open
-// terminal; an import can set them too.
+// TerminalSettings.swift), where the terminal sits around the editor and where its tabs show. Applied at once to
+// every open terminal; an import can set them too.
 
 extension Preferences {
     static var terminalCursorShape: CursorShape {
@@ -98,7 +98,8 @@ extension StartFolder {
     }
 }
 
-/// Settings › Terminal's rows for the cursor, the scrollback, where new tabs open and where the terminal sits.
+/// Settings › Terminal's rows for the cursor, the scrollback, where new tabs open, and where the terminal and its tabs
+/// go.
 final class TerminalBehaviourControls: NSObject {
     let shape = NSPopUpButton()
     let blink = NSButton(checkboxWithTitle: "Blink", target: nil, action: nil)
@@ -106,6 +107,8 @@ final class TerminalBehaviourControls: NSObject {
     let startFolder = NSPopUpButton()
     /// View › Terminal Position, here too.
     let position = NSPopUpButton()
+    /// View › Terminal Tabs, here too, on the same row: where the terminal goes, then where its tabs go in it.
+    let tabs = NSPopUpButton()
 
     static let scrollbackChoices = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000]
 
@@ -134,14 +137,26 @@ final class TerminalBehaviourControls: NSObject {
         position.toolTip = "Where the terminal sits around the editor, in every window. With no file open it fills the window."
         // Chosen from the View menu or the terminal's ⋯ while Settings is open.
         NotificationCenter.default.addObserver(self, selector: #selector(showPosition), name: AppDelegate.terminalPositionChanged, object: nil)
+        for place in TerminalTabsSetting.allCases {
+            tabs.addItem(withTitle: place.title)
+            tabs.lastItem?.representedObject = place.rawValue
+        }
+        tabs.target = self
+        tabs.action = #selector(tabsChanged)
+        tabs.toolTip = "Where the terminal’s tabs show, in every window: along its bar at the top, or in a list down its left or right."
+        tabs.setAccessibilityLabel("Terminal tabs")
+        NotificationCenter.default.addObserver(self, selector: #selector(showTabs), name: AppDelegate.terminalTabsChanged, object: nil)
     }
 
     /// The rows, made with the settings view's own row maker.
     func rows(_ row: (String, [NSView]) -> NSStackView) -> [NSView] {
-        [row("Cursor:", [shape, blink]),
-         row("Scrollback:", [scrollback, NSTextField(labelWithString: "lines")]),
-         row("New tabs:", [startFolder]),
-         row("Position:", [position])]
+        // Tabs shares Position's row: both say where the terminal's parts go, and Settings › Terminal stays as tall.
+        let place = row("Position:", [position, NSTextField(labelWithString: "Tabs:"), tabs])
+        place.setCustomSpacing(18, after: position)
+        return [row("Cursor:", [shape, blink]),
+                row("Scrollback:", [scrollback, NSTextField(labelWithString: "lines")]),
+                row("New tabs:", [startFolder]),
+                place]
     }
 
     func refresh() {
@@ -156,11 +171,17 @@ final class TerminalBehaviourControls: NSObject {
         scrollback.selectItem(withTag: lines)
         fillStartFolder()
         showPosition()
+        showTabs()
     }
 
     @objc private func showPosition() {
         guard let current = AppDelegate.shared?.terminalPosition else { return }
         position.selectItem(at: TerminalPosition.allCases.firstIndex(of: current) ?? 0)
+    }
+
+    @objc private func showTabs() {
+        guard let current = AppDelegate.shared?.terminalTabs else { return }
+        tabs.selectItem(at: TerminalTabsSetting.allCases.firstIndex(of: current) ?? 0)
     }
 
     static func formatted(_ lines: Int) -> String {
@@ -204,6 +225,11 @@ final class TerminalBehaviourControls: NSObject {
     @objc private func positionChanged() {
         guard let raw = position.selectedItem?.representedObject as? String, let chosen = TerminalPosition(rawValue: raw) else { return }
         AppDelegate.shared.moveTerminal(to: chosen, announce: true)
+    }
+
+    @objc private func tabsChanged() {
+        guard let raw = tabs.selectedItem?.representedObject as? String, let chosen = TerminalTabsSetting(rawValue: raw) else { return }
+        AppDelegate.shared.moveTerminalTabs(to: chosen)
     }
 
     @objc private func startFolderChanged() {

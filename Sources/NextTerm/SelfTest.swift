@@ -971,6 +971,7 @@ enum SelfTest {
         let a = c.tabs[0], b = c.tabs[1]
         c.tabBar(c.tabBar, didMove: 0, to: 1)
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
+        await tabListChecks(c, proj: proj)
 
         await endStrayQuestions(after: "the project and window checks")
         await paneChecks(c)
