@@ -186,9 +186,14 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         for view in rows.arrangedSubviews { view.removeFromSuperview() }
         groupRows = []
         listed = []
-        let stored = SecretsStore.shared.index?.names ?? []
-        // A value a stored key holds already (a move tried again after its file was left as it was) keeps that key.
-        let groups = SecretImport.groups(found.findings, stored: stored) { value in Self.storedKey(holding: value)?.name }
+        let index = SecretsStore.shared.index
+        let stored = index?.names ?? []
+        let mask = SecretMask.current
+        // A value keys an earlier move stored hold already (a move tried again after its file was left as it was)
+        // keeps those keys, one per group.
+        let groups = SecretImport.groups(found.findings, stored: stored) { value in
+            SecretImport.reusable(holding: value, in: index, mask: mask)
+        }
         for group in groups { addGroupRow(group) }
         for finding in found.findings where !finding.movable {
             let text = "\(Self.place(finding)): \(finding.notMovable ?? "")"
@@ -297,17 +302,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
     static let reuseNote = "Already in Secrets with this value, from an earlier move: the move uses that key and stores no "
         + "second copy."
 
-    /// The key an earlier move stored whose marks show it holds `value`, if there is one. Only a move's keys: one added
-    /// in Settings or by an agent is the user's own, and an Undo that deletes this move's keys never takes it.
-    static func storedKey(holding value: SecretBytes) -> SecretVault.Entry? {
-        let mask = SecretMask.current
-        return SecretsStore.shared.index?.entries.first { $0.origin == .import && mask.isHeld(value, by: $0) }
-    }
-
-    /// Whether a row's name is a key an earlier move stored that holds its value already.
+    /// Whether a row's name is a key an earlier move stored that holds its value already, and that the move may use
+    /// (`SecretImport.reusable`: not one added in Settings or by an agent, not a write-only one).
     func reusesStored(_ row: GroupRow) -> Bool {
-        guard let entry = SecretsStore.shared.index?.entry(named: row.name), entry.origin == .import else { return false }
-        return SecretMask.current.isHeld(row.group.value, by: entry)
+        let reusable = SecretImport.reusable(holding: row.group.value, in: SecretsStore.shared.index, mask: .current)
+        return reusable.contains(row.name)
     }
 
     /// A ticked row's name is checked as typed: the rule, a stored key with another value, or another ticked row.
@@ -396,9 +395,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             for edit in edits { for backup in edit.backups { kept[backup.id] = backup.keptValues } }
             do {
                 self.statusLabel.stringValue = Self.touchIDLine
-                let boxes = try await SecretsStore.shared.performImport(keys, kept: kept, reason: SecretReason.moveOut(keys.count))
+                let imported = try await SecretsStore.shared.performImport(keys, kept: kept, reason: SecretReason.moveOut(keys.count))
                 for index in edits.indices {
-                    for backup in edits[index].backups { edits[index].seal(backup.id, box: boxes[backup.id]) }
+                    for backup in edits[index].backups { edits[index].seal(backup.id, box: imported.boxes[backup.id]) }
+                    // Which keys this move stored, not used from an earlier one: an Undo of it deletes those alone.
+                    edits[index].setStored(imported.stored)
                 }
                 try SecretsStore.shared.saveBackups(edits.flatMap(\.backups))
                 self.statusLabel.stringValue = Self.writingLine

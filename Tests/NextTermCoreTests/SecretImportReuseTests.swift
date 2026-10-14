@@ -46,10 +46,45 @@ import Testing
         #expect(throws: SecretVault.Failure.locked) { _ = try vault.holds("HELD", value: Self.value) }
     }
 
-    /// A group whose value a stored key holds takes that key's name, even one unlike its variable's, and says so.
-    /// Groups of other values still step around stored names, and so does a second group of the same value (one entry
-    /// holding it under two variables needs a key for each).
-    @Test func aGroupUsesTheStoredKeyHoldingItsValue() throws {
+    /// The keys a group may use: an earlier move's (origin `import`) whose marks hold its value. Never a key added in
+    /// Settings, which is the user's own, nor a write-only one, which an Undo of the move couldn't put back.
+    @Test func onlyAnEarlierMovesReadableKeysAreUsed() throws {
+        let maskKey = SymmetricKey(size: .bits256)
+        let vault = try SecretVault.create(keyring: SoftwareKeyring()).vault
+        let keys: [(String, SecretVault.Origin)] = [("FIRST_MOVE", .import), ("MINE", .settings), ("LOCKED_MOVE", .import),
+                                                    ("SECOND_MOVE", .import)]
+        for (name, origin) in keys {
+            _ = try vault.add(name: name, purpose: "", purposeBy: .user, origin: origin, writeOnly: false, value: Self.value,
+                              maskKey: maskKey)
+        }
+        _ = try vault.makeWriteOnly("LOCKED_MOVE")
+        _ = try vault.add(name: "OTHER_MOVE", purpose: "", purposeBy: .user, origin: .import, writeOnly: false,
+                          value: SecretBytes(utf8: "made-up-value-9876543210"), maskKey: maskKey)
+        let mask = SecretMask(key: maskKey, index: vault.index)
+        #expect(SecretImport.reusable(holding: Self.value, in: vault.index, mask: mask) == ["FIRST_MOVE", "SECOND_MOVE"])
+        #expect(SecretImport.reusable(holding: Self.value, in: nil, mask: mask) == [])
+        #expect(SecretImport.reusable(holding: Self.value, in: vault.index, mask: .empty) == [])
+        #expect(SecretImport.reusable(holding: SecretBytes(utf8: "short-1"), in: vault.index, mask: mask) == [])
+    }
+
+    /// Inside the unlocked vault, the import keeps a key instead of storing the value again only when an earlier move
+    /// stored it, it is not write-only, and it holds that value.
+    @Test func theVaultKeepsOnlyAnEarlierMovesReadableKey() throws {
+        let vault = try SecretVault.create(keyring: SoftwareKeyring()).vault
+        let keys: [(String, SecretVault.Origin)] = [("HELD", .import), ("MINE", .settings), ("LOCKED", .import)]
+        for (name, origin) in keys {
+            _ = try vault.add(name: name, purpose: "", purposeBy: .user, origin: origin, writeOnly: false, value: Self.value)
+        }
+        _ = try vault.makeWriteOnly("LOCKED")
+        #expect(try vault.isReusable("HELD", for: Self.value))
+        #expect(try !vault.isReusable("HELD", for: SecretBytes(utf8: "made-up-value-9876543210")))
+        #expect(try !vault.isReusable("MINE", for: Self.value))
+        #expect(try !vault.isReusable("LOCKED", for: Self.value))
+        #expect(try !vault.isReusable("MISSING", for: Self.value))
+    }
+
+    /// The scan of an entry holding one value under two variables, and another value, for the groups below.
+    private static func twoVariablesOneValue() -> [SecretImport.Finding] {
         let home = F.Home()
         defer { home.remove() }
         home.write(".cursor/mcp.json", """
@@ -58,17 +93,37 @@ import Testing
               "openai": {"command": "npx", "env": {"OPENAI_API_KEY": "\(F.openai)"}}
             }}
             """)
-        let found = SecretImport.scan(F.sources(home), isOpen: { _ in false })
+        return SecretImport.scan(F.sources(home), isOpen: { _ in false }).findings
+    }
+
+    /// Each group's name by its first variable, and whether it uses a stored key.
+    private static func named(_ groups: [SecretImport.Group]) -> [String: String] {
+        var names: [String: String] = [:]
+        for group in groups { names[group.findings[0].variable] = group.name + (group.reusesStored ? " (stored)" : "") }
+        return names
+    }
+
+    /// Groups whose value stored keys hold use those keys, one each. An entry holding the value under two variables,
+    /// both stored by the first try, uses both again, each its own name; never one key twice and a second copy.
+    @Test func eachGroupUsesItsOwnStoredKeyHoldingItsValue() {
+        let findings = Self.twoVariablesOneValue()
         let github = SecretBytes(utf8: F.github)
-        let stored = ["EARLIER_TOKEN", "OPENAI_API_KEY"]
-        let groups = SecretImport.groups(found.findings, stored: stored) { $0 == github ? "EARLIER_TOKEN" : nil }
-        let same = groups.filter { $0.value == github }
-        #expect(same.count == 2)
+        let stored = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY"]
+        let both = SecretImport.groups(findings, stored: stored) { $0 == github ? ["GH_TOKEN", "GITHUB_TOKEN"] : [] }
+        #expect(Self.named(both) == ["GITHUB_TOKEN": "GITHUB_TOKEN (stored)", "GH_TOKEN": "GH_TOKEN (stored)",
+                                     "OPENAI_API_KEY": "OPENAI_API_KEY_2"])
+        // Held under other names: a group takes the one named as its variable first, the other group the next.
+        let other = ["GH_TOKEN", "EARLIER_TOKEN", "OPENAI_API_KEY"]
+        let renamed = SecretImport.groups(findings, stored: other) { $0 == github ? ["EARLIER_TOKEN", "GH_TOKEN"] : [] }
+        #expect(Self.named(renamed)["GITHUB_TOKEN"] == "EARLIER_TOKEN (stored)")
+        #expect(Self.named(renamed)["GH_TOKEN"] == "GH_TOKEN (stored)")
+        // One stored key holding it: one group uses it, the other gets a name of its own and a key of its own.
+        let one = SecretImport.groups(findings, stored: ["EARLIER_TOKEN"]) { $0 == github ? ["EARLIER_TOKEN"] : [] }
+        let same = one.filter { $0.value == github }
         #expect(same.filter(\.reusesStored).map(\.name) == ["EARLIER_TOKEN"])
-        #expect(same.filter { !$0.reusesStored }.allSatisfy { !stored.contains($0.name) })
-        let openai = try #require(groups.first { $0.value == SecretBytes(utf8: F.openai) })
-        #expect(openai.name == "OPENAI_API_KEY_2" && !openai.reusesStored)
-        // With no stored key holding a value, nothing is reused.
-        #expect(SecretImport.groups(found.findings, stored: stored).allSatisfy { !$0.reusesStored })
+        #expect(same.filter { !$0.reusesStored }.allSatisfy { $0.name != "EARLIER_TOKEN" })
+        // A name `holding` gives that isn't stored is never used; with none, nothing is reused.
+        #expect(SecretImport.groups(findings, stored: []) { _ in ["GITHUB_TOKEN"] }.allSatisfy { !$0.reusesStored })
+        #expect(SecretImport.groups(findings, stored: stored).allSatisfy { !$0.reusesStored })
     }
 }

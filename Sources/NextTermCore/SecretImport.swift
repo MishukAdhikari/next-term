@@ -1221,13 +1221,24 @@ public enum SecretImport {
         }
     }
 
+    /// The keys an earlier move stored whose marks show they hold `value` (no value is read), in the vault's order:
+    /// what a group of that value may use instead of a second copy. Only a move's keys (origin `import`): one added in
+    /// Settings or by an agent is the user's own. Never a write-only one: an Undo of the move that used it couldn't put
+    /// it back. The value's mark is worked out once.
+    public static func reusable(holding value: SecretBytes, in index: SecretVault.Index?, mask: SecretMask) -> [String] {
+        guard let index, let mark = mask.mark(of: value) else { return [] }
+        let held = index.entries.filter { $0.origin == .import && !$0.writeOnly && $0.marks.contains(mark) }
+        return held.map(\.name)
+    }
+
     /// The movable findings grouped by identical value, each group named after its first variable (capitals, `_`); a
     /// clash with a stored key or another group adds `_2`, `_3`. A group holds at most one variable of each entry.
-    /// `holding` names the stored key that holds a value already, if one does: the first group of that value takes its
-    /// name (`reusesStored`), so an import tried again after its file was left as it was uses the key the first try
-    /// stored, instead of a second copy under `_2`.
+    /// `holding` names the stored keys that hold a value already (`reusable`): each group of that value takes one of
+    /// them (`reusesStored`), the one named as its variable first, and no two groups take the same one. So an import
+    /// tried again after its file was left as it was uses the keys the first try stored, one per variable, instead of
+    /// second copies under `_2`.
     public static func groups(_ findings: [Finding], stored: [String],
-                              holding: (SecretBytes) -> String? = { _ in nil }) -> [Group] {
+                              holding: (SecretBytes) -> [String] = { _ in [] }) -> [Group] {
         struct Place: Hashable {
             let path: String
             let location: Location
@@ -1249,15 +1260,14 @@ public enum SecretImport {
             }
         }
         var taken = Set(stored)
+        let reusing = storedKeys(for: groups.map { ($0.value, $0.findings[0].variable) }, taken: taken, holding: holding)
         // Where each name's numbers go on from: names are only ever taken, so the ones below are taken still.
         var numbers: [String: Int] = [:]
-        var reused = Set<String>()
-        return groups.map { group in
-            if let name = holding(group.value), taken.contains(name), !reused.contains(name) {
-                reused.insert(name)
-                var reusing = Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
-                reusing.reusesStored = true
-                return reusing
+        return groups.enumerated().map { position, group in
+            if let name = reusing[position] {
+                var reused = Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
+                reused.reusesStored = true
+                return reused
             }
             let base = StoredSecretName.suggested(from: group.findings[0].variable)
             var name = base
@@ -1271,6 +1281,28 @@ public enum SecretImport {
             taken.insert(name)
             return Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
         }
+    }
+
+    /// The stored key each group uses, by its position, when one holds its value: first the groups whose variable's
+    /// name is one of those keys take it, then the others take the next one left. Each key goes to one group at most,
+    /// and only a key that is stored (`taken`).
+    static func storedKeys(for groups: [(value: SecretBytes, variable: String)], taken: Set<String>,
+                           holding: (SecretBytes) -> [String]) -> [Int: String] {
+        let candidates: [[String]] = groups.map { group in holding(group.value).filter { taken.contains($0) } }
+        var chosen: [Int: String] = [:]
+        var used = Set<String>()
+        for (position, group) in groups.enumerated() {
+            let own = StoredSecretName.suggested(from: group.variable)
+            guard candidates[position].contains(own), !used.contains(own) else { continue }
+            chosen[position] = own
+            used.insert(own)
+        }
+        for position in groups.indices where chosen[position] == nil {
+            guard let next = candidates[position].first(where: { !used.contains($0) }) else { continue }
+            chosen[position] = next
+            used.insert(next)
+        }
+        return chosen
     }
 
     // MARK: the wrapper's command
@@ -1325,9 +1357,16 @@ public enum SecretImport {
         public let keptCount: Int
         public var keptBox: Data?
         public var keptValues: [SecretBytes] = []
+        /// Of `names`, the keys the move stored itself; the others it used, stored by an earlier move. Nil in a backup
+        /// written before this was recorded, when every move stored all its keys.
+        public var stored: [String]?
+
+        /// The keys the move stored itself: what an Undo of it may delete.
+        public var storedNames: [String] { stored ?? names }
 
         enum CodingKeys: String, CodingKey {
             case id, batch, date, path, client, format, location, names, original, written, keptCount = "kept_count", keptBox = "kept_box"
+            case stored
         }
 
         /// The record's file name in `imports/`.
@@ -1364,6 +1403,52 @@ public enum SecretImport {
         public mutating func seal(_ id: String, box: Data?) {
             guard let index = backups.firstIndex(where: { $0.id == id }) else { return }
             backups[index].keptBox = box
+        }
+
+        /// Records in each backup which of its keys the import stored (`stored`), the others being keys it used.
+        public mutating func setStored(_ stored: Set<String>) {
+            for index in backups.indices { backups[index].stored = backups[index].names.filter(stored.contains) }
+        }
+    }
+
+    /// What an Undo's "Also delete these keys" deletes: only keys the undone moves stored themselves, and none that
+    /// entries it doesn't put back still name (another import's in the list, or one of its own left wrapped). A key a
+    /// move used because an earlier move had stored it stays, since other entries may use it, even once that earlier
+    /// move's backup is gone.
+    public struct UndoKeys: Equatable, Sendable {
+        /// The keys it may delete, once their entries all went back.
+        public let deletable: Set<String>
+        /// Kept: stored before the undone moves, which used them.
+        public let storedBefore: [String]
+        /// Kept: entries this Undo doesn't put back name them.
+        public let usedElsewhere: [String]
+
+        public init(undoing backups: [EntryBackup], others: [EntryBackup]) {
+            let names = Set(backups.flatMap(\.names))
+            let stored = Set(backups.flatMap(\.storedNames)).intersection(names)
+            let elsewhere = Set(others.flatMap(\.names))
+            deletable = stored.subtracting(elsewhere)
+            storedBefore = names.subtracting(stored).sorted()
+            usedElsewhere = stored.intersection(elsewhere).sorted()
+        }
+
+        /// What Undo says about the keys of `back` (whose entries all went back) it kept although asked to delete them;
+        /// nil when it kept none.
+        public func keptText(_ back: Set<String>) -> String? {
+            let before = storedBefore.filter(back.contains)
+            let elsewhere = usedElsewhere.filter(back.contains)
+            var lines: [String] = []
+            if !before.isEmpty {
+                let one = before.count == 1
+                lines.append("\(SecretRun.keysText(before)) \(one ? "stays" : "stay") in Secrets: \(one ? "it was" : "they were") "
+                    + "there before this import, and other entries may use \(one ? "it" : "them").")
+            }
+            if !elsewhere.isEmpty {
+                let one = elsewhere.count == 1
+                lines.append("\(SecretRun.keysText(elsewhere)) \(one ? "stays" : "stay") in Secrets: entries this Undo doesn’t "
+                    + "put back still use \(one ? "it" : "them").")
+            }
+            return lines.isEmpty ? nil : lines.joined(separator: " ")
         }
     }
 

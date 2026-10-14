@@ -206,14 +206,20 @@ public final class SecretMask: @unchecked Sendable {
     /// has no marks, for one the vault would refuse, and with no mask key. For the import, to use a key an earlier try
     /// stored; the vault checks the value itself before it keeps the key (`SecretVault.holds`).
     public func isHeld(_ value: SecretBytes, by entry: SecretVault.Entry) -> Bool {
+        guard let mark = mark(of: value) else { return false }
+        return entry.marks.contains(mark)
+    }
+
+    /// The mark `value`'s form as stored has, to look for among entries' marks: worked out once for any number of
+    /// them. Nil as `isHeld` is false for every entry.
+    public func mark(of value: SecretBytes) -> SecretVault.Mark? {
         guard let tagKey, let trimmed = try? SecretVault.normalized(value, name: ""),
-              trimmed.count >= Self.minimumLength else { return false }
-        let mark: SecretVault.Mark = trimmed.withUnsafeBytes { buffer in
+              trimmed.count >= Self.minimumLength else { return nil }
+        return trimmed.withUnsafeBytes { buffer in
             let bytes = buffer.bindMemory(to: UInt8.self)
             let head = Self.headOf(bytes.baseAddress!, multiplier, offset)
             return SecretVault.Mark(length: buffer.count, head: head, tag: Self.tag(buffer, key: tagKey))
         }
-        return entry.marks.contains(mark)
     }
 
     // MARK: matching

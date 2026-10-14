@@ -640,10 +640,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
         guard !held.isEmpty else { return say(refusals.joined(separator: " ")) }
         let asked = Array(Set(held.flatMap(\.names))).sorted()
-        // A key another import's entries still use (a later move took the key an earlier one stored) is not deleted.
-        let ids = Set(backups.map(\.id))
+        // Only keys these moves stored themselves are deleted, and none that entries this Undo doesn't put back still
+        // name: another import's in the list, or one of this import's left wrapped for its write-only key.
+        let ids = Set(held.map(\.id))
         let others: [SecretImport.EntryBackup] = importRows.flatMap { $0.backups }.filter { !ids.contains($0.id) }
-        let usedElsewhere = Set(others.flatMap(\.names))
+        let undoKeys = SecretImport.UndoKeys(undoing: held, others: others)
+        let deletable = undoKeys.deletable
         var kept: [String: Data] = [:]
         for backup in held { if let box = backup.keptBox { kept[backup.id] = box } }
         let outcome = UndoOutcome()
@@ -657,8 +659,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                         outcome.add(backup, result)
                         if result != .written { back.subtract(backup.names) }
                     }
-                    back.subtract(usedElsewhere)
-                    return back
+                    return back.intersection(deletable)
                 }
                 for (backup, result) in outcome.results where result == .written { SecretsStore.shared.removeBackup(backup) }
                 let left = refusals + outcome.results.compactMap { pair -> String? in
@@ -666,7 +667,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                     return pair.1 == .written ? nil : SecretImportSheet.text(pair.1)
                 }
                 let back = outcome.results.filter { $0.1 == .written }.count
-                self.say(left.isEmpty ? "Put \(back) \(back == 1 ? "entry" : "entries") back." : left.joined(separator: " "))
+                var said = left.isEmpty ? "Put \(back) \(back == 1 ? "entry" : "entries") back." : left.joined(separator: " ")
+                // Asked to delete the keys: the ones it kept, and why.
+                let notBack = Set(outcome.results.filter { $0.1 != .written }.flatMap { $0.0.names })
+                let wentBack = Set(asked).subtracting(notBack)
+                if delete, let keptText = undoKeys.keptText(wentBack) { said += " " + keptText }
+                self.say(said)
             } catch SecretsStore.Failure.cancelled {
                 self.say("Not approved.")
             } catch {

@@ -637,24 +637,28 @@ final class SecretsStore {
     }
 
     /// One Touch ID for an import: saves its keys (origin `import`) and seals each backup's kept values under the vault
-    /// key. A key stored already with the same value is kept as it is. Returns the sealed boxes by backup id. Nothing is
-    /// saved on a failure.
-    func performImport(_ keys: [ImportKey], kept: [String: [SecretBytes]], reason: String) async throws -> [String: Data] {
+    /// key. A key an earlier move stored with the same value is kept as it is (`SecretVault.isReusable`). Returns the
+    /// sealed boxes by backup id, and the names it stored itself. Nothing is saved on a failure.
+    func performImport(_ keys: [ImportKey], kept: [String: [SecretBytes]],
+                       reason: String) async throws -> (boxes: [String: Data], stored: Set<String>) {
         var boxes: [String: Data] = [:]
+        var stored = Set<String>()
         let names = keys.map(\.name)
         try await run(makes: true, names: names, reason: reason) { vault, maskKey in
             var file: Data?
+            stored = [] // the change may run again, on a vault.json read again
             for key in keys {
                 // Stored by an earlier try whose file was left as it was: the same value under that name is used as
-                // it is, not stored twice. Another value under the name is refused, as add refuses it.
-                if try vault.holds(key.name, value: key.value) { continue }
+                // it is, not stored twice. Another value, or a key not a move's, is refused, as add refuses it.
+                if try vault.isReusable(key.name, for: key.value) { continue }
                 file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: false, value: key.value,
                                      maskKey: maskKey)
+                stored.insert(key.name)
             }
             for (id, values) in kept where !values.isEmpty { boxes[id] = try vault.sealBackup(values, id: id) }
             return file
         } line: { SecretAudit.Line(event: .import, names: names, outcome: "moved \(names.count) \(names.count == 1 ? "key" : "keys")") }
-        return boxes
+        return (boxes, stored)
     }
 
     /// One Touch ID for an Undo: the keys' values and each backup's kept values, handed to `put`, which writes the
