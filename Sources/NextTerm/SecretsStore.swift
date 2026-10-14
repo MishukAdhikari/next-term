@@ -603,13 +603,17 @@ final class SecretsStore {
     }
 
     /// One Touch ID for an import: saves its keys (origin `import`) and seals each backup's kept values under the vault
-    /// key. Returns the sealed boxes by backup id. Nothing is saved on a failure.
+    /// key. A key stored already with the same value is kept as it is. Returns the sealed boxes by backup id. Nothing is
+    /// saved on a failure.
     func performImport(_ keys: [ImportKey], kept: [String: [SecretBytes]], reason: String) async throws -> [String: Data] {
         var boxes: [String: Data] = [:]
         let names = keys.map(\.name)
         try await run(makes: true, names: names, reason: reason) { vault, maskKey in
             var file: Data?
             for key in keys {
+                // Stored by an earlier try whose file was left as it was: the same value under that name is used as
+                // it is, not stored twice. Another value under the name is refused, as add refuses it.
+                if try vault.holds(key.name, value: key.value) { continue }
                 file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: false, value: key.value,
                                      maskKey: maskKey)
             }

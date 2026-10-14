@@ -640,6 +640,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
         guard !held.isEmpty else { return say(refusals.joined(separator: " ")) }
         let asked = Array(Set(held.flatMap(\.names))).sorted()
+        // A key another import's entries still use (a later move took the key an earlier one stored) is not deleted.
+        let ids = Set(backups.map(\.id))
+        let others: [SecretImport.EntryBackup] = importRows.flatMap { $0.backups }.filter { !ids.contains($0.id) }
+        let usedElsewhere = Set(others.flatMap(\.names))
         var kept: [String: Data] = [:]
         for backup in held { if let box = backup.keptBox { kept[backup.id] = box } }
         let outcome = UndoOutcome()
@@ -653,6 +657,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
                         outcome.add(backup, result)
                         if result != .written { back.subtract(backup.names) }
                     }
+                    back.subtract(usedElsewhere)
                     return back
                 }
                 for (backup, result) in outcome.results where result == .written { SecretsStore.shared.removeBackup(backup) }

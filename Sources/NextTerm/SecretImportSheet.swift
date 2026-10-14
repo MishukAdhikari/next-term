@@ -187,7 +187,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         groupRows = []
         listed = []
         let stored = SecretsStore.shared.index?.names ?? []
-        let groups = SecretImport.groups(found.findings, stored: stored)
+        // A value a stored key holds already (a move tried again after its file was left as it was) keeps that key.
+        let groups = SecretImport.groups(found.findings, stored: stored) { value in Self.storedKey(holding: value)?.name }
         for group in groups { addGroupRow(group) }
         for finding in found.findings where !finding.movable {
             let text = "\(Self.place(finding)): \(finding.notMovable ?? "")"
@@ -293,11 +294,28 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         refreshMove()
     }
 
-    /// A ticked row's name is checked as typed: the rule, a stored key, or another ticked row.
+    static let reuseNote = "Already in Secrets with this value, from an earlier move: the move uses that key and stores no "
+        + "second copy."
+
+    /// The key an earlier move stored whose marks show it holds `value`, if there is one. Only a move's keys: one added
+    /// in Settings or by an agent is the user's own, and an Undo that deletes this move's keys never takes it.
+    static func storedKey(holding value: SecretBytes) -> SecretVault.Entry? {
+        let mask = SecretMask.current
+        return SecretsStore.shared.index?.entries.first { $0.origin == .import && mask.isHeld(value, by: $0) }
+    }
+
+    /// Whether a row's name is a key an earlier move stored that holds its value already.
+    func reusesStored(_ row: GroupRow) -> Bool {
+        guard let entry = SecretsStore.shared.index?.entry(named: row.name), entry.origin == .import else { return false }
+        return SecretMask.current.isHeld(row.group.value, by: entry)
+    }
+
+    /// A ticked row's name is checked as typed: the rule, a stored key with another value, or another ticked row.
     func nameProblem(_ row: GroupRow) -> String? {
         let name = row.name
         guard StoredSecretName.isValid(name) else { return StoredSecretName.rule }
-        if SecretsStore.shared.index?.entry(named: name) != nil { return "A key named \(name) is stored already." }
+        let isStored = SecretsStore.shared.index?.entry(named: name) != nil
+        if isStored, !reusesStored(row) { return "A key named \(name) is stored already." }
         if groupRows.contains(where: { $0 !== row && $0.box.state == .on && $0.name == name }) { return "Another row has this name." }
         return nil
     }
@@ -307,8 +325,10 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         var any = false
         for row in groupRows {
             let problem = row.box.state == .on ? nameProblem(row) : nil
-            row.nameNote.stringValue = problem ?? ""
-            row.nameNote.isHidden = problem == nil
+            let note = problem ?? (reusesStored(row) ? Self.reuseNote : nil)
+            row.nameNote.stringValue = note ?? ""
+            row.nameNote.textColor = problem == nil ? .secondaryLabelColor : .systemOrange
+            row.nameNote.isHidden = note == nil
             if row.box.state == .on {
                 any = true
                 if problem != nil { ok = false }

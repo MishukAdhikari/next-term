@@ -1211,6 +1211,8 @@ public enum SecretImport {
         public var name: String
         public let value: SecretBytes
         public let findings: [Finding]
+        /// `name` is a stored key that holds this value already: the move uses it and stores no second copy.
+        public var reusesStored = false
         public var kind: String { findings.first?.kind ?? "key" }
         /// "Same value in 3 servers" when it is in more than one.
         public var summary: String? {
@@ -1221,7 +1223,11 @@ public enum SecretImport {
 
     /// The movable findings grouped by identical value, each group named after its first variable (capitals, `_`); a
     /// clash with a stored key or another group adds `_2`, `_3`. A group holds at most one variable of each entry.
-    public static func groups(_ findings: [Finding], stored: [String]) -> [Group] {
+    /// `holding` names the stored key that holds a value already, if one does: the first group of that value takes its
+    /// name (`reusesStored`), so an import tried again after its file was left as it was uses the key the first try
+    /// stored, instead of a second copy under `_2`.
+    public static func groups(_ findings: [Finding], stored: [String],
+                              holding: (SecretBytes) -> String? = { _ in nil }) -> [Group] {
         struct Place: Hashable {
             let path: String
             let location: Location
@@ -1245,7 +1251,14 @@ public enum SecretImport {
         var taken = Set(stored)
         // Where each name's numbers go on from: names are only ever taken, so the ones below are taken still.
         var numbers: [String: Int] = [:]
+        var reused = Set<String>()
         return groups.map { group in
+            if let name = holding(group.value), taken.contains(name), !reused.contains(name) {
+                reused.insert(name)
+                var reusing = Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
+                reusing.reusesStored = true
+                return reusing
+            }
             let base = StoredSecretName.suggested(from: group.findings[0].variable)
             var name = base
             var number = numbers[base] ?? 2

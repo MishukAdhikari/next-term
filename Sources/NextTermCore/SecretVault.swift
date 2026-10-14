@@ -594,6 +594,15 @@ public final class SecretVault {
         return try Self.open(entry, key: key)
     }
 
+    /// Whether the key `name` holds `value`, trimmed as `add` trims it, compared inside the vault in constant time. For
+    /// an import tried again after its file was left as it was: the key the first try stored is used, not stored twice.
+    /// False when there is no such key, or `value` is not one `add` would take.
+    public func holds(_ name: String, value: SecretBytes) throws -> Bool {
+        let key = try unlockedKey()
+        guard let entry = index.entry(named: name), let wanted = try? Self.normalized(value, name: name) else { return false }
+        return try Self.open(entry, key: key) == wanted
+    }
+
     /// A key's value, to show or copy: refused for a write-only key.
     public func shownValue(of name: String) throws -> SecretBytes {
         let (_, entry) = try find(name)

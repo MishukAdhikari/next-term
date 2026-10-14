@@ -201,6 +201,21 @@ public final class SecretMask: @unchecked Sendable {
         Data(HMAC<SHA256>.authenticationCode(for: bytes, using: key).prefix(tagLength))
     }
 
+    /// Whether `entry` holds `value`, by its marks: no value is read from the vault. The value is trimmed as the vault
+    /// trims it, and its form as stored is looked for among the entry's marks. False for a value under 12 bytes, which
+    /// has no marks, for one the vault would refuse, and with no mask key. For the import, to use a key an earlier try
+    /// stored; the vault checks the value itself before it keeps the key (`SecretVault.holds`).
+    public func isHeld(_ value: SecretBytes, by entry: SecretVault.Entry) -> Bool {
+        guard let tagKey, let trimmed = try? SecretVault.normalized(value, name: ""),
+              trimmed.count >= Self.minimumLength else { return false }
+        let mark: SecretVault.Mark = trimmed.withUnsafeBytes { buffer in
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            let head = Self.headOf(bytes.baseAddress!, multiplier, offset)
+            return SecretVault.Mark(length: buffer.count, head: head, tag: Self.tag(buffer, key: tagKey))
+        }
+        return entry.marks.contains(mark)
+    }
+
     // MARK: matching
 
     /// The byte ranges of `bytes` that are a stored value in one of its forms, sorted, overlapping ones merged.
