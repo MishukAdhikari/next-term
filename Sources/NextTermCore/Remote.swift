@@ -37,6 +37,17 @@ public enum KeepMode: String, Codable, Sendable, CaseIterable {
         case .herdr: return "Attaches to your own herdr on the host, which keeps agents running and resumes them after a reboot."
         }
     }
+
+    /// What a tab opened with this mode has: a plain shell that nothing keeps (off) once tmux or herdr was missing on
+    /// the host and it fell back.
+    public func shown(fellBack: Bool) -> KeepMode { fellBack ? .off : self }
+
+    /// The tab's tooltip line: "Sessions kept: tmux", or for a tab that fell back "Sessions kept: Off (herdr isn’t
+    /// on the host)".
+    public func keptLine(fellBack: Bool) -> String {
+        guard fellBack, self != .off else { return "Sessions kept: \(label)" }
+        return "Sessions kept: Off (\(label) isn’t on the host)"
+    }
 }
 
 /// Where a remote tab's connection stands: the dot on its server mark, and the note in its title.
@@ -469,11 +480,15 @@ public enum RemoteShell {
             case .herdr:
                 break // herdr reports its agents itself; the pid file shows the tab got past ssh's login
             case .tmux:
+                let pane = quote("=" + safeName(tab.session) + ":")
                 lines += [
                     "if [ -n \"$T\" ]; then",
-                    "  q=$(\"$T\" -L nextterm display-message -p -t \(quote("=" + safeName(tab.session) + ":")) '#{pane_pid}' 2>/dev/null)",
+                    "  q=$(\"$T\" -L nextterm display-message -p -t \(pane) '#{pane_pid}' 2>/dev/null)",
                     "  [ -n \"$q\" ] && p=$q",
-                    "  d=$(\"$T\" -L nextterm display-message -p -t \(quote("=" + safeName(tab.session) + ":")) '#{pane_current_path}' 2>/dev/null)",
+                    "  d=$(\"$T\" -L nextterm display-message -p -t \(pane) '#{pane_current_path}' 2>/dev/null)",
+                    // The pane in one of tmux's modes (copy mode, which the mouse wheel enters): keys go to tmux.
+                    "  m=$(\"$T\" -L nextterm display-message -p -t \(pane) '#{pane_in_mode}' 2>/dev/null)",
+                    "  [ \"$m\" = 1 ] && printf '%s\\tmode\\n' \(quote(id))",
                     "fi",
                 ]
             case .off:
@@ -591,6 +606,8 @@ public struct RemoteTabReport: Equatable, Sendable {
     public var plain = false
     /// The folder asked for was not there; the tab opened in the home folder.
     public var folderMissing = false
+    /// A tmux tab's pane is in one of tmux's modes (copy mode): what is typed goes to tmux, not to the shell.
+    public var inMode = false
 }
 
 public struct RemotePoll: Equatable, Sendable {
@@ -625,6 +642,8 @@ public struct RemotePoll: Equatable, Sendable {
                 report.plain = true
             case "nodir":
                 report.folderMissing = true
+            case "mode":
+                report.inMode = true
             case "shell":
                 report.started = true
                 report.foreground = ForegroundProcess(isShell: true, name: "")

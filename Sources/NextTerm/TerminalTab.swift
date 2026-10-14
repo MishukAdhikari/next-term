@@ -439,6 +439,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var remoteReady = false
     /// tmux or herdr was missing on the host, so this tab is a plain shell that nothing keeps.
     private(set) var fellBack = false
+    /// The last status report said this tab's tmux pane is in one of tmux's modes (copy mode): keys go to tmux.
+    private(set) var paneInMode = false
     /// The folder asked for was not on the host (the tab opened in the home folder).
     private(set) var remoteFolderMissing = false
     /// Something on the host keeps this tab's session when the connection drops.
@@ -1158,7 +1160,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if let openedBy, let opener = AppDelegate.shared?.controllers.flatMap(\.tabs).first(where: { $0.id == openedBy }) {
             lines.append("Started by “\(opener.title)”")
         }
-        if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
+        if let remote { lines.append(remote.keep.keptLine(fellBack: fellBack)) }
         lines.append(completion.engineLabel)
         return lines.joined(separator: "\n")
     }
@@ -1404,6 +1406,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         guard remoteConnected else { return } // files on the host from another connection prove nothing
         if report.plain { fellBack = true }
         if report.folderMissing { remoteFolderMissing = true }
+        paneInMode = report.inMode
         // A herdr tab shows herdr: its state comes from herdr's agents (applyHerdr), not from what runs in front.
         if let foreground = report.foreground, remote.keep != .herdr || fellBack {
             if foreground.isShell { remoteReady = true }
@@ -1415,6 +1418,16 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // A title the remote prompt set is stale once a program runs, and the other way round.
         if (status.running, status.command) != (before.0, before.1) { programTitle = nil }
         if (status.running, status.command, directory, remoteConnected, fellBack) != before { delegate?.tabDidChange(self) }
+    }
+
+    /// What the host's status checks say about this tab's prompt, for what Next Term types in by itself (Suggest a
+    /// Command, Tab completion from the screen); nil for a tab on this Mac.
+    var serverPrompt: ServerPrompt? {
+        guard let remote else { return nil }
+        let alternate = view.getTerminal().isCurrentBufferAlternate
+        return ServerPrompt(keep: remote.keep, fellBack: fellBack, connected: remoteConnected && !disconnected && !exited,
+                            shellReported: remoteReady, running: status.running, inMode: paneInMode, alternateScreen: alternate,
+                            reportsSinceReturn: completion.reportsSinceReturn)
     }
 
     /// herdr's agents on the host: the tab shows the one that most needs you. Only once this tab's own

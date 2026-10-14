@@ -205,6 +205,8 @@ final class TerminalSettingsView: NSView {
     private let colours = NSPopUpButton()
     private let swatches = PaletteSwatches()
     let behaviour = TerminalBehaviourControls()
+    /// Tab completion's and Suggest a Command's rows, at the bottom.
+    let completionPane = CompletionSettingsPane()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -234,7 +236,7 @@ final class TerminalSettingsView: NSView {
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
         let sizeRow = row("Font size:", [fontSize, fontSizeValue, sameSize])
-        let stack = NSStackView(views: [row("Font:", [font]), sizeRow, row("Colours:", [colours]), row("", [swatches])] + behaviour.rows(row) + [note, CompletionSettingsPane()])
+        let stack = NSStackView(views: [row("Font:", [font]), sizeRow, row("Colours:", [colours]), row("", [swatches])] + behaviour.rows(row) + [note, completionPane])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14

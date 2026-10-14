@@ -836,15 +836,18 @@ extension CompletionSession {
     var usesScreen: Bool { tab?.remote != nil && state.arm == nil }
 
     /// A server tab kept in Next Term's tmux: tmux draws it on the alternate screen, its pane's cursor where the
-    /// shell's is.
-    var inTmux: Bool { tab?.remote?.keep == .tmux && tab?.fellBack == false }
+    /// shell's is (ServerPrompt.shellOnAlternateScreen).
+    var inTmux: Bool {
+        guard let tab, let remote = tab.remote else { return false }
+        return ServerPrompt.shellOnAlternateScreen(keep: remote.keep, fellBack: tab.fellBack)
+    }
 
-    /// The server's shell is at its prompt and can complete from the screen now: connected, two status reports
-    /// since the last Return, and room on its connection. Without these, a plain ^I at once.
+    /// The server's shell is at its prompt and can complete from the screen now: by the rule Suggest a Command's line
+    /// follows too (ServerPrompt: connected, the shell in front by two status reports since the last Return, not in
+    /// tmux's copy mode), and with room on its connection. Without these, a plain ^I at once.
     var screenReady: Bool {
-        guard let tab, usesScreen, CompletionPreferences.isOn else { return false }
-        guard tab.remoteConnected, !tab.disconnected, !tab.exited, tab.remoteReady, !tab.status.running else { return false }
-        return reportsSinceReturn >= 2 && RemoteCompletion.shared.hasRoom(for: tab)
+        guard let tab, usesScreen, CompletionPreferences.isOn, tab.serverPrompt?.atPrompt == true else { return false }
+        return RemoteCompletion.shared.hasRoom(for: tab)
     }
 
     /// The tab's connection dropped. A plain tab's shell went with it, and a reconnected one may have no hook (one

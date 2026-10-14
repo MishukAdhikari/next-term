@@ -548,7 +548,8 @@ final class RemotePoller {
         for (path, hostTabs) in Dictionary(grouping: tabs, by: { $0.controlPath! }) where !inFlight.contains(path) {
             guard let host = hostTabs.first?.remote?.host, RemoteConnection.masterAlive(path: path) else { continue }
             inFlight.insert(path)
-            let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep, session: $0.remote!.session) }
+            // A tab that fell back is checked as the plain shell it is (its folder too).
+            let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep.shown(fellBack: $0.fellBack), session: $0.remote!.session) }
             RemoteConnection.run(host, path: path, script: RemoteShell.pollScript(tabs: specs), timeout: 10) { [weak self] result in
                 self?.inFlight.remove(path)
                 guard let poll = RemotePoll.parse(result.output) else { return }

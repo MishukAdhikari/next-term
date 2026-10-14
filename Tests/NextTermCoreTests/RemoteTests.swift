@@ -212,6 +212,33 @@ import Testing
         let poll = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
         #expect(poll.tabs["tab1"]?.token == "abc123")
     }
+
+    @Test func aTmuxTabSaysWhenItsPaneIsInCopyMode() throws {
+        // A stand-in tmux where findTmux looks (~/.local/bin), answering display-message for the tab's pane.
+        let home = try temporaryHome()
+        try FileManager.default.createDirectory(atPath: home + "/.local/bin", withIntermediateDirectories: true)
+        let tmux = home + "/.local/bin/tmux"
+        func standIn(mode: String) throws {
+            let answers = "case \"$f\" in '#{pane_in_mode}') echo \(mode) ;; '#{pane_current_path}') echo /srv/app ;; esac"
+            try "#!/bin/sh\nfor a; do f=$a; done\n\(answers)\n".write(toFile: tmux, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmux)
+        }
+        let script = RemoteShell.pollScript(tabs: [(id: "tab1", keep: .tmux, session: "nt-app-123456")])
+        #expect(script.contains("-t '=nt-app-123456:' '#{pane_in_mode}'"))
+        try standIn(mode: "1")
+        let copying = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
+        #expect(copying.tabs["tab1"]?.inMode == true)
+        #expect(copying.tabs["tab1"]?.directory == "/srv/app")
+        // Out of copy mode, or an answer that is not exactly 1: no mode line.
+        for answer in ["0", "1x", ""] {
+            try standIn(mode: answer)
+            let back = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
+            #expect(back.tabs["tab1"]?.inMode == false, "\(answer)")
+        }
+        // Only a tmux tab asks.
+        #expect(!RemoteShell.pollScript(tabs: [(id: "tab1", keep: .off, session: "s")]).contains("pane_in_mode"))
+        #expect(!RemoteShell.pollScript(tabs: [(id: "tab1", keep: .herdr, session: "s")]).contains("pane_in_mode"))
+    }
 }
 
 @Suite struct RemoteParsingTests {
@@ -230,6 +257,8 @@ import Testing
             f6\tshell
             f6\tup\t0123abcd
             f6\tjobs\t2\tsleep (running);vim (suspended);
+            g7\tmode
+            g7\tshell
             """
         let poll = try #require(RemotePoll.parse(output))
         #expect(poll.tabs["a1"]?.foreground?.isShell == true)
@@ -245,6 +274,8 @@ import Testing
         #expect(poll.tabs["f6"]?.plain == true && poll.tabs["f6"]?.folderMissing == true && poll.tabs["f6"]?.started == true)
         #expect(poll.tabs["f6"]?.token == "0123abcd")
         #expect(poll.tabs["f6"]?.jobs == 2 && poll.tabs["f6"]?.jobSummary == "sleep (running)\nvim (suspended)")
+        #expect(poll.tabs["g7"]?.inMode == true && poll.tabs["g7"]?.foreground?.isShell == true)
+        #expect(poll.tabs["a1"]?.inMode == false)
         #expect(RemotePoll.parse("no marker at all") == nil)
     }
 
