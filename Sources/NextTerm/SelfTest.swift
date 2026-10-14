@@ -643,7 +643,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse or remote), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote or cellSnap), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -669,6 +669,7 @@ enum SelfTest {
         case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
+        case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         default: break
         }
         #endif
@@ -1007,6 +1008,7 @@ enum SelfTest {
 
         await linkChecks(c)
         await mouseReportChecks(c)
+        await cellSnapChecks(c)
         await notificationChecks(c)
         notificationsMenuChecks()
         agentSpinnerChecks()
