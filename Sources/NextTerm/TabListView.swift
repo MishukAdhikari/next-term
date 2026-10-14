@@ -22,6 +22,9 @@ protocol TabListViewDelegate: AnyObject {
     /// Let go at `width` (the width it opens at, when collapsed): the window keeps it, and the terminals take the
     /// rest.
     func tabList(_ list: TabListView, didResizeTo width: CGFloat, collapsed: Bool)
+    /// A rename is about to open the collapsed list for its field alone: the window draws it open over the terminal,
+    /// keeps the user's width and collapse as they are, and collapses it again when the field closes.
+    func tabListWillOpenForRename(_ list: TabListView)
 }
 
 /// The terminal's tabs as a list down the terminal's left or right, under its bar: the top bar's tabs turned on their
@@ -454,13 +457,14 @@ final class TabListView: NSView {
 
     var isEditing: Bool { rowViews.contains { $0.isEditing } }
 
-    /// The field on tab `index`'s row, brought into view first; a collapsed list opens for it.
+    /// The field on tab `index`'s row, brought into view first; a collapsed list, collapsed by the user or for want of
+    /// room, opens over the terminal for it and collapses again when it closes.
     func beginRename(at index: Int) {
         guard tabRows.indices.contains(index) else { return }
         if isCollapsed {
-            toggleCollapsed()
+            delegate?.tabListWillOpenForRename(self)
+            showsCollapsed(false)
             window?.layoutIfNeeded()
-            guard !isCollapsed else { return } // no room to open it
         }
         layoutSubtreeIfNeeded()
         scroll(toTab: index, animated: false)

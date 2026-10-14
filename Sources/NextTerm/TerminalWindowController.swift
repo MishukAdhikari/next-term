@@ -2360,7 +2360,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     // MARK: TabBarViewDelegate
 
-    func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index) }
+    /// Folded to its bar, a click chooses the tab there and the terminal stays folded: opening it on the press would
+    /// move the bar (or, with a list, empty it) from under a drag or a double-click's second click. The keyboard opens it.
+    func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index, unfold: !terminalCollapsed) }
 
     func tabBar(_ bar: TabBarView, didClose index: Int) {
         guard let group = groups[safe: index] else { return }
@@ -2403,7 +2405,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // makeFirstResponder call), give the keyboard back to the terminal.
         DispatchQueue.main.async { [weak self] in
             guard let self, let view = self.activeTab?.view, !self.tabStrip.isEditing else { return }
-            self.window?.makeFirstResponder(view)
+            let window: NSWindow? = self.window
+            if !self.terminalCollapsed {
+                window?.makeFirstResponder(view)
+                return
+            }
+            // Folded, no terminal shows to type into, and taking the keyboard would unfold it: the editor keeps it, or
+            // takes it if the field left it with nobody.
+            let nobody: Bool = window?.firstResponder == nil || window?.firstResponder === window
+            if nobody, let text = self.editorArea.activeTextView { window?.makeFirstResponder(text) }
         }
     }
 

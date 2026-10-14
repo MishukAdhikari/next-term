@@ -24,6 +24,9 @@ final class TabListPlacement {
     var shown = TabListWidth.Shown(width: TabListWidth.defaultWidth, collapsed: false, byRoom: false)
     /// The list's edge is being dragged, or it collapses or opens: the terminals keep their width until it is let go.
     var holding = false
+    /// A collapsed list is open over the terminal for a rename: it collapses again when the field closes, and the
+    /// user's width and collapse stay as they were.
+    var renaming = false
     /// Which strips showed the tabs, as last put.
     var listShown = false
     var barShowsTabs = true
@@ -80,6 +83,8 @@ extension TerminalWindowController: TabListViewDelegate {
         let side: TabListSide? = AppDelegate.shared.terminalTabs.listSide
         let place = tabListPlace
         if side != place.side {
+            // A rename in the list ends first, while its row and the list's open form for it still hold.
+            if window?.firstResponder is NSTextView, tabList.isEditing { window?.makeFirstResponder(nil) }
             if let old = place.side { place.edges[old]?.isActive = false } // one edge off before the other is on
             if let side {
                 tabList.side = side
@@ -130,8 +135,8 @@ extension TerminalWindowController: TabListViewDelegate {
         let workingShown: Bool = AgentSpinner.current != .off
         let rows: [TabListRow] = TabListRows.make(tabs: sources, showsFolders: folders, home: NSHomeDirectory(), workingShown: workingShown)
         tabListPlace.rows = rows
-        tabList.update(rows: rows, selectedIndex: activeIndex, density: TabListDensity(showsFolders: folders),
-                       collapsed: tabListPlace.shown.collapsed)
+        let collapsed: Bool = tabListPlace.shown.collapsed && !tabListPlace.renaming
+        tabList.update(rows: rows, selectedIndex: activeIndex, density: TabListDensity(showsFolders: folders), collapsed: collapsed)
     }
 
     /// One tab as the list shows it, from what its bar item already holds: the same title, mark, tooltip, words and
@@ -166,11 +171,12 @@ extension TerminalWindowController: TabListViewDelegate {
     }
 
     /// The list given its rows again as last made, in the form it shows now: when only its width or its collapse
-    /// changed. At once, so a rename that opens a collapsed list finds it open.
+    /// changed. At once, so the list never waits for the tick to show its new form.
     private func refeedTabList() {
         guard tabListPlace.side != nil else { return }
         let density = TabListDensity(showsFolders: AppDelegate.shared.tabListShowsFolders)
-        tabList.update(rows: tabListPlace.rows, selectedIndex: activeIndex, density: density, collapsed: tabListPlace.shown.collapsed)
+        let collapsed: Bool = tabListPlace.shown.collapsed && !tabListPlace.renaming
+        tabList.update(rows: tabListPlace.rows, selectedIndex: activeIndex, density: density, collapsed: collapsed)
     }
 
     // MARK: the width
@@ -281,7 +287,29 @@ extension TerminalWindowController: TabListViewDelegate {
     func tabList(_ list: TabListView, didClose index: Int) { tabBar(tabBar, didClose: index) }
     func tabList(_ list: TabListView, didMove from: Int, to: Int) { tabBar(tabBar, didMove: from, to: to) }
     func tabList(_ list: TabListView, didRename index: Int, to title: String?) { tabBar(tabBar, didRename: index, to: title) }
-    func tabListDidEndEditing(_ list: TabListView) { tabBarDidEndEditing(tabBar) }
     func tabListDidRequestNewTab(_ list: TabListView) { tabBarDidRequestNewTab(tabBar) }
     func tabList(_ list: TabListView, menuFor index: Int) -> NSMenu? { tabBar(tabBar, menuFor: index) }
+
+    /// A rename on a collapsed list: it opens over the terminal at its width, as while its edge is dragged, so the
+    /// terminals keep theirs, and nothing the user set changes or is saved. Never wider than the pane.
+    func tabListWillOpenForRename(_ list: TabListView) {
+        let place = tabListPlace
+        place.renaming = true
+        place.holding = true // fitTabList waits for the field to close
+        let pane: CGFloat = terminalPane.frame.width
+        tabList.widthConstraint.constant = pane > 0 ? min(place.width, pane) : place.width
+    }
+
+    func tabListDidEndEditing(_ list: TabListView) {
+        let place = tabListPlace
+        if place.renaming {
+            // Shown as before the rename, measured again in case the pane changed meanwhile.
+            place.renaming = false
+            place.holding = false
+            place.shown = shownTabList()
+            placeTabList()
+            refeedTabList()
+        }
+        tabBarDidEndEditing(tabBar)
+    }
 }
