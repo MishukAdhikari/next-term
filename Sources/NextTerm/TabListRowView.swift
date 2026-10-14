@@ -477,7 +477,9 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
     #endif
 }
 
-/// A row's text. A debug build counts its draws, for the self-test's smoothness budget.
+/// A row's text. A debug build counts its draws, for the self-test's smoothness budget. Its Objective-C name stays
+/// put, so the perf budget's shim finds it in a release build: the text is all a row draws.
+@objc(NTTabListText)
 final class TabListText: NSTextField {
     #if DEBUG
     var draws = 0

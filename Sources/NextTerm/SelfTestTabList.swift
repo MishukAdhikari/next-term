@@ -9,7 +9,8 @@ import NextTermCore
 /// Collapse Tab List and Show Folders; folded to its bar the bar has the tabs back, beside the editor the rail; a
 /// narrow window collapses it by itself. Top puts every tab back in the bar. An import from a terminal whose vertical
 /// tabs were on brings the list with the files on the right, and Undo Import takes it back. The tabs go back on top at
-/// the end, and the widths kept and the last import are put back as they were.
+/// the end, and the widths kept and the last import are put back as they were. A debug build then measures the list's
+/// smoothness against the bar's (SelfTestTabListBudget.swift).
 extension SelfTest {
     static func tabListChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let window = c.window, let app = AppDelegate.shared else { return check(false, "tab list: the window is open") }
@@ -240,6 +241,9 @@ extension SelfTest {
         _ = await endSheets(over: window)
         app.moveTerminal(to: saved.position)
         if app.sidebarSide != saved.side { app.toggleSidebarSide(nil) }
+        #if DEBUG
+        await tabListBudgetChecks(c)
+        #endif
     }
 
     /// An import from a terminal whose vertical tab panel was on, in expanded view: the preview's row reads as the list
@@ -310,7 +314,7 @@ extension SelfTest {
         NSApp.mainMenu?.items.first { $0.submenu?.title == "View" }?.submenu?.items.first { $0.title == title }
     }
 
-    private static func restoreDefault(_ value: Any?, _ key: String) {
+    static func restoreDefault(_ value: Any?, _ key: String) {
         if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
     }
 }
@@ -342,6 +346,9 @@ final class TerminalResizes: NSObject {
 
     /// The most times any one changed size.
     var most: Int { counts.values.max() ?? 0 }
+
+    /// How many times `view` changed size.
+    func count(_ view: NSView) -> Int { counts[ObjectIdentifier(view)] ?? 0 }
 
     func stop() {
         NotificationCenter.default.removeObserver(self)
