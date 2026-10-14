@@ -120,8 +120,9 @@ import Testing
         #expect(try row("style-guide").copies[0].trigger(for: .opencode) == "ui-style-guide")
     }
 
-    /// Unify leaves one shared copy, but never touches OpenCode's folder (Next Term never writes in OpenCode's config
-    /// folder): OpenCode's own copy stays, and the sheet says OpenCode goes on loading it.
+    /// Unify never touches OpenCode's folder (Next Term never writes in OpenCode's config folder). Keeping another copy,
+    /// OpenCode's own stays, and the sheet says OpenCode goes on loading it; keeping OpenCode's, the shared entry becomes a
+    /// link to it where it is, as for the developer's own folder, so there is one copy and nothing left to unify.
     @Test func unifyLeavesItsOwnFolderAlone() throws {
         try skill(".config/opencode/skills", "notes", body: "mine")
         try skill(".agents/skills", "notes", body: "shared")
@@ -129,20 +130,54 @@ import Testing
         let notes = try row("notes")
         #expect(!notes.isUnified && notes.health == .drifted)
         let inventory = SkillInventory.scan(home: home)
-        let winner = try #require(notes.copies.first { $0.root.kind == .opencode })
-        let staging = home + "/staging/notes"
-        let steps = SkillUnify.plan(notes, winner: winner, in: inventory, claude: .link, staging: staging)
-        #expect(steps == [.copy(from: winner.realPath, to: staging), .trash(home + "/.agents/skills/notes"),
-                          .move(from: staging, to: home + "/.agents/skills/notes"), .trash(home + "/.codex/skills/notes")])
         let sharedRoot = try #require(inventory.root(.shared))
-        let left = try #require(SkillInstall.opencodeLeft(notes, sharedRoot: sharedRoot))
-        #expect(left.contains(".config/opencode/skills/notes stays as it is") && left.hasSuffix("Next Term never changes OpenCode's folder."))
-        // Its copy is outside the library's shape: with the others unified, Unify has nothing to offer.
-        try FileManager.default.removeItem(atPath: home + "/.codex/skills/notes")
-        #expect(try row("notes").isUnified && row("notes").health == .drifted)
-        // Only in its own folder: Unify gives the skill to the agents that read the shared one.
+        let own = try #require(notes.copies.first { $0.root.kind == .opencode })
+        let shared = try #require(notes.copies.first { $0.root.kind == .shared })
+        let sharedPath = home + "/.agents/skills/notes", codexPath = home + "/.codex/skills/notes"
+        #expect(SkillUnify.plan(notes, winner: own, in: inventory, claude: .link) == [.trash(sharedPath), .link(at: sharedPath, to: own.realPath), .trash(codexPath)])
+        #expect(SkillInstall.opencodeLeft(notes, sharedRoot: sharedRoot, keeping: own) == nil)
+        #expect(SkillUnify.plan(notes, winner: shared, in: inventory, claude: .link) == [.trash(codexPath)])
+        let left = try #require(SkillInstall.opencodeLeft(notes, sharedRoot: sharedRoot, keeping: shared))
+        #expect(left.contains(".config/opencode/skills/notes stays as it is") && left.contains("goes on loading that copy rather than the shared one"))
+        #expect(left.hasSuffix("Next Term never changes OpenCode's folder."))
+        // With the others gone, OpenCode's own copy still differs: Unify is offered, and keeping the shared copy changes
+        // nothing (the sheet says so), while keeping OpenCode's shares it.
+        try FileManager.default.removeItem(atPath: codexPath)
+        let two = try row("notes"), after = SkillInventory.scan(home: home)
+        #expect(!two.isUnified && two.health == .drifted)
+        let keptShared = try #require(two.copies.first { $0.root.kind == .shared })
+        #expect(SkillUnify.plan(two, winner: keptShared, in: after, claude: .link).isEmpty)
+        // Only in its own folder: Unify links the shared entry to it, and gives it to the agents that read the shared one.
         try skill(".config/opencode/skills", "solo")
-        #expect(SkillUnify.gained(try row("solo"), in: SkillInventory.scan(home: home)) == [.codex, .commandCode])
+        let solo = try row("solo"), soloCopy = try #require(solo.copies.first)
+        #expect(SkillUnify.gained(solo, in: SkillInventory.scan(home: home)) == [.codex, .commandCode])
+        let soloSteps = SkillUnify.plan(solo, winner: soloCopy, in: SkillInventory.scan(home: home), claude: .link)
+        #expect(soloSteps == [.link(at: home + "/.agents/skills/solo", to: soloCopy.realPath)])
+    }
+
+    /// A shared entry that links to OpenCode's own copy (as 0.11 left it, or Unify makes it) stays a link through Unify:
+    /// OpenCode's folder is not one Next Term manages, as the developer's own folder isn't, so no second copy is made.
+    @Test func aSharedLinkIntoItsFolderStays() throws {
+        try skill(".config/opencode/skills", "x", body: "mine")
+        try link(".agents/skills", "x", to: home + "/.config/opencode/skills/x")
+        try skill(".codex/skills", "x", body: "codex")
+        let x = try row("x"), inventory = SkillInventory.scan(home: home)
+        let shared = try #require(x.copies.first { $0.root.kind == .shared })
+        let own = try #require(x.copies.first { $0.root.kind == .opencode })
+        #expect(!x.isUnified && !inventory.isInsideRoots(own.realPath))
+        #expect(SkillUnify.plan(x, winner: shared, in: inventory, claude: .link) == [.trash(home + "/.codex/skills/x")])
+        #expect(SkillUnify.plan(x, winner: own, in: inventory, claude: .link) == [.trash(home + "/.codex/skills/x")])
+        let sharedRoot = try #require(inventory.root(.shared))
+        #expect(SkillInstall.opencodeLeft(x, sharedRoot: sharedRoot, keeping: shared) == nil)
+        // Once Codex's copy is gone: one copy, every agent reads it, nothing needs attention.
+        try FileManager.default.removeItem(atPath: home + "/.codex/skills/x")
+        let unified = try row("x")
+        #expect(unified.isUnified && unified.health == .ok)
+        #expect(unified.load(for: .opencode).others.isEmpty && unified.load(for: .codex).used?.root.kind == .shared)
+        // Remove takes the shared link only, and says OpenCode goes on loading its own copy.
+        let removing = try #require(SkillInstall.opencodeLeft(unified, sharedRoot: sharedRoot, removing: true))
+        #expect(removing.contains("goes on loading that copy.") && !removing.contains("rather than"))
+        #expect(SkillInstall.removal(name: "x", inventory: SkillInventory.scan(home: home)) == [.trash(home + "/.agents/skills/x")])
     }
 
     /// A link to the shared copy in its folder (as `npx skills` makes one) is the library's shape too; Remove leaves it,
@@ -170,6 +205,37 @@ import Testing
         #expect(plan.existing == .none && plan.replaced.isEmpty && plan.agents == [.codex, .commandCode])
         #expect(!plan.steps.contains(.trash(home + "/.config/opencode/skills/notes")))
         #expect(plan.untouched.contains { $0.contains(".config/opencode/skills/notes stays as it is") })
+    }
+
+    /// OpenCode skips its own copy when that SKILL.md gives no name: it loads the new shared copy, and the note says its
+    /// own copy stays but is skipped, not that OpenCode goes on loading it.
+    @Test func anInstallBesideANamelessCopyReachesIt() throws {
+        try skill(".config/opencode/skills", "notes", frontName: "")
+        let staged = home + "/staging/notes"
+        try FileManager.default.createDirectory(atPath: staged, withIntermediateDirectories: true)
+        let plan = SkillInstall.plan(name: "notes", staged: staged, staging: home + "/ready/notes", inventory: SkillInventory.scan(home: home),
+                                     claude: .skip, package: nil, sameSource: false)
+        #expect(plan.agents == [.codex, .commandCode, .opencode])
+        let note = try #require(plan.untouched.first { $0.contains(".config/opencode/skills/notes") })
+        #expect(note.contains("stays as it is, and OpenCode skips it.") && !note.contains("goes on loading"))
+    }
+
+    /// OpenCode also reads `.opencode` in the home folder, after its config folder (ConfigPaths.directories in 1.19), so a
+    /// copy there is the one it keeps.
+    @Test func theHomeFoldersOpencodeIsARootToo() throws {
+        try skill(".config/opencode/skills", "deploy", body: "config")
+        try skill(".opencode/skills", "deploy", body: "home")
+        try skill(".agents/skills", "deploy", body: "shared")
+        #expect(opencodeRoots() == [home + "/.config/opencode/skills", home + "/.opencode/skills"])
+        let load = try row("deploy").load(for: .opencode)
+        #expect(load.used?.root.path == home + "/.opencode/skills")
+        #expect(load.others.map(\.root.path) == [home + "/.config/opencode/skills", home + "/.agents/skills"])
+        #expect(try row("deploy").load(for: .codex).used?.root.kind == .shared)
+        // Next Term doesn't manage it either: Unify keeping it links the shared entry to it.
+        let deploy = try row("deploy"), inventory = SkillInventory.scan(home: home)
+        let own = try #require(deploy.copies.first { $0.root.path == home + "/.opencode/skills" })
+        let steps = SkillUnify.plan(deploy, winner: own, in: inventory, claude: .link)
+        #expect(steps == [.trash(home + "/.agents/skills/deploy"), .link(at: home + "/.agents/skills/deploy", to: own.realPath)])
     }
 }
 
@@ -213,5 +279,47 @@ import Testing
         let overview = SkillLibrary.overview(project: repo, home: home, nextTerm: [])
         #expect(overview.entry("notes", for: .opencode)?.copy.place == ".opencode/skills")
         #expect(overview.skills.first { $0.name == "notes" }?.copies.map(\.place) == [".agents/skills", ".opencode/skills"])
+        // `.opencode` in the home folder is read after the project's, so its copy comes first of all.
+        try skill(home + "/.opencode/skills", "notes", "The user's older OpenCode notes.")
+        #expect(entry("notes", "opencode")?.copy.place == "~/.opencode/skills" && entry("notes", "opencode")?.native == true)
+        #expect(entry("notes", "opencode")?.others.map(\.place) == [".opencode/skills", "~/.config/opencode/skills", ".agents/skills"])
+        #expect(entry("notes", "codex")?.copy.place == ".agents/skills")
+    }
+
+    /// OpenCode skips a SKILL.md whose front matter gives no name, so list_skills agrees with Settings › Skills: the
+    /// named shared copy is the one it loads, and get_skill gives that one's text.
+    @Test func aNamelessCopyIsNotTheOneItLoads() throws {
+        let home = try folder("home")
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let nameless = home + "/.config/opencode/skills/draft"
+        try FileManager.default.createDirectory(atPath: nameless, withIntermediateDirectories: true)
+        try "---\ndescription: No name here.\n---\n\nSkipped.\n".write(toFile: nameless + "/SKILL.md", atomically: true, encoding: .utf8)
+        let reader = SkillLibrary.Reader(program: "opencode")
+        let alone = SkillLibrary.entries(from: nil, home: home, nextTerm: [], reader: reader).first { $0.name == "draft" }
+        #expect(alone?.native == false)
+        try skill(home + "/.agents/skills", "draft", "Drafts.")
+        let entry = SkillLibrary.entries(from: nil, home: home, nextTerm: [], reader: reader).first { $0.name == "draft" }
+        #expect(entry?.copy.place == "~/.agents/skills" && entry?.native == true)
+        #expect(entry?.others.map(\.place) == ["~/.config/opencode/skills"])
+        let got = SkillLibrary.skill("draft", from: nil, home: home, nextTerm: [], reader: reader)
+        #expect(got?.text.contains("Drafts.") == true)
+        // Settings › Skills says the same.
+        let row = SkillInventory.scan(home: home).rows.first { $0.name == "draft" }
+        #expect(row?.load(for: .opencode).used?.root.kind == .shared)
+        let skipped = try #require(entry?.others.first), loaded = try #require(entry?.copy)
+        #expect(!reader.reads(skipped) && reader.reads(loaded))
+    }
+
+    /// Its config folder where XDG_CONFIG_HOME puts it outside the home folder is said by its full path.
+    @Test func itsConfigFolderOutsideHomeIsSaidInFull() throws {
+        let home = try folder("home"), elsewhere = try folder("xdg")
+        defer { for path in [home, elsewhere] { try? FileManager.default.removeItem(atPath: path) } }
+        let environment = ["XDG_CONFIG_HOME": elsewhere]
+        let folders = SkillLibrary.personalFolders(".opencode/skills", home: home, environment: environment)
+        #expect(folders.map(\.path) == [home + "/.opencode/skills", elsewhere + "/opencode/skills"])
+        #expect(folders.map(\.place) == ["~/.opencode/skills", elsewhere + "/opencode/skills"])
+        #expect(SkillLibrary.personalFolders(".agents/skills", home: home, environment: environment).map(\.place) == ["~/.agents/skills"])
+        let inside = SkillLibrary.personalFolders(".opencode/skill", home: home, environment: ["XDG_CONFIG_HOME": home + "/cfg"])
+        #expect(inside.map(\.place) == ["~/.opencode/skill", "~/cfg/opencode/skill"])
     }
 }

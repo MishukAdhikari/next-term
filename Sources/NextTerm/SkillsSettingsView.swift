@@ -397,9 +397,7 @@ final class SkillsSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             let removed = Set(shown.compactMap { step -> String? in if case .trash(let path) = step { return path }; return nil })
             let others = row.copies.filter { ($0.root.kind == .codex || $0.root.kind == .commandCode) && !removed.contains($0.path) }
             if !others.isEmpty { lines.append("Copies in \(others.map { SkillStep.short($0.path) }.joined(separator: ", ")) are not part of it and stay.") }
-            if let sharedRoot = inventory?.root(.shared), let left = SkillInstall.opencodeLeft(row, sharedRoot: sharedRoot, removing: true) {
-                lines.append(left)
-            }
+            // What stays of OpenCode's is among the leftovers (SkillsInstaller.removal), as an agent's request shows it.
             lines.append("Undo puts it back.")
             alert.informativeText = lines.joined(separator: "\n")
             alert.addButton(withTitle: installed ? "Remove" : "Move to Trash")
@@ -602,6 +600,16 @@ final class SkillsUnifySheet: NSObject {
         let claudeLink = claude.value
         // The staging copy is a detail: show "copy the winner to the shared folder" once.
         let steps = SkillUnify.plan(row, winner: winner, in: inventory, claude: claudeLink)
+        if steps.isEmpty {
+            // What stands apart is OpenCode's own copy, which Next Term never changes: keeping it is what shares it.
+            let canShare = row.copies.contains { $0.root.kind == .opencode && $0.realPath != winner.realPath && row.cannotWin($0) == nil }
+            let then = canShare ? "Keep OpenCode's copy instead to share it with every agent, or remove it from OpenCode's folder yourself."
+                : "Remove it from OpenCode's folder yourself."
+            stepsText.stringValue = "Keeping this copy changes nothing: what differs is OpenCode's own copy, and Next Term never changes "
+                + "OpenCode's folder. " + then
+            unifyButton?.isEnabled = false
+            return
+        }
         var placed: [String: String] = [:]
         for step in steps { if case .move(let from, let to) = step { placed[from] = to } }
         var lines = steps.compactMap { step -> String? in
@@ -618,7 +626,9 @@ final class SkillsUnifySheet: NSObject {
         for agent in SkillUnify.switchesLost(row, winner: winner, in: inventory, claude: claudeLink) {
             lines.append("\(agent.title) switches this skill off under its old name or place: after Unify it loads it again, until you switch it off there")
         }
-        if let sharedRoot = inventory.root(.shared), let left = SkillInstall.opencodeLeft(row, sharedRoot: sharedRoot) { lines.append(left) }
+        if let sharedRoot = inventory.root(.shared), let left = SkillInstall.opencodeLeft(row, sharedRoot: sharedRoot, keeping: winner) {
+            lines.append(left)
+        }
         let gained = SkillUnify.gained(row, in: inventory).filter { claudeLink == .link || $0 != .claudeCode }
         if !gained.isEmpty {
             let names = gained.map(\.title).joined(separator: " and ")

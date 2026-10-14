@@ -172,8 +172,8 @@ public enum SkillInstall {
         steps.append(.move(from: staging, to: shared))
         var agents = sharedRoot.readers
         let opencodeNote = row.flatMap { opencodeLeft($0, sharedRoot: sharedRoot) }
-        // OpenCode goes on loading its own copy, which wins over the shared one.
-        if opencodeNote != nil { agents.removeAll { $0 == .opencode } }
+        // OpenCode goes on loading its own copy, which wins over the shared one, when that copy's SKILL.md gives a name.
+        if let row, !opencodeOwn(row, sharedRoot: sharedRoot).loaded.isEmpty { agents.removeAll { $0 == .opencode } }
         if let claudeRoot {
             let wantsLink = claude == .link || (keptLink != nil && !dropsLink)
             if wantsLink {
@@ -375,19 +375,36 @@ public enum SkillInstall {
         return copies + rest
     }
 
-    /// What Unify, an install or Remove says of OpenCode's own copies of a skill, which they leave as they are: Next Term
-    /// never writes in OpenCode's config folder. A link there to the shared copy needs no word, except when the shared
-    /// copy goes (`removing`): it is then a link to nothing. Nil when there is nothing to say.
-    public static func opencodeLeft(_ row: SkillRow, sharedRoot: SkillRoot, removing: Bool = false) -> String? {
+    /// OpenCode's own entries of a skill, which Next Term leaves as they are: the copies OpenCode loads (their SKILL.md
+    /// gives a name), the ones it skips (no name, or broken), and links to the shared copy.
+    static func opencodeOwn(_ row: SkillRow, sharedRoot: SkillRoot) -> (loaded: [SkillCopy], skipped: [SkillCopy], links: [SkillCopy]) {
         let own = row.copies.filter { $0.root.kind == .opencode }
         let links = own.filter { linksToShared($0, sharedRoot: sharedRoot) }
         let copies = own.filter { (copy: SkillCopy) -> Bool in !links.contains(copy) }
+        let loaded = copies.filter { (copy: SkillCopy) -> Bool in !copy.broken && copy.opencodeName != nil }
+        let skipped = copies.filter { (copy: SkillCopy) -> Bool in !loaded.contains(copy) }
+        return (loaded, skipped, links)
+    }
+
+    /// What Unify, an install or Remove says of OpenCode's own copies of a skill, which they leave as they are: Next Term
+    /// never writes in OpenCode's folders. A link there to the shared copy needs no word, except when the shared copy
+    /// goes (`removing`): it is then a link to nothing. `keeping`: the copy Unify keeps, which the shared entry then is
+    /// (or links to), so OpenCode's copy in that folder needs no word either. Nil when there is nothing to say.
+    public static func opencodeLeft(_ row: SkillRow, sharedRoot: SkillRoot, keeping: SkillCopy? = nil, removing: Bool = false) -> String? {
+        let own = opencodeOwn(row, sharedRoot: sharedRoot)
+        let isKept = { (copy: SkillCopy) -> Bool in keeping.map { $0.realPath == copy.realPath } ?? false }
+        let loaded = own.loaded.filter { !isKept($0) }, skipped = own.skipped.filter { !isKept($0) }
+        let links = own.links
         func listed(_ list: [SkillCopy]) -> String { SkillPackage.list(list.map { SkillStep.short($0.path) }) }
+        func stays(_ list: [SkillCopy]) -> String { list.count == 1 ? "stays as it is" : "stay as they are" }
         var said: [String] = []
-        if !copies.isEmpty {
-            let stays = copies.count == 1 ? "stays as it is" : "stay as they are"
+        if !loaded.isEmpty {
             let rather = removing ? "" : " rather than the shared one"
-            said.append("OpenCode's \(listed(copies)) \(stays), and OpenCode goes on loading that copy\(rather).")
+            let which = loaded.count == 1 ? "that copy" : "its own"
+            said.append("OpenCode's \(listed(loaded)) \(stays(loaded)), and OpenCode goes on loading \(which)\(rather).")
+        }
+        if !skipped.isEmpty {
+            said.append("OpenCode's \(listed(skipped)) \(stays(skipped)), and OpenCode skips \(skipped.count == 1 ? "it" : "them").")
         }
         if removing, !links.isEmpty {
             let stays = links.count == 1 ? "stays, a link" : "stay, links"

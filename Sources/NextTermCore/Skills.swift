@@ -10,9 +10,9 @@ import Foundation
 // - Codex reads ~/.agents/skills and its older ~/.codex/skills; a name in both is listed twice.
 // - Command Code reads ~/.commandcode/skills and ~/.agents/skills; its own folder wins a name, and it
 //   skips a skill whose `name` differs from its folder name.
-// - OpenCode reads ~/.claude/skills, then ~/.agents/skills, then `skills` and `skill` in its config folder
-//   (~/.config/opencode, or where XDG_CONFIG_HOME puts it), and keeps the copy it reads last. It names a skill by
-//   its front matter's `name`, and skips a SKILL.md without one.
+// - OpenCode reads ~/.claude/skills, then ~/.agents/skills, then `skill` and `skills` in its config folder
+//   (~/.config/opencode, or where XDG_CONFIG_HOME puts it), then in ~/.opencode, and keeps the copy it reads last. It
+//   names a skill by its front matter's `name`, and skips a SKILL.md without one.
 // So one real copy in ~/.agents/skills plus a link in ~/.claude/skills reaches all four.
 
 /// The agents the library manages skills for.
@@ -62,7 +62,8 @@ public struct SkillRoot: Equatable, Hashable, Sendable {
         case codex
         /// ~/.commandcode/skills
         case commandCode
-        /// `skills`, or the older `skill`, in OpenCode's config folder (~/.config/opencode/skills)
+        /// `skills`, or the older `skill`, in OpenCode's config folder (~/.config/opencode/skills) or in ~/.opencode.
+        /// Next Term never writes in them.
         case opencode
     }
 
@@ -104,12 +105,17 @@ public struct SkillRoot: Equatable, Hashable, Sendable {
     }
 
     /// The personal skill folders, in a home folder. OpenCode's are in its config folder (OpencodePaths), as the
-    /// login shell's XDG_CONFIG_HOME puts it for the user's own home (`environment`: those variables instead), and
-    /// count only where they are: `skills` first, then the older `skill`.
+    /// login shell's XDG_CONFIG_HOME puts it for the user's own home (`environment`: those variables instead), and in
+    /// ~/.opencode, which it reads after that (ConfigPaths.directories, 1.19). They count only where they are: `skills`
+    /// first, then the older `skill`.
     public static func personal(home: String, environment: [String: String]? = nil) -> [SkillRoot] {
         func at(_ path: String) -> String { (home as NSString).appendingPathComponent(path) }
         let config = OpencodePaths.configFolder(home: home, environment: environment ?? OpencodePaths.environment(home: home))
-        let opencode = ["skills", "skill"].map { (config as NSString).appendingPathComponent($0) }.filter { (path: String) -> Bool in
+        let opencodeFolders: [String] = [config, at(".opencode")]
+        let candidates: [String] = opencodeFolders.flatMap { (folder: String) -> [String] in
+            ["skills", "skill"].map { (folder as NSString).appendingPathComponent($0) }
+        }
+        let opencode = candidates.filter { (path: String) -> Bool in
             var isFolder: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && isFolder.boolValue
         }
@@ -402,10 +408,11 @@ public struct SkillInventory: Sendable {
         root(.claude) == nil && root(.shared)?.readers.contains(.claudeCode) == true
     }
 
-    /// Whether a path is inside one of the personal skill folders (rather than, say, the developer's own
-    /// repository that a skill links to).
+    /// Whether a path is inside one of the personal skill folders Next Term manages (rather than, say, the developer's
+    /// own repository that a skill links to). OpenCode's own folders are not among them: Next Term never changes them,
+    /// so a copy there is left where it is, as the developer's own folder is.
     public func isInsideRoots(_ path: String) -> Bool {
-        roots.contains { path.hasPrefix($0.realPath + "/") }
+        roots.contains { $0.kind != .opencode && path.hasPrefix($0.realPath + "/") }
     }
 
     /// Reads the personal skill folders under `home`, and each agent's own on/off switches. Never writes.
@@ -558,13 +565,16 @@ public struct SkillRow: Equatable, Sendable {
         }
     }
 
-    /// OpenCode keeps the copy it reads last: its own folder's (`skills` before the older `skill`), then the shared
-    /// one's, then Claude Code's. A copy whose SKILL.md names no skill is skipped, so the next one is used; the same
-    /// folder reached twice (Claude Code's link to the shared copy) is one copy, loaded once.
+    /// OpenCode keeps the copy it reads last: its own folders' (~/.opencode's, then its config folder's; in each,
+    /// `skills` before the older `skill`), then the shared one's, then Claude Code's. A copy whose SKILL.md names no
+    /// skill is skipped, so the next one is used; the same folder reached twice (Claude Code's link to the shared copy)
+    /// is one copy, loaded once.
     func opencodeLoad(_ readable: [SkillCopy]) -> Load {
+        let order = ["/.opencode/skills", "/.opencode/skill", "/skills", "/skill"]
+        func rank(_ copy: SkillCopy) -> Int { order.firstIndex { copy.root.path.hasSuffix($0) } ?? order.count }
         let own: [SkillCopy] = readable.filter { $0.root.kind == .opencode }
-        var ranked: [SkillCopy] = own.filter { $0.root.path.hasSuffix("/skills") }
-        ranked += own.filter { !$0.root.path.hasSuffix("/skills") }
+        // Each root holds one entry of a name, and no two roots rank the same.
+        var ranked: [SkillCopy] = own.sorted { (a: SkillCopy, b: SkillCopy) -> Bool in rank(a) < rank(b) }
         ranked += readable.filter { $0.root.kind == .shared }
         ranked += readable.filter { $0.root.kind == .claude }
         var distinct: [SkillCopy] = []
@@ -600,9 +610,9 @@ public struct SkillRow: Equatable, Sendable {
     }
 
     /// Already the library's shape: one real copy in the shared folder, and Claude Code (if it has the
-    /// skill) through a link to it; nothing in ~/.codex/skills or ~/.commandcode/skills. OpenCode's folder is
-    /// not part of it: Next Term never changes it, so a copy there is shown (health, OpenCode's column) but
-    /// never asks for Unify.
+    /// skill) through a link to it; nothing in ~/.codex/skills or ~/.commandcode/skills. Next Term never changes
+    /// OpenCode's folder, so an entry there fits only when it is the shared copy: a link to it, or the copy the shared
+    /// entry links to. Any other copy there leaves Unify to offer: keeping it links the shared entry to it.
     public var isUnified: Bool {
         // The shared entry is a real folder, or a link to the developer's own folder elsewhere.
         guard let shared = copies.first(where: { $0.root.kind == .shared && !$0.broken }) else { return false }
@@ -611,7 +621,7 @@ public struct SkillRow: Equatable, Sendable {
             case .shared: return copy == shared
             case .claude: return copy.isLink && copy.realPath == shared.realPath
             case .codex, .commandCode: return false
-            case .opencode: return true
+            case .opencode: return copy.realPath == shared.realPath
             }
         }
     }
@@ -666,14 +676,16 @@ public enum SkillStep: Equatable, Sendable {
 public enum SkillUnify {
     /// The steps that leave one copy of `row` in the shared folder, with `winner`'s content, linked for
     /// Claude Code when Claude Code had the skill, and nothing in ~/.codex/skills or ~/.commandcode/skills.
-    /// OpenCode's folder is left as it is (SkillInstall.opencodeLeft says so).
+    /// OpenCode's folders are left as they are (SkillInstall.opencodeLeft says so).
     /// `winner` must be one of the row's copies, and one `row.cannotWin` accepts. Steps are in a safe
     /// order: the new shared copy exists before anything goes.
     ///
     /// Links: removing one removes the link only, never what it points to. A winner that links to a
-    /// folder outside the agent folders (the developer's own repository) stays where it is: the shared
-    /// entry becomes a link to it. Folders linked as a whole (`~/.claude/skills` -> `~/.agents/skills`)
-    /// are one folder (SkillInventory.roots), so nothing in them is moved or linked to itself.
+    /// folder outside the agent folders (the developer's own repository), or OpenCode's own copy (Next Term
+    /// never changes OpenCode's folders), stays where it is: the shared entry becomes a link to it, so no second
+    /// copy is made, and a shared entry that already links there stays. Folders linked as a whole
+    /// (`~/.claude/skills` -> `~/.agents/skills`) are one folder (SkillInventory.roots), so nothing in them is
+    /// moved or linked to itself.
     /// Where Unify stages a copy: Next Term's own folder, never an agent's (a leftover there would load as
     /// a skill).
     public static func stagingFolder(home: String, name: String) -> String {
@@ -688,7 +700,9 @@ public enum SkillUnify {
         let shared = (sharedRoot.path as NSString).appendingPathComponent(row.name)
         var steps: [SkillStep] = []
         let existingShared = row.copies.first { $0.root.kind == .shared }
-        let outside = { (copy: SkillCopy) in copy.isLink && !inventory.isInsideRoots(copy.realPath) }
+        let outside = { (copy: SkillCopy) -> Bool in
+            (copy.isLink || copy.root.kind == .opencode) && !inventory.isInsideRoots(copy.realPath)
+        }
         var winnerIsShared = false
         if let existingShared, existingShared.realPath == winner.realPath {
             winnerIsShared = !existingShared.isLink || outside(existingShared)

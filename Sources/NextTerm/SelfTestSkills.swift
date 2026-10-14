@@ -139,6 +139,21 @@ extension SelfTest {
         let skills = listed["skills"] as? [[String: Any]] ?? []
         let notes = skills.first { $0["name"] as? String == "notes-helper" }
         check((notes?["agents"] as? [String: String])?["claude-code"] == "loads", "skills mcp: list_skills shows each skill and which agent loads it", "\(listed)")
+        // AE11: OpenCode loads the shared skill and one in its own folder (in this home's ~/.config/opencode, made up
+        // here); Codex doesn't read OpenCode's folder.
+        let opencodeFolder = (home as NSString).appendingPathComponent(".config/opencode/skills/oc-notes")
+        try? manager.createDirectory(atPath: opencodeFolder, withIntermediateDirectories: true)
+        try? "---\nname: oc-notes\ndescription: OpenCode's notes.\n---\nBody\n".write(toFile: opencodeFolder + "/SKILL.md", atomically: true, encoding: .utf8)
+        let withOwn = await ask("list_skills", [:])
+        let ownSkills = withOwn["skills"] as? [[String: Any]] ?? []
+        func agents(_ name: String) -> [String: String] {
+            ownSkills.first { $0["name"] as? String == name }?["agents"] as? [String: String] ?? [:]
+        }
+        let sharedLoads: Bool = agents("notes-helper")["opencode"] == "loads"
+        let ownLoads: Bool = agents("oc-notes")["opencode"] == "loads", codexNone: Bool = agents("oc-notes")["codex"] == "none"
+        check(sharedLoads && ownLoads && codexNone,
+              "skills mcp: list_skills says OpenCode loads a shared skill and one in its own folder, and Codex only the shared one", "\(withOwn)")
+        try? manager.removeItem(atPath: (home as NSString).appendingPathComponent(".config"))
 
         let bad = await ask("install_skill", ["source": "https://gitlab.com/a/b"])
         check(bad["isError"] as? Bool == true, "skills mcp: a source that is not GitHub is refused at once")

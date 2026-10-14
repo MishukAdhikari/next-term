@@ -158,8 +158,8 @@ final class ProjectSkillsView: NSView, NSTableViewDataSource, NSTableViewDelegat
     static let rulesTip = """
         Claude Code reads .claude/skills and takes your copy of a skill over the project's. Codex reads .agents/skills \
         and lists both copies. Command Code reads .commandcode/skills, then .agents/skills, and takes the project's copy. \
-        OpenCode reads .opencode/skills, .agents/skills and .claude/skills: a copy in its own folder wins (the project's, \
-        then yours in ~/.config/opencode/skills), else the project's. \
+        OpenCode reads .opencode/skills, .agents/skills and .claude/skills: a copy in its own folder wins (yours in \
+        ~/.opencode/skills, the project's, then yours in ~/.config/opencode/skills), else the project's. \
         An agent in a Next Term tab can also use the others through Next Term's skill library (list_skills, get_skill).
         """
 
