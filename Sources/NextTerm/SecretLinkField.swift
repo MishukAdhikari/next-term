@@ -22,6 +22,9 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
     /// The key's link as stored (Edit), and where it came from: unchanged, it isn't saved again.
     let stored: String?
     private let storedFrom: SecretVault.LinkFrom?
+    /// The stored link holds a key (`SecretLink.hides`), such as one stored after the link was saved: the field starts
+    /// empty rather than show it, and Save removes it unless a new link is typed.
+    let hidesStored: Bool
     /// Called after the text changes, by typing or by Use.
     var onChange: () -> Void = {}
     /// The value being saved with the link, which the link must not hold. Asked each time the link is checked.
@@ -30,6 +33,8 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
     init(stored: String? = nil, from: SecretVault.LinkFrom? = nil) {
         self.stored = stored
         storedFrom = stored == nil ? nil : from
+        let mask: (String) -> Bool = { (candidate: String) -> Bool in SecretsStore.holdsStoredKey(candidate) }
+        hidesStored = stored.map { (link: String) -> Bool in SecretLink.hides(link, mask: mask) } ?? false
         chip = NSStackView()
         super.init(frame: .zero)
         build()
@@ -41,7 +46,7 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
         orientation = .vertical
         alignment = .leading
         spacing = 4
-        field.stringValue = stored ?? ""
+        field.stringValue = hidesStored ? "" : (stored ?? "")
         field.placeholderString = Self.placeholder
         field.font = .systemFont(ofSize: 12)
         field.delegate = self
@@ -94,20 +99,21 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
     var showsSuggestion: Bool { !chip.isHidden }
 
     /// Save stays off while a link the user changed can't be kept. A stored link that fails the rules is shown as one
-    /// that can't be opened, and saving other changes leaves it as it is.
+    /// that can't be opened, and saving other changes leaves it as it is; one that holds a key isn't shown, and goes.
     var blocksSave: Bool { isChanged && refusal != nil }
 
-    /// The suggestion for this value and name: shown while the field is empty or holds an earlier suggestion, and
-    /// never in place of a link the user typed.
+    /// The suggestion for this value and name: shown while the field is empty or holds the suggestion Use put there,
+    /// and never in place of a link the user typed or one stored with the key (`SecretKeyPages.offers`).
     func suggest(value: SecretBytes?, name: String) {
         suggestion = SecretKeyPages.suggest(value: value, name: name)
         refresh()
     }
 
+    /// Under the empty field, while the stored link it hides is kept.
+    static let hiddenLine = SecretLink.cantOpen + " It holds a key, so it isn\u{2019}t shown, and Save removes it."
+
     func refresh() {
-        let holdsSuggestion: Bool = linkFrom == .suggested
-        let offered: String? = suggestion?.url.absoluteString
-        let showsChip: Bool = offered != nil && offered != text && (text.isEmpty || holdsSuggestion)
+        let showsChip: Bool = SecretKeyPages.offers(suggestion, over: text, used: used)
         if let suggestion, showsChip {
             chipLabel.stringValue = "Suggested: \(suggestion.provider) · \(suggestion.label)"
             chipLabel.toolTip = suggestion.url.absoluteString
@@ -116,9 +122,15 @@ final class SecretLinkField: NSStackView, NSTextFieldDelegate {
         chip.isHidden = !showsChip
         let refusal = self.refusal
         let sentence: String = refusal?.sentence ?? ""
-        refusalLabel.stringValue = isChanged || refusal == nil ? sentence : SecretLink.cantOpen + " " + sentence
-        refusalLabel.isHidden = refusal == nil
-        refusalLabel.setAccessibilityLabel(refusal == nil ? nil : "Warning: \(refusalLabel.stringValue)")
+        let hidden: Bool = hidesStored && text.isEmpty
+        if hidden {
+            refusalLabel.stringValue = Self.hiddenLine
+        } else {
+            refusalLabel.stringValue = isChanged || refusal == nil ? sentence : SecretLink.cantOpen + " " + sentence
+        }
+        let warns: Bool = hidden || refusal != nil
+        refusalLabel.isHidden = !warns
+        refusalLabel.setAccessibilityLabel(warns ? "Warning: \(refusalLabel.stringValue)" : nil)
     }
 
     @objc func use() {

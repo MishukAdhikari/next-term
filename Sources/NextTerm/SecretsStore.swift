@@ -735,9 +735,10 @@ final class SecretsStore {
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         var checked: SecretVault.Index? = vouchedIndex()
         if checked == nil {
-            try await run(makes: false, names: [name], reason: SecretReason.checkLink(name),
-                          change: { (_: SecretVault, _: SymmetricKey?) -> Data? in nil }, line: nil)
-            checked = index // read from the bytes that unlock MAC-checked
+            // The index from the bytes that unlock MAC-checked, as it handed it back: not `self.index`, which a reload
+            // from disk could replace before this reads it.
+            checked = try await run(makes: false, names: [name], reason: SecretReason.checkLink(name),
+                                    change: { (_: SecretVault, _: SymmetricKey?) -> Data? in nil }, line: nil)
         }
         guard let link = checked?.entry(named: name)?.link else { throw Failure.noPage(name) }
         let mask: (String) -> Bool = { (candidate: String) -> Bool in Self.holdsStoredKey(candidate) }
@@ -819,9 +820,10 @@ final class SecretsStore {
     }
 
     /// A presence check, then `change` on the unlocked vault off the main thread, then `line`, when given, in the audit
-    /// log.
+    /// log. Returns the index the unlock read and MAC-checked, as `change` left it.
+    @discardableResult
     private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
-                     line: (() -> SecretAudit.Line)?) async throws {
+                     line: (() -> SecretAudit.Line)?) async throws -> SecretVault.Index? {
         reloadIfChanged()
         if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
@@ -855,6 +857,7 @@ final class SecretsStore {
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
             postKeysChanged([], since: earlier)
+            return work.index
         case .failure(let error):
             reloadIfChanged()
             throw handle(error, action: .use(names: names), facts: Facts())
@@ -991,6 +994,7 @@ final class StandInPresence: PresenceCheck {
     func confirm(reason: String, accessControl: SecAccessControl?) async throws -> AnyObject {
         calls += 1
         #if DEBUG
+        reasons.append(reason)
         if holds, !(await hold()) { throw UserPresence.Failure.cancelled }
         #endif
         guard approves else { throw UserPresence.Failure.cancelled }
@@ -1000,6 +1004,8 @@ final class StandInPresence: PresenceCheck {
     func finish(_ token: AnyObject) {}
 
     #if DEBUG
+    /// Each check's reason, in order, as the sheet would show it: key names, never a value.
+    private(set) var reasons: [String] = []
     /// A sheet left up: while set, each check waits for `release(approving:)`. One is up at a time, as with
     /// `UserPresence`: a second check waits its turn until the first ends.
     var holds = false

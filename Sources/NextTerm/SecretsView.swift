@@ -214,16 +214,37 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         tableScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 6 * 24 + 28).isActive = true
     }
 
+    /// A column of the list: its widths are shares, which grow and shrink together with the list.
+    struct Column {
+        let id: String
+        let title: String
+        let width: CGFloat
+        let minWidth: CGFloat
+        var maxWidth: CGFloat = 10_000
+    }
+
+    /// The list's six columns. Their widths and gaps add up to under the list at Window › Secrets' smallest size, so
+    /// the table fills the list from the start and its columns resize together: none is squeezed out, and the list
+    /// never scrolls sideways. A cell cut short has its whole text as its tooltip.
+    static let columns: [Column] = [Column(id: "name", title: "Name", width: 84, minWidth: 64),
+                                    Column(id: "purpose", title: "What it's for", width: 70, minWidth: 44),
+                                    Column(id: "page", title: "Page", width: 78, minWidth: 48),
+                                    Column(id: "writeOnly", title: "Write-only", width: 58, minWidth: 56, maxWidth: 72),
+                                    Column(id: "rotated", title: "Rotated", width: 66, minWidth: 48),
+                                    Column(id: "used", title: "Last used", width: 64, minWidth: 48)]
+
     private func buildTable() {
-        let columns: [(String, String, CGFloat)] = [("name", "Name", 150), ("purpose", "What it's for", 160),
-                                                    ("page", "Page", 140), ("writeOnly", "Write-only", 72),
-                                                    ("rotated", "Rotated", 110), ("used", "Last used", 140)]
-        for (id, title, width) in columns {
-            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            column.title = title
-            column.width = width
+        for spec in Self.columns {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(spec.id))
+            column.title = spec.title
+            column.minWidth = spec.minWidth
+            column.maxWidth = spec.maxWidth
+            column.width = spec.width
+            column.resizingMask = [.autoresizingMask, .userResizingMask]
             table.addTableColumn(column)
         }
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.intercellSpacing = NSSize(width: 8, height: table.intercellSpacing.height)
         table.dataSource = self
         table.delegate = self
         table.rowHeight = 22
@@ -318,6 +339,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case "name":
             cell.stringValue = entry.name
             cell.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            cell.toolTip = entry.name
         case "purpose":
             cell.stringValue = entry.purpose + (entry.purposeBy == .agent ? " (an agent wrote this)" : "")
             cell.toolTip = cell.stringValue
@@ -330,9 +352,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case "rotated":
             cell.stringValue = SecretAge.text(entry: entry, now: Date())
             cell.textColor = .secondaryLabelColor
+            cell.toolTip = cell.stringValue
         default:
             cell.stringValue = SecretsStore.shared.lastUse[entry.name].map(Self.lastUsedText) ?? "Never used"
             cell.textColor = .secondaryLabelColor
+            cell.toolTip = cell.stringValue
         }
         return cell
     }
@@ -523,11 +547,14 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         openSheet(.edit(entry))
     }
 
-    /// A double-click on a Page cell opens the page; anywhere else on a row, Edit….
+    /// A double-click on a Page cell opens the page; anywhere else on a row, Edit…. One on the header or below the rows
+    /// does nothing: no row was clicked, whichever is selected.
     @objc func doubleClicked() {
+        let row = table.clickedRow
+        guard entries.indices.contains(row), table.selectedRow == row else { return }
         let column = table.clickedColumn
         let isPage: Bool = table.tableColumns.indices.contains(column) && table.tableColumns[column].identifier.rawValue == "page"
-        guard isPage, let entry = selectedEntry, entry.link != nil else { return edit() }
+        guard isPage, entries[row].link != nil else { return edit() }
         openPage()
     }
 

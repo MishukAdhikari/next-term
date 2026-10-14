@@ -419,3 +419,41 @@ extension SecretKeyPagesTests {
         }
     }
 }
+
+/// When the link field's chip offers the suggestion: over an empty field, or over the suggestion Use put there in this
+/// sheet. A link the user typed, or one stored with the key, is never offered over: Edit… has no value, so its name
+/// would win over the value that picked the stored page. Every value here is made up.
+@Suite struct SecretKeyPagesOfferTests {
+    private static let openAI = SecretKeyPages.suggest(value: nil, name: "OPENAI_API_KEY")
+    private static let openRouter: KeyPage? = {
+        let value = SecretBytes(utf8: "sk-or-v1-" + String(repeating: "x", count: 40))
+        return SecretKeyPages.suggest(value: value, name: "OPENAI_API_KEY")
+    }()
+
+    private static func link(_ page: KeyPage?) -> String { page?.url.absoluteString ?? "" }
+
+    @Test func anEmptyFieldIsOfferedThePage() {
+        #expect(Self.openAI?.provider == "OpenAI" && Self.openRouter?.provider == "OpenRouter")
+        #expect(SecretKeyPages.offers(Self.openAI, over: "", used: nil))
+        #expect(SecretKeyPages.offers(Self.openAI, over: "", used: Self.link(Self.openRouter)))
+        #expect(!SecretKeyPages.offers(nil, over: "", used: nil))
+    }
+
+    @Test func thePageUseTookGivesWayToANewerOne() {
+        let taken = Self.link(Self.openAI)
+        #expect(SecretKeyPages.offers(Self.openRouter, over: taken, used: taken))
+        // Not the page the field holds already.
+        #expect(!SecretKeyPages.offers(Self.openAI, over: taken, used: taken))
+    }
+
+    @Test func aTypedLinkIsNeverOfferedOver() {
+        let typed = "https://console.example.com/keys"
+        #expect(!SecretKeyPages.offers(Self.openAI, over: typed, used: nil))
+        #expect(!SecretKeyPages.offers(Self.openAI, over: typed, used: Self.link(Self.openRouter)))
+    }
+
+    /// Add… saved OpenRouter's page, taken from the value; Edit… has only the name, which names OpenAI.
+    @Test func aStoredLinkIsNeverOfferedOverEvenAStoredSuggestion() {
+        #expect(!SecretKeyPages.offers(Self.openAI, over: Self.link(Self.openRouter), used: nil))
+    }
+}

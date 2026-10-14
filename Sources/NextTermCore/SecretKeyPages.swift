@@ -154,6 +154,15 @@ public enum SecretKeyPages {
         return page(forName: name)
     }
 
+    /// Whether the link field's chip offers `page` over `text` (the field, trimmed): while the field is empty, or holds
+    /// `used`, the suggestion Use put there in this sheet, and never for the page it holds already. A link the user
+    /// typed is never offered over, nor one stored with the key, even a suggestion: Edit… has only the name, and the
+    /// value that picked the stored page wins over it.
+    public static func offers(_ page: KeyPage?, over text: String, used: String?) -> Bool {
+        guard let offered: String = page?.url.absoluteString, offered != text else { return false }
+        return text.isEmpty || text == used
+    }
+
     /// The page a value's head names, longest head first. Only the page is kept, never a byte of the value.
     public static func page(forValue value: SecretBytes) -> KeyPage? {
         var read: (bytes: [UInt8], length: Int) = value.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in

@@ -180,6 +180,24 @@ private let newMembers = ["link", "linkFrom", "valueSet", "remindDays", "retired
         _ = try f.vault.makeWriteOnly("SOURCE_KEY", now: FactsFixture.made.addingTimeInterval(60))
         #expect(f.vault.index.entries[0].valueSet == FactsFixture.made)
     }
+
+    /// Edit… with only a new link, a cleared one or a new reminder: the value isn't sealed again and the Rotated column
+    /// still counts from when it was set.
+    @Test func anEditOfOnlyTheLinkOrTheReminderLeavesTheDateAndTheSeal() throws {
+        let f = try FactsFixture(link: "https://dashboard.example.com/apikeys", linkFrom: .suggested)
+        let box: Data = f.vault.index.entries[0].box
+        let later = FactsFixture.made.addingTimeInterval(86_400)
+        _ = try f.vault.edit("SOURCE_KEY", link: "https://console.example.com/keys", now: later)
+        var entry = try #require(f.vault.index.entry(named: "SOURCE_KEY"))
+        #expect(entry.link == "https://console.example.com/keys" && entry.linkFrom == .user)
+        #expect(entry.valueSet == FactsFixture.made && entry.changed == later && entry.box == box)
+        _ = try f.vault.edit("SOURCE_KEY", link: .some(nil), now: later.addingTimeInterval(60))
+        _ = try f.vault.edit("SOURCE_KEY", remindDays: 90, now: later.addingTimeInterval(120))
+        entry = try #require(f.vault.index.entry(named: "SOURCE_KEY"))
+        #expect(entry.link == nil && entry.remindDays == 90)
+        #expect(entry.valueSet == FactsFixture.made && entry.box == box)
+        #expect(!SecretAge.wasGivenNewValue(entry))
+    }
 }
 
 @Suite struct SecretVaultLinkTests {

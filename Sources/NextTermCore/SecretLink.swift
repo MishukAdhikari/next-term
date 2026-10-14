@@ -74,6 +74,46 @@ public enum SecretLink {
         return .success(url)
     }
 
+    /// Whether a stored link stays out of Edit's field: it holds a key, a stored value (`mask`) or a token shape, as
+    /// typed or decoded, whatever rule refuses it first. Its text would show the key, which may be write-only; the row
+    /// says it can't be opened, and Edit says why.
+    public static func hides(_ text: String, mask: (String) -> Bool) -> Bool {
+        if case .failure(.holdsAKey) = check(text, mask: mask, value: nil) { return true }
+        let typed: String = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let texts: [String] = [typed, decodedLeniently(typed)]
+        return texts.contains { (candidate: String) -> Bool in holdsTokenShape(candidate) || mask(candidate) }
+    }
+
+    /// `text` with each `%` escape decoded, and bytes that aren't UTF-8 read as U+FFFD: one escape that doesn't decode
+    /// leaves the rest decoded, as `removingPercentEncoding` doesn't.
+    static func decodedLeniently(_ text: String) -> String {
+        let utf8: [UInt8] = Array(text.utf8)
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(utf8.count)
+        var index = 0
+        while index < utf8.count {
+            let isEscape: Bool = utf8[index] == UInt8(ascii: "%") && index + 2 < utf8.count
+            if isEscape, let high = hexValue(utf8[index + 1]), let low = hexValue(utf8[index + 2]) {
+                let byte: UInt8 = high << 4 | low
+                bytes.append(byte)
+                index += 3
+            } else {
+                bytes.append(utf8[index])
+                index += 1
+            }
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    private static func hexValue(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): return byte - UInt8(ascii: "0")
+        case UInt8(ascii: "a")...UInt8(ascii: "f"): return byte - UInt8(ascii: "a") + 10
+        case UInt8(ascii: "A")...UInt8(ascii: "F"): return byte - UInt8(ascii: "A") + 10
+        default: return nil
+        }
+    }
+
     /// What the link's button and the Page column name: its host, lower-cased, and its port when it has one
     /// (`platform.openai.com`, `localhost:3000`).
     public static func host(of url: URL) -> String? {

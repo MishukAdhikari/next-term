@@ -95,6 +95,29 @@ import Testing
         #expect(Self.refusal("https://x.example.com/?state=other", mask: mask) == nil)
     }
 
+    /// A stored link that holds a key, such as one whose key was stored after the link was saved, stays out of Edit's
+    /// field: its text would show a write-only key. It is hidden whatever rule refuses it first.
+    @Test func aStoredLinkHoldingAKeyIsKeptOutOfTheField() {
+        let stored = "made-up-stored-value-0123"
+        let mask: (String) -> Bool = { (text: String) -> Bool in text.contains(stored) }
+        let escaped: String = "%6D" + stored.dropFirst()
+        #expect(SecretLink.hides("https://dashboard.example.com/keys/" + stored, mask: mask))
+        #expect(SecretLink.hides("https://dashboard.example.com/keys/" + escaped, mask: mask))
+        #expect(SecretLink.hides("https://x.example.com/" + Self.tokenShaped, mask: Self.noMask))
+        // Refused first for its scheme, its user and password, or an escape that doesn't decode.
+        #expect(SecretLink.hides("http://dashboard.example.com/keys/" + stored, mask: mask))
+        #expect(SecretLink.hides("http://dashboard.example.com/keys/" + escaped, mask: mask))
+        #expect(SecretLink.hides("https://u:p@dashboard.example.com/" + stored, mask: mask))
+        #expect(SecretLink.hides("https://dashboard.example.com/%E9/" + stored, mask: mask))
+        #expect(SecretLink.hides("https://dashboard.example.com/%E9/" + escaped, mask: mask))
+        #expect(SecretLink.decodedLeniently("a%2Fb%E9%zz%4") == "a/b\u{FFFD}%zz%4")
+        // A link with no key in it shows, kept or refused.
+        #expect(!SecretLink.hides("https://dashboard.example.com/keys", mask: mask))
+        #expect(!SecretLink.hides("https://u:p@dashboard.example.com/keys", mask: mask))
+        #expect(!SecretLink.hides("http://dashboard.example.com/keys", mask: mask))
+        #expect(!SecretLink.hides("https://x.example.com/cb?token=other", mask: mask))
+    }
+
     @Test func aLinkHoldingTheSheetsOwnValueIsRefused() throws {
         let value = SecretBytes(utf8: "  made-up-sheet-value-0123  ")
         #expect(Self.refusal("https://x.example.com/?state=made-up-sheet-value-0123", value: value) == .holdsAKey)

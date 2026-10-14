@@ -3,7 +3,7 @@ import NextTermCore
 
 #if DEBUG
 /// "Where it came from", Open Page and the Page column, on the self-test's temporary vaults only. Pages are recorded by
-/// `ServiceLinks.recordsOnly` and never opened; nothing is fetched. Every value is made up at run time from a provider's
+/// `ServiceLinks.recordsOnly` and never opened; nothing is fetched. Keys are pressed from CGEvents (`secretsType`). Every value is made up at run time from a provider's
 /// head and random filler, so no file holds a key-shaped string whole.
 extension SelfTest {
     static let sourcesOpenAIPage = "https://platform.openai.com/settings/organization/api-keys"
@@ -17,8 +17,10 @@ extension SelfTest {
             ServiceLinks.opened = []
         }
         await secretSourcesSheetChecks()
+        await secretSourcesStoreChecks(base)
         await secretSourcesVouchChecks(base)
         await secretSourcesRequestChecks()
+        await secretSourcesRequestUseChecks()
     }
 
     /// Add… suggests the page from the value's head, Use fills it, Save keeps it; a link with a user and password, or
@@ -37,12 +39,10 @@ extension SelfTest {
         guard let sheet = view.sheet, let link = sheet.linkField else {
             return check(false, "secret sources: Add… has Where it came from")
         }
-        sheet.nameField.stringValue = "SOURCE_OPENAI_KEY"
-        sheet.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: sheet.nameField))
+        secretsType("SOURCE_OPENAI_KEY", into: sheet.nameField)
         check(link.text.isEmpty && link.field.placeholderString == SecretLinkField.placeholder,
               "secret sources: Where it came from starts empty, with its placeholder")
-        sheet.valueField.stringValue = value
-        sheet.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: sheet.valueField))
+        secretsType(value, into: sheet.valueField)
         let chipped: Bool = link.chipLabel.stringValue == "Suggested: OpenAI · API Keys"
         check(link.showsSuggestion && chipped && link.text.isEmpty,
               "secret sources: a value with OpenAI's head suggests its page in a chip, and fills nothing",
@@ -72,7 +72,11 @@ extension SelfTest {
               "secret sources: Open platform.openai.com opens the page from the bytes Next Term wrote, with no Touch ID",
               "\(title ?? "no item"), \(ServiceLinks.opened), \(presence.calls - calls) checks")
         await secretSourcesListChecks(value: value)
+        await secretSourcesDoubleClickChecks(view, "SOURCE_OPENAI_KEY", page: sourcesOpenAIPage)
+        secretSourcesColumnChecks(window, view)
         _ = try? await store.perform(.delete(name: "SOURCE_OPENAI_KEY"))
+        await secretSourcesEditChecks(view, presence)
+        await secretSourcesHeldChecks(view, presence)
     }
 
     /// A link with a user and password, then one holding the key being added: each refused under the field, Save off.
@@ -82,14 +86,9 @@ extension SelfTest {
             return check(false, "secret sources: Add… opens again")
         }
         let value = secretsValue("source-refused-")
-        sheet.nameField.stringValue = "SOURCE_REFUSED_KEY"
-        sheet.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: sheet.nameField))
-        sheet.valueField.stringValue = value
-        sheet.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: sheet.valueField))
-        func type(_ text: String) {
-            link.field.stringValue = text
-            link.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: link.field))
-        }
+        secretsType("SOURCE_REFUSED_KEY", into: sheet.nameField)
+        secretsType(value, into: sheet.valueField)
+        func type(_ text: String) { secretsType(text, into: link.field) }
         type("https://u:p@example.com")
         let credentials: Bool = link.refusalLabel.stringValue == SecretLink.Refusal.userOrPassword.sentence
         check(!link.refusalLabel.isHidden && credentials && !sheet.saveButton.isEnabled,
@@ -200,8 +199,7 @@ extension SelfTest {
             return check(false, "secret sources: request_secret opens its window")
         }
         check(window.linkField.text.isEmpty, "secret sources: request_secret's window has Where it came from, empty")
-        window.valueField.stringValue = secretsValue("asked-")
-        window.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: window.valueField))
+        secretsType(secretsValue("asked-"), into: window.valueField)
         window.saveButton.performClick(nil)
         let answer = await call.value
         let entry = store.index?.entry(named: "SOURCE_ASKED_KEY")
