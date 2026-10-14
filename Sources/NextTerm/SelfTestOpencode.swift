@@ -71,6 +71,7 @@ extension SelfTest {
         await opencodeAnswerChecks(c, dir: dir)
         #if DEBUG
         await opencodeNoticeChecks(c, dir: dir)
+        await opencodeProgressChecks(c, dir: dir)
         #endif
     }
 

@@ -377,6 +377,13 @@ enum MCPBridge {
         let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
         let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
         let calls = DispatchGroup()
+        #if DEBUG
+        // The self-test's shorter progress interval (SelfTestOpencodeProgress).
+        let testInterval = environment["NEXTTERM_TEST_MCP_PROGRESS_SECONDS"].flatMap(TimeInterval.init)
+        let progressEvery = testInterval.flatMap { $0 > 0 ? $0 : nil } ?? MCPProgress.interval
+        #else
+        let progressEvery = MCPProgress.interval
+        #endif
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
@@ -386,10 +393,11 @@ enum MCPBridge {
             let messages = (object as? [[String: Any]]) ?? [(object as? [String: Any]) ?? [:]]
             for message in messages {
                 if message["method"] as? String == "tools/call" {
-                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile.
+                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
+                    // progress token gets progress until its answer is sent (MCPProgress).
                     DispatchQueue.global().async(group: calls) {
-                        if let response = MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) }) {
-                            send(response)
+                        MCPProgress.answer(message, every: progressEvery, send: send) {
+                            MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
                         }
                     }
                 } else if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
