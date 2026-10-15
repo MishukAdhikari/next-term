@@ -693,7 +693,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         skillsTab.label = "Skills"
         skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
-        // Secrets is last: after Skills, and after Remote Access once that tab is in.
+        // Where the todo folder is (Tasks › Task Settings…).
+        let tasksTab = NSTabViewItem(identifier: "tasks")
+        tasksTab.label = "Tasks"
+        tasksTab.view = TaskSettingsView()
+        tabs.addTabViewItem(tasksTab)
+        // Secrets is last: after Skills and Tasks, and after Remote Access once that tab is in.
         let secretsTab = NSTabViewItem(identifier: "secrets")
         secretsTab.label = "Secrets"
         secretsTab.view = SecretsView()

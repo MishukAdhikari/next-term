@@ -158,7 +158,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         ## How to answer
 
         1. Say what you are about to change, then change what you can, in as few asks as you can. Count a change as made only when Next Term's answer says so; when the user declines or doesn't answer, say that.
-        2. For the rest, `show_settings` with its tab (general, editor, terminal, notifications, keys, import, skills or secrets), so it is open in front of the user.
+        2. For the rest, `show_settings` with its tab (general, editor, terminal, notifications, keys, import, skills, tasks or secrets), so it is open in front of the user.
         3. Answer with one table, the key first, of what the user asked about:
 
         | Key | What | Where | Done |
@@ -166,6 +166,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         | ⌥⌘T | Open a tab on a server | File › New Remote Tab… | how to |
         | — | Terminal on the right | View › Terminal Position | changed |
         | ⌘, | Terminal font | Settings › Terminal › Font | Settings open |
+        | — | Where new tasks are saved | Settings › Tasks › Todo folder | Settings open |
 
         Write "—" for a command with no key. Add only the keys that go with what was asked, not a full list: `list_shortcuts` is there when the user wants more.
         """#, offersTabs: false,

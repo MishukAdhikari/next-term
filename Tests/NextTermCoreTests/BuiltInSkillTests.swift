@@ -188,6 +188,7 @@ import Testing
         #expect(text.contains("`list_shortcuts`") && text.contains("never from memory") && text.contains("`show_settings`"))
         #expect(text.contains("| Key | What | Where | Done |") && text.contains("Never agent control"))
         for tab in MCPShortcuts.settingsTabs { #expect(text.contains(tab), "\(tab)") }
+        #expect(text.contains("Settings › Tasks") && text.contains("skills, tasks or secrets"))
     }
 
     /// Within the 2,048 characters older Claude Code keeps, the skills whole in the first 512 some clients read, and only
