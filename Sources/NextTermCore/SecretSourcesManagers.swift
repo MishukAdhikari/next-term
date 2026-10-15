@@ -36,17 +36,25 @@ extension SecretSources {
     /// Words in an item's title that say its password is a key: "Groq token", "OpenAI API".
     static let keyTitleWords: Set<String> = ["API", "APIKEY", "APITOKEN", "TOKEN", "KEY"]
 
-    /// Whether an item's title names a key, by its words (`Monkey` and `Keycloak` don't).
+    /// Whether an item's title names a key, by its words (`Monkey` and `Keycloak` don't). Inside a word of several
+    /// parts, API and TOKEN still count (`GroqApiKey`), but KEY alone is a part of a name (`KeyBank`, `YubiKey`).
     static func titleSaysKey(_ title: String) -> Bool {
-        let parts: [Substring] = title.split { (character: Character) -> Bool in
+        let words: [Substring] = title.split { (character: Character) -> Bool in
             !(character.isLetter || character.isNumber)
         }
-        return parts.contains { (part: Substring) -> Bool in
-            SecretName.segments(of: String(part)).contains { (segment: String) -> Bool in
-                let single: String = segment.count > 1 && segment.hasSuffix("S") ? String(segment.dropLast()) : segment
-                return keyTitleWords.contains(segment) || keyTitleWords.contains(single)
-            }
+        return words.contains { (word: Substring) -> Bool in
+            let segments: [String] = SecretName.segments(of: String(word))
+            let named: [String] = segments.compactMap(keyTitleWord)
+            guard segments.count > 1 else { return !named.isEmpty }
+            return named.contains { (keyWord: String) -> Bool in keyWord != "KEY" }
         }
+    }
+
+    /// The key word a title's segment is, one or several (`TOKENS` is TOKEN); nil for any other.
+    static func keyTitleWord(_ segment: String) -> String? {
+        if keyTitleWords.contains(segment) { return segment }
+        let single: String = segment.count > 1 && segment.hasSuffix("S") ? String(segment.dropLast()) : segment
+        return keyTitleWords.contains(single) ? single : nil
     }
 
     /// A key's name from an item's title and, for a field other than the item's own password, its label: the label
@@ -81,11 +89,12 @@ extension SecretSources {
     }
 
     /// `KEY=value` lines in an item's notes, read as a `.env` line is (dotenv's way, with no `KEY: value`: notes are
-    /// prose), each judged by its look. Lines of prose are skipped by the reader.
-    static func noteLines(_ notes: String, title: String, scope: String, link: String?) -> [Found] {
+    /// prose), each judged by its look and marked with the item's `note` (one that asks for the master password again).
+    /// Lines of prose are skipped by the reader.
+    static func noteLines(_ notes: String, title: String, scope: String, link: String?, note: Note? = nil) -> [Found] {
         EnvFile.parse(notes, interpolating: false).map { (entry: EnvEntry) -> Found in
             Found(name: envName(entry.key), value: entry.value, place: "\(title) \u{203A} notes, line \(entry.line)",
-                  line: nil, scope: scope, link: link)
+                  line: nil, scope: scope, link: link, note: note)
         }
     }
 }
@@ -93,8 +102,14 @@ extension SecretSources {
 // MARK: - Which manager wrote it
 
 extension SecretSources {
-    /// The member names that only a manager's JSON holds: text with none of them is read as any JSON, unparsed here.
-    static let managerMembers = ["\"items\"", "\"accounts\"", "\"fields\"", "\"projectId\"", "\"encrypted\""]
+    /// The members of a Bitwarden item that say what it is: every item holds one, custom fields or not.
+    static let bitwardenParts = ["login", "secureNote", "card", "identity", "fields", "sshKey"]
+
+    /// The member names a manager's JSON holds, one at least: text with none of them is read as any JSON, unparsed
+    /// here. `managerShape` decides on the parsed members.
+    static let managerMembers: [String] = (["items", "accounts", "projectId", "encrypted"] + bitwardenParts).map {
+        (member: String) -> String in "\"" + member + "\""
+    }
 
     /// The report for a password manager's JSON, or nil when `forced` is nil and the text isn't one's. With a format
     /// forced (`--from bitwarden`), text that isn't that app's export is refused with its name.
@@ -104,7 +119,7 @@ extension SecretSources {
         guard let documents = jsonDocuments(text) else {
             return forced.map { (format: Format) -> SourceReport in refused(.notJSON, as: format) }
         }
-        let shape: Format? = managerShape(documents)
+        let shape: Format? = managerShape(documents, forced: forced)
         guard let format = forced ?? shape else { return nil }
         // An empty list is what `bws secret list` and `bw list items` print for an empty vault.
         let empty: Bool = documents.count == 1 && (documents[0] as? [Any])?.isEmpty == true
@@ -140,13 +155,13 @@ extension SecretSources {
         }
     }
 
-    /// Which manager's JSON the documents are, by their members: Bitwarden's export by `encrypted` with `items` (or
-    /// sealed `data`), `bw list items` by items with a `type` and a `name`; 1Password's `.1pux` data by its accounts'
-    /// vaults, `op item get` by items with `fields` and a `category`; `bws` by secrets with a `key`, a `value` and a
-    /// `projectId`.
-    static func managerShape(_ documents: [Any]) -> Format? {
+    /// Which manager's JSON the documents are, by their members: Bitwarden's export by `encrypted` with its sealed
+    /// form's members or items that are all Bitwarden's, `bw list items` by such items alone; 1Password's `.1pux` data
+    /// by its accounts' vaults, `op item get` by items with a `category` and `op`'s fields, one concealed at least
+    /// (with `--from 1password`, none needed); `bws` by secrets with a `key`, a `value` and a `projectId`.
+    static func managerShape(_ documents: [Any], forced: Format? = nil) -> Format? {
         if documents.count == 1, let object = documents[0] as? [String: Any] {
-            if object["encrypted"] is Bool, object["items"] != nil || object["data"] != nil { return .bitwarden }
+            if isBitwardenExport(object) { return .bitwarden }
             if let accounts = object["accounts"] as? [[String: Any]], accounts.contains(where: hasVaults) {
                 return .onePassword
             }
@@ -155,7 +170,9 @@ extension SecretSources {
             (document as? [[String: Any]]) ?? (document as? [String: Any]).map { [$0] } ?? []
         }
         guard !objects.isEmpty, objects.count == documents.flatMap(elements).count else { return nil }
-        if objects.allSatisfy(isOpItem) { return .onePassword }
+        let opItems: Bool = objects.allSatisfy(isOpItem)
+        let concealed: Bool = forced == .onePassword || objects.contains(where: holdsConcealed)
+        if opItems, concealed { return .onePassword }
         if documents.count == 1, documents[0] is [Any] {
             if objects.allSatisfy(isBwsSecret) { return .bws }
             if objects.allSatisfy(isBitwardenItem) { return .bitwarden }
@@ -163,12 +180,35 @@ extension SecretSources {
         return nil
     }
 
+    /// Bitwarden's `.json` export: sealed by the account's key (`encKeyValidation_DO_NOT_EDIT`) or a password
+    /// (`passwordProtected` with its `data`), or open with `items` that are all Bitwarden's.
+    static func isBitwardenExport(_ object: [String: Any]) -> Bool {
+        guard object["encrypted"] is Bool else { return false }
+        if object["encKeyValidation_DO_NOT_EDIT"] is String { return true }
+        if object["passwordProtected"] as? Bool == true, object["data"] is String { return true }
+        guard let items = object["items"] as? [[String: Any]] else { return false }
+        return items.allSatisfy(isBitwardenItem)
+    }
+
     static func elements(_ document: Any) -> [Any] { (document as? [Any]) ?? [document] }
 
     static func hasVaults(_ account: [String: Any]) -> Bool { account["vaults"] is [Any] }
 
+    /// An `op` item: a `category`, and fields that each have an `id` and a `type`, as `op` writes them.
     static func isOpItem(_ object: [String: Any]) -> Bool {
-        object["fields"] is [Any] && object["category"] is String
+        guard object["category"] is String, let fields = object["fields"] as? [[String: Any]] else { return false }
+        return fields.allSatisfy { (field: [String: Any]) -> Bool in field["id"] is String && field["type"] is String }
+    }
+
+    /// Whether an `op` item has a field 1Password keeps concealed.
+    static func holdsConcealed(_ object: [String: Any]) -> Bool {
+        let fields: [[String: Any]] = object["fields"] as? [[String: Any]] ?? []
+        return fields.contains(where: isOpSecret)
+    }
+
+    /// A concealed field, or the item's password.
+    static func isOpSecret(_ field: [String: Any]) -> Bool {
+        field["type"] as? String == "CONCEALED" || field["purpose"] as? String == "PASSWORD"
     }
 
     static func isBwsSecret(_ object: [String: Any]) -> Bool {
@@ -177,7 +217,7 @@ extension SecretSources {
 
     static func isBitwardenItem(_ object: [String: Any]) -> Bool {
         let typed: Bool = object["type"] is NSNumber && object["name"] is String
-        let parts: Bool = ["login", "secureNote", "card", "identity", "fields", "sshKey"].contains { object[$0] != nil }
+        let parts: Bool = bitwardenParts.contains { (part: String) -> Bool in object[part] != nil }
         return typed && (parts || object["object"] as? String == "item")
     }
 }
@@ -303,11 +343,7 @@ extension SecretSources {
                                scope: scope, link: link, note: note, managed: .secret, fromTitle: named.fromTitle))
         }
         if type == bitwardenNote, let notes = item["notes"] as? String {
-            found += noteLines(notes, title: title, scope: scope, link: link).map { (line: Found) -> Found in
-                var marked: Found = line
-                marked.note = note
-                return marked
-            }
+            found += noteLines(notes, title: title, scope: scope, link: link, note: note)
         }
         return found
     }
@@ -336,7 +372,7 @@ extension SecretSources {
                                line: row.line, scope: scope, link: link, note: note, fromTitle: named.fromTitle))
         }
         if row["type"] == "note" {
-            found += noteLines(row["notes"], title: title, scope: scope, link: link)
+            found += noteLines(row["notes"], title: title, scope: scope, link: link, note: note)
         }
         return found
     }
@@ -367,8 +403,11 @@ extension SecretSources {
         return found
     }
 
-    /// An `op` item's concealed fields and its password, linked by its primary website first.
+    /// An `op` item's concealed fields and its password, linked by its primary website first. Only an active item is
+    /// read: `op` writes a `state` (`ARCHIVED`, `DELETED`) on any other, as `--include-archive` lists them.
     static func opItemFound(_ item: [String: Any], scope: String) -> [Found] {
+        let state: String = (item["state"] as? String ?? "").uppercased()
+        guard state.isEmpty || state == "ACTIVE" else { return [] }
         guard let category = item["category"] as? String, onePasswordCategories.values.contains(category) else {
             return []
         }
@@ -382,8 +421,7 @@ extension SecretSources {
         var found: [Found] = []
         for field in item["fields"] as? [[String: Any]] ?? [] {
             let purpose: String? = field["purpose"] as? String
-            let concealed: Bool = field["type"] as? String == "CONCEALED" || purpose == "PASSWORD"
-            guard concealed, let value = field["value"] as? String else { continue }
+            guard isOpSecret(field), let value = field["value"] as? String else { continue }
             let id: String = field["id"] as? String ?? ""
             let label: String = field["label"] as? String ?? id
             let main: Bool = purpose == "PASSWORD" || id == "credential" || id == "password"

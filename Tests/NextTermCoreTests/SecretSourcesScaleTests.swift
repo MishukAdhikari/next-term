@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import NextTermCore
 
-/// What a large or crafted file costs the import: a `.env` past the editor's size, a file past the values read, and the
-/// same name in thousands of sections, each refused or read in a few seconds. Every value here is made up.
+/// What a large or crafted file costs the import: a `.env` past the editor's size, a file past the values read, the
+/// same name in thousands of sections, and a browser's CSV or an export of thousands of sites, each refused or read in
+/// a few seconds. Every value here is made up.
 @Suite struct SecretSourcesScaleTests {
     typealias F = SecretSourcesFixtures
 
@@ -68,5 +69,31 @@ import Testing
         let elapsed: Duration = ContinuousClock().measure { report = SecretSources.read(&data, name: "keys.json") }
         #expect(elapsed < .seconds(10), "\(elapsed)")
         #expect(report?.unreadable == .tooMany)
+    }
+
+    /// A browser's CSV and a Bitwarden export of 5,000 sites each: every row named and linked in seconds, so a step
+    /// that grows with the square of the rows shows here.
+    @Test func aLargeBrowserCSVAndExportAreReadInSeconds() {
+        let count = 5_000
+        var lines: [String] = ["name,url,username,password,note"]
+        var items: [String] = []
+        for number in 0..<count {
+            let site = "site\(number).example.com"
+            lines.append("\(site),https://\(site)/login,made-up-user,\(Self.value(number)),")
+            let login = #"{"uris": [{"uri": "https://\#(site)/"}], "password": "\#(Self.value(number))"}"#
+            items.append(#"{"type": 1, "name": "Site \#(number)", "login": \#(login)}"#)
+        }
+        var csv: [UInt8] = Array((lines.joined(separator: "\n") + "\n").utf8)
+        let export = #"{"encrypted": false, "folders": [], "items": ["# + items.joined(separator: ",") + "]}"
+        var json: [UInt8] = Array(export.utf8)
+        var browser: SourceReport?
+        var bitwarden: SourceReport?
+        let clock = ContinuousClock()
+        let csvTime: Duration = clock.measure { browser = SecretSources.read(&csv, name: "Chrome Passwords.csv") }
+        let jsonTime: Duration = clock.measure { bitwarden = SecretSources.read(&json, name: "bitwarden.json") }
+        #expect(csvTime < .seconds(15) && jsonTime < .seconds(15), "\(csvTime), \(jsonTime)")
+        #expect(browser?.exportedBy == "Chrome" && browser?.rows.count == count)
+        #expect(bitwarden?.format == .bitwarden && bitwarden?.rows.count == count)
+        #expect(browser?.rows.last?.link?.url.host == "site4999.example.com")
     }
 }

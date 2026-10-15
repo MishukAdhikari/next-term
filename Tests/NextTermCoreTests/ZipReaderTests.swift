@@ -47,6 +47,14 @@ import Testing
         #expect(Self.failure(Z.archive([honest])) == .inflatesTooFar)
     }
 
+    @Test func anEntryPastFiftyMegabytesIsRefusedBeforeInflating() {
+        let claim = ZipReader.maxEntryBytes + 1
+        let large = Z.Entry(name: "export.data", data: Self.text, claimedSize: claim)
+        #expect(Self.failure(Z.archive([large])) == .tooLarge)
+        let stored = Z.Entry(name: "export.data", data: Self.text, deflate: false, claimedSize: claim)
+        #expect(Self.failure(Z.archive([stored])) == .tooLarge)
+    }
+
     @Test func aDirectoryPastTheEndStops() {
         let entry = Z.Entry(name: "export.data", data: Self.text)
         #expect(Self.failure(Z.archive([entry], bend: Z.Bend(directoryShift: 4096))) == .damaged)
