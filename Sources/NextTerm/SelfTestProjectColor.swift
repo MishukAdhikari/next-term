@@ -233,10 +233,13 @@ extension SelfTest {
     /// pixel as the bar draws it; nil where the view isn't.
     private static func painted(_ view: NSView & ProjectGlowing, atWindowX x: CGFloat) -> UInt32? {
         let local: CGFloat = x - view.convert(NSPoint(x: view.bounds.minX, y: view.bounds.minY), to: nil).x
-        guard local >= 0, local < view.bounds.width,
-              let blank = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8, samplesPerPixel: 4,
-                                           hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0),
-              let rep = blank.retagging(with: .sRGB), let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        // One sRGB pixel, as the hex values compared are sRGB: a generic-RGB bitmap retagged as sRGB reads every colour
+        // lighter (the bar #2B2D30 as #393B3F).
+        var bytes: [UInt8] = [0, 0, 0, 0]
+        guard local >= 0, local < view.bounds.width, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let cg = CGContext(data: &bytes, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space,
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let context = NSGraphicsContext(cgContext: cg, flipped: view.isFlipped)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         let shift = NSAffineTransform()
@@ -248,7 +251,7 @@ extension SelfTest {
         view.projectGlow.paint(pixel, in: view)
         context.flushGraphics()
         NSGraphicsContext.restoreGraphicsState()
-        return rep.colorAt(x: 0, y: 0)?.rgbHex
+        return UInt32(bytes[0]) << 16 | UInt32(bytes[1]) << 8 | UInt32(bytes[2])
     }
 
     /// `top` over `bottom` at `alpha`, channel by channel, as sRGB compositing does it.
