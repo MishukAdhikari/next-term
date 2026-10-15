@@ -16,6 +16,9 @@ extension SelfTest {
         let savedMask = SecretMask.current
         defer { SecretMask.current = savedMask }
         await ghostReadTabChecks(c, dir: dir)
+        GhostPreferences.testIsOn = true
+        defer { GhostPreferences.testIsOn = nil }
+        await ghostRecordChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -32,6 +35,24 @@ extension SelfTest {
         zle -N self-insert __standin_insert
 
         """
+
+    /// The store's answer for `prefix`, as a suggestion asks for one.
+    static func ghostQuery(_ prefix: String, folder: String? = nil) async -> [CommandHistory.Entry] {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[CommandHistory.Entry], Never>) in
+            CommandHistoryStore.shared.query(prefix: prefix, folder: folder) { (found: [CommandHistory.Entry]) in continuation.resume(returning: found) }
+        }
+    }
+
+    /// The store's answer for `prefix` once `ready` holds for it (it records off the main queue), 3 s at most.
+    static func ghostQuery(_ prefix: String, until ready: @escaping ([CommandHistory.Entry]) -> Bool) async -> [CommandHistory.Entry] {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        var found = await ghostQuery(prefix)
+        while !ready(found), ProcessInfo.processInfo.systemUptime < deadline {
+            await pause(0.1)
+            found = await ghostQuery(prefix)
+        }
+        return found
+    }
 
     /// A tool called in this process, as the socket calls it, and its answer's JSON.
     static func ghostTool(_ name: String, _ arguments: [String: Any]) async -> (json: [String: Any]?, text: String) {
@@ -121,6 +142,29 @@ extension SelfTest {
         check(tab.status.running && running.json?["input"] == nil, "read_tab: no input while a command runs", running.text)
         tab.view.send(txt: "\u{3}")
         _ = await wait(3) { !tab.status.running }
+    }
+
+    /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,
+    /// in the self-test's own folder (SelfTest.historyFolder).
+    static func ghostRecordChecks(_ c: TerminalWindowController, dir: URL) async {
+        let folder = SelfTest.historyFolder?.path ?? ""
+        check(mode != .plain || folder.hasPrefix(NSTemporaryDirectory()), "the record of your commands: the plain self-test keeps its own, in a temporary folder",
+              folder)
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc, name: "record"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        let id = tab.id.uuidString.lowercased()
+        let started = tab.status.commandsStarted
+        _ = await ghostTool("send_to_tab", ["tab_id": id, "text": "echo ghostagentline"])
+        _ = await wait(5) { tab.status.commandsStarted > started && !tab.status.running }
+        await pause(0.3)
+        typeKeys(window, "echo ghostmineline")
+        pressKey(window, "\r", code: 36)
+        _ = await wait(5) { tab.status.commandsStarted > started + 1 && !tab.status.running }
+        let mine = await ghostQuery("echo ghostmine") { !$0.isEmpty }
+        let agent = await ghostQuery("echo ghostagent")
+        check(agent.isEmpty, "the record of your commands: a line an agent ran over MCP is not in it", agent.map(\.line).joined(separator: ", "))
+        check(mine.first?.line == "echo ghostmineline" && mine.first?.lastExit == 0 && mine.first?.folder == tab.directory,
+              "the record of your commands: a line you ran is, with its exit and folder", "\(mine)")
     }
     #endif
 }

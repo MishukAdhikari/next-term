@@ -52,6 +52,13 @@ enum SelfTest {
         return support?.appendingPathComponent("Next Term", isDirectory: true)
     }
 
+    /// Where the record of your commands is kept (CommandHistoryStore): `supportFolder`, the relaunch harness's own in its
+    /// runs; for the plain self-test a temporary folder of its own, so it never reads or writes yours.
+    nonisolated static var historyFolder: URL? {
+        guard mode == .plain else { return supportFolder }
+        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nextterm-history-\(getpid())", isDirectory: true)
+    }
+
     /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
     /// saves or restores sessions.
     nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }

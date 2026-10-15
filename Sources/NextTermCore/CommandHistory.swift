@@ -197,6 +197,13 @@ public struct CommandHistory: Sendable {
         if index.count > Self.maxEntries { dropOldest(index.count - Self.maxEntries) }
     }
 
+    /// The entry for `line` (trailing blanks trimmed), if there is one.
+    public func entry(for line: String) -> Entry? {
+        guard let kept = Self.shaped(line) else { return nil }
+        let place = find(Array(kept.utf8))
+        return place.found ? entry(index[place.position]) : nil
+    }
+
     /// Every live entry, oldest record first: what the history file writes back.
     public func entries() -> [Entry] {
         records.indices.compactMap { records[$0].alive ? entry(Int32($0)) : nil }
@@ -416,4 +423,22 @@ struct Interner: Sendable {
     func existing(_ name: String?) -> Int32 { name.flatMap { ids[$0] } ?? -1 }
 
     func name(_ id: Int32) -> String? { id >= 0 && Int(id) < names.count ? names[Int(id)] : nil }
+}
+
+/// Who submitted a command line, as far as the record of your commands goes: only yours are kept.
+public enum CommandAuthor: Equatable, Sendable {
+    case you
+    /// Next Term or an agent pressed Return for it (TerminalTab.submitOwnLine).
+    case agent
+
+    /// From the integration's `cmd` mark and the line Next Term last pressed Return for itself (`ownLine`, as zsh holds it,
+    /// noted until the next command or prompt): the history hook kept the line out (`keptOut`), or it is that line to the
+    /// byte, is an agent's; a resumed job (`fg`) is no line typed now, and is nobody's (nil); anything else is yours, Return
+    /// and all, even one Next Term put on the line for you.
+    public static func decide(flags: CommandMarkFlags, ownLine: String?, typed: String) -> CommandAuthor? {
+        if flags.contains(.jobResume) { return nil }
+        if flags.contains(.keptOut) { return .agent }
+        if let ownLine, ownLine == typed { return .agent }
+        return .you
+    }
 }
