@@ -113,6 +113,28 @@ public enum StoredSecretName {
         return String(name.prefix(maxLength))
     }
 
+    /// A name made from a path's parts, such as a JSON path or an item's title and a field's label: each part split where
+    /// its words change case (`SecretName.segments`), joined with `_`, then made a name as `suggested` makes one.
+    /// `["openai", "apiKey"]` is OPENAI_API_KEY. A part that spells a provider's name (`OpenAI`, `GitHub`) stays one word.
+    public static func fromParts(_ parts: [String]) -> String {
+        let words: [String] = parts.flatMap { (part: String) -> [String] in
+            let segments: [String] = SecretName.segments(of: part)
+            let whole: String = segments.joined()
+            return segments.count > 1 && providerWords.contains(whole) ? [whole] : segments
+        }
+        return suggested(from: words.joined(separator: "_"))
+    }
+
+    /// The providers' names in the key-page table, in capitals with no marks: OPENAI, GITHUB, LANGSMITH.
+    static let providerWords: Set<String> = {
+        var words = Set<String>()
+        for page in SecretKeyPages.all {
+            words.insert(SecretName.segments(of: page.provider).joined())
+            for case .prefix(let prefix) in page.names { words.insert(SecretKeyPages.spelling(of: prefix)) }
+        }
+        return words
+    }()
+
     /// Environment names a key is never given as: ones that change how a shell, a dynamic linker or an interpreter
     /// runs the command, or what Next Term and git read.
     public static let refusedEnvNames: Set<String> = [

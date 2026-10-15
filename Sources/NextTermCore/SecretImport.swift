@@ -396,9 +396,30 @@ public enum SecretImport {
     }
 
     /// A reference, not a key: `${X}`, `$X`, `{env:X}`, `{file:x}`, `${input:x}`, `${user_config.x}`, `op://…`.
+    /// `${` also covers a CI's `${{ secrets.X }}` and VS Code's `${env:X}`. A value sops (`ENC[…]`) or dotenvx
+    /// (`encrypted:…`) encrypted is one too: the program decrypts it at start, so moved, it would get the ciphertext.
     static func isReference(_ value: String) -> Bool {
-        let prefixes = ["${", "$", "{env:", "{file:", "${input:", "${user_config.", "op://"]
+        let prefixes = ["${", "$", "{env:", "{file:", "${input:", "${user_config.", "op://", "ENC[", "encrypted:"]
         return prefixes.contains { value.hasPrefix($0) }
+    }
+
+    /// Starts of placeholders, matched with their `-` and `_` taken out (`change_me`, `REPLACE-ME`).
+    static let placeholderStarts = ["changeme", "replaceme"]
+    static let placeholderRuns = ["xxx", "XXX"]
+    static let placeholderEnds = ["...", "…"]
+
+    /// A placeholder a README or an example file tells the user to replace, beyond what masking already leaves (`xxxx`,
+    /// `<your key>`): `your-api-key-here`, `changeme`, `replace_me`, and a key's head with `xxx` in its body or `...` or
+    /// `…` for its end. A value that looks random (`MCPRedaction.looksRandom`) is never one, whatever it holds.
+    static func isPlaceholder(_ value: String) -> Bool {
+        guard !MCPRedaction.looksRandom(value) else { return false }
+        let brackets = CharacterSet(charactersIn: "<>[]{}\"' ")
+        let bare: String = value.trimmingCharacters(in: brackets).lowercased()
+        if bare.hasPrefix("your") { return true }
+        let joined: String = bare.filter { (character: Character) -> Bool in character != "-" && character != "_" }
+        if placeholderStarts.contains(where: { (start: String) -> Bool in joined.hasPrefix(start) }) { return true }
+        if placeholderRuns.contains(where: { (run: String) -> Bool in value.contains(run) }) { return true }
+        return placeholderEnds.contains { (end: String) -> Bool in value.hasSuffix(end) }
     }
 
     /// True in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in neither, so it doesn't
@@ -469,6 +490,7 @@ public enum SecretImport {
         // The agent fills a reference in at start: a value is judged by the rest, which is what the file holds.
         let trimmed = withoutReferences(whole)?.trimmingCharacters(in: .whitespaces) ?? whole
         guard !trimmed.isEmpty, !isReference(trimmed), MCPRedaction.isValue(trimmed) else { return nil }
+        guard !isPlaceholder(trimmed) else { return nil }
         if let kind = tokenKind(trimmed) { return kind }
         if trimmed.count >= 20, MCPRedaction.looksRandom(trimmed) { return "a key, by its shape" }
         if nameLooksSecret(name), trimmed.count >= 8 { return "a key, by its name" }
@@ -1347,25 +1369,11 @@ public enum SecretImport {
     /// second copies under `_2`.
     public static func groups(_ findings: [Finding], stored: [String],
                               holding: (SecretBytes) -> [String] = { _ in [] }) -> [Group] {
-        struct Place: Hashable {
-            let path: String
-            let location: Location
-        }
-        var groups: [(value: SecretBytes, findings: [Finding], places: Set<Place>)] = []
-        // The groups by their value's digest (in memory only): a finding finds its group at once, not by a walk over all.
-        var byValue: [SHA256.Digest: [Int]] = [:]
-        for finding in findings where finding.movable {
-            let place = Place(path: finding.source.path, location: finding.location)
-            let digest = finding.value.withUnsafeBytes { SHA256.hash(data: $0) }
-            // An entry that holds the value under two variables needs a key for each: the wrapper takes a name once.
-            let same = byValue[digest]?.first { groups[$0].value == finding.value && !groups[$0].places.contains(place) }
-            if let index = same {
-                groups[index].findings.append(finding)
-                groups[index].places.insert(place)
-            } else {
-                byValue[digest, default: []].append(groups.count)
-                groups.append((finding.value, [finding], [place]))
-            }
+        let movable: [Finding] = findings.filter { (finding: Finding) -> Bool in finding.movable }
+        // An entry that holds the value under two variables needs a key for each: the wrapper takes a name once.
+        let groups: [(value: SecretBytes, findings: [Finding])] = byValue(movable).map {
+            (group: (value: SecretBytes, items: [Finding])) -> (value: SecretBytes, findings: [Finding]) in
+            (group.value, group.items)
         }
         var taken = Set(stored)
         let reusing = storedKeys(for: groups.map { ($0.value, $0.findings[0].variable) }, taken: taken, holding: holding)
@@ -2341,5 +2349,52 @@ extension SecretImport.FileEdit {
     func written(like other: SecretImport.FileEdit) -> Bool {
         guard servers == other.servers, backups.count == other.backups.count else { return false }
         return zip(backups, other.backups).allSatisfy { $0.written == $1.written && $0.original == $1.original && $0.names == $1.names }
+    }
+}
+
+// MARK: grouping by value
+
+/// A value an import groups with others of the same bytes: a finding in an MCP config, or a row of a file of keys.
+public protocol GroupableValue {
+    var value: SecretBytes { get }
+    /// Where it is. Two values in one place are never grouped: an entry needs a key for each of its variables.
+    var groupPlace: AnyHashable { get }
+}
+
+extension SecretImport.Finding: GroupableValue {
+    /// The server's entry in its file.
+    public var groupPlace: AnyHashable { AnyHashable(SecretImport.EntryPlace(path: source.path, location: location)) }
+}
+
+extension SecretImport {
+    struct EntryPlace: Hashable {
+        let path: String
+        let location: Location
+    }
+
+    /// `items` grouped by identical value, in the order each value is first seen. A group holds at most one item of each
+    /// place; another of the same value and place starts a group of its own.
+    public static func byValue<Item: GroupableValue>(_ items: [Item]) -> [(value: SecretBytes, items: [Item])] {
+        var groups: [(value: SecretBytes, items: [Item], places: Set<AnyHashable>)] = []
+        // The groups by their value's digest (in memory only): an item finds its group at once, not by a walk over all.
+        var byDigest: [SHA256.Digest: [Int]] = [:]
+        for item in items {
+            let place: AnyHashable = item.groupPlace
+            let digest: SHA256.Digest = item.value.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> SHA256.Digest in
+                SHA256.hash(data: buffer)
+            }
+            let same: Int? = byDigest[digest]?.first { (index: Int) -> Bool in
+                groups[index].value == item.value && !groups[index].places.contains(place)
+            }
+            if let index = same {
+                groups[index].items.append(item)
+                groups[index].places.insert(place)
+            } else {
+                byDigest[digest, default: []].append(groups.count)
+                groups.append((item.value, [item], [place]))
+            }
+        }
+        typealias Group = (value: SecretBytes, items: [Item], places: Set<AnyHashable>)
+        return groups.map { (group: Group) -> (value: SecretBytes, items: [Item]) in (group.value, group.items) }
     }
 }
