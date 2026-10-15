@@ -1,11 +1,11 @@
 import CryptoKit
 import Foundation
 
-// Keys copied in from a file of keys: a `.env`, a JSON document, a CSV, and password managers' exports. Each reader is
-// a pure function from bytes to a report. It runs nothing, follows no `$(…)`, include or `source`, and never writes the
-// file. Values go into `SecretBytes` as each reader finds them and are wiped when the report goes. A row's value, its
-// place in the file and its last characters are for the preview on the Mac only: what an agent learns is
-// `answer(for:)`, names and counts.
+// Keys copied in from a file of keys: a `.env`, a JSON, TOML or YAML document, an agent's config, a CSV, and password
+// managers' exports. Each reader is a pure function from bytes to a report. It runs nothing, follows no `$(…)`, include
+// or `source`, and never writes the file. Values go into `SecretBytes` as each reader finds them and are wiped when the
+// report goes. A row's value, its place in the file and its last characters are for the preview on the Mac only: what
+// an agent learns is `answer(for:)`, names and counts.
 
 /// One key found in a file: what the preview lists, with its tick, note and link. The preview edits its name and tick
 /// (R16); it never ticks a row with a refusal.
@@ -71,14 +71,18 @@ public final class SourceReport: Sendable {
     /// The app that wrote the export ("Bitwarden", "Chrome"); nil for a project's own file. An export is one to move to
     /// the Trash once its keys are in.
     public let exportedBy: String?
+    /// The agent whose config this is ("Zed", "Codex"), when Next Term can't rewrite it: the file still holds the keys
+    /// copied in, and each row says so.
+    public let agent: String?
 
     init(format: SecretSources.Format, rows: [SourceRow] = [], notKeys: [SecretSources.NotKey] = [],
-         unreadable: SecretSources.Unreadable? = nil, purpose: String, exportedBy: String? = nil) {
+         unreadable: SecretSources.Unreadable? = nil, purpose: String, exportedBy: String? = nil, agent: String? = nil) {
         self.format = format
         self.rows = rows
         self.notKeys = notKeys
         self.unreadable = unreadable
         self.exportedBy = exportedBy
+        self.agent = agent
         self.purpose = exportedBy.map { (app: String) -> String in "From " + app } ?? purpose
     }
 
@@ -97,6 +101,8 @@ public enum SecretSources {
     public enum Format: String, Sendable, CaseIterable {
         case env
         case json
+        case toml
+        case yaml
         case csv
         case bitwarden
         case onePassword = "1password"
@@ -139,6 +145,10 @@ public enum SecretSources {
         case websitePassword
         /// Bitwarden asks for the master password again before it shows the item.
         case reprompt
+        /// An agent's config Next Term can't rewrite: the key stays in it after the copy.
+        case stillInFile
+        /// A Compose file's `environment`: Docker advises against keys there, as the file is often committed.
+        case composeInGit
 
         public var sentence: String {
             switch self {
@@ -152,11 +162,13 @@ public enum SecretSources {
             case .loaderReadsDollar: return "Next.js, Vite and Compose read the $ in it as a variable."
             case .websitePassword: return "A website password; usually not an API key"
             case .reprompt: return "Bitwarden asks for your master password before showing it"
+            case .stillInFile: return "This file still holds the key; Next Term can\u{2019}t rewrite it yet"
+            case .composeInGit: return "Compose files are often in git"
             }
         }
 
         /// A note the row starts ticked with: what to know, not a reason to leave it.
-        var keepsTick: Bool { self == .loaderReadsDollar }
+        var keepsTick: Bool { self == .loaderReadsDollar || self == .stillInFile || self == .composeInGit }
     }
 }
 
@@ -174,6 +186,12 @@ extension SecretSources {
         case encryptedDotenvx
         /// A key with a reference inside it, which the project's loader fills in: stored, it would be kept as written.
         case reference([String])
+        /// A part of a YAML file the reader doesn't follow: an alias, a tag, a flow collection over several lines.
+        case unreadablePart
+        /// A Kubernetes Secret of a type that holds a certificate, an SSH key or a registry's login: "TLS".
+        case typedSecret(String)
+        /// A Kubernetes Secret's `data` value that isn't base64 of UTF-8 text.
+        case notText
 
         public var sentence: String {
             switch self {
@@ -186,6 +204,9 @@ extension SecretSources {
             case .reference(let names):
                 let built: String = names.isEmpty ? "another value" : names.joined(separator: ", ")
                 return "Built from \(built), which your loader fills in; Secrets would keep it as written"
+            case .unreadablePart: return "Next Term can\u{2019}t read this part"
+            case .typedSecret(let type): return "A Kubernetes \(type) secret; not importable yet"
+            case .notText: return "It doesn\u{2019}t decode to text Secrets can keep"
             }
         }
     }
@@ -236,6 +257,11 @@ extension SecretSources {
         case csv(CSVReader.Failure)
         /// A CSV whose header names no column Next Term knows.
         case unknownColumns
+        /// TOML that doesn't parse, at its line.
+        case notTOML(line: Int)
+        case notYAML(YAMLSubset.Failure)
+        /// A TOML or YAML file past `configMaxBytes`.
+        case configTooLarge
 
         public var sentence: String {
             switch self {
@@ -251,13 +277,16 @@ extension SecretSources {
             case .archive(let failure): return failure.sentence
             case .csv(let failure): return failure.sentence
             case .unknownColumns: return "Next Term can\u{2019}t tell which column holds the keys."
+            case .notTOML(let line): return "It isn\u{2019}t TOML Next Term can read (line \(line))."
+            case .notYAML(let failure): return "It isn\u{2019}t YAML Next Term can read. " + failure.sentence
+            case .configTooLarge: return "It is larger than the 2 MB Next Term reads in a TOML or YAML file."
             }
         }
 
         /// The kind of reason, for an agent: no line, name or part of the file.
         public var reasonClass: String {
             switch self {
-            case .tooLarge, .envTooLarge: return "too large"
+            case .tooLarge, .envTooLarge, .configTooLarge: return "too large"
             case .notText: return "not text"
             case .notJSON: return "not valid JSON"
             case .tooMany: return "too many values"
@@ -266,6 +295,8 @@ extension SecretSources {
             case .archive: return "an archive Next Term can\u{2019}t read"
             case .csv: return "not a CSV Next Term can read"
             case .unknownColumns: return "unknown CSV columns"
+            case .notTOML: return "not TOML Next Term can read"
+            case .notYAML: return "not YAML Next Term can read"
             }
         }
     }
@@ -367,17 +398,23 @@ extension SecretSources {
         case login
     }
 
-    /// The format a file is read as. A name ending `.json` or `.jsonc` wins (`.env.json` is JSON), or `.csv`; then a
-    /// `.env` family name, since no `.env` is JSON; then text that starts as JSON does (past comments), or a first line
-    /// that is a CSV header Next Term knows; else the `.env` family. Text that only starts like JSON with no JSON name
-    /// is read as a `.env` when it doesn't parse (`read`). A password manager's JSON is told apart once it is parsed.
+    /// The format a file is read as. A name ending `.json` or `.jsonc` wins (`.env.json` is JSON), or `.csv`, `.toml`,
+    /// `.yaml` or `.yml`; then a `.env` family name, since no `.env` is JSON; then TOML with a table that reads (Cargo's
+    /// `credentials`), text that starts as JSON does (past comments), a first line that is a CSV header Next Term
+    /// knows, or YAML that nests or starts a document; else the `.env` family. Text that only starts like JSON with no
+    /// JSON name is read as a `.env` when it doesn't parse (`read`). A password manager's JSON is told apart once it is
+    /// parsed.
     public static func detect(text: String, name: String) -> Format {
         let file: String = (name as NSString).lastPathComponent.lowercased()
         if isJSONName(file) { return .json }
         if file.hasSuffix(".csv") { return .csv }
+        if file.hasSuffix(".toml") { return .toml }
+        if file.hasSuffix(".yaml") || file.hasSuffix(".yml") { return .yaml }
         if EnvFile.isEnvFile(named: file) || isEnvrc(file) { return .env }
+        if looksLikeTOML(text) { return .toml }
         if startsLikeJSON(text) { return .json }
-        return startsWithKnownHeader(text) ? .csv : .env
+        if startsWithKnownHeader(text) { return .csv }
+        return looksLikeYAML(text) ? .yaml : .env
     }
 
     static func isJSONName(_ file: String) -> Bool { file.hasSuffix(".json") || file.hasSuffix(".jsonc") }
@@ -441,14 +478,20 @@ extension SecretSources {
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         var chosen: Format = format ?? detect(text: text, name: file)
         if chosen == .csv { return csvReport(text, purpose: purpose, stored: stored, now: now) }
+        if chosen == .toml || chosen == .yaml {
+            return configReport(text, format: chosen, file: file, purpose: purpose, stored: stored, now: now)
+        }
         if chosen == .json || chosen == .bitwarden || chosen == .onePassword || chosen == .bws {
             let forced: Format? = chosen == .json ? nil : chosen
             if let managed = managerReport(text, as: forced, stored: stored, now: now) { return managed }
             if forced != nil { return SourceReport(format: chosen, unreadable: .notJSON, purpose: purpose) }
         }
         var found: [Found]?
+        var agent: String?
         if chosen == .json {
-            found = jsonFound(text)
+            let read: ConfigFound? = jsonRead(text, file: file)
+            found = read?.values
+            agent = read?.agent
             // Text that only started like JSON (an INI file's `[default]`): its `KEY=value` lines, when it has some.
             let guessed: Bool = format == nil && !isJSONName(file.lowercased())
             if found == nil, guessed, bytes.count <= EnvFile.maxSize, !hasTooManyLines(text) {
@@ -467,14 +510,14 @@ extension SecretSources {
         }
         guard let found else { return SourceReport(format: chosen, unreadable: .notJSON, purpose: purpose) }
         guard found.count <= maxValues else { return SourceReport(format: chosen, unreadable: .tooMany, purpose: purpose) }
-        return report(found, format: chosen, purpose: purpose, stored: stored, now: now)
+        return report(found, format: chosen, purpose: purpose, stored: stored, now: now, agent: agent)
     }
 
     /// The rules run over each value, trimmed (a blank or a line break at either end is a copy's, not the key's), then
     /// the links, then the file's own rules: a name set again, the same name in two sections, and a name already in the
     /// vault.
     static func report(_ found: [Found], format: Format, purpose: String, stored: Set<String>, now: Date,
-                       exportedBy: String? = nil) -> SourceReport {
+                       exportedBy: String? = nil, agent: String? = nil) -> SourceReport {
         var rows: [SourceRow] = []
         var notKeys: [NotKey] = []
         var sources: [String?] = []
@@ -513,7 +556,8 @@ extension SecretSources {
         rows = settingAgain(rows)
         rows = sectioned(rows)
         rows = replacing(rows, stored: stored)
-        return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose, exportedBy: exportedBy)
+        return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose, exportedBy: exportedBy,
+                            agent: agent)
     }
 
     /// Each row's link: the source's own (`sources`, by row) when it passes the link rules and holds no value in the

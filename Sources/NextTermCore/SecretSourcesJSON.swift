@@ -27,14 +27,23 @@ extension SecretSources {
 
     /// Every string, number and boolean in the document as a found value, or nil when it isn't JSON (comments and
     /// trailing commas allowed). Stops one past `maxValues`.
-    static func jsonFound(_ text: String) -> [Found]? {
+    static func jsonFound(_ text: String) -> [Found]? { jsonRead(text, file: "")?.values }
+
+    /// The document's found values, and the agent whose config it is: an agent's config gives only its keys' places
+    /// (`jsonAgent`), any other document every value. Nil when it isn't JSON.
+    static func jsonRead(_ text: String, file: String) -> ConfigFound? {
         var source: String = text
         source.makeContiguousUTF8()
         guard let document = JSONC(source), let root = document.root else { return nil }
         var walk = JSONWalk(text: source)
-        if case .object(let object) = root, let credential = walk.credentialFile(object) { return [credential] }
+        if case .object(let object) = root {
+            if let credential = walk.credentialFile(object) { return ConfigFound(values: [credential]) }
+            if let agent = jsonAgent(object, file: file, walk: &walk) {
+                return ConfigFound(values: walk.found, agent: agent)
+            }
+        }
         walk.value(root, at: JSONPath(), section: "", line: nil)
-        return walk.found
+        return ConfigFound(values: walk.found)
     }
 
     /// A key name for a leaf: its member's name when that is already one, else made from the path's parts.

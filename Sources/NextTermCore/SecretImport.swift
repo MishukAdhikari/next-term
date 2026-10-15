@@ -88,7 +88,8 @@ public enum SecretImport {
 
     /// The files the import reads: the agents' own settings, Claude Code's `~/.claude.json`, VS
     /// Code's user `mcp.json`, and in each open project its `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
-    /// `.gemini/settings.json` and `.codex/config.toml`. A file is listed once, by its real path.
+    /// `.gemini/settings.json`, `.codex/config.toml`, and opencode's `opencode.json` and `opencode.jsonc` (read and
+    /// rewritten as its own settings are). A file is listed once, by its real path.
     public static func sources(home: String = NSHomeDirectory(), projects: [String]) -> [Source] {
         func path(_ relative: String) -> String { (home as NSString).appendingPathComponent(relative) }
         var list: [Source] = []
@@ -125,6 +126,9 @@ public enum SecretImport {
             list.append(Source(path: file(".vscode/mcp.json"), client: .vscode, format: .json, containers: [["servers"]], project: project))
             list.append(Source(path: file(".gemini/settings.json"), client: .gemini, format: .json, containers: [["mcpServers"]], project: project))
             list.append(Source(path: file(".codex/config.toml"), client: .codex, format: .toml, containers: [["mcp_servers"]], project: project))
+            for name in ["opencode.json", "opencode.jsonc"] {
+                list.append(Source(path: file(name), client: .opencode, format: .json, containers: [["mcp"]], project: project))
+            }
         }
         var seen = Set<String>()
         return list.filter { seen.insert(canonicalPath($0.path)).inserted }
@@ -2295,7 +2299,8 @@ public enum SecretImport {
     }
 
     /// The project files the import reads, by their place in a project.
-    static let projectFiles = [".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json", ".gemini/settings.json", ".codex/config.toml"]
+    static let projectFiles = [".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json", ".gemini/settings.json", ".codex/config.toml",
+                               "opencode.json", "opencode.jsonc"]
 
     /// A file the import reads: an agent's own settings under `home`, or a project's own file by its name. Undo writes
     /// only to one of these, whatever a backup record in `imports/` says.
