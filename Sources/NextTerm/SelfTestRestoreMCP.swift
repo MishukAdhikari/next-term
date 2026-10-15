@@ -300,8 +300,8 @@ extension SelfTest {
     /// it takes a tab or a project. Return, Enter and Space go into a tab new_tab opens in `project`; `shown`, a tab of the
     /// window the update sheet sits over or behind the quit dialog, is read, shown and asked to take the keyboard; the new
     /// tab is split, closed, zoomed and laid out, and closed last. A tool that asks on the Mac is declined, as closing its
-    /// window does; settings_set asks for "At launch", which no tool may change; hosts and skills get no arguments, so
-    /// nothing outside the app changes.
+    /// window does; settings_set asks for "At launch", which no tool may change; add_task gets a day it can't read; hosts
+    /// and skills get no arguments, so nothing outside the app changes.
     static func everyToolOnce(_ mcp: MCPTestClient, project: String, shown: TerminalTab, firstID: Int) async -> EveryTool {
         let decline = Task { @MainActor in
             while !Task.isCancelled {
@@ -332,6 +332,8 @@ extension SelfTest {
             case "commit": return ["project": project, "message": "AE13", "paths": [file]]
             case "open_in_editor": return ["path": file]
             case "settings_set": return ["values": ["at_launch": "welcome"]]
+            // A day it can't read: answered at once, with no window and no file.
+            case "add_task": return ["title": "AE13", "when": "someday"]
             default: return [:]
             }
         }
