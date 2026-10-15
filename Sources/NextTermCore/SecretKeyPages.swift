@@ -227,20 +227,36 @@ extension SecretKeyPages {
         if let framework { parts.removeFirst(framework.count) }
         guard !parts.isEmpty else { return nil }
         let letters: String = parts.joined()
-        for page in all {
-            for case .exact(let exact) in page.names where spelling(of: exact) == letters { return page }
-        }
+        if let page = exactSpellings[letters] { return page }
         guard SecretName.isSecret(parts.joined(separator: "_")), !namesAnotherKind(parts) else { return nil }
         var best: (page: KeyPage, length: Int)?
-        for page in all {
-            for case .prefix(let prefix) in page.names {
-                let wanted: String = spelling(of: prefix)
-                guard let used = partsSpelling(wanted, in: parts), used < parts.count else { continue }
-                if wanted.count > (best?.length ?? 0) { best = (page, wanted.count) }
-            }
+        for (wanted, page) in prefixSpellings {
+            guard let used = partsSpelling(wanted, in: parts), used < parts.count else { continue }
+            if wanted.count > (best?.length ?? 0) { best = (page, wanted.count) }
         }
         return best?.page
     }
+
+    /// Each exact name's spelling and its page, the first in table order for a spelling two share: read once, as a
+    /// file of keys asks for a page per row.
+    static let exactSpellings: [String: KeyPage] = {
+        var pages: [String: KeyPage] = [:]
+        for page in all {
+            for case .exact(let exact) in page.names where pages[spelling(of: exact)] == nil {
+                pages[spelling(of: exact)] = page
+            }
+        }
+        return pages
+    }()
+
+    /// Each name prefix's spelling and its page, in table order.
+    static let prefixSpellings: [(spelling: String, page: KeyPage)] = {
+        var spellings: [(spelling: String, page: KeyPage)] = []
+        for page in all {
+            for case .prefix(let prefix) in page.names { spellings.append((spelling(of: prefix), page)) }
+        }
+        return spellings
+    }()
 
     /// A name's letters without the marks between its parts: `GITHUB_TOKEN` and `gitHubToken` are both GITHUBTOKEN.
     static func spelling(of name: String) -> String {

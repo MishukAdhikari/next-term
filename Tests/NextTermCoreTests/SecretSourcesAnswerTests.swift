@@ -68,4 +68,41 @@ import Testing
             }
         }
     }
+
+    /// Random JSON reports: a flat key, the same name in several sections, an array's strings and a name/value pair,
+    /// with random choices. The same holds; a name is looked for in quotes, as the section rule makes one name another's
+    /// head.
+    @Test func noValuePlaceOrUnimportedNameReachesTheAnswerFromJSON() {
+        var generator = SystemRandomNumberGenerator()
+        let lower = Array("abcdefghijklmnopqrstuvwxyz")
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789")
+        func word(_ from: [Character], _ count: Int) -> String {
+            String((0..<count).map { (_: Int) -> Character in from.randomElement(using: &generator) ?? "a" })
+        }
+        func value() -> String { "Kq7" + word(alphabet, 30) + "z9K4" }
+        for _ in 0..<100 {
+            var members: [String] = []
+            for _ in 0..<Int.random(in: 1...8, using: &generator) {
+                let key: String = word(lower, 10)
+                switch Int.random(in: 0..<4, using: &generator) {
+                case 0: members.append(#""\#(key)_api_key": "\#(value())""#)
+                case 1: members.append(#""\#(key)": {"openaiApiKey": "\#(value())"}"#)
+                case 2: members.append(#""\#(key)": ["\#(value())", "\#(value())"]"#)
+                default: members.append(#""\#(key)": [{"name": "\#(key)_TOKEN", "value": "\#(value())"}]"#)
+                }
+            }
+            let report = F.report("{" + members.joined(separator: ", ") + "}", name: "keys.json", folder: "proj")
+            let chosen = report.rows.filter { (_: SourceRow) -> Bool in Bool.random(using: &generator) }
+            let names = chosen.map(\.name)
+            let replaced = names.filter { (_: String) -> Bool in Bool.random(using: &generator) }
+            let text = Self.json(SecretSources.answer(for: .imported(names, replaced: replaced, from: report)))
+            for row in report.rows {
+                let value = row.value.utf8String() ?? ""
+                #expect(!value.isEmpty && !text.contains(value))
+                #expect(!text.contains(String(value.suffix(4))))
+                for place in [row.place] + row.alsoAt { #expect(!text.contains(place)) }
+                if !names.contains(row.name) { #expect(!text.contains("\"" + row.name + "\"")) }
+            }
+        }
+    }
 }

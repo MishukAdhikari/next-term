@@ -35,11 +35,12 @@ extension SecretSources {
         case none
     }
 
-    /// The import's rules for one value. `sourceSays` is true when the source marks the value secret (a hidden field,
-    /// a Kubernetes Secret); `isText` is false for a number or a boolean in JSON.
+    /// The import's rules for one value, judged without the blanks and line breaks at its ends, as the report keeps it.
+    /// `sourceSays` is true when the source marks the value secret (a hidden field, a Kubernetes Secret); `isText` is
+    /// false for a number or a boolean in JSON.
     public static func classify(name: String, value: String, sourceSays: Bool = false, isText: Bool = true,
                                 now: Date = Date()) -> Classified {
-        let trimmed: String = value.trimmingCharacters(in: .whitespaces)
+        let trimmed: String = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .none }
         guard isText else { return .notKey(.setting) }
         if let encrypted = encryption(of: trimmed) {
@@ -58,7 +59,7 @@ extension SecretSources {
             guard let found = keyKind(name: name, value: trimmed, secretName: secretName) else { return .notKey(.setting) }
             kind = found
         }
-        if let refusal = storageRefusal(value) { return .row(kind: kind, ticked: false, note: nil, refusal: refusal) }
+        if let refusal = storageRefusal(trimmed) { return .row(kind: kind, ticked: false, note: nil, refusal: refusal) }
         let note: Note? = untickingNote(name: name, value: trimmed, now: now)
         // A web token ticks only under a key's name: any signed-in session holds one.
         let anyToken: Bool = kind == jwtKind && !secretName && !sourceSays
@@ -151,10 +152,12 @@ extension SecretSources {
         return nil
     }
 
-    /// The note a key starts unticked with, first match first: expired, safe to expose, short-lived, sent to browsers.
+    /// The note a key starts unticked with, first match first: a token past its expiry, safe to expose, short-lived,
+    /// sent to browsers. A token past its expiry reads as short-lived, as R15 says: `vercel env pull`'s OIDC token is
+    /// one 12 hours on (AE8).
     static func untickingNote(name: String, value: String, now: Date) -> Note? {
         let expiry: Date? = jwtExpiry(value)
-        if let expiry, expiry <= now { return .expired }
+        if let expiry, expiry <= now { return .shortLived }
         let upper: String = name.uppercased()
         let segments: [String] = SecretName.segments(of: name)
         let publicKey: Bool = segments.suffix(2) == ["PUBLIC", "KEY"]

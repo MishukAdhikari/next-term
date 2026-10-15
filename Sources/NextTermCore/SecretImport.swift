@@ -409,8 +409,9 @@ public enum SecretImport {
     static let placeholderEnds = ["...", "…"]
 
     /// A placeholder a README or an example file tells the user to replace, beyond what masking already leaves (`xxxx`,
-    /// `<your key>`): `your-api-key-here`, `changeme`, `replace_me`, and a key's head with `xxx` in its body or `...` or
-    /// `…` for its end. A value that looks random (`MCPRedaction.looksRandom`) is never one, whatever it holds.
+    /// `<your key>`): `your-api-key-here`, `changeme`, `replace_me`, a key's head with a body of x's (`sk-xxxx`,
+    /// `AKIAXXXXXXXXXXXXXXXX`), and `...` or `…` for its end. A value that looks random (`MCPRedaction.looksRandom`) is
+    /// never one, whatever it holds, and nor is a key in one case with a run of x's in it (`AKIAQ4RTXXX2BN6L…`).
     static func isPlaceholder(_ value: String) -> Bool {
         guard !MCPRedaction.looksRandom(value) else { return false }
         let brackets = CharacterSet(charactersIn: "<>[]{}\"' ")
@@ -418,8 +419,20 @@ public enum SecretImport {
         if bare.hasPrefix("your") { return true }
         let joined: String = bare.filter { (character: Character) -> Bool in character != "-" && character != "_" }
         if placeholderStarts.contains(where: { (start: String) -> Bool in joined.hasPrefix(start) }) { return true }
-        if placeholderRuns.contains(where: { (run: String) -> Bool in value.contains(run) }) { return true }
+        if placeholderRuns.contains(where: { (run: String) -> Bool in value.contains(run) }), mostlyX(value) { return true }
         return placeholderEnds.contains { (end: String) -> Bool in value.hasSuffix(end) }
+    }
+
+    /// Whether x's (either case) are at least half of a value's letters and digits: a placeholder's body, where three in
+    /// a row in a real key's are chance.
+    static func mostlyX(_ value: String) -> Bool {
+        var xs = 0
+        var all = 0
+        for scalar in value.unicodeScalars where scalar.properties.isAlphabetic || ("0"..."9").contains(scalar) {
+            all += 1
+            if scalar == "x" || scalar == "X" { xs += 1 }
+        }
+        return xs * 2 >= all
     }
 
     /// True in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in neither, so it doesn't

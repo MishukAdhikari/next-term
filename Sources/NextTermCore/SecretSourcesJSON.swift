@@ -97,11 +97,27 @@ extension JSONWalk {
                 let at: Int = self.line(of: member.keyRange.lowerBound)
                 self.value(member.value, at: path.member(member.key), section: path.text, line: at)
             }
-        case .scalar:
-            leaf(value.object(in: text), at: path, section: section, line: line)
-        case .array:
-            guard let elements = value.object(in: text) as? [Any] else { return }
+        case .scalar(let range):
+            leaf(foundationValue(range), at: path, section: section, line: line)
+        case .array(let range):
+            guard let elements = foundationValue(range) as? [Any] else { return }
             array(elements, at: path)
+        }
+    }
+
+    /// A value's text read with Foundation's reader once `plainJSON` made it JSON: one pass over its bytes, where the
+    /// JSONC reader's own `plain` takes seconds over megabytes. The copies are wiped once read.
+    func foundationValue(_ range: Range<String.Index>) -> Any? {
+        var input: [UInt8] = Array(text.utf8[range])
+        var bytes: [UInt8] = SecretSources.plainJSON(input)
+        defer {
+            SecretBytes.wipe(&input)
+            SecretBytes.wipe(&bytes)
+        }
+        return bytes.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) -> Any? in
+            guard let base = buffer.baseAddress else { return nil }
+            let data = Data(bytesNoCopy: base, count: buffer.count, deallocator: .none)
+            return try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
         }
     }
 
@@ -120,18 +136,20 @@ extension JSONWalk {
         }
     }
 
-    /// An array's elements: a name/value pair is one value named by its member; anything else is walked.
+    /// An array's elements: a name/value pair is one value named by its member; anything else is walked. Each string
+    /// is a section of its own: `["a", "b"]` holds two keys, not one set again.
     mutating func array(_ elements: [Any], at path: JSONPath) {
         for (index, element) in elements.enumerated() {
             guard !isFull else { return }
             let place: JSONPath = path.element(index)
             if let dictionary = element as? [String: Any], pair(dictionary, at: place, section: path.text) { continue }
-            foundation(element, at: place, section: path.text)
+            foundation(element, at: place, section: place.text)
         }
     }
 
     /// `{name, value}` or `{key, value}`: a value named by that member. `{name, valueFrom}` only points at a key kept
-    /// elsewhere (a Kubernetes Secret, an ECS parameter): a reference. False for any other object.
+    /// elsewhere (a Kubernetes Secret, an ECS parameter): a reference. False for any other object, and for a `value`
+    /// that is an object or an array, which is walked as any object is.
     mutating func pair(_ dictionary: [String: Any], at path: JSONPath, section: String) -> Bool {
         let label: Any? = dictionary["name"] ?? dictionary["key"]
         guard let label = label as? String else { return false }
@@ -140,7 +158,7 @@ extension JSONWalk {
             found.append(Found(name: name, value: "", place: path.text, line: nil, scope: section, reference: true))
             return true
         }
-        guard let value = dictionary["value"] else { return false }
+        guard let value = dictionary["value"], !(value is [String: Any]), !(value is [Any]) else { return false }
         if let text = value as? String {
             found.append(Found(name: name, value: text, place: path.text, line: nil, scope: section))
         } else if let number = value as? NSNumber {
@@ -159,5 +177,73 @@ extension JSONWalk {
             found.append(Found(name: name, value: number.stringValue, place: path.text, line: line, scope: section,
                                isText: false))
         }
+    }
+}
+
+// MARK: - JSONC as JSON
+
+extension SecretSources {
+    /// JSONC's bytes, which the JSONC reader accepted, as JSON's: each comment outside a string a blank, a comma just
+    /// before a `]` or `}` (past blanks and comments) a blank, and each byte of a blank outside ASCII (a no-break space,
+    /// a byte-order mark) a space, as no token holds one.
+    static func plainJSON(_ input: [UInt8]) -> [UInt8] {
+        let slash = UInt8(ascii: "/")
+        let star = UInt8(ascii: "*")
+        let space = UInt8(ascii: " ")
+        var out: [UInt8] = []
+        out.reserveCapacity(input.count)
+        var comma: Int?
+        var inString = false
+        var escaped = false
+        var index = 0
+        while index < input.count {
+            let byte: UInt8 = input[index]
+            index += 1
+            if inString {
+                out.append(byte)
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            let next: UInt8? = index < input.count ? input[index] : nil
+            if byte == slash, next == slash {
+                while index < input.count, input[index] != UInt8(ascii: "\n") { index += 1 }
+                out.append(space)
+                continue
+            }
+            if byte == slash, next == star {
+                var end: Int = index + 1
+                while end + 1 < input.count, !(input[end] == star && input[end + 1] == slash) { end += 1 }
+                index = end + 2
+                out.append(space)
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+                comma = nil
+                out.append(byte)
+            case UInt8(ascii: ","):
+                comma = out.count
+                out.append(byte)
+            case UInt8(ascii: "]"), UInt8(ascii: "}"):
+                if let comma { out[comma] = space }
+                comma = nil
+                out.append(byte)
+            case 0x80...0xFF:
+                out.append(space)
+            case space, UInt8(ascii: "\t"), UInt8(ascii: "\n"), UInt8(ascii: "\r"):
+                out.append(byte)
+            default:
+                comma = nil
+                out.append(byte)
+            }
+        }
+        return out
     }
 }

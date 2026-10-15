@@ -7,13 +7,14 @@ import Foundation
 
 extension SecretSources {
     /// Each `KEY=value` (and `KEY: value`, except in `.envrc`) with its line, as written: a `${…}` in a value is kept, so
-    /// a value built from another is told from a key.
+    /// a value built from another is told from a key. Stops one past `maxValues`.
     static func envFound(_ text: String, file: String) -> [Found] {
         let envrc: Bool = isEnvrc(file.lowercased())
         let lines: [Substring] = envLines(text)
         let body: String = envrc ? text : withColonLines(text, lines: lines)
         var found: [Found] = []
         for entry in EnvFile.parse(body, interpolating: false) {
+            guard found.count <= maxValues else { break }
             let index: Int = entry.line - 1
             let raw: Substring = index < lines.count ? lines[index] : ""
             let start: Substring = raw.drop { (character: Character) -> Bool in character == " " || character == "\t" }
@@ -48,12 +49,18 @@ extension SecretSources {
     }
 
     /// The text with each `KEY: value` line written `KEY=value`, line for line, so `EnvFile.parse` reads it as dotenv
-    /// does. A line inside a value that goes on over several lines (a quoted private key) is left as it is.
+    /// does. A line inside a value that goes on over several lines (a quoted private key) is left as it is. A file with
+    /// no such line is given back as it is, unparsed.
     static func withColonLines(_ text: String, lines: [Substring]) -> String {
+        var colons: [Int: String] = [:]
+        for (offset, line) in lines.enumerated() {
+            if let written = colonLine(line) { colons[offset] = written }
+        }
+        guard !colons.isEmpty else { return text }
         let inside: Set<Int> = linesInsideValues(text)
         var changed = false
         let written: [String] = lines.enumerated().map { (pair: (offset: Int, element: Substring)) -> String in
-            guard !inside.contains(pair.offset), let line = colonLine(pair.element) else { return String(pair.element) }
+            guard !inside.contains(pair.offset), let line = colons[pair.offset] else { return String(pair.element) }
             changed = true
             return line
         }
