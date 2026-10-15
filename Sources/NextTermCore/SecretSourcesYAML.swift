@@ -1,11 +1,11 @@
 import Foundation
 
-// YAML for the import, each document by its shape. Compose: each service's `environment`, a map or a list, where a
-// name alone takes the shell's value; Docker advises against keys there, as the file is often in git, and each row says
-// so. Kubernetes: a Secret's `stringData` and base64 `data` (`stringData` wins), a Secret of a type that holds a
-// certificate, an SSH key or a registry's login listed as not importable yet, a ConfigMap's `data`, and any object's
-// `env` list. goose's extensions' `envs` and Continue's models' `apiKey` and MCP servers' `env`, which the files keep.
-// Any other document is read by its paths.
+// YAML for the import, each document by its shape, each shape known by members only it has. Compose (a service with an
+// `image`, a `build`, an `environment` or an `env_file`): each service's `environment`, a map or a list, where a name
+// alone takes the shell's value, and the env in its `x-` extension fields, which services take with an alias; Docker
+// advises against keys there, as the file is often in git, and the report says so. Kubernetes: in
+// SecretSourcesKubernetes.swift. goose's extensions' `envs`, and Continue's models' `apiKey` and MCP servers' `env`,
+// which the files keep. The rest of a Compose, goose or Continue file, and any other document, is read by its paths.
 
 extension SecretSources {
     /// Secret types whose values are a certificate, an SSH key or a registry's login: one row, not importable yet.
@@ -13,6 +13,9 @@ extension SecretSources {
         "kubernetes.io/tls": "TLS", "kubernetes.io/ssh-auth": "SSH",
         "kubernetes.io/dockerconfigjson": "registry", "kubernetes.io/dockercfg": "registry",
     ]
+
+    /// goose's extension types (https://block.github.io/goose/docs/getting-started/using-extensions).
+    static let gooseTypes: Set<String> = ["stdio", "builtin", "sse", "streamable_http", "frontend", "inline_python"]
 
     static func yamlFound(_ text: String) -> Result<ConfigFound, Unreadable> {
         let documents: [YAMLSubset.Node]
@@ -22,105 +25,103 @@ extension SecretSources {
         }
         var values: [Found] = []
         var agent: String?
+        var note: Note?
         for (number, document) in documents.enumerated() {
             guard values.count <= maxValues else { break }
             let read: ConfigFound = yamlDocument(document, number: number)
             values += read.values
             agent = agent ?? read.agent
+            note = note ?? read.note
         }
-        return .success(ConfigFound(values: values, agent: agent))
+        return .success(ConfigFound(values: values, agent: agent, note: note))
     }
 
     /// One document's values, by its shape.
     static func yamlDocument(_ root: YAMLSubset.Node, number: Int) -> ConfigFound {
-        let kind: String? = root["kind"]?.string
-        if kind != nil, root["apiVersion"] != nil { return ConfigFound(values: kubernetesFound(root, number: number)) }
-        if let services = root["services"]?.pairs { return ConfigFound(values: composeFound(services)) }
-        if let extensions = root["extensions"]?.pairs, extensions.contains(where: isGooseExtension) {
-            return ConfigFound(values: gooseFound(root, extensions: extensions), agent: "goose")
+        let section: String = number == 0 ? "" : "[\(number)]"
+        if root["kind"]?.string != nil, root["apiVersion"] != nil {
+            return ConfigFound(values: kubernetesFound(root, number: number))
         }
-        if root["mcpServers"]?.items != nil || root["models"]?.items != nil {
-            return ConfigFound(values: continueFound(root), agent: "Continue")
+        if let services = root["services"]?.pairs, services.contains(where: isComposeService) {
+            return ConfigFound(values: composeFound(root, services: services, section: section), note: .composeInGit)
+        }
+        if let extensions = root["extensions"]?.pairs, extensions.contains(where: isGooseExtension) {
+            return ConfigFound(values: gooseFound(root, extensions: extensions, section: section), agent: "goose")
+        }
+        if isContinue(root) {
+            return ConfigFound(values: continueFound(root, section: section), agent: "Continue")
         }
         var walk = ConfigWalk()
-        walk.walk(root, at: JSONPath(), section: number == 0 ? "" : "[\(number)]")
+        walk.rest(root, section: section)
         return ConfigFound(values: walk.found)
     }
 
-    /// Compose's services' `environment`: `KEY: value` or `- KEY=value`, where `KEY` alone is the shell's.
-    static func composeFound(_ services: [YAMLSubset.Pair]) -> [Found] {
+    /// A Compose service: one with an `image`, a `build`, an `environment` or an `env_file`.
+    static func isComposeService(_ pair: YAMLSubset.Pair) -> Bool {
+        ["image", "build", "environment", "env_file"].contains { (key: String) -> Bool in pair.value[key] != nil }
+    }
+
+    /// Compose's env: each `x-` extension field's (an env, or a service's fragment with its own `environment`), each
+    /// service's `environment`, then the rest of the file by its paths. An alias or a merge (`<<: *env`) takes values
+    /// read where its anchor is, so it adds no row.
+    static func composeFound(_ root: YAMLSubset.Node, services: [YAMLSubset.Pair], section: String) -> [Found] {
         var walk = ConfigWalk(note: .composeInGit)
-        for service in services {
-            let scope: String = "services." + service.key
-            let place: String = scope + ".environment"
-            guard let environment = service.value["environment"] else { continue }
-            guard let items = environment.items else {
-                composeMap(environment, place: place, scope: scope, into: &walk)
-                continue
-            }
-            for (index, item) in items.enumerated() {
-                guard let value = item.scalar, value.kind != .null else { continue }
-                let at: String = place + "[\(index)]"
-                guard let equals = value.text.firstIndex(of: "=") else {
-                    walk.reference(name: envName(value.text), place: at, line: value.line, scope: scope)
-                    continue
-                }
-                let text: String = String(value.text[value.text.index(after: equals)...])
-                let entry = YAMLSubset.Scalar(text: text, style: .doubleQuoted, line: value.line)
-                walk.scalar(entry, name: envName(String(value.text[..<equals])), place: at, scope: scope)
+        walk.skipsAliases = true
+        for pair in root.pairs ?? [] where pair.key.hasPrefix("x-") {
+            if pair.value["environment"] != nil {
+                composeService(pair.value, scope: pair.key, into: &walk)
+            } else if pair.value.pairs != nil {
+                composeMap(pair.value, place: pair.key, scope: pair.key, into: &walk)
             }
         }
+        for service in services { composeService(service.value, scope: "services." + service.key, into: &walk) }
+        walk.rest(root, section: section)
         return walk.found
     }
 
-    /// Compose's `environment` as a map, in order: a name with no value is the shell's.
+    /// A service's `environment`: `KEY: value` or `- KEY=value`, where `KEY` alone is the shell's.
+    static func composeService(_ service: YAMLSubset.Node, scope: String, into walk: inout ConfigWalk) {
+        let place: String = scope + ".environment"
+        guard let environment = service["environment"] else { return }
+        guard let items = environment.items else {
+            composeMap(environment, place: place, scope: scope, into: &walk)
+            return
+        }
+        walk.known.insert(place)
+        for (index, item) in items.enumerated() {
+            guard let value = item.scalar, value.kind != .null else { continue }
+            let at: String = place + "[\(index)]"
+            guard let equals = value.text.firstIndex(of: "=") else {
+                walk.reference(name: envName(value.text), place: at, line: value.line, scope: scope)
+                continue
+            }
+            let text: String = String(value.text[value.text.index(after: equals)...])
+            let entry = YAMLSubset.Scalar(text: text, style: .doubleQuoted, line: value.line)
+            walk.scalar(entry, name: envName(String(value.text[..<equals])), place: at, scope: scope)
+        }
+    }
+
+    /// Compose's `environment` as a map, in order: a name with no value is the shell's, and a merge of a map (`<<`)
+    /// is read as part of it. Anything else in it is left to the walk over the rest.
     static func composeMap(_ environment: YAMLSubset.Node, place: String, scope: String, into walk: inout ConfigWalk) {
-        guard environment.pairs != nil else {
+        guard let pairs = environment.pairs else {
             walk.env(environment, place: place, scope: scope)
             return
         }
-        for pair in environment.pairs ?? [] {
+        for pair in pairs {
             let at: String = place + "." + pair.key
-            if pair.value.scalar?.kind == .null {
+            switch pair.value {
+            case .scalar(let value) where value.kind == .null:
                 walk.reference(name: envName(pair.key), place: at, line: pair.line, scope: scope)
-            } else {
-                walk.env(.mapping([pair]), place: place, scope: scope)
+            case .scalar(let value):
+                walk.scalar(value, name: envName(pair.key), place: at, scope: scope)
+            case .skipped(let part, let line):
+                walk.skipped(part, line: line, name: envName(pair.key), place: at, scope: scope)
+            case .mapping where pair.key == "<<":
+                composeMap(pair.value, place: at, scope: scope, into: &walk)
+            default:
+                continue
             }
         }
-    }
-
-    static func isGooseExtension(_ pair: YAMLSubset.Pair) -> Bool {
-        pair.value["envs"] != nil || pair.value["cmd"] != nil || pair.value["type"] != nil
-    }
-
-    /// goose's settings at the root, and each extension's `envs`.
-    static func gooseFound(_ root: YAMLSubset.Node, extensions: [YAMLSubset.Pair]) -> [Found] {
-        var walk = ConfigWalk(note: .stillInFile)
-        for pair in root.pairs ?? [] {
-            guard let value = pair.value.scalar else { continue }
-            walk.scalar(value, name: envName(pair.key), place: pair.key, scope: "")
-        }
-        for pair in extensions {
-            let place: String = "extensions." + pair.key
-            walk.env(pair.value["envs"], place: place + ".envs", scope: place)
-        }
-        return walk.found
-    }
-
-    /// Continue's models' `apiKey`, named by the provider (ANTHROPIC_API_KEY), and its MCP servers' `env`.
-    static func continueFound(_ root: YAMLSubset.Node) -> [Found] {
-        var walk = ConfigWalk(note: .stillInFile)
-        for (index, model) in (root["models"]?.items ?? []).enumerated() {
-            guard let key = model["apiKey"]?.scalar else { continue }
-            let label: String = model["provider"]?.string ?? model["name"]?.string ?? "model"
-            let scope: String = "models." + (model["name"]?.string ?? String(index))
-            walk.scalar(key, name: StoredSecretName.fromParts([label, "api_key"]), place: "models[\(index)].apiKey",
-                        scope: scope, sourceSays: true)
-        }
-        for (index, server) in (root["mcpServers"]?.items ?? []).enumerated() {
-            let scope: String = "mcpServers." + (server["name"]?.string ?? String(index))
-            walk.env(server["env"], place: "mcpServers[\(index)].env", scope: scope)
-        }
-        return walk.found
     }
 }

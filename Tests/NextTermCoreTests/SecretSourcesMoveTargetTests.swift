@@ -55,4 +55,39 @@ import Testing
         #expect(search?["command"] as? [String] == command)
         #expect(search?["environment"] as? [String: String] == ["REF": "{env:REF}"])
     }
+
+    @Test func aProjectPassedInNamesTheSourcesProject() throws {
+        let home = I.Home()
+        defer { home.remove() }
+        let project: String = home.path + "/rag-api"
+        let gemini: String = home.write("rag-api/.gemini/settings.json", "{}")
+        let notes: String = home.write("rag-api/notes/settings.json", "{}")
+        #expect(SecretSources.isMoveTarget(path: gemini, home: home.path, projects: [project]))
+        #expect(!SecretSources.isMoveTarget(path: notes, home: home.path, projects: [project]))
+        let source = try #require(SecretSources.moveSource(path: gemini, home: home.path, projects: [project]))
+        #expect(source.client == .gemini && source.project == project)
+    }
+
+    @Test func anOpenProjectsOpencodeJSONCIsScannedAndRewritten() throws {
+        let home = I.Home()
+        defer { home.remove() }
+        let project: String = home.path + "/rag-api"
+        let commented: String = "// made up for a test\n" + I.opencodeJSON
+        let file: String = home.write("rag-api/opencode.jsonc", commented)
+        let sources: [SecretImport.Source] = SecretImport.sources(home: home.path, projects: [project])
+        let scan: SecretImport.Scan = SecretImport.scan(sources)
+        let finding = try #require(scan.findings.first { (found: SecretImport.Finding) -> Bool in
+            found.variable == "TAVILY_API_KEY"
+        })
+        #expect(finding.source.path == file && finding.source.client == .opencode && finding.notMovable == nil)
+        let planned = SecretImport.plan([SecretImport.Move(name: "TAVILY_API_KEY", findings: [finding])], nxtrm: I.nxtrm)
+        let edit = try #require(planned.edits.first)
+        #expect(SecretImport.apply(edit, lockWait: 0.3) == .written)
+        let text: String = home.read("rag-api/opencode.jsonc")
+        #expect(text.hasPrefix("// made up for a test\n"))
+        let json = try #require(JSONC(text)?.root?.object(in: text) as? [String: Any])
+        let search = (json["mcp"] as? [String: Any])?["search"] as? [String: Any]
+        let command: [String] = [I.nxtrm[0], "secret", "run", "TAVILY_API_KEY", "--", "npx", "-y", "search-mcp"]
+        #expect(search?["command"] as? [String] == command)
+    }
 }

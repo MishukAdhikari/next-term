@@ -16,9 +16,12 @@ import Testing
             #expect(report.format == .yaml && report.unreadable == nil && report.agent == nil)
             #expect(T.names(report) == ["OPENAI_API_KEY"])
             #expect(report.rows.first?.ticked == true && report.rows.first?.note == .composeInGit)
-            // `${PINECONE_API_KEY}` is a reference, and a name alone takes the shell's value: neither is a row.
-            #expect(report.notKeys.map(\.name) == ["LOG_LEVEL", "PINECONE_API_KEY", "FROM_SHELL"])
-            let reasons: [SecretSources.NotKeyReason] = [.setting, .builtFrom(["PINECONE_API_KEY"]), .reference]
+            // `${PINECONE_API_KEY}` is a reference, and a name alone takes the shell's value: neither is a row. The
+            // service's image is read with the rest of the file: a setting.
+            let names: [String] = ["LOG_LEVEL", "PINECONE_API_KEY", "FROM_SHELL", "SERVICES_API_IMAGE"]
+            #expect(report.notKeys.map(\.name) == names)
+            let built: SecretSources.NotKeyReason = .builtFrom(["PINECONE_API_KEY"])
+            let reasons: [SecretSources.NotKeyReason] = [.setting, built, .reference, .setting]
             #expect(report.notKeys.map(\.reason) == reasons)
         }
         #expect(map.rows.first?.value == list.rows.first?.value)
@@ -57,7 +60,7 @@ import Testing
         #expect(T.names(continued) == ["ANTHROPIC_API_KEY", "TAVILY_API_KEY"])
         #expect(continued.rows.allSatisfy { (row: SourceRow) -> Bool in row.ticked && row.note == .stillInFile })
         #expect(continued.rows.first?.place == "models[0].apiKey")
-        #expect(continued.notKeys.map(\.name) == ["SHARED"] && continued.notKeys.first?.reason == .reference)
+        #expect(continued.notKeys.first?.name == "SHARED" && continued.notKeys.first?.reason == .reference)
     }
 
     @Test func anyOtherYAMLIsReadByItsPaths() throws {

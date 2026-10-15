@@ -74,15 +74,21 @@ public final class SourceReport: Sendable {
     /// The agent whose config this is ("Zed", "Codex"), when Next Term can't rewrite it: the file still holds the keys
     /// copied in, and each row says so.
     public let agent: String?
+    /// What to know about the whole file, for the preview's header: an agent's config still holds the keys copied in
+    /// (`stillInFile`, whenever `agent` is set), a Compose file is often in git. A row's own note ("Replaces your key",
+    /// "Set again on line 9") takes this one's place on that row, so the header is where it always shows.
+    public let fileNote: SecretSources.Note?
 
     init(format: SecretSources.Format, rows: [SourceRow] = [], notKeys: [SecretSources.NotKey] = [],
-         unreadable: SecretSources.Unreadable? = nil, purpose: String, exportedBy: String? = nil, agent: String? = nil) {
+         unreadable: SecretSources.Unreadable? = nil, purpose: String, exportedBy: String? = nil, agent: String? = nil,
+         fileNote: SecretSources.Note? = nil) {
         self.format = format
         self.rows = rows
         self.notKeys = notKeys
         self.unreadable = unreadable
         self.exportedBy = exportedBy
         self.agent = agent
+        self.fileNote = agent == nil ? fileNote : .stillInFile
         self.purpose = exportedBy.map { (app: String) -> String in "From " + app } ?? purpose
     }
 
@@ -463,6 +469,12 @@ extension SecretSources {
     /// thread.
     public static func read(_ bytes: inout [UInt8], name: String, folder: String? = nil, format: Format? = nil,
                             stored: Set<String> = [], now: Date = Date()) -> SourceReport {
+        readReport(&bytes, name: name, folder: folder, format: format, stored: stored, now: now, leaving: nil)
+    }
+
+    /// `read`, leaving out what `leaving` says the MCP-config import moves, when it is set.
+    static func readReport(_ bytes: inout [UInt8], name: String, folder: String?, format: Format?, stored: Set<String>,
+                           now: Date, leaving: Leaving?) -> SourceReport {
         defer { SecretBytes.wipe(&bytes) }
         let file: String = (name as NSString).lastPathComponent
         let purpose: String = purpose(file: file, folder: folder)
@@ -479,9 +491,11 @@ extension SecretSources {
         var chosen: Format = format ?? detect(text: text, name: file)
         if chosen == .csv { return csvReport(text, purpose: purpose, stored: stored, now: now) }
         if chosen == .toml || chosen == .yaml {
-            return configReport(text, format: chosen, file: file, purpose: purpose, stored: stored, now: now)
+            return configReport(text, format: chosen, file: file, purpose: purpose, stored: stored, now: now,
+                                leaving: leaving)
         }
-        if chosen == .json || chosen == .bitwarden || chosen == .onePassword || chosen == .bws {
+        let isManager: Bool = chosen == .bitwarden || chosen == .onePassword || chosen == .bws
+        if leaving == nil, chosen == .json || isManager {
             let forced: Format? = chosen == .json ? nil : chosen
             if let managed = managerReport(text, as: forced, stored: stored, now: now) { return managed }
             if forced != nil { return SourceReport(format: chosen, unreadable: .notJSON, purpose: purpose) }
@@ -490,8 +504,8 @@ extension SecretSources {
         var agent: String?
         if chosen == .json {
             let read: ConfigFound? = jsonRead(text, file: file)
-            found = read?.values
-            agent = read?.agent
+            found = read.map { (config: ConfigFound) -> [Found] in leaving?.kept(config.values) ?? config.values }
+            agent = leaving?.agent ?? read?.agent
             // Text that only started like JSON (an INI file's `[default]`): its `KEY=value` lines, when it has some.
             let guessed: Bool = format == nil && !isJSONName(file.lowercased())
             if found == nil, guessed, bytes.count <= EnvFile.maxSize, !hasTooManyLines(text) {
@@ -517,7 +531,7 @@ extension SecretSources {
     /// the links, then the file's own rules: a name set again, the same name in two sections, and a name already in the
     /// vault.
     static func report(_ found: [Found], format: Format, purpose: String, stored: Set<String>, now: Date,
-                       exportedBy: String? = nil, agent: String? = nil) -> SourceReport {
+                       exportedBy: String? = nil, agent: String? = nil, fileNote: Note? = nil) -> SourceReport {
         var rows: [SourceRow] = []
         var notKeys: [NotKey] = []
         var sources: [String?] = []
@@ -557,7 +571,7 @@ extension SecretSources {
         rows = sectioned(rows)
         rows = replacing(rows, stored: stored)
         return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose, exportedBy: exportedBy,
-                            agent: agent)
+                            agent: agent, fileNote: fileNote)
     }
 
     /// Each row's link: the source's own (`sources`, by row) when it passes the link rules and holds no value in the

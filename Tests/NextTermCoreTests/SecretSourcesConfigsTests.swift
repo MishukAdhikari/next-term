@@ -33,9 +33,14 @@ import Testing
         #expect(azure.place == "model_providers.azure.experimental_bearer_token" && azure.line == 8)
         let github = try #require(Self.row(report, "GITHUB_PERSONAL_ACCESS_TOKEN"))
         #expect(github.place == "mcp_servers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN" && github.line == 13)
-        // `bearer_token_env_var` names the variable that holds a key: no row, and not counted.
-        #expect(!report.rows.contains { (row: SourceRow) -> Bool in row.place.hasSuffix("bearer_token_env_var") })
-        #expect(report.notKeys.map(\.name) == ["LOG_LEVEL", "PATH_EXTRA"])
+        // `bearer_token_env_var` and `env_key` name the variable that holds a key: no row, and not counted.
+        let places: [String] = report.rows.map(\.place) + report.notKeys.map(\.place)
+        #expect(!places.contains { (place: String) -> Bool in
+            place.hasSuffix("bearer_token_env_var") || place.hasSuffix("env_key")
+        })
+        // The rest of the file (the model, commands, URLs) is read too: settings, counted.
+        #expect(report.notKeys.prefix(2).map(\.name) == ["LOG_LEVEL", "PATH_EXTRA"])
+        #expect(report.notKeys.map(\.name).contains("MODEL"))
         let sentence = "This file still holds the key; Next Term can\u{2019}t rewrite it yet"
         #expect(SecretSources.Note.stillInFile.sentence == sentence)
     }
@@ -96,10 +101,11 @@ import Testing
         let zed = Self.read(C.zedJSON, name: "settings.json")
         #expect(Self.row(zed, "TAVILY_API_KEY")?.place == "context_servers.older-shape.command.env.TAVILY_API_KEY")
         #expect(Self.row(zed, "GITHUB_PERSONAL_ACCESS_TOKEN")?.line == 9)
-        // The theme, commands and arguments are an agent's settings, not counted.
-        #expect(zed.notKeys.isEmpty)
+        // The theme, commands and arguments are read with the rest of the file: settings, counted, never rows.
+        #expect(!zed.notKeys.isEmpty)
+        #expect(zed.notKeys.allSatisfy { (item: SecretSources.NotKey) -> Bool in item.reason == .setting })
         let claude = Self.read(C.claudeSettingsJSON, name: "settings.json")
-        #expect(claude.notKeys.map(\.name) == ["CLAUDE_CODE_ENABLE_TELEMETRY"])
+        #expect(claude.notKeys.first?.name == "CLAUDE_CODE_ENABLE_TELEMETRY")
     }
 
     @Test func plainJSONWithAnEnvIsStillPlainJSON() {

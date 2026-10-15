@@ -10,12 +10,13 @@ extension YAMLSubset.Parser {
         let line: Line = lines[index]
         guard depth <= YAMLSubset.maxDepth else { throw fail(.tooDeep, line.number) }
         var at: Int = start
-        // An anchor only names the node: read past it, to the node.
-        if bytes[at] == UInt8(ascii: "&") {
+        // An anchor only names the node: read past it, and past any written after it, to the node. One alone on its
+        // line names the node under it, a level deeper, so anchors alone on lines one under another stop at the depth.
+        while bytes[at] == UInt8(ascii: "&") {
             while at < line.end, !YAMLSubset.isBlank(bytes[at]) { at += 1 }
             if isDone(at, end: line.end) {
                 index += 1
-                return try nested(below: parent, line: line.number, depth: depth, inMapping: true)
+                return try nested(below: parent, line: line.number, depth: depth + 1, inMapping: true)
             }
             at = skipBlanks(at, end: line.end)
         }

@@ -2,27 +2,43 @@ import Foundation
 
 // Kubernetes objects for the import (https://kubernetes.io/docs/concepts/configuration/secret/): a Secret's
 // `stringData` and base64 `data`, a ConfigMap's `data`, and any `env` list of `{name, value}` items, where `valueFrom`
-// only points at a key kept elsewhere.
+// only points at a key kept elsewhere. A List (`kubectl get secrets -o yaml`) gives each of its items'. The rest of an
+// object is its metadata and spec, never read: an annotation can hold the whole object again, `data` and all.
 
 extension SecretSources {
-    /// A Kubernetes object's values. Every value in a Secret is a secret by its source.
+    /// A Kubernetes object's values, or each item's for a List. Every value in a Secret is a secret by its source.
     static func kubernetesFound(_ root: YAMLSubset.Node, number: Int) -> [Found] {
-        let name: String = root["metadata"]?["name"]?.string ?? "secret"
-        let scope: String = "[\(number)].\(name)"
         var walk = ConfigWalk()
+        guard root["kind"]?.string?.hasSuffix("List") == true, let items = root["items"]?.items else {
+            kubernetesObject(root, scope: "[\(number)]", at: JSONPath(), into: &walk)
+            return walk.found
+        }
+        for (index, item) in items.enumerated() {
+            let place: String = "items[\(index)]"
+            let path = JSONPath(parts: [], text: place)
+            kubernetesObject(item, scope: "[\(number)].\(place)", at: path, into: &walk)
+        }
+        return walk.found
+    }
+
+    /// One object's values: a Secret's, a ConfigMap's `data`, and its `env` lists, under `path` in the file.
+    static func kubernetesObject(_ root: YAMLSubset.Node, scope prefix: String, at path: JSONPath,
+                                 into walk: inout ConfigWalk) {
+        let name: String = root["metadata"]?["name"]?.string ?? "secret"
+        let scope: String = prefix + "." + name
         switch root["kind"]?.string {
-        case "Secret": secretFound(root, name: name, scope: scope, into: &walk)
-        case "ConfigMap": walk.env(root["data"], place: "data", scope: scope)
+        case "Secret": secretFound(root, name: name, scope: scope, at: path, into: &walk)
+        case "ConfigMap": walk.env(root["data"], place: path.member("data").text, scope: scope)
         default: break
         }
-        envLists(root, at: JSONPath(), into: &walk)
-        return walk.found
+        envLists(root, at: path, into: &walk)
     }
 
     /// A Secret's values: `stringData` as written, then each `data` value it doesn't set, decoded from base64. A value
     /// that doesn't decode to UTF-8 text is refused. A Secret of a type that holds a certificate, an SSH key or a
     /// registry's login is one row, not importable yet.
-    static func secretFound(_ root: YAMLSubset.Node, name: String, scope: String, into walk: inout ConfigWalk) {
+    static func secretFound(_ root: YAMLSubset.Node, name: String, scope: String, at path: JSONPath,
+                            into walk: inout ConfigWalk) {
         if let type = root["type"]?.string, let label = typedSecrets[type] {
             walk.refused(name: StoredSecretName.fromParts([name]), place: "the whole secret", line: root.line,
                          scope: scope, refusal: .typedSecret(label), kind: "a Kubernetes \(label) secret")
@@ -32,13 +48,13 @@ extension SecretSources {
         let given = Set(written.map(\.key))
         for pair in written {
             guard let value = pair.value.scalar else { continue }
-            walk.scalar(value, name: secretKeyName(pair.key, secret: name), place: "stringData." + pair.key,
-                        scope: scope, sourceSays: true)
+            let place: String = path.member("stringData").text + "." + pair.key
+            walk.scalar(value, name: secretKeyName(pair.key, secret: name), place: place, scope: scope, sourceSays: true)
         }
         for pair in root["data"]?.pairs ?? [] where !given.contains(pair.key) {
             guard let value = pair.value.scalar, value.kind != .null else { continue }
             let key: String = secretKeyName(pair.key, secret: name)
-            let place: String = "data." + pair.key
+            let place: String = path.member("data").text + "." + pair.key
             guard let text = decodedText(value.text) else {
                 walk.refused(name: key, place: place, line: value.line, scope: scope, refusal: .notText,
                              kind: "a Kubernetes secret's value")

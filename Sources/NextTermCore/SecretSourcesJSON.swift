@@ -60,6 +60,10 @@ struct JSONWalk {
 
     let text: String
     var found: [Found] = []
+    /// Places an agent's reader read (`jsonAgent`): the walk over the rest of the file passes them over.
+    var known: Set<String> = []
+    /// The note each value the walk finds carries: an agent's config keeps its keys.
+    var note: SecretSources.Note?
     /// Where each line starts, as UTF-8 offsets: a member's line from its key's place.
     private let lineStarts: [Int]
 
@@ -103,8 +107,10 @@ extension JSONWalk {
         switch value {
         case .object(let object):
             for member in object.members {
+                let place: JSONPath = path.member(member.key)
+                guard !known.contains(place.text) else { continue }
                 let at: Int = self.line(of: member.keyRange.lowerBound)
-                self.value(member.value, at: path.member(member.key), section: path.text, line: at)
+                self.value(member.value, at: place, section: path.text, line: at)
             }
         case .scalar(let range):
             leaf(foundationValue(range), at: path, section: section, line: line)
@@ -169,10 +175,10 @@ extension JSONWalk {
         }
         guard let value = dictionary["value"], !(value is [String: Any]), !(value is [Any]) else { return false }
         if let text = value as? String {
-            found.append(Found(name: name, value: text, place: path.text, line: nil, scope: section))
+            found.append(Found(name: name, value: text, place: path.text, line: nil, scope: section, note: note))
         } else if let number = value as? NSNumber {
             found.append(Found(name: name, value: number.stringValue, place: path.text, line: nil, scope: section,
-                               isText: false))
+                               isText: false, note: note))
         }
         return true
     }
@@ -181,10 +187,10 @@ extension JSONWalk {
     mutating func leaf(_ object: Any?, at path: JSONPath, section: String, line: Int?) {
         let name: String = SecretSources.jsonName(path)
         if let text = object as? String {
-            found.append(Found(name: name, value: text, place: path.text, line: line, scope: section))
+            found.append(Found(name: name, value: text, place: path.text, line: line, scope: section, note: note))
         } else if let number = object as? NSNumber {
             found.append(Found(name: name, value: number.stringValue, place: path.text, line: line, scope: section,
-                               isText: false))
+                               isText: false, note: note))
         }
     }
 }

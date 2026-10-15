@@ -36,15 +36,36 @@ extension YAMLSubset.Parser {
             try count(number)
             let style: YAMLSubset.Style = byte == UInt8(ascii: "'") ? .singleQuoted : .doubleQuoted
             return .scalar(YAMLSubset.Scalar(text: quoted.text, style: style, line: number))
-        case UInt8(ascii: "*"), UInt8(ascii: "!"), UInt8(ascii: "&"):
-            while at < end, !YAMLSubset.isBlank(bytes[at]), !Self.flowEnds.contains(bytes[at]) { at += 1 }
-            if byte == UInt8(ascii: "&") { return try flowNode(&at, end: end, number: number, depth: depth) }
-            if byte == UInt8(ascii: "!"), try flowNode(&at, end: end, number: number, depth: depth) == nil { return nil }
+        case UInt8(ascii: "*"):
+            at = flowTokenEnd(at, end: end)
             try count(number)
-            return .skipped(byte == UInt8(ascii: "*") ? .alias : .tag, line: number)
+            return .skipped(.alias, line: number)
+        case UInt8(ascii: "!"), UInt8(ascii: "&"):
+            return try flowProperties(&at, end: end, number: number, depth: depth)
         default:
             return try flowPlain(&at, end: end, number: number)
         }
+    }
+
+    /// Where an anchor's, a tag's or an alias's name ends: at a blank, a `,` or a closing bracket.
+    func flowTokenEnd(_ from: Int, end: Int) -> Int {
+        var at: Int = from
+        while at < end, !YAMLSubset.isBlank(bytes[at]), !Self.flowEnds.contains(bytes[at]) { at += 1 }
+        return at
+    }
+
+    /// Anchors and tags at `at`, as many as are written, then the node they are on: an anchor only names it, and a tag
+    /// makes it a part to skip. Read in a loop, so a run of them costs no stack. Nil when the line ends first.
+    mutating func flowProperties(_ at: inout Int, end: Int, number: Int, depth: Int) throws -> Node? {
+        var tagged = false
+        while at < end, bytes[at] == UInt8(ascii: "&") || bytes[at] == UInt8(ascii: "!") {
+            if bytes[at] == UInt8(ascii: "!") { tagged = true }
+            at = skipBlanks(flowTokenEnd(at, end: end), end: end)
+        }
+        guard let node = try flowNode(&at, end: end, number: number, depth: depth) else { return nil }
+        guard tagged else { return node }
+        try count(number)
+        return .skipped(.tag, line: number)
     }
 
     /// A plain scalar in a flow collection: up to a `,`, a bracket, or a `:` before a blank; empty where none starts.

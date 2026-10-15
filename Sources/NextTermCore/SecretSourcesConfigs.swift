@@ -2,9 +2,10 @@ import Foundation
 
 // TOML, YAML and agents' configs for the import. TOML is read with the importer's TOML reader and YAML with
 // `YAMLSubset`, both into `YAMLSubset.Node`s, and walked here: known shapes (Codex, Cargo, Compose, Kubernetes, goose,
-// Continue) by the places that hold keys, any other document by its paths, as JSON is. Agents' configs the MCP-config
-// import doesn't rewrite are copied with a note on each row that the file still holds the key. The MCP-config import's
-// own files are told apart (`isMoveTarget`) so the app sends them there instead.
+// Continue) by the places that hold keys, then the rest of the file, and any other document, by its paths, as JSON is.
+// Agents' configs the MCP-config import doesn't rewrite are copied with a note that the file still holds the key, on
+// the report and on each row. The MCP-config import's own files are told apart (`isMoveTarget`) so the app sends them
+// there instead, and offers the keys outside their servers as a copy (`readOutsideServers`).
 
 /// A reader's failure, as a `Result`'s.
 extension SecretSources.Unreadable: Error {}
@@ -13,15 +14,18 @@ extension SecretSources {
     /// The most a TOML or YAML file may hold: no config file is near it.
     public static let configMaxBytes = TOMLReader.maxBytes
 
-    /// What a config file gives: its values, and the agent whose config it is.
+    /// What a config file gives: its values, the agent whose config it is, and a note for the whole file (a Compose
+    /// file is often in git).
     struct ConfigFound {
         var values: [Found]
         var agent: String?
+        var note: Note?
     }
 
-    /// The report for a TOML or YAML file, or why it can't be read.
+    /// The report for a TOML or YAML file, or why it can't be read. `leaving`, when set, leaves out what the
+    /// MCP-config import moves.
     static func configReport(_ text: String, format: Format, file: String, purpose: String, stored: Set<String>,
-                             now: Date) -> SourceReport {
+                             now: Date, leaving: Leaving? = nil) -> SourceReport {
         guard text.utf8.count <= configMaxBytes else {
             return SourceReport(format: format, unreadable: .configTooLarge, purpose: purpose)
         }
@@ -33,7 +37,10 @@ extension SecretSources {
             guard found.values.count <= maxValues else {
                 return SourceReport(format: format, unreadable: .tooMany, purpose: purpose)
             }
-            return report(found.values, format: format, purpose: purpose, stored: stored, now: now, agent: found.agent)
+            let values: [Found] = leaving?.kept(found.values) ?? found.values
+            let agent: String? = leaving?.agent ?? found.agent
+            return report(values, format: format, purpose: purpose, stored: stored, now: now, agent: agent,
+                          fileNote: found.note)
         }
     }
 

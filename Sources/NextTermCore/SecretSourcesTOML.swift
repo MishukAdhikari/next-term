@@ -1,10 +1,11 @@
 import Foundation
 
 // TOML for the import, read with the importer's TOML reader into `YAMLSubset.Node`s, each member in file order with
-// its line. Codex's `config.toml` gives its MCP servers' envs, its shell's `set` and a model provider's bearer token,
-// and keeps them (the file is Codex's, and Next Term rewrites only its MCP servers); a server's `bearer_token_env_var`
-// names a variable and is no key. Cargo's credentials are named as Cargo reads them from the environment. Any other
-// TOML (Streamlit's `secrets.toml`) is read by its paths: a key in a section is named SECTION_KEY.
+// its line. Codex's `config.toml` gives its MCP servers' envs and `http_headers`, its shell's `set` and a model
+// provider's bearer token and headers, and keeps them (the file is Codex's, and Next Term rewrites only its MCP
+// servers); `bearer_token_env_var`, `env_key` and the like name a variable and are no key. Cargo's credentials are
+// named as Cargo reads them from the environment. The rest of a Codex or Cargo file, and any other TOML (Streamlit's
+// `secrets.toml`), is read by its paths: a key in a section is named SECTION_KEY.
 
 extension SecretSources {
     static func tomlFound(_ text: String) -> Result<ConfigFound, Unreadable> {
@@ -35,13 +36,15 @@ extension SecretSources {
             switch pair.key {
             case "model_providers":
                 for provider in pair.value.pairs ?? [] {
+                    let place: String = "model_providers." + provider.key
+                    walk.headers(provider.value["http_headers"], server: provider.key, place: place + ".http_headers",
+                                 scope: place)
                     guard let token = provider.value["experimental_bearer_token"]?.scalar else { continue }
                     let named: String? = provider.value["env_key"]?.string
                     let valid: String? = named.flatMap { (name: String) -> String? in
                         StoredSecretName.isValid(name) ? name : nil
                     }
                     let name: String = valid ?? StoredSecretName.fromParts([provider.key, "api_key"])
-                    let place: String = "model_providers." + provider.key
                     walk.scalar(token, name: name, place: place + ".experimental_bearer_token", scope: place,
                                 sourceSays: true)
                 }
@@ -49,6 +52,8 @@ extension SecretSources {
                 for server in pair.value.pairs ?? [] {
                     let place: String = "mcp_servers." + server.key
                     walk.env(server.value["env"], place: place + ".env", scope: place)
+                    walk.headers(server.value["http_headers"], server: server.key, place: place + ".http_headers",
+                                 scope: place)
                 }
             case "shell_environment_policy":
                 walk.env(pair.value["set"], place: "shell_environment_policy.set", scope: pair.key)
@@ -56,6 +61,7 @@ extension SecretSources {
                 continue
             }
         }
+        walk.rest(root)
         return walk.found
     }
 
@@ -76,6 +82,7 @@ extension SecretSources {
                 walk.scalar(token, name: name, place: place + ".token", scope: place, sourceSays: true)
             }
         }
+        walk.rest(root)
         return walk.found
     }
 }
