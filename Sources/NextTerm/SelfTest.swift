@@ -643,7 +643,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote, newTerminal or cellSnap), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal or cellSnap), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -669,6 +669,7 @@ enum SelfTest {
         case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
+        case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
         case "newTerminal": return await newTerminalChecks() // a window with no project: "No project open", no protected place read
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         default: break
@@ -4896,8 +4897,11 @@ enum SelfTest {
         }
         let waited = await tool("wait_for_tab", ["tab_id": workerID, "timeout_seconds": 10])
         let screen = await tool("read_tab", ["tab_id": workerID, "lines": 20])
-        check(waited.json?["timed_out"] as? Bool == false && (screen.json?["screen"] as? String)?.contains("mcp-started") == true,
-              "MCP: the command ran; wait_for_tab and read_tab see its output", waited.text + " / " + screen.text)
+        let ran = waited.json?["timed_out"] as? Bool == false && (screen.json?["screen"] as? String)?.contains("mcp-started") == true
+        check(ran, "MCP: the command ran; wait_for_tab and read_tab see its output",
+              "integrated \(worker.status.integrated), history armed \(worker.history.armed); " + waited.text + " / " + screen.text)
+        // Every check below drives this tab: one that never ran its first command is one failure, not a dozen.
+        guard ran else { return }
 
         // A pane beside the worker, so both can be watched.
         let beside = await tool("new_tab", ["directory": proj.path, "split_beside": workerID, "direction": "down"])
@@ -4917,7 +4921,10 @@ enum SelfTest {
 
         // Keys: Ctrl-C stops what runs; closing a busy tab needs force.
         _ = await tool("send_to_tab", ["tab_id": workerID, "text": "sleep 30 # agent-sleep"])
-        _ = await wait(5) { worker.status.running }
+        // Not running, an unforced close_tab would close the worker, and with it the window the rest needs.
+        guard await wait(5, { worker.status.running }) else {
+            return check(false, "MCP: send_to_tab runs `sleep 30`", worker.screenTail(6).joined(separator: " | "))
+        }
         let refused = await tool("close_tab", ["tab_id": workerID])
         check(refused.isError && refused.text.contains("force"), "MCP: close_tab will not stop a running command unless forced", refused.text)
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["ctrl+c"]])
