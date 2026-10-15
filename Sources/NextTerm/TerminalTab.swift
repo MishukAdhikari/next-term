@@ -679,6 +679,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.status.shellReplaced()
             self.completion.shellReplaced()
             self.history.shellReplaced()
+            self.lastBuffer = nil
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -861,15 +862,35 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// `screenTail`, with stored keys masked over whole lines (`SecretMask.mask(window:rows:text:)`): the rows above the
     /// window are masked with it, wrapped by the terminal or not (agent UIs wrap with a newline or cursor moves), so the
-    /// tail of a key whose start is above the window never shows.
-    func screenTail(_ count: Int, masked mask: SecretMask) -> [String] {
+    /// tail of a key whose start is above the window never shows. `excludingGhost`: cells left out of their rows (a
+    /// plugin's ghost, `typedInput`).
+    func screenTail(_ count: Int, masked mask: SecretMask, excludingGhost ghost: [GhostScreen.Span] = []) -> [String] {
         let terminal = view.getTerminal()
         guard let last = lastTextRow() else { return [] }
         let top = terminal.buffer.totalLinesTrimmed
         let first = max(top, last - count + 1)
-        return mask.mask(window: first...last, rows: top...last) { row in
-            terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true) ?? ""
-        }
+        return mask.mask(window: first...last, rows: top...last) { row in rowText(row, excluding: ghost) }
+    }
+
+    /// `screenTail` without masks, with `ghost`'s cells left out of their rows.
+    func screenTail(_ count: Int, excludingGhost ghost: [GhostScreen.Span]) -> [String] {
+        guard !ghost.isEmpty else { return screenTail(count) }
+        let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
+        return (first...last).map { rowText($0, excluding: ghost) }
+    }
+
+    /// A scroll-invariant row's text, trimmed at its right, without the cells of `ghost` on it: what is left of them and
+    /// right of them, the right part trimmed, then the whole.
+    private func rowText(_ row: Int, excluding ghost: [GhostScreen.Span]) -> String {
+        guard let line = view.getTerminal().getScrollInvariantLine(row: row) else { return "" }
+        guard let cut = ghost.first(where: { $0.row == row }) else { return line.translateToString(trimRight: true) }
+        let end = min(cut.columns.upperBound, line.count)
+        let left = line.translateToString(trimRight: false, startCol: 0, endCol: min(cut.columns.lowerBound, line.count))
+        let right = end < line.count ? line.translateToString(trimRight: true, startCol: end) : ""
+        let text = left + right
+        return String(text.reversed().drop { $0 == " " || $0 == "\u{0}" }.reversed())
     }
 
     /// `screenTail`, with the scroll-invariant row of its first line.
@@ -880,17 +901,36 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
     }
 
-    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
-    func lastTextRow() -> Int? {
+    /// The last line that exists, in scroll-invariant rows, found by bisection (SwiftTerm keeps the line count internal).
+    private func lastRow() -> Int? {
         let terminal = view.getTerminal()
-        let top = terminal.buffer.totalLinesTrimmed
-        // The last line that exists, found by bisection (SwiftTerm keeps the line count internal).
-        var low = top, high = top + 1_000_000
+        var low = terminal.buffer.totalLinesTrimmed, high = low + 1_000_000
         guard terminal.getScrollInvariantLine(row: low) != nil else { return nil }
         while low < high {
             let mid = (low + high + 1) / 2
             if terminal.getScrollInvariantLine(row: mid) != nil { low = mid } else { high = mid - 1 }
         }
+        return low
+    }
+
+    /// The cursor's row, in scroll-invariant rows, wherever the view is scrolled: the screen is the buffer's last `rows`
+    /// lines. At the bottom, the line the view shows under the cursor must be that one.
+    func cursorRow() -> Int? {
+        let terminal = view.getTerminal()
+        guard let last = lastRow() else { return nil }
+        let y = terminal.getCursorLocation().y
+        let row = last - terminal.rows + 1 + y
+        if !view.canScroll || view.scrollPosition >= 1 {
+            guard let shown = terminal.getLine(row: y), shown === terminal.getScrollInvariantLine(row: row) else { return nil }
+        }
+        return row
+    }
+
+    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
+    func lastTextRow() -> Int? {
+        let terminal = view.getTerminal()
+        let top = terminal.buffer.totalLinesTrimmed
+        guard let low = lastRow() else { return nil }
         // Skip blank rows at the bottom (at most one screen of them).
         var last = low
         while last > top, low - last < terminal.rows,
@@ -898,6 +938,66 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             last -= 1
         }
         return last
+    }
+
+    // MARK: what is typed (the ghost hook's reports)
+
+    /// The ghost hook's last report of the line (GhostProtocol), with the tab's write count when it was read and when: it
+    /// says what is typed only while nothing was written to the shell since (GhostScreen.isCurrent).
+    private(set) var lastBuffer: (report: GhostProtocol.BufferReport, writes: Int, at: TimeInterval)?
+
+    /// The line as zsh has it at this tab's prompt, for MCP (read_tab, wait_for_tab): `input`, and the cells of a plugin's
+    /// ghost to leave out of the screen. Only for a tab on this Mac whose shell is alone in front with no command running,
+    /// on the normal screen, from a report nothing was written after; nil otherwise.
+    func typedInput(mask: (String) -> String) -> (input: [String: Any], ghost: [GhostScreen.Span])? {
+        guard let last = lastBuffer, atReportedPrompt,
+              GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites) else { return nil }
+        let ghost = pluginGhost(last.report)
+        let suggestion = ghost.isEmpty ? nil : last.report.postdisplay
+        guard let input = InputReport.make(from: last.report, suggestion: suggestion, mask: mask) else { return nil }
+        return (input, ghost)
+    }
+
+    /// Something was written to the shell at its prompt since the hook last reported the line: a report is on its way, if
+    /// the write changed the line.
+    var awaitsLineReport: Bool {
+        guard let last = lastBuffer else { return false }
+        return atReportedPrompt && !GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
+    }
+
+    /// The hook reports this tab's line, and the shell has the terminal: on this Mac, alone in front with nothing running,
+    /// on the normal screen.
+    private var atReportedPrompt: Bool {
+        guard remote == nil, !exited, lastBuffer != nil, !status.running else { return false }
+        return !view.getTerminal().isCurrentBufferAlternate && shellAlone
+    }
+
+    /// The cells of a plugin's ghost (POSTDISPLAY) as zsh drew them, after the whole line and wrapping, once they are read
+    /// to show it (an async suggestion newer than the report doesn't); none otherwise. Rows past the last there is are cut
+    /// off.
+    private func pluginGhost(_ report: GhostProtocol.BufferReport) -> [GhostScreen.Span] {
+        guard let post = report.postdisplay, !post.isEmpty, let buffer = report.buffer, let ghostCells = GhostScreen.cells(post),
+              report.cursor <= buffer.unicodeScalars.count,
+              let rightCells = GhostScreen.cells(scalars: buffer.unicodeScalars.dropFirst(report.cursor)),
+              let caretRow = cursorRow() else { return [] }
+        let terminal = view.getTerminal()
+        let spans = GhostScreen.span(caretRow: caretRow, caretColumn: terminal.getCursorLocation().x, columns: terminal.cols,
+                                     rightCells: rightCells, ghostCells: ghostCells)
+        var shown: [GhostScreen.Span] = []
+        var read = ""
+        for span in spans {
+            guard let line = terminal.getScrollInvariantLine(row: span.row) else { break }
+            let end = min(span.columns.upperBound, line.count)
+            guard span.columns.lowerBound < end else { break }
+            read += line.translateToString(trimRight: false, startCol: span.columns.lowerBound, endCol: end,
+                                           skipNullCellsFollowingWide: true) { cell in
+                let character = cell.getCharacter()
+                return character == "\u{0}" ? " " : character
+            }
+            shown.append(GhostScreen.Span(row: span.row, columns: span.columns.lowerBound..<end))
+        }
+        let width = shown.reduce(0) { $0 + $1.columns.count }
+        return GhostScreen.matches(cells: read, postdisplay: post, width: width) ? shown : []
     }
 
     // MARK: scrollback on the update and quit paths (SessionScrollback)
@@ -1283,7 +1383,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             return completion.handle(message)
         case .history(let version):
             return history.marked(version: version)
-        case .ghost:
+        case .ghost(let message):
+            if case .buffer(let report) = message { lastBuffer = (report, view.inputWrites, Self.now) }
             return
         case .commandStarted(let line, let expanded, _):
             onCommandMark?(event)

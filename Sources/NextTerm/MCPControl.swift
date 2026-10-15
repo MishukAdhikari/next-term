@@ -252,9 +252,29 @@ enum MCPControl {
     static var fieldMasks = true
     static func field(_ text: String) -> String { fieldMasks ? SecretMask.current.mask(text) : text }
     /// A tab's last `count` rows, masked over whole lines: a key a wrap split above the window is masked in the part the
-    /// window shows (`TerminalTab.screenTail(_:masked:)`).
+    /// window shows (`TerminalTab.screenTail(_:masked:)`). A plugin's ghost at a zsh prompt (zsh-autosuggestions'), once its
+    /// cells are found where zsh drew it, is left out: it isn't typed (`typedInput`).
     static func fieldTail(_ tab: TerminalTab, _ count: Int = AgentScreen.scannedLines) -> [String] {
-        fieldMasks ? tab.screenTail(count, masked: SecretMask.current) : tab.screenTail(count)
+        let ghost = tab.typedInput(mask: field)?.ghost ?? []
+        return fieldMasks ? tab.screenTail(count, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(count, excludingGhost: ghost)
+    }
+
+    /// Runs `body` once the hook's report of a tab's line is current (nothing was written to the shell after it), or there
+    /// is none to wait for, or 200 ms on: a line an agent just typed is read as the shell has it.
+    static func whenLineReported(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
+        if !tab.awaitsLineReport || TerminalTab.now >= deadline { return body() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { whenLineReported(tab, until: deadline, body) }
+    }
+
+    /// The screen and `input` for read_tab and wait_for_tab: the line being typed at a zsh prompt, and a plugin's ghost,
+    /// which is left out of the screen.
+    private static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
+        let typed = tab.typedInput(mask: field)
+        let ghost = typed?.ghost ?? []
+        let rows = fieldMasks ? tab.screenTail(lines, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(lines, excludingGhost: ghost)
+        var info: [String: Any] = ["screen": rows.joined(separator: "\n")]
+        if let input = typed?.input { info["input"] = input }
+        return info
     }
     /// The menu under the tab's question, for an agent to read: matched on the screen as the question was read from it,
     /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
@@ -284,7 +304,9 @@ enum MCPControl {
         switch tool {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
         case "list_projects": reply(listProjects())
-        case "read_tab": reply(withTab(arguments) { tab in readTab(tab, lines: arguments["lines"] as? Int ?? 80) })
+        case "read_tab":
+            guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
+            readTab(tab, lines: arguments["lines"] as? Int ?? 80, reply: reply)
         case "wait_for_tab":
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             let seconds = min(300, max(1, arguments["timeout_seconds"] as? Int ?? 50))
@@ -428,12 +450,16 @@ enum MCPControl {
         return ok(["open": open, "recent": recent])
     }
 
-    private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
-        var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
-        info.merge(questionInfo(tab)) { $1 }
-        info.merge(restoredFields(tab)) { $1 }
-        info["screen"] = fieldTail(tab, min(2000, max(1, lines))).joined(separator: "\n")
-        return ok(info)
+    /// At a zsh prompt it waits for the hook's report of a line just written to (200 ms at most), so `input` and the screen
+    /// say what the shell has.
+    private static func readTab(_ tab: TerminalTab, lines: Int, reply: @escaping Reply) {
+        whenLineReported(tab, until: TerminalTab.now + 0.2) {
+            var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
+            info.merge(questionInfo(tab)) { $1 }
+            info.merge(restoredFields(tab)) { $1 }
+            info.merge(screenFields(tab, lines: min(2000, max(1, lines)))) { $1 }
+            reply(ok(info))
+        }
     }
 
     /// Done when the agent stops working (or the command ends). Input sent just before counts: the
@@ -444,11 +470,13 @@ enum MCPControl {
         let saw = sawWork || busy
         let starting = !saw && isStarting(tab)
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
-            var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
-            info.merge(questionInfo(tab)) { $1 }
-            info.merge(restoredFields(tab)) { $1 }
-            info["screen"] = fieldTail(tab, 40).joined(separator: "\n")
-            return reply(ok(info))
+            return whenLineReported(tab, until: TerminalTab.now + 0.2) {
+                var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
+                info.merge(questionInfo(tab)) { $1 }
+                info.merge(restoredFields(tab)) { $1 }
+                info.merge(screenFields(tab, lines: 40)) { $1 }
+                reply(ok(info))
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitFor(tab, until: deadline, sawWork: saw, reply: reply) }
     }
