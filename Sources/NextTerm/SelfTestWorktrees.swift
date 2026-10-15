@@ -343,8 +343,8 @@ extension SelfTest {
 
         // AE13: the ignored files linked. .env and build (ignored by name, so a link is too) are one link each, relative
         // to xCloud; node_modules and vendor (ignored only as folders) are folders of their own holding a link for each
-        // thing in them; what AE12 leaves out is left out; git sees no change there. Remove Worktree then deletes the
-        // links only: xCloud's files are all still there.
+        // thing in them; what AE12 leaves out is left out; git sees no change there; the sidebar marks a link and says
+        // where it leads. Remove Worktree then deletes the links only: xCloud's files are all still there.
         sh(repo, "branch", "fix/linked")
         if let actions = await actions() {
             actions.openInNewWorktree(.branch("fix/linked"))
@@ -378,6 +378,13 @@ extension SelfTest {
                 _ = await wait(5) { GitToast.text?.contains("ignored item") == true }
                 check(GitToast.text?.contains("; linked ") == true, "worktrees: the notice counts what was linked (AE13)", GitToast.text ?? "no notice")
                 if let linked = worktreeWindow(path) {
+                    let sidebar = linked.sidebar
+                    _ = await wait(10) { sidebar.root?.children?.contains { $0.name == "build" } == true }
+                    sidebar.outline.layoutSubtreeIfNeeded()
+                    let node = sidebar.root?.children?.first { $0.name == "build" }
+                    let cell = node.flatMap { sidebar.outline.view(atColumn: 0, row: sidebar.outline.row(forItem: $0), makeIfNecessary: true) as? FileCellView }
+                    check(cell?.showsLinkMark == true && cell?.tipText.contains("Linked to " + canonicalPath(repo) + "/build") == true,
+                          "worktrees: the sidebar marks the link and says where it leads (AE13)", cell?.tipText ?? "no row")
                     linked.window?.performClose(nil)
                     _ = await wait(5) { worktreeWindow(path) == nil }
                 }
