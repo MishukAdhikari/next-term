@@ -34,6 +34,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
   for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
   never presses Enter for you.
+- **Tasks for tomorrow's agent.** Tasks › Add Task… (⌃⌘T) turns a prompt into a task, filled from what you
+  selected: the first line is what to do, list lines its steps, the rest notes, planned for tomorrow unless you
+  pick another day. Each task is one Markdown file in the project's `todo/` folder (the main checkout's, in a
+  worktree), with `- [ ]` boxes and where you were (branch, tab, agent and the command that resumes its session),
+  so an agent there tomorrow reads it with its own tools. Agents add tasks too, with the MCP tool `add_task`,
+  which asks you on the Mac first and shows the exact file. Stored keys show as •••, Undo takes a task back, and
+  Settings › Tasks chooses another folder. See [the todo file format](docs/todo-files.md).
 - **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode in a Next
   Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
   your next prompt ("⧉ 10 lines selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt (`@file:10-20`
@@ -50,7 +57,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   git status and diffs (secrets files refused, secret-looking values masked), and uses the editor (the
   selection, open files, opening a file at a line). Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
-  closed). The tools are marked honestly, so agents ask you before they type into a tab. Local only: a
+  closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
+  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. Local only: a
   private socket, no network port.
 - **Secrets.** API and MCP keys sealed on your Mac, used by agents by name after you approve with Touch ID or
   your password. See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
@@ -271,6 +279,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Git Log (the commit graph) | ⌥⌘L |
 | Fetch / Update Project / Commit… / Push… / New Branch… | ⌘R / ⌥⌘U / ⇧⌘C / ⌥⌘P / ⇧⌘B |
 | Send to Agent | ⌥⌘K |
+| Add a task (to the project's todo folder) | ⌃⌘T |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
 | Keyboard Shortcuts (change any menu shortcut) | ⌘, |
@@ -372,7 +381,7 @@ Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects,
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme
 Tests/                  unit tests (swift-testing)
 scripts/                build, test, signing and icon scripts
-docs/                   release signing (signing.md)
+docs/                   release signing (signing.md) and the todo file format (todo-files.md)
 ```
 
 `NextTermCore` has no AppKit dependency, so another front end can reuse it. An iPad or iPhone app
