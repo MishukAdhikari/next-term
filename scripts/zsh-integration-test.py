@@ -12,12 +12,14 @@ Runs:
 - the prefix through tmux with `extended-keys` and `user-keys`, when tmux is installed, else skipped;
 - with NT_PLUGIN_DIR pointing at plugin checkouts (zsh-autocomplete, fzf-tab, zsh-autosuggestions,
   zsh-syntax-highlighting, zsh-vi-mode), the plugin matrix; local only;
-- the hook as a server runs it (RemoteCompletionHook), started by its launch command under a fake home.
+- the hook as a server runs it (RemoteCompletionHook), started by its launch command under a fake home;
+- the history hook (history.zsh, beside the .zshenv in every run here, as in the app), in shells with a config and a
+  history file of their own, never the user's: a line Next Term submits by itself stays out of the history.
 
-This script plays Next Term's part: it sends the private keys (CompletionProtocol.frame) and reads the
-marks, so the hook is tested as Next Term drives it.
+This script plays Next Term's part: it sends the private keys (CompletionProtocol.frame, ShellHistory.naming)
+and reads the marks, so the hooks are tested as Next Term drives them.
 """
-import base64, os, pty, re, select, shutil, subprocess, sys, tempfile, time
+import base64, os, pty, re, select, shlex, shutil, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src = open(os.path.join(ROOT, "Sources/NextTermCore/ShellIntegration.swift")).read()
@@ -28,8 +30,12 @@ completion = csrc.split('template = #"""\n', 1)[1].split('"""#', 1)[0]
 VALUES = dict(re.findall(r'\("(@NT_\w+@)", #"(.*?)"#\)', csrc))
 for placeholder, value in VALUES.items():
     completion = completion.replace(placeholder, value)
+# The history hook, as ZshHistoryScript.script holds it.
+histsrc = open(os.path.join(ROOT, "Sources/NextTermCore/ZshHistoryScript.swift")).read()
+history = histsrc.split('script = #"""\n', 1)[1].split('"""#', 1)[0]
 NONCE = "0123456789abcdef0123456789abcdef"
 PREFIX = b"\x1b[6973~"
+HKEY = b"\x1b[6974~"
 
 failures = []
 def check(cond, msg, detail=""):
@@ -42,6 +48,7 @@ def skip(msg):
 
 check(VALUES and "@NT_" not in completion, "every placeholder in the completion hook is filled")
 check(VALUES.get("@NT_PREFIX@") == "\\e[6973~", "the hook's prefix is CompletionProtocol.prefix")
+check("__nextterm_hkey=$'\\e[6974~'" in history, "the history hook's key is ShellHistory.prefix")
 
 # --- Next Term's side of the protocol (CompletionProtocol.frame and parse) ---
 
@@ -88,6 +95,7 @@ class Shell:
         self.zdot = tempfile.mkdtemp()
         open(os.path.join(self.zdot, ".zshenv"), "w").write(script)
         open(os.path.join(self.zdot, "completion.zsh"), "w").write(completion)
+        open(os.path.join(self.zdot, "history.zsh"), "w").write(history)
         env = env_for(self.zdot, user_zdotdir, completion_on, extra_env)
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -234,10 +242,36 @@ def legacy_events(shell):
         elif kind == "jobs":
             count, _, listing = val.partition(";")
             val = count + ":" + (base64.b64decode(listing).decode() if listing else "")
-        elif kind in ("arm", "tab", "comp", "done", "line", "sync", "into"):
+        elif kind in ("arm", "tab", "comp", "done", "line", "sync", "into", "hist"):
             continue
         events.append((nonce, kind, val))
     return events
+
+# Next Term's side of the history hook (ShellHistory), used in 11 and 11c.
+def name_key(line):
+    """ShellHistory.naming: the key, `h`, the payload's length and the payload, escaped as a completion field."""
+    payload = escape(line)
+    return HKEY + b"h" + b"%06d" % len(payload) + payload
+
+def own_line(shell, line, wait=1.0):
+    """A line as Next Term submits one by itself (TerminalTab.submitOwnLine): pasted, then the key naming it and the
+    Return in one write."""
+    shell.send(b"\x1b[200~" + line.replace("\n", "\r").encode() + b"\x1b[201~", 0.3)
+    shell.send(name_key(line) + b"\r", wait)
+
+def history_rc(extra):
+    """A zsh config folder of its own, with a history file of its own (never the user's), exported as hstr's setup
+    exports it, and `extra`."""
+    folder = tempfile.mkdtemp()
+    hist = os.path.join(folder, "history")
+    open(os.path.join(folder, ".zshrc"), "w").write(
+        f"export HISTFILE={shlex.quote(hist)}\nHISTSIZE=200\nSAVEHIST=200\nPS1='$ '\n{extra}\n")
+    return folder, hist
+
+def listed(shell, name):
+    """The file `name` a line of the user's wrote into the shell's integration folder, and what it holds."""
+    out = os.path.join(shell.zdot, name)
+    return out, open(out).read() if os.path.exists(out) else ""
 
 def run_session(label, user_zdotdir, steps, completion_on=True):
     shell = Shell(label, user_zdotdir, completion_on)
@@ -1224,6 +1258,20 @@ if plugins:
             sh.send(frame("k", 44, ["m", "", str(index)]), 0.6)
             check(drawn(sh, mark, "cd Tests/"), f"[plugin {name}] a take works beside it", repr(sh.line(mark)))
             sh.send("\x03", 0.5)
+        if a:
+            # The history hook beside it: a line Next Term submits stays out of the history, and so out of
+            # zsh-autosuggestions' suggestions.
+            sh.send("echo user-plugin\r", 0.8)
+            own_line(sh, "echo own-plugin-xyz", 1.2)
+            mark = len(sh.buf)
+            sh.send("echo own-p", 1.5)
+            suggested = "lugin-xyz" in sh.screen(mark)
+            sh.send("\x03", 0.5)
+            sh.send(f"fc -ln -50 > {sh.zdot}/listed\r", 1)
+            _, lines = listed(sh, "listed")
+            check("own-plugin-xyz" not in lines and "echo user-plugin" in lines and not suggested,
+                  f"[plugin {name}] a line Next Term submits stays out of the history and its suggestions",
+                  f"suggested: {suggested}; " + lines[-120:])
         errors = sh.errors()
         check(not errors, f"[plugin {name}] no errors from the completion hook", str(errors[:2]))
         sh.close()
@@ -1246,6 +1294,77 @@ check(any(k == "cmd" and base64.b64decode(f[0]).decode() == "cd /tmp\nls" for _,
 errors = liner.errors()
 check(not errors, "[suggest a command] no errors from the hook", str(errors[:2]))
 liner.close()
+
+# 11c. The history hook (history.zsh): a line Next Term or an agent submits by itself (pasted, then the key naming it and
+# the Return in one write, as TerminalTab.submitOwnLine sends them) stays out of the history list, ↑ and the history
+# file, while every other line goes in as before. Each shell has a config and a history file of its own (never the
+# user's), with the options that write each line to the file at once.
+def history_checks(label, extra, completion_on):
+    folder, hist = history_rc(extra)
+    sh = Shell(f"history {label}", folder, completion_on=completion_on)
+    marks = [(n, f) for n, k, f in sh.marks() if k == "hist"]
+    check(marks and all(n == NONCE and f == ["1"] for n, f in marks), f"[history {label}] the hook marks the line, with the nonce",
+          str(marks[:2]))
+    out = os.path.join(sh.zdot, "vars")
+    sh.send(f"setopt > {out}; print -r -- ${{(t)HISTFILE}}:$HISTFILE:$HISTSIZE:$SAVEHIST >> {out}\r", 0.8)
+    _, before = listed(sh, "vars")
+    sh.send("echo user-one\r", 0.6)
+    mark = len(sh.buf)
+    own_line(sh, "echo own-two")
+    cmds = [base64.b64decode(f[0]).decode() for _, k, f in sh.marks(mark) if k == "cmd"]
+    check(cmds == ["echo own-two"] and "own-two\r\n" in sh.text(mark).replace("echo own-two", ""),
+          f"[history {label}] a line Next Term submits runs, and preexec still names it", str(cmds))
+    # ↑ at the next prompt brings back the user's line before it, never Next Term's.
+    mark = len(sh.buf)
+    sh.send("\x1b[A", 0.6)
+    check(sh.line(mark).endswith("echo user-one"), f"[history {label}] ↑ skips it", repr(sh.line(mark)))
+    sh.send("\x03", 0.4)
+    own_line(sh, "echo multi-a\necho multi-b")
+    sh.send("echo user-three\r", 0.6)
+    # A name for another line hides nothing, and is gone with that line: the same text typed next goes in.
+    sh.send(b"\x1b[200~echo typed-on\x1b[201~", 0.3)
+    sh.send(name_key("echo typed") + b"\r", 0.6)
+    sh.send("echo typed\r", 0.6)
+    # A stale name (the line cleared with ^C, or an empty Return) is dropped: the user's line like it goes in.
+    sh.send(b"\x1b[200~echo stale-c\x1b[201~", 0.3)
+    sh.send(name_key("echo stale-c"), 0.3)
+    sh.send("\x03", 0.4)
+    sh.send("echo stale-c\r", 0.6)
+    sh.send(name_key("echo stale-empty") + b"\r", 0.6)
+    sh.send("echo stale-empty\r", 0.6)
+    # The key inside a bracketed paste is text: it names nothing.
+    sh.send(b"\x1b[200~" + name_key("echo pasted") + b"\x1b[201~", 0.3)
+    sh.send("\x15", 0.3)
+    sh.send("echo pasted\r", 0.6)
+    own_line(sh, "echo own-last")
+    # HISTFILE stays exported (`fc -p` drops the export; the hook puts it back), for a line kept out too.
+    own_line(sh, f"printenv HISTFILE > {out}.own-env")
+    _, env = listed(sh, "vars.own-env")
+    check(env.strip() == hist, f"[history {label}] a line Next Term submits still sees HISTFILE exported", repr(env))
+    sh.send(f"setopt > {out}.after; print -r -- ${{(t)HISTFILE}}:$HISTFILE:$HISTSIZE:$SAVEHIST >> {out}.after\r", 0.8)
+    _, after = listed(sh, "vars.after")
+    check(before and before == after and "-export" in before, f"[history {label}] the history options and variables are as they were",
+          after[-120:])
+    sh.send(f"fc -ln -200 > {sh.zdot}/listed\r", 0.8)
+    _, lines = listed(sh, "listed")
+    kept = [l.strip() for l in lines.splitlines()]
+    own = [l for l in kept if "own-" in l or "multi-" in l]
+    check(not own, f"[history {label}] Next Term's lines are not in the history list", str(own))
+    users = ["echo user-one", "echo user-three", "echo typed-on", "echo typed", "echo stale-c", "echo stale-empty", "echo pasted"]
+    check(all(u in kept for u in users), f"[history {label}] every line of the user's is, the ones named in vain too",
+          str([u for u in users if u not in kept]))
+    errors = sh.errors()
+    check(not errors, f"[history {label}] no errors from the history hook", str(errors[:2]))
+    sh.close()
+    written = open(hist, errors="replace").read() if os.path.exists(hist) else ""
+    check("echo user-one" in written and "echo pasted" in written and "own-" not in written and "multi-" not in written,
+          f"[history {label}] nor in the history file, where the user's are", written[-200:])
+    shutil.rmtree(folder, ignore_errors=True)
+
+history_checks("inc_append_history", "setopt inc_append_history", completion_on=True)
+history_checks("hostile, Tab completion off",
+               "setopt nounset ksh_arrays err_return share_history extended_history hist_ignore_space hist_ignore_all_dups",
+               completion_on=False)
 
 # 12. Tab completion's hook on a server (RemoteCompletionHook), started the way a tab's launch command starts it,
 # under a fake home: completion marks only, with the host's nonce read from its file at each prompt, the wait
