@@ -23,6 +23,7 @@ extension SelfTest {
         await secretSourcesRequestUseChecks()
         await secretRotateChecks(c, base: base)
         await secretReminderChecks()
+        await secretFileImportChecks(base: base)
     }
 
     /// Add… suggests the page from the value's head, Use fills it, Save keeps it; a link with a user and password, or

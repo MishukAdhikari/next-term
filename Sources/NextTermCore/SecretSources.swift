@@ -268,6 +268,10 @@ extension SecretSources {
         case notYAML(YAMLSubset.Failure)
         /// A TOML or YAML file past `configMaxBytes`.
         case configTooLarge
+        /// A folder, a package or a device picked as a file.
+        case notAFile
+        /// A file that couldn't be opened: gone, or not the user's to read.
+        case cantOpen
 
         public var sentence: String {
             switch self {
@@ -286,6 +290,8 @@ extension SecretSources {
             case .notTOML(let line): return "It isn\u{2019}t TOML Next Term can read (line \(line))."
             case .notYAML(let failure): return "It isn\u{2019}t YAML Next Term can read. " + failure.sentence
             case .configTooLarge: return "It is larger than the 2 MB Next Term reads in a TOML or YAML file."
+            case .notAFile: return "It isn\u{2019}t a file: choose a file of keys, not a folder or a package."
+            case .cantOpen: return "Next Term couldn\u{2019}t open it."
             }
         }
 
@@ -303,6 +309,8 @@ extension SecretSources {
             case .unknownColumns: return "unknown CSV columns"
             case .notTOML: return "not TOML Next Term can read"
             case .notYAML: return "not YAML Next Term can read"
+            case .notAFile: return "not a file"
+            case .cantOpen: return "can\u{2019}t be opened"
             }
         }
     }

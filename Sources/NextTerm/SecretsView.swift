@@ -40,7 +40,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
     static let writeOnlyLine = "Write-only: Next Term never shows this key again. Replace it to change it."
-    static let emptyLine = "No keys yet. Add one, or move keys out of your MCP configs."
+    static let emptyLine = "No keys yet. Add one, or import them from a file or your MCP configs."
     static let footer = "A command you allow gets the key and can send it anywhere. While it runs, other programs and agents running as "
         + "you can read it. Masking hides stored keys in what agents read through Next Term, but not keys under 12 characters or keys a "
         + "program changes before printing. Write-only means Next Term never shows a key again."
@@ -63,7 +63,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var revealButton = NSButton(title: "Reveal", target: nil, action: nil)
     private(set) var copyButton = NSButton(title: "Copy", target: nil, action: nil)
     private(set) var writeOnlyButton = NSButton(title: "Make Write-Only…", target: nil, action: nil)
-    private(set) var importButton = NSButton(title: "Import from MCP Configs…", target: nil, action: nil)
+    /// Import From: A File… and MCP Configs….
+    private(set) var importMenuButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let allowedBox = NSStackView()
     private(set) var allowedRows: [(grant: SecretGrant, revoke: NSButton)] = []
     private(set) var revokeAllButton = NSButton(title: "Revoke All", target: nil, action: nil)
@@ -83,6 +84,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var revealPopover: NSPopover?
     private(set) var revealField: NSTextField?
     private(set) var importSheet: SecretImportSheet?
+    /// Import From › A File…'s sheet, while it is open.
+    var fileImportSheet: SecretFileImportSheet?
+    /// Recent imports' copy-ins, with their Undo buttons.
+    var copyInRows: [(record: SecretCopyIn.Record, undo: NSButton)] = []
     /// Recent imports, by batch, with their Undo buttons.
     private(set) var importRows: [(batch: String, backups: [SecretImport.EntryBackup], undo: NSButton)] = []
     /// The checkbox in Undo's confirm: also delete the keys from Secrets.
@@ -189,8 +194,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let keyActions: [(NSButton, Selector)] = [(addButton, #selector(add)), (editButton, #selector(edit)), (replaceButton, #selector(replace)),
                                                   (rotateButton, #selector(rotateKey)), (deleteButton, #selector(deleteKey)),
                                                   (revealButton, #selector(reveal)), (copyButton, #selector(copyKey)),
-                                                  (writeOnlyButton, #selector(makeWriteOnly)),
-                                                  (importButton, #selector(importKeys)), (revokeAllButton, #selector(revokeAll))]
+                                                  (writeOnlyButton, #selector(makeWriteOnly)), (revokeAllButton, #selector(revokeAll))]
         for (button, action) in keyActions {
             button.target = self
             button.action = action
@@ -198,7 +202,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
         let keyButtons = NSStackView(views: [addButton, editButton, replaceButton, rotateButton, deleteButton])
         keyButtons.spacing = 8
-        let valueButtons = NSStackView(views: [revealButton, copyButton, writeOnlyButton, NSView(), importButton])
+        configureImportMenu()
+        let valueButtons = NSStackView(views: [revealButton, copyButton, writeOnlyButton, NSView(), importMenuButton])
         valueButtons.spacing = 8
         for box in [allowedBox, pausedBox, importsBox] {
             box.orientation = .vertical
@@ -290,7 +295,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         agentControlLabel.isHidden = entries.isEmpty || Self.agentControlIsOn()
         emptyLabel.isHidden = !entries.isEmpty || broken
         addButton.isEnabled = !broken
-        importButton.isEnabled = !broken
+        importMenuButton.isEnabled = !broken
         refreshButtons()
         reloadAllowed()
         reloadImports()
@@ -639,7 +644,9 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     }
 
     /// Whether a sheet is open on the list's window: Add…, Edit…, Replace…, Rotate…, or a question.
-    var hasOpenSheet: Bool { sheet != nil || rotateSheet != nil || window?.attachedSheet != nil }
+    var hasOpenSheet: Bool {
+        sheet != nil || rotateSheet != nil || fileImportSheet != nil || window?.attachedSheet != nil
+    }
 
     private func openRotateSheet(_ entry: SecretVault.Entry) {
         guard sheet == nil, rotateSheet == nil, let window else { return }
@@ -725,11 +732,23 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
     }
 
-    @objc func importKeys() {
+    @objc func importKeys() { openMoveImport() }
+
+    /// Import From › MCP Configs…, or, for a file the user picked that it rewrites, that file alone (`only`). `then`
+    /// runs once the sheet has closed.
+    func openMoveImport(only source: SecretImport.Source? = nil, then: (() -> Void)? = nil) {
         guard importSheet == nil, let window else { return }
-        let sheet = SecretImportSheet(Self.importSetup()) { [weak self] in
+        var setup: SecretImportSheet.Setup = Self.importSetup()
+        if let source { setup.sources = [source] }
+        var after: (() -> Void)? = then
+        let sheet = SecretImportSheet(setup) { [weak self] in
             guard let self else { return }
-            if self.importSheet?.window?.sheetParent == nil { self.importSheet = nil }
+            if self.importSheet?.window?.sheetParent == nil {
+                self.importSheet = nil
+                let next: (() -> Void)? = after
+                after = nil
+                next?()
+            }
             self.reload()
         }
         importSheet = sheet
@@ -741,10 +760,13 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private func reloadImports() {
         for view in importsBox.arrangedSubviews { view.removeFromSuperview() }
         importRows = []
+        copyInRows = []
         let backups = SecretsStore.shared.recentBackups()
-        importsBox.isHidden = backups.isEmpty
-        guard !backups.isEmpty else { return }
+        let copyIns = SecretsStore.shared.recentCopyIns()
+        importsBox.isHidden = backups.isEmpty && copyIns.isEmpty
+        guard !importsBox.isHidden else { return }
         importsBox.addArrangedSubview(Self.heading("Recent imports"))
+        addCopyInRows(copyIns)
         var batches: [String] = []
         for backup in backups where !batches.contains(backup.batch) { batches.append(backup.batch) }
         for batch in batches {
@@ -857,7 +879,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     @objc private func openDocs() { NSWorkspace.shared.open(Self.docsURL) }
 
     /// The confirm, as a sheet; `then` runs on its first button.
-    private func confirm(_ alert: NSAlert, then: @escaping () -> Void) {
+    func confirm(_ alert: NSAlert, then: @escaping () -> Void) {
         guard self.alert == nil, let window else { return }
         self.alert = alert
         alert.beginSheetModal(for: window) { [weak self] response in

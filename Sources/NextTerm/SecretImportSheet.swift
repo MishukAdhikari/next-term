@@ -33,6 +33,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         var lockWait: TimeInterval = 5
         /// The command moved entries start (`nxtrmCommand()`); nil when no path to it lasts, and the import refuses.
         var nxtrm: [String]?
+        /// The one file to look in, when the user picked it (Import From › A File…); nil looks in every config.
+        var sources: [SecretImport.Source]?
     }
 
     /// One row the user can tick: a group of identical values.
@@ -161,11 +163,14 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         guard setup.nxtrm != nil else { return refuse(Self.placeRefusal) }
         let count = setup.projects.count
         headerLabel.stringValue = "Looked in your agents' settings and in the \(count) \(count == 1 ? "project" : "projects") open in Next Term."
+        if let picked = setup.sources {
+            headerLabel.stringValue = "Looked in " + picked.map { Self.file($0.path) }.joined(separator: ", ") + "."
+        }
         statusLabel.stringValue = "Looking…"
         let setup = setup
         scanTask?.cancel()
         scanTask = Task.detached {
-            let sources = SecretImport.sources(home: setup.home, projects: setup.projects)
+            let sources = setup.sources ?? SecretImport.sources(home: setup.home, projects: setup.projects)
             let found = SecretImport.scan(sources, inGitWorkTree: SecretImport.isInGitWorkTree, isOpen: setup.isOpen)
             // Checked again on the main actor, where `closeSheet` cancels: a scan that ended as the sheet closed shows nothing.
             await MainActor.run {

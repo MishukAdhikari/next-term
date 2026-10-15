@@ -140,6 +140,14 @@ enum SecretReason {
     static func replaceWithAgentsKey(_ name: String) -> String { "replace \(name) with the agent’s key" }
     static func moveOut(_ count: Int) -> String { "move \(count) \(count == 1 ? "key" : "keys") out of your MCP configs" }
     static func putBack(_ count: Int) -> String { "put \(count) \(count == 1 ? "key" : "keys") back into your MCP configs" }
+    /// Import From › A File…: "copy 3 keys from .env", the file's name only.
+    static func copyIn(_ count: Int, from source: String) -> String {
+        "copy \(count) \(count == 1 ? "key" : "keys") from \(source)"
+    }
+    /// Undo of a copy-in: the keys it added are deleted.
+    static func removeCopied(_ count: Int) -> String {
+        "delete \(count) \(count == 1 ? "key" : "keys") an import copied in"
+    }
 
     /// "GITHUB_TOKEN", "A and B", or "5 keys" for three or more.
     static func keys(_ names: [String]) -> String {

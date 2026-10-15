@@ -845,7 +845,7 @@ final class SecretsStore {
     /// A presence check, then `change` on the unlocked vault off the main thread, then `line`, when given, in the audit
     /// log. Returns the index the unlock read and MAC-checked, as `change` left it.
     @discardableResult
-    private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
+    func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
                      line: (() -> SecretAudit.Line)?) async throws -> SecretVault.Index? {
         reloadIfChanged()
         if protection == .tampered { throw refusal }
