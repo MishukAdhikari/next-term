@@ -1,11 +1,11 @@
 import CryptoKit
 import Foundation
 
-// Keys copied in from a file of keys: a `.env`, a JSON document, and the formats that follow. Each reader is a pure
-// function from bytes to a report. It runs nothing, follows no `$(…)`, include or `source`, and never writes the file.
-// Values go into `SecretBytes` as each reader finds them and are wiped when the report goes. A row's value, its place in
-// the file and its last characters are for the preview on the Mac only: what an agent learns is `answer(for:)`, names
-// and counts.
+// Keys copied in from a file of keys: a `.env`, a JSON document, a CSV, and password managers' exports. Each reader is
+// a pure function from bytes to a report. It runs nothing, follows no `$(…)`, include or `source`, and never writes the
+// file. Values go into `SecretBytes` as each reader finds them and are wiped when the report goes. A row's value, its
+// place in the file and its last characters are for the preview on the Mac only: what an agent learns is
+// `answer(for:)`, names and counts.
 
 /// One key found in a file: what the preview lists, with its tick, note and link. The preview edits its name and tick
 /// (R16); it never ticks a row with a refusal.
@@ -28,6 +28,8 @@ public struct SourceRow: Sendable, GroupableValue {
     public let refusal: SecretSources.Refusal?
     /// The other places the same name held the same value: one row for them all.
     public internal(set) var alsoAt: [String] = []
+    /// Its name was made from an item's title or a site: the preview says agents will see it.
+    public let fromTitle: Bool
     /// The last 4 characters, for a value of 12 characters or more; nil for a shorter one, which shows as dots. Taken
     /// once, from the text the parse made, so reading it makes no copy of the value.
     public let lastFour: String?
@@ -39,7 +41,8 @@ public struct SourceRow: Sendable, GroupableValue {
 
     /// A row for `text`, the value as the parse found it (trimmed), which goes into `SecretBytes` here.
     init(name: String, text: String, kind: String, place: String, line: Int?, link: SecretSources.LinkHint? = nil,
-         ticked: Bool, note: SecretSources.Note? = nil, refusal: SecretSources.Refusal? = nil, scope: String) {
+         ticked: Bool, note: SecretSources.Note? = nil, refusal: SecretSources.Refusal? = nil, scope: String,
+         fromTitle: Bool = false) {
         self.name = name
         value = SecretBytes(utf8: text)
         self.kind = kind
@@ -51,6 +54,7 @@ public struct SourceRow: Sendable, GroupableValue {
         self.refusal = refusal
         lastFour = SecretSources.lastFour(of: text)
         self.scope = scope
+        self.fromTitle = fromTitle
     }
 }
 
@@ -61,16 +65,21 @@ public final class SourceReport: Sendable {
     public let rows: [SourceRow]
     public let notKeys: [SecretSources.NotKey]
     public let unreadable: SecretSources.Unreadable?
-    /// What each key copied in is for: fixed text from the file's name and folder, never from its content.
+    /// What each key copied in is for: fixed text from the file's name and folder, or the app that wrote an export,
+    /// never from its content.
     public let purpose: String
+    /// The app that wrote the export ("Bitwarden", "Chrome"); nil for a project's own file. An export is one to move to
+    /// the Trash once its keys are in.
+    public let exportedBy: String?
 
     init(format: SecretSources.Format, rows: [SourceRow] = [], notKeys: [SecretSources.NotKey] = [],
-         unreadable: SecretSources.Unreadable? = nil, purpose: String) {
+         unreadable: SecretSources.Unreadable? = nil, purpose: String, exportedBy: String? = nil) {
         self.format = format
         self.rows = rows
         self.notKeys = notKeys
         self.unreadable = unreadable
-        self.purpose = purpose
+        self.exportedBy = exportedBy
+        self.purpose = exportedBy.map { (app: String) -> String in "From " + app } ?? purpose
     }
 
     /// "4 other values aren't keys.", or nil when there are none.
@@ -88,6 +97,11 @@ public enum SecretSources {
     public enum Format: String, Sendable, CaseIterable {
         case env
         case json
+        case csv
+        case bitwarden
+        case onePassword = "1password"
+        /// Bitwarden Secrets Manager's `bws secret list`.
+        case bws
     }
 
     /// Where a row's link comes from: the file itself (a URL in the comment above a `.env` key), or a page suggested on
@@ -121,6 +135,10 @@ public enum SecretSources {
         /// A value under such a name with no key's shape.
         case publicName
         case loaderReadsDollar
+        /// A website's sign-in password from a password manager or a browser, with no key's shape.
+        case websitePassword
+        /// Bitwarden asks for the master password again before it shows the item.
+        case reprompt
 
         public var sentence: String {
             switch self {
@@ -132,6 +150,8 @@ public enum SecretSources {
             case .shipsToBrowsers: return "This name ships the value to browsers."
             case .publicName: return "Its name sends it to browsers, so it isn\u{2019}t secret."
             case .loaderReadsDollar: return "Next.js, Vite and Compose read the $ in it as a variable."
+            case .websitePassword: return "A website password; usually not an API key"
+            case .reprompt: return "Bitwarden asks for your master password before showing it"
             }
         }
 
@@ -185,6 +205,8 @@ extension SecretSources {
         case placeholder
         /// A number, a boolean, a URL, a model's name: a setting.
         case setting
+        /// 1Password's CLI printed a note in its place, as it does without `--reveal`.
+        case concealed
 
         public var sentence: String {
             switch self {
@@ -192,6 +214,7 @@ extension SecretSources {
             case .reference: return "A reference to a key kept elsewhere"
             case .placeholder: return "A placeholder"
             case .setting: return "A setting"
+            case .concealed: return "Hidden by 1Password\u{2019}s CLI; run it again with --reveal"
             }
         }
     }
@@ -205,6 +228,14 @@ extension SecretSources {
         case notText
         case notJSON
         case tooMany
+        /// A Bitwarden export sealed by the account's key or a password.
+        case encryptedExport
+        /// Text or an archive that isn't the app's export it was read as.
+        case notAnExport(from: String)
+        case archive(ZipReader.Failure)
+        case csv(CSVReader.Failure)
+        /// A CSV whose header names no column Next Term knows.
+        case unknownColumns
 
         public var sentence: String {
             switch self {
@@ -213,15 +244,28 @@ extension SecretSources {
             case .notText: return "It isn\u{2019}t text Next Term can read."
             case .notJSON: return "It isn\u{2019}t JSON Next Term can read."
             case .tooMany: return "It holds more values than Next Term reads."
+            case .encryptedExport:
+                let again = "Export again as .json (unencrypted), or use Import from Bitwarden\u{2026}"
+                return "This export is encrypted. " + again
+            case .notAnExport(let app): return "It isn\u{2019}t a \(app) export Next Term can read."
+            case .archive(let failure): return failure.sentence
+            case .csv(let failure): return failure.sentence
+            case .unknownColumns: return "Next Term can\u{2019}t tell which column holds the keys."
             }
         }
 
+        /// The kind of reason, for an agent: no line, name or part of the file.
         public var reasonClass: String {
             switch self {
             case .tooLarge, .envTooLarge: return "too large"
             case .notText: return "not text"
             case .notJSON: return "not valid JSON"
             case .tooMany: return "too many values"
+            case .encryptedExport: return "an encrypted Bitwarden export"
+            case .notAnExport(let app): return "not a \(app) export"
+            case .archive: return "an archive Next Term can\u{2019}t read"
+            case .csv: return "not a CSV Next Term can read"
+            case .unknownColumns: return "unknown CSV columns"
             }
         }
     }
@@ -229,6 +273,8 @@ extension SecretSources {
     /// The most a file read for an import may hold, and the most values it may have. A `.env` may hold no more than the
     /// editor reads (`EnvFile.maxSize`, 512 KB).
     public static let maxBytes = 5 * 1024 * 1024
+    /// The most an archive (1Password's `.1pux`) may hold: its `export.data` is read from it in memory.
+    public static let maxArchiveBytes = ZipReader.maxEntryBytes
     static let maxValues = 50_000
 
     /// The last 4 characters of a value of 12 characters or more, counted as the preview shows them (a character of
@@ -306,16 +352,32 @@ extension SecretSources {
         var kind: String?
         /// It only points at a key kept elsewhere (a `valueFrom`): counted as a reference.
         var reference = false
+        /// How a password manager vouches for it; nil for a value judged by its look.
+        var managed: Managed?
+        /// Its name was made from an item's title or a site.
+        var fromTitle = false
     }
 
-    /// The format a file is read as. A name ending `.json` or `.jsonc` wins (`.env.json` is JSON); then a `.env`
-    /// family name, since no `.env` is JSON; then text that starts as JSON does (past comments); else the `.env` family.
-    /// Text that only starts like JSON with no JSON name is read as a `.env` when it doesn't parse (`read`).
+    /// How a password manager vouches for a value it holds: taken as it is, never a reference or a setting.
+    enum Managed {
+        /// A field the manager keeps hidden (Bitwarden's hidden field, 1Password's concealed one), a `bws` secret, or a
+        /// password whose item's title names a key: ticked.
+        case secret
+        /// A website's sign-in password: ticked only when it has a key's shape.
+        case login
+    }
+
+    /// The format a file is read as. A name ending `.json` or `.jsonc` wins (`.env.json` is JSON), or `.csv`; then a
+    /// `.env` family name, since no `.env` is JSON; then text that starts as JSON does (past comments), or a first line
+    /// that is a CSV header Next Term knows; else the `.env` family. Text that only starts like JSON with no JSON name
+    /// is read as a `.env` when it doesn't parse (`read`). A password manager's JSON is told apart once it is parsed.
     public static func detect(text: String, name: String) -> Format {
         let file: String = (name as NSString).lastPathComponent.lowercased()
         if isJSONName(file) { return .json }
+        if file.hasSuffix(".csv") { return .csv }
         if EnvFile.isEnvFile(named: file) || isEnvrc(file) { return .env }
-        return startsLikeJSON(text) ? .json : .env
+        if startsLikeJSON(text) { return .json }
+        return startsWithKnownHeader(text) ? .csv : .env
     }
 
     static func isJSONName(_ file: String) -> Bool { file.hasSuffix(".json") || file.hasSuffix(".jsonc") }
@@ -357,14 +419,19 @@ extension SecretSources {
     }
 
     /// The report for a file's bytes, as `format` or as `detect` says. `name` is the file's name, `folder` its folder's,
-    /// for the purpose only. `stored` names the keys already in the vault: a row of one of those starts unticked. The
-    /// bytes are wiped before it returns; the strings the parse makes can't be, and go with it. A file near the limits
-    /// can take seconds: the app calls this off the main thread.
+    /// for the purpose only; an export's purpose names the app that wrote it instead. A zip archive is read as a
+    /// 1Password export (`.1pux`), up to `maxArchiveBytes`; any other file up to `maxBytes`. `stored` names the keys
+    /// already in the vault: a row of one of those starts unticked. The bytes are wiped before it returns; the strings
+    /// the parse makes can't be, and go with it. A file near the limits can take seconds: the app calls this off the main
+    /// thread.
     public static func read(_ bytes: inout [UInt8], name: String, folder: String? = nil, format: Format? = nil,
                             stored: Set<String> = [], now: Date = Date()) -> SourceReport {
         defer { SecretBytes.wipe(&bytes) }
         let file: String = (name as NSString).lastPathComponent
         let purpose: String = purpose(file: file, folder: folder)
+        if format == nil || format == .onePassword, ZipReader.isZip(bytes) {
+            return onePUXReport(bytes, stored: stored, now: now)
+        }
         guard bytes.count <= maxBytes else {
             return SourceReport(format: format ?? .env, unreadable: .tooLarge, purpose: purpose)
         }
@@ -373,6 +440,12 @@ extension SecretSources {
         }
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         var chosen: Format = format ?? detect(text: text, name: file)
+        if chosen == .csv { return csvReport(text, purpose: purpose, stored: stored, now: now) }
+        if chosen == .json || chosen == .bitwarden || chosen == .onePassword || chosen == .bws {
+            let forced: Format? = chosen == .json ? nil : chosen
+            if let managed = managerReport(text, as: forced, stored: stored, now: now) { return managed }
+            if forced != nil { return SourceReport(format: chosen, unreadable: .notJSON, purpose: purpose) }
+        }
         var found: [Found]?
         if chosen == .json {
             found = jsonFound(text)
@@ -400,7 +473,8 @@ extension SecretSources {
     /// The rules run over each value, trimmed (a blank or a line break at either end is a copy's, not the key's), then
     /// the links, then the file's own rules: a name set again, the same name in two sections, and a name already in the
     /// vault.
-    static func report(_ found: [Found], format: Format, purpose: String, stored: Set<String>, now: Date) -> SourceReport {
+    static func report(_ found: [Found], format: Format, purpose: String, stored: Set<String>, now: Date,
+                       exportedBy: String? = nil) -> SourceReport {
         var rows: [SourceRow] = []
         var notKeys: [NotKey] = []
         var sources: [String?] = []
@@ -418,8 +492,9 @@ extension SecretSources {
                 sources.append(nil)
                 continue
             }
-            let judged: Classified = classify(name: item.name, value: text, sourceSays: item.sourceSays,
-                                              isText: item.isText, now: now)
+            let judged: Classified = item.managed.map { (managed: Managed) -> Classified in
+                classifyManaged(name: item.name, value: text, as: managed, now: now)
+            } ?? classify(name: item.name, value: text, sourceSays: item.sourceSays, isText: item.isText, now: now)
             switch judged {
             case .none:
                 continue
@@ -429,7 +504,8 @@ extension SecretSources {
                 let extra: Note? = refusal == nil ? item.note : nil
                 let keeps: Bool = extra?.keepsTick ?? true
                 rows.append(SourceRow(name: item.name, text: text, kind: kind, place: item.place, line: item.line,
-                                      ticked: ticked && keeps, note: note ?? extra, refusal: refusal, scope: item.scope))
+                                      ticked: ticked && keeps, note: note ?? extra, refusal: refusal, scope: item.scope,
+                                      fromTitle: item.fromTitle))
                 sources.append(item.link)
             }
         }
@@ -437,7 +513,7 @@ extension SecretSources {
         rows = settingAgain(rows)
         rows = sectioned(rows)
         rows = replacing(rows, stored: stored)
-        return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose)
+        return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose, exportedBy: exportedBy)
     }
 
     /// Each row's link: the source's own (`sources`, by row) when it passes the link rules and holds no value in the
