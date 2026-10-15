@@ -323,7 +323,7 @@ import Testing
 
     @Test func herdrAgentsBecomeOneTabActivity() {
         func agent(_ status: HerdrAgent.Status, _ name: String = "claude") -> HerdrAgent {
-            HerdrAgent(paneID: "p", name: name, status: status)
+            HerdrAgent(paneID: "p", kind: name, status: status)
         }
         #expect(HerdrAgent.activity([agent(.idle), agent(.working)]) == .working)
         #expect(HerdrAgent.activity([agent(.done)]) == .idle)

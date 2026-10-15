@@ -22,20 +22,54 @@ import Testing
         #expect(listed.map(\.status) == [.working, .blocked, .done])
         // The name it was given, else the agent's; the title without its spinner; the folder in front.
         #expect(listed.map(\.name) == ["api", "codex", "gemini"])
+        #expect(listed.map(\.kind) == ["claude", "codex", "gemini"] && listed.map(\.customName) == ["api", nil, nil])
         #expect(listed[0].title == "Fix the login" && listed[0].directory == "/home/me/api/src")
         #expect(listed[1].directory == "/home/me/web" && listed[2].directory == nil)
     }
 
+    @Test func herdr091GivesEachAgentsKindNameWorkspaceTabFocusAndChanges() throws {
+        let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.9.1.json"), exit: 0)))
+        #expect(listed == [
+            HerdrAgent(paneID: "w1:p1", customName: "api", kind: "claude", status: .working, title: "Fix the login",
+                       directory: "/home/me/api/src", workspaceID: "w1", tabID: "w1:t1", focused: true, stateSeq: 9),
+            HerdrAgent(paneID: "w2:p1", kind: "codex", status: .blocked, directory: "/home/me/web", workspaceID: "w2", tabID: "w2:t1",
+                       stateSeq: 4),
+        ])
+        // herdr 0.9.1 has no count of finished turns; 0.9.4 does.
+        #expect(listed.allSatisfy { $0.completionSeq == nil })
+        let v094 = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.9.4.json"))))
+        #expect(v094.map(\.completionSeq) == [3, nil, 1] && v094.map(\.stateSeq) == [14, 2, 5])
+        #expect(v094.map(\.focused) == [true, false, false] && v094.map(\.tabID) == ["w1:t1", "w1:t2", "w2:t1"])
+    }
+
+    @Test func onlyBooleansAreFocusAndOnlyWholeNumbersAreCounts() {
+        let output = #"{"agents":[{"pane_id":"a","agent":"claude","agent_status":"idle","focused":"yes","launch_pending":1,"state_change_seq":true,"completion_seq":"4"},{"pane_id":"b","agent":"codex","agent_status":"idle","focused":true,"launch_pending":true,"state_change_seq":2.5,"completion_seq":-1}]}"#
+        let listed = agents(HerdrAgent.listing(output: output))
+        #expect(listed?.map(\.focused) == [false, true] && listed?.map(\.launchPending) == [false, true])
+        #expect(listed?.map(\.stateSeq) == [nil, nil] && listed?.map(\.completionSeq) == [nil, nil])
+    }
+
+    @Test func aPaneListLacksWhatOlderHerdrNeverGave() throws {
+        // 0.4.0 names no tab, and no state count.
+        let v040 = try #require(agents(HerdrAgent.listing(output: try fixture("pane-list-0.4.0.json"), exit: 0, command: "pane")))
+        #expect(v040.first?.workspaceID == "1" && v040.first?.tabID == nil && v040.first?.stateSeq == nil)
+        // The name is what runs when it was given none.
+        #expect(v040.first?.customName == nil && v040.first?.name == "codex")
+    }
+
     @Test func herdr070AndItsCustomStatusRead() throws {
         let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.7.0.json"))))
-        #expect(listed == [HerdrAgent(paneID: "w1:p1", name: "Claude Code", status: .idle, title: "Refactor the poller",
-                                      directory: "/srv/app/api")])
+        #expect(listed == [HerdrAgent(paneID: "w1:p1", kind: "Claude Code", status: .idle, title: "Refactor the poller",
+                                      directory: "/srv/app/api", workspaceID: "w1", tabID: "w1:t1", focused: true)])
     }
 
     @Test func herdr0510sMinimalShapeAndOldPaneIDsRead() throws {
         let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.5.10.json"))))
-        #expect(listed == [HerdrAgent(paneID: "1-1", name: "claude", status: .working, directory: "/home/me/app")])
+        #expect(listed == [Self.agent0510])
     }
+
+    static let agent0510 = HerdrAgent(paneID: "1-1", customName: "claude", kind: "claude", status: .working, directory: "/home/me/app",
+                                      workspaceID: "64e95948145ed1", tabID: "64e95948145ed1-1", focused: true)
 
     @Test func anEmptyListIsAnAnswer() throws {
         let empty = try fixture("agent-list-empty.json")
@@ -71,16 +105,19 @@ import Testing
         guard case .failed = shim else { Issue.record("\(shim)"); return }
     }
 
+    static let agent045 = HerdrAgent(paneID: "w64e95948145ed1-1", kind: "claude", status: .done, directory: "/home/me/app",
+                                     workspaceID: "w64e95948145ed1", tabID: "w64e95948145ed1-t1", focused: true)
+
     @Test func herdrBefore0510HasNoAgentCommandAndItsPaneListIsRead() throws {
         let old = HerdrAgent.listing(output: try fixture("unknown-command-0.4.txt"), exit: 1, command: "agent")
         guard case .failed(let why) = old else { Issue.record("\(old)"); return }
         #expect(why.contains("older than 0.5.10"))
         // The check then asks `pane list`: only the panes with an agent are agents. 0.4.5 says agent_status…
         let v045 = try #require(agents(HerdrAgent.listing(output: try fixture("pane-list-0.4.5.json"), exit: 0, command: "pane")))
-        #expect(v045 == [HerdrAgent(paneID: "w64e95948145ed1-1", name: "claude", status: .done, directory: "/home/me/app")])
+        #expect(v045 == [Self.agent045])
         // …and 0.4.0 agent_state, with no `done` yet.
         let v040 = try #require(agents(HerdrAgent.listing(output: try fixture("pane-list-0.4.0.json"), exit: 0, command: "pane")))
-        #expect(v040 == [HerdrAgent(paneID: "1-1", name: "codex", status: .blocked, directory: "/home/me/app")])
+        #expect(v040 == [HerdrAgent(paneID: "1-1", kind: "codex", status: .blocked, directory: "/home/me/app", workspaceID: "1", focused: true)])
     }
 
     @Test func noiseAroundTheJSONIsReadPast() throws {
@@ -103,7 +140,8 @@ import Testing
 
     @Test func prettyPrintedJSONReads() throws {
         let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-pretty.json"))))
-        #expect(listed == [HerdrAgent(paneID: "w1:p1", name: "claude", status: .blocked, directory: "/home/me/api")])
+        #expect(listed == [HerdrAgent(paneID: "w1:p1", kind: "claude", status: .blocked, directory: "/home/me/api", workspaceID: "w1",
+                                      tabID: "w1:t1", focused: true)])
     }
 
     @Test func aCutAnswerIsNeverAPartialList() throws {
@@ -159,7 +197,7 @@ import Testing
         let (report, consumed) = HerdrReport.parse(section: lines[...])
         #expect(consumed == 4)
         #expect(report.path == "/home/me/.local/bin/herdr" && report.how == "login")
-        #expect(report.listing == .agents([HerdrAgent(paneID: "1-1", name: "claude", status: .working, directory: "/home/me/app")]))
+        #expect(report.listing == .agents([Self.agent0510]))
         // The check found no herdr.
         let missing = HerdrReport.parse(section: ["missing\tpath,local-bin", Substring(RemoteShell.herdrEndMarker)])
         #expect(missing.report.listing == .missing && missing.report.path == nil && missing.consumed == 2)
@@ -191,7 +229,7 @@ import Testing
 
 /// What a herdr tab makes of each status check.
 @Suite struct HerdrWatchTests {
-    let agent = HerdrAgent(paneID: "w1:p1", name: "claude", status: .working)
+    let agent = HerdrAgent(paneID: "w1:p1", kind: "claude", status: .working)
 
     @Test func herdrsAgentsAreShownWhileItAnswers() {
         var watch = HerdrWatch()

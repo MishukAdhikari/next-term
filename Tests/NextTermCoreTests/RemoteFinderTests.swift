@@ -324,7 +324,7 @@ import Testing
         let panes = try String(contentsOf: HerdrListingTests.fixtures.appendingPathComponent("pane-list-0.4.5.json"), encoding: .utf8)
         try herdr(at: home + "/.local/bin/herdr", error: "unknown command: agent", paneList: panes.trimmingCharacters(in: .newlines))
         let old = try #require(RemotePoll.parse(try run(poll))?.herdr)
-        #expect(old.listing == .agents([HerdrAgent(paneID: "w64e95948145ed1-1", name: "claude", status: .done, directory: "/home/me/app")]))
+        #expect(old.listing == .agents([HerdrListingTests.agent045]))
         // Not there at all.
         try FileManager.default.removeItem(atPath: home + "/.local/bin/herdr")
         guard !Self.herdrOnThisMac else { return }
@@ -335,7 +335,7 @@ import Testing
     @Test func theStatusCheckReadsAnAnswerThatWorkedAsHerdrGaveIt() throws {
         let poll = RemoteShell.pollScript(tabs: [], herdr: true)
         let list = #"{"result":{"agents":[{"pane_id":"p1","name":"claude","agent_status":"working","title":"Fix unknown command error"}]}}"#
-        let agent = HerdrAgent(paneID: "p1", name: "claude", status: .working, title: "Fix unknown command error")
+        let agent = HerdrAgent(paneID: "p1", customName: "claude", status: .working, title: "Fix unknown command error")
         // An agent's title that says "unknown command", in an answer that worked: `pane list` is not asked.
         try herdr(at: home + "/.local/bin/herdr", list: list, paneList: #"{"result":{"panes":[]}}"#)
         let listed = try #require(RemotePoll.parse(try run(poll))?.herdr)

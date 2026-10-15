@@ -103,10 +103,45 @@ public struct HerdrAgent: Equatable, Sendable {
         case idle, working, blocked, done, unknown
     }
     public var paneID: String
-    public var name: String
+    /// The name the user gave it in herdr (`name`), nil when it has none.
+    public var customName: String?
+    /// What runs in the pane, as herdr names it (`display_agent`, else `agent`; a pane's `label` before herdr had
+    /// either): "claude", "Claude Code".
+    public var kind: String?
     public var status: Status
     public var title: String?
     public var directory: String?
+    /// herdr's workspace and tab ids for the pane (`w1`, `w1:t1`), when its list gives them.
+    public var workspaceID: String?
+    public var tabID: String?
+    /// The pane has herdr's focus.
+    public var focused: Bool
+    /// herdr's count of the agent's state changes (`state_change_seq`), and of its finished turns (`completion_seq`,
+    /// herdr 0.9.4 and later): nil when its list has none.
+    public var stateSeq: Int?
+    public var completionSeq: Int?
+    /// herdr is still starting the agent.
+    public var launchPending: Bool
+
+    public init(paneID: String, customName: String? = nil, kind: String? = nil, status: Status, title: String? = nil,
+                directory: String? = nil, workspaceID: String? = nil, tabID: String? = nil, focused: Bool = false,
+                stateSeq: Int? = nil, completionSeq: Int? = nil, launchPending: Bool = false) {
+        self.paneID = paneID
+        self.customName = customName
+        self.kind = kind
+        self.status = status
+        self.title = title
+        self.directory = directory
+        self.workspaceID = workspaceID
+        self.tabID = tabID
+        self.focused = focused
+        self.stateSeq = stateSeq
+        self.completionSeq = completionSeq
+        self.launchPending = launchPending
+    }
+
+    /// What the agent is called: the name it was given, else what runs.
+    public var name: String { customName ?? kind ?? "agent" }
 
     /// The most agents one list gives.
     static let maxAgents = 500
@@ -122,25 +157,7 @@ public struct HerdrAgent: Equatable, Sendable {
     /// together, and its exit status.
     public static func listing(output: String, exit: Int32? = nil, command: String = "agent") -> HerdrListing {
         let text = plain(output)
-        let bytes = Array(text.utf8)
-        // The whole of it, then from each `{` or `[` (8 at most) to its matching end: herdr's answer after or before noise.
-        // A bare array counts only as the whole answer: inside a cut one, an array is never the list.
-        if let value = json(bytes[...]), let listing = read(value, panes: command == "pane", whole: true) { return listing }
-        var from = 0
-        var tries = 0
-        while tries < 8, let open = bytes[from...].firstIndex(where: { $0 == UInt8(ascii: "{") || $0 == UInt8(ascii: "[") }) {
-            tries += 1
-            guard let end = matchingEnd(bytes, from: open) else {
-                from = open + 1
-                continue
-            }
-            if let value = json(bytes[open...end]) {
-                if let listing = read(value, panes: command == "pane", whole: false) { return listing }
-                from = end + 1 // JSON, but not herdr's (a tool's own log line): past it
-            } else {
-                from = open + 1
-            }
-        }
+        if let listing = scan(text, { value, whole in read(value, panes: command == "pane", whole: whole) }) { return listing }
         let said = text.trimmingCharacters(in: .whitespaces)
         let status = exit.map { $0 == 0 ? "" : " (exit \($0))" } ?? ""
         if said.isEmpty { return .failed("herdr printed nothing" + status) }
@@ -154,6 +171,30 @@ public struct HerdrAgent: Equatable, Sendable {
                     "connection refused", "server_not_running"]
         if gone.contains(where: { lower.contains($0) }) { return .notRunning(shown(said)) }
         return .failed(shown(said))
+    }
+
+    /// The first of herdr's answers `read` takes in `text` (`plain` already): the whole of it, then from each `{` or `[`
+    /// (8 at most) to its matching end, herdr's answer after or before noise. `read` is told whether the value is the
+    /// whole text: a bare array counts only as the whole answer, since inside a cut one an array is never the list.
+    static func scan<T>(_ text: String, _ read: (Any, Bool) -> T?) -> T? {
+        let bytes = Array(text.utf8)
+        if let value = json(bytes[...]), let found = read(value, true) { return found }
+        var from = 0
+        var tries = 0
+        while tries < 8, let open = bytes[from...].firstIndex(where: { $0 == UInt8(ascii: "{") || $0 == UInt8(ascii: "[") }) {
+            tries += 1
+            guard let end = matchingEnd(bytes, from: open) else {
+                from = open + 1
+                continue
+            }
+            if let value = json(bytes[open...end]) {
+                if let found = read(value, false) { return found }
+                from = end + 1 // JSON, but not herdr's (a tool's own log line): past it
+            } else {
+                from = open + 1
+            }
+        }
+        return nil
     }
 
     /// herdr's answer as one line of text: a byte order mark, colours and other escape sequences, and control
@@ -192,7 +233,7 @@ public struct HerdrAgent: Equatable, Sendable {
     }
 
     /// A JSON object or array, or nil.
-    private static func json(_ bytes: ArraySlice<UInt8>) -> Any? {
+    static func json(_ bytes: ArraySlice<UInt8>) -> Any? {
         guard let first = bytes.first(where: { $0 != 0x20 }), first == UInt8(ascii: "{") || first == UInt8(ascii: "[") else { return nil }
         return try? JSONSerialization.jsonObject(with: Data(bytes))
     }
@@ -267,7 +308,8 @@ public struct HerdrAgent: Equatable, Sendable {
     }
 
     /// One item, whatever herdr version wrote it: `agent_status` (0.4.5 and later), `agent_state` (0.4.0), or a plain
-    /// `status` or `state`; a pane id as text or a number, else the terminal's.
+    /// `status` or `state`; a pane id as text or a number, else the terminal's. Booleans are read as booleans only (a
+    /// `"focused": "yes"` is not focus), and the counters as whole numbers.
     private static func agent(_ item: [String: Any]) -> HerdrAgent {
         func first(_ keys: [String], max: Int) -> String? {
             keys.lazy.compactMap { string(item[$0], max: max) }.first { !$0.isEmpty }
@@ -276,15 +318,36 @@ public struct HerdrAgent: Equatable, Sendable {
         let status = Status(rawValue: said.trimmingCharacters(in: .whitespaces).lowercased()) ?? .unknown
         return HerdrAgent(
             paneID: first(["pane_id", "terminal_id"], max: 80) ?? "",
-            name: first(["name", "display_agent", "agent", "label"], max: 80) ?? "agent",
+            customName: first(["name"], max: 80),
+            kind: first(["display_agent", "agent", "label"], max: 80),
             status: status,
             title: first(["terminal_title_stripped", "title"], max: 80),
-            directory: first(["foreground_cwd", "cwd"], max: 1024)
+            directory: first(["foreground_cwd", "cwd"], max: 1024),
+            workspaceID: first(["workspace_id"], max: 80),
+            tabID: first(["tab_id"], max: 80),
+            focused: boolean(item["focused"]),
+            stateSeq: count(item["state_change_seq"]),
+            completionSeq: count(item["completion_seq"]),
+            launchPending: boolean(item["launch_pending"])
         )
     }
 
+    /// A JSON boolean; anything else is false.
+    static func boolean(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+        return number.boolValue
+    }
+
+    /// A JSON whole number of 0 or more (never a boolean), or nil.
+    static func count(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let whole = number.int64Value
+        guard whole >= 0, Double(whole) == number.doubleValue else { return nil }
+        return Int(clamping: whole)
+    }
+
     /// A JSON value as text without control characters, cut at `max`: a string, or a number (never a boolean).
-    private static func string(_ value: Any?, max: Int) -> String? {
+    static func string(_ value: Any?, max: Int) -> String? {
         let text: String
         if let value = value as? String {
             text = value
@@ -298,8 +361,8 @@ public struct HerdrAgent: Equatable, Sendable {
     }
 
     /// What herdr said, for a tooltip or MCP: stored keys masked, then cut at 200 characters.
-    private static func shown(_ said: String) -> String {
-        let masked = SecretMask.current.mask(String(said.prefix(1000)))
+    static func shown(_ said: String, mask: SecretMask = .current) -> String {
+        let masked = mask.mask(String(said.prefix(1000)))
         let cut = masked.prefix(200)
         return cut.count < masked.count ? String(cut) + "…" : String(cut)
     }

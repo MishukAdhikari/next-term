@@ -1,0 +1,1 @@
+{"id":"cli:agent:prompt","error":{"code":"agent_blocked","message":"agent w2:p1 is waiting on a decision; answer it before sending a prompt"}}
