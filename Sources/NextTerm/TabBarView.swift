@@ -43,7 +43,7 @@ protocol TabBarViewDelegate: AnyObject {
 }
 
 /// The tab strip along the top of the window, drawn in the title bar area.
-final class TabBarView: NSView {
+final class TabBarView: NSView, ProjectGlowing {
     static let height: CGFloat = 38
     /// Narrower than this and titles stop being readable: extra tabs go behind the » button instead.
     static let minTabWidth: CGFloat = 104
@@ -146,6 +146,11 @@ final class TabBarView: NSView {
     /// The title for the accessibility tab group and the close button's tooltip.
     var kind = "tab" { didSet { setAccessibilityLabel(kind == "tab" ? "Terminal tabs" : "Editor tabs") } }
 
+    /// Its slice of the window's project colour, under the tabs (ProjectGlow).
+    private(set) lazy var projectGlow = ProjectGlow(self)
+    /// A right-click on the empty part of the bar while it runs along the top: the window's Project Color menu.
+    var onTopRowMenu: (() -> NSMenu?)?
+
     private(set) var items: [TabBarItem] = []
     private(set) var selectedIndex = 0
     private var tabViews: [TabItemView] = []
@@ -175,6 +180,8 @@ final class TabBarView: NSView {
     func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
     /// The font of a tab's title (for the self-test: a preview's is italic).
     func titleFont(at index: Int) -> NSFont? { tabViews[safe: index]?.titleFont }
+    /// The colour of a tab's title (for the self-test: the project's colour leaves it alone).
+    func titleColor(at index: Int) -> NSColor? { tabViews[safe: index]?.titleColor }
     /// A tab's view, to click (for the self-test).
     func tabView(at index: Int) -> NSView? { tabViews[safe: index] }
 
@@ -410,8 +417,15 @@ final class TabBarView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        projectGlow.draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - 1))
         Theme.border.setFill()
         NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
+    }
+
+    /// Only on the bar itself: a tab has its own menu, a button none.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard dragsWindow, let superview, hitTest(superview.convert(event.locationInWindow, from: nil)) === self else { return nil }
+        return onTopRowMenu?()
     }
 
     // MARK: mouse on the empty part of the bar drags the window
@@ -623,6 +637,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private var item: TabBarItem?
     var shownShortcut: String? { hint.isHidden ? nil : hint.stringValue }
     var titleFont: NSFont? { label.font }
+    var titleColor: NSColor? { label.textColor }
 
     // Called several times a second: touch only what changed (re-setting a tooltip resets it).
     func configure(item newItem: TabBarItem, selected isSelected: Bool) {

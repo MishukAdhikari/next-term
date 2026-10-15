@@ -4,7 +4,7 @@ import NextTermCore
 // MARK: - header: branch and changes at a glance
 
 /// The sidebar's title row. With git: "⎇ main  +41 −10  [Pull 2]"; otherwise "Project".
-final class SidebarHeaderView: NSView {
+final class SidebarHeaderView: NSView, ProjectGlowing {
     private let branchIcon = NSImageView()
     private let title = NSTextField(labelWithString: "Project")
     /// The branch name is a button: it opens the branch popup (⌥⌘B).
@@ -38,6 +38,10 @@ final class SidebarHeaderView: NSView {
         set { tabPlace.onClick = newValue }
     }
     var inset: CGFloat = 70 { didSet { needsLayout = true } }
+    /// Its slice of the window's project colour, over the sidebar's own (ProjectGlow).
+    private(set) lazy var projectGlow = ProjectGlow(self)
+    /// A right-click on the row, away from its buttons: the window's Project Color menu.
+    var onTopRowMenu: (() -> NSMenu?)?
     private var hideTip: ShortcutToolTip?
     /// "⌘B" just before the hide button, as a tab shows "⌘1", while the row has room for it; without, while
     /// the pointer is on the button, over the counts or Pull.
@@ -98,6 +102,9 @@ final class SidebarHeaderView: NSView {
         return title.cell?.expansionFrame(withFrame: title.bounds, in: title) != .zero
     }
 
+    /// The colour of the branch name (for the self-test: the project's colour leaves it alone).
+    var titleColor: NSColor? { title.textColor }
+
     /// Where the branch name is (for the self-test).
     var titleFrame: NSRect {
         layoutSubtreeIfNeeded()
@@ -130,6 +137,11 @@ final class SidebarHeaderView: NSView {
     override func mouseDown(with event: NSEvent) {
         if let onBranchClick, branchArea.contains(convert(event.locationInWindow, from: nil)) { return onBranchClick() }
         window?.performDrag(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let superview, hitTest(superview.convert(event.locationInWindow, from: nil)) === self else { return nil }
+        return onTopRowMenu?()
     }
 
     /// The branch's icon, name and chevron, with a little room around them.
@@ -389,6 +401,7 @@ final class SidebarHeaderView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        projectGlow.draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - 1))
         Theme.border.setFill()
         NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
         if hoveringBranch {

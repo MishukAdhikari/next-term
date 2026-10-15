@@ -966,10 +966,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidBecomeActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() } // the window in front has its project's glow at full strength again
     }
 
     func applicationDidResignActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() }
     }
 
     // MARK: windows
@@ -1415,6 +1417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return terminalTabs.listSide != nil // a second line for the list's rows: the bar has none
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
+        if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
@@ -1426,6 +1429,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
         }
         return true
+    }
+
+    /// View › Project Color › Show Project Colors (and Settings › General): every window's colour, shown or not. Each
+    /// project keeps its own while they are hidden.
+    @objc func toggleProjectColors(_ sender: Any?) {
+        ProjectColorStore.isShown.toggle()
     }
 
     /// View › Agent Spinner: Spinning, Still or Off, for every window at once.
@@ -1762,6 +1771,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
         }
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
+        // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
+        view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)

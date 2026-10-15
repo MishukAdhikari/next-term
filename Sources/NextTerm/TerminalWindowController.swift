@@ -94,6 +94,8 @@ class HairlineSplitView: NSSplitView {
 
     /// The lines drawn, in this view's coordinates.
     var drawnLines: [NSRect] { lines.filter { !$0.isHidden }.map(\.frame) }
+    /// The panes were placed again (they moved, showed or hid): the top row's glow, placed in the window, follows.
+    var onPanesPlaced: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -156,6 +158,7 @@ class HairlineSplitView: NSSplitView {
             if line.isHidden == shows { line.isHidden = !shows }
             line.color = lineColor
         }
+        onPanesPlaced?()
     }
 
     /// One line: a layer's colour, no drawing of its own. Presses go through to the split view, which
@@ -230,21 +233,34 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The project this window is for: the sidebar stays on it and new tabs open in it by default
     /// (you can still `cd` anywhere). nil: a plain terminal window whose sidebar follows the active tab.
     private(set) var project: String? {
-        didSet { projectTitle = Self.title(ofProject: project) }
+        didSet {
+            let repository = project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
+            projectTitle = Self.title(ofProject: project, repository: repository)
+            projectColorKey = ProjectColors.key(forProject: project, repository: repository)
+            takeProjectColor()
+        }
     }
     /// The project's name in the title, the Window menu and notifications: its folder's, or for a linked
     /// worktree "xCloud ▸ 7027-sso", its repository's and its own.
     private(set) var projectTitle = ""
+    /// Where the project keeps its colour (ProjectColors.key): for a linked worktree its repository's main checkout, so
+    /// every worktree window of a repository has one colour. nil with no project, or the home folder: no colour.
+    private(set) var projectColorKey: String?
+    /// The project's colour as View › Project Color keeps it (nil: none, or None for This Project, or no project).
+    private(set) var projectColorEntry: ProjectColors.Entry?
+    var projectColor: ProjectColor? { projectColorEntry?.color }
     /// The window is being made key to bring an agent's tab forward (AgentArrival), not by the user.
     var keyingForAgent = false
     /// The window closed. AppDelegate drops it from its windows a moment later (windowClosed): until then, nothing may
     /// open a project or a tab in it.
     private(set) var hasClosed = false
 
-    static func title(ofProject project: String?) -> String {
+    /// `repository`: the one `project` is a linked worktree of (WorktreeWindow.repository), read once for the title and
+    /// the colour.
+    static func title(ofProject project: String?, repository: WorktreeWindow.Repository?) -> String {
         guard let project else { return "" }
         let folder = (project as NSString).lastPathComponent
-        guard let repository = WorktreeWindow.repository(ofLinkedWorktree: project) else { return folder }
+        guard let repository else { return folder }
         return WorktreeWindow.title(repository: repository.name, folder: folder)
     }
     private var opensWelcome = false
@@ -271,7 +287,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
     init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
-        projectTitle = Self.title(ofProject: self.project)
+        // Swift runs no didSet in init: the title and the colour's key here, the colour once the bars exist.
+        let repository = self.project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
+        projectTitle = Self.title(ofProject: self.project, repository: repository)
+        projectColorKey = ProjectColors.key(forProject: self.project, repository: repository)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -348,12 +367,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onSummaryClick = { [weak self] in self?.showUncommittedChanges() }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
+        // A right-click on the top row, whichever bar is there: View › Project Color's choices for this window.
+        let colorMenu: () -> NSMenu? = { [weak self] in self?.projectColorMenu() }
+        for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
+        sidebar.header.onTopRowMenu = colorMenu
+        terminalRail.onTopRowMenu = colorMenu
+        NotificationCenter.default.addObserver(self, selector: #selector(projectColorsChanged), name: ProjectColorStore.changed, object: nil)
+        for split in [splitView, workSplit] as [HairlineSplitView] { split.onPanesPlaced = { [weak self] in self?.projectGlowMoved() } }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         // Lines selected in a diff go to the agents, as the editor's selection does.
         NotificationCenter.default.addObserver(self, selector: #selector(diffSelectionChanged(_:)), name: DiffShare.changed, object: nil)
         applyLayout() // the editor area starts hidden: nothing is open
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
+        takeProjectColor()
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
         ticker.tolerance = 0.03
@@ -1072,6 +1099,103 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if window.isVisible && window.attachedSheet == nil { opensWelcome = false } // close was refused
     }
 
+    // MARK: project colour
+
+    /// The project's colour on the top row: as kept, or on the project's first open the colour the other project windows
+    /// use least, kept from then on. When the window takes its project and when a colour or Show Project Colors changes;
+    /// never in `refresh`.
+    private func takeProjectColor() {
+        projectColorEntry = projectColorKey.flatMap { (key: String) -> ProjectColors.Entry? in
+            ProjectColorStore.entry(for: key, inUse: colorsInUse(besides: key), open: openColorKeys)
+        }
+        paintProjectColor()
+    }
+
+    /// The other project windows' colours, one for each window, leaving out `key`'s own (a worktree window of this
+    /// repository): what a pick for `key` should not take while another is free.
+    private func colorsInUse(besides key: String) -> [ProjectColor] {
+        let others: [TerminalWindowController] = AppDelegate.shared.controllers.filter { (other: TerminalWindowController) -> Bool in
+            other !== self && !other.hasClosed && other.projectColorKey != key
+        }
+        return others.compactMap(\.projectColor)
+    }
+
+    private var openColorKeys: Set<String> {
+        Set(AppDelegate.shared.controllers.compactMap(\.projectColorKey) + [projectColorKey].compactMap { $0 })
+    }
+
+    /// The bars of the top row, each with its slice of the glow.
+    private var projectGlows: [ProjectGlow] {
+        [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow]
+    }
+
+    private func paintProjectColor() {
+        let peak: NSColor? = ProjectColorStore.isShown ? projectColor?.glowColor : nil
+        let dimmed: Bool = !isActiveWindow
+        for glow in projectGlows {
+            glow.peak = peak
+            glow.dimmed = dimmed
+        }
+    }
+
+    /// The window in use: in front of the active app, its traffic lights in colour. The others' glow is dimmed.
+    private var isActiveWindow: Bool {
+        guard let window, NSApp.isActive else { return false }
+        return window.isMainWindow || window.isKeyWindow
+    }
+
+    /// The window came into use or went out of it, or the app did.
+    func activityChanged() {
+        let dimmed: Bool = !isActiveWindow
+        for glow in projectGlows { glow.dimmed = dimmed }
+    }
+
+    /// A pane moved, showed or hid (HairlineSplitView.onPanesPlaced): each bar of the top row draws its slice again if it
+    /// moved within the glow's reach.
+    private func projectGlowMoved() {
+        for glow in projectGlows { glow.moved() }
+    }
+
+    /// This window's project's colour, or another's that its repository's worktree windows share, or Show Project Colors.
+    @objc private func projectColorsChanged() { takeProjectColor() }
+
+    /// View › Project Color: a colour for this window's project, which its repository's worktree windows share,
+    /// Automatic, or None for This Project.
+    @objc func setProjectColor(_ sender: NSMenuItem) {
+        guard let key = projectColorKey, let id = sender.representedObject as? String else { return NSSound.beep() }
+        switch id {
+        case ProjectColorMenu.automaticID:
+            ProjectColorStore.automatic(for: key, inUse: colorsInUse(besides: key), open: openColorKeys)
+        case ProjectColorMenu.noneID:
+            ProjectColorStore.choose(nil, for: key, open: openColorKeys)
+        default:
+            guard let color = ProjectColor(id: id) else { return }
+            ProjectColorStore.choose(color, for: key, open: openColorKeys)
+        }
+    }
+
+    /// The window's colour checked, and Automatic while it is the one picked for it; nothing to choose without a project
+    /// or while Show Project Colors is off.
+    private func validateProjectColor(_ item: NSMenuItem) -> Bool {
+        let id: String? = item.representedObject as? String
+        let entry: ProjectColors.Entry? = projectColorEntry
+        let on: Bool
+        if id == ProjectColorMenu.automaticID {
+            on = entry?.chosen == false
+        } else if id == ProjectColorMenu.noneID {
+            on = entry != nil && entry?.color == nil
+        } else {
+            on = entry?.color != nil && entry?.color?.id == id
+        }
+        item.state = on ? .on : .off
+        return projectColorKey != nil && ProjectColorStore.isShown
+    }
+
+    /// The top row's right-click; none in a window with no project, which has no colour.
+    func projectColorMenu() -> NSMenu? {
+        projectColorKey == nil ? nil : ProjectColorMenu.contextMenu(for: self)
+    }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(showWorktrees(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
@@ -1082,6 +1206,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(setProjectColor(_:)) { return validateProjectColor(item) }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
@@ -1228,7 +1353,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// The traffic lights sit over whichever pane is top-left; full screen has none. Tab bars along the
-    /// top of the window drag it, like a title bar; one lower down does not.
+    /// top of the window drag it, like a title bar, and have the project's glow; one lower down has neither.
     private func updateInsets() {
         let lights: CGFloat = isFullScreen ? 8 : 78
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
@@ -1243,11 +1368,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let editorAtTop = terminalPosition != .top
         tabBar.leadingInset = terminalAtCorner ? corner : 8
         tabBar.dragsWindow = terminalAtTop
+        tabBar.projectGlow.onTopRow = terminalAtTop
         let afterRail = max(8, corner - TerminalRail.width - workSplit.dividerThickness)
         editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : (railedLeft ? afterRail : corner)
         // The rail itself under the traffic lights: its arrow goes below them.
         terminalRail.topInset = railedLeft && corner > 8 ? TabBarView.height : 0
         editorArea.tabBar.dragsWindow = editorAtTop
+        editorArea.tabBar.projectGlow.onTopRow = editorAtTop
         // The sidebar hidden: the bar at the top-left corner offers it back.
         tabBar.showsSidebarButton = !isSidebarVisible && terminalAtCorner
         editorArea.tabBar.showsSidebarButton = !isSidebarVisible && !terminalAtCorner
@@ -2410,6 +2537,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowDidBecomeKey(_ notification: Notification) {
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
+        activityChanged()
         refreshVisibility()
         refresh()
         // Another window may have opened a project since: "No project open" lists it.
@@ -2421,8 +2549,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
     }
 
-    func windowDidResignKey(_ notification: Notification) { refreshVisibility() }
-    func windowDidResignMain(_ notification: Notification) { refreshVisibility() }
+    func windowDidResignKey(_ notification: Notification) {
+        activityChanged()
+        refreshVisibility()
+    }
+    func windowDidBecomeMain(_ notification: Notification) { activityChanged() }
+    func windowDidResignMain(_ notification: Notification) {
+        activityChanged()
+        refreshVisibility()
+    }
 
     func windowWillEnterFullScreen(_ notification: Notification) { isFullScreen = true; updateInsets() }
     func windowWillExitFullScreen(_ notification: Notification) { isFullScreen = false; updateInsets() }

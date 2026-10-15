@@ -21,6 +21,8 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
     private(set) var rows: [Row] = []
     /// Each project's branch, by path, as far as it is read.
     private var branches: [String: String] = [:]
+    /// Each project's colour, by path (View › Project Color): none while Show Project Colors is off.
+    private var colors: [String: ProjectColor] = [:]
     private var openCount = 0
     private var keys: SwitcherKeys = .standard
     /// Where each server's tabs open, by its id, for its row's tooltip.
@@ -64,11 +66,12 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
     /// Shows `shown` as the search leaves it. `searching`: text is typed, so a heading shows only over its matches;
     /// with nothing typed the PROJECTS heading stays, over no project at all on a first launch.
     func show(_ shown: SwitcherShown, openCount: Int, searching: Bool, branches: [String: String], keys: SwitcherKeys,
-              folders: [String: String]) {
+              folders: [String: String], colors: [String: ProjectColor]) {
         self.shown = shown
         self.folders = folders
         self.openCount = openCount
         self.branches = branches
+        self.colors = colors
         self.keys = keys
         var rows: [Row] = []
         if !searching || !shown.projects.isEmpty { rows.append(.projectsHeading) }
@@ -186,7 +189,7 @@ extension WelcomeSwitcherList {
         let cell = tableView.makeView(withIdentifier: SwitcherProjectCell.identifier, owner: self) as? SwitcherProjectCell
             ?? SwitcherProjectCell()
         let jump: String? = keys.jumpHint(row, projects: shown.projects.count)
-        cell.show(project, branch: branches[project.path], home: home, jump: jump)
+        cell.show(project, branch: branches[project.path], home: home, jump: jump, color: colors[project.path])
         cell.showsJump = showsJumps
         return cell
     }
@@ -235,11 +238,11 @@ extension WelcomeSwitcherList {
         onForget?(path)
     }
 
-    /// The title a project has in its window, read from git's files: a linked worktree's "xCloud ▸ 7027-sso", else
-    /// the folder's name. Off the main thread, as the branches are read.
-    nonisolated static func title(ofProject path: String) -> String {
+    /// The title a project has in its window, a linked worktree's "xCloud ▸ 7027-sso", else the folder's name, from the
+    /// repository read from git's files (WorktreeWindow.repository). Off the main thread, as the branches are read.
+    nonisolated static func title(ofProject path: String, repository: WorktreeWindow.Repository?) -> String {
         let folder: String = (path as NSString).lastPathComponent
-        guard let repository = WorktreeWindow.repository(ofLinkedWorktree: path) else { return folder }
+        guard let repository else { return folder }
         return WorktreeWindow.title(repository: repository.name, folder: folder)
     }
 }
@@ -327,10 +330,11 @@ final class SwitcherHeaderCell: NSTableCellView {
     var countText: String? { count.isHidden ? nil : count.stringValue }
 }
 
-/// A project in the Welcome list: a green dot in the gutter while a window has it open (open is said by the dot only,
-/// the name keeps its weight and colour), its name, its branch at the right, and below the folder it is in, with "2
-/// windows" after it when more than one window has it. While the jumps' modifiers are held its jump key ("⌘1") shows in
-/// its branch's place.
+/// A project in the Welcome list: a dot in the gutter in the project's colour (View › Project Color; dim without one, as
+/// its repository's for a worktree), filled while a window has it open and a ring while none does (open is said by the
+/// dot only, the name keeps its weight and colour), its name, its branch at the right, and below the folder it is in,
+/// with "2 windows" after it when more than one window has it. While the jumps' modifiers are held its jump key ("⌘1")
+/// shows in its branch's place.
 final class SwitcherProjectCell: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("SwitcherProjectCell")
     static let secondaryFont = NSFont.systemFont(ofSize: 11)
@@ -340,6 +344,7 @@ final class SwitcherProjectCell: NSTableCellView {
     private let branch = NSTextField(labelWithString: "")
     private let jump = NSTextField(labelWithString: "")
     private var project: SwitcherProject?
+    private var dotColor: NSColor = Theme.textDim
     private var branchName: String?
     private var folderName = ""
 
@@ -352,7 +357,6 @@ final class SwitcherProjectCell: NSTableCellView {
         super.init(frame: .zero)
         identifier = Self.identifier
         dot.wantsLayer = true
-        dot.layer?.backgroundColor = Theme.done.cgColor
         dot.layer?.cornerRadius = 3
         name.font = .systemFont(ofSize: 13, weight: .medium)
         name.textColor = Theme.text
@@ -399,12 +403,16 @@ final class SwitcherProjectCell: NSTableCellView {
         didSet { if backgroundStyle != oldValue { paintSecondary() } }
     }
 
-    func show(_ project: SwitcherProject, branch head: String?, home: String, jump key: String?) {
+    func show(_ project: SwitcherProject, branch head: String?, home: String, jump key: String?, color: ProjectColor?) {
         self.project = project
         branchName = head
         folderName = SwitcherText.folder(of: project, home: home)
         name.stringValue = project.title
-        dot.isHidden = !project.isOpen
+        dotColor = color?.swatchColor ?? Theme.textDim
+        // Filled: open in a window. A ring: closed.
+        dot.layer?.backgroundColor = project.isOpen ? dotColor.cgColor : NSColor.clear.cgColor
+        dot.layer?.borderColor = dotColor.cgColor
+        dot.layer?.borderWidth = project.isOpen ? 0 : 1
         jump.stringValue = key ?? ""
         paintSecondary()
         showJumpOrBranch()
@@ -443,7 +451,10 @@ final class SwitcherProjectCell: NSTableCellView {
     /// For the self-test: what the row shows.
     var shownName: String { name.stringValue }
     var shownFolder: String { folder.stringValue }
-    var showsOpenDot: Bool { !dot.isHidden }
+    /// The dot is filled: a window has the project open.
+    var showsOpenDot: Bool { !dot.isHidden && dot.layer?.borderWidth == 0 }
+    /// The dot's colour: the project's swatch, or `textDim` without one.
+    var shownDotColor: NSColor { dotColor }
     var shownJump: String? { jump.isHidden ? nil : jump.stringValue }
     var shownBranch: String? { branch.isHidden ? nil : branch.stringValue }
 

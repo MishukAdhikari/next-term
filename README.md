@@ -82,12 +82,19 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   at its size.
 - **Projects.** ⌘O brings up the Welcome window with the keyboard in its search: type a few letters, and
   Return goes to the window of an open project, opens a closed one, or connects to a saved server. Open
-  projects come first, each marked with a dot and counted, then the ones you used last, including those an
-  agent, a worktree window or a restore opened. ⌘1–⌘9 jump to the first nine projects, and ⌘Return opens
-  one in a new window. The list keeps your last 50 projects; Open Recent shows 10. ⌘O again there (or
-  Open…) opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in
-  it by default. Next Term opens to the Welcome window, reopens your last projects, or opens a new
-  terminal, as you choose. Open Recent and Close Project too.
+  projects come first, each marked with a filled dot and counted (a closed one has a ring), then the ones
+  you used last, including those an agent, a worktree window or a restore opened. ⌘1–⌘9 jump to the first
+  nine projects, and ⌘Return opens one in a new window. The list keeps your last 50 projects; Open Recent
+  shows 10. ⌘O again there (or Open…) opens any folder as a project. Its window keeps the project in the
+  sidebar, and new tabs open in it by default. Next Term opens to the Welcome window, reopens your last
+  projects, or opens a new terminal, as you choose. Open Recent and Close Project too.
+- **Project colours.** Each project's window has a colour of its own, a soft glow along its top row,
+  strongest behind the window's buttons and gone 320 points in, so two windows side by side are told
+  apart at a glance. It is picked the first time a project opens (the colour the open windows use least)
+  and then kept. A worktree's window has its repository's colour, and the Welcome window's dots show it.
+  Right-click the top row, or View › Project Color, for nine named colours, Automatic or None for This
+  Project; Show Project Colors there, or in Settings › General, turns them all off. Nothing is written
+  into the project.
 - **A new terminal stays out of your files.** New Terminal (⌘N) opens a shell where new tabs open
   (Settings › Terminal › New tabs: your home folder unless you chose a folder). With no project, its
   sidebar says "No project open" and lists your recent projects, Open Folder…, Connect to Server… and

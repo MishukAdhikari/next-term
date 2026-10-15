@@ -102,8 +102,8 @@ extension SelfTest {
               "a stored lastProjects selects Resume where I left off")
     }
 
-    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons, "At quit:" and
-    /// "Sessions:" beside their checkboxes, "Privacy:" beside Full Disk Access…, in a 110 pt label column, so the controls start at one edge. The radio group is
+    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons, "At quit:",
+    /// "Sessions:" and "Windows:" beside their checkboxes, "Privacy:" beside Full Disk Access…, in a 110 pt label column, so the controls start at one edge. The radio group is
     /// named with the label's words, so VoiceOver does not read "At launch:" too. Measured as Auto Layout places each view,
     /// by its alignment rect: a label's frame is 2 pt wider on each side.
     private static func generalLayoutChecks() {
@@ -115,20 +115,25 @@ extension SelfTest {
         let launch: NSTextField = view.launchLabel
         let quit: NSTextField = view.quitLabel
         let sessions: NSTextField = view.sessionsLabel
+        let windows: NSTextField = view.windowsLabel
         let privacy: NSTextField = view.privacyLabel
         let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:" && sessions.stringValue == "Sessions:"
+            && windows.stringValue == "Windows:" && view.projectColors.title == "Show project colors"
             && privacy.stringValue == "Privacy:" && view.fullDiskAccess.title == "Full Disk Access…"
-        let widths: [CGFloat] = [placed(launch).width, placed(quit).width, placed(sessions).width, placed(privacy).width]
+        let widths: [CGFloat] = [placed(launch).width, placed(quit).width, placed(sessions).width, placed(windows).width,
+                                 placed(privacy).width]
         let column = widths.allSatisfy { abs($0 - 110) < 0.5 }
         let besideRadios = launch.superview != nil && launch.superview === view.opensGroup.superview
         let besideAsk = quit.superview != nil && quit.superview === view.askToResume.superview
         let besideScrollback = sessions.superview != nil && sessions.superview === view.keepScrollback.superview
             && privacy.superview != nil && privacy.superview === view.fullDiskAccess.superview
+            && windows.superview != nil && windows.superview === view.projectColors.superview
         let radiosX: CGFloat = placed(view.opensGroup).minX
         let askX: CGFloat = placed(view.askToResume).minX
         let scrollbackX: CGFloat = placed(view.keepScrollback).minX
+        let colorsX: CGFloat = placed(view.projectColors).minX
         let labelEnd: CGFloat = placed(launch).maxX
-        let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && radiosX > labelEnd
+        let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && abs(radiosX - colorsX) < 0.5 && radiosX > labelEnd
         let readOnce = !launch.isAccessibilityElement()
         // The notes' rows start with an empty label in the column, which VoiceOver never reaches.
         var blanks: [NSTextField] = []
@@ -137,11 +142,11 @@ extension SelfTest {
             if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
             views.append(contentsOf: next.subviews)
         }
-        let silent = blanks.count == 4 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        let silent = blanks.count == 5 && blanks.allSatisfy { !$0.isAccessibilityElement() }
         let beside = besideRadios && besideAsk && besideScrollback
         check(titles && column && beside && oneEdge && readOnce && silent,
-              "Settings › General: At launch, At quit, Sessions and Privacy beside their controls, in a 110 pt label column as in the other tabs",
-              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideAsk) \(besideScrollback), radios at \(radiosX), checkboxes at \(askX) \(scrollbackX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
+              "Settings › General: At launch, At quit, Sessions, Windows and Privacy beside their controls, in a 110 pt label column as in the other tabs",
+              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideAsk) \(besideScrollback), radios at \(radiosX), checkboxes at \(askX) \(scrollbackX) \(colorsX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
         // The three choices, one under another at one edge, none over another.
         let radios: [NSRect] = view.opens.map(placed)
         let radioXs: [CGFloat] = radios.map(\.minX)
