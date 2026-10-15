@@ -5,17 +5,21 @@ import Foundation
 /// Next Term starts zsh with `ZDOTDIR` pointing at a directory holding `zshenvScript` as `.zshenv`.
 /// That script restores the user's own `ZDOTDIR`, sources their `.zshenv`, and adds two hooks:
 ///
-///     ESC ] 6973 ; <nonce> ; cmd ; <base64 typed> ; <base64 expanded> BEL   preexec, a command starts
+///     ESC ] 6973 ; <nonce> ; cmd ; <base64 typed> ; <base64 expanded> ; <flags> BEL   preexec, a command starts
 ///     ESC ] 6973 ; <nonce> ; end ; <exit status> BEL                         precmd, the command finished
 ///     ESC ] 6973 ; <nonce> ; cwd ; <base64 directory> BEL                    precmd, the working directory
 ///     ESC ] 6973 ; <nonce> ; jobs ; <count> ; <base64 job list> BEL          precmd, suspended/background jobs
 ///
-/// Tab completion's hook (ZshCompletionScript) adds arm, tab, comp, done and line (see CompletionProtocol), and the
-/// history hook (ZshHistoryScript) one more, at each new line:
+/// Tab completion's hook (ZshCompletionScript) adds arm, tab, comp, done and line (see CompletionProtocol), the history
+/// hook (ZshHistoryScript) one more, at each new line:
 ///
 ///     ESC ] 6973 ; <nonce> ; hist ; <version> BEL                            zle-line-init, history's key is bound
 ///
-/// "expanded" is the line with aliases expanded, so `claude-auto` (an alias for `claude …`) is seen as an agent.
+/// and the ghost hook (ZshGhostScript) ghost, buf and gfb: the line as it is edited (see GhostProtocol).
+///
+/// "expanded" is the line with aliases expanded, so `claude-auto` (an alias for `claude …`) is seen as an agent. The flags
+/// say who put the line there (CommandMarkFlags): `k`, the history hook kept it out of the history, as Next Term or an
+/// agent submitted it; `j`, it resumes a job (`fg`), and the text is that job's.
 ///
 /// Anything printed to the terminal can contain these bytes (a `cat` of a log, a remote host over ssh),
 /// so each tab gets a random nonce. The shell receives it as `NEXTTERM_NONCE`, keeps it in an unexported
@@ -26,6 +30,9 @@ public enum ShellIntegration {
     public static let nonceVariable = "NEXTTERM_NONCE"
     /// Set to 1 for a shell that loads Tab completion's hook at its first prompt (the setting when it starts).
     public static let completionVariable = "NEXTTERM_COMPLETION"
+    /// Set to `t` for a shell whose ghost hook turns zsh-autosuggestions' suggestions off at its first line, as the user
+    /// chose Next Term's (GhostOwner).
+    public static let ghostVariable = "NEXTTERM_GHOST"
     /// Longest command line kept (it is only shown in tooltips and used to name the program).
     public static let maxCommandLength = 4096
     static let maxPayloadBytes = 65_536
@@ -35,13 +42,15 @@ public enum ShellIntegration {
     }
 
     public enum Event: Equatable, Sendable {
-        case commandStarted(String, expanded: String?)
+        case commandStarted(String, expanded: String?, flags: CommandMarkFlags = [])
         case commandFinished(Int32)
         case directory(String)
         case jobs(Int, summary: String)
         case completion(CompletionProtocol.Message)
         /// A line is being edited and history's key is bound (ShellHistory), by a hook of this version.
         case history(version: Int)
+        /// The ghost hook's marks: the line as it is edited (GhostProtocol).
+        case ghost(GhostProtocol.Message)
     }
 
     /// Parses an OSC 6973 payload (everything after `6973;`). Returns nil unless it carries `nonce`.
@@ -52,10 +61,11 @@ public enum ShellIntegration {
         let value = String(parts[2])
         switch parts[1] {
         case "cmd":
-            let fields = value.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            let fields = value.split(separator: ";", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
             guard let typed = decode(fields[0]) else { return nil }
             let expanded = fields.count > 1 ? decode(fields[1]).map { String($0.prefix(maxCommandLength)) } : nil
-            return .commandStarted(String(typed.prefix(maxCommandLength)), expanded: expanded == typed ? nil : expanded)
+            let flags = fields.count > 2 ? CommandMarkFlags(fields[2]) : []
+            return .commandStarted(String(typed.prefix(maxCommandLength)), expanded: expanded == typed ? nil : expanded, flags: flags)
         case "jobs":
             let fields = value.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
             guard let count = Int(fields[0]), count >= 0 else { return nil }
@@ -71,6 +81,8 @@ public enum ShellIntegration {
             return .history(version: version)
         case let kind where CompletionProtocol.markKinds.contains(kind):
             return CompletionProtocol.parse(kind: kind, value: value).map(Event.completion)
+        case let kind where GhostProtocol.markKinds.contains(kind):
+            return GhostProtocol.parse(kind: kind, value: value).map(Event.ghost)
         default:
             return nil
         }
@@ -82,8 +94,8 @@ public enum ShellIntegration {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Writes `.zshenv`, and beside it Tab completion's `completion.zsh` and the history hook's `history.zsh`, under
-    /// `directory` (each only if it changed) and returns the directory to use as `ZDOTDIR`.
+    /// Writes `.zshenv`, and beside it Tab completion's `completion.zsh`, the history hook's `history.zsh` and the ghost
+    /// hook's `ghost.zsh`, under `directory` (each only if it changed) and returns the directory to use as `ZDOTDIR`.
     public static func install(in directory: URL) throws -> URL {
         let zdotdir = directory.appendingPathComponent("shell/zsh", isDirectory: true)
         try FileManager.default.createDirectory(at: zdotdir, withIntermediateDirectories: true)
@@ -91,6 +103,7 @@ public enum ShellIntegration {
             (".zshenv", zshenvScript),
             ("completion.zsh", ZshCompletionScript.script),
             ("history.zsh", ZshHistoryScript.script),
+            ("ghost.zsh", ZshGhostScript.script),
         ]
         for (name, script) in files {
             let file = zdotdir.appendingPathComponent(name)
@@ -114,6 +127,9 @@ unset NEXTTERM_NONCE
 # prompt. `q`: with zsh-autocomplete's list as you type off from the start.
 typeset -g __nextterm_completion="${NEXTTERM_COMPLETION-}" __nextterm_dir="${${(%):-%x}:h}"
 unset NEXTTERM_COMPLETION
+# `t`: the ghost hook (ghost.zsh) turns zsh-autosuggestions' suggestions off at the first line, as the user chose Next Term's.
+typeset -g __nextterm_gstart="${NEXTTERM_GHOST-}"
+unset NEXTTERM_GHOST
 
 if [[ -n "$NEXTTERM_USER_ZDOTDIR" ]]; then
   ZDOTDIR="$NEXTTERM_USER_ZDOTDIR"
@@ -152,12 +168,13 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
 
   __nextterm_preexec() {
     emulate -L zsh
-    # A line the history hook kept out of the history (history.zsh) comes with no typed text: the hook kept it.
-    local line=${1:-${__nextterm_hran-}} expanded=${3-$1}
-    [[ -n ${__nextterm_hran-} ]] && __nextterm_hran=
+    # A line the history hook kept out of the history (history.zsh) comes with no typed text: the hook kept it, and the
+    # mark says so (k). A job resumed (j) is named by its own text.
+    local line=${1:-${__nextterm_hran-}} expanded=${3-$1} flags=
+    [[ -n ${__nextterm_hran-} ]] && __nextterm_hran= flags=k
     __nextterm_jobtext "$line"
-    [[ -n $REPLY ]] && line=$REPLY expanded=$REPLY
-    builtin printf '\033]6973;%s;cmd;%s;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$line")" "$(__nextterm_b64 "$expanded")"
+    [[ -n $REPLY ]] && line=$REPLY expanded=$REPLY flags+=j
+    builtin printf '\033]6973;%s;cmd;%s;%s;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$line")" "$(__nextterm_b64 "$expanded")" "$flags"
   }
 
   __nextterm_precmd() {
@@ -182,6 +199,12 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
       typeset -g __nextterm_hloaded=1
       [[ -r $__nextterm_dir/history.zsh ]] && builtin source "$__nextterm_dir/history.zsh"
     fi
+    # The ghost hook, once, the same way: the line as it is edited (ghost.zsh), for suggestions while typing and for what
+    # an agent reads as typed.
+    if [[ -z ${__nextterm_gloaded-} ]]; then
+      typeset -g __nextterm_gloaded=1
+      [[ -r $__nextterm_dir/ghost.zsh ]] && builtin source "$__nextterm_dir/ghost.zsh"
+    fi
   }
 
   # Register in a function: the user's .zshenv may already have set options such as nounset or
@@ -196,7 +219,31 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
   __nextterm_install
   unfunction __nextterm_install
 else
-  unset __nextterm_nonce __nextterm_completion __nextterm_dir
+  unset __nextterm_nonce __nextterm_completion __nextterm_dir __nextterm_gstart
 fi
 """#
+}
+
+/// What the integration's `cmd` mark says about who put the line there.
+public struct CommandMarkFlags: OptionSet, Equatable, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    /// The history hook kept the line out of zsh's history: Next Term or an agent submitted it (ShellHistory).
+    public static let keptOut = CommandMarkFlags(rawValue: 1 << 0)
+    /// `fg` or `%2`: the text is the resumed job's, not a line typed now.
+    public static let jobResume = CommandMarkFlags(rawValue: 1 << 1)
+
+    /// The mark's flag field. A letter this version doesn't know makes it say nothing, as an older Next Term would read it.
+    init(_ field: String) {
+        var flags: CommandMarkFlags = []
+        for letter in field {
+            switch letter {
+            case "k": flags.insert(.keptOut)
+            case "j": flags.insert(.jobResume)
+            default: self = []; return
+            }
+        }
+        self = flags
+    }
 }

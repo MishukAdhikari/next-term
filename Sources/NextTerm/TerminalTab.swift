@@ -1283,7 +1283,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             return completion.handle(message)
         case .history(let version):
             return history.marked(version: version)
-        case .commandStarted(let line, let expanded):
+        case .ghost:
+            return
+        case .commandStarted(let line, let expanded, _):
             onCommandMark?(event)
             completion.disarm()
             history.disarm()

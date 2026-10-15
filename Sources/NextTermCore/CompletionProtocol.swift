@@ -295,7 +295,8 @@ public enum CompletionProtocol {
         return .line(LineReport(id: id, left: false, word: word.value, unquoted: unquoted.value))
     }
 
-    private static func number(_ field: Substring) -> Int? {
+    /// A decimal of 1 to 9 ASCII digits (the ghost hook's marks read theirs so too).
+    static func number(_ field: Substring) -> Int? {
         guard !field.isEmpty, field.count <= 9, field.allSatisfy(\.isASCII), let value = Int(field), value >= 0 else { return nil }
         return value
     }

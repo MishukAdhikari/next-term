@@ -14,7 +14,9 @@ Runs:
   zsh-syntax-highlighting, zsh-vi-mode), the plugin matrix; local only;
 - the hook as a server runs it (RemoteCompletionHook), started by its launch command under a fake home;
 - the history hook (history.zsh, beside the .zshenv in every run here, as in the app), in shells with a config and a
-  history file of their own, never the user's: a line Next Term submits by itself stays out of the history.
+  history file of their own, never the user's: a line Next Term submits by itself stays out of the history;
+- the ghost hook (ghost.zsh, beside it in every run too): the line as it is edited, in `buf` marks, the `cmd` mark's flags,
+  and a plugin's POSTDISPLAY (a stand-in, and zsh-autosuggestions itself in the plugin matrix).
 
 This script plays Next Term's part: it sends the private keys (CompletionProtocol.frame, ShellHistory.naming)
 and reads the marks, so the hooks are tested as Next Term drives them.
@@ -33,9 +35,16 @@ for placeholder, value in VALUES.items():
 # The history hook, as ZshHistoryScript.script holds it.
 histsrc = open(os.path.join(ROOT, "Sources/NextTermCore/ZshHistoryScript.swift")).read()
 history = histsrc.split('script = #"""\n', 1)[1].split('"""#', 1)[0]
+# The ghost hook, filled the way ZshGhostScript.script fills it.
+gsrc = open(os.path.join(ROOT, "Sources/NextTermCore/ZshGhostScript.swift")).read()
+ghost = gsrc.split('template = #"""\n', 1)[1].split('"""#', 1)[0]
+GVALUES = dict(re.findall(r'\("(@NG_\w+@)", #"(.*?)"#\)', gsrc))
+for placeholder, value in GVALUES.items():
+    ghost = ghost.replace(placeholder, value)
 NONCE = "0123456789abcdef0123456789abcdef"
 PREFIX = b"\x1b[6973~"
 HKEY = b"\x1b[6974~"
+GKEY = b"\x1b[6975~"
 
 failures = []
 def check(cond, msg, detail=""):
@@ -49,6 +58,8 @@ def skip(msg):
 check(VALUES and "@NT_" not in completion, "every placeholder in the completion hook is filled")
 check(VALUES.get("@NT_PREFIX@") == "\\e[6973~", "the hook's prefix is CompletionProtocol.prefix")
 check("__nextterm_hkey=$'\\e[6974~'" in history, "the history hook's key is ShellHistory.prefix")
+check(GVALUES and "@NG_" not in ghost, "every placeholder in the ghost hook is filled")
+check(GVALUES.get("@NG_PREFIX@") == "\\e[6975~", "the ghost hook's prefix is GhostProtocol.prefix")
 
 # --- Next Term's side of the protocol (CompletionProtocol.frame and parse) ---
 
@@ -96,6 +107,7 @@ class Shell:
         open(os.path.join(self.zdot, ".zshenv"), "w").write(script)
         open(os.path.join(self.zdot, "completion.zsh"), "w").write(completion)
         open(os.path.join(self.zdot, "history.zsh"), "w").write(history)
+        open(os.path.join(self.zdot, "ghost.zsh"), "w").write(ghost)
         env = env_for(self.zdot, user_zdotdir, completion_on, extra_env)
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -236,13 +248,13 @@ def legacy_events(shell):
         if kind == "cwd" and val:
             val = base64.b64decode(val).decode()
         elif kind == "cmd":
-            typed, _, expanded = val.partition(";")
+            typed, expanded = (fields + [""])[:2]
             val = base64.b64decode(typed).decode()
             events.append((nonce, "exp", base64.b64decode(expanded).decode() if expanded else ""))
         elif kind == "jobs":
             count, _, listing = val.partition(";")
             val = count + ":" + (base64.b64decode(listing).decode() if listing else "")
-        elif kind in ("arm", "tab", "comp", "done", "line", "sync", "into", "hist"):
+        elif kind in ("arm", "tab", "comp", "done", "line", "sync", "into", "hist", "ghost", "buf", "gfb"):
             continue
         events.append((nonce, kind, val))
     return events
@@ -1453,6 +1465,185 @@ other.send("true\r", 0.6)
 check(not other.marks() and b"6973" not in other.buf, "[server] inside the user's own tmux, the hook stays silent")
 other.close()
 shutil.rmtree(other.home, ignore_errors=True)
+
+# 13. The ghost hook (ghost.zsh): the line as it is edited, in `buf` marks with a generation, sent once no key is pending; a
+# `ghost` mark at each new line; the `cmd` mark's flags (k: the history hook kept the line out, j: a job resumed). In
+# shells with a config and a history file of their own, never the user's.
+def bufs(shell, since=0):
+    """The `buf` marks since `since`: (line, gen, cursor, keymap, context, flags, BUFFER, POSTDISPLAY), texts decoded."""
+    found = []
+    for _, k, f in shell.marks(since):
+        if k == "buf" and len(f) == 8 and all(x.isdigit() for x in f[:3]):
+            found.append((int(f[0]), int(f[1]), int(f[2]), pdec(f[3]), pdec(f[4]), f[5], pdec(f[6]), pdec(f[7])))
+    return found
+
+def ghosts(shell, since=0):
+    return [f for _, k, f in shell.marks(since) if k == "ghost"]
+
+def cmds(shell, since=0):
+    """The `cmd` marks since `since`: (typed, flags)."""
+    return [(base64.b64decode(f[0]).decode(), f[2] if len(f) > 2 else None) for _, k, f in shell.marks(since) if k == "cmd"]
+
+def last_buf(shell, since, pred=lambda b: True, timeout=2):
+    """The last `buf` mark since `since` once one satisfies `pred` (a slow machine reports late), else the last one."""
+    end = time.time() + timeout
+    while True:
+        found = bufs(shell, since)
+        if found and pred(found[-1]) or time.time() > end:
+            return found[-1] if found else None
+        shell.read_for(0.05)
+
+# A stand-in for zsh-autosuggestions' ghost: self-insert wrapped, POSTDISPLAY the rest of `git checkout main`. It reads no
+# history.
+STANDIN = ("__standin_insert() {\n  zle .self-insert\n  local s='git checkout main'\n"
+           "  if [[ -n $BUFFER && $s == \"$BUFFER\"* && $s != \"$BUFFER\" ]]; then POSTDISPLAY=${s#\"$BUFFER\"}; else POSTDISPLAY=; fi\n}\n"
+           "zle -N self-insert __standin_insert\n")
+
+def ghost_checks(label, extra, zsh="/bin/zsh"):
+    folder, hist = history_rc(extra)
+    sh = Shell(f"ghost {label}", folder, zsh=zsh)
+    g, b = ghosts(sh), bufs(sh)
+    check(len(g) == 1 and g[0] == ["1", "", "0", ""], f"[ghost {label}] the first prompt gives one `ghost` mark, with no plugin", str(g))
+    check(len(b) == 1 and b[0][0] == 1 and b[0][2] == 0 and b[0][6] == "" and b[0][3] in ("main", "emacs"),
+          f"[ghost {label}] and one `buf` for line 1, empty", str(b))
+    check(all(n == NONCE for n, k, _ in sh.marks() if k in ("ghost", "buf")), f"[ghost {label}] its marks carry the nonce")
+    out = os.path.join(sh.zdot, "vars")
+    sh.send(f"setopt > {out}; print -r -- ${{(t)HISTFILE}}:$HISTFILE:$HISTSIZE:$SAVEHIST >> {out}\r", 0.8)
+    _, before = listed(sh, "vars")
+
+    # One key per write: a report for each, the generation rising.
+    start = len(sh.buf)
+    sh.send("g", 0.3)
+    sh.send("i", 0.3)
+    b = bufs(sh, start)
+    check([x[6] for x in b] == ["g", "gi"] and b[0][1] < b[1][1] and [x[2] for x in b] == [1, 2] and b[0][0] == b[1][0],
+          f"[ghost {label}] `g` then `i`: two reports, the generation rising", str(b))
+    # Keys in one write: one report, for the line after the last of them.
+    sh.send("\x03", 0.4)
+    start = len(sh.buf)
+    sh.send("gi", 0.4)
+    b = bufs(sh, start)
+    check(b and b[-1][6] == "gi" and [x[6] for x in b].count("g") <= 1 and len(b) <= 2,
+          f"[ghost {label}] `gi` in one write: the last report is `gi`, and at most one is `g`", str(b))
+    # ←: the cursor moves, and the line is as it was.
+    start = len(sh.buf)
+    sh.send("\x1b[D", 0.3)
+    b = bufs(sh, start)
+    check(len(b) == 1 and b[0][6] == "gi" and b[0][2] == 1, f"[ghost {label}] ← reports cursor 1 with the same line", str(b))
+    # ^L redraws with nothing changed: no report.
+    start = len(sh.buf)
+    sh.send("\x0c", 0.5)
+    check(not bufs(sh, start), f"[ghost {label}] ^L (a redraw, nothing changed) reports nothing", str(bufs(sh, start)))
+    sh.send("\x03", 0.4)
+    # A line over the cap: flagged, with no text.
+    start = len(sh.buf)
+    sh.send(b"\x1b[200~echo " + b"x" * 3000 + b"\x1b[201~", 0.8)
+    b = last_buf(sh, start, lambda x: "l" in x[5])
+    check(b is not None and "l" in b[5] and b[6] == "" and b[2] == 3005, f"[ghost {label}] a pasted 3,000-byte line: flagged, no text",
+          str(b and b[:6]))
+    sh.send("\x03", 0.4)
+    # UTF-8, `;` and `%` round-trip; the cursor is in characters.
+    line = "echo 'héllo; 50%'"
+    start = len(sh.buf)
+    sh.send(line, 0.5)
+    b = last_buf(sh, start, lambda x: x[6] == line)
+    check(b is not None and b[6] == line and b[2] == len(line), f"[ghost {label}] `{line}` round-trips, the cursor in characters", str(b))
+    number = b[0] if b else 0
+    # Return: the next line has the next number, and starts empty.
+    start = len(sh.buf)
+    sh.send("\r", 0.8)
+    b, g = bufs(sh, start), ghosts(sh, start)
+    check(b and b[0][0] == number + 1 and b[0][6] == "" and len(g) == 1, f"[ghost {label}] Return: line {number + 1}, a `ghost` mark and an empty report",
+          f"{b[:1]} {g}")
+
+    # The `cmd` mark's flags: none for a line of the user's, k for one Next Term submits, j for `fg`, with the job's text.
+    start = len(sh.buf)
+    sh.send("echo user-line\r", 0.6)
+    own_line(sh, "echo own-line")
+    sh.send("sleep 30 &\r", 0.8)
+    sh.send("fg\r", 0.8)
+    sh.send("\x03", 0.8)
+    c = cmds(sh, start)
+    check(("echo user-line", "") in c and ("echo own-line", "k") in c and ("sleep 30 &", "") in c and ("sleep 30", "j") in c,
+          f"[ghost {label}] `cmd` flags: none typed, k submitted by Next Term, j for `fg` with the job's text", str(c))
+
+    # Its key is bound in main and viins; a frame of a kind it doesn't know, or one cut short, leaves nothing.
+    start = len(sh.buf)
+    sh.send("bindkey -M main '\\e[6975~'; bindkey -M viins '\\e[6975~'\r", 0.8)
+    check(sh.screen(start).count("__nextterm_gkeywidget") == 2, f"[ghost {label}] ESC[6975~ is bound to the hook's widget in main and viins",
+          sh.screen(start)[-160:])
+    start = len(sh.buf)
+    sh.send(GKEY + b"z000001000003abc", 0.4)
+    sh.send(GKEY + b"a0000", 1)
+    sh.send("x", 0.4)
+    b = bufs(sh, start)
+    check(b and b[-1][6] == "x" and "6975" not in sh.screen(start), f"[ghost {label}] an unknown or short frame leaves nothing on the line",
+          f"{b} {sh.screen(start)!r}")
+    sh.send("\x03", 0.4)
+
+    sh.send(f"setopt > {out}.after; print -r -- ${{(t)HISTFILE}}:$HISTFILE:$HISTSIZE:$SAVEHIST >> {out}.after\r", 0.8)
+    _, after = listed(sh, "vars.after")
+    check(before and before == after, f"[ghost {label}] the history options and HISTFILE's type are as they were", after[-120:])
+    errors = sh.errors()
+    for l in errors:
+        print("  hook error:", l.strip()[:200])
+    check(not errors, f"[ghost {label}] no errors from the ghost hook")
+    check(NONCE not in sh.screen(), f"[ghost {label}] the nonce never shows")
+    sh.close()
+    shutil.rmtree(folder, ignore_errors=True)
+
+ghost_checks("stock", "")
+ghost_checks("hostile", "setopt nounset ksh_arrays err_return")
+ghost_checks("compinit", "autoload -Uz compinit && compinit -u -D")
+if zsh58:
+    ghost_checks("zsh 5.8", "", zsh=zsh58)
+else:
+    skip("the ghost hook on zsh 5.8: not found (NT_ZSH58)")
+
+# A plugin's ghost (a stand-in): its POSTDISPLAY reaches the report.
+folder, _ = history_rc(STANDIN)
+sh = Shell("ghost: a stand-in plugin", folder)
+start = len(sh.buf)
+sh.send("git ch", 0.5)
+b = last_buf(sh, start, lambda x: x[7] == "eckout main")
+check(b is not None and b[6] == "git ch" and b[7] == "eckout main", "[ghost] a plugin's POSTDISPLAY is in the report", str(b))
+start = len(sh.buf)
+sh.send("x", 0.4)
+b = last_buf(sh, start)
+check(b is not None and b[6] == "git chx" and b[7] == "", "[ghost] and its going is too", str(b))
+check(not sh.errors(), "[ghost] no errors beside the stand-in plugin")
+sh.close()
+shutil.rmtree(folder, ignore_errors=True)
+
+# A plugin that replaces zle-line-pre-redraw in its own precmd (as some prompts do): ours is back at the next prompt.
+redrawer = tempfile.mkdtemp()
+open(os.path.join(redrawer, ".zshrc"), "w").write(
+    "PS1='$ '\n__mine() { zle -N zle-line-pre-redraw __mine_redraw }\n__mine_redraw() { : }\nprecmd_functions+=(__mine)\n")
+sh = Shell("ghost: a plugin replaces zle-line-pre-redraw", redrawer)
+sh.send("true\r", 0.6)
+start = len(sh.buf)
+sh.send("xy", 0.5)
+b = last_buf(sh, start, lambda x: x[6] == "xy")
+check(b is not None and b[6] == "xy", "[ghost] a plugin that replaces zle-line-pre-redraw in its precmd: reports come back", str(bufs(sh, start)))
+check(not sh.errors(), "[ghost] no errors beside it")
+sh.close()
+
+# zsh-autosuggestions itself (the plugin matrix), sync and async: its suggestion reaches the report after its fetch.
+if plugins and os.path.isdir(os.path.join(plugins, "zsh-autosuggestions")):
+    for mode, extra in (("sync", "unset ZSH_AUTOSUGGEST_USE_ASYNC\n"), ("async", "ZSH_AUTOSUGGEST_USE_ASYNC=1\n")):
+        sh = Shell(f"ghost: zsh-autosuggestions, {mode}", plugin_rc("zsh-autosuggestions", extra="print -s 'git checkout main'\n" + extra),
+                   cwd=tree, settle=5)
+        g = ghosts(sh)
+        check(g and g[-1][1:3] == ["zsh-autosuggestions", "1"], f"[ghost zsh-autosuggestions {mode}] the `ghost` mark names it, on", str(g[-1:]))
+        start = len(sh.buf)
+        sh.send("git ch", 1.5)
+        b = last_buf(sh, start, lambda x: x[7] == "eckout main", timeout=3)
+        check(b is not None and b[6] == "git ch" and b[7] == "eckout main", f"[ghost zsh-autosuggestions {mode}] its suggestion is in the report",
+              str(bufs(sh, start)[-2:]))
+        check(not sh.errors(), f"[ghost zsh-autosuggestions {mode}] no errors")
+        sh.close()
+else:
+    skip("the ghost hook beside zsh-autosuggestions: not in NT_PLUGIN_DIR")
 
 shutil.rmtree(tree, ignore_errors=True)
 sys.exit(1 if failures else 0)
