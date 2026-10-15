@@ -1795,6 +1795,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
              target: CommandSuggestionController.shared)
 
+        // Prompts as tasks in the project's todo folder, for tomorrow's agent.
+        MainActor.assumeIsolated { TasksMenu.shared.fill(submenu(main, "Tasks")) }
+
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
         // The branch popup at its Worktrees: where each is listed, opened, unlocked and removed.

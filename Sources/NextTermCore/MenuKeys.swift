@@ -34,6 +34,8 @@ public enum MenuKeys {
             "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"), "resetFontSize:": cmd("0"), "toggleFullScreen:": ctrlCmd("f"),
             // Agents
             "resumeSession:": optCmd("o"), "sendToAgent:": optCmd("k"), "suggestCommand:": ctrlCmd("k"),
+            // Tasks
+            "addTask:": ctrlCmd("t"),
             // Git
             "showBranches:": optCmd("b"), "gitFetch:": cmd("r"), "gitUpdate:": optCmd("u"), "gitCommit:": shiftCmd("c"),
             "gitPush:": optCmd("p"), "gitNewBranch:": shiftCmd("b"), "gitRollback:": optCmd("z"), "showGitLog:": optCmd("l"),

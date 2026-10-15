@@ -4436,10 +4436,11 @@ enum SelfTest {
         check(shortcuts.chord(for: "newTab:")?.display == "⌘T" && shortcuts.chord(for: "showNextTab:")?.display == "⇧⌘]",
               "today's shortcuts are the defaults", shortcuts.chord(for: "showNextTab:")?.display ?? "none")
         let newTabItem = shortcuts.commands.first { $0.id == "newTab:" }?.item
-        shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
-        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
+        // ⌃⌥⌘T: a key no command has (⌃⌘T is Add Task…).
+        shortcuts.set(KeyChord(key: "t", command: true, option: true, control: true), for: "newTab:")
+        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .option, .control],
               "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
-        check(c.tabBar.newTabToolTip == "New tab (⌃⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
+        check(c.tabBar.newTabToolTip == "New tab (⌃⌥⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
         check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
               "a shortcut already in use is found, so it can be moved deliberately")
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
