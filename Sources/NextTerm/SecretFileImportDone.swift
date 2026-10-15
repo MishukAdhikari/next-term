@@ -60,7 +60,7 @@ extension SecretFileImportSheet {
         let readAs: [String: String] = self.readAs
         let alert = NSAlert()
         alert.messageText = "Copy \(planned.count) \(planned.count == 1 ? "key" : "keys") into Secrets?"
-        alert.informativeText = Self.confirmText(planned, file: fileName)
+        alert.informativeText = Self.confirmText(planned, file: isPiped ? nil : fileName)
         alert.addButton(withTitle: "Copy Keys")
         alert.addButton(withTitle: "Cancel")
         confirmAlert = alert
@@ -77,8 +77,9 @@ extension SecretFileImportSheet {
         }
     }
 
-    /// The confirm's text: the keys, the ones it replaces (which Undo can't put back), and that the file stays.
-    static func confirmText(_ planned: [SecretCopyIn.Planned], file: String) -> String {
+    /// The confirm's text: the keys, the ones it replaces (which Undo can't put back), and that the file stays (no
+    /// file for piped keys).
+    static func confirmText(_ planned: [SecretCopyIn.Planned], file: String?) -> String {
         let shown: [String] = planned.prefix(12).map { (key: SecretCopyIn.Planned) -> String in "\u{2022} " + key.name }
         var text: String = shown.joined(separator: "\n")
         if planned.count > shown.count { text += "\n\u{2022} and \(planned.count - shown.count) more" }
@@ -90,6 +91,7 @@ extension SecretFileImportSheet {
             text += "\n\n" + lead + replaced.joined(separator: ", ") + back
         }
         let undo: String = "For 30 days, Undo in Recent imports deletes the keys this copies in."
+        guard let file else { return text + "\n\n" + undo }
         return text + "\n\n" + "\(file) stays as it is. " + undo
     }
 
@@ -146,16 +148,18 @@ extension SecretFileImportSheet {
         let names: [String] = saved.names
         statusLabel.stringValue = SecretCopyIn.copiedText(names.count)
         var summary: [String] = []
-        let exported: Bool = report?.exportedBy != nil
+        let exported: Bool = report?.exportedBy != nil && !isPiped
         let line: String? = SecretCopyIn.doneLine(names: names, file: fileName, format: report?.format ?? .env,
                                                   agent: report?.agent, exported: exported, readAs: readAs)
-        if let line { summary.append(line) }
+        if let line, !isPiped { summary.append(line) }
+        if let pipedLine = pipedDoneLine { summary.append(pipedLine) }
         if inGit { summary.append(SecretImportSheet.rotate) }
         summaryLabel.stringValue = summary.joined(separator: "\n\n")
         summaryLabel.isHidden = summary.isEmpty
         if !undoSaved { addDone(Self.warning(Self.noUndoLine)) }
         if exported { addDone(trashBox, Self.small(Self.trashLine)) }
         if inGit { addRotateRows(names) }
+        addCloseTab()
         doneStack.isHidden = doneStack.arrangedSubviews.isEmpty
         importButton.isHidden = true
         cancelButton.isHidden = true
@@ -165,7 +169,7 @@ extension SecretFileImportSheet {
         statusLabel.stringValue = SecretCopyIn.copiedText(names.count)
     }
 
-    private func addDone(_ views: NSView...) {
+    func addDone(_ views: NSView...) {
         for view in views { doneStack.addArrangedSubview(view) }
     }
 
@@ -214,7 +218,7 @@ extension SecretFileImportSheet {
     private func end(rotate: String?) {
         guard !isBusy, let saved = record else { return closeSheet() }
         let copied: String = SecretCopyIn.copiedText(saved.names.count)
-        guard report?.exportedBy != nil, trashBox.state == .on else {
+        guard report?.exportedBy != nil, !isPiped, trashBox.state == .on else {
             return finishSheet(Ending(said: copied, rotate: rotate))
         }
         let url = URL(fileURLWithPath: path)
@@ -243,6 +247,7 @@ extension SecretFileImportSheet {
     /// Closes the sheet and releases the report, which wipes every value it held.
     private func finishSheet(_ ending: Ending) {
         guard let window else { return }
+        client?.ended(copied: record?.names.count ?? 0)
         confirmAlert = nil
         awaitingConfirm = nil
         rows = []

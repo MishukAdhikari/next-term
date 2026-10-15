@@ -8,8 +8,10 @@ import Foundation
 public enum SecretRun {
     public static let usage = "usage: nxtrm secret run NAME[=ENVNAME]... -- command [arguments...]"
 
-    /// `nxtrm secret help`.
-    public static let help = """
+    /// `nxtrm secret help`: `secret run`, then `secret import`.
+    public static let help = runHelp + "\n\n" + SecretImportPipe.help
+
+    static let runHelp = """
         usage: nxtrm secret run NAME[=ENVNAME]... -- command [arguments...]
 
         Runs the command with keys from Next Term's Secrets in its environment, once you approve in Next Term with \

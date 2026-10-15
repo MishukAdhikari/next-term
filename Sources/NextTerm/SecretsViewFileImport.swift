@@ -17,7 +17,8 @@ extension SecretsView {
     static var pickedForSelfTest: URL?
     #endif
 
-    /// The pull-down: its title, then A File… and MCP Configs….
+    /// The pull-down: its title, then A File… and MCP Configs…, then the password managers (1Password…, Bitwarden…,
+    /// Bitwarden Secrets Manager…), whose CLI the user runs in a new tab.
     func configureImportMenu() {
         importMenuButton.removeAllItems()
         importMenuButton.addItem(withTitle: Self.importMenuTitle)
@@ -28,8 +29,32 @@ extension SecretsView {
             item.target = self
             importMenuButton.menu?.addItem(item)
         }
+        importMenuButton.menu?.addItem(.separator())
+        for preset in SecretImportPreset.allCases {
+            let item = NSMenuItem(title: Self.managerItemTitle(preset), action: #selector(importFromManager(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = preset.rawValue
+            importMenuButton.menu?.addItem(item)
+        }
         importMenuButton.bezelStyle = .rounded
         importMenuButton.setAccessibilityLabel("Import From")
+    }
+
+    /// "1Password…", "Bitwarden…", "Bitwarden Secrets Manager…".
+    static func managerItemTitle(_ preset: SecretImportPreset) -> String { preset.app + "\u{2026}" }
+
+    /// A password manager's sheet: what runs, its line, and Open in a New Tab.
+    @objc func importFromManager(_ sender: NSMenuItem) {
+        guard !hasOpenSheet, let window, let name = sender.representedObject as? String,
+              let preset = SecretImportPreset(rawValue: name) else { return }
+        let sheet = SecretManagerImportSheet(preset: preset, say: { [weak self] (line: String) in
+            self?.say(line)
+        }, done: { [weak self] in
+            self?.managerSheet = nil
+        })
+        managerSheet = sheet
+        sheet.begin(on: window)
     }
 
     /// The open panel, as a sheet on the list's window; any file, never a folder or a package.
@@ -54,8 +79,9 @@ extension SecretsView {
         }
     }
 
-    /// The picked file read off the main thread (a file near the limits takes seconds), then its sheet.
-    func readPicked(_ url: URL) {
+    /// The picked file read off the main thread (a file near the limits takes seconds), then its sheet. `format` and
+    /// `client` are `nxtrm secret import`'s: the format it named, and the importer waiting to hear how it ends.
+    func readPicked(_ url: URL, format: SecretSources.Format? = nil, client: SecretImportClient? = nil) {
         let setup: SecretImportSheet.Setup = Self.importSetup()
         let home: String = setup.home
         let projects: [String] = setup.projects
@@ -66,14 +92,17 @@ extension SecretsView {
         say("Reading \(url.lastPathComponent)\u{2026}")
         Task { @MainActor in
             let read = await Task.detached { () -> (picked: SecretSources.Picked, inGit: Bool) in
-                let picked = SecretSources.readPicked(chosen, home: home, projects: projects, stored: stored)
+                let picked = SecretSources.readPicked(chosen, home: home, projects: projects, stored: stored,
+                                                      format: format)
                 return (picked, SecretImport.isInGitWorkTree(path))
             }.value
             self.say("")
             switch read.picked {
             case .copy(let report):
-                self.openFileImport(path: path, report: report, inGit: read.inGit)
+                self.openFileImport(path: path, report: report, inGit: read.inGit, client: client)
             case .move(let source, let rest):
+                // The MCP-config import asks its own way: the importer is told that, and goes.
+                client?.end(self.hasOpenSheet ? .busy : .moved)
                 self.openMoveImport(only: source) { [weak self] in
                     guard !rest.rows.isEmpty else { return }
                     // After the move sheet has gone: the keys outside its servers, to copy in. The sheet checks
@@ -88,11 +117,16 @@ extension SecretsView {
         }
     }
 
-    /// The copy sheet for `report`. When it closes, the list says what it did and may open Rotate… for a key.
-    func openFileImport(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool) {
-        guard fileImportSheet == nil, let window else { return }
-        let sheet = SecretFileImportSheet(path: path, report: report, outsideServers: outsideServers,
-                                          inGit: inGit) { [weak self] (ending: SecretFileImportSheet.Ending) in
+    /// The copy sheet for `report`. When it closes, the list says what it did and may open Rotate… for a key. `client`
+    /// is `nxtrm secret import`'s importer, told when the sheet opens and how it ends; `busy` when another is open.
+    func openFileImport(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool,
+                        client: SecretImportClient? = nil) {
+        guard fileImportSheet == nil, let window else {
+            client?.end(.busy)
+            return
+        }
+        let sheet = SecretFileImportSheet(path: path, report: report, outsideServers: outsideServers, inGit: inGit,
+                                          client: client) { [weak self] (ending: SecretFileImportSheet.Ending) in
             guard let self else { return }
             self.fileImportSheet = nil
             self.reload()
@@ -104,6 +138,7 @@ extension SecretsView {
         }
         fileImportSheet = sheet
         sheet.begin(on: window)
+        if let report = sheet.report { client?.opened(report) }
     }
 }
 

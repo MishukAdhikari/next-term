@@ -66,10 +66,11 @@ enum SecretSocket {
         return arguments[5] == "secret" && arguments[6] == "run"
     }
 
-    /// Whether the process at a connection is a wrapper, by its whole argv as the kernel has it.
+    /// Whether the process at a connection is a wrapper or `nxtrm secret import`, by its whole argv as the kernel has
+    /// it: no MCP answer goes to either.
     static func isWrapper(pid: pid_t?) -> Bool {
         guard let pid, let full = ProcessInspector.fullCommandLine(of: pid) else { return false }
-        return isWrapper(full.arguments, selfTest: SelfTest.isRequested)
+        return isWrapper(full.arguments, selfTest: SelfTest.isRequested) || SecretImportPipe.isImporter(full.arguments)
     }
 
     // MARK: asking, on the main thread

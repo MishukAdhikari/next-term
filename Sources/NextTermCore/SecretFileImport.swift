@@ -17,9 +17,9 @@ extension SecretSources {
 
     /// The picked file at `path`, as picked (links not followed yet), read off the main thread: a move target
     /// (`moveSource`, with the open `projects`) or a file to copy from. `stored` names the keys in the vault, whose
-    /// rows start unticked.
+    /// rows start unticked. `format` (`nxtrm secret import --from`) is the format a copy is read as.
     public static func readPicked(_ path: String, home: String = NSHomeDirectory(), projects: [String] = [],
-                                  stored: Set<String> = [], now: Date = Date()) -> Picked {
+                                  stored: Set<String> = [], format: Format? = nil, now: Date = Date()) -> Picked {
         let real: String = canonicalPath(path)
         // The path as given: a project's `.mcp.json` that links into a dotfiles folder is still that project's.
         if let source = moveSource(path: path, home: home, projects: projects) {
@@ -30,17 +30,18 @@ extension SecretSources {
                 return .move(source, rest: unreadableReport(reason, path: real))
             }
         }
-        return .copy(readFile(real, stored: stored, now: now))
+        return .copy(readFile(real, stored: stored, format: format, now: now))
     }
 
     /// The report for the file at `path` (links followed): its name and its folder's name make the purpose ("From .env
-    /// in rag-api"). The bytes read are wiped once parsed.
-    public static func readFile(_ path: String, stored: Set<String> = [], now: Date = Date()) -> SourceReport {
+    /// in rag-api"). The bytes read are wiped once parsed. `format`, when given, is read instead of what `detect` says.
+    public static func readFile(_ path: String, stored: Set<String> = [], format: Format? = nil,
+                                now: Date = Date()) -> SourceReport {
         let real: String = canonicalPath(path)
         switch fileBytes(atPath: real) {
         case .success(var bytes):
             let (file, folder) = fileAndFolder(real)
-            return read(&bytes, name: file, folder: folder, stored: stored, now: now)
+            return read(&bytes, name: file, folder: folder, format: format, stored: stored, now: now)
         case .failure(let reason):
             return unreadableReport(reason, path: real)
         }

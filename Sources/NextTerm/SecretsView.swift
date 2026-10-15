@@ -86,6 +86,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var importSheet: SecretImportSheet?
     /// Import From › A File…'s sheet, while it is open.
     var fileImportSheet: SecretFileImportSheet?
+    /// Import From › 1Password…, Bitwarden… or Bitwarden Secrets Manager…, while it is open.
+    var managerSheet: SecretManagerImportSheet?
     /// Recent imports' copy-ins, with their Undo buttons.
     var copyInRows: [(record: SecretCopyIn.Record, undo: NSButton)] = []
     /// Recent imports, by batch, with their Undo buttons.
@@ -645,7 +647,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     /// Whether a sheet is open on the list's window: Add…, Edit…, Replace…, Rotate…, or a question.
     var hasOpenSheet: Bool {
-        sheet != nil || rotateSheet != nil || fileImportSheet != nil || window?.attachedSheet != nil
+        sheet != nil || rotateSheet != nil || fileImportSheet != nil || managerSheet != nil || window?.attachedSheet != nil
     }
 
     private func openRotateSheet(_ entry: SecretVault.Entry) {

@@ -62,11 +62,13 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
     var record: SecretCopyIn.Record?
     var isBusy = false
     let scroll = NSScrollView()
+    /// `nxtrm secret import`'s importer: where its keys came from, told when the sheet ends.
+    let client: SecretImportClient?
 
     /// `report` is checked against the keys stored as the sheet opens, which may be more than when the file was read:
     /// the move import stores its keys before the keys outside its servers open here.
     init(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool = false,
-         done: @escaping (Ending) -> Void) {
+         client: SecretImportClient? = nil, done: @escaping (Ending) -> Void) {
         let stored: Set<String> = Set(SecretsStore.shared.index?.names ?? [])
         let checked: SourceReport = report.checked(against: stored)
         self.path = path
@@ -74,6 +76,7 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
         self.stored = stored
         self.outsideServers = outsideServers
         self.inGit = inGit
+        self.client = client
         self.done = done
         let frame = NSRect(x: 0, y: 0, width: 760, height: 580)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -87,8 +90,8 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// The file's name, as the sheet and the Touch ID line name it.
-    var fileName: String { (path as NSString).lastPathComponent }
+    /// The file's name, as the sheet and the Touch ID line name it; for piped keys, where they came from.
+    var fileName: String { isPiped ? pipedSource : (path as NSString).lastPathComponent }
 
     /// The keys stored now, read again: a row named as a key stored since it was last checked is unticked, so
     /// replacing that key takes a tick by hand. Returns the names it unticked.
@@ -193,10 +196,13 @@ extension SecretFileImportSheet {
     /// The header (the file, how it was read, what to know about it), the line above the rows, the rows, and the
     /// footer's count of values that aren't keys.
     func show(_ report: SourceReport) {
-        var header: String = "\(SecretImportSheet.file(path)), read as \(Self.formatText(report))."
+        let fileHeader: String = "\(SecretImportSheet.file(path)), read as \(Self.formatText(report))."
+        var header: String = isPiped ? pipedHeader(report) : fileHeader
+        if !isPiped, let place = client?.origin.place { header += " Given by nxtrm secret import in \(place)." }
         if outsideServers { header += " " + Self.outsideServersLine }
         if let note = report.fileNote { header += "\n" + note.sentence + "." }
         headerLabel.stringValue = header
+        if client?.origin.agent != nil { addAgentWarning() }
         footerLabel.stringValue = report.footer ?? ""
         notKeysButton.isHidden = report.notKeys.isEmpty
         footerLabel.isHidden = report.notKeys.isEmpty
