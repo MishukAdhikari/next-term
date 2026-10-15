@@ -22,10 +22,33 @@ extension SecretFileImportSheet {
         return purpose.hasPrefix("From ") ? String(purpose.dropFirst(5)) : purpose
     }
 
-    /// Asks once, naming every key and each it replaces; then the copy-in.
+    /// "OPENAI_API_KEY was saved in Secrets since this opened, so its row is unticked: tick it to replace that key."
+    static func storedSinceLine(_ names: [String]) -> String {
+        let one: Bool = names.count == 1
+        let rows: String = one ? "its row is" : "their rows are"
+        let tick: String = one ? "tick it to replace that key" : "tick them to replace those keys"
+        return "\(SecretRun.keysText(names)) \(one ? "was" : "were") saved in Secrets since this opened, so \(rows) "
+            + "unticked: \(tick)."
+    }
+
+    /// The name the file gave each ticked row, by its name in Secrets: the done line sets a renamed key as the project
+    /// reads it.
+    var readAs: [String: String] {
+        guard let report else { return [:] }
+        var names: [String: String] = [:]
+        for row in rows where row.isTicked { names[row.name] = report.rows[row.index].name }
+        return names
+    }
+
+    /// Asks once, naming every key and each it replaces; then the copy-in. A key stored since the sheet opened
+    /// unticks its row first, and nothing is asked.
     @objc func importTicked() {
         guard importButton.isEnabled, let window, let report else { return }
-        let stored: Set<String> = Set(SecretsStore.shared.index?.names ?? [])
+        let unticked: [String] = checkStoredAgain()
+        guard unticked.isEmpty else {
+            statusLabel.stringValue = Self.storedSinceLine(unticked)
+            return
+        }
         let holds: (String) -> Bool = { (text: String) -> Bool in SecretsStore.holdsStoredKey(text) }
         let planned: [SecretCopyIn.Planned]
         do {
@@ -34,16 +57,22 @@ extension SecretFileImportSheet {
             return refresh()
         }
         guard !planned.isEmpty else { return }
+        let readAs: [String: String] = self.readAs
         let alert = NSAlert()
         alert.messageText = "Copy \(planned.count) \(planned.count == 1 ? "key" : "keys") into Secrets?"
         alert.informativeText = Self.confirmText(planned, file: fileName)
         alert.addButton(withTitle: "Copy Keys")
         alert.addButton(withTitle: "Cancel")
         confirmAlert = alert
+        awaitingConfirm = (planned, readAs)
         alert.beginSheetModal(for: window) { [weak self] (response: NSApplication.ModalResponse) in
             MainActor.assumeIsolated {
-                self?.confirmAlert = nil
-                if response == .alertFirstButtonReturn { self?.copyIn(planned) }
+                guard let self else { return }
+                let pending = self.awaitingConfirm
+                self.confirmAlert = nil
+                self.awaitingConfirm = nil
+                guard response == .alertFirstButtonReturn, let pending else { return }
+                self.copyIn(pending.planned, readAs: pending.readAs)
             }
         }
     }
@@ -64,8 +93,9 @@ extension SecretFileImportSheet {
         return text + "\n\n" + "\(file) stays as it is. " + undo
     }
 
-    /// One Touch ID ("copy 3 keys from .env"), then the done view.
-    func copyIn(_ planned: [SecretCopyIn.Planned]) {
+    /// One Touch ID ("copy 3 keys from .env"), then the done view. A key stored since the confirm is never replaced:
+    /// nothing is saved, and its row is unticked.
+    func copyIn(_ planned: [SecretCopyIn.Planned], readAs: [String: String]) {
         guard let report else { return }
         setBusy(true, Self.touchIDLine)
         let format: SecretSources.Format = report.format
@@ -76,9 +106,12 @@ extension SecretFileImportSheet {
                 let saved = try await SecretsStore.shared.performCopyIn(planned, source: source, format: format,
                                                                         reason: reason)
                 self.isBusy = false
-                self.showDone(saved)
+                self.showDone(saved.record, undoSaved: saved.undoSaved, readAs: readAs)
             } catch SecretsStore.Failure.cancelled {
                 self.setBusy(false, Self.notApprovedLine)
+            } catch SecretsStore.Failure.vault(.nameTaken(let name)) {
+                let unticked: [String] = self.checkStoredAgain()
+                self.setBusy(false, Self.storedSinceLine(unticked.isEmpty ? [name] : unticked))
             } catch {
                 let failed: String = "Next Term couldn\u{2019}t copy the keys."
                 self.setBusy(false, (error as? LocalizedError)?.errorDescription ?? failed)
@@ -98,9 +131,13 @@ extension SecretFileImportSheet {
 // MARK: done
 
 extension SecretFileImportSheet {
-    /// The rows go still; the summary says what was copied and what still holds the keys; an export gets Move Export
-    /// to the Trash, ticked; a file in git gets Rotate… for each key, since git's history keeps them.
-    func showDone(_ saved: SecretCopyIn.Record) {
+    static let noUndoLine = "Next Term couldn\u{2019}t keep this import\u{2019}s Undo, so Recent imports won\u{2019}t "
+        + "list it. To take the keys back, delete them in the list."
+
+    /// The rows go still; the summary says what was copied and what still holds the keys (a key renamed here is set
+    /// as `readAs` names it); an export gets Move Export to the Trash, ticked; a file in git gets Rotate… for each
+    /// key, since git's history keeps them. A record that couldn't be saved is a warning: there is no Undo.
+    func showDone(_ saved: SecretCopyIn.Record, undoSaved: Bool = true, readAs: [String: String] = [:]) {
         record = saved
         for row in rows {
             row.box.isEnabled = false
@@ -111,11 +148,12 @@ extension SecretFileImportSheet {
         var summary: [String] = []
         let exported: Bool = report?.exportedBy != nil
         let line: String? = SecretCopyIn.doneLine(names: names, file: fileName, format: report?.format ?? .env,
-                                                  agent: report?.agent, exported: exported)
+                                                  agent: report?.agent, exported: exported, readAs: readAs)
         if let line { summary.append(line) }
         if inGit { summary.append(SecretImportSheet.rotate) }
         summaryLabel.stringValue = summary.joined(separator: "\n\n")
         summaryLabel.isHidden = summary.isEmpty
+        if !undoSaved { addDone(Self.warning(Self.noUndoLine)) }
         if exported { addDone(trashBox, Self.small(Self.trashLine)) }
         if inGit { addRotateRows(names) }
         doneStack.isHidden = doneStack.arrangedSubviews.isEmpty
@@ -152,6 +190,14 @@ extension SecretFileImportSheet {
     static func small(_ text: String) -> NSTextField {
         let label = SecretApprovalPanel.label(text, size: 11)
         label.textColor = .secondaryLabelColor
+        return label
+    }
+
+    /// A line to heed, in the warning colour, which VoiceOver reads as a warning.
+    static func warning(_ text: String) -> NSTextField {
+        let label = SecretApprovalPanel.label(text, size: 12)
+        label.textColor = .systemOrange
+        label.setAccessibilityLabel("Warning: " + text)
         return label
     }
 
@@ -198,6 +244,7 @@ extension SecretFileImportSheet {
     private func finishSheet(_ ending: Ending) {
         guard let window else { return }
         confirmAlert = nil
+        awaitingConfirm = nil
         rows = []
         for view in rowsStack.arrangedSubviews { view.removeFromSuperview() }
         report = nil

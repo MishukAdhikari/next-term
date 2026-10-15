@@ -519,6 +519,10 @@ public final class SecretVault {
     private var vaultKey: SymmetricKey?
     /// `maxWriteSize`; the tests lower it.
     var writeCap = SecretVault.maxWriteSize
+    /// Inside `batch`: each change is checked and kept, and the file is encoded once, when the batch ends.
+    private var isBatching = false
+    /// How many times a change encoded the file; the tests count them.
+    private(set) var encodedFiles = 0
 
     private init(index: Index, file: Data, vaultKey: SymmetricKey) {
         self.index = index
@@ -739,6 +743,23 @@ public final class SecretVault {
         return try written(key, cap: Self.maxFileSize) { _ = index.entries.remove(at: position) }
     }
 
+    /// The changes `body` makes, saved as one file: each is checked as it is made, and the file is encoded and MAC'd
+    /// once, when `body` ends, so a copy-in of hundreds of keys doesn't encode the vault for each. When anything fails,
+    /// the index and the file are left as they were before `body`. A batch inside a batch is part of it. Returns the
+    /// new file's bytes; the changes inside return the file as it was before the batch.
+    public func batch(now: Date = Date(), _ body: () throws -> Void) throws -> Data {
+        let key = try unlockedKey()
+        guard !isBatching else {
+            try body()
+            return file
+        }
+        return try written(key, now: now) {
+            isBatching = true
+            defer { isBatching = false }
+            try body()
+        }
+    }
+
     /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again. Retired marks were made
     /// under the old key and can't be made again, since the old values are gone, so they go.
     public func remark(maskKey: SymmetricKey) throws -> Data {
@@ -870,12 +891,14 @@ public final class SecretVault {
         let before = index
         do {
             try change()
+            if isBatching { return file } // the batch encodes the file once, at its end
             for position in index.entries.indices {
                 guard let until = index.entries[position].retired?.until, until <= now else { continue }
                 index.entries[position].retired = nil
             }
             try Self.checkReadable(index)
             let new = try Self.encodeFile(index, key: key)
+            encodedFiles += 1
             let fits: Bool = new.count <= cap ?? writeCap
             guard fits || new.count <= file.count else { throw Failure.full }
             file = new

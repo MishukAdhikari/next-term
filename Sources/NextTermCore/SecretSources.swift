@@ -175,6 +175,10 @@ public enum SecretSources {
 
         /// A note the row starts ticked with: what to know, not a reason to leave it.
         var keepsTick: Bool { self == .loaderReadsDollar || self == .stillInFile || self == .composeInGit }
+
+        /// A note to heed before ticking the row, which the preview shows as a warning: the value would reach
+        /// browsers, or it would replace a stored key.
+        public var warns: Bool { self == .shipsToBrowsers || self == .replaces }
     }
 }
 

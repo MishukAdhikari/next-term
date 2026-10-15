@@ -37,7 +37,7 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
     let inGit: Bool
     /// What the file holds. Released when the sheet closes, which wipes every value.
     var report: SourceReport?
-    /// The keys stored when the sheet opened, and as it imports: a row of one replaces it.
+    /// The keys stored when the sheet opened, read again at Import… (`checkStoredAgain`): a row of one replaces it.
     private(set) var stored: Set<String>
     let done: (Ending) -> Void
     var rows: [FileImportRow] = []
@@ -55,19 +55,26 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
     private(set) var cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
     private(set) var doneButton = NSButton(title: "Done", target: nil, action: nil)
     var confirmAlert: NSAlert?
+    /// The keys the open confirm names, and the file's names for them: held here, not by the alert's handler, so no
+    /// value outlives the sheet in an alert AppKit keeps.
+    var awaitingConfirm: (planned: [SecretCopyIn.Planned], readAs: [String: String])?
     /// What the copy-in saved, once it has.
     var record: SecretCopyIn.Record?
     var isBusy = false
     let scroll = NSScrollView()
 
+    /// `report` is checked against the keys stored as the sheet opens, which may be more than when the file was read:
+    /// the move import stores its keys before the keys outside its servers open here.
     init(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool = false,
          done: @escaping (Ending) -> Void) {
+        let stored: Set<String> = Set(SecretsStore.shared.index?.names ?? [])
+        let checked: SourceReport = report.checked(against: stored)
         self.path = path
-        self.report = report
+        self.report = checked
+        self.stored = stored
         self.outsideServers = outsideServers
         self.inGit = inGit
         self.done = done
-        stored = Set(SecretsStore.shared.index?.names ?? [])
         let frame = NSRect(x: 0, y: 0, width: 760, height: 580)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -75,13 +82,31 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
         super.init(window: window)
         window.delegate = self
         build()
-        show(report)
+        show(checked)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     /// The file's name, as the sheet and the Touch ID line name it.
     var fileName: String { (path as NSString).lastPathComponent }
+
+    /// The keys stored now, read again: a row named as a key stored since it was last checked is unticked, so
+    /// replacing that key takes a tick by hand. Returns the names it unticked.
+    @discardableResult
+    func checkStoredAgain() -> [String] {
+        stored = Set(SecretsStore.shared.index?.names ?? [])
+        var unticked: [String] = []
+        for row in rows {
+            let isStored: Bool = stored.contains(row.name)
+            if isStored, !row.wasStored, row.isTicked {
+                row.box.state = .off
+                unticked.append(row.name)
+            }
+            row.wasStored = isStored
+        }
+        refresh()
+        return unticked
+    }
 
     func begin(on parent: NSWindow) {
         guard let window else { return }

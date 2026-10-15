@@ -56,30 +56,35 @@ public enum SecretCopyIn {
 
     /// The planned keys saved in `vault`, in one change: each new key with origin `import`, its page, what it's for and
     /// `remindDays` (the reminder new keys start with); each key it replaces with its new value and origin `import`.
+    /// The vault may have changed since the plan: a key planned as new that is stored now is refused (`nameTaken`),
+    /// since the confirm never named it, and nothing is saved; one planned as a replace that is gone now is added.
     /// Returns the file to write (nil when nothing changed) and the record for Undo, under `id`.
     public static func apply(_ planned: [Planned], to vault: SecretVault, source: String, format: SecretSources.Format,
                              remindDays: Int?, maskKey: SymmetricKey?, id: String = UUID().uuidString.lowercased(),
                              now: Date = Date()) throws -> (file: Data?, record: Record) {
-        var file: Data?
         var added: [Record.Added] = []
         var replaced: [String] = []
-        for key in planned {
-            if let entry = vault.index.entry(named: key.name) {
-                file = try vault.replace(key.name, value: key.value, writeOnly: entry.writeOnly, origin: .import,
-                                         maskKey: maskKey, now: now)
-                if entry.link == nil, let link = key.link {
-                    file = try vault.edit(key.name, link: .some(link), linkFrom: key.linkFrom, now: now)
+        let save: () throws -> Void = { () throws -> Void in
+            for key in planned {
+                if key.replaces, let entry = vault.index.entry(named: key.name) {
+                    _ = try vault.replace(key.name, value: key.value, writeOnly: entry.writeOnly, origin: .import,
+                                          maskKey: maskKey, now: now)
+                    if entry.link == nil, let link = key.link {
+                        _ = try vault.edit(key.name, link: .some(link), linkFrom: key.linkFrom, now: now)
+                    }
+                    replaced.append(key.name)
+                    continue
                 }
-                replaced.append(key.name)
-                continue
-            }
-            file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import,
-                                 writeOnly: false, value: key.value, link: key.link, linkFrom: key.linkFrom,
-                                 remindDays: remindDays, maskKey: maskKey, now: now)
-            if let entry = vault.index.entry(named: key.name) {
-                added.append(Record.Added(name: entry.name, id: entry.id, valueSet: entry.lastSet))
+                // A key stored since the plan makes `add` throw `nameTaken`.
+                _ = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import,
+                                  writeOnly: false, value: key.value, link: key.link, linkFrom: key.linkFrom,
+                                  remindDays: remindDays, maskKey: maskKey, now: now)
+                if let entry = vault.index.entry(named: key.name) {
+                    added.append(Record.Added(name: entry.name, id: entry.id, valueSet: entry.lastSet))
+                }
             }
         }
+        let file: Data? = planned.isEmpty ? nil : try vault.batch(now: now, save)
         let date: Date = SecretVault.whole(now)
         let record = Record(id: id, date: date, source: source, format: format.rawValue, added: added, replaced: replaced)
         return (file, record)
@@ -164,7 +169,8 @@ extension SecretCopyIn {
         }
     }
 
-    /// Each key the record added, found by its entry id: deleted while its value is still the one copied in.
+    /// Each key the record added, found by its entry id: deleted while its value is still the one copied in and it
+    /// is an import's.
     public static func undoPlan(_ record: Record, index: SecretVault.Index?) -> UndoPlan {
         var deletes: [String] = []
         var changed: [String] = []
@@ -177,7 +183,9 @@ extension SecretCopyIn {
                 gone.append(added.name)
                 continue
             }
-            if entry.lastSet == added.valueSet {
+            // A key no import added (a record written by another process can name any key's id and date, which
+            // vault.json shows unlocked) stays, as one changed since does.
+            if entry.lastSet == added.valueSet, entry.origin == .import {
                 deletes.append(entry.name)
             } else {
                 changed.append(entry.name)
@@ -191,8 +199,10 @@ extension SecretCopyIn {
     /// write is nil when nothing was deleted.
     public static func undo(_ record: Record, in vault: SecretVault) throws -> (file: Data?, plan: UndoPlan) {
         let plan: UndoPlan = undoPlan(record, index: vault.index)
-        var file: Data?
-        for name in plan.deletes { file = try vault.delete(name) }
+        guard !plan.deletes.isEmpty else { return (nil, plan) }
+        let file: Data = try vault.batch {
+            for name in plan.deletes { _ = try vault.delete(name) }
+        }
         return (file, plan)
     }
 }
@@ -227,9 +237,10 @@ extension SecretCopyIn {
     /// What the done sheet says about the file the keys came from, which the copy-in left as it was: for a `.env`, how
     /// to start the project with the keys from Secrets instead; for an agent's config Next Term can't rewrite, that it
     /// still holds them; for any other file, that it still holds them. An export gets nil: the sheet offers to move it
-    /// to the Trash instead.
+    /// to the Trash instead. `readAs` holds the name the file gave each key, by its name in Secrets: a key renamed in
+    /// the preview is set as the project reads it (`NAME=ENVNAME`).
     public static func doneLine(names: [String], file: String, format: SecretSources.Format, agent: String?,
-                                exported: Bool = false) -> String? {
+                                exported: Bool = false, readAs: [String: String] = [:]) -> String? {
         guard !names.isEmpty, !exported else { return nil }
         let one: Bool = names.count == 1
         let holds: String = "\(file) still holds \(one ? "this key" : "these keys")"
@@ -237,8 +248,16 @@ extension SecretCopyIn {
         guard format == .env else {
             return holds + ". Delete \(one ? "it" : "them") from it once nothing reads \(one ? "it" : "them") there."
         }
-        let run: String = "nxtrm secret run " + names.joined(separator: " ") + " -- <your command>"
+        let pairs: [String] = names.map { (name: String) -> String in runPair(name, readAs: readAs[name]) }
+        let run: String = "nxtrm secret run " + pairs.joined(separator: " ") + " -- <your command>"
         return holds + ". Start the project with \(run), then delete \(one ? "it" : "them") from \(file)."
+    }
+
+    /// `NAME`, or `NAME=ENVNAME` when the file names the key otherwise and `secret run` can set that name.
+    static func runPair(_ name: String, readAs: String?) -> String {
+        guard let envName = readAs, envName != name, StoredSecretName.isValid(envName),
+              !StoredSecretName.isRefusedEnvName(envName) else { return name }
+        return name + "=" + envName
     }
 
     /// "15 Oct: OPENAI_API_KEY and PINECONE_API_KEY, copied from .env in rag-api", for Recent imports.

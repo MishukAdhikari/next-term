@@ -76,9 +76,13 @@ final class FileImportRow {
         row.alsoAt.isEmpty ? row.place : "\(row.place) +\(row.alsoAt.count)"
     }
 
-    /// The page's host, and as its tooltip where it came from and the whole link.
-    static func pageText(_ row: SourceRow) -> (text: String, help: String?) {
+    static let linkHoldsKeyHelp = "Left out: the link holds one of your keys."
+
+    /// The page's host, and as its tooltip where it came from and the whole link. A link that holds a stored key
+    /// (`holdsKey`, as masking finds them) shows none of itself: Import leaves it out.
+    static func pageText(_ row: SourceRow, holdsKey: (String) -> Bool) -> (text: String, help: String?) {
         guard let hint = row.link else { return ("\u{2014}", nil) }
+        guard !holdsKey(hint.url.absoluteString) else { return ("\u{2014}", linkHoldsKeyHelp) }
         let host: String = hint.url.host ?? hint.url.absoluteString
         switch hint {
         case .source(let url): return (host, "From the file: " + url.absoluteString)
@@ -102,7 +106,8 @@ extension SecretFileImportSheet {
         nameField.delegate = self
         nameField.isEnabled = row.refusal == nil
         nameField.setAccessibilityLabel("Name in Secrets")
-        let page: (text: String, help: String?) = FileImportRow.pageText(row)
+        let holds: (String) -> Bool = { (text: String) -> Bool in SecretsStore.holdsStoredKey(text) }
+        let page: (text: String, help: String?) = FileImportRow.pageText(row, holdsKey: holds)
         let pageCell: NSTextField = FileImportRow.cell(page.text, wraps: false)
         pageCell.toolTip = page.help
         let placeText: String = FileImportRow.placeText(row)
@@ -160,6 +165,7 @@ extension SecretFileImportSheet {
             row.noteLabel.stringValue = note.text
             row.noteLabel.textColor = note.warns ? .systemOrange : .secondaryLabelColor
             row.noteLabel.toolTip = note.text.isEmpty ? nil : note.text
+            row.noteLabel.setAccessibilityLabel(note.warns ? "Warning: " + note.text : nil)
         }
         let found: Int = report.rows.count
         if record == nil {
@@ -169,7 +175,8 @@ extension SecretFileImportSheet {
     }
 
     /// A row's note: why it can't be stored, a problem with its name, that it replaces a key, or the report's note
-    /// (unless the header says it for every row); after a note that its name came from an item's title.
+    /// (unless the header says it for every row), a warning when it is one; after a note that its name came from an
+    /// item's title.
     func noteText(_ row: SourceRow, name: String, problem: String?,
                   fileNote: SecretSources.Note?) -> (text: String, warns: Bool) {
         var lines: [String] = []
@@ -186,6 +193,7 @@ extension SecretFileImportSheet {
             warns = true
         } else if let note = row.note, note != .replaces, note != fileNote {
             lines.append(note.sentence)
+            warns = note.warns
         }
         return (lines.joined(separator: " "), warns)
     }

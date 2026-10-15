@@ -60,11 +60,13 @@ extension SecretsView {
         let home: String = setup.home
         let projects: [String] = setup.projects
         let stored: Set<String> = Set(SecretsStore.shared.index?.names ?? [])
-        let path: String = canonicalPath(url.path)
+        // As picked for the move import's check (a project's linked .mcp.json is still its own), then links followed.
+        let chosen: String = url.path
+        let path: String = canonicalPath(chosen)
         say("Reading \(url.lastPathComponent)\u{2026}")
         Task { @MainActor in
             let read = await Task.detached { () -> (picked: SecretSources.Picked, inGit: Bool) in
-                let picked = SecretSources.readPicked(path, home: home, projects: projects, stored: stored)
+                let picked = SecretSources.readPicked(chosen, home: home, projects: projects, stored: stored)
                 return (picked, SecretImport.isInGitWorkTree(path))
             }.value
             self.say("")
@@ -74,7 +76,8 @@ extension SecretsView {
             case .move(let source, let rest):
                 self.openMoveImport(only: source) { [weak self] in
                     guard !rest.rows.isEmpty else { return }
-                    // After the move sheet has gone: the keys outside its servers, to copy in.
+                    // After the move sheet has gone: the keys outside its servers, to copy in. The sheet checks
+                    // them against the keys the move just stored.
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated {
                             self?.openFileImport(path: path, report: rest, outsideServers: true, inGit: read.inGit)

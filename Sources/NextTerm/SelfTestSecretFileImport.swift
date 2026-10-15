@@ -94,10 +94,14 @@ extension SelfTest {
         check(sheet.summaryLabel.stringValue.contains(doneLine),
               "secret file import: the done view says how to start the project", sheet.summaryLabel.stringValue)
         weak var report: SourceReport?
+        weak var value: SecretBytes?
         report = sheet.report
+        value = sheet.report?.rows.first?.value
         sheet.doneButton.performClick(nil)
-        _ = await wait(5) { view.fileImportSheet == nil }
-        check(report == nil, "secret file import: closing the sheet releases its report, so its values are wiped")
+        _ = await wait(5) { view.fileImportSheet == nil && value == nil }
+        // The value itself, which only wipes when nothing holds it: not the report alone, as the plan held it too.
+        check(report == nil && value == nil,
+              "secret file import: closing the sheet releases its report and its values, so they are wiped")
         await secretFileImportUndoCheck(view, names: names)
     }
 }

@@ -81,6 +81,28 @@ import Testing
         #expect(SecretCopyIn.copiedText(1) == "Copied 1 key into Secrets.")
     }
 
+    @Test func aKeyRenamedInThePreviewIsSetAsTheFileNamesIt() {
+        let names = ["OPENAI_API_KEY", "PINECONE_API_KEY"]
+        // OPENAI_KEY in the file, renamed in the preview; PATH can't be set by secret run, so it is left as it is.
+        let readAs: [String: String] = ["OPENAI_API_KEY": "OPENAI_KEY", "PINECONE_API_KEY": "PINECONE_API_KEY"]
+        let line: String? = SecretCopyIn.doneLine(names: names, file: ".env", format: .env, agent: nil, readAs: readAs)
+        let run: String = "nxtrm secret run OPENAI_API_KEY=OPENAI_KEY PINECONE_API_KEY -- <your command>"
+        #expect(line == ".env still holds these keys. Start the project with \(run), then delete them from .env.")
+        let refused: String? = SecretCopyIn.doneLine(names: ["SHELL_KEY"], file: ".env", format: .env, agent: nil,
+                                                     readAs: ["SHELL_KEY": "PATH"])
+        #expect(refused?.contains("nxtrm secret run SHELL_KEY -- <your command>") == true)
+        let parsed = SecretRun.parse(["OPENAI_API_KEY=OPENAI_KEY", "PINECONE_API_KEY", "--", "npm", "start"])
+        #expect((try? parsed.get())?.map["OPENAI_API_KEY"] == "OPENAI_KEY")
+    }
+
+    @Test func aNoteThatWarnsIsToldFromOneThatInforms() {
+        #expect(SecretSources.Note.shipsToBrowsers.warns && SecretSources.Note.replaces.warns)
+        let informs: [SecretSources.Note] = [.publishable, .shortLived, .publicName, .loaderReadsDollar,
+                                             .websitePassword, .reprompt, .stillInFile, .composeInGit,
+                                             .setAgain(line: 9, place: "line 9")]
+        #expect(!informs.contains { (note: SecretSources.Note) -> Bool in note.warns })
+    }
+
     @Test func whatAnUndoSays() {
         let plan = SecretCopyIn.UndoPlan(deletes: ["A_KEY", "B_KEY"], changed: ["C_KEY"], replaced: ["D_KEY"], gone: [])
         let text: String = plan.text

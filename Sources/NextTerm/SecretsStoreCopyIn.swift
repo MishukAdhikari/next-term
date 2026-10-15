@@ -7,9 +7,10 @@ import NextTermCore
 extension SecretsStore {
     /// One Touch ID ("copy 3 keys from .env"), then the planned keys saved in one unlock, one audit line ("copied 3 keys
     /// from a .env file") and the record for Undo in `imports/`. The record is written after the vault: a record that
-    /// failed to save leaves the keys in, with no Undo. Nothing is saved on a failure.
+    /// failed to save leaves the keys in, with no Undo, and `undoSaved` says so for the done view. Nothing is saved on
+    /// a failure.
     func performCopyIn(_ planned: [SecretCopyIn.Planned], source: String, format: SecretSources.Format,
-                       reason: String) async throws -> SecretCopyIn.Record {
+                       reason: String) async throws -> (record: SecretCopyIn.Record, undoSaved: Bool) {
         let names: [String] = planned.map(\.name)
         let remindDays: Int? = SecretReminderRecords.newKeyDays // new keys start with Settings › Secrets' reminder
         let id: String = UUID().uuidString.lowercased()
@@ -26,9 +27,9 @@ extension SecretsStore {
             return SecretAudit.Line(event: .import, names: names, outcome: outcome)
         }
         guard let record = box.record else { throw Failure.vault(.changed) }
-        try? saveCopyIn(record)
+        let undoSaved: Bool = (try? saveCopyIn(record)) != nil
         NotificationCenter.default.post(name: Self.changed, object: self)
-        return record
+        return (record, undoSaved)
     }
 
     /// One Touch ID, then the keys the copy-in added that still hold the value it copied in deleted in one unlock; the
@@ -53,10 +54,11 @@ extension SecretsStore {
 
     // MARK: records
 
-    /// Writes a copy-in's record to `imports/`, 0600, excluded from backups, as the backups are.
+    /// Writes a copy-in's record to `imports/`, 0600, excluded from backups, as the backups are. Throws when it isn't
+    /// written, so the done view can say there is no Undo.
     func saveCopyIn(_ record: SecretCopyIn.Record) throws {
         _ = try folder.ensureImports()
-        guard Self.isPlainID(record.id), let data = record.encoded() else { return }
+        guard Self.isPlainID(record.id), let data = record.encoded() else { throw CocoaError(.fileWriteUnknown) }
         try folder.write(SecretFolder.importsName + "/" + record.fileName, data: data)
     }
 

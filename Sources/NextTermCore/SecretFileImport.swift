@@ -15,12 +15,14 @@ extension SecretSources {
         case move(SecretImport.Source, rest: SourceReport)
     }
 
-    /// The picked file at `path`, read off the main thread: a move target (`moveSource`, with the open `projects`)
-    /// or a file to copy from. `stored` names the keys in the vault, whose rows start unticked.
+    /// The picked file at `path`, as picked (links not followed yet), read off the main thread: a move target
+    /// (`moveSource`, with the open `projects`) or a file to copy from. `stored` names the keys in the vault, whose
+    /// rows start unticked.
     public static func readPicked(_ path: String, home: String = NSHomeDirectory(), projects: [String] = [],
                                   stored: Set<String> = [], now: Date = Date()) -> Picked {
         let real: String = canonicalPath(path)
-        if let source = moveSource(path: real, home: home, projects: projects) {
+        // The path as given: a project's `.mcp.json` that links into a dotfiles folder is still that project's.
+        if let source = moveSource(path: path, home: home, projects: projects) {
             switch fileBytes(atPath: real) {
             case .success(var bytes):
                 return .move(source, rest: readOutsideServers(&bytes, of: source, stored: stored, now: now))
@@ -43,7 +45,20 @@ extension SecretSources {
             return unreadableReport(reason, path: real)
         }
     }
+}
 
+extension SourceReport {
+    /// The report with each row checked against the keys stored now: a row named as one starts unticked, "Replaces
+    /// your key". For a copy that opens after the vault changed since the file was read, as the keys outside a move
+    /// target's servers do once the move import has stored its own.
+    public func checked(against stored: Set<String>) -> SourceReport {
+        let marked: [SourceRow] = SecretSources.replacing(rows, stored: stored)
+        return SourceReport(format: format, rows: marked, notKeys: notKeys, unreadable: unreadable, purpose: purpose,
+                            exportedBy: exportedBy, agent: agent, fileNote: fileNote)
+    }
+}
+
+extension SecretSources {
     static func fileAndFolder(_ path: String) -> (file: String, folder: String?) {
         let url = URL(fileURLWithPath: path)
         let folder: String = url.deletingLastPathComponent().lastPathComponent
