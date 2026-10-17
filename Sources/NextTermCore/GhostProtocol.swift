@@ -23,10 +23,12 @@ import Foundation
 /// id, a 6-digit length and the payload). Its own key, so each hook keeps its own.
 ///
 ///     a  id: the generation   line seen ; new line ; the key's bytes      accept (→, End, ⌃E, ⌃F, ⌥→)
+///     o  id: 0                t | g                                       who draws suggestions: Next Term (t) or the plugin (g)
 ///
 /// An accept replaces the line only while it is the one Next Term saw, at that generation, with the cursor at its end,
 /// and while the key only moves the cursor in that keymap (or does nothing): otherwise the key's own bytes go back to
-/// zsh, which does what that key does.
+/// zsh, which does what that key does. `o t` turns zsh-autosuggestions' suggestions off in that shell, and its rebinding
+/// at each prompt; `o g` gives back what `t` turned off. Either way the hook then sends its `ghost` mark and the line.
 public enum GhostProtocol {
     /// ESC [ 6975 ~: as safe as Tab completion's and history's keys (CompletionProtocol.prefix, ShellHistory.prefix), and
     /// neither of them: unbound in stock keymaps, and not the start of any reply a terminal sends.
@@ -46,6 +48,7 @@ public enum GhostProtocol {
 
     public enum Kind: UInt8, Sendable {
         case accept = 0x61 // a
+        case owner = 0x6F // o
     }
 
     /// An accept: `seen` (the line the suggestion showed on, at generation `gen`) becomes `new`, the cursor at its end; or,
@@ -53,6 +56,12 @@ public enum GhostProtocol {
     /// when the frame would be too long for the hook to read.
     public static func acceptFrame(gen: Int, seen: String, new: String, key: [UInt8]) -> [UInt8]? {
         frame(.accept, id: gen, fields: [seen, new, String(decoding: key, as: UTF8.self)])
+    }
+
+    /// Who draws suggestions in the shell: `takeOver`, Next Term (zsh-autosuggestions' off); otherwise the plugin again,
+    /// where the hook turned it off.
+    public static func ownerFrame(takeOver: Bool) -> [UInt8] {
+        CompletionProtocol.frame(prefix: prefix, kind: Kind.owner.rawValue, id: 0, fields: [takeOver ? "t" : "g"])
     }
 
     static func frame(_ kind: Kind, id: Int, fields: [String]) -> [UInt8]? {

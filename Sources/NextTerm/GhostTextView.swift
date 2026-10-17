@@ -85,3 +85,93 @@ final class GhostTextView: NSView {
     }
 }
 
+
+/// A small notice in a tab, at the top of its terminal as an agent's tab's hint is (NextTermView.awaitsChoice): a line
+/// that says what it is about, its buttons, and a close button. None of them takes the keyboard, so typing goes on in the
+/// terminal. Suggestions while typing use it to ask once where a plugin draws its own, and for their first-use hint.
+final class GhostNotice: NSView {
+    let text: String
+    private var actions: [() -> Void] = []
+    private let onClose: () -> Void
+
+    /// `buttons` in order, then the close button, labelled `closeLabel` for VoiceOver.
+    init(_ text: String, buttons: [(title: String, action: () -> Void)], closeLabel: String, onClose: @escaping () -> Void) {
+        self.text = text
+        self.onClose = onClose
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
+        layer?.cornerRadius = 6
+        translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(text)
+
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .white
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        var views: [NSView] = [label]
+        for (index, button) in buttons.enumerated() {
+            let control = NSButton(title: button.title, target: self, action: #selector(pressed(_:)))
+            control.tag = index
+            control.bezelStyle = .inline
+            control.controlSize = .small
+            control.refusesFirstResponder = true
+            control.setContentCompressionResistancePriority(.required, for: .horizontal)
+            actions.append(button.action)
+            views.append(control)
+        }
+        let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: closeLabel) ?? NSImage(),
+                             target: self, action: #selector(closed(_:)))
+        close.isBordered = false
+        close.contentTintColor = NSColor.white.withAlphaComponent(0.8)
+        close.refusesFirstResponder = true
+        close.setAccessibilityLabel(closeLabel)
+        close.toolTip = closeLabel
+        views.append(close)
+        let stack = NSStackView(views: views)
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 8)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Pinned to the top of `view`, centred, never wider than it; said once to VoiceOver, quietly.
+    func show(in view: NSView) {
+        view.addSubview(self)
+        NSLayoutConstraint.activate([
+            topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
+            centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -16),
+        ])
+        let element: Any = view.window ?? NSApp as Any
+        NSAccessibility.post(element: element, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+    }
+
+    /// The button titled `title`, for the self-test.
+    func button(_ title: String) -> NSButton? {
+        subviews.first?.subviews.compactMap { $0 as? NSButton }.first { $0.title == title }
+    }
+
+    /// The close button, for the self-test.
+    var closeButton: NSButton? { subviews.first?.subviews.compactMap { $0 as? NSButton }.last }
+
+    @objc private func pressed(_ sender: NSButton) {
+        guard actions.indices.contains(sender.tag) else { return }
+        actions[sender.tag]()
+    }
+
+    @objc private func closed(_ sender: NSButton) { onClose() }
+}

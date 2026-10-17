@@ -22,6 +22,7 @@ extension SelfTest {
         await ghostOverlayChecks(c, dir: dir)
         await ghostKeyChecks(c, dir: dir)
         await ghostViChecks(c, dir: dir)
+        await ghostOwnerChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -36,6 +37,21 @@ extension SelfTest {
           if [[ -n $BUFFER && $s == "$BUFFER"* && $s != "$BUFFER" ]]; then POSTDISPLAY=${s#"$BUFFER"}; else POSTDISPLAY=; fi
         }
         zle -N self-insert __standin_insert
+
+        """
+
+    /// The stand-in with zsh-autosuggestions' own switches (autosuggest-disable and -enable, which its ghost follows) and
+    /// its precmd, which drops itself once ZSH_AUTOSUGGEST_MANUAL_REBIND is set.
+    static let standInPlugin = standInGhost.replacingOccurrences(
+        of: "  zle .self-insert\n", with: "  zle .self-insert\n  (( ${+_ZSH_AUTOSUGGEST_DISABLED} )) && { POSTDISPLAY=; return }\n") + """
+        zle -N autosuggest-fetch __standin_fetch
+        __standin_fetch() { : }
+        zle -N autosuggest-disable __standin_disable
+        __standin_disable() { typeset -g _ZSH_AUTOSUGGEST_DISABLED; POSTDISPLAY= }
+        zle -N autosuggest-enable __standin_enable
+        __standin_enable() { unset _ZSH_AUTOSUGGEST_DISABLED }
+        _zsh_autosuggest_start() { (( ${+ZSH_AUTOSUGGEST_MANUAL_REBIND} )) && precmd_functions=(${precmd_functions:#_zsh_autosuggest_start}); : }
+        precmd_functions+=(_zsh_autosuggest_start)
 
         """
 
@@ -344,6 +360,81 @@ extension SelfTest {
         pressKey(window, "\u{1b}", code: 53)
         check(await wait(2) { !tab.ghost.isShowing && tab.lastBuffer?.report.keymap == "vicmd" },
               "suggestions: Esc in vi insert mode hides it and goes on to zsh (vicmd)", "\(String(describing: tab.lastBuffer?.report))")
+    }
+
+    /// Beside a plugin that draws its own (the stand-in): none of Next Term's, a notice once at an idle prompt, and each
+    /// answer; a new tab told at its start; the tooltip's line for each. The user's own choices are put back after.
+    static func ghostOwnerChecks(_ c: TerminalWindowController, dir: URL) async {
+        let keys = [GhostPreferences.choicesKey, GhostPreferences.dismissalsKey]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        let dismissed = GhostPreferences.dismissedThisLaunch
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+            GhostPreferences.dismissedThisLaunch = dismissed
+        }
+        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        GhostPreferences.dismissedThisLaunch = []
+        await ghostSeed("git checkout main", folder: dir.path)
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc + standInPlugin, name: "owner"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        check(tab.ghost.hook?.enabled == true && tab.ghost.label == "Suggestions: zsh-autosuggestions",
+              "suggestions: the tooltip names the plugin that draws its own", tab.ghost.label ?? "none")
+        typeKeys(window, "git ch")
+        _ = await wait(2) { tab.lastBuffer?.report.postdisplay == "eckout main" }
+        check(!(await ghostShows(tab, within: 1)), "suggestions: where a plugin draws its own, none of Next Term's")
+        check(tab.ghost.notice == nil, "suggestions: no question while a line is typed")
+        // An idle prompt, after a command: the question, once.
+        await ghostClear(tab)
+        typeKeys(window, "true")
+        pressKey(window, "\r", code: 36)
+        check(await wait(4) { tab.ghost.notice != nil }, "suggestions: at an idle prompt after a command, a notice in the tab asks")
+        tab.ghost.notice?.button("Use Next Term’s")?.performClick(nil)
+        check(await wait(3) { tab.ghost.hook?.enabled == false } && GhostPreferences.choice(for: .autosuggestions) == .nextTerm
+              && tab.ghost.notice == nil, "suggestions: Use Next Term’s turns the plugin's off in that tab")
+        check(tab.ghost.label == "Suggestions: Next Term’s", "suggestions: and the tooltip says so", tab.ghost.label ?? "none")
+        await ghostClear(tab)
+        typeKeys(window, "git ch")
+        check(await ghostShows(tab), "suggestions: then Next Term's show there", "\(tab.ghost.state)")
+        // A new tab starts with the plugin's off.
+        if let second = await ghostTab(c, in: dir, zshrc: plainZshrc + standInPlugin, name: "owner-new", focused: false) {
+            check(second.ghostStart == "t" && second.ghost.hook?.enabled == false && second.ghost.tookOver,
+                  "suggestions: a new tab starts with the plugin's off", "\(String(describing: second.ghost.hook))")
+            c.remove(second)
+        }
+        // The plugin's chosen again (as in Settings): given back.
+        await ghostClear(tab)
+        GhostPreferences.choose(.plugin, for: .autosuggestions)
+        GhostSession.syncAll()
+        check(await wait(3) { tab.ghost.hook?.enabled == true } && tab.ghost.label == "Suggestions: zsh-autosuggestions, your choice",
+              "suggestions: the plugin's chosen: given back, and the tooltip says it was your choice", tab.ghost.label ?? "none")
+        // Asked again, in a tab of its own: Keep changes nothing.
+        GhostPreferences.choose(nil, for: .autosuggestions)
+        if let third = await ghostTab(c, in: dir, zshrc: plainZshrc + standInPlugin, name: "owner-keep") {
+            typeKeys(window, "true")
+            pressKey(window, "\r", code: 36)
+            if await wait(4, { third.ghost.notice != nil }) {
+                third.ghost.notice?.button("Keep zsh-autosuggestions")?.performClick(nil)
+                await pause(0.5)
+                check(third.ghost.hook?.enabled == true && GhostPreferences.choice(for: .autosuggestions) == .plugin && third.ghost.notice == nil,
+                      "suggestions: Keep zsh-autosuggestions changes nothing in the shell")
+            } else {
+                check(false, "suggestions: asked again, the notice comes back in a new tab")
+            }
+            c.remove(third)
+        }
+        // Not Now: the plugin's until the next launch; twice, for good, as Settings says.
+        GhostPreferences.choose(nil, for: .autosuggestions)
+        GhostPreferences.dismissed(.autosuggestions)
+        check(GhostPreferences.answer(for: .autosuggestions) == .plugin && GhostPreferences.choice(for: .autosuggestions) == nil,
+              "suggestions: Not Now leaves them to the plugin until the next launch")
+        GhostPreferences.dismissed(.autosuggestions)
+        check(GhostPreferences.remembered.contains { $0.plugin == .autosuggestions && $0.choice == .plugin && $0.byDismissal },
+              "suggestions: Not Now twice keeps the plugin's for good, and Settings says why")
+        GhostPreferences.testIsOn = false
+        check(tab.ghost.label == "Suggestions: off", "suggestions: the tooltip says when they are off", tab.ghost.label ?? "none")
+        GhostPreferences.testIsOn = true
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,

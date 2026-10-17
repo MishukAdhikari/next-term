@@ -44,6 +44,13 @@ typeset -ga __nextterm_gf
 # The keymap `main` is, read at each new line: emacs or viins (`bindkey -v`), or main when it can't be read.
 typeset -g __nextterm_gmain=main
 typeset -gi __nextterm_gfd=-1
+# What the tab started with (the integration's NEXTTERM_GHOST), for its first line: `t`, zsh-autosuggestions' suggestions
+# off, as the user chose Next Term's; `a`, the same where they are Atuin's (ZSH_AUTOSUGGEST_STRATEGY names atuin).
+typeset -g __nextterm_gtake=${__nextterm_gstart-}
+unset __nextterm_gstart
+# This hook turned zsh-autosuggestions off (and set ZSH_AUTOSUGGEST_MANUAL_REBIND, which wasn't set before: 1), so it may
+# give both back.
+typeset -g __nextterm_gtook= __nextterm_grebind=
 
 # A scratch descriptor of this hook's own (close-on-exec, its file already removed) to read what `bindkey` prints without a
 # subshell, as Tab completion's hook has its own.
@@ -141,12 +148,56 @@ __nextterm_gsuggest() {
   return $ret
 }
 
+# zsh-autosuggestions' suggestions off in this shell (`t`: Next Term's show instead), and with them its rebinding of every
+# widget at each prompt, about 20 ms (ZSH_AUTOSUGGEST_MANUAL_REBIND, which its precmd reads to drop itself); or (`g`) both
+# given back as they were, where this hook turned them off. Only as the user chose, through Next Term's key or the tab's
+# start; never a file of theirs.
+__nextterm_gtakeover() {
+  emulate -L zsh
+  (( ${+widgets[autosuggest-fetch]} )) || return 0
+  if [[ $1 == t ]]; then
+    (( ${+_ZSH_AUTOSUGGEST_DISABLED} )) && return 0
+    zle autosuggest-disable
+    __nextterm_gtook=1 __nextterm_grebind=
+    if (( ! ${+ZSH_AUTOSUGGEST_MANUAL_REBIND} )); then
+      typeset -g ZSH_AUTOSUGGEST_MANUAL_REBIND=1
+      __nextterm_grebind=1
+    fi
+  elif [[ $1 == g && -n $__nextterm_gtook ]]; then
+    __nextterm_gtook=
+    (( ${+_ZSH_AUTOSUGGEST_DISABLED} )) && zle autosuggest-enable
+    if [[ -n $__nextterm_grebind ]]; then
+      __nextterm_grebind=
+      unset ZSH_AUTOSUGGEST_MANUAL_REBIND
+      # Its precmd dropped itself once the variable was set: back, rebinding at each prompt as before.
+      (( ${+functions[_zsh_autosuggest_start]} )) && precmd_functions=(${precmd_functions:#_zsh_autosuggest_start} _zsh_autosuggest_start)
+    fi
+  fi
+  return 0
+}
+
+# The tab's start (__nextterm_gtake), at its first line: zsh-autosuggestions off where the user chose Next Term's for it,
+# Atuin's or its own.
+__nextterm_gstarttake() {
+  emulate -L zsh
+  local take=$__nextterm_gtake
+  __nextterm_gtake=
+  (( ${+widgets[autosuggest-fetch]} )) || return 0
+  if [[ " ${ZSH_AUTOSUGGEST_STRATEGY[*]-} " == *" atuin "* ]]; then
+    [[ $take == *a* ]] && __nextterm_gtakeover t
+  else
+    [[ $take == *t* ]] && __nextterm_gtakeover t
+  fi
+  return 0
+}
+
 # zle-line-init: a new line and a new generation; the `ghost` mark, then the line as it starts (empty, mostly), so an empty
 # prompt has a generation of its own.
 __nextterm_ginit() {
   emulate -L zsh
   (( __nextterm_gline = (__nextterm_gline + 1) % 1000000000, __nextterm_ggen = (__nextterm_ggen + 1) % 1000000000 ))
   __nextterm_gmainmap
+  [[ -n $__nextterm_gtake ]] && __nextterm_gstarttake
   __nextterm_ghook
   __nextterm_gbuf=$BUFFER __nextterm_gcur=$CURSOR __nextterm_gpost=$POSTDISPLAY
   __nextterm_greport
@@ -206,6 +257,9 @@ __nextterm_gkeywidget() {
   local before=$BUFFER
   case $__nextterm_gk in
     (a) __nextterm_gaccept ;;
+    (o) __nextterm_gtakeover ${__nextterm_gf[1]-}
+        __nextterm_ghook
+        __nextterm_greport ;;
   esac
   # zsh-autosuggestions never wraps this widget: a line changed here is asked for a suggestion that fits it, as Tab
   # completion's widget does.

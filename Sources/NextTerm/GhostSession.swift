@@ -11,6 +11,10 @@ import SwiftTerm
 /// the shell's redraw is on screen: on the output after the report, or on the next turn of the main queue, once the cells
 /// left of the cursor end with the line; not within 50 ms, it hides. Output that moves the cursor after that hides it until
 /// the next report, and so do a resize, a scroll back, marked text, a paste, a selection and the window going to the back.
+///
+/// Where zsh-autosuggestions draws its own (GhostOwner), none of Next Term's show until the user chooses: a notice in the
+/// tab asks once, at an idle prompt. Next Term's chosen, the hook turns the plugin's off in this shell (an `o` frame, sent
+/// only at an idle line, so nothing typed ahead can read it); the plugin's chosen again, it gives them back.
 final class GhostSession {
     /// How long a suggestion's checks may take; one later shows nothing.
     static let checkDeadline: TimeInterval = 0.15
@@ -38,6 +42,20 @@ final class GhostSession {
     private(set) var asks = 0
     private(set) var shows = 0
 
+    /// The hook turned zsh-autosuggestions' suggestions off in this shell (at its start, or by an `o` frame), so it may give
+    /// them back.
+    private(set) var tookOver = false
+    /// A take-over (true) or a give-back (false) waiting for an idle line.
+    private var pendingOwner: Bool?
+    /// When a command last ended here, and when a key of yours last came: the question waits for an idle prompt.
+    private var endedAt: TimeInterval?
+    private var keyAt: TimeInterval = 0
+    /// The question was asked in this tab this launch.
+    private var asked = false
+    /// The notice showing in the tab, and the plugin it asks about.
+    private(set) var notice: GhostNotice?
+    private var noticePlugin: GhostOwner.Plugin?
+
     init(tab: TerminalTab) {
         self.tab = tab
     }
@@ -61,10 +79,17 @@ final class GhostSession {
     func handle(_ message: GhostProtocol.Message) {
         switch message {
         case .hook(let hook):
+            // The first mark of a shell told to take over: the plugin is off because Next Term asked.
+            if self.hook == nil, !hook.enabled, let plugin = GhostOwner.loaded(hook), let start = tab?.ghostStart {
+                tookOver = start.contains(plugin == .atuin ? "a" : "t")
+            }
             self.hook = hook
+            sync()
         case .buffer(let report):
             arrival = TerminalTab.now
             follow(state.report(report, gates: gates()))
+            sendOwnerIfIdle()
+            considerAsking(report)
         case .fallback:
             break
         }
@@ -281,7 +306,7 @@ final class GhostSession {
         gates.notDriven = !MCPControl.isDriven(tab)
         // Where zsh-autosuggestions draws its own (the hook says it is on), none of Next Term's; a plugin's ghost on the line
         // keeps them off too (GhostState).
-        gates.noPlugin = hook?.enabled != true
+        gates.noPlugin = GhostOwner.owner(hook: hook, report: nil) == nil
         guard gates.open else { return gates }
         let terminal = view.getTerminal()
         gates.shellAlone = tab.remote == nil && !tab.status.running && !terminal.isCurrentBufferAlternate && tab.shellAlone
@@ -293,7 +318,99 @@ final class GhostSession {
         guard tab?.remote == nil, hook != nil else { return nil }
         guard GhostPreferences.isOn else { return "Suggestions: off" }
         if GhostPreferences.privateMode { return "Suggestions: off (Private Mode)" }
-        return hook?.enabled == true ? "Suggestions: zsh-autosuggestions" : "Suggestions: Next Term’s"
+        guard let owner = GhostOwner.owner(hook: hook, report: state.report) else { return "Suggestions: Next Term’s" }
+        let chosen = owner.canTakeOver && GhostPreferences.choice(for: owner) == .plugin
+        return "Suggestions: \(owner.label)" + (chosen ? ", your choice" : "")
+    }
+
+    // MARK: a plugin that draws its own
+
+    /// Follows the choice for this shell's plugin: Next Term's (and suggestions on), the plugin's go off where they are on;
+    /// anything else, they come back where the hook turned them off. A notice answered elsewhere goes.
+    func sync() {
+        if let plugin = noticePlugin, GhostPreferences.answer(for: plugin) != .ask || !GhostPreferences.isOn { hideNotice() }
+        pendingOwner = nil
+        guard tab?.remote == nil, let hook, let plugin = GhostOwner.loaded(hook) else { return }
+        let wanted = GhostPreferences.isOn && GhostPreferences.answer(for: plugin) == .nextTerm
+        // Once a shell: one the user turned back on by hand keeps it.
+        if wanted, hook.enabled, !tookOver { pendingOwner = true }
+        if !wanted, tookOver { pendingOwner = false }
+        sendOwnerIfIdle()
+    }
+
+    /// A choice was made or asked again, or suggestions went on or off: every tab follows it.
+    static func syncAll() {
+        for controller in AppDelegate.shared?.controllers ?? [] {
+            for tab in controller.tabs {
+                tab.ghost.sync()
+                tab.delegate?.tabDidChange(tab)
+            }
+        }
+    }
+
+    /// The `o` frame waiting, sent once the line is idle: the shell has the terminal, and nothing was written since its
+    /// last report, so what is sent can only reach the line editor.
+    private func sendOwnerIfIdle() {
+        guard let takeOver = pendingOwner, let tab, tab.lineReportIsCurrent else { return }
+        pendingOwner = nil
+        tookOver = takeOver
+        tab.view.send(data: GhostProtocol.ownerFrame(takeOver: takeOver)[...])
+    }
+
+    /// The question, once a launch in this tab, at an idle prompt: an empty line after a command ended here, no key of
+    /// yours for a second (it waits for one), the tab neither driven by an agent nor waiting to be chosen.
+    private func considerAsking(_ report: GhostProtocol.BufferReport) {
+        guard mayAsk(on: report, sinceKey: .infinity) else { return }
+        let wait = max(0, keyAt + GhostOwner.quietAfterKey - TerminalTab.now)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.05) { [weak self] in
+            guard let self, let now = self.state.report, now.line == report.line,
+                  self.mayAsk(on: now, sinceKey: TerminalTab.now - self.keyAt) else { return }
+            self.askAbout(GhostOwner.owner(hook: self.hook, report: now))
+        }
+    }
+
+    private func mayAsk(on report: GhostProtocol.BufferReport, sinceKey: TimeInterval) -> Bool {
+        guard let plugin = GhostOwner.owner(hook: hook, report: report), notice == nil, GhostPreferences.isOn,
+              let tab, tab.remote == nil, !tab.view.awaitsChoice, !MCPControl.isDriven(tab) else { return false }
+        return GhostOwner.mayAsk(answer: GhostPreferences.answer(for: plugin), askedBefore: asked, lineEmpty: report.buffer == "",
+                                 afterCommand: endedAt != nil, sinceKey: sinceKey)
+    }
+
+    private func askAbout(_ plugin: GhostOwner.Plugin?) {
+        guard let plugin, let view = tab?.view, notice == nil else { return }
+        asked = true
+        let notice = GhostNotice(Self.question(plugin), buttons: [
+            ("Use Next Term’s", { [weak self] in self?.noticeAnswered(plugin, .nextTerm) }),
+            ("Keep \(plugin.name)", { [weak self] in self?.noticeAnswered(plugin, .plugin) }),
+        ], closeLabel: "Not Now") { [weak self] in self?.noticeAnswered(plugin, nil) }
+        notice.show(in: view)
+        self.notice = notice
+        noticePlugin = plugin
+    }
+
+    /// What the notice says, in the words Tab completion's question uses.
+    static func question(_ plugin: GhostOwner.Plugin) -> String {
+        let shows = plugin == .atuin ? "show" : "shows"
+        return "\(plugin.name) \(shows) suggestions in this shell. Next Term can show its own instead, over the terminal, in its tabs"
+            + " only: your files stay as they are. Settings › Terminal changes it."
+    }
+
+    /// The notice answered: a choice (nil: Not Now). Every tab follows it.
+    private func noticeAnswered(_ plugin: GhostOwner.Plugin, _ choice: PluginChoice?) {
+        hideNotice()
+        if let choice { GhostPreferences.choose(choice, for: plugin) } else { GhostPreferences.dismissed(plugin) }
+        Self.syncAll()
+    }
+
+    private func hideNotice() {
+        notice?.removeFromSuperview()
+        notice = nil
+        noticePlugin = nil
+    }
+
+    /// A command ended in this tab: the next empty line is an idle prompt.
+    func commandEnded() {
+        endedAt = TerminalTab.now
     }
 
     // MARK: what happened in the tab
@@ -310,6 +427,7 @@ final class GhostSession {
 
     /// A key of yours in the tab (or a paste, a drop): suggestions may show on this line.
     func userKey() {
+        keyAt = TerminalTab.now
         state.userKey()
     }
 
@@ -329,19 +447,25 @@ final class GhostSession {
         hide()
     }
 
-    /// A command started, or the line ended otherwise: nothing shows until the next line.
+    /// A command started, or the line ended otherwise: nothing shows until the next line. A notice not answered goes, as
+    /// you went on without it.
     func lineEnded() {
         placing = nil
         state.lineEnded()
         hideOverlay()
+        hideNotice()
     }
 
-    /// The shell was replaced (`exec zsh`): the new one says what it is.
+    /// The shell was replaced (`exec zsh`): the new one says what it is, and started with nothing taken over.
     func shellReplaced() {
         placing = nil
         state = GhostState()
         hook = nil
+        tookOver = false
+        pendingOwner = nil
+        endedAt = nil
         hideOverlay()
+        hideNotice()
     }
 }
 

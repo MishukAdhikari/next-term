@@ -124,6 +124,11 @@ import Testing
         #expect(GhostProtocol.acceptFrame(gen: 1, seen: "a", new: String(repeating: "b", count: GhostProtocol.maxPayload - 3), key: []) != nil)
     }
 
+    @Test func anOwnerFrameSaysWhoDraws() {
+        #expect(String(decoding: GhostProtocol.ownerFrame(takeOver: true), as: UTF8.self) == "\u{1b}[6975~o000000000001t")
+        #expect(String(decoding: GhostProtocol.ownerFrame(takeOver: false), as: UTF8.self) == "\u{1b}[6975~o000000000001g")
+    }
+
     @Test func installWritesTheHookAndTheIntegrationLoadsIt() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nt-ghost-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }

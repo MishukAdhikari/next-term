@@ -1037,6 +1037,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return atReportedPrompt && !GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
     }
 
+    /// The hook's last report is the line as it is now, and the shell has the terminal: a frame for its line editor reaches
+    /// nothing else, and nothing typed ahead is waiting.
+    var lineReportIsCurrent: Bool {
+        guard let last = lastBuffer else { return false }
+        return atReportedPrompt && GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
+    }
+
     /// The hook reports this tab's line, and the shell has the terminal: on this Mac, alone in front with nothing running,
     /// on the normal screen.
     private var atReportedPrompt: Bool {
@@ -1477,6 +1484,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         case .commandFinished(let code):
             onCommandMark?(event)
             runEnded(exit: code)
+            ghost.commandEnded()
             ownLine = nil
             history.prompted(at: Self.now)
             programTitle = nil
@@ -1754,6 +1762,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var environmentPath = ""
     /// The Claude Code link's port as given to the shell (for the self-test).
     private(set) var claudePort: String?
+    /// What the shell was told about zsh-autosuggestions as it started (ShellIntegration.ghostVariable): Next Term's
+    /// suggestions were chosen for it, so its hook turned the plugin's off (GhostSession).
+    private(set) var ghostStart: String?
 
     private func environment(shellName: String) -> [String] {
         // A fresh terminal, not a child of whatever launched Next Term (see TerminalEnvironment).
@@ -1781,6 +1792,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
             // Tab completion's hook loads; `q`: with zsh-autocomplete's list as you type off from the first prompt.
             if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = CompletionPreferences.quietsAutocomplete ? "q" : "1" }
+            // zsh-autosuggestions' suggestions off from the first line, where Next Term's were chosen for them.
+            ghostStart = GhostPreferences.startValue
+            if let ghostStart { env[ShellIntegration.ghostVariable] = ghostStart }
         }
         environmentPath = env["PATH"] ?? ""
         claudePort = env["CLAUDE_CODE_SSE_PORT"]

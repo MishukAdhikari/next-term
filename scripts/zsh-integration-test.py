@@ -1679,6 +1679,95 @@ check(not sh.errors(), "[ghost vi] no errors")
 sh.close()
 shutil.rmtree(folder, ignore_errors=True)
 
+# 13c. Who draws suggestions: NEXTTERM_GHOST (t, or a where Atuin's come through the plugin) turns zsh-autosuggestions' off at
+# the first line, with its rebinding at each prompt; `o t` does the same at an idle line, and `o g` gives back what it turned
+# off. A stand-in plugin with the plugin's own widgets and precmd (it reads no history), and the real one in the matrix.
+STANDIN_PLUGIN = STANDIN.replace("  zle .self-insert\n", "  zle .self-insert\n  (( ${+_ZSH_AUTOSUGGEST_DISABLED} )) && { POSTDISPLAY=; return }\n") + (
+    "zle -N autosuggest-fetch __standin_fetch\n__standin_fetch() { : }\n"
+    "zle -N autosuggest-disable __standin_disable\n__standin_disable() { typeset -g _ZSH_AUTOSUGGEST_DISABLED; POSTDISPLAY= }\n"
+    "zle -N autosuggest-enable __standin_enable\n__standin_enable() { unset _ZSH_AUTOSUGGEST_DISABLED }\n"
+    "_zsh_autosuggest_start() { (( ${+ZSH_AUTOSUGGEST_MANUAL_REBIND} )) && precmd_functions=(${precmd_functions:#_zsh_autosuggest_start}); : }\n"
+    "precmd_functions+=(_zsh_autosuggest_start)\n")
+STATE_CMD = "print -r -- STATE=${+_ZSH_AUTOSUGGEST_DISABLED}:${+ZSH_AUTOSUGGEST_MANUAL_REBIND}:${precmd_functions[(I)_zsh_autosuggest_start]}\r"
+
+def plugin_state(sh):
+    """(disabled, manual rebind set, its precmd still there), printed by the shell, after the next prompt."""
+    start = len(sh.buf)
+    sh.send(STATE_CMD, 0.8)
+    found = re.findall(r"STATE=(\d):(\d):(\d+)", sh.screen(start))
+    return (found[-1][0] == "1", found[-1][1] == "1", found[-1][2] != "0") if found else None
+
+def suggestion_after(sh, text, want=""):
+    """The plugin's suggestion (POSTDISPLAY) once `text` is typed on a fresh line, given time to come when one is wanted."""
+    sh.send("\x03", 0.4)
+    start = len(sh.buf)
+    sh.send(text, 0.5)
+    b = last_buf(sh, start, lambda x: x[6] == text and (not want or x[7] == want), timeout=3 if want else 2)
+    sh.send("\x03", 0.4)
+    return b[7] if b else None
+
+def owner_checks(label, extra, start_value, taken):
+    folder, _ = history_rc(STANDIN_PLUGIN + extra)
+    sh = Shell(f"ghost owner {label}", folder, extra_env={"NEXTTERM_GHOST": start_value} if start_value else None)
+    g = ghosts(sh)
+    check(g and g[0][1:3] == ["zsh-autosuggestions", "0" if taken else "1"],
+          f"[ghost owner {label}] the first `ghost` mark says the plugin is {'off' if taken else 'on'}", str(g))
+    plugin_state(sh)
+    state = plugin_state(sh)
+    if taken:
+        check(state == (True, True, False), f"[ghost owner {label}] off, ZSH_AUTOSUGGEST_MANUAL_REBIND set, its precmd gone after the next prompt",
+              str(state))
+        check(suggestion_after(sh, "git ch") == "", f"[ghost owner {label}] and its suggestion with it")
+        # Given back (at an idle line): on again, its precmd back, the variable as it was.
+        start = len(sh.buf)
+        sh.send(gframe("o", 0, ["g"]), 0.6)
+        g, b = ghosts(sh, start), bufs(sh, start)
+        check(g and g[-1][1:3] == ["zsh-autosuggestions", "1"] and b, f"[ghost owner {label}] `o g`: the `ghost` mark says it is on, and the line follows",
+              f"{g} {b}")
+        state = plugin_state(sh)
+        check(state == (False, False, True), f"[ghost owner {label}] `o g`: on, the variable unset, its precmd back", str(state))
+        check(suggestion_after(sh, "git ch", "eckout main") == "eckout main", f"[ghost owner {label}] and its suggestion with it")
+    else:
+        check(state == (False, False, True), f"[ghost owner {label}] left on, as it was", str(state))
+    # Taken over at an idle line, then given back.
+    start = len(sh.buf)
+    sh.send(gframe("o", 0, ["t"]), 0.6)
+    g = ghosts(sh, start)
+    check(g and g[-1][1:3] == ["zsh-autosuggestions", "0"], f"[ghost owner {label}] `o t`: the `ghost` mark says it is off", str(g))
+    check(suggestion_after(sh, "git ch") == "", f"[ghost owner {label}] `o t`: its suggestion goes")
+    sh.send(gframe("o", 0, ["g"]), 0.6)
+    check(suggestion_after(sh, "git ch", "eckout main") == "eckout main", f"[ghost owner {label}] `o g`: back")
+    errors = sh.errors()
+    for l in errors:
+        print("  hook error:", l.strip()[:200])
+    check(not errors, f"[ghost owner {label}] no errors")
+    sh.close()
+    shutil.rmtree(folder, ignore_errors=True)
+
+owner_checks("t", "", "t", True)
+owner_checks("none", "", None, False)
+owner_checks("t, hostile", "setopt nounset ksh_arrays err_return\n", "t", True)
+owner_checks("Atuin's, t only", "ZSH_AUTOSUGGEST_STRATEGY=(atuin history)\n", "t", False)
+owner_checks("Atuin's, a", "ZSH_AUTOSUGGEST_STRATEGY=(atuin history)\n", "a", True)
+
+# The user's own ZSH_AUTOSUGGEST_MANUAL_REBIND stays as it was through a take-over and its give-back.
+folder, _ = history_rc(STANDIN_PLUGIN + "typeset -g ZSH_AUTOSUGGEST_MANUAL_REBIND=1\n")
+sh = Shell("ghost owner: the user's own rebind setting", folder)
+sh.send(gframe("o", 0, ["t"]), 0.6)
+sh.send(gframe("o", 0, ["g"]), 0.6)
+state = plugin_state(sh)
+check(state is not None and state[:2] == (False, True), "[ghost owner] the user's own ZSH_AUTOSUGGEST_MANUAL_REBIND stays set", str(state))
+# A `g` with nothing taken over turns nothing on: the user's own autosuggest-disable stays.
+sh.send("\x03", 0.3)
+sh.send("zle-off() { zle autosuggest-disable }; zle -N zle-off; bindkey '^X' zle-off\r", 0.6)
+sh.send("\x18", 0.4)
+sh.send(gframe("o", 0, ["g"]), 0.6)
+state = plugin_state(sh)
+check(state is not None and state[0], "[ghost owner] `o g` gives back only what `t` turned off", str(state))
+check(not sh.errors(), "[ghost owner] no errors beside the user's own setting")
+sh.close()
+shutil.rmtree(folder, ignore_errors=True)
+
 # A plugin's ghost (a stand-in): its POSTDISPLAY reaches the report.
 folder, _ = history_rc(STANDIN)
 sh = Shell("ghost: a stand-in plugin", folder)
@@ -1719,6 +1808,16 @@ if plugins and os.path.isdir(os.path.join(plugins, "zsh-autosuggestions")):
         b = last_buf(sh, start, lambda x: x[7] == "eckout main", timeout=3)
         check(b is not None and b[6] == "git ch" and b[7] == "eckout main", f"[ghost zsh-autosuggestions {mode}] its suggestion is in the report",
               str(bufs(sh, start)[-2:]))
+        # Taken over: its suggestion goes, and its precmd with the next prompt.
+        sh.send("\x03", 0.4)
+        sh.send(gframe("o", 0, ["t"]), 0.8)
+        check(suggestion_after(sh, "git ch") == "", f"[ghost zsh-autosuggestions {mode}] `o t`: no suggestion of its own")
+        plugin_state(sh)
+        state = plugin_state(sh)
+        check(state is not None and state == (True, True, False), f"[ghost zsh-autosuggestions {mode}] `o t`: off, and its precmd gone",
+              str(state))
+        sh.send(gframe("o", 0, ["g"]), 0.8)
+        check(suggestion_after(sh, "git ch", "eckout main") == "eckout main", f"[ghost zsh-autosuggestions {mode}] `o g`: its suggestion back")
         check(not sh.errors(), f"[ghost zsh-autosuggestions {mode}] no errors")
         sh.close()
 else:

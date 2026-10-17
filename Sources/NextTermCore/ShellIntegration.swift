@@ -127,7 +127,8 @@ unset NEXTTERM_NONCE
 # prompt. `q`: with zsh-autocomplete's list as you type off from the start.
 typeset -g __nextterm_completion="${NEXTTERM_COMPLETION-}" __nextterm_dir="${${(%):-%x}:h}"
 unset NEXTTERM_COMPLETION
-# `t`: the ghost hook (ghost.zsh) turns zsh-autosuggestions' suggestions off at the first line, as the user chose Next Term's.
+# `t`: the ghost hook (ghost.zsh) turns zsh-autosuggestions' suggestions off at the first line, as the user chose Next Term's;
+# `a`: the same where they are Atuin's.
 typeset -g __nextterm_gstart="${NEXTTERM_GHOST-}"
 unset NEXTTERM_GHOST
 
