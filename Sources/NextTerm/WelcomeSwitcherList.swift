@@ -330,19 +330,72 @@ final class SwitcherHeaderCell: NSTableCellView {
     var countText: String? { count.isHidden ? nil : count.stringValue }
 }
 
+/// What a row's window shows of its agents, at the right of the row's second line: each mark its terminals show, drawn
+/// as the tab bar draws it (StatusDotView, without the amber pulse: the list is looked at, not watched), with how many
+/// show it when more than one ("2"). The row says it to VoiceOver in words.
+final class SwitcherMarksView: NSStackView {
+    private(set) var shown: [AgentMarks.Mark] = []
+    private var counts: [NSTextField] = []
+
+    init() {
+        super.init(frame: .zero)
+        orientation = .horizontal
+        alignment = .centerY
+        spacing = 6
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(_ marks: [AgentMarks.Mark], color: NSColor) {
+        for count in counts { count.textColor = color }
+        guard marks != shown else { return }
+        shown = marks
+        for view in arrangedSubviews {
+            removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        counts = []
+        for mark in marks {
+            let dot = StatusDotView()
+            dot.pulsesForAttention = false
+            dot.state = mark.state
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+            dot.setAccessibilityElement(false)
+            addArrangedSubview(dot)
+            guard mark.count > 1 else { continue }
+            let count = NSTextField(labelWithString: "\(mark.count)")
+            count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            count.textColor = color
+            count.setAccessibilityElement(false)
+            addArrangedSubview(count)
+            setCustomSpacing(3, after: dot)
+            counts.append(count)
+        }
+        isHidden = marks.isEmpty
+    }
+}
+
 /// A project in the Welcome list: a dot in the gutter in the project's colour (View › Project Color; dim without one, as
 /// its repository's for a worktree), filled while a window has it open and a ring while none does (open is said by the
 /// dot only, the name keeps its weight and colour), its name, its branch at the right, and below the folder it is in,
-/// with "2 windows" after it when more than one window has it. While the jumps' modifiers are held its jump key ("⌘1")
-/// shows in its branch's place.
+/// with "2 windows" after it when more than one window has it, and at the right the marks of its agents. While the
+/// jumps' modifiers are held its jump key ("⌘1") shows in its branch's place. A window's own row is laid out the same:
+/// the window's title for a name; for a window with no project a terminal or a server in the gutter, and "No project"
+/// or the server's destination for a folder.
 final class SwitcherProjectCell: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("SwitcherProjectCell")
     static let secondaryFont = NSFont.systemFont(ofSize: 11)
     private let dot = NSView()
+    /// A window with no project's mark, in the dot's place.
+    private let symbol = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private let folder = NSTextField(labelWithString: "")
     private let branch = NSTextField(labelWithString: "")
     private let jump = NSTextField(labelWithString: "")
+    private let marks = SwitcherMarksView()
     private var project: SwitcherProject?
     private var dotColor: NSColor = Theme.textDim
     private var branchName: String?
@@ -371,7 +424,12 @@ final class SwitcherProjectCell: NSTableCellView {
         branch.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         folder.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         jump.setContentCompressionResistancePriority(.required, for: .horizontal)
-        for view in [dot, name, folder, branch, jump] as [NSView] {
+        // The marks are never cut: the folder gives way to them.
+        marks.setContentCompressionResistancePriority(.required, for: .horizontal)
+        symbol.symbolConfiguration = .init(pointSize: 11, weight: .regular)
+        symbol.contentTintColor = Theme.textDim
+        symbol.isHidden = true
+        for view in [dot, symbol, name, folder, branch, jump, marks] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.setAccessibilityElement(false) // the cell says it all
             addSubview(view)
@@ -381,6 +439,11 @@ final class SwitcherProjectCell: NSTableCellView {
             dot.heightAnchor.constraint(equalToConstant: 6),
             dot.centerXAnchor.constraint(equalTo: leadingAnchor, constant: SwitcherRowStyle.gutterCenter),
             dot.centerYAnchor.constraint(equalTo: name.centerYAnchor),
+            symbol.centerXAnchor.constraint(equalTo: dot.centerXAnchor),
+            symbol.centerYAnchor.constraint(equalTo: dot.centerYAnchor),
+            marks.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            marks.centerYAnchor.constraint(equalTo: folder.centerYAnchor),
+            folder.trailingAnchor.constraint(lessThanOrEqualTo: marks.leadingAnchor, constant: -8),
             name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SwitcherRowStyle.nameX),
             name.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             name.trailingAnchor.constraint(lessThanOrEqualTo: branch.leadingAnchor, constant: -8),
@@ -413,14 +476,23 @@ final class SwitcherProjectCell: NSTableCellView {
         dot.layer?.backgroundColor = project.isOpen ? dotColor.cgColor : NSColor.clear.cgColor
         dot.layer?.borderColor = dotColor.cgColor
         dot.layer?.borderWidth = project.isOpen ? 0 : 1
+        // A window with no project: a terminal, or a server for one whose tab in front is on a server.
+        let kind: WindowKind? = project.window?.kind
+        let mark: String? = kind == .server ? "server.rack" : kind == .plain ? "terminal" : nil
+        symbol.image = mark.flatMap { (name: String) -> NSImage? in
+            NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        }
+        symbol.isHidden = mark == nil
+        dot.isHidden = mark != nil
         jump.stringValue = key ?? ""
         paintSecondary()
         showJumpOrBranch()
-        var tip: String = project.path
+        var tip: String = project.path.isEmpty ? project.title : project.path
         if !project.isOpen, let used = project.lastUsed { tip += "\nLast used " + SessionStore.when(used) }
         toolTip = tip
-        setAccessibilityLabel(SwitcherText.accessibilityLabel(project, branch: head, home: home))
-        let help: String = project.isOpen ? "Go to its window" : "Open it"
+        let working: Bool = AgentSpinner.current != .off
+        setAccessibilityLabel(SwitcherText.accessibilityLabel(project, branch: head, home: home, working: working))
+        let help: String = project.window != nil ? "Go to this window" : project.isOpen ? "Go to its window" : "Open it"
         setAccessibilityHelp(key.map { (key: String) -> String in help + " with " + key } ?? help)
     }
 
@@ -446,6 +518,9 @@ final class SwitcherProjectCell: NSTableCellView {
         branch.attributedStringValue = head.isEmpty ? NSAttributedString()
             : SwitcherRowStyle.branch(head, font: font, symbolSize: 10, color: color)
         jump.textColor = color
+        symbol.contentTintColor = color
+        // A working agent's mark only while View › Agent Spinner shows one, as on the tab bar.
+        marks.show(project.marks.shown(working: AgentSpinner.current != .off), color: color)
     }
 
     /// For the self-test: what the row shows.
@@ -457,6 +532,10 @@ final class SwitcherProjectCell: NSTableCellView {
     var shownDotColor: NSColor { dotColor }
     var shownJump: String? { jump.isHidden ? nil : jump.stringValue }
     var shownBranch: String? { branch.isHidden ? nil : branch.stringValue }
+    /// The marks shown at the right of the second line, in their order.
+    var shownMarks: [AgentMarks.Mark] { marks.isHidden ? [] : marks.shown }
+    /// A window with no project's terminal or server shows in the gutter, in the dot's place.
+    var shownSymbol: Bool { !symbol.isHidden }
 
     /// For the self-test: how far below the name's baseline the folder's is, as laid out (about 15 pt: 136 percent of
     /// the second line's 11 pt).

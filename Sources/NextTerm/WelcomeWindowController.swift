@@ -108,8 +108,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         window.keyEquivalentHandler = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
         window.cancelHandler = { [weak self] in self?.cancel() ?? false }
         build()
-        // While it shows, the list follows the windows (a project opened, closed, or in a window more), the history
-        // (⌘⌫, Clear Menu) and the keys the jumps and the hint line name.
+        // While it shows, the list follows the windows (a project opened, closed, or in a window more; their agents'
+        // marks, as AppDelegate.indexed tells it), the history (⌘⌫, Clear Menu) and the keys the jumps and the hint line
+        // name.
         let center = NotificationCenter.default
         let history = center.addObserver(forName: ProjectHistoryRecorder.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.listChanged() }
@@ -128,7 +129,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
                 self.applySearch(.keep)
             }
         }
-        observers = [history, keys, colors]
+        // View › Agent Spinner: a working agent's mark shows in the rows or not, as on the tab bar.
+        let spinner = center.addObserver(forName: AgentSpinner.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.windowsChanged() }
+        }
+        observers = [history, keys, colors, spinner]
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -457,13 +462,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         applySearch(.keep)
     }
 
-    /// What there is to list: the open projects (as many windows each as the history's recorder last counted, and the
-    /// newest time one was in front), then the ones used before, newest first, then Recent Projects' with no recorded
-    /// use, then the saved servers. `looksAtFolders` (a show): which of the history's folders are gone is read from
-    /// disk here; otherwise the last look's `missing` is left out.
+    /// What there is to list: every terminal window as the index has it now, its project's row for one on a project (its
+    /// other windows' rows under it) and a row of its own for one with no project, the one in front last first; then
+    /// the projects used before, newest first, then Recent Projects' with no recorded use, then the saved servers.
+    /// `looksAtFolders` (a show): which of the history's folders are gone is read from disk here; otherwise the last
+    /// look's `missing` is left out.
     private func buildList(looksAtFolders: Bool = false) {
         let recorder = ProjectHistoryRecorder.shared
-        let open: [SwitcherList.Window] = openWindows(recorder.windowCounts)
+        AppDelegate.shared.refreshWindowIndex()
+        let open: [WindowIndex.Window] = AppDelegate.shared.windowIndex.windows
         let stored: ProjectHistory = recorder.history
         let history: [ProjectHistory.Entry]
         if looksAtFolders {
@@ -480,21 +487,21 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         listedColors = projectColors()
     }
 
-    /// A window for each one `counts` has on a project, in the order of the windows, each with its project's title and
-    /// the newest time one of its windows was in front.
-    private func openWindows(_ counts: [String: Int]) -> [SwitcherList.Window] {
-        let controllers: [TerminalWindowController] = AppDelegate.shared.controllers.filter { !$0.hasClosed }
-        var windows: [SwitcherList.Window] = []
-        var listed: Set<String> = []
-        for controller in controllers {
-            guard let path = controller.project, let count = counts[path], listed.insert(path).inserted else { continue }
-            let same: [TerminalWindowController] = controllers.filter { $0.project == path }
-            let lastKey: Date = same.map(\.lastKey).max() ?? .distantPast
-            let window = SwitcherList.Window(path: path, title: controller.projectTitle, lastKey: lastKey)
-            windows.append(contentsOf: Array(repeating: window, count: count))
+    /// A window's entry in the index changed (a mark, a title, one opened or closed): while the window shows, its list
+    /// follows, once for the changes that come together, with no git file read again.
+    func windowsChanged() {
+        guard window?.isVisible == true, !windowsChangePending else { return }
+        windowsChangePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.windowsChangePending = false
+            guard self.window?.isVisible == true else { return }
+            self.buildList()
+            self.applySearch(.keep)
         }
-        return windows
     }
+
+    private var windowsChangePending = false
 
     /// The saved hosts, the one connected to last first.
     private static func savedHosts() -> [RemoteHost] {
@@ -512,7 +519,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func readBranchesAndTitles() {
         let stored: ProjectHistory = ProjectHistoryRecorder.shared.history
         let open: Set<String> = Self.openProjects()
-        let paths: [String] = (list.projects.map(\.path) + missing.sorted()).filter { Self.mayLook(inside: $0, open: open) }
+        // A project's own row each, not its other windows' (the same folder) nor a window with no project's (none).
+        let listed: [String] = list.projects.compactMap { (project: SwitcherProject) -> String? in
+            project.window == nil ? project.path : nil
+        }
+        let paths: [String] = (listed + missing.sorted()).filter { Self.mayLook(inside: $0, open: open) }
         folderLook += 1
         let look: Int = folderLook
         DispatchQueue.global(qos: .userInitiated).async {
@@ -598,8 +609,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let home: String = NSHomeDirectory()
         let shown: SwitcherShown = SwitcherSearch.filter(list, query: query, home: home, branches: branches,
                                                          lastPick: lastPick)
-        let origin: String? = AppDelegate.shared.welcomeOrigin?.project
-        let start: Int? = SwitcherSelection.afterSearch(shown, query: query, origin: origin, lastPick: lastPick)
+        let from: TerminalWindowController? = AppDelegate.shared.welcomeOrigin
+        let start: Int? = SwitcherSelection.afterSearch(shown, query: query, origin: from?.project, originWindow: from?.indexID,
+                                                        lastPick: lastPick)
         var index: Int? = start
         if selection == .keep, kept != nil || keptIndex != nil {
             let count: Int = shown.entries.count
@@ -701,7 +713,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func showProject(_ project: SwitcherProject?, reloadSessions: Bool) {
         let previous = current
-        current = project?.path
+        // A window with no project has no sessions of its own to list.
+        current = project?.hasProject == true ? project?.path : nil
         if current != previous { resetSessionSearch() }
         sessionSearch.isEnabled = current != nil
         guard let project else {
@@ -710,16 +723,21 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             projectPath.toolTip = nil
             openButton.isEnabled = false
             openButton.title = "Open Project"
-            sessions = []
-            sessionsLoading = false
-            sessionProblems = [:]
-            applyFilter()
+            showNoSessions()
             return
         }
         openButton.isEnabled = true
         openButton.title = project.isOpen ? "Go to Window" : "Open Project"
-        openButton.toolTip = project.isOpen ? "Bring its window to the front, the one you were in last" : nil
+        let usedLast: String? = project.isOpen ? "Bring its window to the front, the one you were in last" : nil
+        openButton.toolTip = project.window != nil ? "Bring this window to the front" : usedLast
         projectName.stringValue = project.title
+        guard project.hasProject else {
+            // "No project", or for a server's window what ssh connects to there.
+            projectPath.stringValue = SwitcherText.folder(of: project, home: NSHomeDirectory())
+            projectPath.toolTip = nil
+            if current != previous || reloadSessions { showNoSessions() }
+            return
+        }
         projectPath.attributedStringValue = pathLine(project.path)
         projectPath.toolTip = project.path
         guard current != previous || reloadSessions else { return }
@@ -731,6 +749,16 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         sessionProblems = [:]
         applyFilter()
         readSessions(of: path, after: reloadSessions ? 0 : Self.sessionReadDelay)
+    }
+
+    /// The sessions pane with nothing to list: no project chosen, or a window with no project.
+    private func showNoSessions() {
+        pendingSessionRead?.cancel()
+        pendingSessionRead = nil
+        sessions = []
+        sessionsLoading = false
+        sessionProblems = [:]
+        applyFilter()
     }
 
     /// Reads `path`'s sessions after `delay`, while it is still the project shown; a read asked for since takes its
@@ -783,16 +811,24 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         activate(entry, newWindow: newWindow)
     }
 
-    /// An open project: its window comes forward and this one closes. A closed one opens as Open Project does, by the
-    /// "Open projects in" setting. `newWindow` (⌘↩): in a new window without asking, a second one on an open project.
-    /// A server: a window with a tab on it, remembered so the next show starts on it.
+    /// An open project: its window comes forward and this one closes. A window's own row: that window. A closed project
+    /// opens as Open Project does, by the "Open projects in" setting. `newWindow` (⌘↩): in a new window without asking, a
+    /// second one on an open project. A server: a window with a tab on it, remembered so the next show starts on it.
     private func activate(_ entry: SwitcherEntry, newWindow: Bool) {
         switch entry {
         case .project(let project):
             // For projects the list's order already starts on the one used last: only a server is remembered.
             UserDefaults.standard.removeObject(forKey: SwitcherSelection.lastPickKey)
-            if newWindow {
+            let row: SwitcherWindow? = project.window
+            let own: NSWindow? = row.flatMap { (row: SwitcherWindow) -> NSWindow? in terminalWindow(id: row.id) }
+            if newWindow && project.hasProject {
                 AppDelegate.shared.openFolder(project.path, newWindow: true)
+            } else if let own {
+                own.makeKeyAndOrderFront(nil)
+                close()
+            } else if !project.hasProject {
+                // A window with no project, closed since the list was read: nothing to go to, and the list follows.
+                return
             } else if project.isOpen, let window = frontWindow(of: project.path) {
                 // Its window in front last: Open Project would bring the first one made.
                 window.makeKeyAndOrderFront(nil)
@@ -810,6 +846,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             UserDefaults.standard.set(host.id, forKey: SwitcherSelection.lastPickKey)
             AppDelegate.shared.connect(to: host)
         }
+    }
+
+    /// The window a window's own row stands for, while it is open.
+    private func terminalWindow(id: Int) -> NSWindow? {
+        let controllers: [TerminalWindowController] = AppDelegate.shared.controllers
+        let open: TerminalWindowController? = controllers.first { (controller: TerminalWindowController) -> Bool in
+            controller.indexID == id && !controller.hasClosed
+        }
+        return open?.window
     }
 
     /// The window on `path` that was in front last.
@@ -913,7 +958,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func announceSelection() {
         guard let window, let entry = switcher.selectedEntry else { return }
         let branch: String? = entry.project.flatMap { (project: SwitcherProject) -> String? in branches[project.path] }
-        let text: String = SwitcherText.accessibilityLabel(entry, branch: branch, home: NSHomeDirectory())
+        let working: Bool = AgentSpinner.current != .off
+        let text: String = SwitcherText.accessibilityLabel(entry, branch: branch, home: NSHomeDirectory(), working: working)
         announcedSelection = text
         NSAccessibility.post(element: window, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])

@@ -4,29 +4,62 @@ import Foundation
 // it, where the selection starts, what each key does and what the hint line says. All of it here, as plain values, so
 // the window only reads AppKit's state into these and acts on the answers.
 
-/// A project the switcher lists: open in one or more windows, or used before.
+/// A row of the projects list: a project, open in one or more windows or used before; or one window, so that every
+/// window is a row away: another window on an open project (the project's row goes to the one in front last), or a
+/// window with no project, New Terminal's or a server's.
 public struct SwitcherProject: Equatable, Sendable {
+    /// The project's folder; empty for a window with no project.
     public let path: String
     /// What its row shows: a linked worktree's "xCloud ▸ 7027-sso", as its window's title reads, else the
-    /// folder's name.
+    /// folder's name. A window's own row shows the window's whole title: "shop — claude", "~/Downloads — vim".
     public let title: String
-    /// The windows that have it open; none for a closed project.
+    /// The windows that have it open; none for a closed project, one for a window's own row.
     public let windows: Int
     /// Open: when its window was last in front, the newest of its windows. Closed: its last use in the history. Nil for
     /// a Recent Projects entry with no use recorded (from before the history, or imported).
     public let lastUsed: Date?
+    /// The window a window's own row stands for; nil for a project's row.
+    public let window: SwitcherWindow?
+    /// The marks of the agents in the window the row goes to: for an open project, its window in front last (its other
+    /// windows have rows of their own); none for a closed one.
+    public let marks: AgentMarks
 
-    public init(path: String, title: String, windows: Int, lastUsed: Date?) {
+    public init(path: String, title: String, windows: Int, lastUsed: Date?, window: SwitcherWindow? = nil,
+                marks: AgentMarks = AgentMarks()) {
         self.path = path
         self.title = title
         self.windows = windows
         self.lastUsed = lastUsed
+        self.window = window
+        self.marks = marks
     }
 
-    /// The folder's name, which the search ranks first.
+    /// The folder's name, which the search ranks first; empty for a window with no project.
     public var name: String { (path as NSString).lastPathComponent }
 
     public var isOpen: Bool { windows > 0 }
+
+    /// A project's row, or another window on one: what ⌘↩ can open a new window on. Not a window with no project.
+    public var hasProject: Bool { window?.kind.hasProject ?? true }
+}
+
+/// What a window's own row in the switcher knows of the window.
+public struct SwitcherWindow: Equatable, Sendable {
+    /// Its id in the index (`WindowIndex.Window.id`), to bring it to the front.
+    public let id: Int
+    public let kind: WindowKind
+    /// For a server's window, what ssh connects to there, which its second line shows.
+    public let destination: String?
+
+    public init(id: Int, kind: WindowKind, destination: String? = nil) {
+        self.id = id
+        self.kind = kind
+        self.destination = destination
+    }
+
+    public init(_ window: WindowIndex.Window) {
+        self.init(id: window.id, kind: window.kind, destination: window.destination)
+    }
 }
 
 /// A saved server the switcher lists.
@@ -56,13 +89,18 @@ public enum SwitcherEntry: Equatable, Sendable {
     /// What stays the same when the list is rebuilt, so the selection can stay on it.
     public enum ID: Hashable, Sendable {
         case project(String)
+        /// A window's own row, by the window's id.
+        case window(Int)
         case server(String)
     }
 
     public var id: ID {
         switch self {
-        case .project(let project): return .project(project.path)
-        case .server(let server): return .server(server.id)
+        case .project(let project):
+            guard let window = project.window else { return .project(project.path) }
+            return .window(window.id)
+        case .server(let server):
+            return .server(server.id)
         }
     }
 
@@ -77,25 +115,10 @@ public enum SwitcherEntry: Equatable, Sendable {
     }
 }
 
-/// Everything the switcher can list, in its order: the open projects, the one whose window was in front last first;
-/// then the closed ones, the one used last first; then Recent Projects' entries with no recorded use, in their stored
-/// order; then the saved servers, as given.
+/// Everything the switcher can list, in its order: the open projects and the windows with no project, the one in front
+/// last first, each project's other windows under it; then the closed projects, the one used last first; then Recent
+/// Projects' entries with no recorded use, in their stored order; then the saved servers, as given.
 public struct SwitcherList: Equatable, Sendable {
-    /// One window with a project.
-    public struct Window: Equatable, Sendable {
-        public let path: String
-        /// The title its project has in the window: the folder's name, or a linked worktree's "xCloud ▸ 7027-sso".
-        public let title: String
-        /// When it was last in front; `Date.distantPast` for a window never in front.
-        public let lastKey: Date
-
-        public init(path: String, title: String, lastKey: Date) {
-            self.path = path
-            self.title = title
-            self.lastKey = lastKey
-        }
-    }
-
     /// How many servers show while nothing is typed. A search looks through every saved one.
     public static let serverLimit = 3
 
@@ -107,8 +130,10 @@ public struct SwitcherList: Equatable, Sendable {
         self.servers = servers
     }
 
-    /// The number the PROJECTS heading shows.
-    public var openCount: Int { projects.filter(\.isOpen).count }
+    /// The number the PROJECTS heading shows: the open projects, not their windows.
+    public var openCount: Int {
+        projects.filter { (project: SwitcherProject) -> Bool in project.isOpen && project.window == nil }.count
+    }
 
     /// Nothing to list at all: a first launch shows the three ways in instead.
     public var isEmpty: Bool { projects.isEmpty && servers.isEmpty }
@@ -116,16 +141,18 @@ public struct SwitcherList: Equatable, Sendable {
 
 extension SwitcherList {
     /// The list from what is open now and what was used before.
-    /// - `open`: every window with a project, in any order. Windows on the same folder make one project, counted.
+    /// - `open`: every terminal window, as the index has them, in any order. Windows on the same folder make one project,
+    ///   counted, whose row goes to the one in front last; each of its other windows has a row of its own under it, and so
+    ///   does each window with no project.
     /// - `history`: the projects used before, newest first, as `ProjectHistory` keeps them.
     /// - `recents`: Recent Projects' paths, in their stored order; those the history has a time for are listed there.
     /// - `servers`: the saved servers in the order they are listed, the one connected to last first.
     /// - `titles`: a closed project's title when it is not its folder's name (a linked worktree's), once read.
-    public static func build(open: [Window], history: [ProjectHistory.Entry], recents: [String],
+    public static func build(open: [WindowIndex.Window], history: [ProjectHistory.Entry], recents: [String],
                              servers: [SwitcherServer], titles: [String: String] = [:]) -> SwitcherList {
         var listed: Set<String> = []
-        var projects: [SwitcherProject] = openProjects(open)
-        for project in projects { listed.insert(project.path) }
+        var projects: [SwitcherProject] = openRows(open)
+        for project in projects where project.window == nil { listed.insert(project.path) }
         for entry in history where !listed.contains(entry.path) {
             listed.insert(entry.path)
             let title: String = titles[entry.path] ?? (entry.path as NSString).lastPathComponent
@@ -139,40 +166,63 @@ extension SwitcherList {
         return SwitcherList(projects: projects, servers: servers)
     }
 
-    /// One project per folder, with its window count and its newest time in front; the newest first, and projects in
-    /// front at the same moment in the order their first window was given.
-    private static func openProjects(_ windows: [Window]) -> [SwitcherProject] {
-        var order: [String] = []
-        var grouped: [String: OpenGroup] = [:]
+    /// One row per project, with its window count and its newest time in front, and its other windows' rows under it; one
+    /// per window with no project. The newest first, and those in front at the same moment in the order their first
+    /// window was given.
+    private static func openRows(_ windows: [WindowIndex.Window]) -> [SwitcherProject] {
+        var groups: [OpenGroup] = []
+        var byPath: [String: Int] = [:]
         for window in windows {
-            if var group = grouped[window.path] {
-                group.windows += 1
-                group.lastKey = max(group.lastKey, window.lastKey)
-                grouped[window.path] = group
+            guard let path = window.project else {
+                groups.append(OpenGroup(windows: [window], rank: groups.count))
+                continue
+            }
+            if let index = byPath[path] {
+                groups[index].windows.append(window)
             } else {
-                let group = OpenGroup(title: window.title, windows: 1, lastKey: window.lastKey, rank: order.count)
-                grouped[window.path] = group
-                order.append(window.path)
+                byPath[path] = groups.count
+                groups.append(OpenGroup(windows: [window], rank: groups.count))
             }
         }
-        let paths: [String] = order.sorted { (a: String, b: String) -> Bool in
-            guard let first = grouped[a], let second = grouped[b] else { return false }
-            if first.lastKey != second.lastKey { return first.lastKey > second.lastKey }
-            return first.rank < second.rank
+        let sorted: [OpenGroup] = groups.sorted { (a: OpenGroup, b: OpenGroup) -> Bool in
+            a.lastKey != b.lastKey ? a.lastKey > b.lastKey : a.rank < b.rank
         }
-        return paths.compactMap { (path: String) -> SwitcherProject? in
-            guard let group = grouped[path] else { return nil }
-            return SwitcherProject(path: path, title: group.title, windows: group.windows, lastUsed: group.lastKey)
-        }
+        return sorted.flatMap(\.rows)
     }
 
-    /// The windows on one folder, while they are counted.
+    /// A project's windows, or one window with no project.
     private struct OpenGroup {
-        let title: String
-        var windows: Int
-        var lastKey: Date
+        var windows: [WindowIndex.Window]
         /// Where its first window stood in the windows given.
         let rank: Int
+
+        var lastKey: Date {
+            windows.map { (window: WindowIndex.Window) -> Date in window.lastKey }.max() ?? .distantPast
+        }
+
+        /// The project's row, for its window in front last, then a row for each of its other windows, the newest first;
+        /// or the one window's row.
+        var rows: [SwitcherProject] {
+            let order: [Int] = windows.indices.sorted { (a: Int, b: Int) -> Bool in
+                let first: Date = windows[a].lastKey, second: Date = windows[b].lastKey
+                return first != second ? first > second : a < b
+            }
+            let ordered: [WindowIndex.Window] = order.map { (index: Int) -> WindowIndex.Window in windows[index] }
+            guard let front = ordered.first else { return [] }
+            guard let path = front.project else { return [Self.row(front, path: "")] }
+            let project = SwitcherProject(path: path, title: front.name, windows: windows.count, lastUsed: lastKey,
+                                          marks: front.marks)
+            let others: [SwitcherProject] = ordered.dropFirst().map { (window: WindowIndex.Window) -> SwitcherProject in
+                Self.row(window, path: path)
+            }
+            return [project] + others
+        }
+
+        /// A window's own row, titled as the window is.
+        private static func row(_ window: WindowIndex.Window, path: String) -> SwitcherProject {
+            SwitcherProject(path: path, title: window.title, windows: 1, lastUsed: window.lastKey,
+                            window: SwitcherWindow(window), marks: window.marks)
+        }
     }
 }
 
@@ -204,7 +254,11 @@ public struct SwitcherShown: Equatable, Sendable {
     public func index(of id: SwitcherEntry.ID) -> Int? {
         switch id {
         case .project(let path):
-            return projects.firstIndex(where: { (project: SwitcherProject) -> Bool in project.path == path })
+            return projects.firstIndex(where: { (project: SwitcherProject) -> Bool in
+                project.path == path && project.window == nil
+            })
+        case .window(let windowID):
+            return projects.firstIndex(where: { (project: SwitcherProject) -> Bool in project.window?.id == windowID })
         case .server(let serverID):
             let index: Int? = servers.firstIndex(where: { (server: SwitcherServer) -> Bool in server.id == serverID })
             return index.map { (index: Int) -> Int in projects.count + index }
@@ -381,21 +435,28 @@ public enum SwitcherSelection {
 
     /// The row the selection starts on, an index in `shown.entries`; nil with nothing listed.
     /// - `origin`: the folder of the project window the switcher was shown from. The selection starts on the other open
-    ///   project used last, else on the first closed one, so the key that showed it, then Return, switches back; with
-    ///   neither, on the first row.
-    /// - `lastPick`: the id of the server picked last in the window. Shown from anywhere else, the selection starts on
-    ///   it while it is listed (`SwitcherSearch.filter` lists it while it is saved), else on the first row.
-    public static func initial(_ shown: SwitcherShown, origin: String?, lastPick: String?) -> Int? {
+    ///   project or window used last, else on the first closed project, so the key that showed it, then Return, switches
+    ///   back; with neither, on the first row.
+    /// - `originWindow`: the id of the window it was shown from (`WindowIndex.Window.id`), a project's or not. Shown from
+    ///   a window with no project, the selection starts on the other open project or window used last too.
+    /// - `lastPick`: the id of the server picked last in the window. Shown from anywhere else, or from a window with no
+    ///   project and no other window open, the selection starts on it while it is listed (`SwitcherSearch.filter` lists
+    ///   it while it is saved), else on the first row.
+    public static func initial(_ shown: SwitcherShown, origin: String?, originWindow: Int? = nil,
+                               lastPick: String?) -> Int? {
         guard !shown.isEmpty else { return nil }
-        if let origin {
-            let projects: [SwitcherProject] = shown.projects
-            let other: Int? = projects.firstIndex { (project: SwitcherProject) -> Bool in
-                project.isOpen && project.path != origin
-            }
+        let projects: [SwitcherProject] = shown.projects
+        let other: Int? = projects.firstIndex { (project: SwitcherProject) -> Bool in
+            guard project.isOpen else { return false }
+            if let originWindow, project.window?.id == originWindow { return false }
+            return origin == nil || project.path != origin
+        }
+        if origin != nil {
             if let other { return other }
             let closed: Int? = projects.firstIndex { (project: SwitcherProject) -> Bool in !project.isOpen }
             return closed ?? 0
         }
+        if originWindow != nil, let other { return other }
         if let lastPick, let index = shown.index(of: .server(lastPick)) { return index }
         return 0
     }
@@ -404,8 +465,11 @@ public enum SwitcherSelection {
     /// match, which is the first row; nil with no match, so Return does nothing. Emptied (or only spaces left), the
     /// whole list is back and the selection goes where `initial` started it, so clearing the search, then Return, still
     /// switches back.
-    public static func afterSearch(_ shown: SwitcherShown, query: String, origin: String?, lastPick: String?) -> Int? {
-        guard !SearchWords(query).isEmpty else { return initial(shown, origin: origin, lastPick: lastPick) }
+    public static func afterSearch(_ shown: SwitcherShown, query: String, origin: String?, originWindow: Int? = nil,
+                                   lastPick: String?) -> Int? {
+        guard !SearchWords(query).isEmpty else {
+            return initial(shown, origin: origin, originWindow: originWindow, lastPick: lastPick)
+        }
         return shown.isEmpty ? nil : 0
     }
 
@@ -570,9 +634,10 @@ public struct SwitcherKeys: Equatable, Sendable {
         case Self.down: return .move(1)
         case Self.up: return .move(-1)
         case Self.newWindow:
-            // A server has no second window: ⌘↩ connects, as Return does.
+            // A server has no second window: ⌘↩ connects, as Return does. A window with no project has nothing to open
+            // again: ⌘↩ goes to it.
             guard let selection else { return nil }
-            return .activate(newWindow: selection.project != nil)
+            return .activate(newWindow: selection.project?.hasProject ?? false)
         case Self.forget:
             // With text, the field's, held or not. On the empty search a repeat does nothing: held down, each forget
             // would select the next closed project for the next repeat to take.
@@ -735,7 +800,7 @@ public enum SwitcherHint {
         switch selection {
         case .project(let project)?:
             parts.append(enter + " " + (project.isOpen ? "go to window" : "open"))
-            parts.append(SwitcherKeys.newWindow.display + " new window")
+            if project.hasProject { parts.append(SwitcherKeys.newWindow.display + " new window") }
         case .server?:
             parts.append(enter + " connect")
         case nil:
@@ -765,13 +830,23 @@ public enum SwitcherText {
         return "Projects, " + open
     }
 
-    /// After the folder on the row's second line: "2 windows" for a project open in two or more; nothing for one.
+    /// After the folder on the row's second line: "2 windows" for a project open in two or more, and "another window" on
+    /// the row of each of its other windows, which may be titled as the project is (a tab at its prompt there); nothing
+    /// for a project in one window, nor for a window with no project.
     public static func windows(_ project: SwitcherProject) -> String? {
-        project.windows > 1 ? "\(project.windows) windows" : nil
+        if let window = project.window { return window.kind.hasProject ? "another window" : nil }
+        return project.windows > 1 ? "\(project.windows) windows" : nil
     }
 
-    /// The folder the project is in, on its second line: "~/Code".
+    /// What a window with no project says on its second line, in a folder's place.
+    public static let noProject = "No project"
+
+    /// The folder the project is in, on its second line: "~/Code", for another window on it too. In its place, a window
+    /// with no project says so, and a server's says what ssh connects to there.
     public static func folder(of project: SwitcherProject, home: String) -> String {
+        if let window = project.window, !window.kind.hasProject {
+            return window.kind == .server ? (window.destination ?? "") : noProject
+        }
         var home: String = home
         while home.count > 1 && home.hasSuffix("/") { home.removeLast() }
         let parent: String = (project.path as NSString).deletingLastPathComponent
@@ -784,24 +859,36 @@ public enum SwitcherText {
     }
 
     /// What VoiceOver hears of a row the keys selected from the search, as the row says it.
-    public static func accessibilityLabel(_ entry: SwitcherEntry, branch: String?, home: String) -> String {
+    public static func accessibilityLabel(_ entry: SwitcherEntry, branch: String?, home: String,
+                                          working: Bool = true) -> String {
         switch entry {
-        case .project(let project): return accessibilityLabel(project, branch: branch, home: home)
+        case .project(let project): return accessibilityLabel(project, branch: branch, home: home, working: working)
         case .server(let server): return accessibilityLabel(server)
         }
     }
 
-    /// "wiki, open, branch main", "api, open in 2 windows, branch main", or for a closed project
-    /// "Agents, in ~/Code, branch main".
-    public static func accessibilityLabel(_ project: SwitcherProject, branch: String?, home: String) -> String {
+    /// "wiki, open, branch main", "api, open in 2 windows, 1 needs you, branch main", or for a closed project
+    /// "Agents, in ~/Code, branch main". A window's own row: "shop — claude, another window, 2 done, in ~/Code, branch
+    /// main", "~/Downloads — vim, a window with no project", "web-1 — app, a window on deploy@203.0.113.5". `working`
+    /// false leaves out the working agents, as the row does with View › Agent Spinner set to Off.
+    public static func accessibilityLabel(_ project: SwitcherProject, branch: String?, home: String,
+                                          working: Bool = true) -> String {
         var parts: [String] = [project.title]
-        if project.windows > 1 {
+        if let window = project.window {
+            switch window.kind {
+            case .project, .worktree: parts.append("another window")
+            case .plain: parts.append("a window with no project")
+            case .server: parts.append("a window on " + (window.destination ?? "a server"))
+            }
+        } else if project.windows > 1 {
             parts.append("open in \(project.windows) windows")
         } else if project.isOpen {
             parts.append("open")
         } else {
             parts.append("in " + folder(of: project, home: home))
         }
+        if let marks = project.marks.spoken(working: working) { parts.append(marks) }
+        if project.window != nil, project.hasProject { parts.append("in " + folder(of: project, home: home)) }
         if let branch, !branch.isEmpty { parts.append("branch " + branch) }
         return parts.joined(separator: ", ")
     }

@@ -236,6 +236,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         didSet {
             let repository = project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
             projectTitle = Self.title(ofProject: project, repository: repository)
+            isWorktree = repository != nil
             projectColorKey = ProjectColors.key(forProject: project, repository: repository)
             takeProjectColor()
         }
@@ -243,6 +244,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The project's name in the title, the Window menu and notifications: its folder's, or for a linked
     /// worktree "xCloud ▸ 7027-sso", its repository's and its own.
     private(set) var projectTitle = ""
+    /// The project is a linked worktree, read with its title.
+    private(set) var isWorktree = false
+    /// The window's id in the index of every window (AppDelegate.windowIndex): its own, the same while it is open.
+    let indexID: Int
+    private static var lastIndexID = 0
     /// Where the project keeps its colour (ProjectColors.key): for a linked worktree its repository's main checkout, so
     /// every worktree window of a repository has one colour. nil with no project, or the home folder: no colour.
     private(set) var projectColorKey: String?
@@ -287,9 +293,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
     init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
+        Self.lastIndexID += 1
+        indexID = Self.lastIndexID
         // Swift runs no didSet in init: the title and the colour's key here, the colour once the bars exist.
         let repository = self.project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
         projectTitle = Self.title(ofProject: self.project, repository: repository)
+        isWorktree = repository != nil
         projectColorKey = ProjectColors.key(forProject: self.project, repository: repository)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -297,7 +306,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             backing: .buffered,
             defer: false
         )
-        window.title = "Next Term"
+        window.title = "Next Term" // until its first tab names it (updateTitle)
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Theme.background
@@ -898,6 +907,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         updateRailMarks(items)
         announceBackgroundChanges()
         updateTitle()
+        AppDelegate.shared.indexed(self) // its marks across windows: Go to Next Agent Needing You, ⌘O, the Dock menu
         AppDelegate.shared.updateBadge()
         updateProjectRoot()
         updateTabPlace()
@@ -941,16 +951,58 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return order.first { states.contains($0) } ?? .idle
     }
 
-    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal, "claude — on web-1 — xCloud"
-    /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs), but "web-1: app —
-    /// xCloud" when the tab's name says it already.
+    /// "xCloud ▸ 7027-sso — claude" in the terminal, "xCloud — Alertable.php" while editing, "xCloud — claude — on
+    /// web-1" in a remote tab (or "xCloud — web-1: app" when the tab's name says it already); with no project
+    /// "~/Downloads — vim", or "web-1 — app" with a server's tab in front. The window's name comes first, so the Window
+    /// menu, ⌘`, Mission Control and VoiceOver lead with the project (WindowTitle).
     func updateTitle() {
-        let name = project.map { _ in projectTitle }
-        let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
-        let host = isEditorFocused ? nil : activeTab?.remote.flatMap { remote -> String? in
-            focus?.hasPrefix(remote.host.name + ": ") == true ? nil : "on \(remote.host.name)"
+        window?.title = windowTitle
+    }
+
+    var windowTitle: String {
+        let tab: TerminalTab? = isEditorFocused ? nil : activeTab
+        // An agent's spinner frame left out: the title holds still while it works.
+        let shown: String? = tab.map { (tab: TerminalTab) -> String in AgentTitle.withoutSpinnerFrame(tab.title) }
+        let front: String? = isEditorFocused ? editorArea.activeName : shown
+        return WindowTitle.make(name: windowName, front: front, folderName: folderName, host: tab?.remote?.host.name)
+    }
+
+    /// What the window is for, which names it: a project, a linked worktree, or no project, its tab in front on this
+    /// Mac or on a server.
+    var windowKind: WindowKind {
+        if project != nil { return isWorktree ? .worktree : .project }
+        return activeTab?.remote != nil ? .server : .plain
+    }
+
+    /// The name its title starts with: its project's title ("xCloud ▸ 7027-sso"); with no project, its tab in front's
+    /// server ("web-1") or folder ("~/Downloads", "~").
+    var windowName: String {
+        if project != nil { return projectTitle }
+        guard let tab = activeTab else { return "Next Term" }
+        if let remote = tab.remote { return remote.host.name }
+        let home: String = FileManager.default.homeDirectoryForCurrentUser.path
+        return WindowTitle.name(ofFolder: tab.directory, home: home)
+    }
+
+    /// The title a tab at its prompt in the window's own folder has (TerminalTab.title): its project's folder name, or
+    /// with no project its tab's ("~" at home). The name says it already, so the title leaves it out. None on a server.
+    private var folderName: String? {
+        if let project { return (project as NSString).lastPathComponent }
+        guard let tab = activeTab, tab.remote == nil else { return nil }
+        if tab.directory == FileManager.default.homeDirectoryForCurrentUser.path { return "~" }
+        let last: String = (tab.directory as NSString).lastPathComponent
+        return last.isEmpty ? tab.directory : last
+    }
+
+    /// What the index of every window holds for this one (AppDelegate.windowIndex): its name and title, and its
+    /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status.
+    var indexEntry: WindowIndex.Window {
+        let terminals: [WindowIndex.Tab] = tabs.map { (tab: TerminalTab) -> WindowIndex.Tab in
+            WindowIndex.Tab(id: tab.id, title: AgentTitle.withoutSpinnerFrame(tab.title), state: tab.status.state)
         }
-        window?.title = [focus, host, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
+        let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
+        return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,
+                                  lastKey: lastKey, tabs: terminals, destination: destination)
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
