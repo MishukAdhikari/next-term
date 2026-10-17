@@ -39,6 +39,15 @@ public enum SecretAge {
         return days(from: entry.lastSet, to: now, calendar: calendar) >= remind
     }
 
+    /// A due key's help, for the Rotated cell's tooltip and the Secrets menu's due row: "94 days ago. Due: you asked to
+    /// be reminded to rotate it after 90 days." Nil when the key isn't due.
+    public static func dueHelp(entry: SecretVault.Entry, now: Date, calendar: Calendar = .current) -> String? {
+        guard due(entry: entry, now: now, calendar: calendar), let remind = entry.remindDays else { return nil }
+        let age: String = text(entry: entry, now: now, calendar: calendar)
+        let after: String = remind == 1 ? "1 day" : "\(remind) days"
+        return "\(age). Due: you asked to be reminded to rotate it after \(after)."
+    }
+
     /// At most one reminder about a due key in this many days.
     public static let reminderGap = 7
 

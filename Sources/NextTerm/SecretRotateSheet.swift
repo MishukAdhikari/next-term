@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Rotate… in Settings › Secrets and Window › Secrets: a key rotation in three steps, all shown, the current ones on.
+/// Rotate… in Settings › Secrets and the Secrets window: a key rotation in three steps, all shown, the current ones on.
 ///
 /// 1. **Open \<host\>** opens the key's page, where the user makes a new key. GitHub's fine-grained tokens page opens
 ///    its new-token form, filled with the key's name and today's date. A key with no page gets "Where it came from"

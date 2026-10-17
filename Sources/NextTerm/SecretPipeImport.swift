@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// `nxtrm secret import`'s preview, on the main thread: Window › Secrets comes forward with the copy sheet for the
+/// `nxtrm secret import`'s preview, on the main thread: the Secrets window comes forward with the copy sheet for the
 /// piped keys, or for the file given (as Import From › A File… reads one), and the importer hears how far it got and
 /// how it ended, in counts. The sheet's header says where the pipe came from: the tab above the importer and, when an
 /// agent runs above it or no tab is, that an agent may have seen the keys. Busy and refused are decided first, before
@@ -73,7 +73,7 @@ enum SecretPipeImport {
         view.readPicked(URL(fileURLWithPath: path), format: format, client: client)
     }
 
-    /// Window › Secrets in front, with no sheet open on it. Busy or refused is decided first, so a run that can't open
+    /// The Secrets window in front, with no sheet open on it. Busy or refused is decided first, so a run that can't open
     /// a sheet never takes the keyboard from the tab the user types in (a password at bw's prompt, say).
     private static func secretsView(for client: SecretImportClient) -> SecretsView? {
         if let status = blockedStatus() {

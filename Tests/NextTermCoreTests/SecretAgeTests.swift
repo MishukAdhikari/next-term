@@ -84,6 +84,22 @@ import Testing
         #expect(!Self.due(Self.entry(created: Self.date(2026, 9, 20), valueSet: nil, remindDays: 30)))
     }
 
+    /// The Rotated cell's tooltip and the Secrets menu's due row: the age, then the reminder that made it due.
+    @Test func aDueKeysHelpSaysItsAgeAndItsReminder() {
+        let created = Self.date(2026, 1, 5)
+        let rotated = Self.entry(created: created, valueSet: Self.date(2026, 7, 11), remindDays: 90)
+        #expect(SecretAge.dueHelp(entry: rotated, now: Self.now, calendar: Self.calendar)
+                == "94 days ago. Due: you asked to be reminded to rotate it after 90 days.")
+        let daily = Self.entry(created: Self.date(2026, 10, 11), valueSet: Self.date(2026, 10, 11), remindDays: 1)
+        #expect(SecretAge.dueHelp(entry: daily, now: Self.now, calendar: Self.calendar)
+                == "Added 2 days ago. Due: you asked to be reminded to rotate it after 1 day.")
+        // Not due yet, or no reminder: no help.
+        let fresh = Self.entry(created: created, valueSet: Self.date(2026, 10, 1), remindDays: 90)
+        #expect(SecretAge.dueHelp(entry: fresh, now: Self.now, calendar: Self.calendar) == nil)
+        let none = Self.entry(created: created, valueSet: created)
+        #expect(SecretAge.dueHelp(entry: none, now: Self.now, calendar: Self.calendar) == nil)
+    }
+
     @Test func theDayIsWrittenAsListsWriteIt() {
         #expect(SecretAge.day(Self.date(2026, 10, 12, hour: 23, minute: 30), calendar: Self.calendar) == "2026-10-12")
         #expect(SecretAge.day(Self.date(2026, 1, 5), calendar: Self.calendar) == "2026-01-05")

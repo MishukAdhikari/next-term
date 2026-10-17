@@ -9,7 +9,7 @@ extension SelfTest {
     static func secretPipeChecks(_ c: TerminalWindowController, base: URL) async {
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible else {
-            return check(false, "secret pipe: Window › Secrets opens its window")
+            return check(false, "secret pipe: Show Secrets opens the Secrets window")
         }
         defer { window.close() }
         let folder: URL = base.appendingPathComponent("pipe-import", isDirectory: true)

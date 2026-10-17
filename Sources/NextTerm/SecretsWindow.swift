@@ -1,8 +1,8 @@
 import AppKit
 import NextTermCore
 
-/// Window › Secrets: the same list as Settings › Secrets, in a window of its own. It has no default key, as
-/// Window › Skills has none; Settings › Keyboard Shortcuts can give it one.
+/// The Secrets window (Secrets › Show Secrets; no default key): the same list as Settings › Secrets, in a window of its
+/// own. Settings › Keyboard Shortcuts can give Show Secrets a key. The open window is listed in Window's window list.
 @MainActor
 final class SecretsWindowController: NSWindowController, NSWindowDelegate {
     static var shared: SecretsWindowController?

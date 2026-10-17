@@ -14,7 +14,7 @@ extension SelfTest {
         let store = SecretsStore.shared
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible else {
-            return check(false, "secret reminders: Window › Secrets opens its window")
+            return check(false, "secret reminders: Show Secrets opens the Secrets window")
         }
         defer { window.close() }
         let suiteName = "nt-selftest-reminders-\(getpid())"
@@ -119,7 +119,7 @@ extension SelfTest {
     }
 
     /// Clicking the reminder (its notification's userInfo, as the app's response handler reads it) opens Rotate… for
-    /// the key in Window › Secrets.
+    /// the key in the Secrets window.
     static func secretReminderOpenCheck(_ view: SecretsView, _ name: String) async {
         let info: [AnyHashable: Any] = secretReminders(about: name).last?.content.userInfo ?? [:]
         guard let reminder = SecretReminder(userInfo: info) else {

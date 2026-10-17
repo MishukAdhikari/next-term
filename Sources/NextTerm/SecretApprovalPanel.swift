@@ -495,15 +495,28 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         }
     }
 
-    static func makePauseAlert() -> NSAlert {
+    /// Pause's confirm. From the panel it names "this" request. From Secrets › Pause Key Requests for 1 Hour…
+    /// (`fromMenu`) there may be no request on screen, and it is a sheet on the Secrets window whose default button,
+    /// Return, is Cancel.
+    static func makePauseAlert(fromMenu: Bool = false) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "Pause key requests for an hour?"
-        alert.informativeText = "This declines this and every waiting request, refuses new ones for an hour, and ends every approval you gave. "
-            + "MCP servers that need keys won't start."
-        alert.addButton(withTitle: "Pause for 1 Hour")
-        alert.addButton(withTitle: "Cancel")
+        guard fromMenu else {
+            alert.informativeText = "This declines this and every waiting request, refuses new ones for an hour, and ends every approval you gave. "
+                + "MCP servers that need keys won't start."
+            alert.addButton(withTitle: "Pause for 1 Hour")
+            alert.addButton(withTitle: "Cancel")
+            return alert
+        }
+        alert.informativeText = menuPauseText
+        alert.addButton(withTitle: "Pause for 1 Hour").keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r" // Return cancels
         return alert
     }
+
+    /// The menu's Pause confirm: the panel's, with no "this".
+    static let menuPauseText = "This declines every waiting request, refuses new ones for an hour, and ends every approval "
+        + "you gave. MCP servers that need keys won\u{2019}t start."
 
     /// Closing the panel without choosing is a decline.
     func windowWillClose(_ notification: Notification) {

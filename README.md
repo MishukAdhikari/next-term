@@ -322,7 +322,7 @@ Next Term's menu.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
-- **Secrets** (Settings › Secrets, Window › Secrets) keeps API and MCP keys in a vault on your Mac, each
+- **Secrets** (the Secrets menu, and Settings › Secrets) keeps API and MCP keys in a vault on your Mac, each
   value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one,
   by the login keychain, which Settings calls less protected); the names and what each key is for are not
   encrypted. Agents use a key by name, after Next Term's own panel shows who asks, which keys and the

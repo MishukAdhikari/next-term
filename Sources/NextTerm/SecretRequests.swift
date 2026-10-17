@@ -316,6 +316,20 @@ final class SecretRequests {
     /// The request in the panel or the request window now, if any.
     var showing: Request? { queue.first { $0.panel != nil || $0.requestWindow != nil || $0.importAsk?.isOnScreen == true } }
 
+    /// Requests not answered yet, the one showing among them: Secrets › Show Key Request's badge.
+    var waitingCount: Int { queue.filter { !$0.isAnswered }.count }
+
+    /// Secrets › Show Key Request: the showing request's own window in front, as it first came: the panel floating
+    /// without taking the keyboard, `request_secret`'s window and an import's Secrets window ordered front. Nothing is
+    /// made key and nothing is answered: the user answers in that window.
+    func bringShowingToFront() {
+        guard let request = showing else { return }
+        if let panel = request.panel?.window { return panel.orderFrontRegardless() }
+        if let window = request.requestWindow?.window { return window.orderFront(nil) }
+        guard request.importAsk?.isOnScreen == true else { return }
+        SecretsWindowController.shared?.window?.orderFront(nil)
+    }
+
     private func showNext() {
         // An import waiting for its tab's pipe has had its turn.
         let next: Request? = queue.first { (request: Request) -> Bool in

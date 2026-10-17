@@ -35,7 +35,7 @@ extension SelfTest {
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible,
               let presence = store.presence as? StandInPresence else {
-            return check(false, "secret sources: Window › Secrets opens its window")
+            return check(false, "secret sources: Show Secrets opens the Secrets window")
         }
         defer { window.close() }
         let view = controller.secretsView

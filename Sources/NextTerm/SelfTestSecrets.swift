@@ -50,6 +50,9 @@ extension SelfTest {
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
+        #if DEBUG
+        await secretsMenuChecks(base: base)
+        #endif
         await secretsImportChecks(base: base)
         #if DEBUG
         await secretSourcesChecks(c, base: base)
@@ -1536,7 +1539,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: Settings › Secrets and Window › Secrets
+    // MARK: Settings › Secrets and the Secrets window
 
     static func secretsSettingsChecks(base: URL) async {
         let store = SecretsStore.shared
@@ -1544,21 +1547,14 @@ extension SelfTest {
         requests.resetForSelfTest()
         defer { requests.resetForSelfTest() }
 
-        // The last Settings tab, after Skills; Window › Secrets with no key.
+        // The last Settings tab, after Skills. The Secrets menu's own checks (secretsMenuChecks) follow these.
         let tabs = (SettingsWindowController().window?.contentView as? NSTabView)?.tabViewItems.compactMap { $0.identifier as? String } ?? []
         let skills = tabs.firstIndex(of: "skills")
         check(tabs.last == "secrets" && skills.map { $0 < tabs.count - 1 } == true, "secrets: Secrets is the last Settings tab, after Skills",
               tabs.joined(separator: ", "))
-        let windowMenu = NSApp.mainMenu?.items.first { $0.submenu?.title == "Window" }?.submenu
-        let item = windowMenu?.items.first { $0.title == "Secrets" }
-        let afterSkills = windowMenu.map { menu in
-            (menu.items.firstIndex { $0.title == "Skills" } ?? -1) < (menu.items.firstIndex { $0.title == "Secrets" } ?? -1)
-        } ?? false
-        check(item != nil && item?.keyEquivalent == "" && item?.action == #selector(AppDelegate.showSecrets(_:)) && afterSkills,
-              "secrets: Window › Secrets comes after Skills and has no key")
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible else {
-            return check(false, "secrets: Window › Secrets opens its window")
+            return check(false, "secrets: Show Secrets opens the Secrets window")
         }
         defer { window.close() }
         let view = controller.secretsView
@@ -1770,7 +1766,7 @@ extension SelfTest {
         SecretsView.importSetup = { setup }
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window else {
-            return check(false, "secrets: Window › Secrets for the import checks")
+            return check(false, "secrets: the Secrets window for the import checks")
         }
         defer { window.close() }
         let view = controller.secretsView

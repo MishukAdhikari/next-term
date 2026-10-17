@@ -6,7 +6,7 @@ import UserNotifications
 /// age has passed gets one notification ("OPENAI_API_KEY was last rotated 92 days ago"), at most one a week, while
 /// Settings › Secrets' "Remind me in Notification Center" is on; a key Rotate…'s Remind Me Tomorrow named gets its one
 /// reminder on that day, whatever the setting, since the user asked for it then. More than three keys due at once share
-/// one notification. Clicking a due key's notification opens Rotate… for it in Window › Secrets. A key renamed, deleted
+/// one notification. Clicking a due key's notification opens Rotate… for it in the Secrets window. A key renamed, deleted
 /// or given a new value has its notification taken back from Notification Center.
 ///
 /// The index is read with no unlock (names and dates only), and nothing it keeps is in the vault, so a reminder never
@@ -57,8 +57,8 @@ enum SecretReminders {
         check(now: now)
     }
 
-    /// Now, as the checks read it: in the self-test, the day it set.
-    private static func currentDate() -> Date {
+    /// Now, as the checks read it, and the Secrets menu's due rows: in the self-test, the day it set.
+    static func currentDate() -> Date {
         #if DEBUG
         if let selfTestNow { return selfTestNow }
         #endif
@@ -164,7 +164,7 @@ enum SecretReminders {
         }
     }
 
-    /// A reminder's notification, clicked: Window › Secrets with the key selected, and Rotate… open for a due key, as
+    /// A reminder's notification, clicked: the Secrets window with the key selected, and Rotate… open for a due key, as
     /// its button would open it. For Remind Me Tomorrow, where to delete the old key; for several due keys, how many
     /// are due now. With a sheet open on the list, nothing moves behind it: a line says what to do.
     static func open(_ reminder: SecretReminder) {
@@ -231,7 +231,7 @@ enum SecretReminders {
     #endif
 }
 
-/// Settings › Secrets' reminder settings, under the list (Window › Secrets shows them too): "Remind me in Notification
+/// Settings › Secrets' reminder settings, under the list (the Secrets window shows them too): "Remind me in Notification
 /// Center", on unless turned off, and the age a new key starts with in Add…, `request_secret`'s window, `store_secret`
 /// and the import, Never unless set. Both live in the reminders' defaults, not in the vault, so changing them asks for
 /// no Touch ID. A change in one window shows in the other.

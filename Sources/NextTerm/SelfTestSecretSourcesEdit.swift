@@ -131,7 +131,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    /// Through Window › Secrets' sheets: Add… saves its reminder and the page Use took from the value; Edit… shows both
+    /// Through the Secrets window's sheets: Add… saves its reminder and the page Use took from the value; Edit… shows both
     /// and offers the name's page never over it; it changes the page and the reminder, clears the page and keeps an age
     /// off the menu, each saved with what Touch ID is asked for.
     static func secretSourcesEditChecks(_ view: SecretsView, _ presence: StandInPresence) async {
@@ -343,7 +343,7 @@ extension SelfTest {
         ServiceLinks.opened = []
     }
 
-    /// The six columns fit the list, none under its least width, at Window › Secrets' smallest width and as it opens:
+    /// The six columns fit the list, none under its least width, at the Secrets window's smallest width and as it opens:
     /// the list never scrolls sideways.
     static func secretSourcesColumnChecks(_ window: NSWindow, _ view: SecretsView) {
         let frame: NSRect = window.frame
@@ -364,7 +364,7 @@ extension SelfTest {
             }.joined(separator: ", ")
             let sideways: Bool = table.enclosingScrollView?.hasHorizontalScroller ?? true
             check(clip > 0 && last.maxX <= clip + 0.5 && squeezed.isEmpty && !sideways,
-                  "secret sources: the list's six columns fit Window › Secrets at \(Int(width)) wide",
+                  "secret sources: the list's six columns fit the Secrets window at \(Int(width)) wide",
                   "a list \(Int(clip)) wide: \(widths)")
         }
     }

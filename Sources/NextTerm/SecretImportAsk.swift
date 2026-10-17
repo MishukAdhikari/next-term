@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// An agent's import_secrets request, from its turn in `SecretRequests`' queue to its answer: Window › Secrets comes
+/// An agent's import_secrets request, from its turn in `SecretRequests`' queue to its answer: the Secrets window comes
 /// forward with Import from a File's sheet for the file, or a password manager's sheet for a source, each with a banner
 /// naming who asks, from where, and the agent's reason. The import itself is the sheet's own: the user ticks, a key
 /// they have is replaced only by a tick of theirs, and one Touch ID copies the keys in. The agent hears names and counts
@@ -164,7 +164,7 @@ extension SecretImportAsk {
         Self.waiting[id] = nil
     }
 
-    /// Window › Secrets in front, with no sheet open on it; nil, and the request ended, when Secrets can't be opened on
+    /// The Secrets window in front, with no sheet open on it; nil, and the request ended, when Secrets can't be opened on
     /// this Mac or shows another sheet. It never activates Next Term: when another app is in front, the Dock icon
     /// bounces, as request_secret's window does.
     private func secretsView() -> SecretsView? {

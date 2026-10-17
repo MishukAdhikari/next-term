@@ -14,7 +14,7 @@ extension SelfTest {
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible,
               store.presence is StandInPresence else {
-            return check(false, "import_secrets: Window › Secrets opens its window")
+            return check(false, "import_secrets: Show Secrets opens the Secrets window")
         }
         let folder: URL = base.appendingPathComponent("import-tool/shop-web", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

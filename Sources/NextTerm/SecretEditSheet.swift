@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// Add…, Edit… and Replace… in Settings › Secrets and Window › Secrets. Save asks for Touch ID or the Mac
+/// Add…, Edit… and Replace… in Settings › Secrets and the Secrets window. Save asks for Touch ID or the Mac
 /// password once; cancelling it leaves the sheet as it was. A paste into the value field is cleared from the
 /// clipboard on Save, when nothing was copied since. Add… and Edit… also set "Where it came from" (`SecretLinkField`)
 /// and "Remind me to rotate".

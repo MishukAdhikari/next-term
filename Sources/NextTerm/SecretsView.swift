@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// The list of stored keys, shared by Settings › Secrets and Window › Secrets: what guards them, each key with what
+/// The list of stored keys, shared by Settings › Secrets and the Secrets window: what guards them, each key with what
 /// it's for, its page's host, its write-only badge, when its value was set and its last use; the key buttons; the
 /// approvals in force; what is paused; and the limits, said plainly. Each change asks for Touch ID or the Mac password
 /// once.
@@ -236,7 +236,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         var maxWidth: CGFloat = 10_000
     }
 
-    /// The list's six columns. Their widths and gaps add up to under the list at Window › Secrets' smallest size, so
+    /// The list's six columns. Their widths and gaps add up to under the list at the Secrets window's smallest size, so
     /// the table fills the list from the start and its columns resize together: none is squeezed out, and the list
     /// never scrolls sideways. A cell cut short has its whole text as its tooltip.
     static let columns: [Column] = [Column(id: "name", title: "Name", width: 84, minWidth: 64),
@@ -393,7 +393,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static func fillRotatedCell(_ cell: NSTextField, _ entry: SecretVault.Entry, now: Date) {
         let age: String = SecretAge.text(entry: entry, now: now)
         cell.textColor = .secondaryLabelColor
-        guard SecretAge.due(entry: entry, now: now), let days = entry.remindDays else {
+        guard let help = SecretAge.dueHelp(entry: entry, now: now) else {
             cell.stringValue = age
             cell.toolTip = age
             cell.setAccessibilityLabel(nil)
@@ -409,8 +409,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let text = NSMutableAttributedString(string: dueBadge, attributes: badge)
         text.append(NSAttributedString(string: " " + age, attributes: rest))
         cell.attributedStringValue = text
-        let after: String = days == 1 ? "1 day" : "\(days) days"
-        cell.toolTip = "\(age). Due: you asked to be reminded to rotate it after \(after)."
+        cell.toolTip = help
         cell.setAccessibilityLabel("\(age), due to rotate")
     }
 

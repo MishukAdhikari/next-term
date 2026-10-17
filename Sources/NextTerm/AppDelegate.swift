@@ -1814,6 +1814,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
              target: CommandSuggestionController.shared)
 
+        // Secrets, after Agents, whose servers and commands use its keys. Show Secrets keeps Window › Secrets' action, so its key stays.
+        MainActor.assumeIsolated { SecretsMenu.shared.fill(submenu(main, "Secrets")) }
+
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
         // The branch popup at its Worktrees: where each is listed, opened, unlocked and removed.
@@ -1865,7 +1868,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
-        item(window, "Secrets", #selector(showSecrets(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main

@@ -19,7 +19,8 @@ extension SelfTest {
         SkillsInstaller.updates = [:]
 
         let bar = NSApp.mainMenu?.items ?? []
-        check(bar.dropFirst().map(\.title) == ["File", "Edit", "View", "Agents", "Git", "Notifications", "Window"], "agents menu: it sits between View and Git",
+        check(bar.dropFirst().map(\.title) == ["File", "Edit", "View", "Agents", "Secrets", "Git", "Notifications", "Window"],
+              "agents menu: it sits between View and Secrets",
               bar.map(\.title).joined(separator: ", "))
         guard let agents = bar.first(where: { $0.title == "Agents" })?.submenu else { return check(false, "agents menu: the menu bar has it") }
         let listed = agents.items.map { $0.isSeparatorItem ? "—" : $0.title }
