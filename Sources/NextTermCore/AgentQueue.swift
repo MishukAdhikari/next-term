@@ -165,4 +165,21 @@ public struct AgentQueue: Equatable, Sendable {
 
     /// Go to Agent's key for the item at `index` of `shownItems`: "1" to "9", then none.
     public static func digit(_ index: Int) -> String? { (0..<9).contains(index) ? String(index + 1) : nil }
+
+    /// Go to Next Agent Needing You: after `key` (the one it went to last), the next that needs the user and is not on
+    /// screen, round to the first after the last; from the first when `key` is nil or needs nothing now. The agent it
+    /// went to last is on screen now, so the round counts it to know where it was: pressed again, it moves on. nil
+    /// when nothing off screen needs the user.
+    public func next(after key: String?) -> Item? {
+        let round = Self.ordered(items.filter(\.needsYou))
+        let start = key.flatMap { key in round.firstIndex { $0.key == key }.map { $0 + 1 } } ?? 0
+        for step in 0..<round.count {
+            let item = round[(start + step) % round.count]
+            if !item.onScreen { return item }
+        }
+        return nil
+    }
+
+    /// The Dock menu's agents: Needs You in its order, `limit` at most.
+    public func dockItems(limit: Int = 8) -> [Item] { Array(needsYou.prefix(limit)) }
 }

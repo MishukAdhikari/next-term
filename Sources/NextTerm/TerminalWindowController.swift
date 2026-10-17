@@ -809,6 +809,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         HerdrAgentMenu.popUp(in: self)
     }
 
+    /// Window › Go to Next Agent Needing You (⌃⌘N): the agent that has waited longest, herdr's or an agent tab's, as
+    /// choosing it in Go to Agent would; pressed again, the next, round to the first. A beep when nothing needs you.
+    @objc func goToNextAgentNeedingYou(_ sender: Any?) {
+        HerdrAgentMenu.goToNext()
+    }
+
     // MARK: status
 
     /// The user can see the active tab only while this window is in front in the active app: key, or main

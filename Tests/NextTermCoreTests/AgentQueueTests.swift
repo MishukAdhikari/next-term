@@ -60,4 +60,36 @@ import Testing
         working.words = "Working"
         #expect(working.menuTitle(now: 12 * 60) == "w1:p1 — Working · working 12 min")
     }
+
+    @Test func theNextOneRoundsAndMovesOnFromTheOneItWentTo() {
+        // codex blocked since 10:02, a Claude tab asking since 10:05, an agent done on web-2.
+        let codex = herdr("codex", .attention, since: 602), claude = tab("claude", .attention, since: 605)
+        let done = herdr("w3:p1", .done, since: 900, place: "web-2")
+        var queue = AgentQueue([codex, claude, done])
+        #expect(queue.next(after: nil)?.name == "codex")
+        // Gone to codex: it is on screen now, and the next press moves on from it, then round to the first.
+        var shown = codex
+        shown.onScreen = true
+        queue = AgentQueue([shown, claude, done])
+        #expect(queue.next(after: codex.key)?.name == "claude")
+        var seen = claude
+        seen.onScreen = true
+        queue = AgentQueue([codex, seen, done])
+        #expect(queue.next(after: claude.key)?.name == "w3:p1")
+        var last = done
+        last.onScreen = true
+        queue = AgentQueue([codex, claude, last])
+        #expect(queue.next(after: done.key)?.name == "codex")
+        // One that needs nothing now starts from the first; nothing off screen needing you is nothing.
+        #expect(AgentQueue([codex, claude]).next(after: "tab gone")?.name == "codex")
+        #expect(AgentQueue([shown, tab("idle", .idle)]).next(after: nil) == nil)
+        #expect(AgentQueue([]).next(after: nil) == nil)
+        // The Dock menu: Needs You in its order, 8 at most.
+        #expect(AgentQueue([codex, claude, done]).dockItems().map(\.name) == ["codex", "claude", "w3:p1"])
+        let many = AgentQueue((0..<12).map { herdr("w1:p\($0)", .done, since: TimeInterval($0)) })
+        #expect(many.dockItems().count == 8 && many.dockItems().first?.name == "w1:p0")
+        var named = codex
+        named.words = "Needs your decision"
+        #expect(named.dockTitle == "codex — web-1 — Needs your decision")
+    }
 }

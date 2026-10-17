@@ -75,6 +75,34 @@ enum HerdrAgentMenu {
         }
     }
 
+    /// The agent Go to Next Agent Needing You went to last, so pressing it again moves on.
+    private static var lastNext: String?
+
+    /// Go to Next Agent Needing You (⌃⌘N), and the Dock menu's items: the next agent that needs the user after the one it
+    /// went to last; a beep when none does.
+    static func goToNext() {
+        guard let item = queue().next(after: lastNext) else {
+            lastNext = nil
+            return NSSound.beep()
+        }
+        lastNext = item.key
+        NSApp.activate(ignoringOtherApps: true)
+        go(to: item.target)
+    }
+
+    /// The Dock menu's agents: what needs the user, in Go to Agent's order, 8 at most ("codex — web-1 — Needs your
+    /// decision"), each going where choosing it in Go to Agent would.
+    static func dockItems() -> [NSMenuItem] {
+        let mask = SecretMask.current
+        return queue().dockItems().map { item in
+            let entry = NSMenuItem(title: mask.mask(item.dockTitle), action: #selector(Target.chooseFromDock(_:)), keyEquivalent: "")
+            entry.target = Target.shared
+            entry.representedObject = Choice(item.target, key: item.key)
+            entry.image = StatusGlyph.image(for: item.state)
+            return entry
+        }
+    }
+
     /// Brings `tab` forward in its window and moves herdr's view there to `pane`; Next Term's unread flag for it clears.
     /// What herdr could not do is said in the tab, in a line over its top; herdr's own screen is never written to.
     static func show(tab: TerminalTab, pane: String) {
@@ -101,9 +129,11 @@ enum HerdrAgentMenu {
     /// One item in a menu: what choosing it goes to.
     private final class Choice: NSObject {
         let target: AgentQueue.Item.Target
+        let key: String?
 
-        init(_ target: AgentQueue.Item.Target) {
+        init(_ target: AgentQueue.Item.Target, key: String? = nil) {
             self.target = target
+            self.key = key
         }
     }
 
@@ -191,6 +221,14 @@ enum HerdrAgentMenu {
 
         @objc func choose(_ sender: NSMenuItem) {
             guard let choice = sender.representedObject as? Choice else { return NSSound.beep() }
+            HerdrAgentMenu.go(to: choice.target)
+        }
+
+        /// A Dock menu item: Next Term comes forward, and ⌃⌘N goes on from there.
+        @objc func chooseFromDock(_ sender: NSMenuItem) {
+            guard let choice = sender.representedObject as? Choice else { return NSSound.beep() }
+            HerdrAgentMenu.lastNext = choice.key
+            NSApp.activate(ignoringOtherApps: true)
             HerdrAgentMenu.go(to: choice.target)
         }
 

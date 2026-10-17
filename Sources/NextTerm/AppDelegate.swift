@@ -1293,8 +1293,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         welcome?.window?.makeKeyAndOrderFront(nil)
     }
 
+    /// The agents that need you, then New Window and the recent projects.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
+        let agents = HerdrAgentMenu.dockItems()
+        agents.forEach(menu.addItem)
+        if !agents.isEmpty { menu.addItem(.separator()) }
         menu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "").target = self
         let projects = recentProjects
         if !projects.isEmpty {
@@ -1924,6 +1928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(window, "Select Previous Pane", #selector(TerminalWindowController.selectPreviousPane(_:)), "[", [.command, .option])
         // ⌃⌘A: any agent, herdr's or a tab's, from the keyboard (⌃⇧⌘A is Annotate with Git Blame).
         item(window, "Go to Agent…", #selector(TerminalWindowController.goToAgent(_:)), "a", [.command, .control])
+        item(window, "Go to Next Agent Needing You", #selector(TerminalWindowController.goToNextAgentNeedingYou(_:)), "n", [.command, .control])
         item(window, "Maximize Pane", #selector(TerminalWindowController.toggleZoomPane(_:)), "\r", [.command, .shift])
         item(window, "Make Panes Equal", #selector(TerminalWindowController.equalizePanes(_:)), "")
         window.addItem(.separator())

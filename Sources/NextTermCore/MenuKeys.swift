@@ -43,6 +43,7 @@ public enum MenuKeys {
             "selectPaneLeft:": optCmd(left), "selectPaneRight:": optCmd(right), "selectPaneAbove:": optCmd(up),
             "selectPaneBelow:": optCmd(down), "selectNextPane:": optCmd("]"), "selectPreviousPane:": optCmd("["),
             "toggleZoomPane:": shiftCmd("\r"), "goToAgent:": ctrlCmd("a"),
+            "goToNextAgentNeedingYou:": ctrlCmd("n"),
         ]
         for n in 1...9 { keys["selectTabByNumber:#\(n)"] = cmd("\(n)") }
         return keys
