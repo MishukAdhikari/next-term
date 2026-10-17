@@ -44,6 +44,8 @@ final class MarkdownStyler {
     /// Lines whose reading changed, or that were read for the first time and hide or draw something: Live Preview
     /// makes their glyphs again (a line laid out before it was read showed its syntax).
     var onLinesChanged: ((ClosedRange<Int>) -> Void)?
+    /// The file's own markers, for the formatting commands (read once, from the text it opened with).
+    let style: MarkdownStyle
 
     init(storage: NSTextStorage, layoutManager: NSLayoutManager, font: NSFont, colorsLinks: Bool,
          index: @escaping () -> LineIndex, paragraphStyle: @escaping (_ hang: Int, _ heading: Int) -> NSParagraphStyle) {
@@ -53,6 +55,7 @@ final class MarkdownStyler {
         self.paragraphStyle = paragraphStyle
         self.colorsLinks = colorsLinks
         fonts = MarkdownFonts(base: font)
+        style = MarkdownStyle.detect(in: storage.string)
         let count = index().count
         ends = Array(repeating: nil, count: count)
         lines = Array(repeating: nil, count: count)
@@ -66,6 +69,16 @@ final class MarkdownStyler {
     /// The line as last read, if it was: for drawing, which never reads.
     func readLine(_ number: Int) -> MarkdownSyntax.Line? {
         lines.indices.contains(number) ? lines[number] : nil
+    }
+
+    /// A line as read now, for a command: the lines up to it are read first when the slices have not reached it yet.
+    func line(_ number: Int) -> MarkdownSyntax.Line {
+        while validUpTo <= number, validUpTo < lines.count, index().count == lines.count { run() }
+        if let line = readLine(number) { return line }
+        let index = self.index()
+        guard number < index.count else { return MarkdownSyntax.Line() }
+        let before = ends.indices.contains(number - 1) ? ends[number - 1] ?? MarkdownSyntax.LineState() : MarkdownSyntax.LineState()
+        return MarkdownSyntax.scan(storage.string as NSString, range: index.range(ofLine: number), after: before).line
     }
 
     /// Every line, read: the slices still to come are done now (Go to Heading lists them all).

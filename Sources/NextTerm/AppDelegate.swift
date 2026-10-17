@@ -1751,6 +1751,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(line, "Move Line Down", #selector(CodeTextView.moveLineDown(_:)), down, [.command, .control])
         line.addItem(.separator())
         item(line, "Copy Path with Line", #selector(CodeTextView.copyPathWithLine(_:)), "")
+        // A Markdown file's, in the markers it already uses; their keys work while its editor has the keyboard, so ⌘B hides
+        // the sidebar everywhere else. ⌥⌘0 to ⌥⌘6 for the headings, as ⌘1 to ⌘9 select tabs.
+        let markdown = NSMenu(title: "Markdown")
+        edit.addItem(withTitle: "Markdown", action: nil, keyEquivalent: "").submenu = markdown
+        item(markdown, "Bold", #selector(CodeTextView.toggleMarkdownBold(_:)), "b")
+        item(markdown, "Italic", #selector(CodeTextView.toggleMarkdownItalic(_:)), "i")
+        item(markdown, "Strikethrough", #selector(CodeTextView.toggleMarkdownStrikethrough(_:)), "x", [.command, .shift])
+        item(markdown, "Code", #selector(CodeTextView.toggleMarkdownCode(_:)), "")
+        item(markdown, "Link", #selector(CodeTextView.insertMarkdownLink(_:)), "k")
+        markdown.addItem(.separator())
+        let headings = NSMenu(title: "Heading")
+        markdown.addItem(withTitle: "Heading", action: nil, keyEquivalent: "").submenu = headings
+        item(headings, "Body Text", #selector(CodeTextView.markdownBodyText(_:)), "0", [.command, .option])
+        for level in 1...6 {
+            item(headings, "Heading \(level)", #selector(CodeTextView.markdownHeading(_:)), "\(level)", [.command, .option]).tag = level
+        }
+        item(markdown, "Bulleted List", #selector(CodeTextView.toggleMarkdownBullets(_:)), "")
+        item(markdown, "Numbered List", #selector(CodeTextView.toggleMarkdownNumbers(_:)), "")
+        item(markdown, "Toggle Task", #selector(CodeTextView.toggleMarkdownTask(_:)), "l", [.command, .shift])
+        item(markdown, "Quote", #selector(CodeTextView.toggleMarkdownQuote(_:)), "")
+        item(markdown, "Code Block", #selector(CodeTextView.insertMarkdownCodeBlock(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
 

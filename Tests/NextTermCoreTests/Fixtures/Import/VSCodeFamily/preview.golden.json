@@ -31,7 +31,7 @@
     ]
   },
   "Kiro" : {
-    "changes_if_applied" : 13,
+    "changes_if_applied" : 14,
     "not_brought_over" : [
       {
         "item" : "IntelliJ IDEA Keybindings extension",
@@ -62,7 +62,7 @@
       }
     ],
     "shortcut_set" : {
-      "differs" : 12,
+      "differs" : 13,
       "id" : "preset",
       "lines" : [
 

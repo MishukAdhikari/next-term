@@ -111,6 +111,8 @@ final class CodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // A Markdown task's box ticks without moving the caret; ⌘-click opens a link (MarkdownCommands.swift).
+        if handleMarkdownClick(event) { return }
         holdsReveal = true
         caretPlacedByUser = true
         super.mouseDown(with: event) // tracks the click (or drag) until the mouse is up
@@ -128,8 +130,9 @@ final class CodeTextView: NSTextView {
     // MARK: typing
 
     /// Return keeps the indent; after an opening bracket it indents one more, and between a pair of
-    /// brackets it puts the closing one on its own line.
+    /// brackets it puts the closing one on its own line. In a Markdown list or quote it makes the next item.
     override func insertNewline(_ sender: Any?) {
+        if markdownNewline() { return }
         let text = string as NSString
         let caret = selectedRange()
         let lineRange = text.lineRange(for: NSRange(location: caret.location, length: 0))
@@ -154,8 +157,10 @@ final class CodeTextView: NSTextView {
         insertText("\n" + indent, replacementRange: caret)
     }
 
-    /// Tab indents the selected lines when the selection spans lines; otherwise it inserts an indent.
+    /// Tab indents the selected lines when the selection spans lines; otherwise it inserts an indent. On a Markdown
+    /// list item it nests the item.
     override func insertTab(_ sender: Any?) {
+        if markdownNest(1) { return }
         let range = selectedRange()
         if range.length > 0, (string as NSString).substring(with: range).contains("\n") {
             shiftLines(by: 1)
@@ -170,7 +175,10 @@ final class CodeTextView: NSTextView {
         insertText(String(repeating: " ", count: width - column % width), replacementRange: range)
     }
 
-    override func insertBacktab(_ sender: Any?) { shiftLines(by: -1) }
+    override func insertBacktab(_ sender: Any?) {
+        if markdownNest(-1) { return }
+        shiftLines(by: -1)
+    }
 
     @objc func indentSelection(_ sender: Any?) { shiftLines(by: 1) }
     @objc func outdentSelection(_ sender: Any?) { shiftLines(by: -1) }
@@ -258,6 +266,7 @@ final class CodeTextView: NSTextView {
         let lineEdits = [#selector(duplicateLine(_:)), #selector(deleteLine(_:)), #selector(moveLineUp(_:)), #selector(moveLineDown(_:))]
         if let action = item.action, lineEdits.contains(action) { return isEditable && !isBehindKeyWindow }
         if item.action == #selector(copyPathWithLine(_:)) { return document != nil && !isBehindKeyWindow }
+        if let action = item.action, Self.markdownActions.contains(action) { return markdownStyler != nil && isEditable && !isBehindKeyWindow }
         // With nothing selected, ⌘C and ⌘X take the caret's line.
         if item.action == #selector(NSText.copy(_:)), copiesWholeLine { return true }
         if item.action == #selector(NSText.cut(_:)), copiesWholeLine { return isEditable }
@@ -295,14 +304,14 @@ final class CodeTextView: NSTextView {
     }
 
     /// The text's lines, as the document keeps them (or counted afresh if they are not in step).
-    private var lineIndex: LineIndex {
+    var lineIndex: LineIndex {
         if let lines = document?.lines, lines.length == (string as NSString).length { return lines }
         return LineIndex(string)
     }
 
-    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives. ⌘Z puts back the
-    /// caret or the selection from before it, and ⇧⌘Z the one after.
-    func apply(_ edit: LineEdits.Edit, named name: String) {
+    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives, scrolled to unless `scrolls`
+    /// is false (a ticked box). ⌘Z puts back the caret or the selection from before it, and ⇧⌘Z the one after.
+    func apply(_ edit: LineEdits.Edit, named name: String, scrolls: Bool = true) {
         guard isEditable else { return } // as shouldChangeText would say, before anything goes into the undo step
         breakUndoCoalescing() // typing just before is undone on its own
         let before = selectedRanges
@@ -314,7 +323,7 @@ final class CodeTextView: NSTextView {
         restoresSelection(before, edit.selection, afterEdit: true)
         undoManager?.setActionName(name)
         setSelectedRange(edit.selection)
-        scrollRangeToVisible(edit.selection)
+        if scrolls { scrollRangeToVisible(edit.selection) }
     }
 
     /// The text's own undo and redo select the text that changed. Registered just before the change, this runs
@@ -385,13 +394,15 @@ final class CodeTextView: NSTextView {
         if let edit = LineEdits.delete(selectedRange(), in: string as NSString, lineIndex) { apply(edit, named: "Cut") }
     }
 
-    /// A whole line copied that way, pasted with nothing selected, goes in above the caret's line, whole.
+    /// A whole line copied that way, pasted with nothing selected, goes in above the caret's line, whole. In a
+    /// Markdown file, a web address pasted over text makes it a link.
     override func paste(_ sender: Any?) {
         let board = NSPasteboard.general
         if copiesWholeLine, isEditable, let text = board.string(forType: .string), text.hasSuffix("\n"),
            board.string(forType: Self.wholeLineType) == text {
             return apply(LineEdits.pasteLines(text, at: selectedRange().location, lineIndex), named: "Paste")
         }
+        if pasteMarkdownLink() { return }
         super.paste(sender)
     }
 

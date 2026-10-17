@@ -33,6 +33,9 @@ public enum MenuKeys {
             "toggleCurrentLineBlame:": KeyChord(key: "l", command: true, shift: true, control: true),
             "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"), "resetFontSize:": cmd("0"), "toggleFullScreen:": ctrlCmd("f"),
             "toggleMarkdownPreview:": shiftCmd("v"),
+            // Markdown (Edit › Markdown), while a Markdown file's editor has the keyboard
+            "toggleMarkdownBold:": cmd("b"), "toggleMarkdownItalic:": cmd("i"), "insertMarkdownLink:": cmd("k"),
+            "toggleMarkdownStrikethrough:": shiftCmd("x"), "toggleMarkdownTask:": shiftCmd("l"), "markdownBodyText:": optCmd("0"),
             // Agents
             "resumeSession:": optCmd("o"), "sendToAgent:": optCmd("k"), "suggestCommand:": ctrlCmd("k"),
             // Git
@@ -46,6 +49,7 @@ public enum MenuKeys {
             "toggleZoomPane:": shiftCmd("\r"),
         ]
         for n in 1...9 { keys["selectTabByNumber:#\(n)"] = cmd("\(n)") }
+        for level in 1...6 { keys["markdownHeading:#\(level)"] = optCmd("\(level)") }
         return keys
     }()
 

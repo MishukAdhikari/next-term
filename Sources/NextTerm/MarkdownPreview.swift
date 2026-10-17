@@ -192,6 +192,17 @@ final class MarkdownPreview {
         guard let run = read.hidden.first(where: { $0.location <= local && local < NSMaxRange($0) }) else { return ranges }
         return [NSValue(range: NSRange(location: index.starts[line] + NSMaxRange(run), length: 0))]
     }
+
+    /// The task box drawn at a character, if one is (on a line that shows no syntax: there the box is its text).
+    func box(at character: Int) -> NSRange? {
+        guard enabled else { return nil }
+        let index = self.index()
+        guard character < index.length else { return nil }
+        let line = index.line(at: character)
+        guard !isRevealed(line), let box = styler.readLine(line)?.taskBox else { return nil }
+        let drawn = NSRange(location: index.starts[line] + box.location, length: box.length)
+        return NSLocationInRange(character, drawn) ? drawn : nil
+    }
 }
 
 /// Live Preview's hidden characters, as null glyphs: they take no room, and the text keeps every character.

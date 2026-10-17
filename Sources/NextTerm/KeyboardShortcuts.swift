@@ -116,12 +116,14 @@ final class KeyboardShortcuts {
     }
 
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
-    /// shown on the editor's command only, since that is what it does there.
+    /// shown on the editor's command only, since that is what it does there; a Markdown command's, only in a
+    /// Markdown file's editor (⌘B: Bold there, Hide Project Sidebar in any other).
     func menuBarOpened() {
-        let inEditor = NSApp.keyWindow?.firstResponder is CodeTextView
+        let editor = NSApp.keyWindow?.firstResponder as? CodeTextView
         for (chord, item) in editorKeys {
             if let other = sharedKeys[chord] {
-                guard inEditor else { continue }
+                let markdownOnly = Self.id(of: item).map { KeyBindings.markdownCommands.contains($0) } ?? false
+                guard let editor, !markdownOnly || editor.markdownStyler != nil else { continue }
                 Self.set(nil, on: other)
             }
             Self.set(chord, on: item)

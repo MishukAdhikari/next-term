@@ -54,8 +54,12 @@ public enum MarkdownOutline {
 
     /// The heading a link's `#anchor` names, if the text has it (written as the anchor is, or percent-encoded).
     public static func heading(named anchor: String, in text: String) -> Heading? {
+        heading(named: anchor, among: headings(in: text))
+    }
+
+    public static func heading(named anchor: String, among headings: [Heading]) -> Heading? {
         let wanted = (anchor.removingPercentEncoding ?? anchor).lowercased()
-        return headings(in: text).first { $0.anchor == wanted }
+        return headings.first { $0.anchor == wanted }
     }
 
     public struct Stats: Equatable, Sendable {
