@@ -49,6 +49,15 @@ public enum SecretApprovalChoices {
         offered.contains(chosen) ? chosen : .once
     }
 
+    /// The approval a use's audit line records: a lasting one (15 minutes, until lock) only while every key it names
+    /// lets approvals last in `index`, the vault the use unlocked; else Allow once, as `kept` keeps after Touch ID. A
+    /// key's box ticked in another copy of Next Term during Touch ID makes no grant, so the line says Allow once.
+    public static func recorded(_ approval: SecretAudit.Approval?, names: [String],
+                                in index: SecretVault.Index?) -> SecretAudit.Approval? {
+        guard approval == .fifteenMinutes || approval == .untilLock else { return approval }
+        return askingEveryUse(names, in: index).isEmpty ? approval : .once
+    }
+
     /// The keys the lasting grants in force hold that ask every time now, sorted: the grants holding each end
     /// (`SecretGrantEvent.askEveryUse`). A key ticked here or by another copy of Next Term, or gone from the vault. A
     /// one-use grant is Allow once's own use, kept for a wrapper that left during Touch ID, so it is not counted.

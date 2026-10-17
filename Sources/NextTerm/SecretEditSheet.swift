@@ -116,9 +116,12 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             shortLabel.textColor = .secondaryLabelColor
             shortLabel.isHidden = true
             writeOnlyBox = NSButton(checkboxWithTitle: SecretNewKeyDefaults.keyNeverShowTitle, target: self, action: #selector(changed))
-            // In Add…, as Settings › Secrets' New keys default says; in Replace…, on only when the key is never shown already.
+            // In Add…, as Settings › Secrets' New keys default says; in Replace…, on only when the key is never shown
+            // already, and then dimmed, since it can't be undone.
             let neverShow: Bool = entry.map(\.writeOnly) ?? SecretNewKeyDefaults.neverShow
             writeOnlyBox.state = neverShow ? .on : .off
+            writeOnlyBox.isEnabled = !keepsNeverShow
+            writeOnlyBox.toolTip = keepsNeverShow ? SecretRequestWindow.neverShownTip : nil
             let line = SecretApprovalPanel.label(SecretRequestWindow.writeOnlyLine, size: 11)
             line.textColor = .secondaryLabelColor
             views += [Self.caption("Value"), valueField, shortLabel, writeOnlyBox, line]
@@ -173,6 +176,12 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         let row = NSStackView(views: [Self.caption("Remind me to rotate"), popUp, NSView()])
         row.spacing = 8
         return row
+    }
+
+    /// Replace… of a key never shown: its "Never show this key" stays ticked, and can't be unticked.
+    private var keepsNeverShow: Bool {
+        guard case .replace(let entry) = mode else { return false }
+        return entry.writeOnly
     }
 
     /// The reminder's choices, in days; 0 is Never.
@@ -283,7 +292,9 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             return .edit(name: entry.name, newName: newName, purpose: newPurpose, purposeBy: .user, link: change.link,
                          linkFrom: change.from, remindDays: newRemind, asksEveryUse: newAsks)
         case .replace(let entry):
-            return .replace(name: entry.name, value: SecretBytes(utf8: valueField.stringValue), writeOnly: writeOnlyBox.state == .on,
+            // A key never shown stays so (the vault keeps it too).
+            let writeOnly: Bool = entry.writeOnly || writeOnlyBox.state == .on
+            return .replace(name: entry.name, value: SecretBytes(utf8: valueField.stringValue), writeOnly: writeOnly,
                             origin: .settings)
         }
     }
@@ -330,7 +341,7 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     private func setBusy(_ busy: Bool) {
         isBusy = busy
         for field in [nameField, purposeField, valueField] { field.isEnabled = !busy }
-        writeOnlyBox?.isEnabled = !busy
+        writeOnlyBox?.isEnabled = !busy && !keepsNeverShow
         asksBox?.isEnabled = !busy
         linkField?.setEnabled(!busy)
         remindPopUp?.isEnabled = !busy

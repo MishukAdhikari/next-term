@@ -131,6 +131,8 @@ enum SecretReason {
     static func changeAsking(_ name: String, asks: Bool) -> String {
         asks ? "ask every time \(name) is used" : "stop asking every time \(name) is used"
     }
+    /// Another change in Edit…, with the box unticked too: "rename A to B and stop asking every time it’s used".
+    static func andStopAsking(_ reason: String) -> String { reason + " and stop asking every time it\u{2019}s used" }
     static func changePurpose(_ name: String) -> String { "change what \(name) is for" }
     static func rename(_ name: String, to newName: String) -> String { "rename \(name) to \(newName)" }
     static func changeLink(_ name: String) -> String { "change \(name)’s page" }

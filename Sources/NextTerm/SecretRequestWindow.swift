@@ -57,6 +57,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     private(set) var statusLabel = NSTextField(wrappingLabelWithString: "")
     private(set) var linkField = SecretLinkField()
     private var purposeEdited = false
+    /// "Never show this key" as the user left it, or as Settings › Secrets › New keys starts it: what the box shows for
+    /// a new name. A stored key never shown shows it ticked and dimmed instead, since it can't be undone.
+    private var chosenNeverShow = false
     /// The pastes that reach the value field (`SecretPasteWatch`).
     private var pasteWatch: SecretPasteWatch?
     /// The pasteboard's change count at the last paste into the value field.
@@ -141,9 +144,11 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         shortLabel.font = .systemFont(ofSize: 11)
         shortLabel.textColor = .secondaryLabelColor
         shortLabel.isHidden = true
-        writeOnlyBox = NSButton(checkboxWithTitle: SecretNewKeyDefaults.keyNeverShowTitle, target: self, action: #selector(changed))
+        writeOnlyBox = NSButton(checkboxWithTitle: SecretNewKeyDefaults.keyNeverShowTitle, target: self,
+                                action: #selector(neverShowChanged))
         // Ticked when Settings › Secrets › New keys says to never show their values.
-        writeOnlyBox.state = SecretNewKeyDefaults.neverShow ? .on : .off
+        chosenNeverShow = SecretNewKeyDefaults.neverShow
+        writeOnlyBox.state = chosenNeverShow ? .on : .off
         let writeOnlyLine = SecretApprovalPanel.label(Self.writeOnlyLine, size: 11)
         writeOnlyLine.textColor = .secondaryLabelColor
         linkField.onChange = { [weak self] in self?.refreshName() }
@@ -214,9 +219,14 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         refreshName()
     }
 
-    @objc private func changed() { refreshName() }
+    @objc private func neverShowChanged() {
+        // A click reaches the box only while it can change; a stored key never shown keeps its tick.
+        if writeOnlyBox.isEnabled { chosenNeverShow = writeOnlyBox.state == .on }
+        refreshName()
+    }
 
-    /// "Saved as …" or the rule, the replace line for a stored name, the short-value line, and Save's state.
+    /// "Saved as …" or the rule, the replace line for a stored name, the short-value line, "Never show this key" (ticked
+    /// and dimmed for a stored key never shown), and Save's state.
     private func refreshName() {
         let name = self.name
         let valid = StoredSecretName.isValid(name)
@@ -226,6 +236,11 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         replaceLabel.stringValue = stored.map { Self.replaceLine($0) } ?? ""
         replaceLabel.isHidden = stored == nil
         replaceLabel.setAccessibilityLabel(stored == nil ? nil : "Warning: \(replaceLabel.stringValue)")
+        let neverShown: Bool = stored?.writeOnly == true
+        let ticked: Bool = neverShown || chosenNeverShow
+        writeOnlyBox?.state = ticked ? .on : .off
+        writeOnlyBox?.isEnabled = !neverShown && !isBusy && !answered
+        writeOnlyBox?.toolTip = neverShown ? Self.neverShownTip : nil
         // A stored key keeps what it's for and its page: Save replaces only its value.
         purposeField.isEnabled = stored == nil && !isBusy
         linkField.setEnabled(stored == nil && !isBusy && !answered)
@@ -235,6 +250,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         shortLabel.isHidden = length == 0 || length >= SecretMask.minimumLength
         saveButton?.isEnabled = !isBusy && !answered && valid && length > 0 && linkOK
     }
+
+    /// The box's tooltip for a stored key never shown.
+    static let neverShownTip = "This key is never shown, and stays so."
 
     /// The line for a name already stored.
     static func replaceLine(_ entry: SecretVault.Entry) -> String {
@@ -253,8 +271,11 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         let value = SecretBytes(utf8: valueField.stringValue)
         let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let link: String? = linkField.text.isEmpty ? nil : linkField.text
+        // A stored key never shown stays so, whatever the box says (the vault keeps it too).
+        let neverShown: Bool = SecretsStore.shared.index?.entry(named: name)?.writeOnly == true
+        let writeOnly: Bool = neverShown || writeOnlyBox.state == .on
         onSave(Form(name: name, purpose: purpose, purposeBy: purposeEdited ? .user : .agent, value: value,
-                    writeOnly: writeOnlyBox.state == .on, link: link, linkFrom: link == nil ? nil : linkField.linkFrom))
+                    writeOnly: writeOnly, link: link, linkFrom: link == nil ? nil : linkField.linkFrom))
     }
 
     @objc private func decline() { answer(stopAsking: false) }
@@ -272,9 +293,10 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     func setBusy(_ busy: Bool) {
         isBusy = busy
         for field in [nameField, purposeField, valueField] { field.isEnabled = !busy }
-        for button in [stopButton, declineButton, writeOnlyBox] { button?.isEnabled = !busy }
+        for button in [stopButton, declineButton] { button?.isEnabled = !busy }
         window?.standardWindowButton(.closeButton)?.isEnabled = !busy
         setStatus(busy ? "Waiting for Touch ID or your password…" : "")
+        // refreshName dims "Never show this key" while busy, and for a stored key never shown.
         refreshName()
     }
 

@@ -14,8 +14,14 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         + "Git history keeps the old key."
     static let commentNote = "Comments inside this server's entry are lost when it is rewritten."
     static let keepsCopies = "Next Term keeps a copy of each changed entry with the keys taken out, so Undo can put them back for 30 days."
-    static let startsAfter = "After this, these servers start only while Next Term is open. Each start asks you to approve with Touch ID, "
-        + "unless you allowed it earlier. If you don't answer within 25 seconds, the server doesn't start. Allow it, then restart the server."
+    /// How the servers start afterwards. The keys moved in ask for Touch ID every time they're used unless Settings ›
+    /// Secrets › New keys says otherwise (`asksEveryUse`), so only then can an earlier approval still hold.
+    static func startsAfter(asksEveryUse: Bool) -> String {
+        let asks: String = asksEveryUse ? "Each start asks you to approve with Touch ID."
+            : "Each start asks you to approve with Touch ID, unless you allowed it earlier."
+        return "After this, these servers start only while Next Term is open. " + asks
+            + " If you don't answer within 25 seconds, the server doesn't start. Allow it, then restart the server."
+    }
     static let rotate = "These keys sat in plaintext files. To rotate a key, select it in the list and use Rotate…: it opens the key\u{2019}s page, "
         + "or asks where the key came from when it has none, then takes the new key. "
         + "Do it if this Mac ever ran an untrusted install, or if a file is in git: its history keeps the old key. Time Machine keeps old copies too."
@@ -374,7 +380,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         if let warning = SecretImport.droppedWarning(droppedPlaces) { listed += "\n\n" + warning }
         let alert = NSAlert()
         alert.messageText = "Move \(count) \(count == 1 ? "key" : "keys") into Secrets?"
-        alert.informativeText = listed + "\n\n" + Self.keepsCopies + "\n\n" + Self.startsAfter
+        let startsAfter: String = Self.startsAfter(asksEveryUse: SecretNewKeyDefaults.asksEveryUse)
+        alert.informativeText = listed + "\n\n" + Self.keepsCopies + "\n\n" + startsAfter
         let neverShown: [String] = groupRows.filter { $0.box.state == .on && $0.neverShow && !reusesStored($0) }.map(\.name)
         if !neverShown.isEmpty { alert.informativeText += "\n\n" + Self.neverShownNote(neverShown) }
         alert.addButton(withTitle: "Move Keys")

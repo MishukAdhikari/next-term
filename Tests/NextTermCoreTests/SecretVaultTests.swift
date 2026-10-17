@@ -277,9 +277,11 @@ private func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0)
         #expect(locked.index.entries[0].writeOnly)
         #expect(try locked.value(of: "GITHUB_TOKEN") == SecretBytes(utf8: "new-value-0123456789"))
         #expect(throws: SecretVault.Failure.writeOnly("GITHUB_TOKEN")) { _ = try locked.shownValue(of: "GITHUB_TOKEN") }
-        // Replace may clear the flag.
-        let cleared = try f.unlock(try f.vault.replace("GITHUB_TOKEN", value: SecretBytes(utf8: "third-value-0123456789"), writeOnly: false))
-        #expect(try cleared.shownValue(of: "GITHUB_TOKEN") == SecretBytes(utf8: "third-value-0123456789"))
+        // Replace never clears the flag: "Never show this key" can't be undone.
+        let kept = try f.unlock(try f.vault.replace("GITHUB_TOKEN", value: SecretBytes(utf8: "third-value-0123456789"), writeOnly: false))
+        #expect(kept.index.entries[0].writeOnly)
+        #expect(try kept.value(of: "GITHUB_TOKEN") == SecretBytes(utf8: "third-value-0123456789"))
+        #expect(throws: SecretVault.Failure.writeOnly("GITHUB_TOKEN")) { _ = try kept.shownValue(of: "GITHUB_TOKEN") }
         let deleted = try f.vault.delete("GITHUB_TOKEN")
         #expect(try SecretVault.index(from: deleted).entries.isEmpty)
         #expect(throws: SecretVault.Failure.noSuchKey("GITHUB_TOKEN")) { _ = try f.vault.value(of: "GITHUB_TOKEN") }

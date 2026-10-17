@@ -21,6 +21,7 @@ extension SelfTest {
         secretsNewKeyDefaultsChecks()
         await secretsAskOnceChecks()
         await secretsAskTickChecks()
+        await secretsNeverShowStaysChecks()
         let value = SecretBytes(utf8: secretsValue("never-shown"))
         _ = try? await store.perform(.add(name: "NEVER_KEY", purpose: "the lock checks", purposeBy: .user, origin: .settings,
                                           writeOnly: true, value: value))

@@ -685,7 +685,8 @@ public final class SecretVault {
         return try written(key, now: now) { index.entries[position] = entry }
     }
 
-    /// A new value for a key, write-only or not. `origin`, when given, is who replaced it (`agent` for an agent's
+    /// A new value for a key. `writeOnly` makes it never shown; a key never shown already stays so, whatever it says,
+    /// since "Never show this key" can't be undone. `origin`, when given, is who replaced it (`agent` for an agent's
     /// `store_secret`); the key's purpose stays.
     public func replace(_ name: String, value: SecretBytes, writeOnly: Bool, origin: Origin? = nil, maskKey: SymmetricKey? = nil,
                         now: Date = Date()) throws -> Data {
@@ -693,9 +694,10 @@ public final class SecretVault {
         var (position, entry) = try find(name)
         let value = try Self.normalized(value, name: name)
         let origin = origin ?? entry.origin
-        entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: writeOnly, origin: origin)
+        let neverShown: Bool = entry.writeOnly || writeOnly
+        entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: neverShown, origin: origin)
         entry.origin = origin
-        entry.writeOnly = writeOnly
+        entry.writeOnly = neverShown
         entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         entry.changed = Self.whole(now)
         entry.valueSet = entry.changed

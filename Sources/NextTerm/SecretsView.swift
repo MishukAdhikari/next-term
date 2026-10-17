@@ -260,7 +260,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             column.maxWidth = spec.maxWidth
             column.width = spec.width
             column.resizingMask = [.autoresizingMask, .userResizingMask]
-            if spec.id == "writeOnly" { column.headerToolTip = SecretNewKeyDefaults.neverShownHelp }
+            if spec.id == "writeOnly" {
+                // No title, to stay narrow: VoiceOver reads the header as its tooltip says.
+                column.headerToolTip = SecretNewKeyDefaults.neverShownHelp
+                column.headerCell.setAccessibilityLabel(SecretNewKeyDefaults.neverShownHelp)
+            }
             table.addTableColumn(column)
         }
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle

@@ -156,13 +156,13 @@ final class SecretsStore {
             switch self {
             case .add(let key): return SecretReason.save(key.name)
             case .edit(let change):
-                let name = change.name
-                if let newName = change.newName, newName != name { return SecretReason.rename(name, to: newName) }
-                if change.factsChanged > 1 { return SecretReason.changeDetails(name) }
-                if change.link != nil { return SecretReason.changeLink(name) }
-                if change.remindDays != nil { return SecretReason.changeReminder(name) }
-                if let asks = change.asksEveryUse { return SecretReason.changeAsking(name, asks: asks) }
-                return SecretReason.changePurpose(name)
+                // Unticking "Ask for Touch ID every time it's used" is named even beside other changes.
+                guard change.asksEveryUse == false else { return Self.editReason(change) }
+                var others = change
+                others.asksEveryUse = nil
+                let renames: Bool = others.newName != nil && others.newName != others.name
+                guard renames || others.factsChanged > 0 else { return Self.editReason(change) }
+                return SecretReason.andStopAsking(Self.editReason(others))
             case .replace(let name, _, _, _): return SecretReason.replace(name)
             case .rotate(let change): return SecretReason.rotate(change.name)
             case .makeWriteOnly(let name): return SecretReason.makeWriteOnly(name)
@@ -171,6 +171,17 @@ final class SecretsStore {
             case .copy(let name): return SecretReason.copy(name)
             case .use(let names): return "use \(SecretReason.keys(names))"
             }
+        }
+
+        /// Edit…'s reason for what `change` changes.
+        private static func editReason(_ change: KeyEdit) -> String {
+            let name = change.name
+            if let newName = change.newName, newName != name { return SecretReason.rename(name, to: newName) }
+            if change.factsChanged > 1 { return SecretReason.changeDetails(name) }
+            if change.link != nil { return SecretReason.changeLink(name) }
+            if change.remindDays != nil { return SecretReason.changeReminder(name) }
+            if let asks = change.asksEveryUse { return SecretReason.changeAsking(name, asks: asks) }
+            return SecretReason.changePurpose(name)
         }
 
         var isAdd: Bool {
@@ -622,8 +633,14 @@ final class SecretsStore {
             try apply(action, to: vault, maskKey: maskKey, values: &values, earlier: &earlier)
         }
         work.values = values
+        // A use records the approval Allow keeps, by the vault this unlock checked: a box ticked in another copy
+        // during Touch ID makes it Allow once (`SecretRequests.allowed`).
+        var approval: SecretAudit.Approval? = facts.approval
+        if case .use(let names) = action {
+            approval = SecretApprovalChoices.recorded(facts.approval, names: names, in: work.index)
+        }
         let line = SecretAudit.Line(event: action.event, names: action.names, who: facts.who, command: facts.command,
-                                    folder: facts.folder, approval: facts.approval, outcome: "done",
+                                    folder: facts.folder, approval: approval, outcome: "done",
                                     earlierOrigin: earlier?.rawValue)
         try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
         work.line = line

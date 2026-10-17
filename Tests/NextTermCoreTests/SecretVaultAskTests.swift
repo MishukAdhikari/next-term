@@ -159,3 +159,38 @@ import Testing
         #expect(allAsk)
     }
 }
+
+/// "Never show this key" can't be undone: a new value keeps it, whoever gives it (Replace…, `request_secret`'s window,
+/// `store_secret`, an import), and the seal says so too. Every value is made up.
+@Suite struct SecretVaultNeverShowStaysTests {
+    @Test func aNewValueNeverShowsANeverShownKeyAgain() throws {
+        let keyring = SoftwareKeyring()
+        let vault: SecretVault = try SecretVault.create(keyring: keyring).vault
+        _ = try vault.add(name: "OPENAI_API_KEY", purpose: "rag-api", purposeBy: .user, origin: .settings, writeOnly: true,
+                          value: SecretBytes(utf8: "made-up-openai-value-0123456789"))
+        let origins: [SecretVault.Origin?] = [nil, .request, .agent, .import]
+        var file = Data()
+        for (step, origin) in origins.enumerated() {
+            let value = SecretBytes(utf8: "made-up-openai-value-\(step)-0123456789")
+            file = try vault.replace("OPENAI_API_KEY", value: value, writeOnly: false, origin: origin)
+            #expect(vault.index.entry(named: "OPENAI_API_KEY")?.writeOnly == true, "step \(step)")
+            #expect(throws: SecretVault.Failure.writeOnly("OPENAI_API_KEY")) { try vault.shownValue(of: "OPENAI_API_KEY") }
+        }
+        // Read back from the file: the seal holds the flag, so the value opens only as never shown.
+        let opened = try SecretVault.unlock(file, keyring: keyring, context: nil)
+        #expect(opened.index.entries[0].writeOnly)
+        #expect(try opened.value(of: "OPENAI_API_KEY") == SecretBytes(utf8: "made-up-openai-value-3-0123456789"))
+        #expect(throws: SecretVault.Failure.writeOnly("OPENAI_API_KEY")) { try opened.shownValue(of: "OPENAI_API_KEY") }
+    }
+
+    /// A key that is shown may be made never shown by a new value, and stays shown when the new value says nothing.
+    @Test func aShownKeyTakesTheFlagItIsGiven() throws {
+        let vault: SecretVault = try SecretVault.create(keyring: SoftwareKeyring()).vault
+        _ = try vault.add(name: "PINECONE_API_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
+                          value: SecretBytes(utf8: "made-up-pinecone-value-0123456789"))
+        _ = try vault.replace("PINECONE_API_KEY", value: SecretBytes(utf8: "made-up-pinecone-other-0123"), writeOnly: false)
+        #expect(try vault.shownValue(of: "PINECONE_API_KEY") == SecretBytes(utf8: "made-up-pinecone-other-0123"))
+        _ = try vault.replace("PINECONE_API_KEY", value: SecretBytes(utf8: "made-up-pinecone-third-0123"), writeOnly: true)
+        #expect(vault.index.entry(named: "PINECONE_API_KEY")?.writeOnly == true)
+    }
+}

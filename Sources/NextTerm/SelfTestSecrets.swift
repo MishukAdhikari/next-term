@@ -36,10 +36,18 @@ extension SelfTest {
         // The tabs and windows run_with_secrets opens come forward at once: the self-test's own keys would hold them back.
         let keysIgnored = UserKeys.ignoredForTest
         UserKeys.ignoredForTest = true
+        // Settings › Secrets' reminder and New keys defaults as on a Mac that never set them: this Mac's own, such as
+        // Never show their values, would change what Add…, the imports and Undo do here.
+        let defaultsName = "nt-selftest-secrets-defaults-\(getpid())"
+        let savedDefaults = SecretReminderRecords.defaults
+        SecretReminderRecords.defaults = UserDefaults(suiteName: defaultsName) ?? savedDefaults
         defer {
             SecretMask.current = savedMask
             UserKeys.ignoredForTest = keysIgnored
             SecretClipboard.shared.pasteboard.releaseGlobally()
+            SecretReminderRecords.defaults = savedDefaults
+            UserDefaults().removePersistentDomain(forName: defaultsName)
+            NotificationCenter.default.post(name: SecretNewKeySettingsView.changed, object: nil)
         }
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
@@ -1815,7 +1823,7 @@ extension SelfTest {
         _ = await wait(5) { sheet.confirmAlert != nil }
         let confirm = sheet.confirmAlert
         check(confirm?.messageText == "Move 1 key into Secrets?" && confirm?.informativeText.contains(".cursor/mcp.json") == true
-              && confirm?.informativeText.contains(SecretImportSheet.startsAfter) == true,
+              && confirm?.informativeText.contains(SecretImportSheet.startsAfter(asksEveryUse: true)) == true,
               "secrets: the confirm names the files and says how the servers start afterwards", confirm?.informativeText ?? "")
         confirm?.buttons.first?.performClick(nil)
         _ = await wait(15) { !sheet.summaryLabel.isHidden }

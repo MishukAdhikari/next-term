@@ -63,6 +63,23 @@ import Testing
         #expect(SecretApprovalChoices.kept(.untilLock, offered: [.once, .fifteenMinutes]) == .once)
     }
 
+    /// The use's audit line says what was kept: a lasting approval only while every key lets approvals last in the
+    /// vault the use unlocked, so a box ticked in another copy during Touch ID is recorded as Allow once.
+    @Test func theAuditLineRecordsTheApprovalKept() throws {
+        let index = try Self.index()
+        let lasting: [SecretAudit.Approval] = [.fifteenMinutes, .untilLock]
+        for approval in lasting {
+            #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY"], in: index) == approval)
+            #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY", "ASKS_KEY"], in: index) == .once)
+            #expect(SecretApprovalChoices.recorded(approval, names: ["GONE_KEY"], in: index) == .once)
+            #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY"], in: nil) == .once)
+        }
+        let others: [SecretAudit.Approval?] = [.once, .grant, .remote, nil]
+        for approval in others {
+            #expect(SecretApprovalChoices.recorded(approval, names: ["ASKS_KEY"], in: index) == approval)
+        }
+    }
+
     @Test func eachChoiceIsItsAuditWordAndGrant() {
         #expect(SecretApprovalChoice.once.approval == .once && SecretApprovalChoice.once.grantKind == nil)
         #expect(SecretApprovalChoice.fifteenMinutes.approval == .fifteenMinutes)
