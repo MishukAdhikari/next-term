@@ -41,6 +41,9 @@ final class MarkdownStyler {
     var fonts: MarkdownFonts
     /// The paragraph style for a line's wrap column and heading level: the editor's, with its tab stops and heights.
     let paragraphStyle: (_ hang: Int, _ heading: Int) -> NSParagraphStyle
+    /// Lines whose reading changed, or that were read for the first time and hide or draw something: Live Preview
+    /// makes their glyphs again (a line laid out before it was read showed its syntax).
+    var onLinesChanged: ((ClosedRange<Int>) -> Void)?
 
     init(storage: NSTextStorage, layoutManager: NSLayoutManager, font: NSFont, colorsLinks: Bool,
          index: @escaping () -> LineIndex, paragraphStyle: @escaping (_ hang: Int, _ heading: Int) -> NSParagraphStyle) {
@@ -59,6 +62,11 @@ final class MarkdownStyler {
 
     /// Lines still to read (0 when the whole file is styled), for the self-test.
     var pendingLines: Int { lines.count - validUpTo }
+
+    /// The line as last read, if it was: for drawing, which never reads.
+    func readLine(_ number: Int) -> MarkdownSyntax.Line? {
+        lines.indices.contains(number) ? lines[number] : nil
+    }
 
     /// Lines `old` (as they were) became lines `old.lowerBound...newLast`. Call from the document's edit callback, with
     /// the line index already updated.
@@ -100,6 +108,7 @@ final class MarkdownStyler {
         guard index.count == lines.count else { return restyleAll(storageIsBase: false) }
         let text = storage.string as NSString
         let deadline = Date().addingTimeInterval(Self.sliceBudget)
+        var changed: ClosedRange<Int>?
         storage.beginEditing()
         while validUpTo < lines.count {
             let number = validUpTo
@@ -109,6 +118,9 @@ final class MarkdownStyler {
                 let plain = line.headingLevel == 0 && line.hang == 0 && line.spans.isEmpty
                 if !(plain && lines[number] == nil && baseOnStorage[number]) { apply(line, at: index.range(ofLine: number)) }
                 baseOnStorage[number] = false
+                if lines[number] != nil || !line.hidden.isEmpty || !line.drawn.isEmpty {
+                    changed = changed.map { min($0.lowerBound, number)...max($0.upperBound, number) } ?? number...number
+                }
             }
             let unchanged = number > mustRedoThrough && ends[number] == end
             ends[number] = end
@@ -121,6 +133,7 @@ final class MarkdownStyler {
             if Date() > deadline { break }
         }
         storage.endEditing()
+        if let changed { onLinesChanged?(changed) }
         if validUpTo < lines.count { schedule() }
     }
 
@@ -213,8 +226,12 @@ final class MarkdownFonts {
 }
 
 /// A Markdown file's line heights: a heading's line is as tall as its font (its paragraph style says how tall), the text
-/// centred in it as on every other line. Every other file keeps LineSpacing's one height.
+/// centred in it as on every other line. Live Preview's hidden characters are made null glyphs here too
+/// (MarkdownPreview.swift). Every other file keeps LineSpacing's one height and its glyphs as they are.
 final class MarkdownSpacing: LineSpacing {
+    /// The characters to hide in a range of the text, in order (Live Preview's).
+    var hiddenCharacters: ((NSRange) -> [NSRange])?
+
     override func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
                                 lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
                                 in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {

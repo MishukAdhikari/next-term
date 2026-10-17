@@ -59,24 +59,41 @@ final class CodeTextView: NSTextView {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         needsDisplay = true // the current-line band moves
         enclosingScrollView?.verticalRulerView?.needsDisplay = true
+        if !holdsReveal { onSelectionMoved?(stillSelecting) }
     }
 
+    /// The selection moved (`stillSelecting` while a drag selects), or the keyboard came or went: a Markdown file's
+    /// Live Preview shows the syntax of the lines it is on (MarkdownPreview).
+    var onSelectionMoved: ((_ stillSelecting: Bool) -> Void)?
+    /// A click is being tracked: what shows waits for the mouse to come up, so no text moves under the pointer.
+    private var holdsReveal = false
+
     override func becomeFirstResponder() -> Bool {
-        defer { needsDisplay = true }
+        defer {
+            needsDisplay = true
+            onSelectionMoved?(false)
+        }
         return super.becomeFirstResponder()
     }
 
     override func resignFirstResponder() -> Bool {
         defer { needsDisplay = true }
         let resigned = super.resignFirstResponder()
-        if resigned { caretPlacedByUser = false }
+        if resigned {
+            caretPlacedByUser = false
+            onSelectionMoved?(false)
+        }
         return resigned
     }
 
     /// A click or a key in the text since it got the keyboard: a .env file's caret line then shows its
-    /// value (CodeEditorView.hiddenEnvValues).
+    /// value (CodeEditorView.hiddenEnvValues), and a Markdown file's its syntax.
     var caretPlacedByUser = false {
-        didSet { if caretPlacedByUser != oldValue { needsDisplay = true } }
+        didSet {
+            guard caretPlacedByUser != oldValue else { return }
+            needsDisplay = true
+            if !holdsReveal { onSelectionMoved?(false) }
+        }
     }
 
     private var keyObserver: NSObjectProtocol?
@@ -94,8 +111,11 @@ final class CodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        holdsReveal = true
         caretPlacedByUser = true
-        super.mouseDown(with: event)
+        super.mouseDown(with: event) // tracks the click (or drag) until the mouse is up
+        holdsReveal = false
+        onSelectionMoved?(false)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -597,8 +617,9 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     let spacing: LineSpacing
     /// A .env file's values, drawn hidden (EditorEnvValues.swift).
     let envValues = EnvValueMask()
-    /// A Markdown file's styles (up to MarkdownSyntax.previewMaxLength): nil for every other file.
+    /// A Markdown file's styles and its Live Preview (up to MarkdownSyntax.previewMaxLength): nil for every other file.
     private(set) var markdown: MarkdownStyler?
+    private(set) var preview: MarkdownPreview?
 
     init(document: EditorDocument) {
         self.document = document
@@ -667,7 +688,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             self?.envValues.textEdited()
             self?.markdown?.textEdited(old, newLast: newLast)
         }
-        layoutManager.hiddenRanges = { [weak self] in self?.hiddenEnvValues() ?? [] }
+        layoutManager.drawOver = { [weak self] range in self?.drawOver(in: range) ?? [] }
         ruler.blameSource = { [weak self] in self?.editedBlame }
         ruler.onBlameClick = { [weak self] sha, root in
             (self?.window?.windowController as? TerminalWindowController)?.showCommit(sha: sha, root: root)
@@ -1063,17 +1084,36 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         textView.isEditable
     }
 
+    /// Live Preview: a caret put inside hidden syntax goes to its end.
+    func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRanges oldSelectedCharRanges: [NSValue],
+                  toCharacterRanges newSelectedCharRanges: [NSValue]) -> [NSValue] {
+        preview?.snapped(newSelectedCharRanges) ?? newSelectedCharRanges
+    }
+
     // MARK: Markdown
 
-    /// A Markdown file's styler, set up before the first font is applied (which styles it).
+    /// A Markdown file's styler and Live Preview, set up before the first font is applied (which styles it).
     private func startMarkdown(_ layoutManager: CodeLayoutManager) {
         // The grammar colours links; without the highlighting bundle, the styler does.
         let colorsLinks = SyntaxEngine.shared == nil || document.grammar == nil
         let lines: () -> LineIndex = { [weak document] in document?.lines ?? LineIndex() }
-        markdown = MarkdownStyler(storage: document.storage, layoutManager: layoutManager, font: EditorDocument.font, colorsLinks: colorsLinks,
-                                  index: lines) { [weak self] hang, heading in
+        let styler = MarkdownStyler(storage: document.storage, layoutManager: layoutManager, font: EditorDocument.font, colorsLinks: colorsLinks,
+                                    index: lines) { [weak self] hang, heading in
             self?.markdownParagraphStyle(hang: hang, heading: heading) ?? .default
         }
+        let preview = MarkdownPreview(styler: styler, textView: textView, layoutManager: layoutManager, enabled: true, index: lines)
+        markdown = styler
+        self.preview = preview
+        (spacing as? MarkdownSpacing)?.hiddenCharacters = { [weak preview] range in preview?.hiddenCharacters(in: range) ?? [] }
+        layoutManager.tintedLines = { [weak preview] range in preview?.tintedLines(in: range) ?? [] }
+        styler.onLinesChanged = { [weak preview] lines in preview?.linesChanged(lines) }
+        textView.onSelectionMoved = { [weak preview] stillSelecting in preview?.selectionChanged(stillSelecting: stillSelecting) }
+    }
+
+    /// What the layout manager draws over the characters in a range: a .env file's hidden values, or Live Preview's marks.
+    func drawOver(in range: NSRange) -> [CodeLayoutManager.DrawOver] {
+        if isEnvFile { return hiddenEnvValues().map { .init(range: $0, drawing: .bullet) } }
+        return preview?.drawings(in: range) ?? []
     }
 
     private var markdownStyles: [Int: NSParagraphStyle] = [:]
