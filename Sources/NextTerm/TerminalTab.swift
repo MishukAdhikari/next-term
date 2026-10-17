@@ -556,18 +556,23 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var herdrAgents: [HerdrAgent] { herdrWatch.agents ?? [] }
     /// The same agents followed one by one: their decisions and finishes, what is on screen, what needs you, their rows.
     private(set) var herdrTracker = HerdrAgents()
+    /// herdr's client in front of this tab on this Mac (its own screen, HerdrClient), whose agents the tab follows as a
+    /// server's (LocalHerdrWatch); nil otherwise. Next Term only reads it: the tab is not kept, nor rerun on restore.
+    private(set) var localHerdr: LocalHerdrClient?
     /// This tab shows herdr and follows its agents one by one: herdr answers its checks.
     var followsHerdr: Bool {
-        guard let remote, remote.keep == .herdr, !fellBack else { return false }
-        return herdrWatch.agents != nil
+        let shows = remote.map { $0.keep == .herdr && !fellBack } ?? (localHerdr != nil)
+        return shows && herdrWatch.agents != nil
     }
     /// herdr's agents as the tab list shows them, while this tab follows them.
     var herdrRows: [TabListRows.Agent] { followsHerdr ? herdrTracker.rows : [] }
     /// Where its herdr is, for the Dock badge and Go to Agent, which count an agent once however many tabs show its
     /// session: the host and the herdr session.
-    var herdrPlace: String { remote.map { "\($0.host.id) \($0.herdrSession ?? "")" } ?? "" }
+    var herdrPlace: String {
+        remote.map { "\($0.host.id) \($0.herdrSession ?? "")" } ?? "mac \(localHerdr?.server ?? "")"
+    }
     /// The herdr session it shows, when it is not herdr's default.
-    var herdrSessionName: String? { remote?.herdrSession }
+    var herdrSessionName: String? { remote?.herdrSession ?? localHerdr?.session }
     /// Its folded idle agents show in the tab list (HerdrAgents.fold), until the tab closes.
     var herdrIdleOpen = false
     /// When the tab began to need the user as it does now (its agent asks, or it finished and is not seen), for Go to
@@ -752,6 +757,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         reconnectWork = nil
         MCPControl.forget(self)
         AppDelegate.shared?.withdrawHerdrNotices(of: self)
+        if localHerdr != nil { LocalHerdrWatch.shared.follow(self, false) }
         guard !exited else { return [] }
         // A disconnected remote tab's ssh has exited and was reaped: its pid may be another process's now,
         // so neither SwiftTerm (SIGTERM) nor we (SIGHUP) signal it, as for a shell that already exited.
@@ -904,6 +910,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollForeground() {
         guard !exited else { return }
         guard remote == nil else { return watchLogin() } // a remote tab's foreground comes from its host (applyRemote)
+        watchLocalHerdr()
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
@@ -1128,10 +1135,36 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         servingScanned = last - 1 // the last line may still be being written
     }
 
-    /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's
-    /// status follows the agent itself.
+    /// herdr's client in front of this local tab, or no longer: the tab follows its agents while it is (LocalHerdrWatch),
+    /// with the client's own executable, session and socket. Looked at only while herdr runs in front.
+    private func watchLocalHerdr() {
+        var client: LocalHerdrClient?
+        if status.running, status.program == "herdr" {
+            let group = foregroundGroup
+            if let known = localHerdr, known.pid == group { return } // the same client as at the last look
+            let pid = view.process.shellPid
+            let found = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd, shellPid: pid, shellName: shellName)
+            if group > 0, let found, let match = HerdrClient.match(found) {
+                let environment = ProcessInspector.arguments(of: group, keeping: HerdrClient.variables)?.environment ?? [:]
+                client = LocalHerdrClient(pid: group, executable: match.executable, session: match.session, environment: environment)
+            }
+        }
+        guard client != localHerdr else { return }
+        localHerdr = client
+        herdrWatch = HerdrWatch()
+        herdrTracker = HerdrAgents()
+        decisionsToPost = []
+        status.suppressesNotices = false
+        AppDelegate.shared.withdrawHerdrNotices(of: self)
+        LocalHerdrWatch.shared.follow(self, client != nil)
+        delegate?.tabDidChange(self)
+    }
+
+    /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's status follows the
+    /// agent itself. Not herdr's own screen, here or on a server: its agents report their states.
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
+        guard status.program != "herdr" else { return }
         let before = (status.state, status.question)
         status.observe(agentScreen: agentActivity(liveTail()), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
@@ -1623,7 +1656,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// up (herdr's list says nothing about this tab's ssh). A tab that fell back only learns whether herdr is on the host
     /// now.
     func applyHerdr(_ report: HerdrReport) {
-        guard remote?.keep == .herdr, remoteConnected, !exited, !disconnected else { return }
+        guard !exited else { return }
+        if let remote {
+            guard remote.keep == .herdr, remoteConnected, !disconnected else { return }
+        } else {
+            guard localHerdr != nil, report.session == localHerdr?.session else { return }
+        }
         let note = herdrWatch.note
         let listed = herdrWatch.observe(report, showsHerdr: !fellBack)
         if herdrWatch.note != note { delegate?.tabDidChange(self) }

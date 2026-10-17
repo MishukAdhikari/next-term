@@ -1,10 +1,11 @@
 import AppKit
 import NextTermCore
 
-/// Runs one herdr command (HerdrCommand) for a tab that shows herdr, on its host, over the tab's own ssh connection, as
-/// every check does (it never logs in). Two at a time per connection beside the status check, as sshd's MaxSessions
-/// leaves room for (10 by default, and each tab is one); the others wait their turn, up to their own time limit. Text for
-/// an agent goes on the script's stdin, never into it. A command that changes what herdr shows (a prompt, keys, a focus)
+/// Runs one herdr command (HerdrCommand) for a tab that shows herdr: on its host, over the tab's own ssh connection, as
+/// every check does (it never logs in), or for herdr in a local tab, as a process on this Mac (runHere). On a host, two
+/// at a time per connection beside the status check, as sshd's MaxSessions leaves room for (10 by default, and each tab
+/// is one); the others wait their turn, up to their own time limit. Text for an agent goes on the script's stdin, never
+/// into it, and here as one argument no shell reads. A command that changes what herdr shows (a prompt, keys, a focus)
 /// asks for a check soon after, so the tab follows. Completions run on the main thread.
 enum HerdrRunner {
     /// The most commands running at once on one connection, besides the status check.
@@ -22,6 +23,9 @@ enum HerdrRunner {
     /// The same, also saying which verb answered ("tab focus" when this herdr had no `agent focus`).
     static func run(_ command: HerdrCommand, for tab: TerminalTab, input: String? = nil, timeout: TimeInterval = 15,
                     reporting completion: @escaping (HerdrResult, _ verb: String?) -> Void) {
+        if tab.remote == nil, let client = tab.localHerdr {
+            return runHere(command, client: client, input: input, timeout: timeout, completion: completion)
+        }
         guard let remote = tab.remote, remote.keep == .herdr, !tab.fellBack, let path = tab.controlPath else {
             return completion(.unreachable("That tab does not show herdr."), nil)
         }
@@ -43,6 +47,48 @@ enum HerdrRunner {
                 if command.changesHerdr { RemotePoller.shared.pollSoon(path) }
             }
         }
+    }
+
+    /// herdr on this Mac (a local tab's client): its argument lists run one by one off the main thread, no shell between,
+    /// the text as one argument; an attempt whose verb this herdr lacks gives way to the next.
+    private static func runHere(_ command: HerdrCommand, client: LocalHerdrClient, input: String?, timeout: TimeInterval,
+                                completion: @escaping (HerdrResult, String?) -> Void) {
+        guard let attempts = command.argv(executable: client.executable, session: client.session, text: input) else {
+            let refusal = command.refusal(session: client.session) ?? "That herdr command cannot be built."
+            return completion(.error(code: "", message: refusal), nil)
+        }
+        let environment = client.processEnvironment
+        let deadline = Date().addingTimeInterval(timeout)
+        DispatchQueue.global(qos: .utility).async {
+            let (result, verb) = runAttempts(attempts, command: command, environment: environment, deadline: deadline)
+            DispatchQueue.main.async {
+                completion(result, verb)
+                if command.changesHerdr { LocalHerdrWatch.shared.checkSoon() }
+            }
+        }
+    }
+
+    /// The attempts in turn, off the main thread: the first whose verb this herdr has answers; a call after the first
+    /// in an attempt runs only when the one before it worked.
+    private static func runAttempts(_ attempts: [[[String]]], command: HerdrCommand, environment: [String: String],
+                                    deadline: Date) -> (HerdrResult, String?) {
+        var verb: String?
+        for attempt in attempts {
+            var said: HerdrResult = .cut
+            for call in attempt {
+                verb = HerdrCommand.verb(of: call)
+                let left = deadline.timeIntervalSinceNow
+                guard left >= 1 else { return (.unreachable("herdr did not answer in time."), verb) }
+                let ran = LocalHerdr.run(call, environment: environment, timeout: left)
+                if let failure = ran.failure { return (.unreachable(failure), verb) }
+                said = ran.output.count > HerdrResult.outputCap ? .cut
+                    : HerdrResult.make(exit: ran.status, out: ran.output, err: ran.errors, firstVerb: command.verb, text: command.readsText)
+                if ran.status != 0 { break } // the call after it in this attempt never runs
+            }
+            if case .unsupported = said { continue }
+            return (said, verb)
+        }
+        return (.unsupported(command.verb), verb)
     }
 
     /// Moves herdr's view to `pane` in `tab` (the agent's own herdr tab, as `tab focus` for an older herdr).
