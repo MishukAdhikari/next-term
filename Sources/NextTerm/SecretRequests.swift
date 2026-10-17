@@ -25,26 +25,8 @@ final class SecretRequests {
     /// How long a pending card, and a tool request with no answer, waits before it is dropped (the self-test shortens it).
     static var dropAfter: Duration = .seconds(30 * 60)
 
-    /// How long an approval lasts, as the panel's "How long" offers it.
-    enum How: Equatable {
-        case once, fifteenMinutes, untilLock
-
-        var approval: SecretAudit.Approval {
-            switch self {
-            case .once: return .once
-            case .fifteenMinutes: return .fifteenMinutes
-            case .untilLock: return .untilLock
-            }
-        }
-
-        var grantKind: SecretGrant.Kind? {
-            switch self {
-            case .once: return nil
-            case .fifteenMinutes: return .fifteenMinutes
-            case .untilLock: return .untilLock
-            }
-        }
-    }
+    /// How long an approval lasts, as the panel's "How long" offers it (`SecretApprovalChoices` picks which).
+    typealias How = SecretApprovalChoice
 
     /// Next Term's facts about who asks, as the panel's Asked by rows show them. None is the asker's own word but the
     /// agent's name, which is shown as "going by its program's name".
@@ -214,6 +196,10 @@ final class SecretRequests {
         observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.startedOver, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { SecretRequests.shared.vaultStartedOver() }
         })
+        // "Ask for Touch ID every time it's used" ticked, here or by another copy of Next Term: its grants end.
+        observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.changed, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { SecretRequests.shared.endGrantsAskingEveryUse() }
+        })
     }
 
     // MARK: asking
@@ -228,6 +214,7 @@ final class SecretRequests {
         SecretsStore.shared.reloadIfChanged()
         let now = now()
         expire(at: now)
+        endGrantsAskingEveryUse() // a key that asks every time is never answered by a lasting grant
         if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
             limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
             expire(at: now) // a one-use grant is over now, and its values go now
@@ -409,6 +396,10 @@ final class SecretRequests {
             runsAsShell: !request.isWrapper && request.isUse, folder: request.folder, warnings: request.warnings,
             agentWords: request.agentWords, askedBy: request.askedBy, argv: request.argv, isWrapper: request.isWrapper,
             isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
+        let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: store.index)
+        content.choices = SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote,
+                                                        asksEveryUse: !asking.isEmpty)
+        content.askingEveryUse = request.isRemote ? [] : asking
         if !request.isUse {
             content.offersHowLong = false
             content.allowTitle = "Save"
@@ -421,7 +412,8 @@ final class SecretRequests {
     private func allow(_ request: Request, how: How) {
         guard !request.isAnswered, let panel = request.panel else { return }
         if case .store(let value) = request.kind { return saveStored(request, value: value, panel: panel) }
-        let how: How = request.isRemote ? .once : how
+        // A key's box ticked since the panel showed takes the lasting choices away.
+        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
         panel.setBusy(true)
         let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
         let facts = SecretsStore.Facts(who: Self.who(request), command: request.command, folder: request.folder, approval: how.approval)
@@ -442,6 +434,8 @@ final class SecretRequests {
     private func allowed(_ request: Request, how: How, values: [String: SecretBytes]) {
         // "Allow once" goes to one caller. One that left in the moment before, its leaving not heard here yet, is let go
         // now as its leaving would have been: the use passes to the next caller, or a wrapper's one-use grant is made.
+        // Asked again of the vault this unlock checked: a key ticked to ask every time gets no lasting grant.
+        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
         let now = now()
@@ -485,7 +479,7 @@ final class SecretRequests {
         } else {
             let purpose = StoredSecretName.purpose(fromReason: request.agentWords ?? "")
             action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value,
-                          remindDays: SecretReminderRecords.newKeyDays)
+                          remindDays: SecretReminderRecords.newKeyDays, asksEveryUse: SecretNewKeyDefaults.asksEveryUse)
         }
         let reason = stored == nil ? SecretReason.save(name) : SecretReason.replaceWithAgentsKey(name)
         let facts = SecretsStore.Facts(who: Self.who(request))
@@ -514,7 +508,8 @@ final class SecretRequests {
             action = .replace(name: form.name, value: form.value, writeOnly: form.writeOnly, origin: .request)
         } else {
             action = .add(name: form.name, purpose: form.purpose, purposeBy: form.purposeBy, origin: .request, writeOnly: form.writeOnly,
-                          value: form.value, link: form.link, linkFrom: form.linkFrom, remindDays: SecretReminderRecords.newKeyDays)
+                          value: form.value, link: form.link, linkFrom: form.linkFrom, remindDays: SecretReminderRecords.newKeyDays,
+                          asksEveryUse: SecretNewKeyDefaults.asksEveryUse)
         }
         let reason = stored == nil ? SecretReason.save(form.name) : SecretReason.replace(form.name)
         let pasted = window.pastedAt
@@ -783,6 +778,19 @@ final class SecretRequests {
 
     func revoke(_ id: String) { end(.revoke(id)) }
     func revokeAll() { end(.revokeAll) }
+
+    /// The "How long" choices `request` gets now: only Allow once while a key it names asks for Touch ID every time.
+    func offered(_ request: Request) -> [How] {
+        let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: SecretsStore.shared.index)
+        return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty)
+    }
+
+    /// Ends the lasting grants that hold a key set to ask for Touch ID every time it's used.
+    func endGrantsAskingEveryUse() {
+        for name in SecretApprovalChoices.askingNames(heldBy: book.grants, in: SecretsStore.shared.index) {
+            end(.askEveryUse(name))
+        }
+    }
 
     func end(_ event: SecretGrantEvent) {
         let ended = book.end(event)

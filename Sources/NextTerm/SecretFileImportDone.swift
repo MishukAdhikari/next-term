@@ -12,6 +12,7 @@ extension SecretFileImportSheet {
             var edited: SourceRow = report.rows[row.index]
             edited.name = row.name
             edited.ticked = row.isTicked
+            edited.neverShow = row.neverShow
             return edited
         }
     }
@@ -90,6 +91,8 @@ extension SecretFileImportSheet {
             let back: String = ". Undo can\u{2019}t put back what " + (one ? "it" : "they") + " held."
             text += "\n\n" + lead + replaced.joined(separator: ", ") + back
         }
+        let neverShown: [String] = planned.filter(\.writeOnly).map(\.name)
+        if !neverShown.isEmpty { text += "\n\n" + SecretImportSheet.neverShownNote(neverShown, inConfigs: false) }
         let undo: String = "For 30 days, Undo in Recent imports deletes the keys this copies in."
         guard let file else { return text + "\n\n" + undo }
         return text + "\n\n" + "\(file) stays as it is. " + undo

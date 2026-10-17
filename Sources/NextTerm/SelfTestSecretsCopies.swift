@@ -100,7 +100,7 @@ extension SelfTest {
                                           value: SecretBytes(utf8: secretsValue("copy-keep"))))
         let withoutKey = try? store.folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
         _ = try? await store.perform(.add(name: "COPY_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
-                                          value: SecretBytes(utf8: secretsValue("copy"))))
+                                          value: SecretBytes(utf8: secretsValue("copy")), asksEveryUse: false))
         let first = secretsRequest(asker: "wrapper:selftest-other-copy", command: ["node", "copy.js"], names: ["COPY_KEY"], tab: "tab 3")
         requests.ask(first) { _ in }
         first.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)

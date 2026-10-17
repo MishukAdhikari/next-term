@@ -45,14 +45,20 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let nameField: NSTextField
         let nameNote: NSTextField
         let result: NSTextField
+        /// "Never show": the key is saved write-only. Ticked as Settings › Secrets' New keys default says.
+        let neverShowBox: NSButton
 
-        init(group: SecretImport.Group, box: NSButton, nameField: NSTextField, nameNote: NSTextField, result: NSTextField) {
+        init(group: SecretImport.Group, box: NSButton, nameField: NSTextField, nameNote: NSTextField, result: NSTextField,
+             neverShowBox: NSButton) {
             self.group = group
             self.box = box
             self.nameField = nameField
             self.nameNote = nameNote
             self.result = result
+            self.neverShowBox = neverShowBox
         }
+
+        var neverShow: Bool { neverShowBox.state == .on }
 
         var name: String { SecretRequestWindow.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
     }
@@ -249,7 +255,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let nameNote = Self.small("", color: .systemOrange)
         let kind = SecretApprovalPanel.label("\(group.kind), ending …\(group.findings[0].lastFour)", size: 11)
         kind.textColor = .secondaryLabelColor
-        let line = NSStackView(views: [box, nameField, kind])
+        let neverShowBox = NSButton(checkboxWithTitle: Self.neverShowTitle, target: nil, action: nil)
+        neverShowBox.state = SecretNewKeyDefaults.neverShow ? .on : .off
+        neverShowBox.toolTip = Self.neverShowHelp
+        neverShowBox.setAccessibilityLabel("Never show \(group.name)")
+        let line = NSStackView(views: [box, nameField, neverShowBox, kind])
         line.spacing = 8
         var views: [NSView] = [line, nameNote]
         if let summary = group.summary { views.append(Self.small(summary, color: .labelColor)) }
@@ -264,7 +274,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         stack.alignment = .leading
         stack.spacing = 3
         rows.addArrangedSubview(stack)
-        groupRows.append(GroupRow(group: group, box: box, nameField: nameField, nameNote: nameNote, result: result))
+        groupRows.append(GroupRow(group: group, box: box, nameField: nameField, nameNote: nameNote, result: result,
+                                  neverShowBox: neverShowBox))
     }
 
     /// "Codex, ~/.codex/config.toml, “github”, GITHUB_TOKEN", the server's name cut at 60 characters.
@@ -328,6 +339,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             row.nameNote.stringValue = note ?? ""
             row.nameNote.textColor = problem == nil ? .secondaryLabelColor : .systemOrange
             row.nameNote.isHidden = note == nil
+            // A key an earlier move stored is used as it is.
+            row.neverShowBox.isEnabled = !isBusy && !reusesStored(row)
             if row.box.state == .on {
                 any = true
                 if problem != nil { ok = false }
@@ -362,6 +375,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let alert = NSAlert()
         alert.messageText = "Move \(count) \(count == 1 ? "key" : "keys") into Secrets?"
         alert.informativeText = listed + "\n\n" + Self.keepsCopies + "\n\n" + Self.startsAfter
+        let neverShown: [String] = groupRows.filter { $0.box.state == .on && $0.neverShow && !reusesStored($0) }.map(\.name)
+        if !neverShown.isEmpty { alert.informativeText += "\n\n" + Self.neverShownNote(neverShown) }
         alert.addButton(withTitle: "Move Keys")
         alert.addButton(withTitle: "Cancel")
         confirmAlert = alert
@@ -397,8 +412,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
                 return self.showResults(edits: [], moved: [])
             }
             let movedNames = Set(edits.flatMap(\.names))
+            let ticked: [GroupRow] = self.groupRows.filter { $0.box.state == .on && $0.neverShow }
+            let neverShown: Set<String> = Set(ticked.map(\.name))
             let keys = moves.filter { movedNames.contains($0.name) }.map { move in
-                SecretsStore.ImportKey(name: move.name, purpose: Self.purpose(move), value: move.findings[0].value)
+                SecretsStore.ImportKey(name: move.name, purpose: Self.purpose(move), value: move.findings[0].value,
+                                       writeOnly: neverShown.contains(move.name))
             }
             var kept: [String: [SecretBytes]] = [:]
             for edit in edits { for backup in edit.backups { kept[backup.id] = backup.keptValues } }

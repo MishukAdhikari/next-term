@@ -1,28 +1,34 @@
 import AppKit
 import NextTermCore
 
-/// One row of Import from a File: its tick, its name (editable, as agents will see it), its kind, its last four
-/// characters, where it was found, its page's host and its note. The value itself is never on screen.
+/// One row of Import from a File: its tick, its name (editable, as agents will see it), "Never show", its kind, its last
+/// four characters, where it was found, its page's host and its note. The value itself is never on screen.
 @MainActor
 final class FileImportRow {
-    /// The columns' widths, the header's and every row's alike: tick, name, kind, last 4, found at, page, note.
-    static let widths: [CGFloat] = [18, 170, 96, 44, 76, 108, 150]
-    static let headers: [String] = ["", SecretFileImportSheet.nameHeader, "Kind", "Last 4", "Found at", "Page", "Note"]
+    /// The columns' widths, the header's and every row's alike: tick, name, never show, kind, last 4, found at, page,
+    /// note. They add up to what they did before "Never show" came.
+    static let widths: [CGFloat] = [18, 150, 66, 96, 44, 76, 92, 114]
+    static let headers: [String] = ["", SecretFileImportSheet.nameHeader, neverShowHeader, "Kind", "Last 4", "Found at", "Page",
+                                    "Note"]
 
     /// The row's place in the report.
     let index: Int
     let box: NSButton
     let nameField: NSTextField
+    /// "Never show": the key is saved write-only. Ticked as Settings › Secrets' New keys default says.
+    let neverShowBox: NSButton
     let noteLabel: NSTextField
     let view: NSStackView
     /// Whether its name was a stored key's when last checked: typing a stored key's name unticks it, so a key is
     /// replaced only by a tick made by hand.
     var wasStored: Bool
 
-    init(index: Int, box: NSButton, nameField: NSTextField, noteLabel: NSTextField, view: NSStackView, wasStored: Bool) {
+    init(index: Int, box: NSButton, nameField: NSTextField, neverShowBox: NSButton, noteLabel: NSTextField, view: NSStackView,
+         wasStored: Bool) {
         self.index = index
         self.box = box
         self.nameField = nameField
+        self.neverShowBox = neverShowBox
         self.noteLabel = noteLabel
         self.view = view
         self.wasStored = wasStored
@@ -30,6 +36,7 @@ final class FileImportRow {
 
     var name: String { SecretRequestWindow.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
     var isTicked: Bool { box.state == .on }
+    var neverShow: Bool { neverShowBox.state == .on }
 
     /// The header row: the column titles over the same widths.
     static func header() -> NSView {
@@ -114,12 +121,13 @@ extension SecretFileImportSheet {
         let place: NSTextField = FileImportRow.cell(placeText, wraps: false, color: .secondaryLabelColor)
         if !row.alsoAt.isEmpty { place.toolTip = ([row.place] + row.alsoAt).joined(separator: ", ") }
         let noteLabel: NSTextField = FileImportRow.cell("", color: .secondaryLabelColor)
-        let cells: [NSView] = [box, nameField, FileImportRow.cell(row.kind),
+        let neverShowBox: NSButton = FileImportRow.neverShowBox(for: row)
+        let cells: [NSView] = [box, nameField, neverShowBox, FileImportRow.cell(row.kind),
                                FileImportRow.cell(FileImportRow.lastFourText(row), mono: true), place, pageCell, noteLabel]
         let line: NSStackView = FileImportRow.line(cells)
         rowsStack.addArrangedSubview(line)
-        let shown = FileImportRow(index: index, box: box, nameField: nameField, noteLabel: noteLabel, view: line,
-                                  wasStored: stored.contains(row.name))
+        let shown = FileImportRow(index: index, box: box, nameField: nameField, neverShowBox: neverShowBox, noteLabel: noteLabel,
+                                  view: line, wasStored: stored.contains(row.name))
         rows.append(shown)
     }
 

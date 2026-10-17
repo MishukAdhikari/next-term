@@ -40,6 +40,10 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         /// store_secret has no "How long", and saves instead of allowing.
         var offersHowLong = true
         var allowTitle = "Allow"
+        /// "How long"'s choices, in order (`SecretApprovalChoices.offered`).
+        var choices: [SecretRequests.How] = [.once, .fifteenMinutes]
+        /// The keys set to ask for Touch ID every time they're used, which leave only Allow once: said under it.
+        var askingEveryUse: [String] = []
     }
 
     static let fifteenMinutesNote = "Only this agent, these keys, this exact command and folder. Anything different asks again."
@@ -196,9 +200,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         name.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
         var parts: [NSView] = [name]
         if key.writeOnly {
-            let badge = Self.label("Write-only", size: 10, weight: .medium)
+            let badge = Self.label(SecretNewKeyDefaults.neverShownHelp, size: 10, weight: .medium)
             badge.textColor = .secondaryLabelColor
-            badge.setAccessibilityLabel("Write-only")
+            badge.setAccessibilityLabel(SecretNewKeyDefaults.neverShownHelp)
             parts.append(badge)
         }
         let line = NSStackView(views: parts)
@@ -326,16 +330,17 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
                 views.append(label)
             }
         }
-        radio("Allow once", .once, note: nil)
-        if !content.isRemote {
+        let asking: String? = content.askingEveryUse.isEmpty ? nil : Self.askingNote(content.askingEveryUse)
+        radio("Allow once", .once, note: asking)
+        if content.choices.contains(.fifteenMinutes) {
             let note = content.isWrapper ? Self.fifteenMinutesNote + " " + Self.wrapperRestartNote : Self.fifteenMinutesNote
             radio("Allow for 15 minutes", .fifteenMinutes, note: note)
-            if content.isWrapper {
-                let agent = content.askedBy.agent ?? "this program"
-                radio("Allow this command until the Mac locks", .untilLock,
-                      note: "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
-                        + "or Next Term quits. Revoke it in Settings › Secrets.")
-            }
+        }
+        if content.choices.contains(.untilLock) {
+            let agent = content.askedBy.agent ?? "this program"
+            radio("Allow this command until the Mac locks", .untilLock,
+                  note: "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
+                    + "or Next Term quits. Revoke it in Settings › Secrets.")
         }
         durationChoice[.once]?.state = .on
         let heading = Self.label("How long", size: 12, weight: .semibold)
@@ -395,7 +400,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         isBusy = busy
         for button in [allowButton, declineButton, stopButton, pauseButton] { button?.isEnabled = !busy }
         for button in durationChoice.values { button.isEnabled = !busy }
-        if !content.isRemote, cardLabel.isHidden == false { durationChoice[.once]?.isEnabled = false }
+        if oncePausesWhenGone, cardLabel.isHidden == false { durationChoice[.once]?.isEnabled = false }
         window?.standardWindowButton(.closeButton)?.isEnabled = !busy
         setStatus(busy ? "Waiting for Touch ID or your password…" : "")
     }
@@ -405,13 +410,27 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         setStatus("Not approved.")
     }
 
-    /// Its wrapper stopped waiting: a pending card, "Allow for 15 minutes" chosen and "Allow once" off.
+    /// Its wrapper stopped waiting: a pending card, "Allow for 15 minutes" chosen and "Allow once" off. With only Allow
+    /// once offered (a key that asks every time), it stays on: its one use waits 2 minutes for the restart.
     func markGone() {
         cardLabel.stringValue = Self.cardText
         cardLabel.isHidden = false
-        if durationChoice[.fifteenMinutes] != nil { select(.fifteenMinutes) }
-        durationChoice[.once]?.isEnabled = false
+        if oncePausesWhenGone {
+            select(.fifteenMinutes)
+            durationChoice[.once]?.isEnabled = false
+        }
         announce(Self.cardText)
+    }
+
+    /// Whether a pending card turns Allow once off: only when Allow for 15 minutes is there to take its place.
+    private var oncePausesWhenGone: Bool { durationChoice[.fifteenMinutes] != nil }
+
+    /// "GITHUB_TOKEN asks for Touch ID every time it’s used, so only Allow once is offered."
+    static func askingNote(_ names: [String]) -> String {
+        let one: Bool = names.count == 1
+        let verb: String = one ? "asks" : "ask"
+        let used: String = one ? "it\u{2019}s used" : "they\u{2019}re used"
+        return "\(SecretRun.keysText(names)) \(verb) for Touch ID every time \(used), so only Allow once is offered."
     }
 
     /// An identical request took the card over: its wrapper waits again.

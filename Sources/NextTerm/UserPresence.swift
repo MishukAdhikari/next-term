@@ -125,7 +125,12 @@ enum SecretReason {
     static func show(_ name: String) -> String { "show \(name)" }
     static func copy(_ name: String) -> String { "copy \(name)" }
     static func delete(_ name: String) -> String { "delete \(name)" }
-    static func makeWriteOnly(_ name: String) -> String { "make \(name) write-only" }
+    /// Never Show This Key…
+    static func makeWriteOnly(_ name: String) -> String { "stop showing \(name)" }
+    /// "Ask for Touch ID every time it's used", ticked (`asks`) or unticked.
+    static func changeAsking(_ name: String, asks: Bool) -> String {
+        asks ? "ask every time \(name) is used" : "stop asking every time \(name) is used"
+    }
     static func changePurpose(_ name: String) -> String { "change what \(name) is for" }
     static func rename(_ name: String, to newName: String) -> String { "rename \(name) to \(newName)" }
     static func changeLink(_ name: String) -> String { "change \(name)’s page" }

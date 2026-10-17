@@ -66,6 +66,8 @@ final class SecretsStore {
         var link: String?
         var linkFrom: SecretVault.LinkFrom?
         var remindDays: Int?
+        /// "Ask for Touch ID every time it's used".
+        var asksEveryUse: Bool = true
     }
 
     /// What Edit… changes. Nil leaves a fact as it is; for `link` and `remindDays`, `.some(nil)` clears it.
@@ -77,10 +79,12 @@ final class SecretsStore {
         var link: String??
         var linkFrom: SecretVault.LinkFrom?
         var remindDays: Int??
+        /// "Ask for Touch ID every time it's used", ticked or unticked.
+        var asksEveryUse: Bool? = nil
 
-        /// How many of what it's for, its page and its reminder this changes.
+        /// How many of what it's for, its page, its reminder and whether it asks every time this changes.
         var factsChanged: Int {
-            let changes: [Bool] = [purpose != nil, link != nil, remindDays != nil]
+            let changes: [Bool] = [purpose != nil, link != nil, remindDays != nil, asksEveryUse != nil]
             return changes.filter { (changed: Bool) -> Bool in changed }.count
         }
     }
@@ -109,15 +113,16 @@ final class SecretsStore {
 
         static func add(name: String, purpose: String, purposeBy: SecretVault.PurposeBy, origin: SecretVault.Origin,
                         writeOnly: Bool, value: SecretBytes, link: String? = nil, linkFrom: SecretVault.LinkFrom? = nil,
-                        remindDays: Int? = nil) -> Action {
+                        remindDays: Int? = nil, asksEveryUse: Bool = true) -> Action {
             .add(NewKey(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value,
-                        link: link, linkFrom: linkFrom, remindDays: remindDays))
+                        link: link, linkFrom: linkFrom, remindDays: remindDays, asksEveryUse: asksEveryUse))
         }
 
         static func edit(name: String, newName: String?, purpose: String?, purposeBy: SecretVault.PurposeBy,
-                         link: String?? = nil, linkFrom: SecretVault.LinkFrom? = nil, remindDays: Int?? = nil) -> Action {
+                         link: String?? = nil, linkFrom: SecretVault.LinkFrom? = nil, remindDays: Int?? = nil,
+                         asksEveryUse: Bool? = nil) -> Action {
             .edit(KeyEdit(name: name, newName: newName, purpose: purpose, purposeBy: purposeBy, link: link, linkFrom: linkFrom,
-                          remindDays: remindDays))
+                          remindDays: remindDays, asksEveryUse: asksEveryUse))
         }
 
         var names: [String] {
@@ -156,6 +161,7 @@ final class SecretsStore {
                 if change.factsChanged > 1 { return SecretReason.changeDetails(name) }
                 if change.link != nil { return SecretReason.changeLink(name) }
                 if change.remindDays != nil { return SecretReason.changeReminder(name) }
+                if let asks = change.asksEveryUse { return SecretReason.changeAsking(name, asks: asks) }
                 return SecretReason.changePurpose(name)
             case .replace(let name, _, _, _): return SecretReason.replace(name)
             case .rotate(let change): return SecretReason.rotate(change.name)
@@ -784,6 +790,8 @@ final class SecretsStore {
         var name: String
         var purpose: String
         var value: SecretBytes
+        /// "Never show": saved write-only.
+        var writeOnly: Bool = false
     }
 
     /// One Touch ID for an import: saves its keys (origin `import`) and seals each backup's kept values under the vault
@@ -795,6 +803,7 @@ final class SecretsStore {
         var stored = Set<String>()
         let names = keys.map(\.name)
         let remindDays: Int? = SecretReminderRecords.newKeyDays // new keys start with Settings › Secrets' reminder
+        let asks: Bool = SecretNewKeyDefaults.asksEveryUse // and its New keys default
         try await run(makes: true, names: names, reason: reason) { vault, maskKey in
             var file: Data?
             stored = [] // the change may run again, on a vault.json read again
@@ -802,8 +811,8 @@ final class SecretsStore {
                 // Stored by an earlier try whose file was left as it was: the same value under that name is used as
                 // it is, not stored twice. Another value, or a key not a move's, is refused, as add refuses it.
                 if try vault.isReusable(key.name, for: key.value) { continue }
-                file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: false, value: key.value,
-                                     remindDays: remindDays, maskKey: maskKey)
+                file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: key.writeOnly,
+                                     value: key.value, remindDays: remindDays, asksEveryUse: asks, maskKey: maskKey)
                 stored.insert(key.name)
             }
             for (id, values) in kept where !values.isEmpty { boxes[id] = try vault.sealBackup(values, id: id) }
@@ -937,10 +946,11 @@ final class SecretsStore {
         case .add(let key):
             return try vault.add(name: key.name, purpose: key.purpose, purposeBy: key.purposeBy, origin: key.origin,
                                  writeOnly: key.writeOnly, value: key.value, link: key.link, linkFrom: key.linkFrom,
-                                 remindDays: key.remindDays, maskKey: maskKey)
+                                 remindDays: key.remindDays, asksEveryUse: key.asksEveryUse, maskKey: maskKey)
         case .edit(let change):
             return try vault.edit(change.name, newName: change.newName, purpose: change.purpose, purposeBy: change.purposeBy,
-                                  link: change.link, linkFrom: change.linkFrom, remindDays: change.remindDays)
+                                  link: change.link, linkFrom: change.linkFrom, remindDays: change.remindDays,
+                                  asksEveryUse: change.asksEveryUse)
         case .replace(let name, let value, let writeOnly, let origin):
             earlier = vault.index.entry(named: name)?.origin
             return try vault.replace(name, value: value, writeOnly: writeOnly, origin: origin, maskKey: maskKey)

@@ -82,7 +82,7 @@ private struct FactsFixture {
     }
 }
 
-private let newMembers = ["link", "linkFrom", "valueSet", "remindDays", "retired"]
+private let newMembers = ["link", "linkFrom", "valueSet", "remindDays", "retired", "lastingApprovals"]
 
 /// A key's link, where it came from, when its value was set, its reminder and its retired marks: optional members of
 /// the entry, so the vault stays format 1 and a vault from before them reads and writes as it did.

@@ -3,15 +3,15 @@ import NextTermCore
 
 /// Add…, Edit… and Replace… in Settings › Secrets and the Secrets window. Save asks for Touch ID or the Mac
 /// password once; cancelling it leaves the sheet as it was. A paste into the value field is cleared from the
-/// clipboard on Save, when nothing was copied since. Add… and Edit… also set "Where it came from" (`SecretLinkField`)
-/// and "Remind me to rotate".
+/// clipboard on Save, when nothing was copied since. Add… and Edit… also set "Where it came from" (`SecretLinkField`),
+/// "Remind me to rotate" and "Ask for Touch ID every time it’s used"; Add… and Replace…, "Never show this key".
 @MainActor
 final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     enum Mode {
         case add
-        /// The name, what it's for, its page and its reminder.
+        /// The name, what it's for, its page, its reminder and whether it asks every time.
         case edit(SecretVault.Entry)
-        /// A new value, and the write-only flag.
+        /// A new value, and "Never show this key".
         case replace(SecretVault.Entry)
 
         var entry: SecretVault.Entry? {
@@ -38,6 +38,8 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     private(set) var linkField: SecretLinkField?
     /// "Remind me to rotate", in Add… and Edit…: each item's tag is its days, 0 for Never.
     private(set) var remindPopUp: NSPopUpButton?
+    /// "Ask for Touch ID every time it’s used", in Add… and Edit….
+    private(set) var asksBox: NSButton?
     /// The pastes that reach the value field (`SecretPasteWatch`), when the sheet has one.
     private var pasteWatch: SecretPasteWatch?
     /// The pasteboard's change count at the last paste into the value field.
@@ -102,6 +104,9 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             // A new key starts with the reminder Settings › Secrets sets for new keys; a stored key shows its own.
             let remind: Int? = entry == nil ? SecretReminderRecords.newKeyDays : entry?.remindDays
             views += [link, reminderRow(remind)]
+            // So does asking every time: an old key, saved before the box, asks.
+            let asks: Bool = entry?.asksEveryUse ?? SecretNewKeyDefaults.asksEveryUse
+            views += asksRows(asks)
         }
         if hasValue {
             valueField.placeholderString = "Paste or type the key"
@@ -110,9 +115,10 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             shortLabel.font = .systemFont(ofSize: 11)
             shortLabel.textColor = .secondaryLabelColor
             shortLabel.isHidden = true
-            writeOnlyBox = NSButton(checkboxWithTitle: "Write-only", target: self, action: #selector(changed))
-            // On in Replace only when the key is write-only already.
-            writeOnlyBox.state = entry?.writeOnly == true ? .on : .off
+            writeOnlyBox = NSButton(checkboxWithTitle: SecretNewKeyDefaults.keyNeverShowTitle, target: self, action: #selector(changed))
+            // In Add…, as Settings › Secrets' New keys default says; in Replace…, on only when the key is never shown already.
+            let neverShow: Bool = entry.map(\.writeOnly) ?? SecretNewKeyDefaults.neverShow
+            writeOnlyBox.state = neverShow ? .on : .off
             let line = SecretApprovalPanel.label(SecretRequestWindow.writeOnlyLine, size: 11)
             line.textColor = .secondaryLabelColor
             views += [Self.caption("Value"), valueField, shortLabel, writeOnlyBox, line]
@@ -171,6 +177,19 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
 
     /// The reminder's choices, in days; 0 is Never.
     static let remindChoices = [0, 30, 90, 180, 365]
+
+    /// "Ask for Touch ID every time it’s used", and what unticking it allows.
+    private func asksRows(_ asks: Bool) -> [NSView] {
+        let box = NSButton(checkboxWithTitle: SecretNewKeyDefaults.keyAsksTitle, target: self, action: #selector(changed))
+        box.state = asks ? .on : .off
+        asksBox = box
+        let help = SecretApprovalPanel.label(SecretNewKeyDefaults.keyAsksHelp, size: 11)
+        help.textColor = .secondaryLabelColor
+        return [box, help]
+    }
+
+    /// Whether the key asks for Touch ID every time it's used, as ticked.
+    var asksEveryUse: Bool { asksBox?.state != .off }
 
     /// The reminder chosen: nil for Never.
     var remindDays: Int? {
@@ -252,16 +271,17 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             let link: String? = linkField.map { $0.text.isEmpty ? nil : $0.text } ?? nil
             return .add(name: name, purpose: purpose, purposeBy: .user, origin: .settings, writeOnly: writeOnlyBox.state == .on,
                         value: SecretBytes(utf8: valueField.stringValue), link: link, linkFrom: link == nil ? nil : linkField?.linkFrom,
-                        remindDays: remindDays)
+                        remindDays: remindDays, asksEveryUse: asksEveryUse)
         case .edit(let entry):
             let newName = name == entry.name ? nil : name
             let newPurpose = purpose == entry.purpose ? nil : purpose
             let change = linkChange()
             let newRemind: Int?? = remindDays == entry.remindDays ? nil : .some(remindDays)
-            let changes: [Bool] = [newName != nil, newPurpose != nil, change.link != nil, newRemind != nil]
+            let newAsks: Bool? = asksEveryUse == entry.asksEveryUse ? nil : asksEveryUse
+            let changes: [Bool] = [newName != nil, newPurpose != nil, change.link != nil, newRemind != nil, newAsks != nil]
             guard changes.contains(true) else { return nil }
             return .edit(name: entry.name, newName: newName, purpose: newPurpose, purposeBy: .user, link: change.link,
-                         linkFrom: change.from, remindDays: newRemind)
+                         linkFrom: change.from, remindDays: newRemind, asksEveryUse: newAsks)
         case .replace(let entry):
             return .replace(name: entry.name, value: SecretBytes(utf8: valueField.stringValue), writeOnly: writeOnlyBox.state == .on,
                             origin: .settings)
@@ -311,6 +331,7 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         isBusy = busy
         for field in [nameField, purposeField, valueField] { field.isEnabled = !busy }
         writeOnlyBox?.isEnabled = !busy
+        asksBox?.isEnabled = !busy
         linkField?.setEnabled(!busy)
         remindPopUp?.isEnabled = !busy
         cancelButton.isEnabled = !busy

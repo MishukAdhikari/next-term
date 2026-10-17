@@ -353,7 +353,7 @@ public final class SecretVault {
             case .valueTooLong(let name): return "\(name) is longer than 16 KB."
             case .badValue(let name): return "\(name) is empty, or holds a line break or a NUL character, or is not text."
             case .badPurpose: return "What a key is for is one line of at most \(SecretVault.maxPurposeLength) characters."
-            case .writeOnly(let name): return "\(name) is write-only: Next Term never shows it again."
+            case .writeOnly(let name): return "Next Term never shows \(name): it is set to “Never show this key”."
             case .full:
                 let megabytes = SecretVault.maxWriteSize / (1024 * 1024)
                 return "Secrets is full, so nothing was saved: its file can’t grow past \(megabytes) MB. Delete keys you no longer "
@@ -437,6 +437,13 @@ public final class SecretVault {
         /// Remind the user to rotate the key this many days after `lastSet`; nil is never.
         public internal(set) var remindDays: Int? = nil
         public internal(set) var retired: Retired? = nil
+        /// True once the user unticked "Ask for Touch ID every time it's used": an approval may then outlast one use
+        /// (Allow for 15 minutes, until the Mac locks). Absent on every key that asks, so a key saved before the box
+        /// reads as asking every time, the safe default.
+        public internal(set) var lastingApprovals: Bool? = nil
+
+        /// "Ask for Touch ID every time it's used": on unless the user unticked it for this key.
+        public var asksEveryUse: Bool { lastingApprovals != true }
 
         /// Added by the user: in Settings, through `request_secret` or the import. Not by an agent's `store_secret`.
         public var addedByUser: Bool { origin != .agent }
@@ -613,10 +620,11 @@ public final class SecretVault {
     ///
     /// `link` is kept as `SecretLink.check` gives it, and never when it holds the value (`badLink`); the app checks it
     /// against the stored keys first. `linkFrom` says where it came from (`user` unless given), and goes with it: no
-    /// link, or an empty one, keeps neither. `remindDays` is in `remindRange` (`badReminder`).
+    /// link, or an empty one, keeps neither. `remindDays` is in `remindRange` (`badReminder`). `asksEveryUse` is
+    /// "Ask for Touch ID every time it's used", on unless the caller says otherwise.
     public func add(name: String, purpose: String, purposeBy: PurposeBy, origin: Origin, writeOnly: Bool,
                     value: SecretBytes, link: String? = nil, linkFrom: LinkFrom? = nil, remindDays: Int? = nil,
-                    maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
+                    asksEveryUse: Bool = true, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         guard StoredSecretName.isValid(name) else { throw Failure.badName }
         guard index.entry(named: name) == nil else { throw Failure.nameTaken(name) }
@@ -635,19 +643,22 @@ public final class SecretVault {
         entry.linkFrom = source?.from
         entry.valueSet = date
         entry.remindDays = remindDays
+        entry.lastingApprovals = asksEveryUse ? nil : true
         return try written(key, now: now) { index.entries.append(entry) }
     }
 
-    /// Renames a key, changes what it is for, its link, its reminder, or any of them. A new name seals the value again,
-    /// since the name is in its seal; the others need no new seal. For `link` and `remindDays`, nil leaves them as they
-    /// are and `.some(nil)` clears them (so does an empty link); a new link is checked as `add` checks one, with
-    /// `linkFrom` (`user` unless given). The same link saved again with no `linkFrom`, as the Edit sheet sends its
-    /// field each time, keeps where it came from. When the value was set stays as it is.
+    /// Renames a key, changes what it is for, its link, its reminder, whether it asks every time, or any of them. A new
+    /// name seals the value again, since the name is in its seal; the others need no new seal. For `link` and
+    /// `remindDays`, nil leaves them as they are and `.some(nil)` clears them (so does an empty link); a new link is
+    /// checked as `add` checks one, with `linkFrom` (`user` unless given). The same link saved again with no `linkFrom`,
+    /// as the Edit sheet sends its field each time, keeps where it came from. `asksEveryUse`, nil leaves it. When the
+    /// value was set stays as it is.
     public func edit(_ name: String, newName: String? = nil, purpose: String? = nil, purposeBy: PurposeBy? = nil,
-                     link: String?? = nil, linkFrom: LinkFrom? = nil, remindDays: Int?? = nil,
+                     link: String?? = nil, linkFrom: LinkFrom? = nil, remindDays: Int?? = nil, asksEveryUse: Bool? = nil,
                      now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
+        if let asksEveryUse { entry.lastingApprovals = asksEveryUse ? nil : true }
         if let link {
             let source = try Self.checkedLink(link, from: linkFrom, value: nil)
             let same: Bool = linkFrom == nil && source != nil && source?.link == entry.link

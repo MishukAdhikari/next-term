@@ -2,7 +2,7 @@ import AppKit
 import NextTermCore
 
 /// The list of stored keys, shared by Settings › Secrets and the Secrets window: what guards them, each key with what
-/// it's for, its page's host, its write-only badge, when its value was set and its last use; the key buttons; the
+/// it's for, its page's host, a lock for one never shown, when its value was set and its last use; the key buttons; the
 /// approvals in force; what is paused; and the limits, said plainly. Each change asks for Touch ID or the Mac password
 /// once.
 @MainActor
@@ -39,11 +39,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         + "keys are its own, and no key is released. Start Over to make a new vault."
     static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
-    static let writeOnlyLine = "Write-only: Next Term never shows this key again. Replace it to change it."
+    static let writeOnlyLine = "Never shown: Next Term never shows or copies this key. Replace it to change it."
     static let emptyLine = "No keys yet. Add one, or import them from a file or your MCP configs."
     static let footer = "A command you allow gets the key and can send it anywhere. While it runs, other programs and agents running as "
         + "you can read it. Masking hides stored keys in what agents read through Next Term, but not keys under 12 characters or keys a "
-        + "program changes before printing. Write-only means Next Term never shows a key again."
+        + "program changes before printing. A key set to \u{201C}Never show this key\u{201D} is never shown or copied, even to you."
     static let revokeHelp = "Stops new starts. A server already running keeps the key until it quits."
 
     private let content = NSStackView()
@@ -62,7 +62,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var deleteButton = NSButton(title: "Delete…", target: nil, action: nil)
     private(set) var revealButton = NSButton(title: "Reveal", target: nil, action: nil)
     private(set) var copyButton = NSButton(title: "Copy", target: nil, action: nil)
-    private(set) var writeOnlyButton = NSButton(title: "Make Write-Only…", target: nil, action: nil)
+    /// Never Show This Key…: in the row of value buttons, and in a key's right-click menu, which takes its title.
+    private(set) var writeOnlyButton = NSButton(title: SecretsView.neverShowTitle, target: nil, action: nil)
     /// Import From: A File… and MCP Configs….
     private(set) var importMenuButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let allowedBox = NSStackView()
@@ -74,10 +75,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     let importsBox = NSStackView()
     /// "Remind me in Notification Center" and the reminder new keys start with.
     private(set) var reminderSettings = SecretReminderSettingsView()
+    /// New keys: "Never show their values" and "Ask for Touch ID every time they’re used".
+    private(set) var newKeySettings = SecretNewKeySettingsView()
     private var resumeActions: [ObjectIdentifier: () -> Void] = [:]
 
     private(set) var entries: [SecretVault.Entry] = []
-    /// The confirm on screen (Make Write-Only…, Delete…, Start Over…, the Secrets menu's Pause and Revoke All), for the
+    /// The confirm on screen (Never Show This Key…, Delete…, Start Over…, the Secrets menu's Pause and Revoke All), for the
     /// self-test.
     private(set) var alert: NSAlert?
     private(set) var sheet: SecretEditSheet?
@@ -218,10 +221,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let docs = NSButton(title: "What Secrets protects, and what it doesn't", target: self, action: #selector(openDocs))
         docs.bezelStyle = .inline
         let rows: [NSView] = [statusLabel, startOverButton, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons,
-                              valueButtons, actionLabel, reminderSettings, allowedBox, importsBox, pausedBox, footer, docs]
+                              valueButtons, actionLabel, newKeySettings, reminderSettings, allowedBox, importsBox, pausedBox, footer,
+                              docs]
         for row in rows { content.addArrangedSubview(row) }
-        for row in [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons, actionLabel,
-                    reminderSettings, allowedBox, importsBox, pausedBox, footer] {
+        let wide: [NSView] = [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons,
+                              actionLabel, newKeySettings, reminderSettings, allowedBox, importsBox, pausedBox, footer]
+        for row in wide {
             row.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32).isActive = true
         }
         // At least six rows high.
@@ -243,7 +248,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static let columns: [Column] = [Column(id: "name", title: "Name", width: 84, minWidth: 64),
                                     Column(id: "purpose", title: "What it's for", width: 70, minWidth: 44),
                                     Column(id: "page", title: "Page", width: 78, minWidth: 48),
-                                    Column(id: "writeOnly", title: "Write-only", width: 58, minWidth: 56, maxWidth: 72),
+                                    Column(id: "writeOnly", title: "", width: 20, minWidth: 18, maxWidth: 28),
                                     Column(id: "rotated", title: "Rotated", width: 66, minWidth: 48),
                                     Column(id: "used", title: "Last used", width: 64, minWidth: 48)]
 
@@ -255,6 +260,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             column.maxWidth = spec.maxWidth
             column.width = spec.width
             column.resizingMask = [.autoresizingMask, .userResizingMask]
+            if spec.id == "writeOnly" { column.headerToolTip = SecretNewKeyDefaults.neverShownHelp }
             table.addTableColumn(column)
         }
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -360,9 +366,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         case "page":
             Self.fillPageCell(cell, SecretsStore.shared.pageLink(of: entry.name))
         case "writeOnly":
-            cell.stringValue = entry.writeOnly ? "Write-only" : ""
-            cell.textColor = .secondaryLabelColor
-            if entry.writeOnly { cell.setAccessibilityLabel("Write-only") }
+            return Self.neverShownCell(entry)
         case "rotated":
             Self.fillRotatedCell(cell, entry, now: Date())
         default:
@@ -696,11 +700,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     @objc func makeWriteOnly() {
         guard let entry = selectedEntry, !entry.writeOnly else { return }
-        let alert = NSAlert()
-        alert.messageText = "Make \(entry.name) write-only?"
-        alert.informativeText = "You can't show or copy it again. To change it, replace it with a new value."
-        alert.addButton(withTitle: "Make Write-Only")
-        alert.addButton(withTitle: "Cancel")
+        let alert = Self.neverShowAlert(entry.name)
         confirm(alert) { [weak self] in self?.run(.makeWriteOnly(name: entry.name)) { _ in } }
     }
 
@@ -831,7 +831,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let held = backups.filter { !$0.names.contains(where: writeOnly.contains) }
         let refusals = backups.filter { $0.names.contains(where: writeOnly.contains) }.map { backup -> String in
             let name = backup.names.first(where: writeOnly.contains) ?? ""
-            return "\(name) is write-only: Next Term never shows it again, so it left the “\(backup.location.server)” entry in "
+            return "\(name) is never shown: Next Term never shows it, so it left the “\(backup.location.server)” entry in "
                 + "\(SecretImportSheet.file(backup.path)) as it is."
         }
         guard !held.isEmpty else { return say(refusals.joined(separator: " ")) }

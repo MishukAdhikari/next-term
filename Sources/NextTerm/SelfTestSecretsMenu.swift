@@ -176,7 +176,7 @@ extension SelfTest {
         let store = SecretsStore.shared
         let menu = SecretsMenu.shared
         _ = try? await store.perform(.add(name: "MENU_KEY", purpose: "the menu checks", purposeBy: .user, origin: .settings,
-                                          writeOnly: false, value: SecretBytes(utf8: secretsValue("menu-"))))
+                                          writeOnly: false, value: SecretBytes(utf8: secretsValue("menu-")), asksEveryUse: false))
         let vaultPath: String = store.folder.path(SecretFolder.vaultName)
         guard let original = FileManager.default.contents(atPath: vaultPath) else {
             return check(false, "secrets menu: a vault for the broken checks")

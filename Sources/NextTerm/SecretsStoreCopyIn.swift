@@ -14,6 +14,7 @@ extension SecretsStore {
                        reason: String, asked: SecretImportAsk? = nil) async throws -> (record: SecretCopyIn.Record, undoSaved: Bool) {
         let names: [String] = planned.map(\.name)
         let remindDays: Int? = SecretReminderRecords.newKeyDays // new keys start with Settings › Secrets' reminder
+        let asks: Bool = SecretNewKeyDefaults.asksEveryUse // and its New keys default
         let id: String = UUID().uuidString.lowercased()
         let who: String? = asked?.askedBy
         let command: String? = asked?.command
@@ -22,7 +23,7 @@ extension SecretsStore {
             (vault: SecretVault, maskKey: SymmetricKey?) -> Data? in
             // The change may run again, on a vault.json read again: the record is the last run's.
             let done = try SecretCopyIn.apply(planned, to: vault, source: source, format: format, remindDays: remindDays,
-                                              maskKey: maskKey, id: id)
+                                              asksEveryUse: asks, maskKey: maskKey, id: id)
             box.record = done.record
             return done.file
         } line: { () -> SecretAudit.Line in

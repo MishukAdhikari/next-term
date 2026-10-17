@@ -18,6 +18,8 @@ public enum SecretCopyIn {
         public let linkFrom: SecretVault.LinkFrom?
         /// A key of this name is stored: it gets the new value and keeps what it's for, and its page when it has one.
         public let replaces: Bool
+        /// "Never show": a new key is saved write-only, and so is a key it replaces, which stays write-only either way.
+        public internal(set) var writeOnly: Bool = false
     }
 
     /// Why ticked rows can't be saved: the preview checks names as they are typed, so this is a last check.
@@ -40,7 +42,7 @@ public enum SecretCopyIn {
             if let text = link, holdsKey(text) { link = nil }
             let from: SecretVault.LinkFrom? = link == nil ? nil : linkFrom(row.link)
             planned.append(Planned(name: row.name, value: row.value, purpose: purpose, link: link, linkFrom: from,
-                                   replaces: stored.contains(row.name)))
+                                   replaces: stored.contains(row.name), writeOnly: row.neverShow))
         }
         return planned
     }
@@ -54,20 +56,23 @@ public enum SecretCopyIn {
         }
     }
 
-    /// The planned keys saved in `vault`, in one change: each new key with origin `import`, its page, what it's for and
-    /// `remindDays` (the reminder new keys start with); each key it replaces with its new value and origin `import`.
+    /// The planned keys saved in `vault`, in one change: each new key with origin `import`, its page, what it's for,
+    /// `remindDays` (the reminder new keys start with) and `asksEveryUse` (whether they ask for Touch ID every time);
+    /// each key it replaces with its new value and origin `import`, never shown when it was or the row says so.
     /// The vault may have changed since the plan: a key planned as new that is stored now is refused (`nameTaken`),
     /// since the confirm never named it, and nothing is saved; one planned as a replace that is gone now is added.
     /// Returns the file to write (nil when nothing changed) and the record for Undo, under `id`.
     public static func apply(_ planned: [Planned], to vault: SecretVault, source: String, format: SecretSources.Format,
-                             remindDays: Int?, maskKey: SymmetricKey?, id: String = UUID().uuidString.lowercased(),
+                             remindDays: Int?, asksEveryUse: Bool = true, maskKey: SymmetricKey?,
+                             id: String = UUID().uuidString.lowercased(),
                              now: Date = Date()) throws -> (file: Data?, record: Record) {
         var added: [Record.Added] = []
         var replaced: [String] = []
         let save: () throws -> Void = { () throws -> Void in
             for key in planned {
                 if key.replaces, let entry = vault.index.entry(named: key.name) {
-                    _ = try vault.replace(key.name, value: key.value, writeOnly: entry.writeOnly, origin: .import,
+                    let writeOnly: Bool = entry.writeOnly || key.writeOnly
+                    _ = try vault.replace(key.name, value: key.value, writeOnly: writeOnly, origin: .import,
                                           maskKey: maskKey, now: now)
                     if entry.link == nil, let link = key.link {
                         _ = try vault.edit(key.name, link: .some(link), linkFrom: key.linkFrom, now: now)
@@ -77,8 +82,8 @@ public enum SecretCopyIn {
                 }
                 // A key stored since the plan makes `add` throw `nameTaken`.
                 _ = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import,
-                                  writeOnly: false, value: key.value, link: key.link, linkFrom: key.linkFrom,
-                                  remindDays: remindDays, maskKey: maskKey, now: now)
+                                  writeOnly: key.writeOnly, value: key.value, link: key.link, linkFrom: key.linkFrom,
+                                  remindDays: remindDays, asksEveryUse: asksEveryUse, maskKey: maskKey, now: now)
                 if let entry = vault.index.entry(named: key.name) {
                     added.append(Record.Added(name: entry.name, id: entry.id, valueSet: entry.lastSet))
                 }

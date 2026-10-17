@@ -37,7 +37,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     }
 
     static let writeOnlyLine = "Next Term never shows or copies this key again. Commands you allow still get it. "
-        + "Keep your own copy if you'll need it on another Mac."
+        + "Keep your own copy if you\u{2019}ll need it on another Mac. This can\u{2019}t be undone."
     static let shortLine = "Shorter than 12 characters: Next Term can't hide it by value in what agents read."
 
     private let content: Content
@@ -141,8 +141,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         shortLabel.font = .systemFont(ofSize: 11)
         shortLabel.textColor = .secondaryLabelColor
         shortLabel.isHidden = true
-        writeOnlyBox = NSButton(checkboxWithTitle: "Write-only", target: self, action: #selector(changed))
-        writeOnlyBox.state = .off
+        writeOnlyBox = NSButton(checkboxWithTitle: SecretNewKeyDefaults.keyNeverShowTitle, target: self, action: #selector(changed))
+        // Ticked when Settings › Secrets › New keys says to never show their values.
+        writeOnlyBox.state = SecretNewKeyDefaults.neverShow ? .on : .off
         let writeOnlyLine = SecretApprovalPanel.label(Self.writeOnlyLine, size: 11)
         writeOnlyLine.textColor = .secondaryLabelColor
         linkField.onChange = { [weak self] in self?.refreshName() }

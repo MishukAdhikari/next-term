@@ -46,6 +46,7 @@ extension SelfTest {
         await secretsPanelChecks(base)
         #if DEBUG
         await secretsAllowOnceChecks()
+        await secretsAskEveryUseChecks()
         #endif
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
@@ -633,8 +634,9 @@ extension SelfTest {
         requests.resetForSelfTest()
         defer { requests.resetForSelfTest() }
         let value = secretsValue("panel")
+        // Unticked "Ask for Touch ID every time it's used", so the panel offers the lasting approvals these check.
         _ = try? await store.perform(.add(name: "PANEL_KEY", purpose: "the panel checks", purposeBy: .agent, origin: .settings,
-                                          writeOnly: true, value: SecretBytes(utf8: value)))
+                                          writeOnly: true, value: SecretBytes(utf8: value), asksEveryUse: false))
 
         // A wrapper's request: Next Term's facts in their own rows, Details, and "until the Mac locks".
         let answers = SecretsAnswers()
@@ -654,8 +656,8 @@ extension SelfTest {
               "secrets: a tab title's control, bidi and zero-width characters are stripped")
         check(SecretApprovalPanel.shownCommand("npm test\r\nnpx -y x\u{202E}\u{200B}", limit: 200) == "npm test\\r\\nnpx -y x\\u{202e}\\u{200b}",
               "secrets: the panel's command shows line breaks, bidi and zero-width characters escaped, never as spaces or taken out")
-        check(shown.contains("(an agent wrote this)") && shown.contains("Write-only"),
-              "secrets: the key's row marks an agent's purpose and the write-only badge")
+        check(shown.contains("(an agent wrote this)") && shown.contains(SecretNewKeyDefaults.neverShownHelp),
+              "secrets: the key's row marks an agent's purpose and that it is never shown")
         check(!window.isKeyWindow && window.collectionBehavior.contains(.canJoinAllSpaces) && window.collectionBehavior.contains(.fullScreenAuxiliary)
               && window.level == .floating && window.styleMask.contains(.nonactivatingPanel)
               && panel.allowButton.keyEquivalent.isEmpty && panel.allowButton.refusesFirstResponder,
@@ -1105,7 +1107,7 @@ extension SelfTest {
         }
         let value = secretsValue("tool")
         _ = try? await store.perform(.add(name: "TOOL_KEY", purpose: "the tool checks", purposeBy: .user, origin: .settings,
-                                          writeOnly: false, value: SecretBytes(utf8: value)))
+                                          writeOnly: false, value: SecretBytes(utf8: value), asksEveryUse: false))
         await secretsListChecks(value: value)
         await secretsRequestChecks()
         await secretsStoreToolChecks(c, base: base)
@@ -1569,6 +1571,7 @@ extension SelfTest {
             sheet.purposeField.stringValue = "the Settings checks"
             sheet.valueField.stringValue = value
             sheet.writeOnlyBox.state = writeOnly ? .on : .off
+            sheet.asksBox?.state = .off // so Allowed now can list a lasting approval for it
             sheet.refresh()
             sheet.saveButton.performClick(nil)
             _ = await wait(10) { view.entries.contains { $0.name == name } && view.sheet == nil }
@@ -1583,16 +1586,16 @@ extension SelfTest {
               && view.deleteButton.isEnabled && !view.writeOnlyLabel.isHidden && view.writeOnlyLabel.stringValue == SecretsView.writeOnlyLine,
               "secrets: a write-only key has Reveal and Copy off, Edit, Replace and Delete on, and the line under the table")
 
-        // Make Write-Only… asks first; Cancel changes nothing.
+        // Never Show This Key… asks first; Cancel changes nothing.
         view.select("SHOWN_KEY")
         let calls = presence.calls
         view.writeOnlyButton.performClick(nil)
         _ = await wait(5) { view.alert != nil }
-        let asked = view.alert?.messageText == "Make SHOWN_KEY write-only?"
+        let asked = view.alert?.messageText == "Never show SHOWN_KEY again?" && view.writeOnlyButton.title == SecretsView.neverShowTitle
         view.alert?.buttons.last?.performClick(nil)
         _ = await wait(5) { view.alert == nil }
         check(asked && store.index?.entry(named: "SHOWN_KEY")?.writeOnly == false && presence.calls == calls,
-              "secrets: Make Write-Only… asks first, and Cancel changes nothing")
+              "secrets: Never Show This Key… asks first, and Cancel changes nothing")
 
         // Copy, on the self-test's own pasteboard: this Mac only, both markers, cleared after the delay unless changed.
         let clipboard = SecretClipboard.shared

@@ -23,6 +23,8 @@ public struct SourceRow: Sendable, GroupableValue {
     public internal(set) var link: SecretSources.LinkHint?
     /// Whether it is ticked: it starts so when it looks like a key, and nothing in its note or refusal says otherwise.
     public var ticked: Bool
+    /// "Never show": the key is saved write-only. The preview sets it, from Settings › Secrets' New keys default.
+    public var neverShow: Bool = false
     public internal(set) var note: SecretSources.Note?
     /// Why it can't be stored; such a row is never ticked.
     public let refusal: SecretSources.Refusal?
