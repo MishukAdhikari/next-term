@@ -8,7 +8,12 @@ import NextTermCore
 /// window); and Settings › Tasks right before Secrets. Everything goes to the self-test project's own todo folder, or to
 /// a repository of the part's own, and is removed after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
 extension SelfTest {
-    static func tasksChecks(_ c: TerminalWindowController, proj: URL) async {
+    static func tasksChecks(_ given: TerminalWindowController, proj: URL) async {
+        // The part works in a window of the test project's own: the self-test's first window has no project of its own,
+        // it follows its tab, and a todo folder belongs to a project.
+        let opened = given.project == nil ? AppDelegate.shared.openWindow(directory: proj.path, project: canonicalPath(proj.path)) : nil
+        let c = opened ?? given
+        defer { if let opened, !opened.hasClosed { opened.window?.close() } }
         let defaults = UserDefaults.standard
         let saved = TaskSettings.Key.all.map { defaults.object(forKey: $0) }
         let savedBindings = defaults.data(forKey: "keyBindings")
