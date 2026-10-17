@@ -52,6 +52,34 @@ final class NextTermView: LocalProcessTerminalView {
         hintView = hint
     }
 
+    /// Suggestions while typing hide on these (GhostSession): a paste, a scroll, a selection, marked text (an input method).
+    var onPaste: (() -> Void)?
+    var onScrolled: (() -> Void)?
+    var onSelection: (() -> Void)?
+    var onMarkedText: (() -> Void)?
+
+    override func scrolled(source: TerminalView, position: Double) {
+        super.scrolled(source: source, position: position)
+        onScrolled?()
+    }
+
+    override func selectionChanged(source: Terminal) {
+        super.selectionChanged(source: source)
+        onSelection?()
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onMarkedText?()
+    }
+
+    /// No inline predictions from macOS beside or in place of the suggestion while typing.
+    @available(macOS 14.0, *)
+    @objc var inlinePredictionType: NSTextInputTraitType {
+        get { .no }
+        set {}
+    }
+
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
@@ -170,6 +198,7 @@ final class NextTermView: LocalProcessTerminalView {
     override func paste(_ sender: Any) {
         guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         onKeyboard?()
+        onPaste?()
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
@@ -551,6 +580,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var execWatcher: DispatchSourceProcess?
     /// Tab completion in this tab.
     private(set) lazy var completion = CompletionSession(tab: self)
+    /// Suggestions while typing in this tab.
+    private(set) lazy var ghost = GhostSession(tab: self)
     /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
     /// (ShellHistory, submitOwnLine).
     private(set) var history = ShellHistory.Readiness()
@@ -573,7 +604,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onOutput = { [weak self] in
             self?.status.output(at: Self.now)
             self?.completion.output()
+            self?.ghost.output()
         }
+        view.onPaste = { [weak self] in self?.ghost.hide() }
+        view.onScrolled = { [weak self] in self?.ghost.scrolled() }
+        view.onSelection = { [weak self] in
+            if self?.view.selection?.active == true { self?.ghost.hide() }
+        }
+        view.onMarkedText = { [weak self] in self?.ghost.hide() }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
@@ -679,6 +717,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.status.shellReplaced()
             self.completion.shellReplaced()
             self.history.shellReplaced()
+            self.ghost.shellReplaced()
             self.lastBuffer = nil
             self.runEnded(exit: nil)
             self.ownLine = nil
@@ -1066,6 +1105,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
     func userInput() {
         touchedByUser = true
+        ghost.userKey()
         view.awaitsChoice = false // a paste or a drop into it is the user's choice
         MCPControl.typedByUser(self)
     }
@@ -1405,6 +1445,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if let note = herdrWatch.note { lines.append(note) }
         }
         lines.append(completion.engineLabel)
+        if let label = ghost.label { lines.append(label) }
         return lines.joined(separator: "\n")
     }
 
@@ -1418,10 +1459,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             return history.marked(version: version)
         case .ghost(let message):
             if case .buffer(let report) = message { lastBuffer = (report, view.inputWrites, Self.now) }
-            return
+            return ghost.handle(message)
         case .commandStarted(let line, let expanded, let flags):
             onCommandMark?(event)
             runStarted(line, flags: flags)
+            ghost.lineEnded()
             completion.disarm()
             history.disarm()
             programTitle = nil
@@ -1462,6 +1504,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
         completion.viewChanged()
+        ghost.viewChanged()
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {

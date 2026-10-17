@@ -19,6 +19,7 @@ extension SelfTest {
         GhostPreferences.testIsOn = true
         defer { GhostPreferences.testIsOn = nil }
         await ghostRecordChecks(c, dir: dir)
+        await ghostOverlayChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -142,6 +143,102 @@ extension SelfTest {
         check(tab.status.running && running.json?["input"] == nil, "read_tab: no input while a command runs", running.text)
         tab.view.send(txt: "\u{3}")
         _ = await wait(3) { !tab.status.running }
+    }
+
+    /// The suggestion shows (placed, after the shell's redraw), within `seconds`.
+    static func ghostShows(_ tab: TerminalTab, within seconds: Double = 3) async -> Bool {
+        await wait(seconds) { tab.ghost.isShowing }
+    }
+
+    /// The record holds `line`, run well a moment ago in `folder`: what a suggestion is asked from.
+    static func ghostSeed(_ line: String, folder: String) async {
+        CommandHistoryStore.shared.record(line, folder: folder, at: Date(), exit: 0)
+        _ = await ghostQuery(String(line.prefix(3))) { (found: [CommandHistory.Entry]) -> Bool in found.contains { $0.line == line } }
+    }
+
+    /// The overlay: where it shows and what never holds it, what hides it, and where it never shows.
+    static func ghostOverlayChecks(_ c: TerminalWindowController, dir: URL) async {
+        await ghostSeed("git checkout main", folder: dir.path)
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc, name: "overlay"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        typeKeys(window, "git ch")
+        check(await ghostShows(tab), "suggestions: typing `git ch` shows the rest of `git checkout main`", "\(tab.ghost.state)")
+        let overlay = tab.ghost.overlay
+        check(overlay.text == "eckout main", "suggestions: the overlay says `eckout main`", overlay.text)
+        let cursor = tab.view.getTerminal().getCursorLocation()
+        let cell = tab.view.cellSize
+        let expected = CGPoint(x: CGFloat(cursor.x) * cell.width, y: tab.view.bounds.height - cell.height * CGFloat(cursor.y + 1))
+        check(abs(overlay.frame.origin.x - expected.x) < 0.5 && abs(overlay.frame.origin.y - expected.y) < 0.5,
+              "suggestions: the overlay starts at the cursor's cell", "\(overlay.frame.origin) for \(expected)")
+        check(tab.view.subviews.first === overlay, "suggestions: the overlay is the terminal's bottom subview, under the caret")
+        check(!overlay.isAccessibilityElement(), "suggestions: the overlay is no accessibility element")
+        let read = await ghostTool("read_tab", ["tab_id": tab.id.uuidString.lowercased(), "lines": 5])
+        let spoken = (tab.view.accessibilityValue() as? String) ?? ""
+        check(!tab.screenTail(5).joined().contains("eckout") && !read.text.contains("eckout") && !spoken.contains("eckout"),
+              "suggestions: the screen, read_tab and the terminal's accessibility value never hold the suggestion")
+
+        // Each of these hides it until the next report.
+        let hiders: [(String, () -> Void)] = [
+            ("a resize", { window.setContentSize(NSSize(width: window.frame.width - 40, height: window.frame.height)) }),
+            ("the alternate screen", { tab.view.feed(text: "\u{1b}[?1049h") }),
+            ("marked text", { tab.view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0)) }),
+            ("a selection", { tab.view.selectAll(nil) }),
+        ]
+        for (what, hide) in hiders {
+            await ghostClear(tab)
+            typeKeys(window, "git ch")
+            guard await ghostShows(tab) else {
+                check(false, "suggestions: hidden by \(what): it showed first")
+                continue
+            }
+            hide()
+            check(await wait(1) { !tab.ghost.isShowing }, "suggestions: \(what) hides it")
+            if what == "the alternate screen" { tab.view.feed(text: "\u{1b}[?1049l") }
+            if what == "marked text" { tab.view.unmarkText() }
+        }
+        // Scrolled back: hidden. The output first gives it somewhere to scroll.
+        await ghostClear(tab)
+        tab.view.send(txt: "seq 1 300\r")
+        _ = await wait(5) { !tab.status.running && tab.status.commandsStarted > 0 }
+        typeKeys(window, "git ch")
+        if await ghostShows(tab) {
+            tab.view.scroll(toPosition: 0)
+            check(await wait(1) { !tab.ghost.isShowing }, "suggestions: scrolling back hides it")
+            tab.view.scroll(toPosition: 1)
+        } else {
+            check(false, "suggestions: hidden by a scroll back: it showed first")
+        }
+
+        // Where it never shows: an agent's text, text with no key of yours on the line, and with suggestions off.
+        await ghostClear(tab)
+        _ = await ghostTool("send_to_tab", ["tab_id": tab.id.uuidString.lowercased(), "text": "git ch", "submit": false])
+        check(!(await ghostShows(tab, within: 1)), "suggestions: none in a tab an agent drives")
+        await ghostClear(tab)
+        _ = await focus(c, tab)
+        tab.view.send(txt: "git ch")
+        check(!(await ghostShows(tab, within: 1)), "suggestions: none before a key of yours on the line")
+        await ghostClear(tab)
+        GhostPreferences.testIsOn = false
+        typeKeys(window, "git ch")
+        check(!(await ghostShows(tab, within: 1)), "suggestions: none with suggestions off")
+        GhostPreferences.testIsOn = true
+        await ghostClear(tab)
+
+        // A right prompt stays whole: the suggestion ends a cell before it, with "…".
+        await ghostSeed("echo " + String(repeating: "word ", count: 30) + "end", folder: dir.path)
+        guard let right = await ghostTab(c, in: dir, zshrc: plainZshrc + "RPROMPT=XYZ\n", name: "rprompt") else { return }
+        defer { c.remove(right) }
+        typeKeys(window, "echo wo")
+        if await ghostShows(right) {
+            let row = right.screenTail(1).last ?? ""
+            let columns = right.view.getTerminal().cols
+            let ghostEnd = Int((right.ghost.overlay.frame.maxX / right.view.cellSize.width).rounded())
+            check(row.hasSuffix("XYZ") && right.ghost.overlay.text.hasSuffix(GhostClip.ellipsis) && ghostEnd <= columns - 4,
+                  "suggestions: a right prompt stays whole, and the suggestion ends before it with …", "\(row) / \(right.ghost.overlay.text)")
+        } else {
+            check(false, "suggestions: beside a right prompt: it showed")
+        }
+        note("suggestions: a server tab gets no ghost marks (its hook is Tab completion's alone, RemoteCompletionConsent); a paste's hide is the clipboard's, not checked here")
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,
