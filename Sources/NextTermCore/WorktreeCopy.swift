@@ -5,7 +5,9 @@ import os
 /// output) brought into the new worktree, so it runs without installing again, as the sheet's choice says (`Choice`).
 /// Copy: APFS clones (`clone`), no data copied, the two sharing disk space until either side changes, modes, times and
 /// links kept as they are. Link: symbolic links to the main checkout's (`link`), shared, so a change on either side is
-/// on both, and nothing copied. Leave Out: neither (what `.worktreeinclude` lists is copied, as before).
+/// on both, and nothing copied; a link there made again as it is (`relink`), so it leads within the new worktree, and
+/// Composer's autoloader cloned (`composerOwn`). Never in a bare repository: no checkout of it is kept from Remove
+/// Worktree (`linkSource`). Leave Out: neither (what `.worktreeinclude` lists is copied, as before).
 ///
 /// - What: git's own list of the ignored entries (`ls-files --others --ignored --directory`, a wholly ignored folder
 ///   as one entry), only those the new worktree's branch ignores too, so nothing it tracks is ever touched; a link
@@ -18,7 +20,9 @@ import os
 ///   checkout's `.worktreeinclude` lists brings one back. Linked, they'd be the source's own, so the same rules hold.
 /// - How: each entry's folders are cloned a level down (`node_modules/<package>`, `vendor/<vendor>`), one clone
 ///   call each: a whole tree in one call holds the disk for its length (clonefile(2) discourages it). An entry is one
-///   link. At low I/O priority, one at a time, with Stop between calls.
+///   link, unless a link in it leads out of it (a workspace package, `node_modules/@acme/utils` →
+///   `../../packages/utils`): linked whole, that would be the main checkout's own source, never the branch's. At low
+///   I/O priority, one at a time, with Stop between calls.
 /// - Removing the worktree (`git worktree remove`, FileManager's removeItem) deletes a link, never what it leads to:
 ///   neither follows a link into the main checkout (WorktreeCopyTests).
 /// Plan: claudedocs/2026-10-09-worktree-from-switch-guard-plan.md, D13b.
@@ -153,6 +157,11 @@ public enum WorktreeCopy {
         return "Ignored files: " + ordered.prefix(3).joined(separator: ", ") + (ordered.count > 3 ? "…" : "")
     }
 
+    /// `choiceTitle` from git's own list (`ignoredEntries`): its entries at the checkout's top.
+    public static func choiceTitle(listed: [String]) -> String? {
+        choiceTitle(ignored: listed.filter { !($0.hasSuffix("/") ? $0.dropLast() : Substring($0)).contains("/") })
+    }
+
     /// What each choice means, in one plain line after its name. `main`: the checkout links lead to (`linkSource`);
     /// `includes`: the checkout has a `.worktreeinclude`.
     public static func line(_ choice: Choice, main: String, includes: Bool) -> String {
@@ -163,9 +172,10 @@ public enum WorktreeCopy {
         }
     }
 
-    /// The sheet's footnote with Copy chosen.
-    public static func footnote(checkout: String) -> String {
-        "\(checkout) and its changes stay as they are. The new folder also gets clones of what \(checkout)’s git ignores, "
+    /// The sheet's footnote with Copy chosen. `source`: the checkout the clones come from (`linkSource`, else the one
+    /// the window shows).
+    public static func footnote(checkout: String, source: String) -> String {
+        "\(checkout) and its changes stay as they are. The new folder also gets clones of what \(source)’s git ignores, "
             + ".env and keys included (so the same database and services), sharing disk space until either side changes. "
             + "Left out: other worktrees, logs, Python virtualenvs, .build and Laravel’s cached config."
     }
@@ -179,6 +189,11 @@ public enum WorktreeCopy {
 
     /// Why Copy is off: the new folder isn't on a disk where it can be cloned from the checkout.
     public static let cantClone = "Copying needs the new folder on the same APFS disk as the checkout: clones share space, a copy would fill the disk."
+
+    /// Why Link is off: a bare repository has no main checkout, and any worktree of it can be removed, with what links
+    /// into it lead to.
+    public static let cantLink = "Linking needs the repository’s main checkout, and a bare repository has none: any of its worktrees "
+        + "can be removed, and what the links lead to with it."
 
     /// The notice's part: "; copied 72 ignored items, 6 left out; run composer install there", "; linked 3 ignored
     /// items" with what to know before installing there (`warnings`).
@@ -270,11 +285,20 @@ public enum WorktreeCopy {
     }
 
     /// The checkout links lead to: the repository's main checkout, which Remove Worktree never removes, when it has
-    /// files (it isn't a bare repository's folder); else `root`, the checkout the window shows.
-    public static func linkSource(main: String, root: String) -> String {
+    /// files. Nil for a bare repository's folder: any worktree of it can be removed, and links into one would lead
+    /// nowhere after, so Link is off there (`cantLink`).
+    public static func linkSource(main: String) -> String? {
         var info = stat()
-        return lstat(main + "/.git", &info) == 0 ? main : root
+        return lstat(main + "/.git", &info) == 0 ? main : nil
     }
+
+    /// Composer's own in vendor/: its autoloader and its bin proxies. PHP follows links for `__DIR__`, so linked they'd
+    /// load the checkout's classes (app/, tests/) in the new worktree, and an install there would point the checkout's
+    /// autoloader at the new worktree's: cloned, so they are the new worktree's own (`Engine.ownComposer`).
+    static let composerOwn = ["vendor/composer", "vendor/autoload.php", "vendor/bin"]
+
+    /// Why Composer's own is left out when linking on a disk that can't clone it (composer install makes it there).
+    static func composerLeftOut(_ main: String) -> LeftOut { .rule("Composer’s autoloader: linked, it would load \(main)’s classes") }
 
     /// What the link at `path` in `destination` holds to reach the same path in `source` (both as the kernel spells
     /// them, `canonicalPath`): relative when the two are on one volume, so moving the folder holding both keeps it
@@ -381,10 +405,11 @@ public enum WorktreeCopy {
 
     /// Links `entries` (from `entries(from:to:git:)`) in `destination` to the same paths in `source` (`linkSource`), one
     /// symbolic link each (`linkTarget`) and nothing copied, with `clone`'s rules for what is left out. A folder is one
-    /// link where the new branch ignores a link of its name too (`linkable`) and nothing in it is left out a level down
-    /// (as `clone` goes), else a folder of its own, which git ignores with all that is in it, holding a link for each
-    /// thing in it; so is one that holds a worktree. A folder there already is left as it is: a link goes only where git
-    /// said it is ignored.
+    /// link where the new branch ignores a link of its name too (`linkable`), nothing in it is left out a level down
+    /// (as `clone` goes) and no link in it leads out of it, else a folder of its own, which git ignores with all that is
+    /// in it, holding a link for each thing in it; so is one that holds a worktree, and a Composer vendor/, whose own
+    /// files are cloned (`composerOwn`). A link in the checkout is made again as it is, as a clone keeps it. A folder there
+    /// already is left as it is: a link goes only where git said it is ignored.
     public static func link(_ entries: [String], from source: String, to destination: String, worktrees: [String], includes: Set<String> = [],
                             linkable: Set<String>, stop: Stop = Stop(), progress: (String, Int, Int) -> Void = { _, _, _ in }) -> Report {
         bring(entries, from: source, to: destination, worktrees: worktrees, includes: includes, linkable: linkable, hasTracked: { _ in false },
@@ -409,7 +434,10 @@ public enum WorktreeCopy {
             path.hasPrefix(canonicalSource + "/") ? String(path.dropFirst(canonicalSource.count + 1)) : nil
         }
         let sameVolume = lstat(destination, &there) == 0 && there.st_dev == info.st_dev
-        let links = linkable.map { Links(source: canonicalSource, destination: canonicalPath(destination), sameVolume: sameVolume, whole: $0) }
+        let links = linkable.map { whole in
+            Links(source: canonicalSource, destination: canonicalPath(destination), sameVolume: sameVolume, whole: whole,
+                  composer: FileManager.default.fileExists(atPath: source + "/vendor/composer"), clones: canClone(from: source, into: destination))
+        }
         var engine = Engine(source: source, destination: destination, device: info.st_dev, avoid: avoid, worktreesInside: inside,
                             includes: includes, hasTracked: hasTracked, stop: stop, links: links)
         engine.report.links = links != nil
@@ -433,13 +461,17 @@ public enum WorktreeCopy {
         return engine.report
     }
 
-    /// Linking: where the links lead from and to, as the kernel spells them, whether they can be relative, and the
-    /// folders a link may stand for whole (`linkable`).
+    /// Linking: where the links lead from and to, as the kernel spells them, whether they can be relative, the
+    /// folders a link may stand for whole (`linkable`), and what Composer's own (`composerOwn`) needs.
     private struct Links {
         let source: String
         let destination: String
         let sameVolume: Bool
         let whole: Set<String>
+        /// The checkout's vendor/ is Composer's: it has vendor/composer.
+        let composer: Bool
+        /// The new worktree can get clones from the checkout (`canClone`): Composer's own is cloned.
+        let clones: Bool
     }
 
     private struct Engine {
@@ -473,7 +505,7 @@ public enum WorktreeCopy {
             var info = stat()
             guard lstat(source + "/" + path, &info) == 0 else { return } // gone since git listed it
             if let why = leftOut(path, info) { return leave(path, why) }
-            guard info.st_mode & S_IFMT == S_IFDIR else { return bringFile(path) }
+            guard info.st_mode & S_IFMT == S_IFDIR else { return bringFile(path, isLink: info.st_mode & S_IFMT == S_IFLNK) }
             let name = (path as NSString).lastPathComponent
             let holdsWorktree = worktreesInside.contains { $0 == path || $0.hasPrefix(path + "/") }
             var there = stat()
@@ -486,10 +518,13 @@ public enum WorktreeCopy {
                 return goThrough(path, depth: depth)
             }
             if let links {
-                // One link for the folder, unless the new branch ignores only a folder there, or something in it is
-                // left out: then a folder of its own, all in it ignored with it, so a link for each thing in it is too.
-                let whole = depth > 0 || (links.whole.contains(path) && !leavesOutInside(path))
-                if holdsWorktree || WorktreeCopy.containers.contains(name) || !whole { return goThrough(path, depth: depth, mode: info.st_mode) }
+                if ownComposer(path) { return cloneComposer(path, isFolder: true) }
+                // One link for the folder, unless the new branch ignores only a folder there, something in it is left
+                // out, or a link in it leads out of it: then a folder of its own, all in it ignored with it, so a link
+                // for each thing in it is too. So is a Composer vendor/: its packages linked, Composer's own cloned.
+                let whole = depth > 0 || links.whole.contains(path)
+                let through = !whole || holdsWorktree || WorktreeCopy.containers.contains(name) || (links.composer && path == "vendor")
+                if through || leavesOutInside(path) { return goThrough(path, depth: depth, mode: info.st_mode) }
                 return link(path)
             }
             // An entry's folders go a level down, each in a call of its own (node_modules/<package>).
@@ -526,19 +561,63 @@ public enum WorktreeCopy {
         }
 
         /// Whether a link for the whole folder at `path` would bring what Copy, going a level down, leaves out (Finder's
-        /// .DS_Store aside, harmless shared): then it is gone through instead.
+        /// .DS_Store aside, harmless shared), or holds a link leading out of it, in it or a level further down (a
+        /// workspace package: node_modules/@acme/utils → ../../packages/utils): through a link to the folder, that
+        /// would lead to the checkout's own files, never the new worktree's. Then it is gone through instead.
         func leavesOutInside(_ path: String) -> Bool {
-            let names = (try? FileManager.default.contentsOfDirectory(atPath: source + "/" + path)) ?? []
+            let fm = FileManager.default
+            let names = (try? fm.contentsOfDirectory(atPath: source + "/" + path)) ?? []
             return names.contains { name in
                 var info = stat()
                 guard name != ".DS_Store", lstat(source + "/" + path + "/" + name, &info) == 0 else { return false }
-                return leftOut(path + "/" + name, info) != nil
+                if leftOut(path + "/" + name, info) != nil { return true }
+                switch info.st_mode & S_IFMT {
+                case S_IFLNK:
+                    return leadsOut(of: path, name)
+                case S_IFDIR:
+                    // A scope's or a vendor's packages: node_modules/@acme/utils, vendor/acme/pkg.
+                    let inner = (try? fm.contentsOfDirectory(atPath: source + "/" + path + "/" + name)) ?? []
+                    return inner.contains { child in
+                        var link = stat()
+                        let relative = name + "/" + child
+                        return lstat(source + "/" + path + "/" + relative, &link) == 0 && link.st_mode & S_IFMT == S_IFLNK && leadsOut(of: path, relative)
+                    }
+                default:
+                    return false
+                }
             }
         }
 
-        /// A file or a link (as it is): cloned, or linked to.
-        mutating func bringFile(_ path: String) {
-            if links == nil { clone(path, isFolder: false) } else { link(path) }
+        /// Whether the link at `relative` in the folder at `path` leads out of that folder.
+        func leadsOut(of path: String, _ relative: String) -> Bool {
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: source + "/" + path + "/" + relative) else { return false }
+            return !WorktreeCopy.linkStaysInside(relative, target: target)
+        }
+
+        /// A file or a link: cloned as it is; linking, linked to, a link made again as it is (`relink`), and Composer's
+        /// own cloned (`ownComposer`).
+        mutating func bringFile(_ path: String, isLink: Bool) {
+            if links == nil {
+                clone(path, isFolder: false)
+            } else if ownComposer(path) {
+                cloneComposer(path, isFolder: false)
+            } else if isLink {
+                relink(path)
+            } else {
+                link(path)
+            }
+        }
+
+        /// Linking, whether `path` is Composer's own (`composerOwn`) or in it.
+        func ownComposer(_ path: String) -> Bool {
+            guard let links, links.composer else { return false }
+            return WorktreeCopy.composerOwn.contains { path == $0 || path.hasPrefix($0 + "/") }
+        }
+
+        /// Composer's own, linking: cloned, so `__DIR__` is in the new worktree; left out on a disk that can't clone it.
+        mutating func cloneComposer(_ path: String, isFolder: Bool) {
+            guard links?.clones == true else { return leave(path, WorktreeCopy.composerLeftOut((source as NSString).lastPathComponent)) }
+            clone(path, isFolder: isFolder)
         }
 
         /// Each thing in the folder at `path`, placed on its own; the folder made at the destination first when
@@ -606,10 +685,23 @@ public enum WorktreeCopy {
             }
         }
 
-        /// One symbolic link to the same path in the checkout: never over anything, never followed.
+        /// One symbolic link to the same path in the checkout.
         mutating func link(_ path: String) {
-            guard let links, makeParents(of: path) else { return }
-            let target = WorktreeCopy.linkTarget(path, source: links.source, destination: links.destination, sameVolume: links.sameVolume)
+            guard let links else { return }
+            makeLink(path, to: WorktreeCopy.linkTarget(path, source: links.source, destination: links.destination, sameVolume: links.sameVolume))
+        }
+
+        /// A link in the checkout, made again with its own target (`leftOut` found it staying inside), as a clone keeps
+        /// it: it leads within the new worktree (node_modules/@acme/utils → ../../packages/utils, the branch's own),
+        /// never through a link to it into the checkout's files.
+        mutating func relink(_ path: String) {
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: source + "/" + path) else { return } // gone since
+            makeLink(path, to: target)
+        }
+
+        /// A symbolic link at `path` holding `target`: never over anything, never followed.
+        mutating func makeLink(_ path: String, to target: String) {
+            guard makeParents(of: path) else { return }
             if symlink(target, destination + "/" + path) == 0 {
                 report.copied.append(path)
                 return
@@ -637,16 +729,24 @@ public enum WorktreeCopy {
     // MARK: after
 
     /// The hints for what was copied (`hints(differs:…)`), reading the lock files of both checkouts and their HEADs.
-    /// Linked, only `php artisan storage:link`: an install there would change the checkout's own (`warnings`).
+    /// Linked, never an install, which would change the checkout's own (`warnings`): `composer dump-autoload` when the
+    /// cloned autoloader's classmap names the checkout's classes, `composer install` when it was left out (a disk that
+    /// can't clone), and `php artisan storage:link`.
     public static func hints(for report: Report, source: String, destination: String, git: String) -> [String] {
         let vendor = report.placed("vendor"), nodeModules = report.placed("node_modules")
         // Laravel's public/storage link, absolute to the source checkout: left out, and made again there.
         let storageLink = report.leftOut.contains(Item("public/storage", .linkOut)) ? ["php artisan storage:link"] : []
-        guard vendor || nodeModules, !report.links else { return storageLink }
-        let differs = differingLocks(source: source, destination: destination)
+        guard vendor || nodeModules else { return storageLink }
         func head(_ root: String) -> String? {
             GitRunner.run(git, ["-C", root, "rev-parse", "HEAD"], timeout: 10).map { String(decoding: $0, as: UTF8.self) }
         }
+        if report.links {
+            // Linking, nothing in vendor/composer is a link (`composerOwn`): placed, it was cloned.
+            if report.placed("vendor/composer") { return (head(source) != head(destination) ? ["composer dump-autoload"] : []) + storageLink }
+            let autoloader = report.leftOut.contains(Item("vendor/composer", composerLeftOut((source as NSString).lastPathComponent)))
+            return (autoloader ? ["composer install"] : []) + storageLink
+        }
+        let differs = differingLocks(source: source, destination: destination)
         let classmap = report.placed("vendor/composer") || report.copied.contains("vendor/composer/autoload_classmap.php")
         return hints(differs: differs, vendorCopied: vendor, classmapCopied: classmap, headsDiffer: head(source) != head(destination),
                      nodeModulesCopied: nodeModules) + storageLink

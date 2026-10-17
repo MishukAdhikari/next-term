@@ -126,8 +126,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   and its changes. What git ignores there (`.env`, `node_modules/`, `vendor/`) the new folder can **copy**
   (APFS clones: independent, taking no space until either side changes), **link** (a link for each
   ignored entry, to the main checkout's: shared, so an install or an edit in either is in both, and
-  nothing is copied) or **leave out**, as you choose; the choice is remembered per repository. Linked
-  entries have a link mark in the sidebar, and removing the worktree deletes only the links. Logs,
+  nothing is copied; a bare repository has none, so Link is off there) or **leave out**, as you choose;
+  the choice is remembered per repository. Linked, a workspace package still leads to the worktree's own
+  source, and Composer's autoloader is cloned, so the worktree runs its branch's code. Linked entries
+  have a link mark in the sidebar, and removing the worktree deletes only the links. Logs,
   Laravel's cached config, virtualenvs and Swift builds stay out either way; `.worktreeinclude` brings
   one back. Remove Worktree… never forces: the branch stays, and a worktree with changes stays too.
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch

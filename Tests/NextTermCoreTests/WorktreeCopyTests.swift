@@ -6,7 +6,8 @@ import Testing
 /// that stay inside, what the sheet and the notice say, real clones in temporary folders (an APFS disk) with links
 /// kept as links, nothing over what is there, other worktrees and links out of the checkout left out, and git's own
 /// list of what the new branch ignores; real links, relative, one for an entry where the new branch ignores a link
-/// too, and removing a linked worktree (git's remove, FileManager's) deleting the links, never what they lead to.
+/// too, and removing a linked worktree (git's remove, FileManager's) deleting the links, never what they lead to; a
+/// workspace package's link made again as it is, and Composer's autoloader cloned, so the new worktree runs its own code.
 @Suite struct WorktreeCopyTests {
     @Test func whatIsLeftOutByDefault() {
         #expect(WorktreeCopy.rule(for: "storage/logs/laravel.log", isFolder: false) == "a log of this checkout’s")
@@ -60,7 +61,15 @@ import Testing
         #expect(WorktreeCopy.choiceTitle(ignored: ["dist/"]) == "Ignored files: dist/")
         #expect(WorktreeCopy.choiceTitle(ignored: [".claude/", ".worktrees/", ".DS_Store"]) == nil)
         #expect(WorktreeCopy.choiceTitle(ignored: []) == nil)
-        #expect(WorktreeCopy.footnote(checkout: "xCloud").hasPrefix("xCloud and its changes stay as they are. The new folder also gets clones of what xCloud’s git ignores"))
+        // From git's own list: only what is at the checkout's top.
+        #expect(WorktreeCopy.choiceTitle(listed: ["storage/logs/laravel.log", "vendor/", ".env", "public/hot", ".claude/worktrees/"])
+                == "Ignored files: vendor/, .env")
+        #expect(WorktreeCopy.choiceTitle(listed: ["storage/logs/laravel.log"]) == nil)
+        #expect(WorktreeCopy.footnote(checkout: "xCloud", source: "xCloud")
+            .hasPrefix("xCloud and its changes stay as they are. The new folder also gets clones of what xCloud’s git ignores"))
+        // From a worktree's window, the clones come from the main checkout, as the links do.
+        #expect(WorktreeCopy.footnote(checkout: "xCloud-wt-a", source: "xCloud")
+            .hasPrefix("xCloud-wt-a and its changes stay as they are. The new folder also gets clones of what xCloud’s git ignores"))
 
         var report = WorktreeCopy.Report()
         #expect(WorktreeCopy.notice(report, hints: []) == "")
@@ -108,14 +117,16 @@ import Testing
         #expect(WorktreeCopy.linkTarget("vendor", source: "/Users/m/Code/xCloud", destination: "/Volumes/Fast/x", sameVolume: false) == "/Users/m/Code/xCloud/vendor")
     }
 
-    /// Links lead to the main checkout, which Remove Worktree never removes; to the window's checkout when the
-    /// repository is bare.
+    /// Links lead to the main checkout, which Remove Worktree never removes; none in a bare repository, any of whose
+    /// worktrees can be removed: Link is off there.
     @Test func whereLinksLeadFrom() throws {
         let f = try Folders()
         defer { f.remove() }
         try FileManager.default.createDirectory(atPath: f.source + "/.git", withIntermediateDirectories: true)
-        #expect(WorktreeCopy.linkSource(main: f.source, root: f.destination) == f.source)
-        #expect(WorktreeCopy.linkSource(main: f.base + "/app.git", root: f.destination) == f.destination)
+        try FileManager.default.createDirectory(atPath: f.base + "/app.git", withIntermediateDirectories: true)
+        #expect(WorktreeCopy.linkSource(main: f.source) == f.source)
+        #expect(WorktreeCopy.linkSource(main: f.base + "/app.git") == nil)
+        #expect(WorktreeCopy.cantLink.hasPrefix("Linking needs the repository’s main checkout, and a bare repository has none"))
     }
 
     @Test func whatToRunThere() {
@@ -307,6 +318,51 @@ import Testing
         #expect(WorktreeCopy.hints(for: report, source: f.source, destination: f.destination, git: "/usr/bin/false") == ["php artisan storage:link"])
     }
 
+    /// Composer's own (vendor/composer, vendor/autoload.php, vendor/bin) is cloned, never linked: PHP follows links for
+    /// `__DIR__`, so linked it would load the main checkout's app/ and tests/ there, and an install there would point
+    /// the main checkout's autoloader at the new worktree. Its packages are linked, with `vendor/` and `/vendor` alike;
+    /// a path repository's package (vendor/acme/pkg → ../../packages/pkg) leads to the new worktree's own.
+    @Test func composersAutoloaderIsTheNewWorktreesOwn() throws {
+        for linkable: Set<String> in [[], ["vendor"]] {
+            let f = try Folders()
+            defer { f.remove() }
+            let fm = FileManager.default
+            try f.write("vendor/autoload.php", "<?php\nreturn require_once __DIR__ . '/composer/autoload_real.php';\n")
+            try f.write("vendor/composer/autoload_psr4.php", "<?php\n$vendorDir = dirname(__DIR__);\n")
+            try f.write("vendor/composer/installed.json", "{}\n")
+            try f.write("vendor/bin/phpunit", "#!/usr/bin/env php\n")
+            try f.write("vendor/laravel/framework/src/App.php", "<?php\n")
+            try fm.createDirectory(atPath: f.source + "/vendor/acme", withIntermediateDirectories: true)
+            try fm.createSymbolicLink(atPath: f.source + "/vendor/acme/pkg", withDestinationPath: "../../packages/pkg")
+            let report = WorktreeCopy.link(["vendor/"], from: f.source, to: f.destination, worktrees: [], linkable: linkable)
+            func target(_ path: String) -> String? { try? fm.destinationOfSymbolicLink(atPath: f.destination + "/" + path) }
+            func kind(_ path: String) -> mode_t? {
+                var info = stat()
+                return lstat(f.destination + "/" + path, &info) == 0 ? info.st_mode & S_IFMT : nil
+            }
+            #expect(kind("vendor") == S_IFDIR && target("vendor/laravel") == "../../app/vendor/laravel", "\(linkable)")
+            #expect(target("vendor/acme/pkg") == "../../packages/pkg" && kind("vendor/acme") == S_IFDIR)
+            let hints = WorktreeCopy.hints(for: report, source: f.source, destination: f.destination, git: "/usr/bin/false")
+            if WorktreeCopy.canClone(from: f.source, into: f.destination) {
+                #expect(kind("vendor/composer") == S_IFDIR && kind("vendor/autoload.php") == S_IFREG && kind("vendor/bin") == S_IFDIR)
+                #expect(kind("vendor/composer/autoload_psr4.php") == S_IFREG && f.read("vendor/composer/installed.json") == "{}\n")
+                #expect(report.copied.contains("vendor/composer") && report.failures.isEmpty)
+                #expect(hints.isEmpty) // the same HEAD (git can't say here): its classmap is right
+            } else {
+                // A disk that can't clone: left out, never linked, and composer install makes them there.
+                #expect(kind("vendor/composer") == nil && kind("vendor/autoload.php") == nil && kind("vendor/bin") == nil)
+                #expect(report.leftOut.contains(.init("vendor/composer", WorktreeCopy.composerLeftOut("app"))))
+                #expect(hints == ["composer install"])
+            }
+        }
+        // Without vendor/composer, vendor/ is no Composer's: linked whole where a link may stand for it.
+        let f = try Folders()
+        defer { f.remove() }
+        try f.write("vendor/autoload.php", "<?php\n")
+        let report = WorktreeCopy.link(["vendor/"], from: f.source, to: f.destination, worktrees: [], linkable: ["vendor"])
+        #expect(report.copied == ["vendor"] && (try? FileManager.default.destinationOfSymbolicLink(atPath: f.destination + "/vendor")) == "../app/vendor")
+    }
+
     @Test func nothingIsLinkedOverWhatIsThere() throws {
         let f = try Folders()
         defer { f.remove() }
@@ -441,6 +497,49 @@ import Testing
             #expect(try String(contentsOfFile: repo.path + "/node_modules/vite/index.js", encoding: .utf8) == "vite\n")
             #expect(try String(contentsOfFile: repo.path + "/vendor/a/x.php", encoding: .utf8) == "<?php\n")
             #expect(try String(contentsOfFile: repo.path + "/.env", encoding: .utf8) == "APP_KEY=x\n")
+        }
+    }
+
+    /// A workspace package (npm, yarn and pnpm link node_modules/@acme/utils → ../../packages/utils): linked, the link is
+    /// made again as it is, so it leads to the new worktree's own packages/utils, the branch's, never the main checkout's
+    /// tracked source; with `node_modules/` and `/node_modules` alike. The rest is the main checkout's, linked.
+    @Test func aWorkspacePackageLeadsToTheBranchsOwn() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let fm = FileManager.default
+        for pattern in ["node_modules/", "/node_modules"] {
+            let repo = try TemporaryRepository(git: git)
+            defer { repo.remove() }
+            try repo.write(".gitignore", pattern + "\n")
+            try repo.write("packages/utils/index.js", "main version\n")
+            repo.run(["add", ".gitignore", "packages/utils/index.js"])
+            repo.run(["commit", "-qm", "Utils"])
+            repo.run(["switch", "-qc", "fix/x"])
+            try repo.write("packages/utils/index.js", "branch version\n")
+            repo.run(["commit", "-qam", "Change utils"])
+            repo.run(["switch", "-q", "main"])
+            try repo.write("node_modules/vite/bin/vite.js", "vite\n")
+            try fm.createDirectory(atPath: repo.path + "/node_modules/.bin", withIntermediateDirectories: true)
+            try fm.createSymbolicLink(atPath: repo.path + "/node_modules/.bin/vite", withDestinationPath: "../vite/bin/vite.js")
+            try repo.write("node_modules/@acme/other/index.js", "other\n") // a scoped package from the registry
+            try fm.createSymbolicLink(atPath: repo.path + "/node_modules/@acme/utils", withDestinationPath: "../../packages/utils")
+            let destination = repo.base + "/xCloud-wt-x"
+            repo.run(["worktree", "add", "-q", destination, "fix/x"])
+            let entries = try #require(WorktreeCopy.entries(from: repo.path, to: destination, git: git))
+            let linkable = try #require(WorktreeCopy.linkable(entries, in: destination, git: git))
+            let whole: Set<String> = pattern == "/node_modules" ? ["node_modules"] : [] // `node_modules/` ignores no link
+            #expect(entries == ["node_modules/"] && linkable == whole, "\(pattern)")
+            let report = WorktreeCopy.link(entries, from: repo.path, to: destination, worktrees: WorktreeCopy.worktrees(of: repo.path, git: git),
+                                           linkable: linkable)
+            #expect(report.failures.isEmpty && report.fatal == nil)
+            // The branch's own, through the link made again as it is.
+            #expect(canonicalPath(destination + "/node_modules/@acme/utils") == canonicalPath(destination + "/packages/utils"), "\(pattern)")
+            #expect(try fm.destinationOfSymbolicLink(atPath: destination + "/node_modules/@acme/utils") == "../../packages/utils")
+            #expect(try String(contentsOfFile: destination + "/node_modules/@acme/utils/index.js", encoding: .utf8) == "branch version\n")
+            // The rest is the main checkout's: the packages linked whole, the .bin link leading to one of them.
+            #expect(try fm.destinationOfSymbolicLink(atPath: destination + "/node_modules/vite") == "../../xCloud/node_modules/vite")
+            #expect(try fm.destinationOfSymbolicLink(atPath: destination + "/node_modules/@acme/other") == "../../../xCloud/node_modules/@acme/other")
+            #expect(canonicalPath(destination + "/node_modules/.bin/vite") == canonicalPath(repo.path + "/node_modules/vite/bin/vite.js"))
+            #expect(repo.output(["-C", destination, "status", "--porcelain"]).isEmpty, "nothing tracked there was touched")
         }
     }
 }

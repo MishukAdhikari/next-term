@@ -21,13 +21,18 @@ extension GitActions {
         let root = self.root
         let location = AppDelegate.shared.worktreeLocation
         let listed = model.worktrees.map(\.path)
-        // The choice for the ignored files names what the sidebar already knows git ignores at the checkout's top.
+        // The choice for the ignored files names what the sidebar already knows git ignores at the checkout's top. git
+        // takes a link for a file: one to a folder is named as the folder (a Link-made worktree's "vendor").
         let snapshot = controller?.sidebar.git.snapshot.flatMap { canonicalPath($0.root) == canonicalPath(root) ? $0 : nil }
+        func named(_ path: String) -> String {
+            var isFolder: ObjCBool = false
+            return FileManager.default.fileExists(atPath: root + "/" + path, isDirectory: &isFolder) && isFolder.boolValue ? path + "/" : path
+        }
         let ignoredHere = snapshot.map { snapshot in
             snapshot.wholeFolders.filter { $0.value == .ignored && !$0.key.contains("/") }.map { $0.key + "/" }
-                + snapshot.files.filter { $0.value == .ignored && !$0.key.contains("/") }.map(\.key)
+                + snapshot.files.filter { $0.value == .ignored && !$0.key.contains("/") }.map { named($0.key) }
         }
-        let choiceTitle = ignoredHere.map(WorktreeCopy.choiceTitle(ignored:)) ?? "Ignored files:"
+        let titleHere = ignoredHere.map(WorktreeCopy.choiceTitle(ignored:)) ?? "Ignored files:"
         let chosen = AppDelegate.shared.ignoredFilesChoice(for: main)
         DispatchQueue.global(qos: .userInitiated).async {
             let ignored = location == .claudeWorktrees && WorktreeFolder.ignoresClaudeWorktrees(mainCheckout: main, git: git)
@@ -35,13 +40,21 @@ extension GitActions {
             let outermost = WorktreeFolder.outermostCheckout(main, git: git)
             let includes = WorktreeInclude.exists(in: root)
             let place = WorktreeFolder.place(mainCheckout: main, outermost: outermost, location: location, claudeWorktreesIgnored: ignored)
-            let canClone = WorktreeCopy.canClone(from: root, into: place.folder)
-            let linkSource = WorktreeCopy.linkSource(main: main, root: root)
+            // Copy and Link both take the ignored files from the main checkout (the window's in a bare repository, which
+            // has none for links to lead to), and the choice names what git ignores at its top: the sidebar's, when it
+            // is this window's, else git's own list.
+            let linkSource = WorktreeCopy.linkSource(main: main)
+            let source = linkSource ?? root
+            let canClone = WorktreeCopy.canClone(from: source, into: place.folder)
+            let fromHere = canonicalPath(source) == canonicalPath(root)
+            let ignoredThere = fromHere ? nil : WorktreeCopy.ignoredEntries(in: source, git: git)
+            let choiceTitle = fromHere ? titleHere : ignoredThere.map(WorktreeCopy.choiceTitle(listed:)) ?? "Ignored files:"
             DispatchQueue.main.async {
-                let shared = (linkSource as NSString).lastPathComponent
+                let shared = (source as NSString).lastPathComponent
                 let lines = Dictionary(uniqueKeysWithValues: WorktreeCopy.Choice.allCases.map { ($0, WorktreeCopy.line($0, main: shared, includes: includes)) })
                 let ignored = choiceTitle.map { title in
-                    WorktreeSheet.IgnoredChoice(title: title, lines: lines, chosen: chosen, canClone: canClone, main: main, linkSource: linkSource)
+                    WorktreeSheet.IgnoredChoice(title: title, lines: lines, chosen: chosen, canClone: canClone, canLink: linkSource != nil, main: main,
+                                                source: source)
                 }
                 askWorktreeName(target, place: place, listed: listed, includes: includes, ignored: ignored, update: update)
             }
@@ -59,9 +72,9 @@ extension GitActions {
         let taken = { (name: String) in WorktreeFolder.exists(path(name)) || isListed(name) }
         let prefill = WorktreeFolder.suggestedName(prefix: place.prefix, short: target.shortName, isTaken: taken)
         let checkout = ((model?.root ?? root) as NSString).lastPathComponent
-        let shared = ((ignored?.linkSource ?? root) as NSString).lastPathComponent
+        let shared = ((ignored?.source ?? root) as NSString).lastPathComponent
         let footnotes: [WorktreeCopy.Choice: String] = [
-            .copy: WorktreeCopy.footnote(checkout: checkout), .link: WorktreeCopy.linkFootnote(checkout: checkout, main: shared),
+            .copy: WorktreeCopy.footnote(checkout: checkout, source: shared), .link: WorktreeCopy.linkFootnote(checkout: checkout, main: shared),
             .leaveOut: WorktreeFolder.sheetInfo(checkout: checkout, includes: includes),
         ]
         let sheet = WorktreeSheet(title: WorktreeFolder.sheetTitle(target), folder: folder, prefill: prefill, prefix: place.prefix,
@@ -70,11 +83,12 @@ extension GitActions {
                                    isRegistered: { isListed($0) && !WorktreeFolder.exists(path($0)) })
         }
         sheet.present(over: window) { name, sheet in
-            // Copy, remembered on a disk that can't clone, starts as Leave Out: it stays remembered unless changed.
-            if let ignored, ignored.canClone || sheet.ignoredChoice != ignored.shown {
+            // Copy, remembered on a disk that can't clone, starts as Leave Out, as Link does in a bare repository: it
+            // stays remembered unless changed.
+            if let ignored, (ignored.canClone && ignored.canLink) || sheet.ignoredChoice != ignored.shown {
                 AppDelegate.shared.setIgnoredFilesChoice(sheet.ignoredChoice, for: ignored.main)
             }
-            createWorktree(target, at: path(name), update: update, sheet: sheet, linkSource: ignored?.linkSource ?? root)
+            createWorktree(target, at: path(name), update: update, sheet: sheet, ignoredSource: ignored?.source ?? root)
         }
     }
 
@@ -82,8 +96,9 @@ extension GitActions {
     /// The folder is made first, empty, so one that appeared since the sheet checked the name is never taken
     /// for the new worktree; it goes again when git makes nothing in it. A worktree that is there after git
     /// failed (a post-checkout hook, LFS) opens anyway, with the error over its window; nothing is rolled back.
-    /// `linkSource`: the checkout Link's links lead to (WorktreeCopy.linkSource); Copy clones the one the window shows.
-    private func createWorktree(_ target: WorktreeTarget, at path: String, update: Bool, sheet: WorktreeSheet, linkSource: String) {
+    /// `ignoredSource`: the checkout Copy clones and Link's links lead to (WorktreeCopy.linkSource, else the window's);
+    /// Leave Out copies what the window's `.worktreeinclude` lists.
+    private func createWorktree(_ target: WorktreeTarget, at path: String, update: Bool, sheet: WorktreeSheet, ignoredSource: String) {
         if let problem = WorktreeFolder.claim(path) { return sheet.refused(problem) }
         let args = target.addArguments(path: path)
         let folder = (path as NSString).lastPathComponent
@@ -101,7 +116,7 @@ extension GitActions {
             DispatchQueue.global(qos: .userInitiated).async {
                 // Copy or Link: what git ignores there, cloned or linked, the window opening once it is in; Leave Out:
                 // what .worktreeinclude lists, copied, as before.
-                let source = choice == .link ? linkSource : root
+                let source = choice == .leaveOut ? root : ignoredSource
                 let ignored = choice == .leaveOut ? nil : Self.bringIgnored(choice, from: source, to: path, stop: stop, sheet: sheet)
                 let copied = choice == .leaveOut ? Self.copyIncludes(from: root, to: path) : []
                 DispatchQueue.main.async {
@@ -344,18 +359,29 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     private(set) static var current: WorktreeSheet?
 
     /// The ignored files' choice: its title naming them, each choice's line, the one remembered, whether the disk lets
-    /// Copy be (else Copy is off, and says why), the main checkout it is remembered for, and the checkout Link's links
-    /// lead to.
+    /// Copy be and whether the repository has a main checkout for Link (else each is off, and says why), the main
+    /// checkout it is remembered for, and the checkout Copy clones and Link's links lead to.
     struct IgnoredChoice {
         let title: String
         let lines: [WorktreeCopy.Choice: String]
         let chosen: WorktreeCopy.Choice
         let canClone: Bool
+        let canLink: Bool
         let main: String
-        let linkSource: String
+        let source: String
 
-        /// The one chosen as the sheet comes up: Copy, remembered, on a disk that can't clone is Leave Out.
-        var shown: WorktreeCopy.Choice { chosen == .copy && !canClone ? .leaveOut : chosen }
+        /// Whether `choice` can be made here: Copy on a disk that clones, Link with a main checkout to lead to.
+        func offers(_ choice: WorktreeCopy.Choice) -> Bool {
+            switch choice {
+            case .copy: return canClone
+            case .link: return canLink
+            case .leaveOut: return true
+            }
+        }
+
+        /// The one chosen as the sheet comes up: one remembered that can't be made here (Copy on a disk that can't
+        /// clone, Link in a bare repository) is Leave Out.
+        var shown: WorktreeCopy.Choice { offers(chosen) ? chosen : .leaveOut }
     }
 
     private let alert = NSAlert()
@@ -364,6 +390,8 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
     private var choiceTitle: NSTextField?
     /// Copy, Link and Leave Out, in that order: one group, as radio buttons with one action in one view are.
     private var radios: [(choice: WorktreeCopy.Choice, button: NSButton)] = []
+    /// What the choice offers: which radios can be on again when the sheet is the sheet again (`refused`).
+    private var choices: IgnoredChoice?
     private let footnotes: [WorktreeCopy.Choice: String]
     /// What the new worktree gets of the ignored files: Leave Out when the sheet offers no choice.
     private(set) var ignoredChoice: WorktreeCopy.Choice = .leaveOut
@@ -432,15 +460,17 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
             heading.lineBreakMode = .byTruncatingTail
             choiceTitle = heading
             views.append(heading)
+            choices = ignored
             ignoredChoice = ignored.shown
             for choice in WorktreeCopy.Choice.allCases {
                 let line = ignored.lines[choice] ?? ""
-                let enabled = choice != .copy || ignored.canClone
+                let enabled = ignored.offers(choice)
                 let radio = NSButton(radioButtonWithTitle: choice.title, target: self, action: #selector(choiceMade))
                 radio.attributedTitle = Self.radioTitle(choice.title, line, enabled: enabled)
                 radio.state = choice == ignoredChoice ? .on : .off
                 radio.isEnabled = enabled
-                radio.toolTip = enabled ? choice.title + ": " + line : WorktreeCopy.cantClone
+                let why = choice == .copy ? WorktreeCopy.cantClone : WorktreeCopy.cantLink
+                radio.toolTip = enabled ? choice.title + ": " + line : why
                 radio.setAccessibilityLabel(choice.title + ": " + line)
                 radio.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) // cut, never wider than the sheet
                 radios.append((choice, radio))
@@ -526,6 +556,7 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         create.title = "Create"
         cancel.isEnabled = true
         field.isEnabled = true
+        for (choice, radio) in radios { radio.isEnabled = choices?.offers(choice) ?? true }
         changed()
         if problem.stringValue.isEmpty { problem.stringValue = reason }
         alert.window.makeFirstResponder(field)
@@ -602,6 +633,8 @@ final class WorktreeSheet: NSObject, NSTextFieldDelegate {
         create.title = "Creating…"
         create.isEnabled = false
         cancel.isEnabled = false
+        // The choice is read once git is done (createWorktree): it stays as it was at Create.
+        for (_, radio) in radios { radio.isEnabled = false }
         spinner.startAnimation(nil)
         onCreate(WorktreeFolder.finalName(field.stringValue), self)
     }

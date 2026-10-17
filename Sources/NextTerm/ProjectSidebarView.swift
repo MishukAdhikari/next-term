@@ -1119,6 +1119,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Worktree's Link): the row says so, with a mark.
     private func linkedTarget(of node: FileNode) -> String? {
         guard node.isSymlink, let linkedMain, let target = node.linkTarget, target.hasPrefix(linkedMain + "/") else { return nil }
+        // A worktree nested in its main checkout (.claude/worktrees/x): a link within the worktree itself is no link into
+        // the main checkout. Both spelled from real folders (setRoot's canonical path, `linkTarget`).
+        if let root, target == root.path || target.hasPrefix(root.path + "/") { return nil }
         return target
     }
 

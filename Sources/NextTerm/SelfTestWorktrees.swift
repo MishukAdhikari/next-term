@@ -365,11 +365,13 @@ extension SelfTest {
                     var info = stat()
                     return lstat(path + "/" + name, &info) == 0 ? info.st_mode & S_IFMT : nil
                 }
+                // .bin's link leads out of .bin: made again as it is, in a folder of its own, so it leads within the new worktree.
                 let links = [".env": "../xCloud/.env", "build": "../xCloud/build", "node_modules/vite": "../../xCloud/node_modules/vite",
-                             "node_modules/.bin": "../../xCloud/node_modules/.bin", "vendor/autoload.php": "../../xCloud/vendor/autoload.php"]
+                             "node_modules/.bin/vite": "../vite/bin/vite.js", "vendor/autoload.php": "../../xCloud/vendor/autoload.php"]
                 let wrong = links.filter { target($0.key) != $0.value }.map(\.key).sorted()
-                check(wrong.isEmpty && kind("node_modules") == S_IFDIR && kind("vendor") == S_IFDIR && read(path + "/node_modules/vite/bin/vite.js") == "#!/usr/bin/env node\n",
-                      "worktrees: .env and build are one link each, relative; node_modules and vendor are folders holding a link for each thing in them (AE13)",
+                let folders = kind("node_modules") == S_IFDIR && kind("node_modules/.bin") == S_IFDIR && kind("vendor") == S_IFDIR
+                check(wrong.isEmpty && folders && read(path + "/node_modules/.bin/vite") == "#!/usr/bin/env node\n",
+                      "worktrees: .env and build are one link each, relative; node_modules and vendor are folders holding a link for each thing in them, .bin's link made again as it is (AE13)",
                       "wrong: \(wrong)")
                 let absent = ["debug.log", "public/hot", "public/storage", ".claude/worktrees/agent-x"].filter { kind($0) != nil }
                 let status = sh(path, "status", "--porcelain")
