@@ -53,7 +53,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   closed). The tools are marked honestly, so agents ask you before they type into a tab. Local only: a
   private socket, no network port.
 - **Secrets.** API and MCP keys sealed on your Mac, used by agents by name after you approve with Touch ID or
-  your password. See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
+  your password. **Secrets › Import From** copies keys in from .env, JSON, TOML, YAML and CSV files and
+  password-manager exports, moves them out of your MCP configs, or takes them from your own 1Password and
+  Bitwarden CLI in a tab you can see, a ticked row at a time, with Undo. Rotate… opens a key’s page from its
+  link and takes the new key in the same sheet; it keeps the old key masked for 30 days and can remind you
+  when a key gets old (**Secrets › Keys Due to Rotate**). Each key asks for Touch ID every time it’s used
+  until you untick that, and a key set to “Never show this key” is never shown or copied, even to you.
+  See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot
   CLI kept for it is there, newest first, with its title, branch and model, including the ones started in
@@ -323,14 +329,22 @@ Next Term's menu.
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
 - **Secrets** (the Secrets menu, and Settings › Secrets) keeps API and MCP keys in a vault on your Mac, each
-  value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one,
-  by the login keychain, which Settings calls less protected); the names and what each key is for are not
-  encrypted. Agents use a key by name, after Next Term's own panel shows who asks, which keys and the
-  command, and you approve with Touch ID or your password; no MCP tool returns a value. Stored keys are
-  masked, best effort, in what agents read through Next Term. A command you approve gets the key in its
-  environment, and for as long as it runs, any program running as you can read it there (`ps -E` shows it),
-  an agent's own shell tool included, which Next Term's masks never see. The command can also send the key
-  on, and Secrets can't stop malware already running as you.
+  value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one, by
+  the login keychain, which Settings calls less protected); the names, what each key is for and the link to
+  its page are not encrypted. Agents use a key by name, after Next Term’s own panel shows who asks, which
+  keys and the command, and you approve with Touch ID or your password; no MCP tool returns a value. A key’s
+  “Ask for Touch ID every time it’s used” is ticked by default (untick it in its Edit… sheet), and while it
+  is, a request that uses the key offers only Allow once. A key set to “Never show this key” is never shown
+  or copied, even to you, and that can’t be undone; commands you allow still get it. The New keys group in
+  Settings › Secrets sets how both start for new keys. Stored keys are masked, best effort, in what agents
+  read through Next Term. A command you approve gets the key in its environment, and for as long as it runs,
+  any program running as you can read it there (`ps -E` shows it), an agent’s own shell tool included, which
+  Next Term’s masks never see. The command can also send the key on, and Secrets can’t stop malware already
+  running as you. **Secrets › Import From** leaves a file it copies keys from as it was, and changes an MCP
+  config only once you choose the keys to move out of it. For 1Password and Bitwarden, Next Term types the
+  CLI’s line into a new tab and never presses Return: you unlock at the CLI’s own prompt, and the keys go by
+  pipe, never onto the screen. Next Term doesn’t rotate keys through providers’ APIs: you make the new key,
+  and delete or deactivate the old one, on the provider’s page.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
