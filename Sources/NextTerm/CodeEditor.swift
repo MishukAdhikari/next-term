@@ -782,6 +782,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         if document.lines.count > 0 { applyWrapIndents(0...(document.lines.count - 1)) }
         document.storage.endEditing()
         markdown?.restyleAll(storageIsBase: true)
+        styleVisibleMarkdown()
         textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: document.storage.length), actualCharacterRange: nil)
         ruler.updateThickness()
         ruler.needsDisplay = true
@@ -1120,6 +1121,34 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         layoutManager.tintedLines = { [weak preview] range in preview?.tintedLines(in: range) ?? [] }
         styler.onLinesChanged = { [weak preview] lines in preview?.linesChanged(lines) }
         textView.onSelectionMoved = { [weak preview] stillSelecting in preview?.selectionChanged(stillSelecting: stillSelecting) }
+        // Scrolled to lines the slices have not reached yet (a link opened deep in, a file just opened), those come first.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(markdownScrolled), name: NSView.boundsDidChangeNotification,
+                                               object: scrollView.contentView)
+    }
+
+    /// On the next turn of the run loop, never inside the layout or the edit that moved the view.
+    @objc private func markdownScrolled(_ notification: Notification) {
+        guard markdown?.pendingLines ?? 0 > 0, !visibleStyleQueued else { return }
+        visibleStyleQueued = true
+        DispatchQueue.main.async { [weak self] in
+            self?.visibleStyleQueued = false
+            self?.styleVisibleMarkdown()
+        }
+    }
+
+    /// The lines on screen styled before the rest, while the slices have not reached them (MarkdownStyler.styleFirst).
+    private func styleVisibleMarkdown() {
+        guard let markdown, markdown.pendingLines > 0, let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
+        let index = document.lines
+        // At the top the slices are there first anyway.
+        guard scrollView.contentView.bounds.minY > 0, index.count > 0, index.length == document.storage.length else { return }
+        let visible = scrollView.contentView.bounds.offsetBy(dx: 0, dy: -textView.textContainerOrigin.y)
+        let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let first = index.line(at: characters.location)
+        let last = index.line(at: max(characters.location, NSMaxRange(characters) - 1))
+        markdown.styleFirst(first...max(first, last))
     }
 
     /// What the layout manager draws over the characters in a range: a .env file's hidden values, or Live Preview's marks.
@@ -1129,6 +1158,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
 
     private var markdownStyles: [Int: NSParagraphStyle] = [:]
+    private var visibleStyleQueued = false
 
     /// A Markdown line's paragraph style: wrapped rows start at its text's column (an item's text, past a quote's bar),
     /// and a heading's line is as tall as its font, at the user's line height.

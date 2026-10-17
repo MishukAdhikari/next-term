@@ -35,8 +35,9 @@ public enum MarkdownEdits {
     // MARK: bold, italic, strikethrough, code
 
     /// Bold, Italic, Strikethrough or Code. A selection that is that span's text (or the span with its markers), or a
-    /// caret in one, takes the markers off. Otherwise the selection is wrapped (without the spaces at its ends), or the
-    /// word at the caret, or an empty pair goes in with the caret between (and comes out again). One line at a time.
+    /// caret in one, takes the markers off. Otherwise the selection is wrapped (without the spaces at its ends; in code
+    /// with more backticks than any run in it), or the word at the caret, or an empty pair goes in with the caret between
+    /// (and comes out again). One line at a time.
     public static func toggleWrap(_ wrap: Wrap, selection: NSRange, in text: NSString, _ index: LineIndex, lines: Lines,
                                   style: MarkdownStyle = .standard) -> Edit? {
         guard let (number, line) = oneLine(selection, index), !lines(number).isSource else { return nil }
@@ -51,17 +52,29 @@ public enum MarkdownEdits {
             while span.range.location - count > 0, text.character(at: line.location + span.range.location - count - 1) == 0x60 { count += 1 }
             return count
         }
+        // A code span's text, without the one space at each end that pads a backtick next to its fence.
+        func content(_ span: MarkdownSyntax.Span) -> NSRange {
+            let r = span.range
+            guard wrap == .code, r.length > 2, text.character(at: line.location + r.location) == 0x20,
+                  text.character(at: line.location + NSMaxRange(r) - 1) == 0x20,
+                  text.substring(with: NSRange(location: line.location + r.location, length: r.length)).contains(where: { $0 != " " })
+            else { return r }
+            return NSRange(location: r.location + 1, length: r.length - 2)
+        }
         let found: MarkdownSyntax.Span? = selection.length > 0
             ? spans.first { span in
-                span.range == core || (span.range.location - markers(span) == core.location && NSMaxRange(span.range) + markers(span) == NSMaxRange(core))
+                span.range == core || content(span) == core
+                    || (span.range.location - markers(span) == core.location && NSMaxRange(span.range) + markers(span) == NSMaxRange(core))
             }
             : spans.filter { $0.range.location <= local.location && local.location <= NSMaxRange($0.range) }.min { $0.range.length < $1.range.length }
         if let span = found {
             let count = markers(span)
+            let body = content(span)
+            let opening = count + body.location - span.range.location
             let whole = NSRange(location: line.location + span.range.location - count, length: span.range.length + 2 * count)
-            let inner = text.substring(with: NSRange(location: line.location + span.range.location, length: span.range.length))
-            let after = selection.length > 0 ? NSRange(location: whole.location, length: span.range.length)
-                : NSRange(location: min(max(whole.location, selection.location - count), whole.location + span.range.length), length: 0)
+            let inner = text.substring(with: NSRange(location: line.location + body.location, length: body.length))
+            let after = selection.length > 0 ? NSRange(location: whole.location, length: body.length)
+                : NSRange(location: min(max(whole.location, selection.location - opening), whole.location + body.length), length: 0)
             return edit(whole, inner, in: text, selection: after)
         }
         var marker = wrap.marker(style)
@@ -76,9 +89,18 @@ public enum MarkdownEdits {
         if selection.length > 0 {
             guard core.length > 0 else { return nil }
             let target = NSRange(location: line.location + core.location, length: core.length)
-            marker = fitted(target)
-            return Edit(range: target, text: marker + text.substring(with: target) + marker,
-                        selection: NSRange(location: target.location + (marker as NSString).length, length: target.length))
+            let inner = text.substring(with: target)
+            // Code: a fence one backtick longer than any run inside, and a space where a backtick would touch it.
+            var pad = ""
+            if wrap == .code {
+                marker = String(repeating: "`", count: longestBacktickRun(inner) + 1)
+                if inner.hasPrefix("`") || inner.hasSuffix("`") { pad = " " }
+            } else {
+                marker = fitted(target)
+            }
+            let opening = (marker as NSString).length + (pad as NSString).length
+            return Edit(range: target, text: marker + pad + inner + pad + marker,
+                        selection: NSRange(location: target.location + opening, length: target.length))
         }
         let width = (marker as NSString).length
         let caret = selection.location
@@ -320,12 +342,7 @@ public enum MarkdownEdits {
         guard numbers.allSatisfy({ !lines($0).isSource }) else { return nil }
         let start = index.starts[first]
         let end = LineEdits.end(of: last, in: index)
-        let body = text.substring(with: NSRange(location: start, length: end - start))
-        var longest = 0, run = 0
-        for unit in body.utf16 {
-            run = unit == 0x60 ? run + 1 : 0
-            longest = max(longest, run)
-        }
+        let longest = longestBacktickRun(text.substring(with: NSRange(location: start, length: end - start)))
         let firstLine = content(of: first, in: index)
         let prefix = text.substring(with: NSRange(location: firstLine.location, length: textStart(of: firstLine, in: text) - firstLine.location))
         let fence = prefix + String(repeating: "`", count: max(3, longest + 1))
@@ -479,6 +496,16 @@ public enum MarkdownEdits {
         while start < end, isSpace(text.character(at: line.location + start)) { start += 1 }
         while end > start, isSpace(text.character(at: line.location + end - 1)) { end -= 1 }
         return NSRange(location: start, length: end - start)
+    }
+
+    /// The most backticks in a row in a text: a fence around it needs one more.
+    static func longestBacktickRun(_ text: String) -> Int {
+        var longest = 0, run = 0
+        for unit in text.utf16 {
+            run = unit == 0x60 ? run + 1 : 0
+            longest = max(longest, run)
+        }
+        return longest
     }
 
     /// The word the caret is in or at the end of, if any.

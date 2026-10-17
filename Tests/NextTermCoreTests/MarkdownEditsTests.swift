@@ -92,6 +92,16 @@ import Testing
         #expect(run("x «code» y", Self.code) == "x `«code»` y")
         #expect(run("x `co|de` y", Self.code) == "x co|de y")
         #expect(run("x ``a ` b|`` y", Self.code) == "x a ` b| y")
+        // A backtick in the selection: a fence longer than any run in it, a space where a backtick would touch it, and
+        // the same command takes it all off again.
+        #expect(run("«a`b»", Self.code) == "``«a`b»``")
+        #expect(run("«`x»", Self.code) == "`` «`x» ``")
+        #expect(run("x «``a`»", Self.code) == "x ``` «``a`» ```")
+        #expect(run("`` `x| ``", Self.code) == "`x|")
+        for marked in ["«a`b»", "«`x»", "x «``a`»"] {
+            let (text, selection) = Self.parse(marked)
+            #expect(Self.twice(text, selection, Self.code)?.twice == text, "\(marked)")
+        }
         // In code, a table or HTML, nothing.
         #expect(run("```\nwo|rd\n```", Self.bold) == nil)
         #expect(run("| a | «word» |\n| - | - |", Self.bold) == nil)

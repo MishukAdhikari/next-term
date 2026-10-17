@@ -34,17 +34,47 @@ final class MarkdownPreview {
     }
 
     /// Live Preview on or off: the glyphs of what is laid out are made again, and nothing else changes. In Source every
-    /// character shows and the fonts stay (MarkdownStyler), so switching moves no text but the syntax.
+    /// character shows and the fonts stay (MarkdownStyler), so switching moves no text but the syntax: the text on the
+    /// top row stays there, however many rows the hidden syntax above it takes in Source.
     func setEnabled(_ on: Bool) {
         guard on != enabled else { return }
         enabled = on
         revealed = on ? revealedLines() : nil
         guard let layoutManager, let storage = layoutManager.textStorage else { return }
+        let top = topCharacter()
         let all = NSRange(location: 0, length: storage.length)
         layoutManager.invalidateGlyphs(forCharacterRange: all, changeInLength: 0, actualCharacterRange: nil)
         layoutManager.invalidateLayout(forCharacterRange: all, actualCharacterRange: nil)
+        if let top { keepAtTop(top) }
         textView?.needsDisplay = true
         textView?.enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    }
+
+    /// The first character on the editor's top row, and how far that row is scrolled past the top: a switch keeps it so.
+    private func topCharacter() -> (character: Int, past: CGFloat)? {
+        guard let textView, let layoutManager, let container = textView.textContainer, (layoutManager.textStorage?.length ?? 0) > 0 else {
+            return nil
+        }
+        let y = textView.visibleRect.minY - textView.textContainerOrigin.y
+        guard y > 0 else { return nil } // at the top, the text stays at the top anyway
+        let glyph = layoutManager.glyphIndex(for: NSPoint(x: 0, y: y), in: container)
+        var row = NSRange()
+        let rect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &row)
+        return (layoutManager.characterIndexForGlyph(at: row.location), max(0, y - rect.minY))
+    }
+
+    /// That character's row back on the top row, as far past it as it was.
+    private func keepAtTop(_ top: (character: Int, past: CGFloat)) {
+        guard let textView, let layoutManager else { return }
+        layoutManager.ensureLayout(forCharacterRange: NSRange(location: top.character, length: 0))
+        let glyph = layoutManager.glyphIndexForCharacter(at: top.character)
+        let row = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let visible = textView.visibleRect
+        // A rect as tall as the view from that row, so the scroll view puts the row on top (as go to line does, never a
+        // raw scroll(to:), which ignores the gutter).
+        let y = row.minY + min(top.past, row.height) + textView.textContainerOrigin.y
+        let rect = NSRect(x: visible.minX, y: y, width: 1, height: visible.height)
+        textView.scrollToVisible(rect.intersection(textView.bounds))
     }
 
     private func isRevealed(_ line: Int) -> Bool { revealed?.contains(line) ?? false }
@@ -181,7 +211,7 @@ final class MarkdownPreview {
     // MARK: the caret
 
     /// A caret put inside a hidden run on a line that shows none (a click left of a heading's title, an arrow onto it)
-    /// goes to the run's end, before the text it marks.
+    /// goes to the run's end, before the text it marks; a run that ends in an escape's backslash, before the backslash.
     func snapped(_ ranges: [NSValue]) -> [NSValue] {
         guard enabled, ranges.count == 1, let range = ranges.first?.rangeValue, range.length == 0 else { return ranges }
         let index = self.index()
@@ -190,7 +220,14 @@ final class MarkdownPreview {
         guard !isRevealed(line), let read = styler.readLine(line) else { return ranges }
         let local = range.location - index.starts[line]
         guard let run = read.hidden.first(where: { $0.location <= local && local < NSMaxRange($0) }) else { return ranges }
-        return [NSValue(range: NSRange(location: index.starts[line] + NSMaxRange(run), length: 0))]
+        // An escape's backslash and its character are one token: the caret goes before the backslash, never between them,
+        // so typing at the start of `\# not a heading` leaves its escape whole. No other hidden run ends in a backslash.
+        var end = NSMaxRange(run)
+        if end > run.location, let text = textView?.string as NSString?, index.starts[line] + end <= text.length,
+           text.character(at: index.starts[line] + end - 1) == 0x5C {
+            end -= 1
+        }
+        return [NSValue(range: NSRange(location: index.starts[line] + end, length: 0))]
     }
 
     /// The task box drawn at a character, if one is (on a line that shows no syntax: there the box is its text).

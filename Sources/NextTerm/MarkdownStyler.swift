@@ -7,12 +7,13 @@ import NextTermCore
 /// storage (no undo step, never the dirty flag, never a byte on disk) or the layout manager's temporary ones, so the
 /// grammar's colours stay as they are.
 ///
-/// Lines are read and styled in 8 ms slices from the top, so a long file never holds up typing; a line that reads as
-/// plain text and still has the attributes it opened with is left alone, so most of a long file costs only its reading.
-/// An edit reads again from the line before it (which looks at the line after it, for a setext heading or a table)
-/// until a line ends in the state it ended in before, so a keystroke restyles its own line, and a fence opened by typing
-/// restyles onwards in slices. Only a line whose reading changed is styled again. Typed text takes the attributes of
-/// the text before it, and its line's restyle, right after, gives each character its own.
+/// Lines are read and styled in 8 ms slices from the top (the lines on screen first, when the slices have not reached
+/// them), so a long file never holds up typing; a line that reads as plain text and still has the attributes it opened
+/// with is left alone, so most of a long file costs only its reading. An edit reads again from the line before it
+/// (which looks at the line after it, for a setext heading or a table) until a line ends in the state it ended in
+/// before, so a keystroke restyles its own line, and a fence opened by typing restyles onwards in slices. Only a line
+/// whose reading changed is styled again. Typed text takes the attributes of the text before it, and its line's
+/// restyle, right after, gives each character its own. A command reads the lines it needs at once, styled or not.
 final class MarkdownStyler {
     static let sliceBudget: TimeInterval = 0.008
     /// A heading's size, by level, as a multiple of the editor's font size.
@@ -34,6 +35,14 @@ final class MarkdownStyler {
     private var validUpTo = 0
     /// Lines up to here are read again even if their state matches: an edit changed them.
     private var mustRedoThrough = -1
+    /// Where a pass still spreading down the file had got to when an edit above it started another, the nearest last:
+    /// from each, the lines were read against the state from before, so a pass that finds a line ending as it did goes
+    /// on from the next of these, never past it.
+    private var stops: [Int] = []
+    /// The states lines start in, read ahead of the slices for a command or the lines on screen: the first is line
+    /// `aheadFrom`'s. Right until an edit above them (the slices read the same), and dropped once the slices pass them.
+    private var aheadFrom = 0
+    private var aheadStates: [MarkdownSyntax.LineState] = []
     private var scheduled = false
     /// Without a grammar, links get their colour here.
     private let colorsLinks: Bool
@@ -71,14 +80,54 @@ final class MarkdownStyler {
         lines.indices.contains(number) ? lines[number] : nil
     }
 
-    /// A line as read now, for a command: the lines up to it are read first when the slices have not reached it yet.
+    /// A line as read now, for a command. Where the slices have not reached it yet, the lines before it are read for
+    /// their state only (reading is quick, styling is the slow part, and the states are kept for the next line asked
+    /// for), so a command never waits for the styling.
     func line(_ number: Int) -> MarkdownSyntax.Line {
-        while validUpTo <= number, validUpTo < lines.count, index().count == lines.count { run() }
-        if let line = readLine(number) { return line }
         let index = self.index()
         guard number < index.count else { return MarkdownSyntax.Line() }
-        let before = ends.indices.contains(number - 1) ? ends[number - 1] ?? MarkdownSyntax.LineState() : MarkdownSyntax.LineState()
-        return MarkdownSyntax.scan(storage.string as NSString, range: index.range(ofLine: number), after: before).line
+        let text = storage.string as NSString
+        guard index.count == lines.count else {
+            let before = ends.indices.contains(number - 1) ? ends[number - 1] ?? MarkdownSyntax.LineState() : MarkdownSyntax.LineState()
+            return MarkdownSyntax.scan(text, range: index.range(ofLine: number), after: before).line
+        }
+        if number < validUpTo, let line = lines[number] { return line }
+        return MarkdownSyntax.scan(text, range: index.range(ofLine: number), after: state(before: number, text, index)).line
+    }
+
+    /// The state a line starts in: the slices' where they have read, else read on from the last state known.
+    private func state(before number: Int, _ text: NSString, _ index: LineIndex) -> MarkdownSyntax.LineState {
+        if number <= validUpTo { return number > 0 ? ends[number - 1] ?? MarkdownSyntax.LineState() : MarkdownSyntax.LineState() }
+        if aheadStates.isEmpty || number < aheadFrom {
+            aheadFrom = validUpTo
+            aheadStates = [state(before: validUpTo, text, index)]
+        }
+        while aheadFrom + aheadStates.count <= number {
+            let line = aheadFrom + aheadStates.count - 1
+            aheadStates.append(MarkdownSyntax.scan(text, range: index.range(ofLine: line), after: aheadStates[aheadStates.count - 1]).state)
+        }
+        return aheadStates[number - aheadFrom]
+    }
+
+    /// The lines on screen, styled now when the slices have not reached them (a new font, a file opened deep in): the
+    /// lines above are read for their state only, and the slices then go on from where they were and find these as
+    /// read. Only where every line is to be read again anyway, so no match further up can skip the lines below these.
+    func styleFirst(_ visible: ClosedRange<Int>) {
+        let index = self.index()
+        guard index.count == lines.count, visible.lowerBound > validUpTo, visible.upperBound < lines.count,
+              visible.upperBound <= mustRedoThrough, lines[visible.lowerBound] == nil || lines[visible.upperBound] == nil else { return }
+        let text = storage.string as NSString
+        var state = state(before: visible.lowerBound, text, index)
+        var changed: ClosedRange<Int>?
+        storage.beginEditing()
+        for number in visible {
+            let range = index.range(ofLine: number)
+            let (line, end) = MarkdownSyntax.scan(text, range: range, after: state)
+            if store(line, end, at: number, range) { changed = changed.map { $0.lowerBound...number } ?? number...number }
+            state = end
+        }
+        storage.endEditing()
+        if let changed { onLinesChanged?(changed) }
     }
 
     /// Every line, read: the slices still to come are done now (Go to Heading lists them all).
@@ -100,6 +149,17 @@ final class MarkdownStyler {
         }
         guard ends.count == count else { return restyleAll(storageIsBase: false) }
         let shift = added - old.count
+        // A pass still spreading had got this far: from here on the lines were read against the state from before, so a
+        // later pass that finds a line ending as it did above here goes on from here. (The lines between the edit and
+        // here were read from the new state, and a match among them still skips them.)
+        stops = stops.compactMap { $0 > old.upperBound ? $0 + shift : $0 < old.lowerBound ? $0 : nil }
+        if validUpTo > old.upperBound, validUpTo + shift < count, stops.last != validUpTo + shift { stops.append(validUpTo + shift) }
+        // The states read ahead hold up to the line before the edited one (whose reading looks at the edited line).
+        if old.lowerBound <= aheadFrom {
+            aheadStates = []
+        } else if old.lowerBound - aheadFrom < aheadStates.count {
+            aheadStates.removeSubrange((old.lowerBound - aheadFrom)...)
+        }
         if validUpTo > mustRedoThrough {
             mustRedoThrough = -1 // the last edit's lines are done: only this one's must be redone
         } else if mustRedoThrough > old.upperBound {
@@ -119,6 +179,8 @@ final class MarkdownStyler {
         baseOnStorage = Array(repeating: storageIsBase, count: count)
         validUpTo = 0
         mustRedoThrough = count - 1
+        stops = []
+        aheadStates = []
         run()
     }
 
@@ -133,36 +195,51 @@ final class MarkdownStyler {
         while validUpTo < lines.count {
             let number = validUpTo
             let before = number > 0 ? ends[number - 1] ?? MarkdownSyntax.LineState() : MarkdownSyntax.LineState()
-            let (line, end) = MarkdownSyntax.scan(text, range: index.range(ofLine: number), after: before)
-            if lines[number] != line {
-                let plain = line.headingLevel == 0 && line.hang == 0 && line.spans.isEmpty
-                if !(plain && lines[number] == nil && baseOnStorage[number]) { apply(line, at: index.range(ofLine: number)) }
-                baseOnStorage[number] = false
-                if lines[number] != nil || !line.hidden.isEmpty || !line.drawn.isEmpty {
-                    changed = changed.map { min($0.lowerBound, number)...max($0.upperBound, number) } ?? number...number
-                }
-            }
+            let range = index.range(ofLine: number)
+            let (line, end) = MarkdownSyntax.scan(text, range: range, after: before)
             let unchanged = number > mustRedoThrough && ends[number] == end
-            ends[number] = end
-            lines[number] = line
+            if store(line, end, at: number, range) {
+                changed = changed.map { min($0.lowerBound, number)...max($0.upperBound, number) } ?? number...number
+            }
+            while let stop = stops.last, stop <= number { stops.removeLast() }
             validUpTo = number + 1
             if unchanged {
-                // Every line after ended as it did before: already right.
-                validUpTo = lines.firstIndex(where: { $0 == nil }) ?? lines.count
+                // Every line after ended as it did before: already right, down to where an unfinished pass stopped (a
+                // line not read yet is never past mustRedoThrough).
+                validUpTo = stops.last ?? lines.count
             }
             if Date() > deadline { break }
         }
         storage.endEditing()
+        if !aheadStates.isEmpty, validUpTo >= aheadFrom + aheadStates.count - 1 { aheadStates = [] }
         if let changed { onLinesChanged?(changed) }
         if validUpTo < lines.count { schedule() }
     }
 
-    private func schedule() {
+    /// A line as read now, styled again when its reading changed. True when Live Preview must make its glyphs again:
+    /// its reading changed, or it was read for the first time and hides or draws something.
+    private func store(_ line: MarkdownSyntax.Line, _ end: MarkdownSyntax.LineState, at number: Int, _ range: NSRange) -> Bool {
+        var remake = false
+        if lines[number] != line {
+            let plain = line.headingLevel == 0 && line.hang == 0 && line.spans.isEmpty
+            if !(plain && lines[number] == nil && baseOnStorage[number]) { apply(line, at: range) }
+            baseOnStorage[number] = false
+            remake = lines[number] != nil || !line.hidden.isEmpty || !line.drawn.isEmpty
+        }
+        ends[number] = end
+        lines[number] = line
+        return remake
+    }
+
+    private func schedule(after delay: TimeInterval = 0) {
         guard !scheduled else { return }
         scheduled = true
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             self.scheduled = false
+            // A line an input method is composing in keeps its look until the text is committed (textDidChange goes on
+            // then); the slices wait.
+            if self.layoutManager?.firstTextView?.hasMarkedText() == true { return self.schedule(after: 0.1) }
             self.run()
         }
     }

@@ -346,8 +346,8 @@ extension SelfTest {
 
     // MARK: large files
 
-    /// The time Live Preview takes on large files: a 1 MB file styled to the end, typing at the end of 20,000 lines, and a
-    /// 3 MB file opening as source with the menu item off.
+    /// The time Live Preview takes on large files: a 1 MB file styled to the end, typing at the end and near the top of
+    /// 20,000 lines, and a 3 MB file opening as source with the menu item off.
     private static func markdownLargeFileNotes(_ c: TerminalWindowController, folder: URL) async {
         guard let window = c.window else { return }
         var paragraph = "## Section\n\nSome **bold** text, a [link](a.md), `code` and _italic_ words in a longer line of prose.\n\n- [ ] a task\n- an item\n\n"
@@ -368,18 +368,28 @@ extension SelfTest {
         try? lines.write(to: long, atomically: true, encoding: .utf8)
         if let editor = await openMarkdown(c, long) {
             window.makeFirstResponder(editor.textView)
-            editor.textView.setSelectedRange(NSRange(location: editor.document.storage.length, length: 0))
-            var slowest = 0.0, total = 0.0
-            for character in "typed at the end" {
-                let start = Date()
-                editor.textView.insertText(String(character), replacementRange: editor.textView.selectedRange())
-                let took = Date().timeIntervalSince(start) * 1000
-                slowest = max(slowest, took)
-                total += took
+            // Sixteen keys at a place: the average and the slowest, in ms.
+            func typing(at location: Int) -> (average: Double, slowest: Double) {
+                editor.textView.setSelectedRange(NSRange(location: location, length: 0))
+                var slowest = 0.0, total = 0.0
+                for character in "sixteen letters." {
+                    let start = Date()
+                    editor.textView.insertText(String(character), replacementRange: editor.textView.selectedRange())
+                    let took = Date().timeIntervalSince(start) * 1000
+                    slowest = max(slowest, took)
+                    total += took
+                }
+                return (total / 16, slowest)
             }
-            note(String(format: "markdown: typing at the end of 20,000 lines restyles in %.2f ms a key on average, %.2f ms at most", total / 16, slowest))
-            // The aim is under 2 ms a key (the note says); a key slower than a frame at 60 Hz is a failure.
-            check(total / 16 < 16, "markdown: typing at the end of 20,000 lines takes less than a frame a key", String(format: "%.2f ms", total / 16))
+            // At the end, and near the top, where each key's restyle finds the line below it ending as before and stops.
+            let places: [(String, Int)] = [("the end", editor.document.storage.length), ("the top", editor.document.lines.starts[2] + 4)]
+            for (place, location) in places {
+                let (average, slowest) = typing(at: location)
+                let took = String(format: "%.2f ms a key on average, %.2f ms at most", average, slowest)
+                note("markdown: typing at \(place) of 20,000 lines restyles in \(took)")
+                // The aim is under 2 ms a key (the note says); a key slower than a frame at 60 Hz is a failure.
+                check(average < 16, "markdown: typing at \(place) of 20,000 lines takes less than a frame a key", String(format: "%.2f ms", average))
+            }
             editor.document.reload()
             c.editorArea.close(editor)
         }
