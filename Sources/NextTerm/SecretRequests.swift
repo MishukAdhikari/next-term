@@ -510,10 +510,12 @@ final class SecretRequests {
         finish(request, outcome: .declined, decision: .declined(stopAsking: stopAsking))
     }
 
-    /// import_secrets' sheet ended: a decline counts and pauses as any other; any other end answers as it is.
+    /// import_secrets' sheet ended: a decline counts and pauses as any other, and Decline and Stop Asking stops the
+    /// asker; any other end answers as it is, with an audit line when nothing was copied in (a copy-in writes its own).
     private func importEnded(_ request: Request, _ end: SecretImportAsk.End) {
         guard !request.isAnswered else { return }
-        if case .declined = end { return decline(request, stopAsking: false) }
+        if case .declined(let stopAsking) = end { return decline(request, stopAsking: stopAsking) }
+        if let line = end.audit { audit(line.event, request, outcome: line.outcome) }
         finish(request, outcome: .allowed, decision: .answered(end.answer))
     }
 

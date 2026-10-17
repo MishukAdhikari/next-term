@@ -104,6 +104,34 @@ import Testing
         #expect(Self.check(home.file("here/.env.local"), home) == .success(env))
     }
 
+    /// The data volume's own path to a file (`/System/Volumes/Data/…`) is the same file by another name: a protected
+    /// one answers as a missing file does, in any case, and any other comes back by its usual path.
+    @Test func theDataVolumesPathReachesNoProtectedFile() throws {
+        let home = I.Home()
+        defer { home.remove() }
+        home.write(".ssh/config", "Host example\n")
+        home.write(".gnupg/pubring.kbx", "made up\n")
+        home.write("Library/Keychains/login.keychain-db", "made up\n")
+        home.write("Library/Application Support/Next Term/Secrets/vault.json", "{}\n")
+        let env: String = home.write("shop-web/.env.local", "A=1\n")
+        let data: String = "/System/Volumes/Data"
+        try #require(FileManager.default.fileExists(atPath: data + env), "the temporary home is on the data volume")
+        let missing: Result<String, SecretSources.PathRefusal> = Self.check(home.file("shop-web/.env.missing"), home)
+        let protected: [String] = [
+            home.file(".ssh/config"), home.file(".ssh"), home.file(".ssh/id_missing"), home.file(".gnupg/pubring.kbx"),
+            home.file("Library/Keychains/login.keychain-db"), Self.vault(home) + "/vault.json",
+        ]
+        for path in protected {
+            #expect(Self.check(data + path, home) == missing, "\(path)")
+            #expect(Self.check(data.lowercased() + path, home) == missing, "\(path)")
+        }
+        // A link to the data volume's path of a protected folder: the same again.
+        try FileManager.default.createSymbolicLink(atPath: home.file("shop-web/keys"), withDestinationPath: data + home.file(".ssh"))
+        #expect(Self.check(home.file("shop-web/keys/config"), home) == missing)
+        // Any other file is read by the path the rest of the Mac uses.
+        #expect(Self.check(data + env, home) == .success(env))
+    }
+
     /// AE9's banner: who asks, from where, and the agent's reason in its own words.
     @Test func theBannerNamesTheAskerTheSourceAndTheReason() {
         let asker: String = SecretSources.askerText(agent: "Claude Code", tab: "tab 2", project: "/Users/someone/Code/shop-web")
@@ -121,7 +149,7 @@ import Testing
         #expect(SecretSources.askerText(agent: nil, tab: "tab 3", project: "/Users/someone/Code/rag-api") == "An agent in tab 3 of rag-api")
         #expect(SecretSources.askerText(agent: nil, tab: "tab 3", project: nil) == "An agent in tab 3")
         #expect(SecretSources.askerText(agent: "Codex", tab: "tab 1", project: nil) == "Codex")
-        #expect(SecretSources.askerText(agent: nil, tab: nil, project: nil) == "An agent outside Next Term's tabs")
+        #expect(SecretSources.askerText(agent: nil, tab: nil, project: nil) == "An agent outside Next Term\u{2019}s tabs")
         #expect(SecretSources.shownPath("/Volumes/Work/shop-web/.env", home: "/Users/someone") == "/Volumes/Work/shop-web/.env")
         #expect(SecretSources.shownPath("/Users/someone2/.env", home: "/Users/someone") == "/Users/someone2/.env")
     }

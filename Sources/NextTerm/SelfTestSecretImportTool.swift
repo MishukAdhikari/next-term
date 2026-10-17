@@ -28,13 +28,14 @@ extension SelfTest {
         await secretImportToolRefusals(view, env: env)
         await secretImportToolFileCheck(view, env: env)
         await secretImportToolSourceCheck(view)
+        await secretImportToolLimitChecks(view, env: env)
     }
 
     /// Refused before anything opens: path and source both, a remote connection, a protected folder.
     static func secretImportToolRefusals(_ view: SecretsView, env: URL) async {
         try? "AE9_PROBE_KEY=\(secretsValue("sb_" + "secret_"))\n".write(to: env, atomically: true, encoding: .utf8)
         let both: [String: Any] = await secretsTool("import_secrets", ["path": env.path, "source": "bws"])
-        check(both["status"] as? String == "refused" && both["note"] as? String == SecretsMCP.importUsage
+        check(both["status"] as? String == "refused" && both["note"] as? String == SecretSources.askUsage
                 && !view.hasOpenSheet,
               "import_secrets: a call with both path and source is refused, and nothing opens", secretsJSON(both))
         let remote: [String: Any] = await secretsTool("import_secrets", ["path": env.path], requester: "the connection “test”")
@@ -133,6 +134,50 @@ extension SelfTest {
         let paused: Bool = (again["note"] as? String)?.hasPrefix("paused because you declined") == true
         check(again["status"] as? String == "declined" && paused && view.managerSheet == nil,
               "import_secrets: the same request at once is paused, and nothing opens", secretsJSON(again))
+    }
+}
+
+extension SelfTest {
+    /// The shared limits: with the asker's count of declines reached, import_secrets gets limited and opens nothing. The
+    /// banner's Decline and Stop Asking declines and stops the asker: its next request is refused, with nothing opened.
+    static func secretImportToolLimitChecks(_ view: SecretsView, env: URL) async {
+        let requests = SecretRequests.shared
+        requests.resetForSelfTest()
+        for index in 0..<SecretLimits.perAsker {
+            let request = secretsRequest(asker: "outside", command: ["count \(index)"], source: .tool, names: ["TOOL_KEY"],
+                                         agent: nil)
+            requests.ask(request) { _ in }
+            request.panel?.declineButton.performClick(nil)
+        }
+        let limited: [String: Any] = await secretsTool("import_secrets", ["path": env.path])
+        check(limited["status"] as? String == "limited" && !view.hasOpenSheet,
+              "import_secrets: with the asker's count of declines reached, it gets limited and opens nothing",
+              secretsJSON(limited))
+        requests.resetForSelfTest()
+        let call = secretsStart("import_secrets", ["source": "bitwarden"])
+        guard await wait(15, { view.managerSheet != nil }), let sheet = view.managerSheet,
+              let stop = secretImportStopButton(sheet.window) else {
+            return check(false, "import_secrets: the source's sheet has the banner's Decline and Stop Asking")
+        }
+        stop.performClick(nil)
+        let declined: [String: Any] = await call.value
+        let stopped: Bool = (declined["note"] as? String)?.hasPrefix("The user chose Decline and Stop Asking") == true
+        check(declined["status"] as? String == "declined" && stopped && view.managerSheet == nil,
+              "import_secrets: the banner's Decline and Stop Asking declines and closes the sheet", secretsJSON(declined))
+        let again: [String: Any] = await secretsTool("import_secrets", ["source": "1password"])
+        let refused: Bool = (again["note"] as? String)?.hasPrefix("The user chose Decline and Stop Asking for you") == true
+        check(again["status"] as? String == "declined" && refused && !view.hasOpenSheet,
+              "import_secrets: after Decline and Stop Asking, the agent's next request opens nothing", secretsJSON(again))
+        requests.resetForSelfTest()
+    }
+
+    /// The banner's Decline and Stop Asking in `window`, if it has one.
+    static func secretImportStopButton(_ window: NSWindow?) -> SecretImportStopButton? {
+        func find(_ view: NSView) -> SecretImportStopButton? {
+            if let button = view as? SecretImportStopButton { return button }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        return window?.contentView.flatMap(find)
     }
 }
 #endif

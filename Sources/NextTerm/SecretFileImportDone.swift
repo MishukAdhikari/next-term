@@ -256,14 +256,16 @@ extension SecretFileImportSheet {
     static func askedEnd(_ report: SourceReport) -> SecretImportAsk.End {
         if let reason = report.unreadable { return .outcome(.unreadable(reason)) }
         if report.rows.isEmpty { return .outcome(.nothingFound(format: report.format)) }
-        return .declined
+        return .declined(stopAsking: false)
     }
 
-    /// Closes the sheet and releases the report, which wipes every value it held.
+    /// Closes the sheet and releases the report, which wipes every value it held. An agent's request hears how it
+    /// ended once the sheet is gone, so the queue's next request finds Secrets free.
     private func finishSheet(_ ending: Ending) {
         guard let window else { return }
         client?.ended(copied: record?.names.count ?? 0)
-        if let report { asked?.end(Self.askedEnd(report)) }
+        let askedEnd: SecretImportAsk.End? = report.map(Self.askedEnd)
+        let request: SecretImportAsk? = asked
         confirmAlert = nil
         awaitingConfirm = nil
         rows = []
@@ -271,5 +273,6 @@ extension SecretFileImportSheet {
         report = nil
         if let parent = window.sheetParent { parent.endSheet(window) } else { window.close() }
         done(ending)
+        if let askedEnd { request?.end(askedEnd) }
     }
 }

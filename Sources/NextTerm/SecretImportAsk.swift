@@ -36,7 +36,8 @@ final class SecretImportAsk {
     /// How the request ended, as the agent hears it.
     enum End {
         case outcome(SecretSources.CopyInOutcome)
-        case declined
+        /// Cancel, or the banner's Decline and Stop Asking.
+        case declined(stopAsking: Bool)
         /// Secrets shows another sheet: the import window couldn't open.
         case busy
         case refused(String)
@@ -48,6 +49,19 @@ final class SecretImportAsk {
             case .declined: return SecretSources.answer(for: .declined)
             case .busy: return ["status": "busy", "note": SecretImportAsk.busyNote]
             case .refused(let note): return ["status": "refused", "note": note]
+            }
+        }
+
+        /// The audit line of an end that copied nothing in: a copy-in's line is its own (`performCopyIn`), and a
+        /// decline's the queue's.
+        var audit: (event: SecretAudit.Event, outcome: String)? {
+            switch self {
+            case .outcome(let outcome):
+                guard let said = SecretSources.askedAuditOutcome(outcome) else { return nil }
+                return (.import, said)
+            case .declined: return nil
+            case .busy: return (.refused, "import_secrets: busy, Secrets had another window open")
+            case .refused(let note): return (.refused, "import_secrets refused: \(note)")
             }
         }
     }
@@ -71,6 +85,8 @@ final class SecretImportAsk {
     /// The sheets showing it, closed when the queue ends it first.
     private weak var fileSheet: SecretFileImportSheet?
     private weak var managerSheet: SecretManagerImportSheet?
+    /// The banner's Decline and Stop Asking, turned off once the request has ended.
+    weak var stopButton: NSButton?
 
     /// The requests waiting for their tab's pipe, by that tab's id.
     private(set) static var waiting: [UUID: SecretImportAsk] = [:]
@@ -113,6 +129,7 @@ extension SecretImportAsk {
     func end(_ end: End) {
         guard !hasEnded else { return }
         hasEnded = true
+        stopButton?.isEnabled = false
         forgetTab()
         let told = ended
         ended = nil
@@ -120,10 +137,21 @@ extension SecretImportAsk {
         told?(end)
     }
 
+    /// Decline and Stop Asking, from the banner: the sheet closes first, so the queue's next request finds Secrets
+    /// free, then the request is declined and the agent asks no more until Next Term quits. Not while the sheet copies
+    /// keys in.
+    func declineAndStopAsking() {
+        guard !hasEnded, fileSheet?.isBusy != true else { return }
+        let told = ended
+        close()
+        told?(.declined(stopAsking: true))
+    }
+
     /// The queue ended it first (a pause, Start Over, its 30 minutes): its sheet closes, and nothing more is told.
     func close() {
         guard !hasEnded else { return }
         hasEnded = true
+        stopButton?.isEnabled = false
         ended = nil
         leftScreen = nil
         forgetTab()
@@ -213,7 +241,7 @@ extension SecretImportAsk {
     private func sourceSheetWent() {
         managerSheet = nil
         guard !hasEnded else { return }
-        guard tabID != nil else { return end(.declined) }
+        guard tabID != nil else { return end(.declined(stopAsking: false)) }
         leftScreen?()
     }
 
@@ -222,58 +250,4 @@ extension SecretImportAsk {
         fileSheet = sheet
         Self.addBanner(self, to: sheet.window)
     }
-}
-
-// MARK: the banner
-
-extension SecretImportAsk {
-    /// The banner under a sheet's title: who asks, from where, and the agent's reason, then its Asked by facts. The
-    /// agent's words are shown as its own and never become a key's purpose.
-    static func addBanner(_ ask: SecretImportAsk, to window: NSWindow?) {
-        guard let stack = window?.contentView?.subviews.first(where: { (view: NSView) -> Bool in view is NSStackView })
-            as? NSStackView, !stack.arrangedSubviews.isEmpty else { return }
-        let banner: NSView = bannerView(ask)
-        stack.insertArrangedSubview(banner, at: 1)
-        banner.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36).isActive = true
-    }
-
-    static func bannerView(_ ask: SecretImportAsk) -> NSView {
-        let said: String = SecretApprovalPanel.sanitized(ask.banner, limit: 700)
-        let line = NSTextField(wrappingLabelWithString: said)
-        line.font = .systemFont(ofSize: 12, weight: .semibold)
-        line.setAccessibilityLabel("Request: " + said)
-        let facts: String = "Asked by \(SecretApprovalPanel.sanitized(ask.askedBy, limit: 300))."
-        let asked = NSTextField(wrappingLabelWithString: facts)
-        asked.font = .systemFont(ofSize: 11)
-        asked.textColor = .secondaryLabelColor
-        let replace = NSTextField(wrappingLabelWithString: replaceLine)
-        replace.font = .systemFont(ofSize: 11)
-        replace.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [line, asked, replace])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 3
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let box = NSView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 6
-        box.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.1).cgColor
-        box.identifier = NSUserInterfaceItemIdentifier(bannerID)
-        box.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: box.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor),
-        ])
-        for label in [line, asked, replace] {
-            label.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
-        }
-        return box
-    }
-
-    static let bannerID = "import-secrets-banner"
-    static let replaceLine = "The agent learns only the names you import and counts. A key you already have is "
-        + "replaced only if you tick its row."
 }
