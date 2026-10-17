@@ -60,6 +60,10 @@ final class GhostSession {
     /// The first-use hint showing in the tab, and the line it came on.
     private(set) var hint: GhostNotice?
     private var hintLine: Int?
+    /// What VoiceOver hears, and when (GhostAnnouncer).
+    private var announcer = GhostAnnouncer()
+    /// For the self-test: announcements made.
+    private(set) var announcements = 0
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -108,6 +112,7 @@ final class GhostSession {
             hideOverlay()
             ask(gen, prefix)
         case .trimmed:
+            announcer.typed(at: TerminalTab.now)
             placeAfterRedraw()
         case .hidden:
             hideOverlay()
@@ -158,6 +163,7 @@ final class GhostSession {
             if state.asked == next.gen { check(next.gen, next.candidates, folder: next.folder) }
         }
         guard !late, let chosen, state.answer(gen: gen, command: chosen.line) else { return }
+        announcer.suggested(chosen.line, at: TerminalTab.now)
         placeAfterRedraw()
     }
 
@@ -189,9 +195,12 @@ final class GhostSession {
         }
         placing = nil
         draw(shown, in: tab.view)
+        announceWhenDue()
     }
 
-    private func draw(_ shown: GhostSuggestion, in view: NextTermView) {
+    /// Draws the suggestion at the cursor; `fresh`, it was just placed (not drawn again in a new style): the perf
+    /// budget's stamp, and the first-use hint.
+    private func draw(_ shown: GhostSuggestion, in view: NextTermView, fresh: Bool = true) {
         let terminal = view.getTerminal()
         let cursor = terminal.getCursorLocation()
         let available = rightEdge(of: terminal, row: cursor.y, after: cursor.x) - cursor.x - 1
@@ -206,11 +215,43 @@ final class GhostSession {
         overlay.show(text, at: origin, cell: cell, font: view.font, colour: Self.colour(for: view),
                      underline: workspace.accessibilityDisplayShouldDifferentiateWithoutColor)
         placed = (cursor.x, cursor.y)
-        shows += 1
         watch(view.window)
         _ = Self.displayOptions
+        guard fresh else { return }
+        shows += 1
         overlay.ghostShown(arrival)
         showHintIfDue()
+    }
+
+    // MARK: VoiceOver
+
+    #if DEBUG
+    /// The self-test's word on whether VoiceOver is on.
+    nonisolated(unsafe) static var testVoiceOver: Bool?
+    #endif
+
+    static var voiceOverOn: Bool {
+        #if DEBUG
+        if let testVoiceOver { return testVoiceOver }
+        #endif
+        return NSWorkspace.shared.isVoiceOverEnabled
+    }
+
+    /// While VoiceOver is on: a new suggestion is said once, quietly, half a second after typing stops, in the words
+    /// Settings chose (GhostAnnouncer). The line VoiceOver reads never holds it.
+    private func announceWhenDue() {
+        guard Self.voiceOverOn, let due = announcer.dueAt else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - TerminalTab.now) + 0.01) { [weak self] in self?.announce() }
+    }
+
+    private func announce() {
+        guard isShowing, let text = announcer.due(at: TerminalTab.now, words: GhostPreferences.voiceOverWords) else {
+            return announceWhenDue() // typing went on: later, if it still shows
+        }
+        announcements += 1
+        let element: Any = tab?.view.window ?? NSApp as Any
+        NSAccessibility.post(element: element, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.low.rawValue])
     }
 
     /// The first-use hint, on the first two lines a suggestion shows on (across launches): the keys, and Turn Off, which
@@ -283,7 +324,7 @@ final class GhostSession {
     /// The suggestion showing, drawn again where it is (the display options changed).
     private func restyle() {
         guard isShowing, let shown = state.shown, let view = tab?.view else { return }
-        draw(shown, in: view)
+        draw(shown, in: view, fresh: false)
     }
 
     /// The window going to the back hides the suggestion at once.
@@ -297,6 +338,7 @@ final class GhostSession {
 
     private func hideOverlay() {
         placed = nil
+        announcer.hidden()
         if overlayMade { overlay.hide() }
     }
 

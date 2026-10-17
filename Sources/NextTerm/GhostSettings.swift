@@ -2,16 +2,22 @@ import AppKit
 import NextTermCore
 
 /// Settings › Terminal › While typing (suggestions while typing): On (the default) or Off, a note on what Next Term keeps
-/// and what it never does, how many commands are kept with Clear History…, the choices remembered where a plugin draws its
-/// own suggestions, each with Ask Again, and a line when the history folder can't be used. Between Tab completion's rows
-/// and Suggest a Command's, with the same 110 pt right-aligned label.
+/// and what it never does, how many commands are kept with Clear History…, what VoiceOver says of a suggestion, the choices
+/// remembered where a plugin draws its own suggestions, each with Ask Again, and a line when the history folder can't be
+/// used. Between Tab completion's rows and Suggest a Command's, with the same 110 pt right-aligned label.
 final class GhostSettingsView: NSStackView {
     private let onOff = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
     private let kept = NSTextField(labelWithString: "")
     private let clear = NSButton(title: "Clear History…", target: nil, action: nil)
+    private let voiceOver = NSPopUpButton()
     private let choices = NSStackView()
     private let problem = NSTextField(wrappingLabelWithString: "")
+
+    /// VoiceOver's words, as the pop-up lists them.
+    static let voiceOverChoices: [(words: GhostAnnouncer.Words, title: String)] = [
+        (.whole, "The command, then “→ accepts”"), (.short, "“Suggestion, → accepts”"), (.none, "Nothing"),
+    ]
 
     init() {
         super.init(frame: .zero)
@@ -40,10 +46,20 @@ final class GhostSettingsView: NSStackView {
         clear.bezelStyle = .rounded
         let keptRow = NSStackView(views: [kept, clear])
         keptRow.spacing = 8
+        let says = NSTextField(labelWithString: "VoiceOver says:")
+        says.font = .systemFont(ofSize: 11)
+        voiceOver.addItems(withTitles: Self.voiceOverChoices.map(\.title))
+        voiceOver.controlSize = .small
+        voiceOver.font = .systemFont(ofSize: 11)
+        voiceOver.target = self
+        voiceOver.action = #selector(voiceOverChanged)
+        voiceOver.setAccessibilityLabel("What VoiceOver says of a suggestion")
+        let voiceOverRow = NSStackView(views: [says, voiceOver])
+        voiceOverRow.spacing = 8
         choices.orientation = .vertical
         choices.alignment = .leading
         choices.spacing = 2
-        let indented = NSStackView(views: [note, keptRow, choices, problem])
+        let indented = NSStackView(views: [note, keptRow, voiceOverRow, choices, problem])
         indented.orientation = .vertical
         indented.alignment = .leading
         indented.spacing = 4
@@ -65,6 +81,7 @@ final class GhostSettingsView: NSStackView {
         let on = GhostPreferences.isOn
         onOff.selectItem(at: on ? 0 : 1)
         note.stringValue = Self.note(on: on)
+        voiceOver.selectItem(at: Self.voiceOverChoices.firstIndex { $0.words == GhostPreferences.voiceOverWords } ?? 0)
         choices.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for item in GhostPreferences.remembered {
             let label = NSTextField(labelWithString: Self.choiceText(item.plugin, item.choice, byDismissal: item.byDismissal))
@@ -120,6 +137,12 @@ final class GhostSettingsView: NSStackView {
         case .nextTerm: return "\(plugin.name): Next Term’s show instead"
         case .plugin: return byDismissal ? "\(plugin.name) keeps them (the question was closed twice)" : "\(plugin.name) keeps them"
         }
+    }
+
+    @objc private func voiceOverChanged() {
+        let index = voiceOver.indexOfSelectedItem
+        guard Self.voiceOverChoices.indices.contains(index) else { return }
+        GhostPreferences.voiceOverWords = Self.voiceOverChoices[index].words
     }
 
     @objc private func onOffChanged() {

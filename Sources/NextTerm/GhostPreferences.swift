@@ -48,6 +48,20 @@ enum GhostPreferences {
     /// A choice made, or the question asked again, here or in Settings; or suggestions turned on or off.
     static let changed = Notification.Name("NextTermGhostTextChanged")
 
+    // MARK: VoiceOver
+
+    static let voiceOverKey = "ghostTextVoiceOver"
+
+    /// What VoiceOver says of a new suggestion: the whole command and "→ accepts" (the default), only "Suggestion,
+    /// → accepts", or nothing.
+    static var voiceOverWords: GhostAnnouncer.Words {
+        get { UserDefaults.standard.string(forKey: voiceOverKey).flatMap(GhostAnnouncer.Words.init(rawValue:)) ?? .whole }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: voiceOverKey)
+            NotificationCenter.default.post(name: changed, object: nil)
+        }
+    }
+
     // MARK: the first-use hint
 
     static let hintsKey = "ghostTextHintsShown"

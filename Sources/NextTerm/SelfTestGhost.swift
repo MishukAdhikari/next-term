@@ -24,6 +24,7 @@ extension SelfTest {
         await ghostViChecks(c, dir: dir)
         await ghostOwnerChecks(c, dir: dir)
         await ghostSettingsChecks(c, dir: dir)
+        await ghostVoiceOverChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -545,6 +546,26 @@ extension SelfTest {
         check(await wait(3) { settings.keptCount == 0 }, "suggestions: Clear History… leaves none kept")
         let log = folder.appendingPathComponent(CommandHistoryFolder.logName).path
         check(!FileManager.default.fileExists(atPath: log), "suggestions: and the log is gone")
+    }
+
+    /// VoiceOver (the session told it is on): one announcement per new suggestion, none for typing through it, and the
+    /// overlay never among the terminal's accessibility children.
+    static func ghostVoiceOverChecks(_ c: TerminalWindowController, dir: URL) async {
+        await ghostSeed("git checkout main", folder: dir.path)
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc, name: "voiceover"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        GhostSession.testVoiceOver = true
+        defer { GhostSession.testVoiceOver = nil }
+        let before = tab.ghost.announcements
+        typeKeys(window, "git ch")
+        guard await ghostShows(tab) else { return check(false, "suggestions, VoiceOver: it showed first", "\(tab.ghost.state)") }
+        check(await wait(2) { tab.ghost.announcements == before + 1 }, "suggestions: VoiceOver hears a new one once, after typing stops",
+              "\(tab.ghost.announcements - before)")
+        typeKeys(window, "e")
+        await pause(1)
+        check(tab.ghost.announcements == before + 1, "suggestions: typing through it is not a new one for VoiceOver")
+        let children = (tab.view.accessibilityChildren() ?? []).compactMap { $0 as? NSView }
+        check(!children.contains { $0 is GhostTextView }, "suggestions: the overlay is not among the terminal's accessibility children")
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,
