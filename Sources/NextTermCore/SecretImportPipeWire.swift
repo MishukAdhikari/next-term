@@ -32,11 +32,14 @@ extension SecretImportPipe {
             self.argvFull = argvFull
         }
 
-        /// A file or a body, never both or neither; a body within the cap; a known format; an absolute path.
+        /// A file or a body, never both or neither; a body within the cap; a known format; an absolute path of at most
+        /// 4096 bytes with no control character (C0, DEL or C1), as the sheet's header shows it.
         public var isWellFormed: Bool {
             if let format, SecretImportPipe.format(named: format) == nil { return false }
             guard let path else { return bytes >= 1 && bytes <= maxBytes }
-            let plain: Bool = !path.unicodeScalars.contains { (scalar: Unicode.Scalar) -> Bool in scalar.value < 0x20 }
+            let plain: Bool = !path.unicodeScalars.contains { (scalar: Unicode.Scalar) -> Bool in
+                scalar.properties.generalCategory == .control
+            }
             return bytes == 0 && path.hasPrefix("/") && path.utf8.count <= 4096 && plain
         }
 

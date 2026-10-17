@@ -4,12 +4,12 @@ import NextTermCore
 /// `nxtrm secret import`'s preview, on the main thread: Window › Secrets comes forward with the copy sheet for the
 /// piped keys, or for the file given (as Import From › A File… reads one), and the importer hears how far it got and
 /// how it ended, in counts. The sheet's header says where the pipe came from: the tab above the importer and, when an
-/// agent runs above it, that the agent may have seen the keys.
+/// agent runs above it or no tab is, that an agent may have seen the keys. Busy and refused are decided first, before
+/// Secrets comes forward and before the keys are sent.
 @MainActor
 enum SecretPipeImport {
     /// The name piped keys are read under: their purpose is "From standard input" unless a manager's JSON names its app.
     nonisolated static let standardInput = "standard input"
-    static let agentWarning = "An agent ran this command. It may have seen these keys."
     static let busyLine = "nxtrm secret import asked to open an import. Finish what\u{2019}s open here, then run it again."
 
     /// Where the keys came from, as the process tree and the tabs tell it: never from what was piped.
@@ -21,9 +21,16 @@ enum SecretPipeImport {
         /// The tab the importer runs in.
         var tabID: UUID?
         /// The preset whose line that tab got (Import From › 1Password…), when it is one of theirs.
+        var tabPreset: SecretImportPreset?
+        /// The line the tab's shell said it is running; nil when its shell doesn't say (only zsh's integration does).
+        var command: String?
+        /// `tabPreset`, when the tab runs its line as typed: only then does the sheet name it.
         var preset: SecretImportPreset?
         /// "tab 2 of rag-api".
         var place: String?
+
+        /// The warning under the sheet's header: an agent ran it, or no tab did.
+        var warning: String? { SecretImportPipe.originWarning(agent: agent, inTab: tabID != nil) }
     }
 
     static func origin(pid: pid_t, agent: String?, piped: Bool) -> Origin {
@@ -31,7 +38,14 @@ enum SecretPipeImport {
         let tabs: [TerminalTab] = AppDelegate.shared.controllers.flatMap(\.tabs)
         guard let tab = ClaudeIDEServer.tab(for: pid, among: tabs) else { return origin }
         origin.tabID = tab.id
-        origin.preset = SecretManagerImportSheet.preset(ofTab: tab.id)
+        let said: String = tab.status.integrated && tab.status.running ? tab.status.command : ""
+        origin.command = said.isEmpty ? nil : said
+        origin.tabPreset = SecretManagerImportSheet.preset(ofTab: tab.id)
+        if let preset = origin.tabPreset, let command = origin.command,
+           let line = SecretManagerImportSheet.line(preset, shell: SecretsMCP.shellName(of: tab)),
+           SecretImportPreset.ran(command, as: line) {
+            origin.preset = preset
+        }
         guard let controller = MCPControl.controller(of: tab) else { return origin }
         let position: Int? = controller.groups.firstIndex { (group: PaneGroup) -> Bool in group.contains(tab) }
         let tabText: String = position.map { (index: Int) -> String in "tab \(index + 1)" } ?? "a tab"
@@ -55,26 +69,32 @@ enum SecretPipeImport {
         view.readPicked(URL(fileURLWithPath: path), format: format, client: client)
     }
 
-    /// Window › Secrets in front, with no sheet open on it; else the importer hears `busy`, or `refused` when Secrets
-    /// can't be opened on this Mac.
+    /// Window › Secrets in front, with no sheet open on it. Busy or refused is decided first, so a run that can't open
+    /// a sheet never takes the keyboard from the tab the user types in (a password at bw's prompt, say).
     private static func secretsView(for client: SecretImportClient) -> SecretsView? {
+        if let status = blockedStatus() {
+            client.end(status)
+            return nil
+        }
         SecretsWindowController.show()
         NSApp.activate(ignoringOtherApps: true)
         guard let view = SecretsWindowController.shared?.secretsView else {
             client.end(.refused)
             return nil
         }
-        let protection: SecretsStore.Protection = SecretsStore.shared.protection
-        if protection == .cantOpen || protection == .tampered {
-            client.end(.refused)
-            return nil
-        }
-        guard !view.hasOpenSheet else {
-            view.say(busyLine)
-            client.end(.busy)
-            return nil
-        }
         return view
+    }
+
+    /// Why no import can open now, without bringing anything forward: `refused` when Secrets can't be opened on this
+    /// Mac, `busy` (and a line under the list) when it shows another sheet. The socket asks this before `ready`, so a
+    /// busy Secrets never gets the keys; the sheet asks it again as it opens.
+    static func blockedStatus() -> SecretImportPipe.Reply.Status? {
+        SecretsStore.shared.reloadIfChanged()
+        let protection: SecretsStore.Protection = SecretsStore.shared.protection
+        if protection == .cantOpen || protection == .tampered { return .refused }
+        guard let view = SecretsWindowController.shared?.secretsView, view.hasOpenSheet else { return nil }
+        view.say(busyLine)
+        return .busy
     }
 }
 

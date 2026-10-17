@@ -113,6 +113,22 @@ import Testing
         #expect(P.Request.decode(["bytes": "many"]) == nil)
     }
 
+    /// The path is shown in the sheet's header: no control character, and at most 4096 bytes.
+    @Test func aHeadersPathHasNoControlCharacterAndFitsTheCap() {
+        let argv = ["/x/NextTerm", "--cli", "secret", "import"]
+        func make(_ path: String) -> P.Request {
+            P.Request(format: nil, bytes: 0, path: path, directory: "/", argvFull: argv)
+        }
+        for control in ["\u{0}", "\u{7}", "\n", "\r", "\u{1B}[2J", "\u{7F}", "\u{85}", "\u{9B}"] {
+            #expect(!make("/tmp/made-up" + control + ".env").isWellFormed, "\(control.unicodeScalars.map(\.value))")
+        }
+        #expect(make("/tmp/made-up café/.env").isWellFormed)
+        #expect(make("/" + String(repeating: "a", count: 4095)).isWellFormed)
+        #expect(!make("/" + String(repeating: "a", count: 4096)).isWellFormed)
+        // Bytes, not characters: 2,048 two-byte letters and the slash are 4,097 bytes.
+        #expect(!make("/" + String(repeating: "\u{E9}", count: 2048)).isWellFormed)
+    }
+
     @Test func repliesRoundTrip() throws {
         for reply in [P.Reply(status: .ready), P.Reply(status: .found, count: 7), P.Reply(status: .imported, count: 2)] {
             let line = reply.line()

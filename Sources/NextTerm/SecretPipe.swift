@@ -65,6 +65,8 @@ enum SecretPipe {
                 case .reply(let reply): return SecretImportPipe.ending(for: reply)
                 case .closed, .timedOut: return .refused
                 }
+            } else if pausesBeforeKeys {
+                usleep(50_000)
             }
             let sent: Bool = write(body, to: fd)
             SecretBytes.wipe(&body)
@@ -89,10 +91,20 @@ enum SecretPipe {
     static let eagerVariable = "NEXTTERM_SELFTEST_EAGER_BODY"
     #endif
 
-    /// The self-test's importer that sends its keys before `ready`, which the app must refuse. A release build has none.
+    /// The self-test's importer that sends its keys before `ready`, which the app must refuse: with "1" right after the
+    /// header, so one read may take both; with "pause" 50 ms after it, so they come apart and the app sees the keys
+    /// waiting. A release build has none.
     private static var sendsEagerly: Bool {
         #if DEBUG
-        return ProcessInfo.processInfo.environment[eagerVariable] == "1"
+        return ["1", "pause"].contains(ProcessInfo.processInfo.environment[eagerVariable] ?? "")
+        #else
+        return false
+        #endif
+    }
+
+    private static var pausesBeforeKeys: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment[eagerVariable] == "pause"
         #else
         return false
         #endif

@@ -23,7 +23,7 @@ extension SecretManagerImportSheet {
         downloadButton.action = #selector(openDownload)
         downloadButton.setAccessibilityLabel("Open \(preset.program)\u{2019}s download page in the browser")
         views.append(downloadButton)
-        let agentControl: Bool = AppDelegate.shared.agentControl
+        let agentControl: Bool = SecretsView.agentControlIsOn()
         offLabel.stringValue = Self.agentControlOff
         offLabel.font = .systemFont(ofSize: 12)
         offLabel.textColor = .systemOrange
@@ -93,11 +93,15 @@ extension SecretManagerImportSheet {
     @objc func cancel() { finish() }
 
     /// A new tab in the home folder, in front, titled for the import; its line typed once its shell is at the prompt,
-    /// with no Return. From then on agents can't act on that tab.
+    /// with no Return, and the list says so only then. From now on agents can't act on that tab.
+    /// zsh says when it reaches its prompt (Next Term's integration): its line waits for that, up to `promptWait`, and
+    /// is never typed into a shell still starting, where a prompt of the user's own startup files could take it. Other
+    /// shells say nothing, so theirs is typed after 5 s, as new_tab types a command.
     @objc func openInNewTab() {
-        guard AppDelegate.shared.agentControl else { return }
+        guard SecretsView.agentControlIsOn() else { return }
         let home: String = NSHomeDirectory()
-        let controller: TerminalWindowController = Self.frontWindow() ?? MCPControl.window(for: home).controller
+        let window: TerminalWindowController? = Self.homeWindow(home) ?? Self.frontWindow()
+        let controller: TerminalWindowController = window ?? MCPControl.window(for: home).controller
         let tab: TerminalTab = controller.addTab(directory: home, select: true)
         tab.userTitle = preset.tabTitle
         Self.register(tab, preset: preset)
@@ -105,14 +109,35 @@ extension SecretManagerImportSheet {
         controller.window?.makeKeyAndOrderFront(nil)
         let preset: SecretImportPreset = self.preset
         let say: (String) -> Void = self.say
-        MCPControl.whenReady(tab, until: TerminalTab.now + 5) {
+        let reports: Bool = Self.newTabShell == "zsh" && AppSupport.zshIntegrationDirectory != nil
+        let wait: TimeInterval = reports ? Self.promptWait : 5
+        MCPControl.whenReady(tab, until: TerminalTab.now + wait) {
+            if reports, !tab.status.integrated { return say(Self.notAtPrompt) }
             let shell: String = SecretsMCP.shellName(of: tab)
             guard let line = Self.line(preset, shell: shell) else { return say(Self.untypableLine(shell)) }
             guard MCPControl.canType(tab) else { return say(Self.notTyped) }
             MCPControl.type(line, into: tab, submit: false)
+            say(Self.typedLine)
         }
-        say(Self.typedLine)
         finish()
+    }
+
+    /// The longest zsh's first prompt is waited for.
+    static let promptWait: TimeInterval = 20
+    static let notAtPrompt = "The new tab\u{2019}s shell didn\u{2019}t reach its prompt, so Next Term didn\u{2019}t type "
+        + "the line. Open the import again once it has."
+
+    /// The window whose project holds the home folder, as new_tab picks one; else nil, and the window in front takes
+    /// the tab, so no project window opens on the whole home folder (joining Recent projects) for one tab.
+    static func homeWindow(_ home: String) -> TerminalWindowController? {
+        let owners: [TerminalWindowController] = AppDelegate.shared.controllers.filter {
+            (controller: TerminalWindowController) -> Bool in
+            guard !controller.hasClosed, let project = controller.project else { return false }
+            return home == project || home.hasPrefix(project + "/")
+        }
+        return owners.max { (first: TerminalWindowController, second: TerminalWindowController) -> Bool in
+            (first.project?.count ?? 0) < (second.project?.count ?? 0)
+        }
     }
 
     /// The terminal window in front, as the user last saw it.

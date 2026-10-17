@@ -19,13 +19,19 @@ extension SelfTest {
         let managers: [String] = SecretImportPreset.allCases.map(SecretsView.managerItemTitle)
         let listed: Bool = managers.allSatisfy { (title: String) -> Bool in titles.contains(title) }
         check(listed, "secret pipe: Import From lists 1Password…, Bitwarden… and Bitwarden Secrets Manager…", "\(titles)")
-        for preset in SecretImportPreset.allCases { await secretPresetChecks(view, preset) }
         let values: [String] = [secretsValue("sk-" + "proj-"), secretsValue("pcsk_")]
         let list: URL = folder.appendingPathComponent("bws-list.json")
         try? Data(secretPipeList(values).utf8).write(to: list)
+        for preset in SecretImportPreset.allCases { await secretPresetChecks(view, preset, list: list) }
         await secretPipeImportCheck(c, view, list: list, folder: folder, values: values)
-        await secretPipeEagerCheck(view, list: list)
+        await secretPipeEagerCheck(view, list: list, mode: "1")
+        await secretPipeEagerCheck(view, list: list, mode: "pause")
         await secretPipeStrangerCheck(view)
+        await secretPipeDoneChecks(c, view, folder: folder)
+        await secretPipeOriginChecks(c, view, folder: folder, list: list)
+        await secretPipeFileChecks(c, view, folder: folder)
+        await secretPipeSheetOffCheck(view)
+        await secretPipePasswordPromptCheck(c, folder: folder)
     }
 
     /// A made-up `bws secret list --output json` with two secrets.
@@ -50,9 +56,23 @@ extension SelfTest {
         tab.screenTail(200).joined()
     }
 
+    /// The tab's screen as an agent's read_tab gets it.
+    static func secretPipeReadTab(_ tab: TerminalTab) async -> String {
+        let read = await secretPipeTool("read_tab", ["tab_id": tab.id.uuidString.lowercased(), "lines": 20])
+        let answer = (try? JSONSerialization.jsonObject(with: Data(read.text.utf8))) as? [String: Any]
+        return answer?["screen"] as? String ?? read.text
+    }
+
+    /// Whether `screen` ends with `line`, as typed and nothing after it: spaces and row breaks aside, since a wrap
+    /// breaks a row where the terminal's width says and read_tab trims each row's end.
+    static func secretPipeEndsWith(_ screen: String, _ line: String) -> Bool {
+        let bare: (String) -> String = { (text: String) -> String in text.filter { !$0.isWhitespace } }
+        return !line.isEmpty && bare(screen).hasSuffix(bare(line))
+    }
+
     /// The sheet shows the preset's line; Open in a New Tab types it into a new tab titled for it, with no Return; and
     /// send_to_tab, press_keys, answer_agent and close_tab refuse that tab until it closes.
-    static func secretPresetChecks(_ view: SecretsView, _ preset: SecretImportPreset) async {
+    static func secretPresetChecks(_ view: SecretsView, _ preset: SecretImportPreset, list: URL) async {
         let item = NSMenuItem()
         item.representedObject = preset.rawValue
         view.importFromManager(item)
@@ -75,16 +95,21 @@ extension SelfTest {
         _ = await wait(10) { tab.status.integrated }
         _ = await wait(8) { secretPipeScreen(tab).contains(tail) }
         await pause(1)
-        let screen: String = secretPipeScreen(tab)
-        check(screen.contains(tail) && tab.status.commandsRun == 0 && !tab.status.running,
-              "secret pipe: \(preset.app)'s line is typed in its tab and not run", screen)
+        let typed: String = SecretManagerImportSheet.line(preset, shell: SecretsMCP.shellName(of: tab)) ?? ""
+        let screen: String = await secretPipeReadTab(tab)
+        check(secretPipeEndsWith(screen, typed) && tab.status.commandsRun == 0 && !tab.status.running,
+              "secret pipe: \(preset.app)'s tab, read with read_tab, ends with exactly its line, not run", screen)
         check(view.managerSheet == nil && tab.directory == NSHomeDirectory(),
               "secret pipe: the sheet goes, and the tab is in the home folder", tab.directory)
+        check(view.actionLabel.stringValue == SecretManagerImportSheet.typedLine,
+              "secret pipe: the list says the line is in the tab once it is typed", view.actionLabel.stringValue)
         await secretPresetRefusalChecks(tab, preset)
+        if preset == .bws { await secretPresetAfterPipeChecks(view, tab, list: list) }
     }
 
-    /// Agents can't type into a preset's tab, press its keys, answer in it or close it.
-    static func secretPresetRefusalChecks(_ tab: TerminalTab, _ preset: SecretImportPreset) async {
+    /// Agents can't type into a preset's tab, press its keys, answer in it or close it: before its Return, and after
+    /// a pipe in it ended (`afterPipe`), until it closes.
+    static func secretPresetRefusalChecks(_ tab: TerminalTab, _ preset: SecretImportPreset, afterPipe: Bool = false) async {
         let id: String = tab.id.uuidString.lowercased()
         let typed = await secretPipeTool("send_to_tab", ["tab_id": id, "text": "echo made-up"])
         let pressed = await secretPipeTool("press_keys", ["tab_id": id, "keys": ["enter"]])
@@ -95,8 +120,10 @@ extension SelfTest {
             result.isError && result.text.contains("Import from \(preset.app)")
         }
         let open: Bool = AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0 === tab }
-        check(refused && open && tab.status.commandsRun == 0,
-              "secret pipe: send_to_tab, press_keys, answer_agent and close_tab refuse \(preset.app)'s tab",
+        let held: Bool = afterPipe || tab.status.commandsRun == 0
+        let when: String = afterPipe ? "after its pipe ended" : "before its Return"
+        check(refused && open && held,
+              "secret pipe: send_to_tab, press_keys, answer_agent and close_tab refuse \(preset.app)'s tab \(when)",
               results.map(\.text).joined(separator: " / "))
     }
 
@@ -136,14 +163,17 @@ extension SelfTest {
         SecretRun.typedLine([word], shell: "zsh") ?? word
     }
 
-    /// Next Term's own importer that sends its keys right after the header, before `ready`: refused, and no sheet opens.
-    static func secretPipeEagerCheck(_ view: SecretsView, list: URL) async {
+    /// Next Term's own importer that sends its keys before `ready`: refused, and no sheet opens. With `mode` "1" they
+    /// follow the header at once, and one read of the socket's line reader may take both (only the route could keep
+    /// them out: the importer is refused as it reads `ready` as one). With "pause" they come 50 ms after it, apart, and
+    /// the app sees them waiting: the audit names that.
+    static func secretPipeEagerCheck(_ view: SecretsView, list: URL, mode: String) async {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
         process.arguments = ["--cli", "secret", "import", "--from", "bws", "-"]
         var environment: [String: String] = ProcessInfo.processInfo.environment
         environment[MCPServer.socketVariable] = MCPControlServer.shared.path
-        environment[SecretPipe.eagerVariable] = "1"
+        environment[SecretPipe.eagerVariable] = mode
         process.environment = environment
         process.standardInput = FileHandle(forReadingAtPath: list.path)
         let errors = Pipe()
@@ -155,7 +185,18 @@ extension SelfTest {
         let said: String = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         check(ended && process.terminationStatus == 1 && said.contains(SecretImportPipe.text(.refused).line)
                   && view.fileImportSheet == nil,
-              "secret pipe: keys sent before Next Term is ready for them are refused, and no sheet opens", said)
+              "secret pipe: keys sent before Next Term is ready for them (\(mode)) are refused, and no sheet opens", said)
+        guard mode == "pause" else { return }
+        let pid: Int32 = process.processIdentifier
+        let refusedEarly: () -> Bool = {
+            SecretAudit.lines(in: SecretsStore.shared.folder.readAudit()).contains { (line: SecretAudit.Line) -> Bool in
+                let who: String = line.who ?? ""
+                let early: Bool = line.outcome == SecretPipeSocket.earlyReason
+                return line.event == .refused && early && who.hasSuffix("(process \(pid))")
+            }
+        }
+        let audited: Bool = await wait(5, refusedEarly)
+        check(audited, "secret pipe: keys that come apart from the header, before ready, are seen waiting and refused for it")
     }
 
     /// A program that isn't Next Term at the socket, sending an importer's header: refused, and no sheet opens.

@@ -141,6 +141,9 @@ extension SecretFileImportSheet {
     /// key, since git's history keeps them. A record that couldn't be saved is a warning: there is no Undo.
     func showDone(_ saved: SecretCopyIn.Record, undoSaved: Bool = true, readAs: [String: String] = [:]) {
         record = saved
+        // `nxtrm secret import` hears it now, not as the sheet closes: its tab says "Imported 2 keys." and the rest of
+        // its line runs (Bitwarden's bw lock) while the done view is up. Closing the sheet tells it nothing more.
+        client?.ended(copied: saved.names.count)
         for row in rows {
             row.box.isEnabled = false
             row.nameField.isEnabled = false

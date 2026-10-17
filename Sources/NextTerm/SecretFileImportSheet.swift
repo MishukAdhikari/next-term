@@ -202,7 +202,7 @@ extension SecretFileImportSheet {
         if outsideServers { header += " " + Self.outsideServersLine }
         if let note = report.fileNote { header += "\n" + note.sentence + "." }
         headerLabel.stringValue = header
-        if client?.origin.agent != nil { addAgentWarning() }
+        if let warning = client?.origin.warning { addOriginWarning(warning) }
         footerLabel.stringValue = report.footer ?? ""
         notKeysButton.isHidden = report.notKeys.isEmpty
         footerLabel.isHidden = report.notKeys.isEmpty
