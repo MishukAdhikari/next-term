@@ -33,7 +33,7 @@ public enum HerdrResult: Equatable, Sendable {
         return ["unknown command", "unrecognized subcommand", "unexpected argument"].contains { lower.contains($0) }
     }
 
-    /// One command's answer as its script printed it, after `RemoteShell.marker`: `missing<TAB>…`, or `where<TAB>path<TAB>how`,
+    /// One command's answer as its script printed it, after `RemoteShell.marker`: `missing<TAB>…` (or `fail<TAB>why`), or `where<TAB>path<TAB>how`,
     /// then `exit<TAB>status<TAB>verb` for each herdr call it made, and for the last one `bytes<TAB>its output's size`,
     /// `out<TAB>` and `err<TAB>` with its output and errors in base64 (so nothing in them can forge a line), then the end
     /// marker. `text`: herdr answers this command with a pane's text, not JSON.
@@ -52,6 +52,8 @@ public enum HerdrResult: Equatable, Sendable {
             switch fields[0] {
             case "missing":
                 return .unreachable("herdr was not found on the host")
+            case "fail" where fields.count >= 2:
+                return .unreachable(String(fields[1...].joined(separator: " ").prefix(300)))
             case "exit" where fields.count >= 3:
                 exits.append((Int32(fields[1]) ?? -1, fields[2]))
             case "bytes" where fields.count >= 2:
@@ -67,6 +69,17 @@ public enum HerdrResult: Equatable, Sendable {
         guard ended, let last = exits.last else { return .cut }
         if let bytes, bytes > outputCap { return .cut }
         return make(exit: last.code, out: out, err: err, firstVerb: exits[0].verb, text: text, mask: mask)
+    }
+
+    /// The verb of the last herdr call a command's script made ("tab focus" when `agent focus` was not in this herdr), or
+    /// nil when it made none.
+    public static func lastVerb(_ output: String) -> String? {
+        guard let lines = RemoteShell.payload(output) else { return nil }
+        let exits = lines.filter { $0.hasPrefix("exit\t") }
+        return exits.last.flatMap { line in
+            let fields = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            return fields.count == 3 ? String(fields[2]) : nil
+        }
     }
 
     /// One herdr call's answer (the last a command made): its exit status, stdout and stderr. `firstVerb` names the

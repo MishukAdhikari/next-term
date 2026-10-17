@@ -269,25 +269,54 @@ extension RemoteShell {
     /// 0.5.10 has no `agent` command: then, when `agent list` failed saying so (an agent's title may say it too),
     /// `pane list`. Line breaks become spaces (pretty-printed JSON reads the same, and noise stays apart from it);
     /// escape sequences, and BEL, which ends an OSC, stay for HerdrAgent.listing to read past, other control characters
-    /// go; 1 MB at most.
-    static var herdrSection: String {
-        [
-            "printf '\\n%s\\n' \(quote(herdrMarker))",
+    /// go; 1 MB at most. `session`: a named herdr session's (`--session`, in a subshell without herdr's own socket
+    /// variables, which name the default session's), said on a `session<TAB>name` line after the marker; nil for herdr's
+    /// default, as before, with no such line. `wantsFocus`: a tab of the session is on screen, so when no agent has
+    /// herdr's focus (a shell pane does), `tabs<TAB>` and what `herdr tab list` said follow, to tell which tab it is.
+    static var herdrSection: String { herdrSection(session: nil) }
+
+    static func herdrSection(session: String?, wantsFocus: Bool = false) -> String {
+        herdrSection(word: session.map(quote), wantsFocus: wantsFocus)
+    }
+
+    /// The section, `word` being the session as one sh word (a quoted name, or a variable the caller set from herdr's own
+    /// list of sessions).
+    static func herdrSection(word: String?, wantsFocus: Bool) -> String {
+        // herdr with its arguments, for the session asked. A subshell inside $( ) starts with a space: "$((" is arithmetic.
+        func herdr(_ arguments: String) -> String {
+            guard let word else { return "\"$H\" \(arguments)" }
+            return " ( unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session \(word) \(arguments) )"
+        }
+        let clean = "tr '\\n\\r\\t' '   ' | tr -d '\\000-\\006\\010-\\032\\034-\\037\\177'"
+        var lines = ["printf '\\n%s\\n' \(quote(herdrMarker))"]
+        if let word { lines.append("printf 'session\\t%s\\n' \(word)") }
+        lines += [
             "if [ -z \"$H\" ]; then",
             "  printf 'missing\\t%s\\n' \(quote(herdrPlaces))",
             "else",
             "  printf 'where\\t%s\\t%s\\n' \"$(printf '%s' \"$H\" | tr -d '\\000-\\037\\177' | cut -c 1-1024)\" \"$HW\"",
-            "  nt_out=$(\"$H\" agent list 2>&1 </dev/null); nt_x=$?; nt_cmd=agent",
+            "  nt_out=$(\(herdr("agent list")) 2>&1 </dev/null); nt_x=$?; nt_cmd=agent",
             "  if [ \"$nt_x\" -ne 0 ]; then",
             "    case $nt_out in",
-            "      *'unknown command'*|*'unrecognized subcommand'*) nt_out=$(\"$H\" pane list 2>&1 </dev/null); nt_x=$?; nt_cmd=pane ;;",
+            "      *'unknown command'*|*'unrecognized subcommand'*) nt_out=$(\(herdr("pane list")) 2>&1 </dev/null); nt_x=$?; nt_cmd=pane ;;",
             "    esac",
             "  fi",
             "  printf 'exit\\t%s\\t%s\\n' \"$nt_x\" \"$nt_cmd\"",
-            "  printf 'out\\t'; printf '%s' \"$nt_out\" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\006\\010-\\032\\034-\\037\\177' | head -c 1000000; echo",
+            "  printf 'out\\t'; printf '%s' \"$nt_out\" | \(clean) | head -c 1000000; echo",
+        ]
+        if wantsFocus {
+            lines += [
+                "  if [ \"$nt_x\" -eq 0 ] && ! printf '%s' \"$nt_out\" | grep -Eq '\"focused\"[[:space:]]*:[[:space:]]*true'; then",
+                "    nt_tl=$(\(herdr("tab list")) 2>&1 </dev/null)",
+                "    printf 'tabs\\t'; printf '%s' \"$nt_tl\" | \(clean) | head -c 200000; echo",
+                "  fi",
+            ]
+        }
+        lines += [
             "fi",
             "printf '%s\\n' \(quote(herdrEndMarker))",
-        ].joined(separator: "\n")
+        ]
+        return lines.joined(separator: "\n")
     }
 
     /// What a herdr tab says when herdr is not there (or a copy did not run), in plain lines, then the reason in K.plain

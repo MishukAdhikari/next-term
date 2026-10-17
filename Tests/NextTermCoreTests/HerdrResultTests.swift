@@ -73,6 +73,14 @@ import Testing
         #expect(HerdrResult.parse(printed(exits: [(0, "agent read")], out: forged), text: true) == .text(forged))
     }
 
+    @Test func theAnswerSaysWhichVerbAnswered() {
+        // An older herdr moved to the agent's tab, not its pane.
+        let focus = printed(exits: [(2, "agent focus"), (0, "tab focus")], out: "{}")
+        #expect(HerdrResult.lastVerb(focus) == "tab focus" && HerdrResult.parse(focus, text: false) == .json("{}"))
+        #expect(HerdrResult.lastVerb(printed(exits: [(0, "agent focus")])) == "agent focus")
+        #expect(HerdrResult.lastVerb("no marker") == nil)
+    }
+
     @Test func aCutOrMissingAnswerSaysSo() throws {
         #expect(HerdrResult.parse(printed(exits: [(0, "agent read")], out: "a", ended: false), text: true) == .cut)
         #expect(HerdrResult.parse(printed(exits: [(0, "agent read")], out: "a", bytes: HerdrResult.outputCap + 1), text: true) == .cut)
