@@ -4,13 +4,19 @@
 #
 # The tests' fixtures (nt-fixture-*, nt-db-*, nt-skills*, …: one per call, thousands per run) go in the user's
 # temporary folder: Foundation's temporaryDirectory there is getconf DARWIN_USER_TEMP_DIR, whatever TMPDIR says. So
-# the run notes when it starts, and when it ends, failed or not, removes the nt-* folders made there since. Builds and
-# test runs take turns on this Mac, so nothing else's are that new, except the Next Term app's own, which the sweep
-# leaves alone: nt-ssh (its ssh settings and control sockets) and nt-suggest-* (a suggestion being worked out). What
+# the run notes when it starts, and when it ends, failed or not, removes the nt-* folders made there since. Test runs
+# take turns on this Mac: one lock, /tmp/nt-test.lock, is held for the whole run, so a second run waits for the first
+# to finish and clean up instead of sweeping its live fixtures. So nothing else's are that new, except the Next Term
+# app's own, which the sweep leaves alone: nt-ssh (its ssh settings and control sockets) and nt-suggest-* (a suggestion being worked out). What
 # can't be removed (an app bundle macOS protects) is left. TMPDIR, for git and the shells the tests start, is a folder of
 # the run's own, removed too.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# One run at a time on this Mac: the sweep below must never meet another run's fixtures.
+if [[ -z "${NT_TEST_LOCKED:-}" ]] && command -v lockf >/dev/null 2>&1; then
+  export NT_TEST_LOCKED=1
+  exec lockf -s -t 7200 /tmp/nt-test.lock "$PWD/scripts/test.sh" "$@"
+fi
 TEMP="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
 RUN_TMP="$(mktemp -d /tmp/nt-test.XXXXXX)"
 STARTED="$RUN_TMP/.started"
