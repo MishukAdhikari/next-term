@@ -68,6 +68,13 @@ final class MarkdownStyler {
         lines.indices.contains(number) ? lines[number] : nil
     }
 
+    /// Every line, read: the slices still to come are done now (Go to Heading lists them all).
+    func allLines() -> [MarkdownSyntax.Line] {
+        while validUpTo < lines.count, index().count == lines.count { run() }
+        let read = lines.compactMap { $0 }
+        return read.count == index().count ? read : MarkdownSyntax.lines(of: storage.string)
+    }
+
     /// Lines `old` (as they were) became lines `old.lowerBound...newLast`. Call from the document's edit callback, with
     /// the line index already updated.
     func textEdited(_ old: ClosedRange<Int>, newLast: Int) {

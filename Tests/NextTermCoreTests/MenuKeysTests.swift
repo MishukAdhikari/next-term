@@ -83,4 +83,12 @@ struct MenuKeysTests {
         #expect(ImportVSCode.commandMap["markdown.showPreview"] == "toggleMarkdownPreview:")
         #expect(ImportShortcuts.titles["toggleMarkdownPreview:"] == "Markdown Live Preview")
     }
+
+    /// Go to Heading is ⇧⌘O, VS Code's Go to Symbol; under JetBrains' keys, where ⇧⌘O is Go to File, it is ⌘F12.
+    @Test func goToHeadingIsShiftCommandOOrCommandF12() {
+        func shown(_ preset: KeymapPreset) -> String { (Self.defaults(under: preset)["goToHeading:"] ?? nil)?.display ?? "none" }
+        #expect(shown(.nextTerm) == "⇧⌘O" && shown(.vsCode) == "⇧⌘O")
+        #expect(shown(.jetBrains) == KeyChord(key: "\u{F70F}", command: true).display)
+        #expect((Self.defaults(under: .jetBrains)["goToFile:"] ?? nil)?.display == "⇧⌘O")
+    }
 }

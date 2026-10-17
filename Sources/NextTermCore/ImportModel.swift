@@ -49,6 +49,7 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 // free once Delete Line moves to ⌘⌫. ⌘T stays New Tab, which it is in every terminal.
                 "gitCommit:": cmd("k"),
                 "gitPush:": KeyChord(key: "k", command: true, shift: true),
+                "goToHeading:": cmd("\u{F70F}"),  // ⌘F12, the file's structure there; ⇧⌘O is Go to File
             ]
         }
     }

@@ -1736,6 +1736,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
         item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
+        // ⇧⌘O, VS Code's Go to Symbol (headings, in a Markdown file); ⌘F12 under JetBrains' keys, whose ⇧⌘O is Go to File.
+        item(edit, "Go to Heading…", #selector(TerminalWindowController.goToHeading(_:)), "o", [.command, .shift])
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
         item(edit, "Outdent", #selector(CodeTextView.outdentSelection(_:)), "[")
