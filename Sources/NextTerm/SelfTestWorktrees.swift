@@ -6,8 +6,9 @@ import NextTermCore
 /// Codex working in it. The guard's three buttons and its words, the sheet (prefill, the short part
 /// selected, the path line, -2, a taken name, "/" as "-"), the worktree in its own window titled
 /// "xCloud ▸ 7027-sso" and kept out of Recent Projects while the agents' checkout keeps its HEAD and
-/// changes, a remote-only branch, a held one, .worktreeinclude, a hook that fails, Remove Worktree… refused
-/// while a window is open there, the dead end under an agent, and Open in New Window twice.
+/// changes, a remote-only branch, a held one, .worktreeinclude, the ignored files copied (AE12) or linked and
+/// removed with only the links going (AE13), a hook that fails, Remove Worktree… refused while a window is open
+/// there, the dead end under an agent, and Open in New Window twice.
 /// The sheets and windows need the app in front: without it the section is skipped with a note.
 extension SelfTest {
     static func worktreeChecks(_ c: TerminalWindowController) async {
@@ -277,13 +278,16 @@ extension SelfTest {
         GitToast.dismiss()
         window.makeKeyAndOrderFront(nil)
 
-        // AE12: Copy ignored files too. node_modules with its .bin link, vendor and .env are cloned; the log, public/hot,
+        // AE12: the ignored files copied. node_modules with its .bin link, vendor and .env are cloned; the log, public/hot,
         // a link out of the checkout and a worktree nested in .claude/worktrees are left out; the checkout's changes
-        // stay as they were; the box is remembered for the repository.
+        // stay as they were; the choice is remembered for the repository.
         let savedCopies = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")
+        let savedChoices = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles")
         let exclude = repo + "/.git/info/exclude"
         let excludeBefore = read(exclude) ?? ""
-        write(exclude, excludeBefore + "vendor/\nnode_modules/\npublic/hot\npublic/storage\n.claude/worktrees/\n") // every worktree reads it
+        // Every worktree reads it. /build ignores a link by that name too; node_modules/ and vendor/ only folders.
+        write(exclude, excludeBefore + "vendor/\nnode_modules/\n/build\npublic/hot\npublic/storage\n.claude/worktrees/\n")
+        write(repo + "/build/app.js", "built\n")
         write(repo + "/node_modules/vite/bin/vite.js", "#!/usr/bin/env node\n")
         try? fm.createDirectory(atPath: repo + "/node_modules/.bin", withIntermediateDirectories: true)
         try? fm.createSymbolicLink(atPath: repo + "/node_modules/.bin/vite", withDestinationPath: "../vite/bin/vite.js")
@@ -298,13 +302,13 @@ extension SelfTest {
         if let actions = await actions() {
             actions.openInNewWorktree(.branch("fix/copied"))
             if let named = await sheet() {
-                check(named.copyTitle == "Copy ignored files too: node_modules/, vendor/, .env…" && !named.copiesIgnored,
-                      "worktrees: the sheet offers to copy the ignored files, naming node_modules/, vendor/ and .env, unticked at first (AE12)",
-                      named.copyTitle ?? "no box")
-                if named.copyEnabled {
-                    named.toggleCopy()
-                    check(named.footnote.contains("also gets clones of what xCloud’s git ignores, .env and keys included"),
-                          "worktrees: ticked, the footnote says what the new folder gets (AE12)", named.footnote)
+                check(named.ignoredTitle == "Ignored files: node_modules/, vendor/, .env…" && named.ignoredChoice == .leaveOut,
+                      "worktrees: the sheet asks what to do with the ignored files, naming node_modules/, vendor/ and .env, Leave Out at first (AE12)",
+                      named.ignoredTitle ?? "no choice")
+                if named.canChoose(.copy) {
+                    named.choose(.copy)
+                    check(named.ignoredChoice == .copy && named.footnote.contains("also gets clones of what xCloud’s git ignores, .env and keys included"),
+                          "worktrees: Copy chosen, the footnote says what the new folder gets (AE12)", named.footnote)
                     named.pressCreate()
                     let path = code + "/xCloud-wt-copied"
                     _ = await wait(30) { worktreeWindow(path) != nil }
@@ -323,10 +327,10 @@ extension SelfTest {
                           "worktrees: the notice counts what was copied and left out, and names storage:link (AE12)", GitToast.text ?? "no notice")
                     worktreeWindow(path)?.window?.performClose(nil)
                     window.makeKeyAndOrderFront(nil)
-                    // Remembered: the next sheet in this repository has it ticked.
+                    // Remembered: the next sheet in this repository has Copy chosen.
                     actions.openInNewWorktree(.branch("fix/7050-pr"))
                     if let next = await sheet() {
-                        check(next.copiesIgnored, "worktrees: the box is remembered for the repository (AE12)")
+                        check(next.ignoredChoice == .copy, "worktrees: the choice is remembered for the repository (AE12)")
                         next.pressCancel()
                     }
                 } else {
@@ -334,9 +338,85 @@ extension SelfTest {
                 }
             }
         }
+        GitToast.dismiss()
+        window.makeKeyAndOrderFront(nil)
+
+        // AE13: the ignored files linked. .env and build (ignored by name, so a link is too) are one link each, relative
+        // to xCloud; node_modules and vendor (ignored only as folders) are folders of their own holding a link for each
+        // thing in them; what AE12 leaves out is left out; git sees no change there; the sidebar marks a link and says
+        // where it leads. Remove Worktree then deletes the links only: xCloud's files are all still there.
+        sh(repo, "branch", "fix/linked")
+        if let actions = await actions() {
+            actions.openInNewWorktree(.branch("fix/linked"))
+            if let named = await sheet() {
+                let lines = named.choiceLines
+                check(lines.count == 3 && lines[0].hasPrefix("Copy: ") && lines[1] == "Link: shared with xCloud, so changing one changes both"
+                      && lines[2].hasPrefix("Leave Out: ") && named.canChoose(.link),
+                      "worktrees: the sheet offers Copy, Link and Leave Out, each saying in a line what it means (AE13)", lines.joined(separator: " | "))
+                named.choose(.link)
+                check(named.ignoredChoice == .link && named.footnote.contains("links to what xCloud’s git ignores") && named.footnote.contains("deletes only the links"),
+                      "worktrees: Link chosen, the footnote says what is shared and that removing the worktree deletes only the links (AE13)", named.footnote)
+                named.pressCreate()
+                let path = code + "/xCloud-wt-linked"
+                _ = await wait(30) { worktreeWindow(path) != nil }
+                made.append(path)
+                func target(_ name: String) -> String? { try? fm.destinationOfSymbolicLink(atPath: path + "/" + name) }
+                func kind(_ name: String) -> mode_t? {
+                    var info = stat()
+                    return lstat(path + "/" + name, &info) == 0 ? info.st_mode & S_IFMT : nil
+                }
+                // .bin's link leads out of .bin: made again as it is, in a folder of its own, so it leads within the new worktree.
+                let links = [".env": "../xCloud/.env", "build": "../xCloud/build", "node_modules/vite": "../../xCloud/node_modules/vite",
+                             "node_modules/.bin/vite": "../vite/bin/vite.js", "vendor/autoload.php": "../../xCloud/vendor/autoload.php"]
+                let wrong = links.filter { target($0.key) != $0.value }.map(\.key).sorted()
+                let folders = kind("node_modules") == S_IFDIR && kind("node_modules/.bin") == S_IFDIR && kind("vendor") == S_IFDIR
+                check(wrong.isEmpty && folders && read(path + "/node_modules/.bin/vite") == "#!/usr/bin/env node\n",
+                      "worktrees: .env and build are one link each, relative; node_modules and vendor are folders holding a link for each thing in them, .bin's link made again as it is (AE13)",
+                      "wrong: \(wrong)")
+                let absent = ["debug.log", "public/hot", "public/storage", ".claude/worktrees/agent-x"].filter { kind($0) != nil }
+                let status = sh(path, "status", "--porcelain")
+                check(absent.isEmpty && status.isEmpty, "worktrees: what Copy leaves out isn't linked, and git sees no change there (AE13)",
+                      "present: \(absent), status: \(status)")
+                _ = await wait(5) { GitToast.text?.contains("ignored item") == true }
+                check(GitToast.text?.contains("; linked ") == true, "worktrees: the notice counts what was linked (AE13)", GitToast.text ?? "no notice")
+                if let linked = worktreeWindow(path) {
+                    let sidebar = linked.sidebar
+                    _ = await wait(10) { sidebar.root?.children?.contains { $0.name == "build" } == true }
+                    sidebar.outline.layoutSubtreeIfNeeded()
+                    let node = sidebar.root?.children?.first { $0.name == "build" }
+                    let cell = node.flatMap { sidebar.outline.view(atColumn: 0, row: sidebar.outline.row(forItem: $0), makeIfNecessary: true) as? FileCellView }
+                    check(cell?.showsLinkMark == true && cell?.tipText.contains("Linked to " + canonicalPath(repo) + "/build") == true,
+                          "worktrees: the sidebar marks the link and says where it leads (AE13)", cell?.tipText ?? "no row")
+                    linked.window?.performClose(nil)
+                    _ = await wait(5) { worktreeWindow(path) == nil }
+                }
+                window.makeKeyAndOrderFront(nil)
+                actions.openInNewWorktree(.branch("fix/7050-pr"))
+                if let next = await sheet() {
+                    check(next.ignoredChoice == .link, "worktrees: Link is remembered for the repository (AE13)")
+                    next.pressCancel()
+                }
+                // Removed: the links go, and what they led to stays.
+                _ = await rows("")
+                run(menu("worktree xCloud-wt-linked")?.items.first { $0.title == "Remove Worktree…" })
+                if await press("Remove", within: 10) {
+                    let removed = await wait(15) { !fm.fileExists(atPath: path) }
+                    let kept = read(repo + "/.env") == "SECRET=1\n" && read(repo + "/build/app.js") == "built\n"
+                        && read(repo + "/node_modules/vite/bin/vite.js") == "#!/usr/bin/env node\n" && read(repo + "/vendor/autoload.php") == "<?php\n"
+                        && (try? fm.destinationOfSymbolicLink(atPath: repo + "/node_modules/.bin/vite")) == "../vite/bin/vite.js"
+                    check(removed && kept, "worktrees: Remove Worktree deletes the links and never what they lead to: xCloud's files are all there (AE13)",
+                          ((try? fm.contentsOfDirectory(atPath: repo)) ?? []).sorted().joined(separator: ", "))
+                    if removed { made.removeAll { $0 == path } }
+                } else {
+                    check(false, "worktrees: Remove Worktree… asks before it removes the linked worktree (AE13)", sheetText(window))
+                }
+                popup.close()
+            }
+        }
         if let savedCopies { UserDefaults.standard.set(savedCopies, forKey: "worktreeCopiesIgnored") } else { UserDefaults.standard.removeObject(forKey: "worktreeCopiesIgnored") }
+        if let savedChoices { UserDefaults.standard.set(savedChoices, forKey: "worktreeIgnoredFiles") } else { UserDefaults.standard.removeObject(forKey: "worktreeIgnoredFiles") }
         write(exclude, excludeBefore)
-        for name in ["node_modules", "vendor", "public"] { try? fm.removeItem(atPath: repo + "/" + name) }
+        for name in ["node_modules", "vendor", "public", "build"] { try? fm.removeItem(atPath: repo + "/" + name) }
         GitToast.dismiss()
         window.makeKeyAndOrderFront(nil)
 

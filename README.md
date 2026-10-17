@@ -120,6 +120,18 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
   uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
+- **Worktrees.** Open in New Worktree… on a branch, tag or commit in Branches (or when a switch would change
+  the files under a working agent) checks it out in a folder of its own, beside the repository or in its
+  `.claude/worktrees`, and opens it in its own window, so the checkout an agent works in keeps its branch
+  and its changes. What git ignores there (`.env`, `node_modules/`, `vendor/`) the new folder can **copy**
+  (APFS clones: independent, taking no space until either side changes), **link** (a link for each
+  ignored entry, to the main checkout's: shared, so an install or an edit in either is in both, and
+  nothing is copied; a bare repository has none, so Link is off there) or **leave out**, as you choose;
+  the choice is remembered per repository. Linked, a workspace package still leads to the worktree's own
+  source, and Composer's autoloader is cloned, so the worktree runs its branch's code. Linked entries
+  have a link mark in the sidebar, and removing the worktree deletes only the links. Logs,
+  Laravel's cached config, virtualenvs and Swift builds stay out either way; `.worktreeinclude` brings
+  one back. Remove Worktree… never forces: the branch stays, and a worktree with changes stays too.
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
   and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
   files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.

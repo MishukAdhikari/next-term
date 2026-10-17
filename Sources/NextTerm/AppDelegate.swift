@@ -1055,17 +1055,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
-    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
-    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
-    func copiesIgnoredFiles(for main: String) -> Bool {
-        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    /// Open in New Worktree's choice for the ignored files (Copy, Link or Leave Out), as it was last left for the
+    /// repository whose main checkout is `main`: before there was a choice, Copy where "Copy ignored files too" was
+    /// ticked; Leave Out for one never seen. Saved when Create is pressed; the choice is the setting.
+    func ignoredFilesChoice(for main: String) -> WorktreeCopy.Choice {
+        let path = canonicalPath(main)
+        let saved = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles")?[path] as? String
+        let before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[path] as? Bool
+        return WorktreeCopy.Choice.remembered(saved, copiedBefore: before)
     }
 
-    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
-        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+    func setIgnoredFilesChoice(_ choice: WorktreeCopy.Choice, for main: String) {
+        let path = canonicalPath(main)
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles") ?? [:]
         choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
-        choices[canonicalPath(main)] = on
-        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+        choices[path] = choice.rawValue
+        UserDefaults.standard.set(choices, forKey: "worktreeIgnoredFiles")
+        // The checkbox's own setting, now the choice holds it.
+        if var before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored"), before.removeValue(forKey: path) != nil {
+            if before.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "worktreeCopiesIgnored")
+            } else {
+                UserDefaults.standard.set(before, forKey: "worktreeCopiesIgnored")
+            }
+        }
     }
 
     // MARK: projects

@@ -65,7 +65,7 @@ public struct GitSnapshot: Sendable {
 
     /// The change to show for a path in the tree.
     public func change(at relativePath: String, isDirectory: Bool) -> GitChange? {
-        if isDirectory, let whole = wholeFolders[relativePath] { return whole }
+        if isDirectory, let whole = whole(relativePath) { return whole }
         if let own = isDirectory ? folderChanges[relativePath] : files[relativePath] { return own }
         return inherited(relativePath)
     }
@@ -104,9 +104,16 @@ public struct GitSnapshot: Sendable {
         var current = path
         while let slash = current.lastIndex(of: "/") {
             current = String(current[..<slash])
-            if let whole = wholeFolders[current] { return whole }
+            if let whole = whole(current) { return whole }
         }
         return nil
+    }
+
+    /// Untracked or ignored with all it holds: a folder git reports whole ("vendor/"), or a link to one, which git
+    /// takes for a file ("vendor"): a path git reports as a file has children only when it is a link to a folder.
+    private func whole(_ path: String) -> GitChange? {
+        if let whole = wholeFolders[path] { return whole }
+        return files[path].flatMap { $0 <= .untracked ? $0 : nil }
     }
 
     // MARK: parsing
