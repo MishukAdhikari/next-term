@@ -540,8 +540,8 @@ extension SelfTest {
         let placed: CGRect = footer.convert(footer.bounds, to: nil)
         let shown: Bool = !footer.isHiddenOrHasHiddenAncestor && placed.width > 0 && content.contains(placed)
         let general = GeneralSettingsView(frame: .zero)
-        check(titles == expected && general.opens.map(\.title) == expected && footer.choice == .welcome && shown,
-              "Welcome: its footer's At launch offers Settings › General's three choices, “Open a new terminal” too, “Show the Welcome window” until changed",
+        check(titles == expected && general.opens.map(\.title) == expected && footer.choice == LaunchOpens.standard && shown,
+              "Welcome: its footer's At launch offers Settings › General's three choices, “Open a new terminal” too, “Resume where I left off” until changed",
               "\(titles), selected \(footer.popUp.titleOfSelectedItem ?? "none"), shown \(shown) at \(NSStringFromRect(placed))")
 
         footer.choose(.newTerminal)
