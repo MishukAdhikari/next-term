@@ -643,7 +643,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap or projectColor), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap or projectColor), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -656,6 +656,7 @@ enum SelfTest {
             await arrivalChecks(c, proj: proj)
             return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
+        case "markdown": return await markdownChecks(c, proj: proj) // Live Preview: bytes kept, hiding, commands, Go to Heading
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
         case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
         case "notifications":
@@ -840,6 +841,7 @@ enum SelfTest {
         await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
+        await markdownChecks(c, proj: proj)
         await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
