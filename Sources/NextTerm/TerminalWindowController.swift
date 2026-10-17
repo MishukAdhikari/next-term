@@ -800,7 +800,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     static func stopText(_ lead: String, _ busy: [TerminalTab], otherwise: String = "") -> String {
         CloseText.text(lead: lead, notes: busy.compactMap(\.closeNote), otherwise: otherwise)
     }
-    var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil }.count }
+    /// Tabs marked for you. A tab that follows herdr's agents counts them instead (AppDelegate.updateBadge).
+    var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil && !$0.followsHerdr }.count }
+
+    /// Window › Go to Agent… (⌃⌘A): a menu of every agent in every window, herdr's and the agent tabs', what needs you
+    /// first.
+    @objc func goToAgent(_ sender: Any?) {
+        HerdrAgentMenu.popUp(in: self)
+    }
 
     // MARK: status
 
@@ -850,6 +857,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             // The agent in sight every 0.25 s; the others every 0.5 s, half of them on each tick.
             if isOnScreen(tab) || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
             tab.status.tick(at: now)
+            tab.noteNeed(at: now)
             if let notice = tab.status.takeNotice() {
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
@@ -1207,6 +1215,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(goToAgent(_:)) { return HerdrAgentMenu.hasAgents }
         if item.action == #selector(setProjectColor(_:)) { return validateProjectColor(item) }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }

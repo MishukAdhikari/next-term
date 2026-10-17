@@ -11,6 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastBadge = -1
     /// Last notification per tab, to rate-limit noisy programs.
     private var lastNotified: [UUID: (at: Date, key: String)] = [:]
+    /// The same for each of herdr's agents, by its id ("<tab id>/<pane>").
+    private var lastHerdrNotified: [String: (at: Date, key: String)] = [:]
+    /// herdr agents' notices still in Notification Center, by id: the tab that posted each, and whether it was about a
+    /// decision (else a finish), so each is withdrawn once its agent no longer needs the user that way.
+    private var herdrDelivered: [String: (tab: UUID, decision: Bool)] = [:]
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
@@ -1486,8 +1491,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: dock badge and notifications
 
+    /// The tabs that need you, and each of herdr's agents that does (blocked, done and not seen, or kept unread) while
+    /// its tab follows them: once per host, herdr session and pane, however many tabs show that session.
     func updateBadge() {
-        let count = controllers.reduce(0) { $0 + $1.unseenTabCount }
+        var agents = Set<String>()
+        for tab in controllers.flatMap(\.tabs) where tab.followsHerdr {
+            for pane in tab.herdrTracker.needsYou { agents.insert(tab.herdrPlace + "\u{0}" + pane) }
+        }
+        let count = controllers.reduce(0) { $0 + $1.unseenTabCount } + agents.count
         guard count != lastBadge else { return }
         lastBadge = count
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
@@ -1539,6 +1550,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString]
         deliver(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
+    }
+
+    /// A notice for one of herdr's agents (TerminalTab.herdrEvents): "codex needs your decision" with its question, or
+    /// "codex is waiting for you", as Settings › Notifications says. None while that agent is on screen (its tab is, and
+    /// herdr shows the agent's own herdr tab there), and none for an agent whose notices the user muted. The subtitle
+    /// says where: the host and the tab for an agent on a server. Each agent's notice replaces its own earlier one,
+    /// never another agent's, and is withdrawn once the agent no longer needs the user that way; a click brings the tab
+    /// forward and moves herdr's view to the agent's pane.
+    func post(herdrAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, tab: TerminalTab,
+              in controller: TerminalWindowController, appActive: Bool? = nil) {
+        guard !tab.herdrTracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        // A turn only herdr's counts saw end is as long as the shortest that is news.
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        let onScreen = tab.herdrTracker.isOnScreen(agent.paneID)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: onScreen) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let title = Typography.shortened(tab.title, to: 80)
+        let place = Typography.shortened(controller.placeName(of: tab), to: 60)
+        // Where it runs: "web-1 — <tab>" on a server, the tab and its project here.
+        let host = tab.remote.map { Typography.shortened($0.host.name, to: 40) }
+        let whereShown = host.map { title.hasPrefix($0 + ":") ? [title] : [$0, title] } ?? [title, place == title ? nil : place].compactMap { $0 }
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = whereShown.joined(separator: " — ")
+        let id = HerdrTarget(tabID: tab.id.uuidString, pane: agent.paneID).id
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = controller.placeName(of: tab)
+        content.userInfo = ["tab": tab.id.uuidString, "herdr_pane": agent.paneID]
+        herdrDelivered[id] = (tab.id, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// Withdraws one herdr agent's notice from Notification Center (and the self-test's sink).
+    func withdrawHerdrNotice(_ id: String) {
+        guard herdrDelivered.removeValue(forKey: id) != nil else { return }
+        lastHerdrNotified[id] = nil
+        testNotifications.removeAll { $0.identifier == id }
+        notificationCenter?.removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    /// Withdraws the notices of `tab`'s agents that no longer need the user as their notice said: a decision's once the
+    /// agent is not blocked, a finish's once it is neither done nor kept unread, and either once herdr no longer lists
+    /// it or the agent is on screen.
+    func withdrawStaleHerdrNotices(of tab: TerminalTab) {
+        let tracker = tab.herdrTracker
+        for (id, posted) in herdrDelivered where posted.tab == tab.id {
+            guard let target = HerdrTarget.parse(id) else { continue }
+            let agent = tracker.agents.first { $0.paneID == target.pane }
+            let finished = agent.map { $0.status == .done || tracker.isUnread($0.paneID) } ?? false
+            let still = posted.decision ? agent?.status == .blocked : finished && agent?.status != .blocked
+            if !still || tracker.isOnScreen(target.pane) { withdrawHerdrNotice(id) }
+        }
+    }
+
+    /// Withdraws every notice of `tab`'s agents: the tab closed, or no longer follows herdr.
+    func withdrawHerdrNotices(of tab: TerminalTab) {
+        for (id, posted) in herdrDelivered where posted.tab == tab.id { withdrawHerdrNotice(id) }
     }
 
     /// While the self-test runs, notifications land here instead of in Notification Center: it checks what
@@ -1616,12 +1698,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let tabID = response.notification.request.content.userInfo["tab"] as? String
+        // One of herdr's agents: herdr's view moves to its pane too (the user clicked, so nothing asks).
+        let pane = response.notification.request.content.userInfo["herdr_pane"] as? String
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
-                    controller.window?.makeKeyAndOrderFront(nil)
-                    controller.show(tab)
+                    if let pane {
+                        HerdrAgentMenu.show(tab: tab, pane: pane)
+                    } else {
+                        controller.window?.makeKeyAndOrderFront(nil)
+                        controller.show(tab)
+                    }
                     break
                 }
             }
@@ -1834,6 +1922,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(window, "Select Pane Below", #selector(TerminalWindowController.selectPaneBelow(_:)), arrow(NSDownArrowFunctionKey), [.command, .option])
         item(window, "Select Next Pane", #selector(TerminalWindowController.selectNextPane(_:)), "]", [.command, .option])
         item(window, "Select Previous Pane", #selector(TerminalWindowController.selectPreviousPane(_:)), "[", [.command, .option])
+        // ⌃⌘A: any agent, herdr's or a tab's, from the keyboard (⌃⇧⌘A is Annotate with Git Blame).
+        item(window, "Go to Agent…", #selector(TerminalWindowController.goToAgent(_:)), "a", [.command, .control])
         item(window, "Maximize Pane", #selector(TerminalWindowController.toggleZoomPane(_:)), "\r", [.command, .shift])
         item(window, "Make Panes Equal", #selector(TerminalWindowController.equalizePanes(_:)), "")
         window.addItem(.separator())

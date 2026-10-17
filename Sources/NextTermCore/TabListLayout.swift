@@ -82,9 +82,13 @@ public struct TabListLayout: Equatable, Sendable {
     public static let autoscrollBand: CGFloat = 24
     public static let autoscrollFastest: CGFloat = 12
 
+    /// A herdr agent's row has a second line with Show Folders, as a tab's (its question, or where it works).
     public static func rowHeight(for kind: TabListRow.Kind, density: TabListDensity) -> CGFloat {
-        guard kind == .tab else { return paneHeight }
-        return density == .twoLines ? twoLineHeight : oneLineHeight
+        switch kind {
+        case .tab: return density == .twoLines ? twoLineHeight : oneLineHeight
+        case .herdrAgent: return density == .twoLines ? twoLineHeight : paneHeight
+        case .pane, .herdrFolded: return paneHeight
+        }
     }
 
     /// One per row, the full width across, no gaps between them.

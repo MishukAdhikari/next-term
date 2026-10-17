@@ -7,6 +7,14 @@ protocol TabListViewDelegate: AnyObject {
     /// A pane's row was clicked: its tab comes forward and that pane (`pane`, its place in the tab) takes the
     /// keyboard.
     func tabList(_ list: TabListView, didSelectPane pane: Int, of index: Int)
+    /// A herdr agent's row was clicked (or pressed): its tab comes forward and herdr moves to that agent's pane (`pane`,
+    /// herdr's id for it).
+    func tabList(_ list: TabListView, didSelectAgent pane: String, of index: Int)
+    /// A herdr agent's row's menu.
+    func tabList(_ list: TabListView, menuForAgent pane: String, of index: Int) -> NSMenu?
+    /// The row of tab `index`'s folded idle herdr agents was clicked or pressed (`open` nil: the other way), or an arrow
+    /// opened or closed it.
+    func tabList(_ list: TabListView, foldIdleAgentsOf index: Int, open: Bool?)
     func tabList(_ list: TabListView, didClose index: Int)
     func tabList(_ list: TabListView, didMove from: Int, to: Int)
     /// `title` nil means "back to the automatic title".
@@ -481,6 +489,15 @@ final class TabListView: NSView {
 
     func rowMouseDown(_ view: TabListRowView, event: NSEvent) {
         guard let place = place(of: view) else { return }
+        // An agent's row is never dragged: it goes to its agent; the folded row opens or closes.
+        if let agent = rows[place.row].herdrPane {
+            delegate?.tabList(self, didSelectAgent: agent, of: place.tab)
+            return
+        }
+        if rows[place.row].isFolded {
+            delegate?.tabList(self, foldIdleAgentsOf: place.tab, open: nil)
+            return
+        }
         if case .pane(let pane, _) = rows[place.row].kind {
             delegate?.tabList(self, didSelectPane: pane, of: place.tab)
             return
@@ -497,7 +514,11 @@ final class TabListView: NSView {
     /// VoiceOver's press: as a click.
     func rowPressed(_ view: TabListRowView) -> Bool {
         guard let place = place(of: view) else { return false }
-        if case .pane(let pane, _) = rows[place.row].kind {
+        if let agent = rows[place.row].herdrPane {
+            delegate?.tabList(self, didSelectAgent: agent, of: place.tab)
+        } else if rows[place.row].isFolded {
+            delegate?.tabList(self, foldIdleAgentsOf: place.tab, open: nil)
+        } else if case .pane(let pane, _) = rows[place.row].kind {
             delegate?.tabList(self, didSelectPane: pane, of: place.tab)
         } else {
             delegate?.tabList(self, didSelect: place.tab)
@@ -516,9 +537,17 @@ final class TabListView: NSView {
         delegate?.tabList(self, didClose: place.tab)
     }
 
-    /// A pane's row has its tab's menu.
+    /// A pane's row has its tab's menu; an agent's row, its agent's.
     func rowMenu(_ view: TabListRowView) -> NSMenu? {
-        place(of: view).flatMap { menu(forTabAt: $0.tab) }
+        guard let place = place(of: view) else { return nil }
+        if let agent = rows[place.row].herdrPane { return delegate?.tabList(self, menuForAgent: agent, of: place.tab) }
+        return menu(forTabAt: place.tab)
+    }
+
+    /// VoiceOver's increment and decrement on the folded row: open and close it, as → and ← in a list.
+    func rowFolds(_ view: TabListRowView, open: Bool) {
+        guard let place = place(of: view), rows[place.row].isFolded else { return }
+        delegate?.tabList(self, foldIdleAgentsOf: place.tab, open: open)
     }
 
     /// A tab's right-click menu (for the self-test too).

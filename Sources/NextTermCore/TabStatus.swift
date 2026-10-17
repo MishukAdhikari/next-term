@@ -321,9 +321,13 @@ public struct TabStatus {
         if isVisible { unseen = nil }
     }
 
+    /// The tab's own notices are off: a herdr tab whose agents are followed one by one posts theirs instead, so none
+    /// comes twice. Its marks are as before.
+    public var suppressesNotices = false
+
     public mutating func takeNotice() -> TabNotice? {
         defer { pendingNotice = nil }
-        return pendingNotice
+        return suppressesNotices ? nil : pendingNotice
     }
 
     // MARK: internals

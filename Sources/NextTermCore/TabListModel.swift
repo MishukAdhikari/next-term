@@ -8,6 +8,12 @@ public struct TabListRow: Equatable, Sendable {
         case tab
         /// One pane of a split tab: `index` counts from 0, of `count` panes.
         case pane(index: Int, count: Int)
+        /// One of herdr's agents, under the row of the tab or pane that shows herdr: `index` counts from 0 in herdr's
+        /// order, of `count`.
+        case herdrAgent(index: Int, count: Int)
+        /// A tab's idle herdr agents folded into one row ("5 idle"), past HerdrAgents.foldsPast agents; `open` while
+        /// they show under it.
+        case herdrFolded(count: Int, open: Bool)
     }
 
     /// Stable while what it shows lives: the tab's pane group for a tab row, the pane itself for a pane row. The
@@ -39,11 +45,16 @@ public struct TabListRow: Equatable, Sendable {
     public var detailIsQuestion: Bool
     /// A pane row's pane has the keyboard in its tab.
     public var focused: Bool
+    /// An agent's row: herdr's pane id for it.
+    public var herdrPane: String?
+    /// What VoiceOver says for the title when it is not the title as shown (an agent's row says its time with its
+    /// state, in full words); nil: the title.
+    public var spokenTitle: String?
 
     public init(key: String, kind: Kind = .tab, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                 editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
                 shortcut: String? = nil, remote: RemoteMark? = nil, place: String? = nil, detail: String? = nil,
-                detailIsQuestion: Bool = false, focused: Bool = false) {
+                detailIsQuestion: Bool = false, focused: Bool = false, herdrPane: String? = nil) {
         self.key = key
         self.kind = kind
         self.title = title
@@ -59,16 +70,35 @@ public struct TabListRow: Equatable, Sendable {
         self.detail = detail
         self.detailIsQuestion = detailIsQuestion
         self.focused = focused
+        self.herdrPane = herdrPane
     }
 
+    /// A row under its tab's: a pane's, a herdr agent's, or the folded idle agents'.
     public var isPane: Bool { kind != .tab }
+
+    /// One of herdr's agents.
+    public var isAgent: Bool {
+        if case .herdrAgent = kind { return true }
+        return false
+    }
+
+    /// The row of a tab's folded idle herdr agents.
+    public var isFolded: Bool {
+        if case .herdrFolded = kind { return true }
+        return false
+    }
 
     /// What VoiceOver says: the top bar's words for the tab (title, state, server, place) and the second line
     /// once, unless the state said it already (a question is in "Needs your decision: …"). A pane row says where
-    /// it is in its tab: "claude, pane 2 of 3, Working".
+    /// it is in its tab: "claude, pane 2 of 3, Working"; an agent's row, "codex, herdr agent 2 of 3, Needs your
+    /// decision"; the folded row, "5 idle herdr agents, collapsed".
     public var accessibilityLabel: String {
-        var parts: [String] = [title]
+        if case .herdrFolded(let count, let open) = kind {
+            return "\(count) idle herdr agent\(count == 1 ? "" : "s"), \(open ? "expanded" : "collapsed")"
+        }
+        var parts: [String] = [spokenTitle ?? title]
         if case .pane(let index, let count) = kind { parts.append("pane \(index + 1) of \(count)") }
+        if case .herdrAgent(let index, let count) = kind { parts.append("herdr agent \(index + 1) of \(count)") }
         parts.append(spokenStatus)
         parts.append(remote?.summary ?? "")
         parts.append(place ?? "")
@@ -97,10 +127,15 @@ public enum TabListRows {
         public var remote: RemoteMark?
         /// It has the keyboard in its tab.
         public var focused: Bool
+        /// It shows herdr: herdr's agents, each a row after this pane's (after the tab's, for a tab of one pane).
+        public var herdrAgents: [Agent]
+        /// Its folded idle agents show (HerdrAgents.fold).
+        public var herdrIdleOpen: Bool
 
         public init(key: String, title: String, truncatesTail: Bool = false, shorterTitles: [String] = [],
                     editableTitle: String? = nil, state: TabState = .idle, tooltip: String = "", spokenStatus: String = "",
-                    folder: String = "", question: String? = nil, remote: RemoteMark? = nil, focused: Bool = false) {
+                    folder: String = "", question: String? = nil, remote: RemoteMark? = nil, focused: Bool = false,
+                    herdrAgents: [Agent] = [], herdrIdleOpen: Bool = false) {
             self.key = key
             self.title = title
             self.truncatesTail = truncatesTail
@@ -113,6 +148,8 @@ public enum TabListRows {
             self.question = question
             self.remote = remote
             self.focused = focused
+            self.herdrAgents = herdrAgents
+            self.herdrIdleOpen = herdrIdleOpen
         }
     }
 
@@ -140,18 +177,69 @@ public enum TabListRows {
 
     /// A row per tab, in the tabs' own order whatever their marks (so "⌘3" stays on the third tab), each split tab
     /// followed by a row per pane. A tab's row is named by the pane with the keyboard and marked by the pane that
-    /// most needs you, as the top bar's tab is. `workingShown` is false while the agent spinner is off.
-    public static func make(tabs: [Source], showsFolders: Bool, home: String, workingShown: Bool = true) -> [TabListRow] {
+    /// most needs you, as the top bar's tab is. `workingShown` is false while the agent spinner is off. A pane that
+    /// shows herdr has a row per agent after its own (after the tab's, for a tab of one pane), with how long each has
+    /// been in its state at `now` (none without it).
+    public static func make(tabs: [Source], showsFolders: Bool, home: String, workingShown: Bool = true,
+                            now: TimeInterval? = nil) -> [TabListRow] {
         var rows: [TabListRow] = []
         rows.reserveCapacity(tabs.count)
         for source in tabs {
             rows.append(tabRow(source, showsFolders: showsFolders, home: home, workingShown: workingShown))
-            guard source.panes.count > 1 else { continue }
+            guard source.panes.count > 1 else {
+                if let pane = source.panes.first { rows += agentRows(pane, showsFolders: showsFolders, home: home, now: now) }
+                continue
+            }
             for (index, pane) in source.panes.enumerated() {
                 rows.append(paneRow(pane, index: index, count: source.panes.count))
+                rows += agentRows(pane, showsFolders: showsFolders, home: home, now: now)
             }
         }
         return rows
+    }
+
+    /// The rows of herdr's agents in `pane`, keyed `<pane's key>/herdr/<herdr's pane id>`, in herdr's order. Past
+    /// HerdrAgents.foldsPast agents the idle ones fold into one row after the others, keyed `<pane's key>/herdr/idle`,
+    /// and show under it while it is open.
+    static func agentRows(_ pane: Pane, showsFolders: Bool, home: String, now: TimeInterval?) -> [TabListRow] {
+        let agents = pane.herdrAgents
+        guard !agents.isEmpty else { return [] }
+        let count = agents.count
+        let place = Dictionary(agents.enumerated().map { ($0.element.pane, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        func row(_ agent: Agent) -> TabListRow {
+            agentRow(agent, in: pane, index: place[agent.pane] ?? 0, count: count, showsFolders: showsFolders, home: home, now: now)
+        }
+        let (shown, folded) = HerdrAgents.fold(agents)
+        var rows = shown.map(row)
+        guard !folded.isEmpty else { return rows }
+        let names = folded.map { agent in agent.disambiguation.map { "\(agent.name) (\($0))" } ?? agent.name }
+        let tip = "\(folded.count) idle herdr agents: " + names.joined(separator: ", ")
+        rows.append(TabListRow(key: "\(pane.key)/herdr/idle", kind: .herdrFolded(count: folded.count, open: pane.herdrIdleOpen),
+                               title: (pane.herdrIdleOpen ? "▾ " : "▸ ") + "\(folded.count) idle", tooltip: tip))
+        if pane.herdrIdleOpen { rows += folded.map(row) }
+        return rows
+    }
+
+    /// One agent's row: herdr's name for it, its title and what tells it from a row that reads the same ("claude · Fix
+    /// login · api"), then how long it has waited or worked ("waiting 4 min"), which goes first when the row is narrow;
+    /// herdr's state as the mark, and with Show Folders its question, else where it works ("web-1: /srv/api").
+    static func agentRow(_ agent: Agent, in pane: Pane, index: Int, count: Int, showsFolders: Bool, home: String,
+                         now: TimeInterval?) -> TabListRow {
+        let named = [agent.name, agent.title, agent.disambiguation].compactMap { $0 }.joined(separator: " · ")
+        let time = now.flatMap { agent.time(now: $0) }
+        let title = time.map { named + " · " + $0 } ?? named
+        var shorter: [String] = []
+        if let time { shorter = [agent.name + " · " + time, agent.name].filter { $0 != title } }
+        let spoken = [agent.words, now.flatMap { agent.spokenTime(now: $0) }].compactMap { $0 }.joined(separator: ", ")
+        var row = TabListRow(key: "\(pane.key)/herdr/\(agent.pane)", kind: .herdrAgent(index: index, count: count), title: title,
+                             truncatesTail: true, shorterTitles: shorter, state: agent.state, tooltip: agent.tooltip(now: now),
+                             spokenStatus: spoken, focused: agent.focused, herdrPane: agent.pane)
+        if time != nil { row.spokenTitle = named }
+        guard showsFolders else { return row }
+        let line = detail(folder: agent.directory ?? "", question: agent.question, remoteHost: pane.remote?.host, home: home)
+        row.detail = line?.text
+        row.detailIsQuestion = line?.isQuestion ?? false
+        return row
     }
 
     private static func tabRow(_ source: Source, showsFolders: Bool, home: String, workingShown: Bool) -> TabListRow {

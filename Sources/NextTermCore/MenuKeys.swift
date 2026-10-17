@@ -42,7 +42,7 @@ public enum MenuKeys {
             "performMiniaturize:": cmd("m"), "showNextTab:": shiftCmd("]"), "showPreviousTab:": shiftCmd("["),
             "selectPaneLeft:": optCmd(left), "selectPaneRight:": optCmd(right), "selectPaneAbove:": optCmd(up),
             "selectPaneBelow:": optCmd(down), "selectNextPane:": optCmd("]"), "selectPreviousPane:": optCmd("["),
-            "toggleZoomPane:": shiftCmd("\r"),
+            "toggleZoomPane:": shiftCmd("\r"), "goToAgent:": ctrlCmd("a"),
         ]
         for n in 1...9 { keys["selectTabByNumber:#\(n)"] = cmd("\(n)") }
         return keys
