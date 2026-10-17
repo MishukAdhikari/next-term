@@ -829,6 +829,20 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         then?()
     }
 
+    /// What a program in this tab that asked to hear about focus (DECSET 1004) was last told of it.
+    private var focusReport = FocusReport()
+
+    /// One look at whether the user sees this tab with the keyboard in it (TerminalWindowController.refreshVisibility):
+    /// a program that asked is told when that changes, not only when the view gains or loses the keyboard, so herdr
+    /// keeps a turn that ends while Next Term is behind another app as not seen yet. SwiftTerm writes it only to a
+    /// program that asked.
+    func reportFocus(seen: Bool) {
+        guard !exited, view.acceptsInput else { return }
+        let keyboard = view.window?.firstResponder === view
+        guard let focused = focusReport.look(keyboard: keyboard, seen: seen) else { return }
+        view.getTerminal().setTerminalFocus(focused)
+    }
+
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
     /// is; with integration it only looks behind commands that look plain, for agents run by functions.
     func pollForeground() {

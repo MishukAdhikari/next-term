@@ -818,6 +818,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 let isVisible = isOnScreen(tab)
                 tab.status.setVisible(isVisible)
                 tab.view.beepAllowed = isVisible && tab === group.focused
+                tab.reportFocus(seen: isVisible)
             }
         }
     }
