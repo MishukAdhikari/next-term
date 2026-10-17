@@ -6,11 +6,10 @@ import NextTermCore
 /// own explanation, since it changes the file; the keys outside its servers then open in the copy sheet. Unlike that
 /// import, a copy needs no "Let agents control Next Term": nothing is rewritten to start through it.
 extension SecretsView {
-    static let importMenuTitle = "Import From"
-    static let fileItemTitle = "A File\u{2026}"
-    static let mcpItemTitle = "MCP Configs\u{2026}"
+    /// A File… hands an MCP config to the MCP-config import, which rewrites it.
     static let panelMessage = "Choose a file of keys: a .env file, a JSON, TOML or YAML config, an agent\u{2019}s MCP "
-        + "config, or a password manager\u{2019}s export. Next Term reads it and doesn\u{2019}t change it."
+        + "config, or a password manager\u{2019}s export. Next Term reads it, and changes only an MCP config, once you "
+        + "choose the keys to move out of it."
 
     #if DEBUG
     /// The self-test's stand-in for the open panel: the file it picks.
@@ -18,12 +17,12 @@ extension SecretsView {
     #endif
 
     /// The pull-down: its title, then A File… and MCP Configs…, then the password managers (1Password…, Bitwarden…,
-    /// Bitwarden Secrets Manager…), whose CLI the user runs in a new tab.
+    /// Bitwarden Secrets Manager…), whose CLI the user runs in a new tab. Its titles are the Secrets menu's Import From's.
     func configureImportMenu() {
         importMenuButton.removeAllItems()
-        importMenuButton.addItem(withTitle: Self.importMenuTitle)
-        let items: [(String, Selector)] = [(Self.fileItemTitle, #selector(importFromFile)),
-                                           (Self.mcpItemTitle, #selector(importKeys))]
+        importMenuButton.addItem(withTitle: SecretsMenuModel.importTitle)
+        let items: [(String, Selector)] = [(SecretsMenuModel.importFileTitle, #selector(importFromFile)),
+                                           (SecretsMenuModel.importMCPTitle, #selector(importKeys))]
         for (title, action) in items {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
@@ -31,18 +30,15 @@ extension SecretsView {
         }
         importMenuButton.menu?.addItem(.separator())
         for preset in SecretImportPreset.allCases {
-            let item = NSMenuItem(title: Self.managerItemTitle(preset), action: #selector(importFromManager(_:)),
+            let item = NSMenuItem(title: SecretsMenuModel.managerTitle(preset), action: #selector(importFromManager(_:)),
                                   keyEquivalent: "")
             item.target = self
             item.representedObject = preset.rawValue
             importMenuButton.menu?.addItem(item)
         }
         importMenuButton.bezelStyle = .rounded
-        importMenuButton.setAccessibilityLabel("Import From")
+        importMenuButton.setAccessibilityLabel(SecretsMenuModel.importTitle)
     }
-
-    /// "1Password…", "Bitwarden…", "Bitwarden Secrets Manager…".
-    static func managerItemTitle(_ preset: SecretImportPreset) -> String { preset.app + "\u{2026}" }
 
     /// A password manager's sheet: what runs, its line, and Open in a New Tab.
     @objc func importFromManager(_ sender: NSMenuItem) {

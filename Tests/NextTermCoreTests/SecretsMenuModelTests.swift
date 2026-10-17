@@ -81,6 +81,15 @@ import Testing
         #expect(Model.pausedHelp("4:02 PM") == "Paused until 4:02 PM.")
     }
 
+    @Test func pauseAsksOverAnAgentsImportSheetButOverNoOtherSheet() {
+        #expect(Model.pauseConfirm(listHasSheet: false, requestSheetOnly: false, copying: false) == .onList)
+        // An agent's import_secrets sheet has no Pause of its own: Pause asks over it, and ends that request.
+        #expect(Model.pauseConfirm(listHasSheet: true, requestSheetOnly: true, copying: false) == .overRequest)
+        // Copying keys in, nothing closes the sheet; and a sheet the user opened, or one over the request's, is theirs.
+        #expect(Model.pauseConfirm(listHasSheet: true, requestSheetOnly: true, copying: true) == .busy)
+        #expect(Model.pauseConfirm(listHasSheet: true, requestSheetOnly: false, copying: false) == .busy)
+    }
+
     @Test func revokeAllsConfirmSaysHowManyApprovalsItEnds() {
         #expect(Model.revokeConfirmText(3) == "This ends 3 approvals you gave. The next use of each key asks again.")
         #expect(Model.revokeConfirmText(1) == "This ends 1 approval you gave. The next use of each key asks again.")
@@ -159,6 +168,12 @@ import Testing
         #expect(Model.cantChangeTitle == "Secrets Can\u{2019}t Change Keys Now")
         #expect(SecretImportPreset.allCases.map(Model.managerTitle)
                 == ["1Password\u{2026}", "Bitwarden\u{2026}", "Bitwarden Secrets Manager\u{2026}"])
+    }
+
+    @Test func aFilesTooltipSaysAnMCPConfigIsChanged() {
+        // A File… hands an MCP config to the MCP-config import, which rewrites it once the user chooses.
+        #expect(!Model.importFileHelp.contains("isn\u{2019}t changed"))
+        #expect(Model.importFileHelp.contains("Only an MCP config is changed"))
     }
 
     @Test func noSecretsCommandHasADefaultKey() {

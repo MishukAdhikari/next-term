@@ -33,8 +33,11 @@ extension SelfTest {
         await secretsMenuBrokenChecks(secrets)
         await secretsMenuAddChecks(secrets, view)
         await secretsMenuImportChecks(secrets, view, base: base)
+        await secretsMenuBusyChecks(secrets, view, base: base)
         await secretsMenuDueChecks(secrets, view)
         await secretsMenuRequestChecks(secrets)
+        await secretsMenuRequestWindowCheck(secrets)
+        await secretsMenuImportRequestChecks(secrets, view, base: base)
         await secretsMenuPauseChecks(secrets, view)
         await secretsMenuRevokeChecks(secrets, view)
         _ = try? await SecretsStore.shared.perform(.delete(name: "MENU_KEY"))
@@ -188,15 +191,10 @@ extension SelfTest {
                                              value: SecretBytes(utf8: secretsValue("foreign-"))) {
             try? store.folder.write(SecretFolder.vaultName, data: foreign)
             await store.load()
-            menu.menuNeedsUpdate(menu.dueMenu)
-            let rows: [String] = secretsMenuTitles(menu.dueMenu)
-            let off: Bool = !secretsMenuOn(add) && imports.allSatisfy { !secretsMenuOn($0) }
-            let row: NSMenuItem? = menu.dueMenu.items.first
-            let saysWhy: Bool = rows == [SecretsMenuModel.cantChangeTitle] && row?.toolTip == SecretsView.cantOpenLine
-            let rowOff: Bool = row?.isEnabled == false
-            check(store.protection == .cantOpen && off && saysWhy && rowOff,
+            let saysWhy: Bool = secretsMenuBrokenOff(add, imports, line: SecretsView.cantOpenLine)
+            check(store.protection == .cantOpen && saysWhy,
                   "secrets menu: with a vault this Mac can't open, Add Key… and Import From are off, and the due row says why",
-                  rows.joined(separator: ", "))
+                  secretsMenuTitles(menu.dueMenu).joined(separator: ", "))
             let pause: NSMenuItem? = secretsMenuItem(secrets, #selector(SecretsMenu.toggleKeyRequestPause(_:)))
             let request: NSMenuItem? = secretsMenuItem(secrets, #selector(SecretsMenu.showKeyRequest(_:)))
             let revoke: NSMenuItem? = secretsMenuItem(secrets, #selector(SecretsMenu.revokeAllSecretApprovals(_:)))
@@ -205,6 +203,19 @@ extension SelfTest {
         } else {
             check(false, "secrets menu: a vault made with another keyring")
         }
+        // Changed outside Next Term: the same, with the tampered line.
+        if let planted = secretsTampered(original, { $0["purpose"] = "changed by hand" }) {
+            try? store.folder.write(SecretFolder.vaultName, data: planted)
+            await store.load()
+            let line: String = SecretsView.statusText(store.protection, waitingForKeychain: store.isWaitingForKeychain,
+                                                      unlisted: store.isUnlisted, tooLarge: store.isTooLarge)
+            let saysWhy: Bool = secretsMenuBrokenOff(add, imports, line: line)
+            check(store.protection == .tampered && saysWhy,
+                  "secrets menu: with a vault changed outside Next Term, Add Key… and Import From are off, and the due row says why",
+                  line)
+        } else {
+            check(false, "secrets menu: a tampered vault")
+        }
         // No vault yet: the first Add makes it.
         try? FileManager.default.removeItem(atPath: vaultPath)
         await store.load()
@@ -212,6 +223,17 @@ extension SelfTest {
         try? store.folder.write(SecretFolder.vaultName, data: original)
         await store.load()
         check(store.index?.entry(named: "MENU_KEY") != nil, "secrets menu: the vault is back for the checks after")
+    }
+
+    /// With the vault broken: Add Key… and every import off, and Keys Due to Rotate's one row off, saying it can't
+    /// change keys, with `line`, the list's own status line, as its tooltip.
+    static func secretsMenuBrokenOff(_ add: NSMenuItem?, _ imports: [NSMenuItem?], line: String) -> Bool {
+        let menu = SecretsMenu.shared
+        menu.menuNeedsUpdate(menu.dueMenu)
+        let off: Bool = !secretsMenuOn(add) && imports.allSatisfy { (item: NSMenuItem?) -> Bool in !secretsMenuOn(item) }
+        let row: NSMenuItem? = menu.dueMenu.items.first
+        let rowSays: Bool = secretsMenuTitles(menu.dueMenu) == [SecretsMenuModel.cantChangeTitle] && row?.toolTip == line
+        return off && rowSays && row?.isEnabled == false
     }
 
     /// Add Key… opens Add…'s sheet on the Secrets window, or on Settings › Secrets when that is in front; chosen again
@@ -283,9 +305,11 @@ extension SelfTest {
         view.say("")
     }
 
-    /// On the self-test's day, a key 2 days past its 1-day reminder is listed, with its help and a badge of 1, and opens
-    /// Rotate…; with a sheet open, nothing new opens and the line says why. 11 due list 10 and Show All 11, which says
-    /// how many; none due, "No Keys Due", off. No title, tooltip or badge holds a stored value or its last four.
+    /// On the self-test's day, a key 2 days past its 1-day reminder is listed, with its help, counted in the badge, and
+    /// opens Rotate…; with a sheet open, nothing new opens and the line says why. With 10 more due, the submenu lists 10
+    /// and Show All N, which says how many; none due, "No Keys Due", off. No title, tooltip or badge holds a stored value
+    /// or its last four. Keys earlier checks left may be due on that day too: the rows are the list's rule's, ours among
+    /// them.
     static func secretsMenuDueChecks(_ secrets: NSMenu, _ view: SecretsView) async {
         let store = SecretsStore.shared
         let menu = SecretsMenu.shared
@@ -298,13 +322,14 @@ extension SelfTest {
         SecretReminders.selfTestNow = due
         menu.menuNeedsUpdate(menu.dueMenu)
         let rows: [String] = secretsMenuTitles(menu.dueMenu)
-        let row: NSMenuItem? = menu.dueMenu.items.first
+        let row: NSMenuItem? = menu.dueMenu.items.first { (item: NSMenuItem) -> Bool in item.title == name }
         let count: Int = secretsMenuCount(menu.dueItem, title: SecretsMenuModel.dueTitle)
+        let total: Int = SecretsMenu.dueCount()
         let help: String? = SecretAge.dueHelp(entry: entry, now: due)
-        let listed: Bool = rows == [name] && row?.toolTip == help
-        check(listed && count == 1 && secretsMenuOn(row),
-              "secrets menu: a key past its reminder is listed under Keys Due to Rotate, with its help and a count of 1",
-              "\(rows.joined(separator: ", ")), \(count)")
+        let listed: Bool = rows == secretsMenuDueTitles(now: due) && row?.toolTip == help
+        check(listed && total >= 1 && count == total && secretsMenuOn(row),
+              "secrets menu: a key past its reminder is listed under Keys Due to Rotate, with its help, and counted",
+              "\(rows.joined(separator: ", ")), \(count) of \(total)")
         await secretsMenuFocus(view)
         secretsMenuChoose(row)
         let rotating: Bool = await wait(5) { view.rotateSheet?.name == name }
@@ -322,20 +347,23 @@ extension SelfTest {
                                               value: SecretBytes(utf8: secretsValue("due-more-")), remindDays: 1))
         }
         menu.menuNeedsUpdate(menu.dueMenu)
-        let eleven: [String] = secretsMenuTitles(menu.dueMenu)
+        let many: [String] = secretsMenuTitles(menu.dueMenu)
         let showAll: NSMenuItem? = menu.dueMenu.items.last
         let badge: Int = secretsMenuCount(menu.dueItem, title: SecretsMenuModel.dueTitle)
-        let tenThenSeparator: Bool = eleven.count == 12 && eleven[10] == "—"
-        let first: String? = showAll?.representedObject as? String
-        let showsAll: Bool = showAll?.title == "Show All 11 in Secrets" && first == name
-        check(tenThenSeparator && showsAll && badge == 11,
-              "secrets menu: 11 keys due list 10, then Show All 11 in Secrets", eleven.joined(separator: ", "))
+        let allDue: Int = SecretsMenu.dueCount()
+        let tenThenSeparator: Bool = many.count == 12 && many[10] == "—" && many == secretsMenuDueTitles(now: due)
+        let firstDue: Bool = showAll?.representedObject as? String == many.first
+        let showsAll: Bool = showAll?.title == SecretsMenuModel.moreTitle(allDue) && firstDue
+        check(allDue >= 11 && tenThenSeparator && showsAll && badge == allDue,
+              "secrets menu: 11 or more keys due list 10, then Show All N in Secrets", many.joined(separator: ", "))
         secretsMenuValueCheck(secrets, value: value)
         secretsMenuChoose(showAll)
         let all: String = view.actionLabel.stringValue
-        check(all.hasPrefix("11 keys are due to rotate"), "secrets menu: Show All says how many keys are due", all)
+        check(all.hasPrefix("\(allDue) keys are due to rotate"), "secrets menu: Show All says how many keys are due", all)
 
-        SecretReminders.selfTestNow = entry.lastSet
+        // A day before any key's value was set, none is due, whatever earlier checks left.
+        let earliest: Date = (store.index?.entries ?? []).map(\.lastSet).min() ?? entry.lastSet
+        SecretReminders.selfTestNow = earliest.addingTimeInterval(-86_400)
         menu.menuNeedsUpdate(menu.dueMenu)
         let none: NSMenuItem? = menu.dueMenu.items.first
         let noneRow: Bool = secretsMenuTitles(menu.dueMenu) == [SecretsMenuModel.noneDueTitle] && none?.isEnabled == false
@@ -345,6 +373,20 @@ extension SelfTest {
               "secrets menu: with no key due, the one row reads No Keys Due, off, and there is no count")
         for left in [name] + more { _ = try? await store.perform(.delete(name: left)) }
         view.say("")
+    }
+
+    /// Keys Due to Rotate's titles on `now`, as the list's rule gives them for the vault as it is (a separator as "—").
+    static func secretsMenuDueTitles(now: Date) -> [String] {
+        let entries: [SecretVault.Entry] = SecretsStore.shared.index?.entries ?? []
+        let rows: [SecretsMenuModel.DueRow] = SecretsMenuModel.dueRows(entries: entries, broken: SecretsMenu.isBroken, now: now)
+        return rows.flatMap { (row: SecretsMenuModel.DueRow) -> [String] in
+            switch row {
+            case .key(let name, _): return [name]
+            case .more(let count, _): return ["—", SecretsMenuModel.moreTitle(count)]
+            case .none: return [SecretsMenuModel.noneDueTitle]
+            case .cantChange: return [SecretsMenuModel.cantChangeTitle]
+            }
+        }
     }
 
     /// Every title, tooltip and badge in the menu, the filled due rows among them: none holds `value` or its last four,
@@ -368,8 +410,8 @@ extension SelfTest {
 // MARK: requests: Show Key Request, Pause and Resume, Revoke All Approvals…
 
 extension SelfTest {
-    /// Off with no request; with a stand-in one waiting, on with a count of 1, and choosing it brings the panel forward
-    /// without making it key or answering it.
+    /// Off with no request; with a stand-in one waiting, on with a count of 1, and choosing it brings the panel back on
+    /// screen (taken off first, so only the item can) without making it key or answering it.
     static func secretsMenuRequestChecks(_ secrets: NSMenu) async {
         let requests = SecretRequests.shared
         let menu = SecretsMenu.shared
@@ -384,9 +426,11 @@ extension SelfTest {
         let on: Bool = secretsMenuOn(item) && item?.toolTip == SecretsMenuModel.showRequestHelp
         let key: NSWindow? = NSApp.keyWindow
         let panel: NSWindow? = request.panel?.window
-        panel?.orderBack(nil)
+        // Floating, the panel stays above other windows when ordered back: off screen, only the item brings it back.
+        panel?.orderOut(nil)
+        let away: Bool = panel?.isVisible == false
         secretsMenuChoose(item)
-        let shown: Bool = panel?.isVisible == true && panel?.isKeyWindow == false
+        let shown: Bool = away && panel?.isVisible == true && panel?.isKeyWindow == false
         let inFront: Bool = shown && NSApp.keyWindow === key
         check(offAtFirst && on && count == 1 && inFront && answers.all.isEmpty,
               "secrets menu: Show Key Request is off with no request, then on with a count of 1, and brings the panel forward unanswered and not key",
@@ -443,7 +487,7 @@ extension SelfTest {
     }
 
     /// Off with no approval; on with one. Chosen, it asks in a sheet saying how many it ends, Return on Cancel, which
-    /// keeps it; Revoke ends it.
+    /// keeps it; then `secretsMenuRevokeSheetChecks`, which ends with Revoke ending them.
     static func secretsMenuRevokeChecks(_ secrets: NSMenu, _ view: SecretsView) async {
         let requests = SecretRequests.shared
         requests.resetForSelfTest()
@@ -469,12 +513,9 @@ extension SelfTest {
         enter?.performClick(nil)
         _ = await wait(5) { view.alert == nil }
         let kept: Bool = requests.grants.count == 1 && enter?.title == "Cancel"
-        secretsMenuChoose(item)
-        _ = await wait(5) { view.alert != nil }
-        view.alert?.buttons.first?.performClick(nil)
-        let ended: Bool = await wait(5) { requests.grants.isEmpty }
-        check(asked && kept && ended, "secrets menu: Revoke All Approvals… asks in a sheet saying how many, Return cancels, Revoke ends them",
+        check(asked && kept, "secrets menu: Revoke All Approvals… asks in a sheet saying how many, and Return cancels",
               alert?.informativeText ?? "no sheet")
+        await secretsMenuRevokeSheetChecks(item, view)
         requests.resetForSelfTest()
     }
 }

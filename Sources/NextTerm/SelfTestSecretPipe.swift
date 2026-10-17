@@ -16,7 +16,7 @@ extension SelfTest {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let view = controller.secretsView
         let titles: [String] = view.importMenuButton.itemTitles
-        let managers: [String] = SecretImportPreset.allCases.map(SecretsView.managerItemTitle)
+        let managers: [String] = SecretImportPreset.allCases.map(SecretsMenuModel.managerTitle)
         let listed: Bool = managers.allSatisfy { (title: String) -> Bool in titles.contains(title) }
         check(listed, "secret pipe: Import From lists 1Password…, Bitwarden… and Bitwarden Secrets Manager…", "\(titles)")
         let values: [String] = [secretsValue("sk-" + "proj-"), secretsValue("pcsk_")]

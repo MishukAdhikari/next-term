@@ -320,14 +320,31 @@ final class SecretRequests {
     var waitingCount: Int { queue.filter { !$0.isAnswered }.count }
 
     /// Secrets › Show Key Request: the showing request's own window in front, as it first came: the panel floating
-    /// without taking the keyboard, `request_secret`'s window and an import's Secrets window ordered front. Nothing is
-    /// made key and nothing is answered: the user answers in that window.
+    /// without taking the keyboard, `request_secret`'s window and an import's Secrets window ordered front, none made
+    /// key. One the user minimised is restored first, as the Dock restores it. Nothing is answered: the user answers in
+    /// that window.
     func bringShowingToFront() {
         guard let request = showing else { return }
-        if let panel = request.panel?.window { return panel.orderFrontRegardless() }
-        if let window = request.requestWindow?.window { return window.orderFront(nil) }
-        guard request.importAsk?.isOnScreen == true else { return }
-        SecretsWindowController.shared?.window?.orderFront(nil)
+        if let panel = request.panel?.window { return Self.restore(panel).orderFrontRegardless() }
+        if let window = request.requestWindow?.window { return Self.restore(window).orderFront(nil) }
+        guard request.importAsk?.isOnScreen == true, let window = SecretsWindowController.shared?.window else { return }
+        Self.restore(window).orderFront(nil)
+    }
+
+    /// `window`, out of the Dock if it was minimised there: ordering it front alone leaves it there.
+    private static func restore(_ window: NSWindow) -> NSWindow {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        return window
+    }
+
+    /// The agent's import whose sheet is the one open on `window`, while it waits: Secrets › Pause ends it, so Pause's
+    /// confirm may go over that sheet.
+    func importAsk(sheetOn window: NSWindow?) -> SecretImportAsk? {
+        guard let sheet = window?.attachedSheet else { return nil }
+        let request: Request? = queue.first { (request: Request) -> Bool in
+            !request.isAnswered && request.importAsk?.sheetWindow === sheet
+        }
+        return request?.importAsk
     }
 
     private func showNext() {

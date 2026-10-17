@@ -77,7 +77,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private var resumeActions: [ObjectIdentifier: () -> Void] = [:]
 
     private(set) var entries: [SecretVault.Entry] = []
-    /// The confirm on screen (Make Write-Only…, Delete…, Start Over…), for the self-test.
+    /// The confirm on screen (Make Write-Only…, Delete…, Start Over…, the Secrets menu's Pause and Revoke All), for the
+    /// self-test.
     private(set) var alert: NSAlert?
     private(set) var sheet: SecretEditSheet?
     private(set) var rotateSheet: SecretRotateSheet?
@@ -879,16 +880,24 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     @objc private func openDocs() { NSWorkspace.shared.open(Self.docsURL) }
 
-    /// The confirm, as a sheet; `then` runs on its first button.
-    func confirm(_ alert: NSAlert, then: @escaping () -> Void) {
-        guard self.alert == nil, let window else { return }
+    /// The confirm, as a sheet on the list's window, or over `sheet`, one already on it (Secrets › Pause's, over an
+    /// agent's import); `then` runs on its first button, and `ended` however it ends. Escape cancels a confirm whose
+    /// Return is Cancel. Whether it showed.
+    @discardableResult
+    func confirm(_ alert: NSAlert, over sheet: NSWindow? = nil, ended: (() -> Void)? = nil,
+                 then: @escaping () -> Void) -> Bool {
+        guard self.alert == nil, let host = sheet ?? window else { return false }
         self.alert = alert
-        alert.beginSheetModal(for: window) { [weak self] response in
+        let escape: Any? = alert.escapePressesCancel()
+        alert.beginSheetModal(for: host) { [weak self] response in
             MainActor.assumeIsolated {
+                if let escape { NSEvent.removeMonitor(escape) }
                 self?.alert = nil
+                ended?()
                 if response == .alertFirstButtonReturn { then() }
             }
         }
+        return true
     }
 
     /// One presence check, then the action; "Not approved." when the user, or macOS, cancelled it. A check this view

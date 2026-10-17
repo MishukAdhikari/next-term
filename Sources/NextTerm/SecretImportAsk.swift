@@ -101,6 +101,12 @@ final class SecretImportAsk {
     /// A sheet of it is up, in the queue's turn.
     var isOnScreen: Bool { wasOpened && !hasEnded && tabID == nil }
 
+    /// Its sheet on the Secrets window while one is up: the file's copy sheet, or the source's.
+    var sheetWindow: NSWindow? { fileSheet?.window ?? managerSheet?.window }
+
+    /// The copy sheet copies keys in now: nothing closes it until that is done.
+    var isCopying: Bool { fileSheet?.isBusy == true }
+
     /// The request waiting on tab `id`'s pipe, if any.
     static func waiting(onTab id: UUID) -> SecretImportAsk? {
         guard let ask = waiting[id], !ask.hasEnded else { return nil }
@@ -147,7 +153,8 @@ extension SecretImportAsk {
         told?(.declined(stopAsking: true))
     }
 
-    /// The queue ended it first (a pause, Start Over, its 30 minutes): its sheet closes, and nothing more is told.
+    /// The queue ended it first (a pause, Start Over, its 30 minutes): its sheet closes, and nothing more is told. A
+    /// confirm over it, such as Secrets › Pause's, goes first, cancelled.
     func close() {
         guard !hasEnded else { return }
         hasEnded = true
@@ -155,6 +162,9 @@ extension SecretImportAsk {
         ended = nil
         leftScreen = nil
         forgetTab()
+        if let sheet = sheetWindow, let over = sheet.attachedSheet, fileSheet?.isBusy != true {
+            sheet.endSheet(over, returnCode: .cancel)
+        }
         fileSheet?.closeSheet()
         managerSheet?.cancel()
     }

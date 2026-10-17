@@ -30,7 +30,8 @@ extension SelfTest {
         SecretsView.importSetup = { fixed }
         defer { SecretsView.importSetup = savedSetup }
         let menu: [String] = view.importMenuButton.itemTitles
-        check(Array(menu.prefix(3)) == [SecretsView.importMenuTitle, SecretsView.fileItemTitle, SecretsView.mcpItemTitle],
+        let firstThree: [String] = [SecretsMenuModel.importTitle, SecretsMenuModel.importFileTitle, SecretsMenuModel.importMCPTitle]
+        check(Array(menu.prefix(3)) == firstThree,
               "secret file import: Import From lists A File… and MCP Configs… first", "\(menu)")
         await secretFileImportEnvChecks(view, presence, folder: folder)
         await secretFileImportMoveCheck(view, folder: folder)

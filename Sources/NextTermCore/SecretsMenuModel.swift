@@ -55,6 +55,25 @@ public enum SecretsMenuModel {
         pausedUntil == nil ? pauseItemTitle : resumeTitle
     }
 
+    /// Where Pause Key Requests for 1 Hour… asks.
+    public enum PauseConfirm: Equatable, Sendable {
+        /// On the list, which has no sheet open.
+        case onList
+        /// Over an agent's import sheet, the one sheet open: Pause ends that request, and Cancel leaves its sheet as it
+        /// was. The sheet has no Pause of its own.
+        case overRequest
+        /// Nowhere: the sheet is the user's, or one is open over the request's, or the import copies keys in. The line
+        /// says to finish first.
+        case busy
+    }
+
+    /// Pause's confirm goes on the list when it has no sheet, over an agent's import sheet when that is the only one
+    /// open and it isn't copying keys in, and nowhere else.
+    public static func pauseConfirm(listHasSheet: Bool, requestSheetOnly: Bool, copying: Bool) -> PauseConfirm {
+        guard listHasSheet else { return .onList }
+        return requestSheetOnly && !copying ? .overRequest : .busy
+    }
+
     /// Resume's tooltip: "Paused until 4:02 PM.", the clock as the list says it.
     public static func pausedHelp(_ clock: String) -> String {
         "Paused until \(clock)."
@@ -144,8 +163,9 @@ extension SecretsMenuModel {
     /// It opens the Secrets window and confirms in a sheet there, so it has the "…".
     public static let revokeAllTitle = "Revoke All Approvals\u{2026}"
 
+    /// A File… hands an MCP config to the MCP-config import, which rewrites it.
     public static let importFileHelp = "Copies keys from a .env file, a config or a password manager\u{2019}s export into "
-        + "Secrets. You choose them first, and the file isn\u{2019}t changed."
+        + "Secrets. You choose them first. Only an MCP config is changed, once you choose the keys to move out of it."
     public static let importMCPHelp = "Moves keys out of your MCP configs into Secrets. You choose them before anything changes."
     public static let importManagerHelp = "Shows the line for its own command-line tool. Next Term types it into a new tab "
         + "and never runs it: you press Return."

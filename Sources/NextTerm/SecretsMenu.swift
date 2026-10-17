@@ -230,7 +230,8 @@ extension SecretsMenu {
         SecretRequests.shared.bringShowingToFront()
     }
 
-    /// Paused: Resume, on the list, which says so. Else Pause's confirm, a sheet on the list with Cancel the default.
+    /// Paused: Resume, on the list, which says so. Else Pause's confirm, a sheet on the list with Cancel the default; or
+    /// over an agent's import sheet, which has no Pause of its own and which Pause ends (Cancel leaves it as it was).
     @objc func toggleKeyRequestPause(_ sender: Any?) {
         let requests = SecretRequests.shared
         if requests.pausedUntil != nil {
@@ -238,14 +239,22 @@ extension SecretsMenu {
             requests.resumeAsking()
             return view.say(SecretsMenuModel.resumedLine)
         }
-        guard let view = freeList() else { return }
+        guard let view = frontList() else { return }
+        view.reload()
+        let ask: SecretImportAsk? = requests.importAsk(sheetOn: view.window)
+        let only: Bool = ask != nil && ask?.sheetWindow?.attachedSheet == nil
+        let route: SecretsMenuModel.PauseConfirm = SecretsMenuModel.pauseConfirm(listHasSheet: view.hasOpenSheet,
+                                                                                 requestSheetOnly: only,
+                                                                                 copying: ask?.isCopying == true)
+        guard route != .busy else { return view.say(SecretsMenuModel.busyLine) }
         #if DEBUG
         if let answer = Self.answerPause {
             if answer == .alertFirstButtonReturn { pause(view) }
             return
         }
         #endif
-        view.confirm(SecretApprovalPanel.makePauseAlert(fromMenu: true)) { [weak self, weak view] in
+        let over: NSWindow? = route == .overRequest ? ask?.sheetWindow : nil
+        view.confirm(SecretApprovalPanel.makePauseAlert(fromMenu: true), over: over) { [weak self, weak view] in
             guard let view else { return }
             self?.pause(view)
         }
@@ -257,13 +266,37 @@ extension SecretsMenu {
         view.reload()
     }
 
-    /// Revoke All Approvals…' confirm, a sheet on the list saying how many it ends, with Cancel the default.
+    /// Revoke All Approvals…' confirm, a sheet on the list saying how many it ends, with Cancel the default. The count
+    /// follows the approvals while it shows (one allowed in the panel meanwhile, one expiring); with none left, it goes.
     @objc func revokeAllSecretApprovals(_ sender: Any?) {
         let count: Int = SecretRequests.shared.grants.count
         guard count > 0, let view = freeList() else { return }
-        view.confirm(Self.makeRevokeAlert(count: count)) {
+        let alert: NSAlert = Self.makeRevokeAlert(count: count)
+        let watch: NSObjectProtocol = NotificationCenter.default.addObserver(forName: SecretRequests.changed, object: nil,
+                                                                             queue: .main) { [weak alert, weak view] _ in
+            MainActor.assumeIsolated {
+                guard let alert else { return }
+                Self.recount(alert, on: view)
+            }
+        }
+        let shown: Bool = view.confirm(alert, ended: { NotificationCenter.default.removeObserver(watch) }) {
             SecretRequests.shared.revokeAll()
         }
+        if !shown { NotificationCenter.default.removeObserver(watch) }
+    }
+
+    /// The Revoke confirm's count, as the approvals are now; with none left it goes, and the line says so.
+    static func recount(_ alert: NSAlert, on view: SecretsView?) {
+        let count: Int = SecretRequests.shared.grants.count
+        guard count > 0 else {
+            alert.window.sheetParent?.endSheet(alert.window, returnCode: .cancel)
+            view?.say(SecretsMenuModel.noGrantsHelp)
+            return
+        }
+        let text: String = SecretsMenuModel.revokeConfirmText(count)
+        guard alert.informativeText != text else { return }
+        alert.informativeText = text
+        alert.layout()
     }
 
     static func makeRevokeAlert(count: Int) -> NSAlert {
