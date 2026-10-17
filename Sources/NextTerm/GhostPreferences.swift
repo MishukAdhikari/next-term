@@ -4,13 +4,15 @@ import NextTermCore
 /// Suggestions while typing: whether they are on, View › Private Mode, and who shows them where zsh-autosuggestions draws
 /// its own (Atuin's through it), remembered on this Mac by plugin with Tab completion's rules (GhostOwner).
 enum GhostPreferences {
+    static let onKey = "ghostText"
+
     /// Next Term suggests while you type, and keeps the record of your commands it suggests from (CommandHistoryStore).
-    /// Off until Settings can turn it off.
+    /// On by default (Settings › Terminal › While typing, or the first-use hint's Turn Off).
     static var isOn: Bool {
         #if DEBUG
         if let testIsOn { return testIsOn }
         #endif
-        return false
+        return UserDefaults.standard.object(forKey: onKey) as? Bool ?? true
     }
 
     #if DEBUG
@@ -18,14 +20,44 @@ enum GhostPreferences {
     nonisolated(unsafe) static var testIsOn: Bool?
     #endif
 
-    /// No suggestion shows and nothing is recorded, until it is turned off or Next Term quits: never stored.
-    nonisolated(unsafe) static var privateMode = false
+    /// Turns suggestions on or off: off, every suggestion and notice goes at once, nothing more is recorded, and a plugin's
+    /// suggestions Next Term turned off come back; on, Next Term's show again. Tabs open now keep their hook, which only
+    /// reports.
+    static func set(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: onKey)
+        #if DEBUG
+        if testIsOn != nil { testIsOn = on }
+        #endif
+        GhostSession.syncAll()
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
+
+    /// View › Private Mode: no suggestion shows and nothing is recorded, until it is turned off or Next Term quits. Never
+    /// stored, so a new launch starts without it.
+    nonisolated(unsafe) private(set) static var privateMode = false
+
+    static func setPrivateMode(_ on: Bool) {
+        privateMode = on
+        GhostSession.syncAll()
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
 
     /// Your commands are recorded now.
     static var records: Bool { isOn && !privateMode }
 
     /// A choice made, or the question asked again, here or in Settings; or suggestions turned on or off.
     static let changed = Notification.Name("NextTermGhostTextChanged")
+
+    // MARK: the first-use hint
+
+    static let hintsKey = "ghostTextHintsShown"
+    /// The hint shows on the first two lines a suggestion shows on, across launches.
+    static let hintLines = 2
+
+    static var hintsShown: Int {
+        get { UserDefaults.standard.integer(forKey: hintsKey) }
+        set { UserDefaults.standard.set(min(newValue, hintLines), forKey: hintsKey) }
+    }
 }
 
 // MARK: plugins that draw their own

@@ -43,6 +43,11 @@ final class CommandHistoryStore: @unchecked Sendable {
         self.folder = folder
     }
 
+    #if DEBUG
+    /// The folder, for the self-test: it checks the record it clears is its own.
+    var folderURL: URL? { folder?.url }
+    #endif
+
     // MARK: asking
 
     /// The newest lines you ran that start with `prefix` (CommandHistory.query), asked from `folder`, to `reply` on the main

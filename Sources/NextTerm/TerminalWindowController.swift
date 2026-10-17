@@ -1129,6 +1129,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
         }
         if item.action == #selector(revealInSidebar(_:)) { return editorArea.activePath != nil }
+        if item.action == #selector(forgetSuggestion(_:)) { return activeTab?.ghost.isShowing == true }
         if item.action == #selector(toggleEnvValues(_:)) {
             item.state = editorArea.activeEditor?.hidesEnvValues == true ? .on : .off
             return editorArea.activeEditor?.isEnvFile == true
@@ -2304,6 +2305,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // Not selectNextTab:/selectPreviousTab:: NSWindow implements those (system tabs) and would swallow them.
     @objc func showNextTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: 1) : cycleTab(by: 1) }
     @objc func showPreviousTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: -1) : cycleTab(by: -1) }
+
+    /// Edit › Forget This Suggestion (⇧⌘⌫): the suggestion showing in the terminal with the keyboard leaves the record.
+    @objc func forgetSuggestion(_ sender: Any?) {
+        if activeTab?.ghost.forget() != true { NSSound.beep() }
+    }
 
     @objc func clearBuffer(_ sender: Any?) {
         if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }

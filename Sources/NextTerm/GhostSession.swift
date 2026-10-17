@@ -22,6 +22,8 @@ final class GhostSession {
     static let redrawWait: TimeInterval = 0.05
     /// Checks of a tab's that may run at once.
     static let maxChecks = 2
+    /// How long the first-use hint stays, unless its line ends first.
+    static let hintTime: TimeInterval = 8
 
     private(set) weak var tab: TerminalTab?
     private(set) var state = GhostState()
@@ -55,6 +57,9 @@ final class GhostSession {
     /// The notice showing in the tab, and the plugin it asks about.
     private(set) var notice: GhostNotice?
     private var noticePlugin: GhostOwner.Plugin?
+    /// The first-use hint showing in the tab, and the line it came on.
+    private(set) var hint: GhostNotice?
+    private var hintLine: Int?
 
     init(tab: TerminalTab) {
         self.tab = tab
@@ -87,6 +92,8 @@ final class GhostSession {
             sync()
         case .buffer(let report):
             arrival = TerminalTab.now
+            // The hint's line ended (^C, Return): it goes.
+            if let hintLine, report.line != hintLine { hideHint() }
             follow(state.report(report, gates: gates()))
             sendOwnerIfIdle()
             considerAsking(report)
@@ -203,6 +210,30 @@ final class GhostSession {
         watch(view.window)
         _ = Self.displayOptions
         overlay.ghostShown(arrival)
+        showHintIfDue()
+    }
+
+    /// The first-use hint, on the first two lines a suggestion shows on (across launches): the keys, and Turn Off, which
+    /// turns suggestions off. It goes when its line ends, or after `hintTime`.
+    private func showHintIfDue() {
+        guard let line = state.report?.line, hintLine != line, hint == nil, notice == nil,
+              GhostPreferences.hintsShown < GhostPreferences.hintLines, let view = tab?.view else { return }
+        hintLine = line
+        GhostPreferences.hintsShown += 1
+        let hint = GhostNotice("→ accepts · Esc hides", buttons: [("Turn Off", { GhostPreferences.set(false) })],
+                               closeLabel: "Close") { [weak self] in self?.hideHint() }
+        hint.setAccessibilityLabel("Suggestion while typing: → accepts it, Esc hides it")
+        hint.show(in: view)
+        self.hint = hint
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hintTime) { [weak self, weak hint] in
+            guard let self, let hint, self.hint === hint else { return }
+            self.hideHint()
+        }
+    }
+
+    private func hideHint() {
+        hint?.removeFromSuperview()
+        hint = nil
     }
 
     /// The first column right of the cursor with something drawn in it (a right prompt), or the row's end.
@@ -269,6 +300,19 @@ final class GhostSession {
         if overlayMade { overlay.hide() }
     }
 
+    // MARK: forgetting one
+
+    /// Edit › Forget This Suggestion, or the terminal's menu: the command showing leaves the record, and its log at once;
+    /// the next match, if one passes the checks, shows instead. False: none shows.
+    @discardableResult
+    func forget() -> Bool {
+        guard isShowing, let shown = state.shown, let report = state.report else { return false }
+        CommandHistoryStore.shared.forget(shown.command)
+        hide()
+        follow(state.report(report, gates: gates()))
+        return true
+    }
+
     // MARK: keys (GhostController)
 
     /// A key that takes the suggestion showing, or Esc: true, taken, so SwiftTerm never sees it. An accept goes to the
@@ -328,6 +372,10 @@ final class GhostSession {
     /// Follows the choice for this shell's plugin: Next Term's (and suggestions on), the plugin's go off where they are on;
     /// anything else, they come back where the hook turned them off. A notice answered elsewhere goes.
     func sync() {
+        if !GhostPreferences.isOn || GhostPreferences.privateMode {
+            hide()
+            hideHint()
+        }
         if let plugin = noticePlugin, GhostPreferences.answer(for: plugin) != .ask || !GhostPreferences.isOn { hideNotice() }
         pendingOwner = nil
         guard tab?.remote == nil, let hook, let plugin = GhostOwner.loaded(hook) else { return }
@@ -454,6 +502,7 @@ final class GhostSession {
         state.lineEnded()
         hideOverlay()
         hideNotice()
+        hideHint()
     }
 
     /// The shell was replaced (`exec zsh`): the new one says what it is, and started with nothing taken over.
@@ -466,6 +515,7 @@ final class GhostSession {
         endedAt = nil
         hideOverlay()
         hideNotice()
+        hideHint()
     }
 }
 

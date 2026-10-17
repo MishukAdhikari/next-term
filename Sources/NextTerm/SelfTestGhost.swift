@@ -23,6 +23,7 @@ extension SelfTest {
         await ghostKeyChecks(c, dir: dir)
         await ghostViChecks(c, dir: dir)
         await ghostOwnerChecks(c, dir: dir)
+        await ghostSettingsChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -435,6 +436,115 @@ extension SelfTest {
         GhostPreferences.testIsOn = false
         check(tab.ghost.label == "Suggestions: off", "suggestions: the tooltip says when they are off", tab.ghost.label ?? "none")
         GhostPreferences.testIsOn = true
+    }
+
+    /// Settings › Terminal › While typing, the first-use hint, Forget This Suggestion and Private Mode. The user's own
+    /// setting and hint count are put back after; Clear History… clears only the self-test's own record.
+    static func ghostSettingsChecks(_ c: TerminalWindowController, dir: URL) async {
+        let keys = [GhostPreferences.onKey, GhostPreferences.hintsKey]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+            GhostPreferences.testIsOn = true
+            GhostPreferences.setPrivateMode(false)
+        }
+        UserDefaults.standard.removeObject(forKey: GhostPreferences.hintsKey)
+        await ghostSeed("git checkout main", folder: dir.path)
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc, name: "settings"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        func shows() async -> Bool {
+            await ghostClear(tab)
+            typeKeys(window, "git ch")
+            return await ghostShows(tab)
+        }
+        // The hint: on the first two lines a suggestion shows on, not the third.
+        var hinted: [Bool] = []
+        for _ in 0..<3 {
+            hinted.append(await shows() && tab.ghost.hint != nil)
+        }
+        check(hinted == [true, true, false], "suggestions: the first-use hint on the first two lines with a suggestion, not the third", "\(hinted)")
+
+        // Off: the overlay goes at once, and a command run isn't recorded; on again, back.
+        if await shows() {
+            GhostPreferences.set(false)
+            check(!tab.ghost.isShowing, "suggestions: Off hides the suggestion at once")
+            await ghostClear(tab)
+            typeKeys(window, "echo nt-ghost-off")
+            pressKey(window, "\r", code: 36)
+            _ = await wait(3) { tab.status.command == "echo nt-ghost-off" && !tab.status.running }
+            await pause(0.3)
+            let found = await ghostQuery("echo nt-ghost-o")
+            check(found.isEmpty, "suggestions: Off, a command you run isn't recorded", "\(found.map(\.line))")
+            GhostPreferences.set(true)
+            check(await shows(), "suggestions: On again, they come back")
+        }
+        // Turn Off in the hint: Settings says Off.
+        UserDefaults.standard.removeObject(forKey: GhostPreferences.hintsKey)
+        if await shows(), let hint = tab.ghost.hint {
+            hint.button("Turn Off")?.performClick(nil)
+            let settings = GhostSettingsView()
+            settings.refresh()
+            check(!GhostPreferences.isOn && !tab.ghost.isShowing && tab.ghost.hint == nil
+                  && GhostSettingsView.note(on: false).hasPrefix("Off"), "suggestions: the hint's Turn Off turns them off, as Settings shows")
+            GhostPreferences.set(true)
+        } else {
+            check(false, "suggestions: the hint's Turn Off: the hint showed first")
+        }
+
+        // Forget This Suggestion, from the menu and from the terminal's own menu: gone from the record, never suggested again.
+        if await shows() {
+            NSApp.sendAction(#selector(TerminalWindowController.forgetSuggestion(_:)), to: nil, from: nil)
+            let found = await ghostQuery("git ch")
+            check(!found.contains { $0.line == "git checkout main" } && !tab.ghost.isShowing,
+                  "suggestions: Edit › Forget This Suggestion takes it out of the record")
+            await ghostClear(tab)
+            typeKeys(window, "git ch")
+            check(!(await ghostShows(tab, within: 1)), "suggestions: a forgotten one isn't suggested again")
+        }
+        await ghostSeed("git checkout main", folder: dir.path)
+        if await shows() {
+            let menu = c.terminalMenu(for: tab, link: nil)
+            let item = menu.items.first { $0.title == "Forget This Suggestion" }
+            check(item != nil, "suggestions: the terminal's menu offers Forget This Suggestion while one shows")
+            if let item, let index = menu.items.firstIndex(of: item) { menu.performActionForItem(at: index) }
+            let found = await ghostQuery("git ch")
+            check(!found.contains { $0.line == "git checkout main" }, "suggestions: and it takes it out of the record")
+        }
+
+        // Private Mode: none shows, nothing is recorded, and the menu item is ticked; off again, back.
+        await ghostSeed("git checkout main", folder: dir.path)
+        GhostPreferences.setPrivateMode(true)
+        let item = NSMenuItem(title: "Private Mode", action: #selector(AppDelegate.togglePrivateMode(_:)), keyEquivalent: "")
+        _ = AppDelegate.shared.validateMenuItem(item)
+        check(!(await shows()) && item.state == .on, "suggestions: Private Mode shows none, and View › Private Mode is ticked")
+        await ghostClear(tab)
+        typeKeys(window, "echo nt-ghost-private")
+        pressKey(window, "\r", code: 36)
+        _ = await wait(3) { tab.status.command == "echo nt-ghost-private" && !tab.status.running }
+        await pause(0.3)
+        check((await ghostQuery("echo nt-ghost-p")).isEmpty, "suggestions: in Private Mode, nothing is recorded")
+        GhostPreferences.setPrivateMode(false)
+        check(await shows(), "suggestions: Private Mode off, they come back")
+        check(UserDefaults.standard.object(forKey: "ghostTextPrivateMode") == nil, "suggestions: Private Mode is never stored, so a launch starts without it")
+
+        // The count, and Clear History… (only ever the self-test's own record).
+        let settings = GhostSettingsView()
+        settings.refresh()
+        let count = await withCheckedContinuation { (done: CheckedContinuation<Int, Never>) in
+            CommandHistoryStore.shared.count { (count: Int) in done.resume(returning: count) }
+        }
+        check(await wait(2) { settings.keptCount == count } && count > 0, "suggestions: Settings says how many commands are kept",
+              "\(String(describing: settings.keptCount)) for \(count)")
+        let temporary = CommandHistoryStore.shared.folderURL?.path.hasPrefix(NSTemporaryDirectory()) == true
+        guard temporary, let folder = CommandHistoryStore.shared.folderURL else {
+            return note("suggestions: Clear History… not checked: the record isn't the self-test's own")
+        }
+        settings.clearNow()
+        check(await wait(3) { settings.keptCount == 0 }, "suggestions: Clear History… leaves none kept")
+        let log = folder.appendingPathComponent(CommandHistoryFolder.logName).path
+        check(!FileManager.default.fileExists(atPath: log), "suggestions: and the log is gone")
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,

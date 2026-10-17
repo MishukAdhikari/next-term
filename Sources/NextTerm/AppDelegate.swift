@@ -326,6 +326,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
     }
 
+    /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
+    /// turned off or Next Term quits.
+    @objc func togglePrivateMode(_ sender: Any?) {
+        GhostPreferences.setPrivateMode(!GhostPreferences.privateMode)
+    }
+
     @objc func toggleSoftWrap(_ sender: Any?) {
         softWrap.toggle()
         controllers.forEach { $0.editorArea.applyWrap() }
@@ -1416,6 +1422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
         if item.action == #selector(setAgentSpinner(_:)) { item.state = item.representedObject as? String == AgentSpinner.current.rawValue ? .on : .off }
@@ -1726,6 +1733,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(line, "Copy Path with Line", #selector(CodeTextView.copyPathWithLine(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
+        // While a suggestion shows after the cursor: that command leaves Next Term's record of yours.
+        item(edit, "Forget This Suggestion", #selector(TerminalWindowController.forgetSuggestion(_:)), "\u{8}", [.command, .shift])
 
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
@@ -1749,6 +1758,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
+            "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
