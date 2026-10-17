@@ -1101,7 +1101,8 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
                                     index: lines) { [weak self] hang, heading in
             self?.markdownParagraphStyle(hang: hang, heading: heading) ?? .default
         }
-        let preview = MarkdownPreview(styler: styler, textView: textView, layoutManager: layoutManager, enabled: true, index: lines)
+        let preview = MarkdownPreview(styler: styler, textView: textView, layoutManager: layoutManager, enabled: showsMarkdownPreview,
+                                      index: lines)
         markdown = styler
         self.preview = preview
         (spacing as? MarkdownSpacing)?.hiddenCharacters = { [weak preview] range in preview?.hiddenCharacters(in: range) ?? [] }

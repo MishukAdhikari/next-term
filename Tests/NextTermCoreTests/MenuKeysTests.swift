@@ -70,4 +70,17 @@ struct MenuKeysTests {
         // Another command given ⌘R takes it from Fetch, as from any command for everywhere.
         #expect(bindings.owners(of: Self.commandR, defaults: keys, except: "goToLine:") == ["gitFetch:"])
     }
+
+    // MARK: Markdown
+
+    /// ⇧⌘V switches the Markdown file in front between Live Preview and its source in every set, as it opens VS Code's
+    /// preview, and a VS Code binding of that preview lands on it.
+    @Test func markdownLivePreviewIsShiftCommandVInEverySet() {
+        let shiftV = KeyChord(key: "v", command: true, shift: true)
+        for preset in KeymapPreset.allCases {
+            #expect(Self.defaults(under: preset)["toggleMarkdownPreview:"] == .some(shiftV), "\(preset.name)")
+        }
+        #expect(ImportVSCode.commandMap["markdown.showPreview"] == "toggleMarkdownPreview:")
+        #expect(ImportShortcuts.titles["toggleMarkdownPreview:"] == "Markdown Live Preview")
+    }
 }

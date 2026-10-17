@@ -33,6 +33,20 @@ final class MarkdownPreview {
         self.index = index
     }
 
+    /// Live Preview on or off: the glyphs of what is laid out are made again, and nothing else changes. In Source every
+    /// character shows and the fonts stay (MarkdownStyler), so switching moves no text but the syntax.
+    func setEnabled(_ on: Bool) {
+        guard on != enabled else { return }
+        enabled = on
+        revealed = on ? revealedLines() : nil
+        guard let layoutManager, let storage = layoutManager.textStorage else { return }
+        let all = NSRange(location: 0, length: storage.length)
+        layoutManager.invalidateGlyphs(forCharacterRange: all, changeInLength: 0, actualCharacterRange: nil)
+        layoutManager.invalidateLayout(forCharacterRange: all, actualCharacterRange: nil)
+        textView?.needsDisplay = true
+        textView?.enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    }
+
     private func isRevealed(_ line: Int) -> Bool { revealed?.contains(line) ?? false }
 
     /// Each line a range of the text touches, with where it starts.
@@ -207,5 +221,33 @@ extension MarkdownSpacing {
             }
         }
         return count
+    }
+}
+
+extension CodeEditorView {
+    /// A `.md` or `.markdown` file, whatever its size.
+    var isMarkdownFile: Bool { MarkdownSyntax.isMarkdown(fileName: document.name) }
+    /// A Markdown file too large for Live Preview (MarkdownSyntax.previewMaxLength): it shows as source.
+    var markdownTooLarge: Bool { isMarkdownFile && markdown == nil }
+    var showsLivePreview: Bool { preview?.enabled == true }
+
+    /// Whether this file shows in Live Preview: its own choice from the View menu, else Settings › Editor's.
+    var showsMarkdownPreview: Bool {
+        guard let app = AppDelegate.shared else { return true }
+        return app.markdownViewChoices.choice(for: document.path) ?? app.markdownLivePreview
+    }
+
+    /// View › Markdown Live Preview: this file between Live Preview and Source, remembered for it. Only the drawing
+    /// changes: not the text, the dirty flag or the undo stack.
+    func toggleMarkdownPreview() {
+        guard let preview, let app = AppDelegate.shared else { return }
+        let on = !preview.enabled
+        preview.setEnabled(on)
+        app.markdownViewChoices.set(on, for: document.path)
+    }
+
+    /// Settings › Editor changed: a file without its own choice follows it.
+    func applyMarkdownPreviewSetting() {
+        preview?.setEnabled(showsMarkdownPreview)
     }
 }

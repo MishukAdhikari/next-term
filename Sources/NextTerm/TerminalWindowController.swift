@@ -1250,6 +1250,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             item.state = editorArea.activeEditor?.hidesEnvValues == true ? .on : .off
             return editorArea.activeEditor?.isEnvFile == true
         }
+        if item.action == #selector(toggleMarkdownPreview(_:)) {
+            let editor = editorArea.activeEditor
+            item.title = editor?.markdownTooLarge == true ? "Markdown Live Preview (file too large)" : "Markdown Live Preview"
+            item.state = editor?.showsLivePreview == true ? .on : .off
+            return editor?.preview != nil
+        }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
             return !editorArea.isHidden
@@ -2210,6 +2216,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func toggleEnvValues(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.isEnvFile else { return NSSound.beep() }
         editor.toggleEnvValues()
+    }
+
+    /// View › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
+    /// (Settings › Editor sets what the others open in).
+    @objc func toggleMarkdownPreview(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, editor.preview != nil else { return NSSound.beep() }
+        editor.toggleMarkdownPreview()
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String) {

@@ -341,6 +341,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Markdown files open in Live Preview (on unless turned off in Settings › Editor). A file's own choice from View ›
+    /// Markdown Live Preview wins (markdownViewChoices); changing this, every open file without one follows.
+    var markdownLivePreview: Bool {
+        get { UserDefaults.standard.object(forKey: "markdownLivePreview") as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "markdownLivePreview")
+            controllers.forEach { $0.editorArea.applyMarkdownPreviewSetting() }
+        }
+    }
+
+    /// Each Markdown file's own choice of Live Preview or Source, the newest 500.
+    var markdownViewChoices: MarkdownViewChoices {
+        get { MarkdownViewChoices.decode(UserDefaults.standard.data(forKey: MarkdownViewChoices.defaultsKey)) }
+        set { UserDefaults.standard.set(newValue.encoded(), forKey: MarkdownViewChoices.defaultsKey) }
+    }
+
     /// Who last changed each line, in a column beside the line numbers (off unless turned on).
     var blameAnnotations: Bool {
         get { UserDefaults.standard.bool(forKey: "blameAnnotations") }
@@ -1758,6 +1774,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
+        item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]

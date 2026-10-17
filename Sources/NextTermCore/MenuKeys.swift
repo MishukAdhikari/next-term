@@ -32,6 +32,7 @@ public enum MenuKeys {
             "toggleBlameAnnotations:": KeyChord(key: "a", command: true, shift: true, control: true),
             "toggleCurrentLineBlame:": KeyChord(key: "l", command: true, shift: true, control: true),
             "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"), "resetFontSize:": cmd("0"), "toggleFullScreen:": ctrlCmd("f"),
+            "toggleMarkdownPreview:": shiftCmd("v"),
             // Agents
             "resumeSession:": optCmd("o"), "sendToAgent:": optCmd("k"), "suggestCommand:": ctrlCmd("k"),
             // Git
