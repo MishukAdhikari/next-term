@@ -81,17 +81,39 @@ final class CommandHistoryStore: @unchecked Sendable {
 
     // MARK: changing
 
-    /// A run of yours of `line` in `folder` that started `at`, with its exit (nil: it never said, as when its tab closed).
-    /// Kept only when CommandHistory keeps the line; the log gets one line for it.
-    func record(_ line: String, folder: String, at date: Date, exit: Int32?) {
+    /// A run of yours of `line` in `folder` that started `at`, with its exit (nil: it never said, as when its tab closed),
+    /// right after `previous` in the same tab (your command before it there, if no other came between). Kept only when
+    /// CommandHistory keeps the line; the log gets its state, and `previous`'s when what follows it changed.
+    func record(_ line: String, folder: String, at date: Date, exit: Int32?, after previous: String? = nil) {
         queue.async {
             self.loadIfNeeded()
             let repo = self.repository(of: folder)
-            guard let made = self.history.record(line, folder: folder, repo: repo, at: Self.milliseconds(date)) else { return }
+            let time = Self.milliseconds(date)
+            guard let made = self.history.record(line, folder: folder, repo: repo, at: time) else { return }
             if let exit { self.history.ended(made.line, exit: exit) }
             self.forgottenSince.remove(made.line)
-            guard let entry = self.history.entry(for: made.line) else { return }
-            self.append { (named: inout Set<String>) -> Data in CommandHistoryFile.entryLines(entry, named: &named) }
+            var changed = [made.line]
+            if let previous, let before = self.history.entry(for: previous) {
+                self.history.followed(previous: before.line, by: made.line, at: time)
+                let followed = self.history.entry(for: before.line)?.followed
+                if followed != before.followed, before.line != made.line { changed.append(before.line) }
+            }
+            let entries = changed.compactMap { self.history.entry(for: $0) }
+            self.append { (named: inout Set<String>) -> Data in
+                var out = Data()
+                for entry in entries { out += CommandHistoryFile.entryLines(entry, named: &named) }
+                return out
+            }
+        }
+    }
+
+    /// The command the record is sure follows `line` (CommandHistory.next), with what is known of it, to `reply` on the
+    /// main queue.
+    func next(after line: String, reply: @escaping (CommandHistory.Entry?) -> Void) {
+        queue.async {
+            self.loadIfNeeded()
+            let next = self.history.next(after: line).flatMap { self.history.entry(for: $0) }
+            DispatchQueue.main.async { reply(next) }
         }
     }
 

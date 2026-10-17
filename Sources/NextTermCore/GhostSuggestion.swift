@@ -7,6 +7,8 @@ public struct GhostSuggestion: Equatable, Sendable {
     public let typed: String
     /// The command it is the start of.
     public let command: String
+    /// The next command on an empty line (CommandHistory.next): any key gives way to matching what is typed.
+    public let isNext: Bool
 
     /// nil unless `command` is longer than `typed` and starts with it: case-blind unless what was typed has a capital (smart
     /// case, ASCII letters only, as the record matches).
@@ -14,6 +16,14 @@ public struct GhostSuggestion: Equatable, Sendable {
         guard !typed.isEmpty, Self.starts(command, with: typed), command.utf8.count > typed.utf8.count else { return nil }
         self.typed = typed
         self.command = command
+        isNext = false
+    }
+
+    /// The command that usually comes next, on an empty line: all of it shows.
+    public init(next command: String) {
+        typed = ""
+        self.command = command
+        isNext = true
     }
 
     static func starts(_ command: String, with typed: String) -> Bool {
@@ -61,7 +71,7 @@ public struct GhostSuggestion: Equatable, Sendable {
     /// The same suggestion after `typed` grew by characters its remainder starts with (typing through it): nil when it
     /// didn't, or when a capital typed after a case-blind match changes how it matches (it is asked for again).
     public func typedThrough(_ newTyped: String) -> GhostSuggestion? {
-        guard newTyped.utf8.count > typed.utf8.count, newTyped.utf8.starts(with: typed.utf8) else { return nil }
+        guard !isNext, newTyped.utf8.count > typed.utf8.count, newTyped.utf8.starts(with: typed.utf8) else { return nil }
         let added = String(decoding: newTyped.utf8.dropFirst(typed.utf8.count), as: UTF8.self)
         guard remainder.utf8.starts(with: added.utf8) else { return nil }
         let caseBlind = !typed.utf8.contains { $0 >= 0x41 && $0 <= 0x5A }

@@ -39,6 +39,8 @@ final class GhostSession {
     /// only its hash.
     private var fallback = GhostFallback()
     private var shownFromShell: String?
+    /// The command that usually follows yours just ended, checked, waiting for the empty line after `afterLine`.
+    private var nextCommand: (afterLine: Int, command: String)?
     /// When the last report was read: the perf budget's start.
     private var arrival: TimeInterval = 0
     private var resignObserver: NSObjectProtocol?
@@ -103,6 +105,7 @@ final class GhostSession {
             // The hint's line ended (^C, Return): it goes.
             if let hintLine, report.line != hintLine { hideHint() }
             follow(state.report(report, gates: gates()))
+            if nextCommand != nil { offerNext() }
             sendOwnerIfIdle()
             considerAsking(report)
         case .fallback(let gen, let line):
@@ -223,7 +226,11 @@ final class GhostSession {
             state.hide()
             return hideOverlay()
         }
-        guard let left = tab.lineLeftOfCursor(), left.hasSuffix(String(buffer.suffix(16))) else {
+        // An empty line has nothing to match: its prompt, drawn, says the redraw is on screen.
+        let drawn = { (left: String) -> Bool in
+            buffer.isEmpty ? left.contains { $0 != " " } : left.hasSuffix(String(buffer.suffix(16)))
+        }
+        guard let left = tab.lineLeftOfCursor(), drawn(left) else {
             if late || TerminalTab.now - started >= Self.redrawWait {
                 placing = nil
                 state.hide()
@@ -542,9 +549,35 @@ final class GhostSession {
         noticePlugin = nil
     }
 
-    /// A command ended in this tab: the next empty line is an idle prompt.
-    func commandEnded() {
+    /// A command ended in this tab: the next empty line is an idle prompt. When it was yours (`yours`, recorded), the
+    /// record is asked what usually follows it, and that is checked as any suggestion is, for the empty line.
+    func commandEnded(yours line: String?) {
         endedAt = TerminalTab.now
+        nextCommand = nil
+        guard let line, let folder = tab?.directory else { return }
+        let after = state.report?.line ?? 0
+        CommandHistoryStore.shared.next(after: line) { [weak self] next in
+            guard let next else { return }
+            let home = NSHomeDirectory()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let passed = GhostValidation.first([next], cwd: folder, home: home, probe: .disk) != nil
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, passed, self.endedAt != nil else { return }
+                    self.nextCommand = (after, next.line)
+                    self.offerNext()
+                }
+            }
+        }
+    }
+
+    /// The next command, on the empty line after the command it follows (now, or once the shell reports that line).
+    private func offerNext() {
+        guard let next = nextCommand, let report = state.report, report.line != next.afterLine else { return }
+        nextCommand = nil
+        guard report.buffer == "", state.offerNext(next.command, gates: gates()) else { return }
+        shownFromShell = nil
+        announcer.suggested(next.command, at: TerminalTab.now)
+        placeAfterRedraw()
     }
 
     // MARK: what happened in the tab
@@ -585,6 +618,7 @@ final class GhostSession {
     /// you went on without it.
     func lineEnded() {
         placing = nil
+        nextCommand = nil
         state.lineEnded()
         hideOverlay()
         hideNotice()
@@ -599,6 +633,7 @@ final class GhostSession {
         tookOver = false
         pendingOwner = nil
         endedAt = nil
+        nextCommand = nil
         hideOverlay()
         hideNotice()
         hideHint()

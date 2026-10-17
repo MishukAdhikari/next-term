@@ -185,6 +185,62 @@ import Testing
         #expect(checked > 100)
     }
 
+    // MARK: what comes next
+
+    /// Each of `lines` run a minute after the one before, each following it.
+    func ran(_ lines: [String], into history: inout CommandHistory, from start: Int64 = 0, gap: Int64 = 60_000) {
+        var previous: String?
+        for (i, line) in lines.enumerated() {
+            let time = start + Int64(i) * gap
+            history.record(line, folder: nil, repo: nil, at: time)
+            if let previous { history.followed(previous: previous, by: line, at: time) }
+            previous = line
+        }
+    }
+
+    @Test func theNextCommandWhenTheRecordIsSure() {
+        var history = CommandHistory()
+        // B after A three times of four.
+        ran(["make build", "make test", "make build", "make test", "make build", "make test", "make build", "ls"], into: &history)
+        #expect(history.next(after: "make build") == "make test")
+        #expect(history.entry(for: "make build")?.followed == 4)
+        // Once is not sure.
+        var once = CommandHistory()
+        ran(["a", "b"], into: &once)
+        #expect(once.next(after: "a") == nil)
+        // Twice of ten (20%) is not either.
+        var rare = CommandHistory()
+        ran(["a", "b", "a", "b", "a", "c", "a", "d", "a", "e", "a", "f", "a", "c", "a", "d", "a", "e", "a", "f"], into: &rare)
+        #expect(rare.entry(for: "a")?.followed == 10 && rare.next(after: "a") == nil)
+    }
+
+    @Test func onlyWithinHalfAnHour() {
+        var history = CommandHistory()
+        ran(["a", "b", "a", "b", "a"], into: &history, gap: 31 * 60_000)
+        #expect(history.entry(for: "a")?.followed == 0 && history.next(after: "a") == nil)
+        ran(["a", "b", "a", "b", "a"], into: &history, from: 10_000_000_000, gap: 29 * 60_000)
+        #expect(history.next(after: "a") == "b")
+    }
+
+    @Test func aFifthFollowerTakesTheLeastFollowedsPlace() {
+        var history = CommandHistory()
+        ran(["a", "b", "a", "b", "a", "c", "a", "c", "a", "d", "a", "d", "a", "e", "a", "f"], into: &history)
+        let followers = history.entry(for: "a")?.followers ?? []
+        let hashes = Set(followers.map(\.hash))
+        #expect(followers.count == CommandHistory.maxFollowers)
+        #expect(hashes.contains(CommandHistoryFile.fnv1a("f".utf8)) && !hashes.contains(CommandHistoryFile.fnv1a("e".utf8)))
+        #expect(history.entry(for: "a")?.followed == 8)
+    }
+
+    @Test func forgettingAFollowerTakesItOutOfEveryList() {
+        var history = CommandHistory()
+        ran(["a", "b", "a", "b", "a", "c"], into: &history)
+        #expect(history.next(after: "a") == "b")
+        history.forget("b")
+        #expect(history.next(after: "a") == nil)
+        #expect(history.entry(for: "a")?.followers.map(\.hash) == [CommandHistoryFile.fnv1a("c".utf8)] && history.entry(for: "a")?.followed == 1)
+    }
+
     @Test func loadingKeepsTheLastStateOfALine() {
         var history = CommandHistory()
         history.load([CommandHistory.Entry(line: "make", lastRun: 1, count: 1, successes: 0, lastExit: 2, folder: "/a"),

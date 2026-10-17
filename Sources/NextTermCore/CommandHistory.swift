@@ -21,6 +21,10 @@ public struct CommandHistory: Sendable {
     public static let maxFolderBytes = 1024
     /// How many matches a query gives by default: the first that passes the checks (GhostValidation) is shown.
     public static let queryLimit = 8
+    /// What follows an entry is counted only for a run within this long of its own (ms), in the same tab.
+    public static let followWindow: Int64 = 30 * 60 * 1000
+    /// The commands kept as following an entry at most: a new one past them takes the place of the least followed.
+    public static let maxFollowers = 4
 
     /// One distinct line and what is known of its runs.
     public struct Entry: Equatable, Sendable {
@@ -34,9 +38,12 @@ public struct CommandHistory: Sendable {
         public var lastExit: Int32?
         public var folder: String?
         public var repo: String?
+        /// The commands that followed its runs (`followed(previous:by:at:)`), and how many times any command did.
+        public var followers: [Follower]
+        public var followed: Int
 
         public init(line: String, lastRun: Int64, count: Int = 1, successes: Int = 0, lastExit: Int32? = nil, folder: String? = nil,
-                    repo: String? = nil) {
+                    repo: String? = nil, followers: [Follower] = [], followed: Int = 0) {
             self.line = line
             self.lastRun = lastRun
             self.count = count
@@ -44,9 +51,22 @@ public struct CommandHistory: Sendable {
             self.lastExit = lastExit
             self.folder = folder
             self.repo = repo
+            self.followers = followers
+            self.followed = followed
         }
 
         public var everSucceeded: Bool { successes > 0 }
+    }
+
+    /// A command that followed an entry's run: its line's FNV-1a hash, and how many times.
+    public struct Follower: Equatable, Sendable {
+        public var hash: UInt64
+        public var count: Int
+
+        public init(hash: UInt64, count: Int) {
+            self.hash = hash
+            self.count = count
+        }
     }
 
     public typealias Candidate = Entry
@@ -67,8 +87,72 @@ public struct CommandHistory: Sendable {
 
     static let noExit = Int32.min
 
+    /// An entry's followers, beside its record (so a query's scan stays small): up to four, by their line's hash.
+    struct Followers: Sendable {
+        var hashes: (UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0)
+        var counts: (UInt32, UInt32, UInt32, UInt32) = (0, 0, 0, 0)
+        var total: UInt32 = 0
+
+        subscript(i: Int) -> (hash: UInt64, count: UInt32) {
+            get {
+                switch i {
+                case 0: return (hashes.0, counts.0)
+                case 1: return (hashes.1, counts.1)
+                case 2: return (hashes.2, counts.2)
+                default: return (hashes.3, counts.3)
+                }
+            }
+            set {
+                switch i {
+                case 0: (hashes.0, counts.0) = newValue
+                case 1: (hashes.1, counts.1) = newValue
+                case 2: (hashes.2, counts.2) = newValue
+                default: (hashes.3, counts.3) = newValue
+                }
+            }
+        }
+
+        /// One more run of `hash` after it: counted where it is kept; else in a free place; else in the least followed's.
+        mutating func add(_ hash: UInt64) {
+            total &+= 1
+            var weakest = 0
+            for i in 0..<CommandHistory.maxFollowers {
+                if self[i].count > 0, self[i].hash == hash {
+                    self[i].count &+= 1
+                    return
+                }
+                if self[i].count < self[weakest].count { weakest = i }
+            }
+            self[weakest] = (hash, 1)
+        }
+
+        /// `hash` is gone (forgotten): its place is free, and its runs leave the total.
+        mutating func remove(_ hash: UInt64) {
+            for i in 0..<CommandHistory.maxFollowers where self[i].count > 0 && self[i].hash == hash {
+                total -= min(total, self[i].count)
+                self[i] = (0, 0)
+            }
+        }
+
+        var list: [Follower] {
+            (0..<CommandHistory.maxFollowers).compactMap { self[$0].count > 0 ? Follower(hash: self[$0].hash, count: Int(self[$0].count)) : nil }
+        }
+
+        init() {}
+
+        init(_ list: [Follower], total: Int) {
+            for (i, follower) in list.prefix(CommandHistory.maxFollowers).enumerated() where follower.count > 0 {
+                self[i] = (follower.hash, UInt32(clamping: follower.count))
+            }
+            self.total = UInt32(clamping: max(total, list.reduce(0) { $0 + $1.count }))
+        }
+    }
+
     private var bytes: [UInt8] = []
     private var records: [Record] = []
+    /// Beside `records`, place for place: each line's FNV-1a hash, and what followed it.
+    private var hashes: [UInt64] = []
+    private var followers: [Followers] = []
     /// The live records' ids, sorted by folded bytes, then exact bytes.
     private var index: [Int32] = []
     private var deadBytes = 0
@@ -157,14 +241,45 @@ public struct CommandHistory: Sendable {
         if Self.succeeded(exit: exit) { records[id].successes &+= 1 }
     }
 
-    /// `line` is gone from the record.
+    /// `line` is gone from the record, and from what followed every other entry.
     public mutating func forget(_ line: String) {
         guard let kept = Self.shaped(line) else { return }
         let place = find(Array(kept.utf8))
         guard place.found else { return }
         let id = index.remove(at: place.position)
+        let hash = hashes[Int(id)]
         kill(id)
+        for i in followers.indices where followers[i].total > 0 { followers[i].remove(hash) }
         compactIfNeeded()
+    }
+
+    // MARK: what comes next
+
+    /// `line` ran right after `previous` in the same tab, starting at `time` (ms since 1970): counted toward what follows
+    /// `previous` when that is within `followWindow` of `previous`'s last run. Both must be entries.
+    public mutating func followed(previous: String, by line: String, at time: Int64) {
+        guard let before = id(of: previous), let after = id(of: line) else { return }
+        let gap = time - records[Int(before)].lastRun
+        guard gap >= 0, gap <= Self.followWindow else { return }
+        followers[Int(before)].add(hashes[Int(after)])
+    }
+
+    /// The command that follows `line` when the record is sure of it: the one that followed it most, at least twice, and
+    /// at least a quarter of the times any command did. nil otherwise.
+    public func next(after line: String) -> String? {
+        guard let id = id(of: line) else { return nil }
+        let following = followers[Int(id)]
+        guard let best = following.list.max(by: { $0.count < $1.count }), best.count >= 2,
+              best.count * 4 >= Int(following.total) else { return nil }
+        guard let found = records.indices.first(where: { records[$0].alive && hashes[$0] == best.hash }) else { return nil }
+        return entry(Int32(found)).line
+    }
+
+    /// The live record of `line` (trailing blanks trimmed), if there is one.
+    private func id(of line: String) -> Int32? {
+        guard let kept = Self.shaped(line) else { return nil }
+        let place = find(Array(kept.utf8))
+        return place.found ? index[place.position] : nil
     }
 
     public mutating func clear() {
@@ -181,6 +296,7 @@ public struct CommandHistory: Sendable {
             let lastExit = entry.lastExit ?? Self.noExit
             let folder = folders.id(for: entry.folder), repo = repos.id(for: entry.repo)
             let count = UInt32(clamping: max(1, entry.count)), successes = UInt32(clamping: max(0, entry.successes))
+            let following = Followers(entry.followers, total: entry.followed)
             if let id = places[line] {
                 records[Int(id)].lastRun = entry.lastRun
                 records[Int(id)].count = count
@@ -188,9 +304,12 @@ public struct CommandHistory: Sendable {
                 records[Int(id)].lastExit = lastExit
                 records[Int(id)].folder = folder
                 records[Int(id)].repo = repo
+                followers[Int(id)] = following
             } else {
-                places[line] = append(line, lastRun: entry.lastRun, count: count, successes: successes, lastExit: lastExit,
-                                      folder: folder, repo: repo)
+                let id = append(line, lastRun: entry.lastRun, count: count, successes: successes, lastExit: lastExit, folder: folder,
+                                repo: repo)
+                followers[Int(id)] = following
+                places[line] = id
             }
         }
         rebuildIndex()
@@ -351,6 +470,8 @@ public struct CommandHistory: Sendable {
                             successes: successes, lastExit: lastExit, folder: folder, repo: repo)
         bytes += line
         records.append(record)
+        hashes.append(CommandHistoryFile.fnv1a(line))
+        followers.append(Followers())
         return Int32(records.count - 1)
     }
 
@@ -380,6 +501,9 @@ public struct CommandHistory: Sendable {
         packed.reserveCapacity(bytes.count - deadBytes)
         var kept: [Record] = []
         kept.reserveCapacity(records.count - deadRecords)
+        var keptHashes: [UInt64] = [], keptFollowers: [Followers] = []
+        keptHashes.reserveCapacity(kept.capacity)
+        keptFollowers.reserveCapacity(kept.capacity)
         var moved = [Int32](repeating: -1, count: records.count)
         for (id, record) in records.enumerated() where record.alive {
             var copy = record
@@ -387,9 +511,13 @@ public struct CommandHistory: Sendable {
             packed += bytes[Int(record.offset)..<(Int(record.offset) + Int(record.length))]
             moved[id] = Int32(kept.count)
             kept.append(copy)
+            keptHashes.append(hashes[id])
+            keptFollowers.append(followers[id])
         }
         bytes = packed
         records = kept
+        hashes = keptHashes
+        followers = keptFollowers
         index = index.map { moved[Int($0)] }
         deadBytes = 0
         deadRecords = 0
@@ -398,9 +526,10 @@ public struct CommandHistory: Sendable {
     private func entry(_ id: Int32) -> Entry {
         let record = records[Int(id)]
         let line = String(decoding: bytes[Int(record.offset)..<(Int(record.offset) + Int(record.length))], as: UTF8.self)
+        let following = followers[Int(id)]
         return Entry(line: line, lastRun: record.lastRun, count: Int(record.count), successes: Int(record.successes),
                      lastExit: record.lastExit == Self.noExit ? nil : record.lastExit, folder: folders.name(record.folder),
-                     repo: repos.name(record.repo))
+                     repo: repos.name(record.repo), followers: following.list, followed: Int(following.total))
     }
 }
 

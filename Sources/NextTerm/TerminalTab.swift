@@ -878,8 +878,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// The line Next Term last pressed Return for by itself (submitOwnLine), as zsh holds it, until the next command or prompt.
     private var ownLine: String?
-    /// Your command running now, recorded when it ends, with its exit: its line, its folder and when it started.
-    private var pendingRun: (line: String, folder: String, at: Date)?
+    /// Your command running now, recorded when it ends, with its exit: its line, its folder, when it started, and your
+    /// command before it here (what it follows).
+    private var pendingRun: (line: String, folder: String, at: Date, after: String?)?
+    /// Your last command here, until another command (an agent's) came after it.
+    private var lastYours: String?
 
     /// Commands run here are recorded: a tab on this Mac, suggestions on and Private Mode off, and no agent driving it.
     private var recordsCommands: Bool { remote == nil && GhostPreferences.records && !MCPControl.isDriven(self) }
@@ -889,17 +892,23 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let own = ownLine
         ownLine = nil
         runEnded(exit: nil)
-        guard recordsCommands, CommandAuthor.decide(flags: flags, ownLine: own, typed: typed) == .you else { return }
-        pendingRun = (typed, directory, Date())
+        guard recordsCommands, CommandAuthor.decide(flags: flags, ownLine: own, typed: typed) == .you else {
+            lastYours = nil
+            return
+        }
+        pendingRun = (typed, directory, Date(), lastYours)
     }
 
     /// The command ended (`exit`), or can no longer say how (nil: the shell was replaced, the tab closed): recorded, unless
-    /// suggestions went off or Private Mode on meanwhile.
-    private func runEnded(exit: Int32?) {
-        guard let run = pendingRun else { return }
+    /// suggestions went off or Private Mode on meanwhile. Its line, when it was yours and recorded.
+    @discardableResult
+    private func runEnded(exit: Int32?) -> String? {
+        guard let run = pendingRun else { return nil }
         pendingRun = nil
-        guard GhostPreferences.records else { return }
-        CommandHistoryStore.shared.record(run.line, folder: run.folder, at: run.at, exit: exit)
+        guard GhostPreferences.records else { return nil }
+        CommandHistoryStore.shared.record(run.line, folder: run.folder, at: run.at, exit: exit, after: run.after)
+        lastYours = run.line
+        return run.line
     }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
@@ -1483,8 +1492,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             onCommandMark?(event)
-            runEnded(exit: code)
-            ghost.commandEnded()
+            ghost.commandEnded(yours: runEnded(exit: code))
             ownLine = nil
             history.prompted(at: Self.now)
             programTitle = nil

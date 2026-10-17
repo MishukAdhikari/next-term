@@ -26,6 +26,7 @@ extension SelfTest {
         await ghostSettingsChecks(c, dir: dir)
         await ghostVoiceOverChecks(c, dir: dir)
         await ghostFallbackChecks(c, dir: dir)
+        await ghostNextCommandChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -592,6 +593,33 @@ extension SelfTest {
             CommandHistoryStore.shared.count { (count: Int) in done.resume(returning: count) }
         }
         check(count == 0, "suggestions: nothing from the shell's history is recorded", "\(count)")
+    }
+
+    /// The next command on an empty line: `true` then `echo next`, twice, typed through the window; after `true` again the
+    /// empty prompt shows `echo next`, → puts it on the line, and typing gives way to matching.
+    static func ghostNextCommandChecks(_ c: TerminalWindowController, dir: URL) async {
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc, name: "next"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        func run(_ line: String) async {
+            let started = tab.status.commandsStarted
+            typeKeys(window, line)
+            pressKey(window, "\r", code: 36)
+            _ = await wait(3) { tab.status.commandsStarted > started && !tab.status.running }
+            await pause(0.3)
+        }
+        for line in ["true", "echo next", "true", "echo next", "true"] { await run(line) }
+        check(await ghostShows(tab) && tab.ghost.state.shown?.isNext == true && tab.ghost.overlay.text == "echo next",
+              "suggestions: after a command, the empty prompt shows what usually follows it", "\(tab.ghost.state)")
+        pressKey(window, "\u{F703}", code: 124, flags: [.function, .numericPad])
+        check(await wait(3) { tab.lastBuffer?.report.buffer == "echo next" }, "suggestions: → puts the next command on the line, unrun")
+        await ghostClear(tab)
+        await run("true")
+        if await ghostShows(tab) {
+            typeKeys(window, "e")
+            check(await wait(2) { tab.ghost.state.shown?.isNext != true }, "suggestions: typing gives way to matching what is typed")
+        } else {
+            check(false, "suggestions: the next command shows again after `true`")
+        }
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,

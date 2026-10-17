@@ -68,6 +68,8 @@ public enum GhostKeys {
 ///   hides it, and asks for the new line.
 /// - A deletion at the end hides it until the line grows again. Esc hides it for the rest of the line.
 /// - An answer for an older generation than the one asked for is dropped.
+/// - On an empty line, the next command (`offerNext`) shows with no key on that line: your Return before it was the key.
+///   Anything typed gives way to matching.
 public struct GhostState: Sendable {
     public enum Step: Equatable, Sendable {
         /// Ask the record for the newest command starting with `prefix`, for generation `gen`.
@@ -103,8 +105,9 @@ public struct GhostState: Sendable {
         if previous == nil { newLine() }
         report = new
         asked = nil
-        guard gates.open, userKeyed, !lineHidden, !new.region, !new.isearch, Self.keymaps.contains(new.keymap), new.context == "start",
-              new.atEnd, new.postdisplay?.isEmpty ?? false, let buffer = new.buffer,
+        // The next command on the empty line stays while the line does.
+        if shown?.isNext == true, new.buffer == "", gates.open, !lineHidden, Self.editable(new) { return .none }
+        guard gates.open, userKeyed, !lineHidden, Self.editable(new), let buffer = new.buffer,
               buffer.unicodeScalars.contains(where: { $0 != " " && $0 != "\t" }) else { return hide() }
         if let before = previous?.buffer {
             if buffer.utf8.count < before.utf8.count, before.utf8.starts(with: buffer.utf8) { deletedSinceInsert = true }
@@ -119,6 +122,23 @@ public struct GhostState: Sendable {
         shown = nil
         asked = new.gen
         return .ask(gen: new.gen, prefix: buffer)
+    }
+
+    /// The line can take a suggestion: the first line of a command in a keymap suggestions show in, with the cursor at the
+    /// end, no region or incremental search, and no plugin's ghost.
+    static func editable(_ report: GhostProtocol.BufferReport) -> Bool {
+        !report.region && !report.isearch && keymaps.contains(report.keymap) && report.context == "start" && report.atEnd
+            && report.postdisplay?.isEmpty ?? false
+    }
+
+    /// The next command on an empty line (the record is sure of it, after a command of yours): it shows while the line is
+    /// still the new empty one, with every gate open. True: it shows.
+    public mutating func offerNext(_ command: String, gates: GhostGates) -> Bool {
+        guard gates.open, !lineHidden, shown == nil, !command.isEmpty, let report, report.buffer == "", Self.editable(report) else {
+            return false
+        }
+        shown = GhostSuggestion(next: command)
+        return true
     }
 
     /// The record's answer for generation `gen`: `command`, the first candidate that passed the checks, shows if that

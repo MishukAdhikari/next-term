@@ -37,6 +37,32 @@ import Testing
         #expect(decoded.named.contains("f" + CommandHistoryFile.id(of: "/tmp/a\tb\nc\\d")))
     }
 
+    /// What followed an entry goes in its `<next>` field and comes back; a field this format never writes loads the entry
+    /// without it.
+    @Test func whatFollowedRoundTrips() {
+        let follower = CommandHistory.Follower(hash: CommandHistoryFile.fnv1a("make test".utf8), count: 3)
+        let other = CommandHistory.Follower(hash: 0x0123, count: 1)
+        let entries = [
+            Entry(line: "make build", lastRun: 10, count: 4, successes: 4, lastExit: 0, followers: [follower, other], followed: 4),
+            Entry(line: "make test", lastRun: 11, count: 3, successes: 3, lastExit: 0),
+        ]
+        let encoded = CommandHistoryFile.encode(history(entries), forgotten: [])
+        let text = String(decoding: encoded, as: UTF8.self)
+        #expect(text.contains("\t4/" + String(format: "%016llx", follower.hash) + ":3,0000000000000123:1\t"))
+        let decoded = CommandHistoryFile.decode(encoded)
+        #expect(decoded.history.entries() == entries && decoded.history.next(after: "make build") == "make test")
+        let damaged = data([CommandHistoryFile.header, "c\t10\t1\t1\t0\t-\t-\t4/xyz:3\tmake build"])
+        #expect(CommandHistoryFile.decode(damaged).history.entries() == [Entry(line: "make build", lastRun: 10, successes: 1, lastExit: 0)])
+    }
+
+    /// A merge keeps what followed with each line's later state, and leaves out a follower forgotten since.
+    @Test func aMergeDropsAForgottenFollower() {
+        let b = CommandHistoryFile.fnv1a("b".utf8), c = CommandHistoryFile.fnv1a("c".utf8)
+        let log = history([Entry(line: "a", lastRun: 5, count: 3, followers: [.init(hash: b, count: 2), .init(hash: c, count: 1)], followed: 3)])
+        let merged = CommandHistoryFile.merge(history([]), log, dropping: ["b"])
+        #expect(merged.entry(for: "a")?.followers == [.init(hash: c, count: 1)] && merged.entry(for: "a")?.followed == 1)
+    }
+
     @Test func anotherVersionIsLeftAsItIs() {
         let other = CommandHistoryFile.decode(data(["nextterm-history 2", "c\t1\t1\t1\t0\t-\t-\t-\tls"]))
         #expect(other.otherVersion && other.history.count == 0)

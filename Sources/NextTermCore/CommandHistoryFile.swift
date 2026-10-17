@@ -14,6 +14,9 @@ import Darwin
 ///     c <last ms> <count> <successes> <last exit|-> <folder|-> <repo|-> <next> <line>   an entry's state after a run
 ///     x <sha-256>                                                              a line of the shell's own history, forgotten
 ///
+/// `<next>` is what followed the entry's runs (the next command on an empty line): `-`, or how many times any command did,
+/// then each one's line by its FNV-1a hash with how often, as `5/0123456789abcdef:3,fedcba9876543210:2`.
+///
 /// The last `c` for a line wins. A folder's or repository's id is its path's FNV-1a hash, so two copies of Next Term
 /// appending to one log name each place alike. A forgotten line of the shell's history is kept by its hash alone, never its
 /// text. A damaged line is skipped; a header of another version leaves the record empty and the file as it is.
@@ -87,8 +90,33 @@ public enum CommandHistoryFile {
         if fields[4] == "-" { exit = nil } else if let code = Int32(fields[4]) { exit = code } else { return nil }
         let folder = fields[5] == "-" ? nil : folders[String(fields[5])]
         let repo = fields[6] == "-" ? nil : repos[String(fields[6])]
+        // What followed it, when it reads: an entry is never lost over it.
+        let next = followers(fields[7])
         return CommandHistory.Entry(line: line, lastRun: lastRun, count: count, successes: successes, lastExit: exit, folder: folder,
-                                    repo: repo)
+                                    repo: repo, followers: next?.list ?? [], followed: next?.total ?? 0)
+    }
+
+    /// The `<next>` field read: nil for `-` or one this format never writes.
+    static func followers(_ field: Substring) -> (total: Int, list: [CommandHistory.Follower])? {
+        guard field != "-", let slash = field.firstIndex(of: "/"), let total = Int(field[..<slash]), total >= 0 else { return nil }
+        var list: [CommandHistory.Follower] = []
+        for item in field[field.index(after: slash)...].split(separator: ",") {
+            let parts = item.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2, isHex(parts[0], length: 16), let hash = UInt64(parts[0], radix: 16), let count = Int(parts[1]),
+                  count > 0, list.count < CommandHistory.maxFollowers else { return nil }
+            list.append(CommandHistory.Follower(hash: hash, count: count))
+        }
+        return (total, list)
+    }
+
+    /// The `<next>` field for `entry`.
+    static func followersField(_ entry: CommandHistory.Entry) -> String {
+        guard !entry.followers.isEmpty else { return "-" }
+        let list = entry.followers.map { (follower: CommandHistory.Follower) -> String in
+            let digits = String(follower.hash, radix: 16)
+            return String(repeating: "0", count: 16 - digits.count) + digits + ":" + String(follower.count)
+        }
+        return String(entry.followed) + "/" + list.joined(separator: ",")
     }
 
     /// The whole log for `history` and `forgotten`, as compaction writes it.
@@ -110,7 +138,7 @@ public enum CommandHistoryFile {
     public static func hasNews(_ log: CommandHistory, for history: CommandHistory) -> Bool {
         log.entries().contains { (entry: CommandHistory.Entry) -> Bool in
             guard let held = history.entry(for: entry.line) else { return true }
-            return (entry.lastRun, entry.count) > (held.lastRun, held.count)
+            return (entry.lastRun, entry.count, entry.followed) > (held.lastRun, held.count, held.followed)
         }
     }
 
@@ -126,7 +154,8 @@ public enum CommandHistoryFile {
         }
         let folder = place("f", entry.folder), repo = place("r", entry.repo)
         let exit = entry.lastExit.map(String.init) ?? "-"
-        let fields = ["c", String(entry.lastRun), String(entry.count), String(entry.successes), exit, folder, repo, "-", escape(entry.line)]
+        let next = followersField(entry)
+        let fields = ["c", String(entry.lastRun), String(entry.count), String(entry.successes), exit, folder, repo, next, escape(entry.line)]
         out += fields.joined(separator: "\t") + "\n"
         return Data(out.utf8)
     }
@@ -199,14 +228,21 @@ public enum CommandHistoryFile {
         return String(out)
     }
 
-    /// The entries of both, each line's later state (a later run, then more runs) kept: what a compaction writes when
-    /// another copy of Next Term appended to the log meanwhile. Lines in `dropping` are left out (forgotten since).
+    /// The entries of both, each line's later state (a later run, then more runs, then more followed) kept: what a
+    /// compaction writes when another copy of Next Term appended to the log meanwhile. Lines in `dropping` are left out
+    /// (forgotten since), and so is any follower they were.
     public static func merge(_ a: CommandHistory, _ b: CommandHistory, dropping: Set<String> = []) -> CommandHistory {
         var byLine: [String: CommandHistory.Entry] = [:]
         var order: [String] = []
-        for entry in a.entries() + b.entries() where !dropping.contains(entry.line) {
+        let dropped = Set(dropping.map { fnv1a($0.utf8) })
+        for var entry in a.entries() + b.entries() where !dropping.contains(entry.line) {
+            if !dropped.isEmpty {
+                let gone = entry.followers.filter { dropped.contains($0.hash) }.reduce(0) { $0 + $1.count }
+                entry.followers.removeAll { dropped.contains($0.hash) }
+                entry.followed = max(0, entry.followed - gone)
+            }
             if let held = byLine[entry.line] {
-                if (entry.lastRun, entry.count) > (held.lastRun, held.count) { byLine[entry.line] = entry }
+                if (entry.lastRun, entry.count, entry.followed) > (held.lastRun, held.count, held.followed) { byLine[entry.line] = entry }
             } else {
                 byLine[entry.line] = entry
                 order.append(entry.line)

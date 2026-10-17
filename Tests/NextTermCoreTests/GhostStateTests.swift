@@ -187,6 +187,48 @@ import Testing
     }
 }
 
+@Suite struct GhostNextCommandTests {
+    typealias Report = GhostProtocol.BufferReport
+
+    func empty(line: Int = 2, gen: Int) -> Report { Report(line: line, gen: gen, cursor: 0, buffer: "") }
+
+    /// On the empty line after a command of yours: no key needed; → takes all of it; typing gives way to matching.
+    @Test func theNextCommandOnAnEmptyLine() {
+        var state = GhostState()
+        _ = state.report(empty(gen: 3), gates: GhostGates())
+        let offered = state.offerNext("echo next", gates: GhostGates())
+        #expect(offered && state.shown?.remainder == "echo next" && state.shown?.isNext == true)
+        // A redraw of the same empty line keeps it.
+        let same = state.report(empty(gen: 4), gates: GhostGates())
+        #expect(same == .none && state.shown != nil)
+        let frame = state.accept(.right, bytes: [0x1B, 0x5B, 0x43])
+        #expect(frame == GhostProtocol.acceptFrame(gen: 4, seen: "", new: "echo next", key: [0x1B, 0x5B, 0x43]))
+        // Typed instead: matching what is typed, asked for.
+        var typed = GhostState()
+        _ = typed.report(empty(gen: 3), gates: GhostGates())
+        _ = typed.offerNext("echo next", gates: GhostGates())
+        typed.userKey()
+        let step = typed.report(Report(line: 2, gen: 5, cursor: 1, buffer: "e"), gates: GhostGates())
+        #expect(step == .ask(gen: 5, prefix: "e") && typed.shown == nil)
+    }
+
+    @Test func notOnALineWithTextOrAClosedGate() {
+        var state = GhostState()
+        _ = state.report(Report(line: 2, gen: 3, cursor: 1, buffer: "x"), gates: GhostGates())
+        let withText = state.offerNext("echo next", gates: GhostGates())
+        var driven = GhostState()
+        _ = driven.report(empty(gen: 3), gates: GhostGates())
+        let closed = driven.offerNext("echo next", gates: GhostGates(notDriven: false))
+        #expect(!withText && !closed)
+        // A gate closing at the next report hides it.
+        var open = GhostState()
+        _ = open.report(empty(gen: 3), gates: GhostGates())
+        _ = open.offerNext("echo next", gates: GhostGates())
+        let hidden = open.report(empty(gen: 4), gates: GhostGates(focused: false))
+        #expect(hidden == .hidden && open.shown == nil)
+    }
+}
+
 @Suite struct GhostFallbackTests {
     @Test func asksOncePerPrefixFamily() {
         var fallback = GhostFallback()
