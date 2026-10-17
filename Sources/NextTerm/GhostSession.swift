@@ -34,7 +34,11 @@ final class GhostSession {
     private var placed: (x: Int, y: Int)?
     private var checks = 0
     /// The newest candidates waiting for a check, while two are out.
-    private var waiting: (gen: Int, candidates: [CommandHistory.Entry], folder: String)?
+    private var waiting: (gen: Int, candidates: [CommandHistory.Entry], folder: String, fromShell: Bool)?
+    /// When to ask the shell's own history (the cold start), and the command showing that came from it: Forget keeps
+    /// only its hash.
+    private var fallback = GhostFallback()
+    private var shownFromShell: String?
     /// When the last report was read: the perf budget's start.
     private var arrival: TimeInterval = 0
     private var resignObserver: NSObjectProtocol?
@@ -101,8 +105,8 @@ final class GhostSession {
             follow(state.report(report, gates: gates()))
             sendOwnerIfIdle()
             considerAsking(report)
-        case .fallback:
-            break
+        case .fallback(let gen, let line):
+            shellAnswered(gen, line)
         }
     }
 
@@ -133,38 +137,72 @@ final class GhostSession {
 
     private func answered(_ gen: Int, _ candidates: [CommandHistory.Entry], folder: String) {
         guard state.asked == gen else { return }
-        guard !candidates.isEmpty else { return }
+        guard !candidates.isEmpty else { return askShellSoon(gen) }
         check(gen, candidates, folder: folder)
     }
 
     /// The checks for generation `gen`'s candidates, on a queue of their own. With two of the tab's out already (a folder
-    /// on a slow volume), the newest waits for one of them to finish, and replaces any older one waiting.
-    private func check(_ gen: Int, _ candidates: [CommandHistory.Entry], folder: String) {
+    /// on a slow volume), the newest waits for one of them to finish, and replaces any older one waiting. A line from the
+    /// shell's own history (`fromShell`) must be one the record would keep: no secret, no leading space, one line.
+    private func check(_ gen: Int, _ candidates: [CommandHistory.Entry], folder: String, fromShell: Bool = false) {
         guard checks < Self.maxChecks else {
-            waiting = (gen, candidates, folder)
+            waiting = (gen, candidates, folder, fromShell)
             return
         }
         checks += 1
         let started = TerminalTab.now
         let home = NSHomeDirectory()
         DispatchQueue.global(qos: .userInitiated).async {
-            let chosen = GhostValidation.first(candidates, cwd: folder, home: home, probe: .disk)
+            let mayShow: (String) -> Bool = fromShell ? { CommandHistory.keeps($0) } : { CommandSecrets.mayKeep($0) }
+            let chosen = GhostValidation.first(candidates, cwd: folder, home: home, probe: .disk, mayShow: mayShow)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.checked(gen, chosen, late: TerminalTab.now - started > Self.checkDeadline)
+                self.checked(gen, chosen, late: TerminalTab.now - started > Self.checkDeadline, fromShell: fromShell)
             }
         }
     }
 
-    private func checked(_ gen: Int, _ chosen: CommandHistory.Entry?, late: Bool) {
+    private func checked(_ gen: Int, _ chosen: CommandHistory.Entry?, late: Bool, fromShell: Bool) {
         checks -= 1
         if let next = waiting {
             waiting = nil
-            if state.asked == next.gen { check(next.gen, next.candidates, folder: next.folder) }
+            if state.asked == next.gen { check(next.gen, next.candidates, folder: next.folder, fromShell: next.fromShell) }
         }
+        // None of the record's passed: the shell's own history may have one.
+        if chosen == nil, !late, !fromShell, state.asked == gen { return askShellSoon(gen) }
         guard !late, let chosen, state.answer(gen: gen, command: chosen.line) else { return }
+        shownFromShell = fromShell ? chosen.line : nil
         announcer.suggested(chosen.line, at: TerminalTab.now)
         placeAfterRedraw()
+    }
+
+    // MARK: the shell's own history (the cold start)
+
+    /// The record had nothing that passes for generation `gen`'s line: at a pause (no key for GhostFallback.idle), zsh's
+    /// own in-memory history is asked, at an idle line, never again for a prefix it had nothing for or a line grown from
+    /// one.
+    private func askShellSoon(_ gen: Int) {
+        let wait = max(0, keyAt + GhostFallback.idle - TerminalTab.now)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.01) { [weak self] in self?.askShell(gen) }
+    }
+
+    private func askShell(_ gen: Int) {
+        guard let tab, state.asked == gen, let report = state.report, report.gen == gen, let prefix = report.buffer,
+              TerminalTab.now - keyAt >= GhostFallback.idle, tab.lineReportIsCurrent, gates().open,
+              let frame = GhostProtocol.fallbackFrame(gen: gen, prefix: prefix),
+              fallback.shouldAsk(line: report.line, gen: gen, prefix: prefix) else { return }
+        // Not typed: past Tab completion's writer, which holds nothing at an idle line, so the report stays current.
+        tab.view.sendPastGate(frame[...])
+    }
+
+    /// The shell's answer: a line it holds that starts with what is typed, checked as the record's are (and never one you
+    /// forgot) before it shows. Nothing of it is recorded.
+    private func shellAnswered(_ gen: Int, _ answer: String?) {
+        guard let line = fallback.answer(gen: gen, line: answer), state.asked == gen, let folder = tab?.directory else { return }
+        CommandHistoryStore.shared.isForgotten(line) { [weak self] forgotten in
+            guard let self, !forgotten, self.state.asked == gen else { return }
+            self.check(gen, [CommandHistory.Entry(line: line, lastRun: 0)], folder: folder, fromShell: true)
+        }
     }
 
     // MARK: placing it
@@ -344,12 +382,17 @@ final class GhostSession {
 
     // MARK: forgetting one
 
-    /// Edit › Forget This Suggestion, or the terminal's menu: the command showing leaves the record, and its log at once;
-    /// the next match, if one passes the checks, shows instead. False: none shows.
+    /// Edit › Forget This Suggestion, or the terminal's menu: the command showing leaves the record, and its log at once
+    /// (one from the shell's own history is never suggested again: only its hash is kept); the next match, if one passes
+    /// the checks, shows instead. False: none shows.
     @discardableResult
     func forget() -> Bool {
         guard isShowing, let shown = state.shown, let report = state.report else { return false }
-        CommandHistoryStore.shared.forget(shown.command)
+        if shown.command == shownFromShell {
+            CommandHistoryStore.shared.forgetFallback(shown.command)
+        } else {
+            CommandHistoryStore.shared.forget(shown.command)
+        }
         hide()
         follow(state.report(report, gates: gates()))
         return true
@@ -444,7 +487,8 @@ final class GhostSession {
         guard let takeOver = pendingOwner, let tab, tab.lineReportIsCurrent else { return }
         pendingOwner = nil
         tookOver = takeOver
-        tab.view.send(data: GhostProtocol.ownerFrame(takeOver: takeOver)[...])
+        // Not typed: past Tab completion's writer, which holds nothing at an idle line.
+        tab.view.sendPastGate(GhostProtocol.ownerFrame(takeOver: takeOver)[...])
     }
 
     /// The question, once a launch in this tab, at an idle prompt: an empty line after a command ended here, no key of

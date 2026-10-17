@@ -1768,6 +1768,56 @@ check(not sh.errors(), "[ghost owner] no errors beside the user's own setting")
 sh.close()
 shutil.rmtree(folder, ignore_errors=True)
 
+# 13d. The shell's own history (the `f` frame, the cold start): the newest longer line that starts with the prefix, matched
+# as it is, answered as `gfb` with Next Term's generation; nothing past 20,000 lines. No `buf` follows, and the history file
+# is never touched. In a config of the test's own whose history is in memory only (print -s), its file in the scratch folder.
+def gfbs(shell, since=0):
+    return [(int(f[0]), pdec(f[1])) for _, k, f in shell.marks(since) if k == "gfb" and len(f) == 2 and f[0].isdigit()]
+
+def fallback_answer(sh, gen, prefix, wait=0.6):
+    start = len(sh.buf)
+    sh.send(gframe("f", 0, [str(gen), prefix]), wait)
+    found = gfbs(sh, start)
+    return (found[-1] if found else None), start
+
+def fallback_checks(label, extra):
+    folder, hist = history_rc("print -s 'kubectl get pods'\nprint -s 'kubectl get nodes'\nprint -s 'echo [*] star'\n" + extra)
+    open(hist, "w").write("")
+    before = os.stat(hist)
+    sh = Shell(f"ghost fallback {label}", folder)
+    answer, start = fallback_answer(sh, 1234567, "kubectl g")
+    check(answer == (1234567, "kubectl get nodes"), f"[ghost fallback {label}] `f` with `kubectl g`: its newest longer line, with the generation",
+          str(answer))
+    check(not bufs(sh, start), f"[ghost fallback {label}] and no `buf` after it: the line didn't change", str(bufs(sh, start)))
+    answer, _ = fallback_answer(sh, 8, "kubectl get nodes")
+    check(answer == (8, ""), f"[ghost fallback {label}] a whole line asks for a longer one: none", str(answer))
+    answer, _ = fallback_answer(sh, 9, "echo [*")
+    check(answer == (9, "echo [*] star"), f"[ghost fallback {label}] a prefix with [ and * matches only as it is", str(answer))
+    answer, _ = fallback_answer(sh, 10, "[*")
+    check(answer == (10, ""), f"[ghost fallback {label}] and is never a pattern", str(answer))
+    answer, _ = fallback_answer(sh, 11, "nothing-starts-so")
+    check(answer == (11, ""), f"[ghost fallback {label}] nothing that starts with it: empty", str(answer))
+    after = os.stat(hist)
+    check((after.st_size, after.st_mtime) == (before.st_size, before.st_mtime), f"[ghost fallback {label}] the history file is untouched")
+    errors = sh.errors()
+    for l in errors:
+        print("  hook error:", l.strip()[:200])
+    check(not errors, f"[ghost fallback {label}] no errors")
+    sh.close()
+    shutil.rmtree(folder, ignore_errors=True)
+
+fallback_checks("stock", "")
+fallback_checks("hostile", "setopt nounset ksh_arrays err_return\n")
+
+# Over 20,000 lines in memory: the shell isn't searched.
+folder, _ = history_rc("HISTSIZE=30000\nfor __i in {1..25000}; do print -s \"cmd $__i\"; done\nunset __i\nprint -s 'kubectl get pods'\n")
+sh = Shell("ghost fallback: a long history", folder, settle=8)
+answer, _ = fallback_answer(sh, 3, "kubectl g", wait=1)
+check(answer == (3, ""), "[ghost fallback] over 20,000 lines in memory: nothing", str(answer))
+check(not sh.errors(), "[ghost fallback] no errors with a long history")
+sh.close()
+shutil.rmtree(folder, ignore_errors=True)
+
 # A plugin's ghost (a stand-in): its POSTDISPLAY reaches the report.
 folder, _ = history_rc(STANDIN)
 sh = Shell("ghost: a stand-in plugin", folder)

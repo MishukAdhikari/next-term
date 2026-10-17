@@ -196,3 +196,43 @@ public struct GhostState: Sendable {
         shown = nil
     }
 }
+
+/// When one tab asks its shell's own history (the cold start: zsh's in-memory history fills in while Next Term's record has
+/// nothing for the line), and what it makes of the answer. Asked only at a pause (`idle` with no key), and never again on
+/// that line for a prefix the shell had nothing for, or for any longer line that starts with it, which can't have any
+/// either. An answer for an older generation than the last asked is dropped, and so is one that isn't longer than the
+/// prefix and doesn't start with it. Nothing it answers is ever recorded.
+public struct GhostFallback: Sendable {
+    /// How long after the last key the shell is asked.
+    public static let idle: TimeInterval = 0.15
+
+    private var line: Int?
+    /// This line's prefixes the shell had nothing for.
+    private var empty: [String] = []
+    private var asked: (gen: Int, prefix: String)?
+
+    public init() {}
+
+    /// Whether to ask now for `prefix`, on line `line` at generation `gen`; true records the ask.
+    public mutating func shouldAsk(line: Int, gen: Int, prefix: String) -> Bool {
+        if self.line != line {
+            self.line = line
+            empty = []
+        }
+        guard !prefix.isEmpty, !empty.contains(where: { prefix.utf8.starts(with: $0.utf8) }) else { return false }
+        asked = (gen, prefix)
+        return true
+    }
+
+    /// The shell's answer for generation `gen`: the line to check before it shows, or nil (stale, none, or not a longer
+    /// line that starts with what was asked; none marks the prefix and every line it grows into).
+    public mutating func answer(gen: Int, line: String?) -> String? {
+        guard let asked, asked.gen == gen else { return nil }
+        self.asked = nil
+        guard let line, line.utf8.count > asked.prefix.utf8.count, line.utf8.starts(with: asked.prefix.utf8) else {
+            empty.append(asked.prefix)
+            return nil
+        }
+        return line
+    }
+}

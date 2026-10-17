@@ -24,11 +24,14 @@ import Foundation
 ///
 ///     a  id: the generation   line seen ; new line ; the key's bytes      accept (→, End, ⌃E, ⌃F, ⌥→)
 ///     o  id: 0                t | g                                       who draws suggestions: Next Term (t) or the plugin (g)
+///     f  id: 0                generation ; prefix                         the shell's own history, asked (answered as `gfb`)
 ///
 /// An accept replaces the line only while it is the one Next Term saw, at that generation, with the cursor at its end,
 /// and while the key only moves the cursor in that keymap (or does nothing): otherwise the key's own bytes go back to
 /// zsh, which does what that key does. `o t` turns zsh-autosuggestions' suggestions off in that shell, and its rebinding
 /// at each prompt; `o g` gives back what `t` turned off. Either way the hook then sends its `ghost` mark and the line.
+/// `f` asks zsh's in-memory history for the newest line longer than the prefix that starts with it; nothing where it holds
+/// over `maxFallbackHistory` lines. The line doesn't change, so no `buf` follows.
 public enum GhostProtocol {
     /// ESC [ 6975 ~: as safe as Tab completion's and history's keys (CompletionProtocol.prefix, ShellHistory.prefix), and
     /// neither of them: unbound in stock keymaps, and not the start of any reply a terminal sends.
@@ -43,12 +46,15 @@ public enum GhostProtocol {
     public static let markKinds: Set<Substring> = ["ghost", "buf", "gfb"]
     /// The longest payload the hook reads after its key.
     public static let maxPayload = 65_536
+    /// zsh's in-memory history is asked only up to this many lines: a search costs about 2 ms there.
+    public static let maxFallbackHistory = 20_000
 
     // MARK: app to shell
 
     public enum Kind: UInt8, Sendable {
         case accept = 0x61 // a
         case owner = 0x6F // o
+        case fallback = 0x66 // f
     }
 
     /// An accept: `seen` (the line the suggestion showed on, at generation `gen`) becomes `new`, the cursor at its end; or,
@@ -62,6 +68,12 @@ public enum GhostProtocol {
     /// where the hook turned it off.
     public static func ownerFrame(takeOver: Bool) -> [UInt8] {
         CompletionProtocol.frame(prefix: prefix, kind: Kind.owner.rawValue, id: 0, fields: [takeOver ? "t" : "g"])
+    }
+
+    /// The shell's own history, for the newest line that starts with `prefix` and is longer (the cold start), answered
+    /// with generation `gen`. nil when the frame would be too long for the hook.
+    public static func fallbackFrame(gen: Int, prefix: String) -> [UInt8]? {
+        frame(.fallback, id: 0, fields: [String(gen), prefix])
     }
 
     static func frame(_ kind: Kind, id: Int, fields: [String]) -> [UInt8]? {

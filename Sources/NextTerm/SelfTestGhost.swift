@@ -25,6 +25,7 @@ extension SelfTest {
         await ghostOwnerChecks(c, dir: dir)
         await ghostSettingsChecks(c, dir: dir)
         await ghostVoiceOverChecks(c, dir: dir)
+        await ghostFallbackChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -566,6 +567,31 @@ extension SelfTest {
         check(tab.ghost.announcements == before + 1, "suggestions: typing through it is not a new one for VoiceOver")
         let children = (tab.view.accessibilityChildren() ?? []).compactMap { $0 as? NSView }
         check(!children.contains { $0 is GhostTextView }, "suggestions: the overlay is not among the terminal's accessibility children")
+    }
+
+    /// The cold start: with nothing in the record, the shell's own history in memory fills in after a pause; Forget keeps
+    /// it from showing again; and none of it is ever recorded. Only with the self-test's own record, emptied first.
+    static func ghostFallbackChecks(_ c: TerminalWindowController, dir: URL) async {
+        guard CommandHistoryStore.shared.folderURL?.path.hasPrefix(NSTemporaryDirectory()) == true else {
+            return note("suggestions from the shell's own history: not checked, the record isn't the self-test's own")
+        }
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in CommandHistoryStore.shared.clear { done.resume() } }
+        let history = dir.appendingPathComponent("fallback-history").path
+        let rc = plainZshrc + "HISTFILE=\(ShellQuote.quote(history))\nprint -s 'kubectl get pods'\n"
+        guard let tab = await ghostTab(c, in: dir, zshrc: rc, name: "fallback"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        typeKeys(window, "kubectl g")
+        check(await ghostShows(tab) && tab.ghost.overlay.text == "et pods", "suggestions: with an empty record, zsh's own history fills in after a pause",
+              tab.ghost.overlay.text)
+        NSApp.sendAction(#selector(TerminalWindowController.forgetSuggestion(_:)), to: nil, from: nil)
+        check(!tab.ghost.isShowing, "suggestions: Forget This Suggestion hides one from the shell's history")
+        await ghostClear(tab)
+        typeKeys(window, "kubectl g")
+        check(!(await ghostShows(tab, within: 1.5)), "suggestions: a forgotten line of the shell's history never shows again")
+        let count = await withCheckedContinuation { (done: CheckedContinuation<Int, Never>) in
+            CommandHistoryStore.shared.count { (count: Int) in done.resume(returning: count) }
+        }
+        check(count == 0, "suggestions: nothing from the shell's history is recorded", "\(count)")
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,

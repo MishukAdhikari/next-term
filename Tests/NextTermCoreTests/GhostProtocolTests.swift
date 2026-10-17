@@ -93,6 +93,7 @@ import Testing
         #expect(values["@NG_MAX_LINE@"] == String(GhostProtocol.maxLineBytes))
         #expect(values["@NG_FRAME_WAIT@"].flatMap(Double.init) == GhostProtocol.frameWait)
         #expect(values["@NG_MAX_PAYLOAD@"] == String(GhostProtocol.maxPayload))
+        #expect(values["@NG_MAX_HISTORY@"] == String(GhostProtocol.maxFallbackHistory))
         #expect(values.keys.allSatisfy { ZshGhostScript.template.contains($0) })
         #expect(!ZshGhostScript.script.contains("@NG_"))
         // Each hook keeps a key of its own.
@@ -122,6 +123,11 @@ import Testing
         let long = String(repeating: "\u{1}", count: 20_000)
         #expect(GhostProtocol.acceptFrame(gen: 1, seen: long, new: long, key: []) == nil)
         #expect(GhostProtocol.acceptFrame(gen: 1, seen: "a", new: String(repeating: "b", count: GhostProtocol.maxPayload - 3), key: []) != nil)
+    }
+
+    @Test func aFallbackFrameCarriesTheGenerationAndThePrefix() {
+        let frame = GhostProtocol.fallbackFrame(gen: 1_234_567, prefix: "kubectl g")
+        #expect(frame.map { String(decoding: $0, as: UTF8.self) } == "\u{1b}[6975~f000000000020" + #"1234567;kubectl\x20g"#)
     }
 
     @Test func anOwnerFrameSaysWhoDraws() {

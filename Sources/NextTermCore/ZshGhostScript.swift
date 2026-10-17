@@ -21,6 +21,7 @@ public enum ZshGhostScript {
         ("@NG_MAX_LINE@", #"2048"#),
         ("@NG_FRAME_WAIT@", #"0.5"#),
         ("@NG_MAX_PAYLOAD@", #"65536"#),
+        ("@NG_MAX_HISTORY@", #"20000"#),
     ]
 
     static let template = #"""
@@ -249,6 +250,21 @@ __nextterm_gaccept() {
   return 0
 }
 
+# The shell's own history (f), which Next Term asks at a pause while its own record has nothing for the line: the newest
+# line longer than the prefix that starts with it, as zsh-autosuggestions' history strategy reads it ($history, newest
+# first, the prefix quoted so it matches only as it is), answered as a `gfb` mark with Next Term's generation. Nothing where
+# the history holds over @NG_MAX_HISTORY@ lines, or for a line over @NG_MAX_LINE@ bytes. The line doesn't change, so zle
+# draws nothing, and nothing is written anywhere.
+__nextterm_gfallback() {
+  emulate -L zsh +o multibyte
+  local gen=${__nextterm_gf[1]-} prefix=${__nextterm_gf[2]-} hit=
+  [[ $gen == <-> && -n $prefix ]] || return 0
+  (( ${#history} <= @NG_MAX_HISTORY@ )) && hit=${history[(r)${(b)prefix}?*]}
+  (( ${#hit} > @NG_MAX_LINE@ )) && hit=
+  __nextterm_gencall "$hit"
+  __nextterm_gmark gfb $gen "$reply[1]"
+}
+
 # The private key's widget: what Next Term sent, by kind. Anything else (a kind this version doesn't know, a frame that
 # doesn't all arrive at once) is read and dropped, so it never lands on the line.
 __nextterm_gkeywidget() {
@@ -260,6 +276,7 @@ __nextterm_gkeywidget() {
     (o) __nextterm_gtakeover ${__nextterm_gf[1]-}
         __nextterm_ghook
         __nextterm_greport ;;
+    (f) __nextterm_gfallback ;;
   esac
   # zsh-autosuggestions never wraps this widget: a line changed here is asked for a suggestion that fits it, as Tab
   # completion's widget does.

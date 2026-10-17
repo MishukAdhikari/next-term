@@ -186,3 +186,35 @@ import Testing
                                                                                            key: [0x1B, 0x5B, 0x46]))
     }
 }
+
+@Suite struct GhostFallbackTests {
+    @Test func asksOncePerPrefixFamily() {
+        var fallback = GhostFallback()
+        let first = fallback.shouldAsk(line: 1, gen: 5, prefix: "kub")
+        let none = fallback.answer(gen: 5, line: nil)
+        #expect(first && none == nil)
+        // Nothing for `kub`: nothing for `kube` either, so it isn't asked.
+        let longer = fallback.shouldAsk(line: 1, gen: 6, prefix: "kube")
+        let again = fallback.shouldAsk(line: 1, gen: 7, prefix: "kub")
+        #expect(!longer && !again)
+        // Another line starts over.
+        let nextLine = fallback.shouldAsk(line: 2, gen: 9, prefix: "kube")
+        let empty = fallback.shouldAsk(line: 2, gen: 10, prefix: "")
+        #expect(nextLine && !empty)
+    }
+
+    @Test func anAnswerIsForTheLastAsk() {
+        var fallback = GhostFallback()
+        _ = fallback.shouldAsk(line: 1, gen: 5, prefix: "kubectl g")
+        _ = fallback.shouldAsk(line: 1, gen: 6, prefix: "kubectl ge")
+        let stale = fallback.answer(gen: 5, line: "kubectl get pods")
+        let current = fallback.answer(gen: 6, line: "kubectl get pods")
+        #expect(stale == nil && current == "kubectl get pods")
+        // After a hit, a longer prefix it doesn't go on with is asked for: older lines may start with it.
+        let other = fallback.shouldAsk(line: 1, gen: 8, prefix: "kubectl gx")
+        // Not a longer line that starts with it: as none.
+        let same = fallback.answer(gen: 8, line: "kubectl gx")
+        let grown = fallback.shouldAsk(line: 1, gen: 9, prefix: "kubectl gxy")
+        #expect(other && same == nil && !grown)
+    }
+}
