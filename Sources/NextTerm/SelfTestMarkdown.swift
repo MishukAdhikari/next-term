@@ -24,7 +24,7 @@ extension SelfTest {
         markdownEnvMaskCheck(c, folder: folder)
         await markdownCommandChecks(c, folder: folder)
         await markdownHeadingChecks(c, folder: folder)
-        markdownDiffChecks(c, folder: folder)
+        await markdownDiffChecks(c, folder: folder)
         await markdownLargeFileNotes(c, folder: folder)
     }
 
@@ -129,6 +129,10 @@ extension SelfTest {
         check(marks.contains(.checkbox(done: false)) && marks.contains(.listBullet) && marks.contains(.rule) && marks.contains(.quoteBar),
               "markdown: a box, a bullet, a rule and a quote bar are drawn", "\(marks)")
         check(editor.preview?.box(at: task + 3) != nil && editor.preview?.box(at: rule) == nil && quote > 0, "markdown: the box is where its brackets are")
+        let code = (previewText as NSString).range(of: "`code`")
+        let tinted = (manager as? CodeLayoutManager)?.tintedRuns?(NSRange(location: 0, length: doc.storage.length)) ?? []
+        check(tinted == [NSRange(location: code.location + 1, length: 4)], "markdown: a code span's text is drawn on a tint, from the line as read",
+              "\(tinted)")
         // An Option character types as typed.
         view.setSelectedRange(NSRange(location: doc.lines.starts[2], length: 0))
         pressKey(window, "ƒ", code: 3, flags: .option)
@@ -324,13 +328,13 @@ extension SelfTest {
     // MARK: diffs
 
     /// An agent's proposed edit of a Markdown file shows its source: its text views are the diff's own, with nothing
-    /// hidden and no heading font.
-    private static func markdownDiffChecks(_ c: TerminalWindowController, folder: URL) {
+    /// hidden and no heading font. The diff is read on a queue of its own, so its sides fill a moment after it opens.
+    private static func markdownDiffChecks(_ c: TerminalWindowController, folder: URL) async {
         let path = canonicalPath(folder.appendingPathComponent("preview.md").path)
         let diff = DiffPane(proposalFor: path, proposal: .init(original: "# Title\n", proposed: "## Title **bold**\n", author: "self-test",
                                                                tag: "markdown", client: nil))
-        let texts = diff.sideTexts
-        check(texts.1.contains("## Title **bold**"), "markdown: a proposed edit of a Markdown file shows its source", texts.1.debugDescription)
+        let shown = await wait(5) { diff.sideTexts.1.contains("## Title **bold**") }
+        check(shown, "markdown: a proposed edit of a Markdown file shows its source", diff.sideTexts.1.debugDescription)
         var views: [NSView] = [diff]
         var styled = false
         while let view = views.popLast() {

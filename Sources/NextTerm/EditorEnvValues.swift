@@ -33,8 +33,11 @@ final class CodeLayoutManager: NSLayoutManager {
     var drawOver: ((NSRange) -> [DrawOver])?
     /// Lines (character ranges) drawn on a tint across the editor: a Markdown fence's.
     var tintedLines: ((NSRange) -> [NSRange])?
+    /// Runs of characters drawn on a tint behind their text, in order: a Markdown code span's.
+    var tintedRuns: ((NSRange) -> [NSRange])?
     private static let bullet = "•" as NSString
     static let fenceTint = NSColor(white: 1, alpha: 0.035)
+    static let codeTint = NSColor(white: 1, alpha: 0.07)
     static let markColor = NSColor(hex: 0x9DA0A8)
     static let ruleColor = NSColor(hex: 0x43454A)
     static let quoteColor = NSColor(hex: 0x4E5157)
@@ -59,14 +62,26 @@ final class CodeLayoutManager: NSLayoutManager {
     }
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        if let tinted = tintedLines?(characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)), !tinted.isEmpty,
-           let width = textContainers.first?.textView?.bounds.width {
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        if let tinted = tintedLines?(characters), !tinted.isEmpty, let width = textContainers.first?.textView?.bounds.width {
             Self.fenceTint.setFill()
             for line in tinted {
                 let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: line, actualCharacterRange: nil), glyphsToShow)
                 guard glyphs.length > 0 else { continue }
                 enumerateLineFragments(forGlyphRange: glyphs) { fragment, _, _, _, _ in
                     NSRect(x: 0, y: fragment.minY + origin.y, width: width, height: fragment.height).fill(using: .sourceOver)
+                }
+            }
+        }
+        if let runs = tintedRuns?(characters), !runs.isEmpty, let container = textContainers.first {
+            Self.codeTint.setFill()
+            let none = NSRange(location: NSNotFound, length: 0)
+            for run in runs {
+                let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: run, actualCharacterRange: nil), glyphsToShow)
+                guard glyphs.length > 0 else { continue }
+                // One rect a row, as a background colour's (a span that wraps is tinted on each of its rows).
+                enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: none, in: container) { rect, _ in
+                    rect.offsetBy(dx: origin.x, dy: origin.y).fill(using: .sourceOver)
                 }
             }
         }

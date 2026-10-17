@@ -4,8 +4,11 @@ import NextTermCore
 /// A Markdown file's look in its editor, from what MarkdownSyntax reads in each line: headings in the editor's own font
 /// at 1.5, 1.3 and 1.15 times its size (bold, as are the levels after them), bold and italic by the font's own traits,
 /// struck text, code spans on a tint, and each item's wrapped rows under its text. All of it is attributes of the text
-/// storage (no undo step, never the dirty flag, never a byte on disk) or the layout manager's temporary ones, so the
-/// grammar's colours stay as they are.
+/// storage (no undo step, never the dirty flag, never a byte on disk), set in one edit batch a slice, so the grammar's
+/// colours (the layout manager's temporary attributes) stay as they are. A code span's tint is drawn behind it from the
+/// lines as read (CodeLayoutManager), never an attribute: the layout manager's own attributes cannot change inside the
+/// storage's batch (it would make their glyphs while the storage is being edited, and raise), and setting one makes
+/// the glyphs of text that may never be shown, which would double each slice of a long file.
 ///
 /// Lines are read and styled in 8 ms slices from the top (the lines on screen first, when the slices have not reached
 /// them), so a long file never holds up typing; a line that reads as plain text and still has the attributes it opened
@@ -18,8 +21,6 @@ final class MarkdownStyler {
     static let sliceBudget: TimeInterval = 0.008
     /// A heading's size, by level, as a multiple of the editor's font size.
     static let headingScales: [CGFloat] = [1, 1.5, 1.3, 1.15, 1, 1, 1]
-    /// Code spans' tint, behind the grammar's colour.
-    static let codeTint = NSColor(white: 1, alpha: 0.07)
     /// Link text, when no grammar colours it (the highlighting bundle is missing).
     static let linkColor = NSColor(hex: 0x548AF7)
 
@@ -78,6 +79,30 @@ final class MarkdownStyler {
     /// The line as last read, if it was: for drawing, which never reads.
     func readLine(_ number: Int) -> MarkdownSyntax.Line? {
         lines.indices.contains(number) ? lines[number] : nil
+    }
+
+    /// The code spans in a range of the text, in order, from the lines as last read: drawn on a tint behind their text,
+    /// in Live Preview and in Source, and only once they are on screen.
+    func codeSpans(in range: NSRange) -> [NSRange] {
+        let index = self.index()
+        guard index.count == lines.count, index.count > 0, range.location <= index.length else { return [] }
+        let first = index.line(at: range.location)
+        let last = min(index.line(at: max(range.location, NSMaxRange(range) - 1)), index.count - 1)
+        var spans: [NSRange] = []
+        for number in first...last {
+            guard let line = lines[number] else { continue }
+            let start = index.starts[number]
+            for span in line.spans where span.style.contains(.code) && NSMaxRange(span.range) <= line.length {
+                let run = NSRange(location: start + span.range.location, length: span.range.length)
+                // Spans that touch are one tint (bold code beside plain code).
+                if let previous = spans.last, NSMaxRange(previous) == run.location {
+                    spans[spans.count - 1].length += run.length
+                } else {
+                    spans.append(run)
+                }
+            }
+        }
+        return spans
     }
 
     /// A line as read now, for a command. Where the slices have not reached it yet, the lines before it are read for
@@ -244,17 +269,15 @@ final class MarkdownStyler {
         }
     }
 
-    /// One line's attributes from scratch: the base font (a heading's for a heading line), its paragraph style, then its
-    /// spans' fonts, strikethrough and tints.
+    /// One line's attributes from scratch: the base font (a heading's for a heading line), its paragraph style and (with
+    /// no grammar) colour, then its spans' fonts, strikethrough and link colour.
     private func apply(_ line: MarkdownSyntax.Line, at range: NSRange) {
         guard range.length > 0 else { return }
         let heading = line.headingLevel
         storage.addAttribute(.font, value: fonts.font(heading: heading), range: range)
         storage.addAttribute(.paragraphStyle, value: paragraphStyle(line.hang, heading), range: range)
         storage.removeAttribute(.strikethroughStyle, range: range)
-        let content = NSRange(location: range.location, length: line.length)
-        layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: content)
-        if colorsLinks { layoutManager?.removeTemporaryAttribute(.foregroundColor, forCharacterRange: content) }
+        if colorsLinks, let color = EditorDocument.attributes[.foregroundColor] { storage.addAttribute(.foregroundColor, value: color, range: range) }
         guard !line.spans.isEmpty else { return }
         // Each character's style: spans can nest (`***x***` is bold inside italic).
         var styles = [MarkdownSyntax.Style](repeating: [], count: line.length)
@@ -276,8 +299,7 @@ final class MarkdownStyler {
         let strong = style.contains(.strong), emphasis = style.contains(.emphasis)
         if strong || emphasis { storage.addAttribute(.font, value: fonts.font(heading: heading, strong: strong, emphasis: emphasis), range: run) }
         if style.contains(.strikethrough) { storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: run) }
-        if style.contains(.code) { layoutManager?.addTemporaryAttribute(.backgroundColor, value: Self.codeTint, forCharacterRange: run) }
-        if style.contains(.link), colorsLinks { layoutManager?.addTemporaryAttribute(.foregroundColor, value: Self.linkColor, forCharacterRange: run) }
+        if style.contains(.link), colorsLinks { storage.addAttribute(.foregroundColor, value: Self.linkColor, range: run) }
     }
 }
 

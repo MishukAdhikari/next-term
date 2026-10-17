@@ -1119,6 +1119,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         self.preview = preview
         (spacing as? MarkdownSpacing)?.hiddenCharacters = { [weak preview] range in preview?.hiddenCharacters(in: range) ?? [] }
         layoutManager.tintedLines = { [weak preview] range in preview?.tintedLines(in: range) ?? [] }
+        layoutManager.tintedRuns = { [weak styler] range in styler?.codeSpans(in: range) ?? [] }
         styler.onLinesChanged = { [weak preview] lines in preview?.linesChanged(lines) }
         textView.onSelectionMoved = { [weak preview] stillSelecting in preview?.selectionChanged(stillSelecting: stillSelecting) }
         // Scrolled to lines the slices have not reached yet (a link opened deep in, a file just opened), those come first.
