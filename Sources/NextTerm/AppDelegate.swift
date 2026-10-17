@@ -495,6 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             openAtLaunch(kind: kind, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
+            GhostPreferences.testIsOn = false // its tabs record nothing, and → moves the cursor
             return SelfTestRestore.run(restore: restore)
         }
         #endif

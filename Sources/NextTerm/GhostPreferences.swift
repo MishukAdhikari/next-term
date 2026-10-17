@@ -9,25 +9,20 @@ enum GhostPreferences {
     /// Next Term suggests while you type, and keeps the record of your commands it suggests from (CommandHistoryStore).
     /// On by default (Settings › Terminal › While typing, or the first-use hint's Turn Off).
     static var isOn: Bool {
-        #if DEBUG
         if let testIsOn { return testIsOn }
-        #endif
         return UserDefaults.standard.object(forKey: onKey) as? Bool ?? true
     }
 
-    #if DEBUG
-    /// The self-test's switch, over the setting.
+    /// The self-test's switch, over the setting: off for every part of it but suggestions' own, so a key another part
+    /// presses (→, End) does what it always did. Never set outside the self-test.
     nonisolated(unsafe) static var testIsOn: Bool?
-    #endif
 
     /// Turns suggestions on or off: off, every suggestion and notice goes at once, nothing more is recorded, and a plugin's
     /// suggestions Next Term turned off come back; on, Next Term's show again. Tabs open now keep their hook, which only
     /// reports.
     static func set(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: onKey)
-        #if DEBUG
         if testIsOn != nil { testIsOn = on }
-        #endif
         GhostSession.syncAll()
         NotificationCenter.default.post(name: changed, object: nil)
     }

@@ -87,6 +87,8 @@ enum SelfTest {
     private static var failures = 0
 
     static func run() {
+        // Suggestions while typing only in their own part (ghostText): elsewhere → and End move the cursor, as before.
+        GhostPreferences.testIsOn = false
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()

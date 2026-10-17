@@ -17,7 +17,7 @@ extension SelfTest {
         defer { SecretMask.current = savedMask }
         await ghostReadTabChecks(c, dir: dir)
         GhostPreferences.testIsOn = true
-        defer { GhostPreferences.testIsOn = nil }
+        defer { GhostPreferences.testIsOn = false }
         await ghostRecordChecks(c, dir: dir)
         await ghostOverlayChecks(c, dir: dir)
         await ghostKeyChecks(c, dir: dir)
