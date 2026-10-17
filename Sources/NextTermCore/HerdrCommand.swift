@@ -73,6 +73,16 @@ public enum HerdrCommand: Equatable, Sendable {
     /// Stands for the text (stdin) in `attempts`.
     static let textMark = "$T"
 
+    /// Why text cannot go to one of herdr's agents, or nil: over `maxTextBytes`, or holding a stored key's value, which
+    /// on a host would be herdr's argument while herdr runs, where others there can see it in `ps`.
+    public static func textRefusal(_ text: String, mask: SecretMask = .current) -> String? {
+        if text.utf8.count > maxTextBytes { return "The text is longer than 64 KB; send it in parts. Nothing was sent." }
+        if !mask.isEmpty, mask.mask(text) != text {
+            return "The text holds a stored key's value: for a herdr agent it would be herdr's argument on the host while it runs, where others can see it in ps. run_with_secrets runs a command with keys in a tab instead. Nothing was sent."
+        }
+        return nil
+    }
+
     /// The command's first verb, as its answer names it ("agent read").
     public var verb: String {
         let call = attempts[0][0]

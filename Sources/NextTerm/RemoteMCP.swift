@@ -141,16 +141,57 @@ enum RemoteMCP {
         }
         let directory = (arguments["directory"] as? String)?.trimmingCharacters(in: .whitespaces) ?? found.directory
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
-        let session = (arguments["session"] as? String).map(RemoteShell.safeName)
         let command = (arguments["command"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
         if command.contains("\n") { return reply(fail("The command must be one line.")) }
         if !command.isEmpty && mode == .herdr {
-            return reply(fail("A herdr tab shows herdr itself, not a shell: start agents in herdr (on the host: herdr agent start), or open the tab with keep tmux or off to run a command."))
+            return reply(fail("A herdr tab shows herdr itself, not a shell: give herdr's agents work with send_to_tab on their ids from list_tabs, or open the tab with keep tmux or off to run a command."))
         }
-        if !command.isEmpty && session != nil {
+        let named = arguments["session"] as? String
+        if !command.isEmpty && named != nil {
             return reply(fail("Give either session (attach to what runs there) or command (a new session), not both."))
         }
-        if session != nil && mode != .tmux { return reply(fail("session attaches to Next Term's tmux sessions: use it with keep tmux.")) }
+        if named != nil && mode == .off {
+            return reply(fail("session is one of Next Term's tmux sessions (keep tmux) or one of herdr's sessions (keep herdr), from host_sessions."))
+        }
+        // A herdr session only as herdr lists it, never made by its name: asked on the open connection.
+        if mode == .herdr, let named {
+            return herdrSession(named, on: found) { result in
+                switch result {
+                case .failure(let error): reply(fail(error.text))
+                case .success(let session):
+                    open(found, directory: directory, mode: mode, session: nil, herdrSession: session, command: "",
+                         arguments: arguments, caller: caller, reply: reply)
+                }
+            }
+        }
+        open(found, directory: directory, mode: mode, session: named.map(RemoteShell.safeName), herdrSession: nil, command: command,
+             arguments: arguments, caller: caller, reply: reply)
+    }
+
+    /// The herdr session `name` names on `host`, as `herdr session list --json` lists it there: nil for herdr's default.
+    /// Refused while no tab on the host is connected (checks never log in), and for a name herdr does not list.
+    private static func herdrSession(_ name: String, on host: RemoteHost, _ done: @escaping (Result<String?, MCPControl.MCPError>) -> Void) {
+        guard HerdrTarget.isSession(name) else {
+            return done(.failure(.init("“\(name)” is not a herdr session name (letters, digits, _ and -); host_sessions lists herdr's sessions.")))
+        }
+        guard RemoteConnection.masterAlive(host) else {
+            return done(.failure(.init("To open a herdr session by name, list host_sessions once a tab on \(host.name) is connected: Next Term opens only a session herdr lists.")))
+        }
+        RemoteConnection.run(host, script: RemoteShell.sessionsScript, timeout: 25) { output in
+            guard let listed = RemoteSession.parseList(output.output) else {
+                return done(.failure(.init("Could not list herdr's sessions on \(host.name): \(output.problem)")))
+            }
+            guard let session = listed.herdrSessions?.first(where: { $0.name == name }) else {
+                let known = (listed.herdrSessions ?? []).map(\.name).joined(separator: ", ")
+                let lists = known.isEmpty ? "" : " (it lists \(known))"
+                return done(.failure(.init("herdr on \(host.name) lists no session “\(name)”\(lists); nothing was opened.")))
+            }
+            done(.success(session.isDefault ? nil : session.name))
+        }
+    }
+
+    private static func open(_ found: RemoteHost, directory: String, mode: KeepMode, session: String?, herdrSession: String?,
+                             command: String, arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
             ?? app.controllers.first ?? app.openWindow(directory: nil, forAgent: true)
@@ -158,7 +199,8 @@ enum RemoteMCP {
         // (another tab may be logging in to this host already: then that one), selected even in the window they are in.
         // It waits for their click like any tab an agent opened, so nothing they were typing goes to ssh (AgentArrival).
         let mustLogIn = !RemoteConnection.masterAlive(found)
-        let tab = controller.addRemoteTab(RemoteTab(host: found, directory: directory, session: session, keep: mode), select: false, byAgent: true)
+        let remote = RemoteTab(host: found, directory: directory, session: session, keep: mode, herdrSession: herdrSession)
+        let tab = controller.addRemoteTab(remote, select: false, byAgent: true)
         if mustLogIn {
             let asking = RemoteConnection.loginTab(for: found) ?? tab
             if let owner = MCPControl.controller(of: asking) {
@@ -171,8 +213,9 @@ enum RemoteMCP {
         MCPControl.driven.insert(tab.id)
         if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
         controller.refresh()
-        let answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "host": found.name, "directory": directory,
+        var answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "host": found.name, "directory": directory,
                                      "keep": mode.rawValue, "session": tab.remote?.session ?? ""]
+        if mode == .herdr { answer["session"] = herdrSession ?? NSNull() } // herdr's session; null for its default
         guard !command.isEmpty else { return reply(ok(answer)) }
         // Type it only at the host's shell prompt: never into ssh asking the user for a password.
         waitForPrompt(tab, until: TerminalTab.now + 45) { ready in
@@ -257,11 +300,12 @@ enum RemoteMCP {
         for (session, report) in reports {
             guard let report, case .agents(let listed) = report.listing else { continue }
             answered = true
+            let shown = tab(showing: session)
             for agent in listed {
-                var entry: [String: Any] = ["pane": agent.paneID, "agent": agent.name, "state": agent.status.rawValue]
-                if let title = agent.title { entry["title"] = title }
-                if let directory = agent.directory { entry["directory"] = directory }
+                var entry = HerdrMCP.fields(agent)
                 if let name = session ?? defaultName { entry["session"] = name }
+                // Its id while a tab follows this session's agents: the tab tools then take it.
+                if let shown, shown.followsHerdr { entry["id"] = HerdrTarget(tabID: shown.id.uuidString, pane: agent.paneID).id }
                 agents.append(entry)
             }
         }

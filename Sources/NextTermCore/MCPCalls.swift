@@ -10,10 +10,27 @@ public final class MCPCalls: @unchecked Sendable {
     public struct Request {
         public let tool: String
         public let arguments: [String: Any]
+        /// What the bridge (`nxtrm mcp`) says of the agent that called, from its own environment: its herdr pane
+        /// (`herdr_pane`) and herdr's socket (`herdr_socket`) when it runs in one of herdr's panes. It only marks the
+        /// agent's own entry ("you") and keeps it from typing into its own pane; it grants nothing.
+        public let caller: [String: String]
 
-        public init(tool: String, arguments: [String: Any]) {
+        public init(tool: String, arguments: [String: Any], caller: [String: String] = [:]) {
             self.tool = tool
             self.arguments = arguments
+            self.caller = caller
+        }
+
+        /// A request line's object: `tool`, `arguments`, and `caller`'s text values (others are dropped); nil without a tool.
+        public static func parse(_ object: [String: Any]) -> Request? {
+            guard let tool = object["tool"] as? String else { return nil }
+            let said = object["caller"] as? [String: Any] ?? [:]
+            var caller: [String: String] = [:]
+            for (key, value) in said {
+                guard let text = value as? String, key.count <= 40, text.count <= 1024 else { continue }
+                caller[key] = text
+            }
+            return Request(tool: tool, arguments: object["arguments"] as? [String: Any] ?? [:], caller: caller)
         }
     }
 

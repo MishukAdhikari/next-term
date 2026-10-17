@@ -1571,7 +1571,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
                                stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
         let onScreen = tab.herdrTracker.isOnScreen(agent.paneID)
-        guard settings.shouldNotify(notice, appActive: active, tabVisible: onScreen) else { return }
+        let id = HerdrTarget(tabID: tab.id.uuidString, pane: agent.paneID).id
+        // An agent an MCP agent drives is quiet while Next Term is in front; its herdr neighbours are not.
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: onScreen, drivenByAgent: HerdrMCP.isDriven(id)) else { return }
         let name = Typography.shortened(agent.name, to: 60)
         let title = Typography.shortened(tab.title, to: 80)
         let place = Typography.shortened(controller.placeName(of: tab), to: 60)
@@ -1587,7 +1589,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
         }
         content.subtitle = whereShown.joined(separator: " — ")
-        let id = HerdrTarget(tabID: tab.id.uuidString, pane: agent.paneID).id
         let key = content.title + "\u{0}" + content.body
         if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
         lastHerdrNotified[id] = (Date(), key)

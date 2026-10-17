@@ -120,23 +120,22 @@ final class MCPControlServer: @unchecked Sendable {
         }
         if !ended, line.count > Self.requestLimit { return refuseTooLarge(fd, buffer: &buffer) }
         guard let request else { return }
-        let tool = request.tool, arguments = request.arguments
+        let tool = request.tool, arguments = request.arguments, herdr = request.caller
         if call.asked(request) {
             DispatchQueue.main.async {
                 guard call.starts() else { return } // the quit answered it first
-                MCPControl.call(tool, arguments, caller: peer) { result in call.finish(result) }
+                MCPControl.call(tool, arguments, caller: peer, herdrCaller: herdr) { result in call.finish(result) }
             }
             call.answered.wait()
         }
         send(call.answer ?? MCPServer.CallResult(text: "No answer", isError: true), on: fd)
     }
 
-    /// The tool and arguments of a whole request line, or nil.
+    /// The tool, arguments and caller of a whole request line, or nil.
     private static func request(in line: Data) -> MCPCalls.Request? {
         guard let end = line.firstIndex(of: 0x0A),
-              let object = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any],
-              let tool = object["tool"] as? String else { return nil }
-        return MCPCalls.Request(tool: tool, arguments: object["arguments"] as? [String: Any] ?? [:])
+              let object = (try? JSONSerialization.jsonObject(with: line[..<end])) as? [String: Any] else { return nil }
+        return MCPCalls.Request.parse(object)
     }
 
     /// As Next Term quits (KTD17): it takes no new connection, answers every call it is serving with `answer`, calls posted
@@ -206,6 +205,7 @@ enum MCPControl {
     /// You pressed a key in the tab, or pasted into it: what happens there is yours again.
     static func typedByUser(_ tab: TerminalTab) {
         driven.remove(tab.id)
+        HerdrMCP.userTyped(in: tab) // its herdr agents too
         MCPRestoredTabs.typedByUser(tab) // a restored tab's details count your commands from here (U13)
     }
 
@@ -221,7 +221,7 @@ enum MCPControl {
     }
 
     /// Input went in: watch for the work it starts (a command can start and end between two looks).
-    private static func sent(to tab: TerminalTab) {
+    static func sent(to tab: TerminalTab) {
         SecretRequests.tabGotInput(tab.id) // its run_with_secrets grants end
         driven.insert(tab.id)
         lastSent[tab.id] = Sent(at: TerminalTab.now, commands: tab.status.commandsStarted)
@@ -276,13 +276,19 @@ enum MCPControl {
     /// window names it, and which remote connection (its grant id) a Decline and Stop Asking stops. The
     /// local socket passes none, so a local agent's change always waits for Approve on the Mac; the remote
     /// door passes its connection's policy, name and grant id (see MCPApproval).
-    static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, approval: MCPApproval = .askOnMac,
-                     requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
+    /// `herdrCaller`: what the bridge said of the agent that called, its herdr pane (MCPCalls.Request.caller).
+    static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, herdrCaller: [String: String] = [:],
+                     approval: MCPApproval = .askOnMac, requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         // Safe mode runs only tools that read; an update's wait refuses new work elsewhere (U13).
         if let refusal = MCPRestoredTabs.refusal(tool, arguments) { return reply(fail(refusal)) }
+        // One of herdr's agents: its id stands where a tab's does, its tab's refusals first (HerdrMCP).
+        if let raw = arguments["tab_id"] as? String, let target = HerdrTarget.parse(raw) {
+            if let refusal = MCPRestoredTabs.refusal(tool, ["tab_id": target.tabID]) { return reply(fail(refusal)) }
+            if HerdrMCP.route(tool, target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) { return }
+        }
         switch tool {
-        case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
+        case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller, herdrCaller: herdrCaller))
         case "list_projects": reply(listProjects())
         case "read_tab": reply(withTab(arguments) { tab in readTab(tab, lines: arguments["lines"] as? Int ?? 80) })
         case "wait_for_tab":
@@ -333,6 +339,9 @@ enum MCPControl {
         return allTabs.first { $0.id.uuidString.lowercased() == id }
     }
 
+    /// The tab with this id (as list_tabs gives it), or nil.
+    static func tab(withID id: String) -> TerminalTab? { findTab(id) }
+
     static func controller(of tab: TerminalTab) -> TerminalWindowController? {
         app.controllers.first { $0.tabs.contains { $0 === tab } }
     }
@@ -352,7 +361,8 @@ enum MCPControl {
         return state.rawValue
     }
 
-    static func describe(_ tab: TerminalTab, in controller: TerminalWindowController, caller: TerminalTab?) -> [String: Any] {
+    static func describe(_ tab: TerminalTab, in controller: TerminalWindowController, caller: TerminalTab?,
+                         herdrCaller: [String: String] = [:]) -> [String: Any] {
         var info: [String: Any] = [
             "id": tab.id.uuidString.lowercased(),
             "title": field(tab.title),
@@ -394,22 +404,24 @@ enum MCPControl {
                 info["herdr_missing_reason"] = "\(why). Next Term never installs it: \(RemoteShell.herdrInstallPage)"
             }
             if remote.keep == .tmux, tab.isKept { info["session"] = remote.session }
-            if remote.keep == .herdr, !tab.herdrAgents.isEmpty {
-                info["herdr_agents"] = tab.herdrAgents.map { ["pane": $0.paneID, "agent": $0.name, "state": $0.status.rawValue] }
-            }
+            if remote.keep == .herdr, let session = remote.herdrSession { info["herdr_session"] = session }
             // herdr doesn't answer (or needs a restart, or is on the host now): its agents' states are unknown.
             if remote.keep == .herdr, let note = tab.herdrWatch.note { info["herdr_note"] = note }
+        }
+        // herdr's agents, each with an id of its own (HerdrMCP), on a server or in a tab on this Mac.
+        if tab.followsHerdr, !tab.herdrTracker.agents.isEmpty {
+            info["herdr_agents"] = tab.herdrTracker.agents.map { HerdrMCP.entry($0, in: tab, caller: herdrCaller) }
         }
         return info
     }
 
-    private static func listTabs(project: String?, caller: TerminalTab?) -> MCPServer.CallResult {
+    private static func listTabs(project: String?, caller: TerminalTab?, herdrCaller: [String: String]) -> MCPServer.CallResult {
         let wanted = project.map { canonicalPath(($0 as NSString).expandingTildeInPath) }
         let key = NSApp.keyWindow
         let windows: [[String: Any]] = app.controllers.compactMap { controller in
             if let wanted, controller.project != wanted { return nil }
             var window: [String: Any] = [
-                "tabs": controller.tabs.map { describe($0, in: controller, caller: caller) },
+                "tabs": controller.tabs.map { describe($0, in: controller, caller: caller, herdrCaller: herdrCaller) },
                 "front": controller.window === key,
             ]
             if let project = controller.project {
@@ -633,7 +645,7 @@ enum MCPControl {
         !tab.exited && !tab.disconnected && tab.view.acceptsInput && (tab.remote == nil || tab.remoteConnected)
     }
 
-    private static func target(_ arguments: [String: Any], caller: TerminalTab?) -> Result<TerminalTab, MCPError> {
+    static func target(_ arguments: [String: Any], caller: TerminalTab?) -> Result<TerminalTab, MCPError> {
         guard let tab = findTab(arguments["tab_id"]) else { return .failure(MCPError("No tab with that id; list_tabs shows them.")) }
         if tab === caller { return .failure(MCPError("That is your own tab; type into another one.")) }
         if tab.disconnected { return .failure(MCPError("That tab lost its connection to its host; it reconnects by itself (tmux, herdr) or when someone presses Return in it.")) }

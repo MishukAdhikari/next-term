@@ -161,9 +161,66 @@ enum HerdrAgentMenu {
                 entry.toolTip = mask.mask(item.tooltip)
                 entry.image = StatusGlyph.image(for: item.state)
                 menu.addItem(entry)
+                if let answers = answerItem(item) { menu.addItem(answers) }
             }
         }
         return menu
+    }
+
+    /// Under one of herdr's agents that waits on a decision whose choices were read: Answer, with a choice each ("1 Yes").
+    /// Choosing one answers through the same path as answer_agent (HerdrMCP.answer), which reads the pane again first;
+    /// herdr's view does not move. A choice that no longer fits says why in the tab.
+    private static func answerItem(_ item: AgentQueue.Item) -> NSMenuItem? {
+        guard case let .herdr(id, pane) = item.target, item.state == .attention, !item.choices.isEmpty,
+              let tab = tab(id), let asked = tab.herdrTracker.question(pane) else { return nil }
+        let question = HerdrMCP.questionID(asked, pane: pane, in: tab)
+        let choices = NSMenu(title: "Answer")
+        for (index, choice) in item.choices.enumerated() {
+            let entry = NSMenuItem(title: "\(index + 1) " + SecretMask.current.mask(choice), action: #selector(Target.answer(_:)),
+                                   keyEquivalent: "")
+            entry.target = Target.shared
+            entry.representedObject = Answer(tab: tab, pane: pane, question: question, choice: index + 1)
+            choices.addItem(entry)
+        }
+        let answers = NSMenuItem(title: "Answer", action: nil, keyEquivalent: "")
+        answers.indentationLevel = 2
+        answers.submenu = choices
+        return answers
+    }
+
+    /// Answers `pane`'s question as the user's own act, from a menu, Peek or a notice: the agent is the user's again, and
+    /// what could not be answered is said in the tab.
+    static func answer(tab: TerminalTab, pane: String, question: String, choice: Int, done: ((Bool) -> Void)? = nil) {
+        let id = HerdrTarget(tabID: tab.id.uuidString, pane: pane).id
+        HerdrMCP.answer(tab, pane: pane, expected: question, choice: choice, answer: nil, typing: { HerdrMCP.userActed(on: id) }) { said in
+            switch said {
+            case .answered:
+                done?(true)
+            case .refused(let refusal):
+                NSSound.beep()
+                tab.view.showNote(refusal.sentence)
+                done?(false)
+            case .failed(let problem):
+                NSSound.beep()
+                tab.view.showNote(problem)
+                done?(false)
+            }
+        }
+    }
+
+    /// One choice of an agent's question in a menu.
+    private final class Answer: NSObject {
+        weak var tab: TerminalTab?
+        let pane: String
+        let question: String
+        let choice: Int
+
+        init(tab: TerminalTab, pane: String, question: String, choice: Int) {
+            self.tab = tab
+            self.pane = pane
+            self.question = question
+            self.choice = choice
+        }
     }
 
     /// ⌃⌘A: the menu over the window's terminal, the first agent selected for Return (the first that needs you, when one
@@ -230,6 +287,11 @@ enum HerdrAgentMenu {
             HerdrAgentMenu.lastNext = choice.key
             NSApp.activate(ignoringOtherApps: true)
             HerdrAgentMenu.go(to: choice.target)
+        }
+
+        @objc func answer(_ sender: NSMenuItem) {
+            guard let answer = sender.representedObject as? Answer, let tab = answer.tab, !tab.exited else { return NSSound.beep() }
+            HerdrAgentMenu.answer(tab: tab, pane: answer.pane, question: answer.question, choice: answer.choice)
         }
 
         @objc func show(_ sender: NSMenuItem) {

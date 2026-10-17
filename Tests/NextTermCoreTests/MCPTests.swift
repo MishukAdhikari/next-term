@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NextTermCore
@@ -1443,5 +1444,71 @@ struct SplitMix: RandomNumberGenerator {
         z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
         z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
         return z ^ (z >> 31)
+    }
+}
+
+/// herdr's agents over MCP: no tool of their own, and not a character more in the instructions. An agent's id goes where
+/// a tab's id goes, and the tools that take one say so.
+@Suite struct MCPHerdrAgentTests {
+    func description(_ name: String) -> String { MCPServer.tool(named: name)?.description ?? "" }
+
+    @Test func noNewToolAndTheInstructionsOnlyNameThem() {
+        // 31 + 12 + 4 + 4, as before herdr's agents had ids.
+        #expect(MCPServer.tools.count == 51)
+        #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
+        // Five characters more, and no sentence: list_tabs' description says the rest.
+        #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))
+        #expect(MCPServer.instructions.components(separatedBy: "herdr").count == 2)
+        // Typing into an agent is as destructive as typing into a tab, and focus_tab still asks first.
+        #expect(MCPServer.tool(named: "send_to_tab")?.destructive == true && MCPServer.isControlTool("focus_tab"))
+    }
+
+    @Test func theToolsThatTakeAnAgentsIdSaySo() {
+        for name in ["list_tabs", "read_tab", "wait_for_tab", "send_to_tab", "press_keys", "focus_tab", "show_tab", "close_tab", "new_remote_tab"] {
+            let said = description(name)
+            #expect(said.contains("herdr agent's id") || said.contains("herdr_sessions"), "\(name)")
+        }
+        #expect(description("host_sessions").contains("herdr_sessions") && description("host_sessions").contains("herdr agent's id"))
+        #expect(description("new_remote_tab").contains("herdr_sessions from host_sessions"))
+        #expect(description("list_tabs").contains("read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab and focus_tab take that id"))
+        // The schema's words for it, on exactly the seven tools an agent's id works with.
+        let taking = MCPServer.tools.filter { $0.inputSchema.contains("or a herdr agent's id from its herdr_agents") }.map(\.name)
+        #expect(Set(taking) == ["read_tab", "wait_for_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "focus_tab"])
+    }
+
+    @Test func theBridgeSaysWhichHerdrPaneTheCallerRunsIn() throws {
+        let caller = MCPServer.herdrCaller(["HERDR_PANE_ID": "w1:p2", "HERDR_SOCKET_PATH": "/Users/me/.config/herdr/herdr.sock", "PATH": "/bin"])
+        #expect(caller == ["herdr_pane": "w1:p2", "herdr_socket": "/Users/me/.config/herdr/herdr.sock"])
+        #expect(MCPServer.herdrCaller(["HERDR_PANE_ID": "w1;p2"]).isEmpty && MCPServer.herdrCaller([:]).isEmpty)
+        let line = try #require(MCPServer.request(tool: "list_tabs", arguments: [:], caller: caller))
+        let object = try #require(try JSONSerialization.jsonObject(with: line.dropLast()) as? [String: Any])
+        let request = try #require(MCPCalls.Request.parse(object))
+        #expect(request.tool == "list_tabs" && request.caller == caller)
+        // Only text: anything else in caller is dropped, and a line with none has none.
+        let odd = try #require(MCPCalls.Request.parse(["tool": "read_tab", "caller": ["herdr_pane": 7, "herdr_socket": "/s", "x": ["y": 1]]]))
+        #expect(odd.caller == ["herdr_socket": "/s"])
+        #expect(MCPCalls.Request.parse(["tool": "read_tab", "arguments": ["tab_id": "t"]])?.caller == [:])
+        #expect(MCPCalls.Request.parse(["arguments": [:]]) == nil)
+        let plain = try #require(MCPServer.request(tool: "read_tab", arguments: ["tab_id": "t"]))
+        #expect(!String(decoding: plain, as: UTF8.self).contains("caller"))
+    }
+
+    @Test func anAgentsIdIsToldFromATabsId() throws {
+        // A tab's id goes to the tab tools; an agent's to herdr's.
+        #expect(HerdrTarget.parse("5c0d9a1e-0000-4000-8000-0000000000e1") == nil)
+        let agent = try #require(HerdrTarget.parse("5c0d9a1e-0000-4000-8000-0000000000e1/w2:p1"))
+        #expect(agent.pane == "w2:p1" && HerdrTarget.isPane(agent.pane))
+    }
+}
+
+/// Text for one of herdr's agents: on a host it is herdr's argument while herdr runs, so a stored key's value never goes.
+@Suite struct HerdrTextRefusalTests {
+    @Test func aStoredKeyOrTooMuchTextIsRefusedAndNothingElse() {
+        let value = "Rk7vQp2xLm9nWz4cTb8hYq3sJ6dF"
+        let key = SymmetricKey(size: .bits256)
+        let mask = SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
+        #expect(HerdrCommand.textRefusal("deploy with \(value)", mask: mask)?.contains("stored key") == true)
+        #expect(HerdrCommand.textRefusal(String(repeating: "a", count: HerdrCommand.maxTextBytes + 1), mask: mask)?.contains("64 KB") == true)
+        #expect(HerdrCommand.textRefusal("run the tests", mask: mask) == nil)
     }
 }
