@@ -95,6 +95,60 @@ import Testing
         #expect(file.path == main + "/todo/2026-10-15-x.md" && !exists(linked + "/todo"))
     }
 
+    @Test func aBareRepositorysWorktreeKeepsItsTasksItself() throws {
+        guard let git = GitRunner.locateGit() else { return }
+        let repo = try TemporaryRepository(git: git)
+        defer { repo.remove() }
+        // proj/.bare is git's folder and proj/main its worktree: there is no main checkout to share.
+        let bare = repo.base + "/proj/.bare", worktree = repo.base + "/proj/main"
+        #expect(repo.run(["clone", "--bare", "-q", repo.path, bare]) == 0)
+        #expect(repo.run(["-C", bare, "worktree", "add", "-q", worktree]) == 0)
+        let main = canonicalPath(worktree)
+        let places = ProtectedPlaces(home: repo.base + "/home")
+        let resolution = TodoFolder.resolve(project: worktree, settings: TaskSettings(), places: places)
+        #expect(resolution == .inProject(URL(fileURLWithPath: main + "/todo"), root: main, mustCreate: true))
+        let file = try TodoFolder.create("x\n", names: names("x"), in: resolution)
+        #expect(file.path == main + "/todo/2026-10-15-x.md" && !exists(bare + "/todo"))
+    }
+
+    @Test func aProjectFolderThatIsGoneIsNeverMadeAgain() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let project = dir + "/project"
+        // Found while the project was there (the sheet stays open), then the folder was removed.
+        let stale = TodoFolder.resolve(project: project, settings: TaskSettings(), places: places(dir))
+        try FileManager.default.removeItem(atPath: project)
+        let gone = TodoFolder.resolve(project: project, settings: TaskSettings(), places: places(dir))
+        guard case .refused(let why) = gone else {
+            Issue.record("\(gone)")
+            return
+        }
+        #expect(why == "The project folder \(project) is not there.")
+        #expect(throws: TodoFolder.Failure.projectMissing(project)) {
+            try TodoFolder.create("x\n", names: names("x"), in: stale, home: dir + "/home")
+        }
+        #expect(!exists(project))
+    }
+
+    @Test func aFolderNextTermCantOpenIsNotCalledMissing() throws {
+        let dir = try folder()
+        let locked = dir + "/locked"
+        try FileManager.default.createDirectory(atPath: locked + "/Todo", withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked)
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+        // A folder above it can't be gone through (EACCES): the folder may be there, so it is not called missing.
+        let shared = TodoFolder.Resolution.shared(URL(fileURLWithPath: locked + "/Todo", isDirectory: true), project: nil)
+        #expect(throws: TodoFolder.Failure.unreadable(locked + "/Todo")) {
+            try TodoFolder.create("x", names: names("x"), in: shared, home: "/nowhere")
+        }
+        // macOS's own refusal names the pane that allows it.
+        let denied = TodoFolder.Failure.denied("~/Documents/Todo", .filesAndFolders).errorDescription ?? ""
+        #expect(denied.hasSuffix("System Settings › Privacy & Security › Files and Folders."))
+    }
+
     @Test func anAbsoluteFolderIsUsedOnlyWhenItIsThereAndNeverMade() throws {
         let dir = try folder()
         defer { try? FileManager.default.removeItem(atPath: dir) }
@@ -120,7 +174,7 @@ import Testing
         // In a protected place it is not looked at before the user adds a task: it can't be told missing yet.
         let documents = dir + "/home/Documents/Todo"
         let protected = TodoFolder.resolve(project: project, settings: TaskSettings(folder: documents), places: places(dir))
-        #expect(protected == .shared(URL(fileURLWithPath: documents), project: project))
+        #expect(protected == .shared(URL(fileURLWithPath: documents, isDirectory: true), project: project))
         #expect(throws: TodoFolder.Failure.missing(documents)) { try TodoFolder.create("x", names: names("x"), in: protected, home: "/nowhere") }
         #expect(!exists(documents))
     }

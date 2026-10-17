@@ -59,8 +59,8 @@ enum TasksMCP {
     }
 
     /// The project the task is for: the one named (its top folder for a folder inside it), else the caller's window's
-    /// (nil for a window with no project), else the only one open. nil when there is none: the folder for windows with
-    /// no project, if the user chose one.
+    /// (nil for a window with no project), else the only one open. nil when none is open: the folder for windows with
+    /// no project, if the user chose one. Several open and none named is refused.
     static func project(_ raw: Any?, callerWindow: TerminalWindowController?, projects: MCPProjects) -> Result<String?, MCPToolError> {
         if raw != nil {
             switch projects.project(raw) {
@@ -69,8 +69,12 @@ enum TasksMCP {
             }
         }
         if let callerWindow { return .success(callerWindow.project) }
-        if case .success(let folder) = projects.project(nil) { return .success(folder) }
-        return .success(nil)
+        switch projects.project(nil) {
+        case .success(let folder): return .success(folder)
+        // None open: a task outside projects. Several: the agent names one, as every project tool asks.
+        case .failure(let error):
+            return projects.open.isEmpty ? .success(nil) : .failure(MCPToolError(error.text + " Nothing was written."))
+        }
     }
 
     /// Why nothing was written, for the agent.
@@ -82,22 +86,14 @@ enum TasksMCP {
         }
     }
 
-    /// The longest file shown whole in the approval window, in lines; a longer one is cut there and says so.
-    static let shownLines = 40
-
     /// What the approval window says: the file it creates (and the folder, when that is new), the note when the same
-    /// task was added a minute ago, then the file's text as it will be written.
+    /// task was added a minute ago, then the whole file's text as it will be written (the window scrolls a long one).
     static func details(_ plan: TaskWriter.Plan) -> String {
         var said: [String] = []
         if plan.duplicate { said.append("Added a minute ago. Add again? The same task went to \(plan.shownFolder) less than a minute ago.") }
         let folder = plan.resolution.createsFolder ? ", and the \(plan.shownFolder.dropLast()) folder" : ""
         said.append("Creates \(plan.shown)\(folder):")
-        var lines = plan.text.components(separatedBy: "\n")
-        if lines.last == "" { lines.removeLast() }
-        if lines.count > shownLines {
-            let more = lines.count - shownLines
-            lines = Array(lines.prefix(shownLines)) + ["… and \(more) more line\(more == 1 ? "" : "s")"]
-        }
-        return said.joined(separator: "\n") + "\n\n" + lines.joined(separator: "\n")
+        let text = plan.text.hasSuffix("\n") ? String(plan.text.dropLast()) : plan.text
+        return said.joined(separator: "\n") + "\n\n" + text
     }
 }

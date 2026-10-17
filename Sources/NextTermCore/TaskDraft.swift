@@ -5,7 +5,8 @@ import Foundation
 /// form; the todo folder's is a Markdown file (TodoFile).
 ///
 /// No model reads the prompt: fixed rules do (`drafts(prompt:mask:)`).
-/// - The first plain line is the title, without a trailing `:`. A leading bullet or box is dropped from a title.
+/// - The first plain line before any list line is the title; a prompt that starts with a list takes its first item
+///   instead. Either is without a trailing `:`, and a leading bullet or box is dropped from a title.
 /// - Lines starting `-`, `*`, `+`, `1.`, `1)`, `[ ]` or `[x]` are steps, a `[x]` one done; an indented one is nested
 ///   under the step above it, and an indented plain line right after a step carries on its text.
 /// - Every other line, and code fences whole, are the notes, word for word.
@@ -72,9 +73,10 @@ public struct TaskDraft: Equatable, Sendable {
     public static func drafts(prompt: String, mask: (String) -> String = { $0 }) -> [TaskDraft] {
         let text = mask(prompt)
         let masked = text != prompt
-        let lines = Self.lines(text)
+        let lines = carried(Self.lines(text))
         let kinds = classify(lines)
-        if let title = kinds.firstIndex(of: .plain) {
+        let firstItem = kinds.firstIndex { if case .item = $0 { return true }; return false } ?? kinds.endIndex
+        if let title = kinds[..<firstItem].firstIndex(of: .plain) {
             var rest = lines
             rest.remove(at: title)
             let body = Self.body(rest)
@@ -85,8 +87,8 @@ public struct TaskDraft: Equatable, Sendable {
             return nil
         }
         guard let first = items.first else { return [] }
-        // Code and a list: the first item is the title, the rest its steps and notes.
-        if kinds.contains(where: { $0 == .fence }) {
+        // Code or notes with a list: the first item is the title, the rest its steps and notes.
+        if kinds.contains(where: { $0 == .fence || $0 == .plain }) {
             var rest = lines
             rest.remove(at: first.index)
             let body = Self.body(rest)
@@ -124,6 +126,21 @@ public struct TaskDraft: Equatable, Sendable {
         let indent: Int
         let text: String
         let done: Bool
+    }
+
+    /// The lines with each indented plain line right after a list item joined onto that item, as `body` reads it.
+    static func carried(_ lines: [String]) -> [String] {
+        var joined: [String] = []
+        var afterItem = false
+        for (line, kind) in zip(lines, classify(lines)) {
+            if kind == .plain, afterItem, line.first.map({ $0 == " " || $0 == "\t" }) == true {
+                joined[joined.count - 1] += " " + line.trimmingCharacters(in: .whitespaces)
+                continue
+            }
+            if case .item(let item) = kind { afterItem = !item.text.isEmpty } else { afterItem = false }
+            joined.append(line)
+        }
+        return joined
     }
 
     /// The text's lines, with CRLF and a lone CR read as LF.
@@ -283,9 +300,9 @@ public struct TaskDay: Hashable, Comparable, Sendable, CustomStringConvertible {
         self.day = day
     }
 
-    /// The day `date` falls on in `calendar` (its time zone).
+    /// The day `date` falls on in `calendar`'s time zone, written as the Gregorian day whatever calendar this Mac shows.
     public init(_ date: Date, calendar: Calendar) {
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        let parts = TaskDay.gregorian(like: calendar).dateComponents([.year, .month, .day], from: date)
         year = parts.year ?? 1970
         month = parts.month ?? 1
         day = parts.day ?? 1
@@ -293,9 +310,18 @@ public struct TaskDay: Hashable, Comparable, Sendable, CustomStringConvertible {
 
     public var description: String { String(format: "%04d-%02d-%02d", year, month, day) }
 
-    /// The day's start in `calendar`.
+    /// The day's start in `calendar`'s time zone.
     public func start(in calendar: Calendar) -> Date? {
-        calendar.date(from: DateComponents(year: year, month: month, day: day))
+        TaskDay.gregorian(like: calendar).date(from: DateComponents(year: year, month: month, day: day))
+    }
+
+    /// A Gregorian calendar with `calendar`'s time zone and first weekday (a Buddhist or Japanese one counts years another way).
+    static func gregorian(like calendar: Calendar) -> Calendar {
+        guard calendar.identifier != .gregorian else { return calendar }
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        gregorian.firstWeekday = calendar.firstWeekday
+        return gregorian
     }
 
     public static func < (a: TaskDay, b: TaskDay) -> Bool { (a.year, a.month, a.day) < (b.year, b.month, b.day) }

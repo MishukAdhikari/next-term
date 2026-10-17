@@ -6,9 +6,10 @@ import Darwin
 /// The todo folder: where a task's file goes (TodoFile), so tomorrow's agent in the project reads it with its own file
 /// tools and no extra permission.
 /// - **In the project** by default: `todo/` at its top, or the path Settings › Tasks names. In a linked worktree it is
-///   in the main checkout, so tasks outlive the worktree and every worktree shares one list. The path must stay inside
-///   the project once `..` and links are resolved, and never in `.git`. A missing folder is made, with its parents,
-///   only as a task is added.
+///   in the main checkout, so tasks outlive the worktree and every worktree shares one list (a bare repository has no
+///   checkout of its own: there it is in the worktree). The path must stay inside the project once `..` and links are
+///   resolved, and never in `.git`. A missing folder is made, with its parents, only as a task is added; the project's
+///   own folder never is.
 /// - **One absolute folder** for every project, or for windows with no project: it must be there, and is never made.
 ///   One in a protected place (~/Documents, iCloud Drive) is not looked at until the user adds a task there.
 /// - Files are written create-only: Next Term never changes a file another program may have open, and a name taken
@@ -46,6 +47,12 @@ public enum TodoFolder {
     /// Why a task's file was not written; nothing was.
     public enum Failure: Error, Equatable, LocalizedError {
         case missing(String)
+        /// macOS's privacy protection keeps Next Term out: the user can allow it in this pane.
+        case denied(String, PrivacySettings.Pane)
+        /// The folder's own permissions (or a folder above it) keep Next Term out.
+        case unreadable(String)
+        /// The project's own folder was moved or removed: it is never made again.
+        case projectMissing(String)
         case notAFolder(String)
         case outsideProject
         case allNamesTaken
@@ -53,6 +60,11 @@ public enum TodoFolder {
         public var errorDescription: String? {
             switch self {
             case .missing(let folder): return "The todo folder \(folder) is not there (an unmounted disk?)."
+            case .denied(let folder, let pane):
+                return "macOS hasn’t given Next Term access to the todo folder \(folder). "
+                    + "You can allow it in System Settings › Privacy & Security › \(pane.title)."
+            case .unreadable(let folder): return "Next Term can’t open the todo folder \(folder)."
+            case .projectMissing(let folder): return "The project folder \(folder) is not there."
             case .notAFolder(let folder): return "\(folder) is a file, not a folder."
             case .outsideProject: return "The todo folder is outside the project now."
             case .allNamesTaken: return "Every name for this task is taken, up to -\(TodoFile.lastNumber), on this day."
@@ -69,7 +81,9 @@ public enum TodoFolder {
             return absolute(outside, project: nil, places: places, home: home)
         }
         let linked = WorktreeWindow.repository(ofLinkedWorktree: project)
-        let root = canonicalPath(linked?.mainCheckout ?? project)
+        // A bare repository has no checkout of its own (its mainCheckout is git's folder): tasks stay in the worktree.
+        let main = linked.map(\.mainCheckout).flatMap { FileManager.default.fileExists(atPath: $0 + "/.git") ? $0 : nil }
+        let root = canonicalPath(main ?? project)
         if settings.isShared { return absolute(settings.folder, project: root, places: places, home: home) }
         return inside(root, settings.folder)
     }
@@ -78,9 +92,10 @@ public enum TodoFolder {
     static func absolute(_ path: String, project: String?, places: ProtectedPlaces, home: String) -> Resolution {
         let expanded = path == "~" ? home : path.hasPrefix("~/") ? home + path.dropFirst() : path
         guard let normal = lexical("/", expanded) else { return .refused("Settings › Tasks names \(path), which is not a folder.") }
+        // A look in a protected place is what macOS asks about: it waits for the user's Add or Approve. The URL is made
+        // as a folder's, as one made from the path alone stats it.
+        if places.holds(normal) { return .shared(URL(fileURLWithPath: normal, isDirectory: true), project: project) }
         let url = URL(fileURLWithPath: normal)
-        // A look in a protected place is what macOS asks about: it waits for the user's Add or Approve.
-        if places.holds(normal) { return .shared(url, project: project) }
         var isFolder: ObjCBool = false
         guard FileManager.default.fileExists(atPath: normal, isDirectory: &isFolder) else { return .missing(url) }
         guard isFolder.boolValue else { return .refused(Failure.notAFolder(shown(normal, home: home)).errorDescription ?? "") }
@@ -103,6 +118,7 @@ public enum TodoFolder {
 
     /// `relative` in the project at `root` (a real path): inside it once `..` and links are resolved, and not in `.git`.
     static func inside(_ root: String, _ relative: String) -> Resolution {
+        guard FileManager.default.fileExists(atPath: root) else { return .refused("The project folder \(shown(root)) is not there.") }
         if let problem = problem(with: relative) { return .refused("Settings › Tasks names \(relative). " + problem) }
         let outside = Resolution.refused("Settings › Tasks names \(relative), which is outside the project; name a folder inside it, such as todo.")
         guard let path = lexical(root, relative), path.hasPrefix(root + "/") else { return outside }
@@ -146,13 +162,23 @@ public enum TodoFolder {
         let folder: URL
         switch resolution {
         case .inProject(let url, let root, _):
+            // The project itself is never made: one moved or removed since is said so.
+            guard FileManager.default.fileExists(atPath: root) else { throw Failure.projectMissing(shown(root, home: home)) }
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             guard canonicalPath(url.path).hasPrefix(root + "/") else { throw Failure.outsideProject }
             folder = url
         case .shared(let url, _):
-            var isFolder: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder) else { throw Failure.missing(shown(url.path, home: home)) }
-            guard isFolder.boolValue else { throw Failure.notAFolder(shown(url.path, home: home)) }
+            var info = stat()
+            guard stat(url.path, &info) == 0 else {
+                let code = errno
+                let shownFolder = shown(url.path, home: home)
+                // EPERM is macOS's privacy refusal (FolderAccess.isPrivacyDenial): the folder may well be there. EACCES
+                // is a folder's own permissions, which System Settings can't change.
+                if code == EPERM { throw Failure.denied(shownFolder, PrivacySettings.pane(forDenied: url.path)) }
+                if code == EACCES { throw Failure.unreadable(shownFolder) }
+                throw Failure.missing(shownFolder)
+            }
+            guard info.st_mode & S_IFMT == S_IFDIR else { throw Failure.notAFolder(shown(url.path, home: home)) }
             folder = url
         case .missing(let url):
             throw Failure.missing(shown(url.path, home: home))

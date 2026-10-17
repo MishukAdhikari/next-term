@@ -7,7 +7,7 @@ those files. It is open: any program, agent or person can read and write it.
 ## Where
 
 - `<project>/todo/`, or the folder Settings › Tasks names: a path inside each project, or one absolute folder.
-- In a linked worktree, the folder is in the main checkout.
+- In a linked worktree, the folder is in the main checkout; for a bare repository, in the worktree itself.
 - Every `.md` file in that folder is a todo file, a hand-written one included.
 
 ## Name

@@ -54,7 +54,7 @@ import Testing
         #expect(draft.notes == "A note")
     }
 
-    @Test func aPromptThatIsOnlyAListIsOneTaskPerItem() {
+    @Test func aPromptThatIsOnlyAListIsOneTaskPerItem() throws {
         let drafts = TaskDraft.drafts(prompt: "- Fix the login test\n  - [x] read the log\n- [ ] Update the docs:\n\n3. Tag the release\n")
         #expect(drafts.map(\.title) == ["Fix the login test", "Update the docs", "Tag the release"])
         #expect(drafts[0].steps == [TaskDraft.Step(text: "read the log", done: true)])
@@ -62,6 +62,13 @@ import Testing
         // A list with code: the first item is the title.
         let coded = TaskDraft.drafts(prompt: "- Fix it\n- see below\n```\ncode\n```")
         #expect(coded.map(\.title) == ["Fix it"] && coded.first?.steps.map(\.text) == ["see below"] && coded.first?.notes == "```\ncode\n```")
+        // A wrapped item carries on its text; it is never the title.
+        let wrapped = TaskDraft.drafts(prompt: "- Fix the login test\n  so it handles expired tokens\n- Update the docs")
+        #expect(wrapped.map(\.title) == ["Fix the login test so it handles expired tokens", "Update the docs"])
+        // A note after the list: the first item is still the title, the note its notes.
+        let noted = try #require(TaskDraft.drafts(prompt: "- Add tests\n- Update docs\n\nSee PR 512.").first)
+        #expect(noted.title == "Add tests" && noted.steps == [TaskDraft.Step(text: "Update docs")] && noted.notes == "See PR 512.")
+        #expect(TaskDraft.drafts(prompt: "- Add tests\n- Update docs\n\nSee PR 512.").count == 1)
         // Nothing to do: no task.
         #expect(TaskDraft.drafts(prompt: "").isEmpty && TaskDraft.drafts(prompt: " \n\t\n").isEmpty && TaskDraft.drafts(prompt: "```\nx\n```").isEmpty)
     }
@@ -126,5 +133,24 @@ import Testing
         // On the first day itself: the one a week on, never today.
         #expect(When.nextWeek(after: at("2026-10-19 09:00", monday), calendar: monday).description == "2026-10-26")
         #expect(When.days(7, after: at("2026-10-28 09:00", monday), calendar: monday).description == "2026-11-04")
+    }
+
+    @Test func theDayIsWrittenAsTheGregorianOneWhateverCalendarTheMacShows() throws {
+        let dhaka = calendar("Asia/Dhaka")
+        let now = at("2026-10-18 10:00", dhaka)
+        let day = try #require(TaskDay("2026-10-19"))
+        // A Buddhist calendar counts 2569, a Japanese one 8: the file still says 2026.
+        for identifier in [Calendar.Identifier.buddhist, .japanese] {
+            var shown = Calendar(identifier: identifier)
+            shown.timeZone = dhaka.timeZone
+            #expect(When.parse("today", now: now, calendar: shown)?.description == "2026-10-18", "\(identifier)")
+            #expect(When.parse("tomorrow", now: now, calendar: shown)?.description == "2026-10-19", "\(identifier)")
+            #expect(When.parse("2026-10-19", now: now, calendar: shown) == day, "\(identifier)")
+            let made = try MCPServer.taskDraft(["title": "x"], now: now, calendar: shown).get()
+            #expect(made.draft.scheduled == .day(day), "\(identifier)")
+            // And back: the day's start in that calendar is the same day, at midnight in its time zone.
+            let start = try #require(day.start(in: shown))
+            #expect(start == at("2026-10-19 00:00", dhaka) && TaskDay(start, calendar: shown) == day, "\(identifier)")
+        }
     }
 }

@@ -238,7 +238,7 @@ extension SelfTest {
               "tasks: a worktree window's task goes to its main checkout's todo folder", added.text)
         check(added.shown.contains("in app"), "tasks: and the window names the main checkout", added.shown)
         let unnamed = await client.call(["title": "Which project?"])
-        check(unnamed.isError && unnamed.text == MCPServer.taskNeedsProject && MCPWriteControl.pending == nil,
+        check(unnamed.isError && unnamed.text.hasPrefix("Give project: one of the open projects") && MCPWriteControl.pending == nil,
               "tasks: with several projects open and none named, a caller outside the tabs is refused with no window", unnamed.text)
     }
 
