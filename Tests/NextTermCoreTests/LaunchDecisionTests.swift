@@ -160,6 +160,25 @@ import Testing
         #expect(decide(none) == .welcome)
     }
 
+    /// Under any setting but Reopen the folders open at the last quit are never checked: a look at one in ~/Documents
+    /// would ask for Documents before anything was shown.
+    @Test func onlyReopenChecksTheProjectsOpenAtTheLastQuit() {
+        for opens in LaunchOpens.allCases where opens != .lastProjects {
+            for mayOfferImport in [false, true] {
+                var launch = input(.normal, opens)
+                launch.mayOfferImport = mayOfferImport
+                var checked: [String] = []
+                let shown = LaunchDecision.opening(launch) { (path: String) -> Bool in
+                    checked.append(path)
+                    return true
+                }
+                #expect(checked.isEmpty, "\(opens): \(checked)")
+                let expected: LaunchOpening = opens == .newTerminal ? .newTerminal : (mayOfferImport ? .importThenWelcome : .welcome)
+                #expect(shown == expected, "\(opens), import \(mayOfferImport)")
+            }
+        }
+    }
+
     @Test func aReopenKeepsTheSavedOrderAndDropsRepeats() {
         var launch = input(.normal, .lastProjects)
         launch.sessionProjects = [api, app, api, web, app]

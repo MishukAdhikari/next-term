@@ -384,6 +384,8 @@ public enum AgentGuard {
 /// `.worktreeinclude` (as Claude Code reads it): gitignore patterns for the ignored files a new worktree gets
 /// copies of. A file is copied only when the repository ignores it too, only from inside the checkout,
 /// never through a link, and never over a file that is there. Nothing else is copied and no script runs.
+/// With Copy or Link chosen for the ignored files (WorktreeCopy), what it lists brings back what a rule leaves
+/// out, cloned or linked as the rest.
 public enum WorktreeInclude {
     public static let fileName = ".worktreeinclude"
 

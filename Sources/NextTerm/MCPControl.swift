@@ -197,6 +197,9 @@ enum MCPControl {
         var sawWork = false
     }
     private static var lastSent: [UUID: Sent] = [:]
+    /// Text send_to_tab typed with no Return, as typed, and the tab's write count just after it: a press_keys Return or
+    /// more text that comes next, with nothing written meanwhile, carries on that line (TerminalTab.submitOwnLine).
+    private static var unsubmitted: [UUID: (typed: String, writes: Int)] = [:]
 
     /// Tabs an agent drives over MCP: opened with new_tab, or given input with send_to_tab, press_keys or
     /// answer_agent, until you type in one yourself. That agent waits for their work (wait_for_tab), so while
@@ -215,6 +218,7 @@ enum MCPControl {
     static func forget(_ tab: TerminalTab) {
         driven.remove(tab.id)
         lastSent[tab.id] = nil
+        unsubmitted[tab.id] = nil
     }
 
     private static func isBusy(_ tab: TerminalTab) -> Bool {
@@ -578,7 +582,9 @@ enum MCPControl {
     }
 
     /// The window a new tab in `directory` opens in (new_tab's rule, which run_with_secrets shares): the window of the
-    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true).
+    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true); in a
+    /// folder that is never a project (the home folder: ProjectRoot.project), the window with no project that has a tab
+    /// there already, else a new one.
     static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
         // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
         let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
@@ -587,7 +593,18 @@ enum MCPControl {
             guard let worktree = owner.project.flatMap({ MCPServer.ownWorktree(of: directory, inside: $0) }) else { return (owner, false) }
             return (app.openFolder(worktree, newWindow: false, forAgent: true), true)
         }
-        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true), true)
+        guard let project = ProjectRoot.project(from: directory) else {
+            // A folder that is never a project (the home folder): the window with no project that has a tab there already
+            // (one an earlier call opened) takes the tab, as a project's window does; else a new one.
+            let folder: String = canonicalPath(directory)
+            let plain: TerminalWindowController? = app.controllers.first { (controller: TerminalWindowController) -> Bool in
+                guard !controller.hasClosed, controller.project == nil else { return false }
+                return controller.tabs.contains { (tab: TerminalTab) -> Bool in tab.remote == nil && canonicalPath(tab.directory) == folder }
+            }
+            if let plain { return (plain, false) }
+            return (app.openWindow(directory: directory, forAgent: true), true)
+        }
+        return (app.openFolder(project, newWindow: false, forAgent: true), true)
     }
 
     static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
@@ -596,15 +613,21 @@ enum MCPControl {
     }
 
     /// Types text as a paste (literal, never run early), then presses Return after a moment: agents
-    /// take a paste in as a block and only treat a separate Return as "send".
+    /// take a paste in as a block and only treat a separate Return as "send". That Return is Next Term's own, so a zsh
+    /// with the history hook keeps the line out of its history (TerminalTab.submitOwnLine).
     static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
         guard canType(tab) else { return }
-        tab.view.typeText(text)
-        guard submit else { return }
+        // Text an earlier send_to_tab left with no Return, nothing written since, is the start of this line.
+        let earlier = unsubmitted.removeValue(forKey: tab.id).flatMap { $0.writes == tab.view.inputWrites ? $0.typed : nil }
+        let typed = (earlier ?? "") + tab.view.typeText(text)
+        guard submit else {
+            unsubmitted[tab.id] = (typed: typed, writes: tab.view.inputWrites)
+            return
+        }
         sent(to: tab)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard canType(tab) else { return } // the connection may have dropped in between
-            tab.view.send(txt: "\r")
+            tab.submitOwnLine(typed)
         }
     }
 
@@ -671,8 +694,21 @@ enum MCPControl {
             guard canType(tab) else {
                 return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
             }
+            let next = { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) } }
+            // A Return right after send_to_tab's text, with nothing written since, submits that line: the next key waits
+            // for it, which can wait a moment for the shell's new line (TerminalTab.submitOwnLine).
+            let pending = unsubmitted.removeValue(forKey: tab.id)
+            if sequences[index] == "\r", let pending, pending.writes == tab.view.inputWrites {
+                return tab.submitOwnLine(pending.typed) {
+                    // The Return waited for the shell's new line: a tab that ended meanwhile never got it.
+                    guard canType(tab) else {
+                        return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
+                    }
+                    next()
+                }
+            }
             tab.view.send(txt: sequences[index])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) }
+            next()
         }
         sent(to: tab)
         press(0)

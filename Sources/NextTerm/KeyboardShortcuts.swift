@@ -633,8 +633,16 @@ final class KeyHintOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (hint?.backdrop ?? Theme.bar).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
+        let backdrop: NSColor = hint?.backdrop ?? Theme.bar
+        let shape = NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4)
+        backdrop.setFill()
+        shape.fill()
+        // Over the top row the bar's colour has the project's glow on it, where the key now is: no plain patch in it.
+        guard backdrop === Theme.bar, let glow = (superview as? ProjectGlowing)?.projectGlow else { return }
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        glow.paint(bounds, in: self)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 

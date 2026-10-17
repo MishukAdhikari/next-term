@@ -72,10 +72,12 @@ public enum AgentSessions {
         public var problems: [AgentKind: String]
     }
 
-    /// The sessions for a folder (and, with `subfolders`, the folders inside it), newest first.
+    /// The sessions for a folder (and, with `subfolders`, the folders inside it), newest first. `resolving`: the folder
+    /// is spelled as the kernel spells it first, which looks at each folder on its path; false for one nothing may look
+    /// in yet (a project in ~/Documents the user has not opened), whose sessions are found by its spelling as saved.
     public static func list(project: String, home: String = NSHomeDirectory(), subfolders: Bool = true,
-                            perAgent limit: Int = 50) -> Listing {
-        let folder = canonicalPath(project)
+                            perAgent limit: Int = 50, resolving: Bool = true) -> Listing {
+        let folder = resolving ? canonicalPath(project) : project
         var listing = Listing(sessions: [], problems: [:])
         for agent in AgentKind.allCases {
             do {

@@ -26,6 +26,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var hosts: [RemoteHost] = []
     /// A closed linked worktree's title ("xCloud ▸ 7027-sso"), by path, once read from git's files.
     private var titles: [String: String] = [:]
+    /// Where each project keeps its colour (ProjectColors.key), by path, read with the titles: a worktree's repository's.
+    private var colorKeys: [String: String] = [:]
+    /// The listed projects' colours, by path: worked out when the list is built or read, and when a colour changes, not
+    /// as each key is typed.
+    private var listedColors: [String: ProjectColor] = [:]
     /// The history's folders that were not on disk at the last look. A show looks on the main thread, so the list is
     /// right as it appears; a refresh while it shows leaves these out and looks again off the main thread, so up to 50
     /// folders, one on a network drive that stopped answering among them, never hold the window up as it comes forward.
@@ -115,7 +120,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
                 self?.listChanged()
             }
         }
-        observers = [history, keys]
+        // A project's colour, or Show Project Colors: the dots follow.
+        let colors = center.addObserver(forName: ProjectColorStore.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.isVisible == true else { return }
+                self.listedColors = self.projectColors()
+                self.applySearch(.keep)
+            }
+        }
+        observers = [history, keys, colors]
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -464,6 +477,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         hosts = Self.savedHosts()
         let servers: [SwitcherServer] = hosts.map { (host: RemoteHost) -> SwitcherServer in SwitcherServer(host) }
         list = SwitcherList.build(open: open, history: history, recents: recents, servers: servers, titles: titles)
+        listedColors = projectColors()
     }
 
     /// A window for each one `counts` has on a project, in the order of the windows, each with its project's title and
@@ -493,27 +507,33 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Each listed project's branch, and a linked worktree's title, read off the main thread from git's files, with
     /// which of the history's folders are gone; then the list shows them, the search finds the branches, and the
     /// selection stays. A folder gone at the last look is read too, so one that is back shows with its branch.
+    /// A project in a protected place (ProtectedPlaces: ~/Documents, ~/Desktop, a disk in /Volumes) that no window has
+    /// open is not read: it shows with its saved name and folder, and no branch, until it is opened.
     private func readBranchesAndTitles() {
         let stored: ProjectHistory = ProjectHistoryRecorder.shared.history
-        let paths: [String] = list.projects.map(\.path) + missing.sorted()
+        let open: Set<String> = Self.openProjects()
+        let paths: [String] = (list.projects.map(\.path) + missing.sorted()).filter { Self.mayLook(inside: $0, open: open) }
         folderLook += 1
         let look: Int = folderLook
         DispatchQueue.global(qos: .userInitiated).async {
             let gone: Set<String> = Self.missing(stored, present: stored.existing())
             var branches: [String: String] = [:]
             var titles: [String: String] = [:]
+            var keys: [String: String] = [:]
             for path in paths where !gone.contains(path) {
                 branches[path] = SessionStore.branch(of: path)
-                titles[path] = WelcomeSwitcherList.title(ofProject: path)
+                let repository: WorktreeWindow.Repository? = WorktreeWindow.repository(ofLinkedWorktree: path)
+                titles[path] = WelcomeSwitcherList.title(ofProject: path, repository: repository)
+                keys[path] = ProjectColors.key(forProject: path, repository: repository)
             }
             DispatchQueue.main.async { [weak self] in
-                self?.read(paths, branches: branches, titles: titles, missing: gone, look: look)
+                self?.read(paths, branches: branches, titles: titles, colorKeys: keys, missing: gone, look: look)
             }
         }
     }
 
     private func read(_ paths: [String], branches found: [String: String], titles named: [String: String],
-                      missing gone: Set<String>, look: Int) {
+                      colorKeys keyed: [String: String], missing gone: Set<String>, look: Int) {
         var changed = false
         // A show or a newer read looked since: theirs stands.
         if look == folderLook, gone != missing {
@@ -524,9 +544,21 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             branches[path] = found[path]
             if titles[path] != named[path] { changed = true }
             titles[path] = named[path]
+            colorKeys[path] = keyed[path]
         }
-        if changed { buildList() }
+        if changed { buildList() } else { listedColors = projectColors() } // a worktree's key, read now
         applySearch(.keep)
+    }
+
+    /// The projects a window has open now.
+    private static func openProjects() -> Set<String> {
+        Set(AppDelegate.shared.controllers.compactMap { (controller: TerminalWindowController) -> String? in controller.project })
+    }
+
+    /// Whether the list may read in `path`'s folder (its .git, for the branch and a worktree's title): not in a protected
+    /// place unless a window has it open (the user opened it, and macOS asked then).
+    private nonisolated static func mayLook(inside path: String, open: Set<String>) -> Bool {
+        open.contains(path) || !ProtectedPlaces.current.holds(path)
     }
 
     /// The history's folders not among `present`, the ones on disk.
@@ -579,13 +611,31 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         var folders: [String: String] = [:]
         for host in hosts { folders[host.id] = host.directory }
         switcher.show(shown, openCount: list.openCount, searching: searching, branches: branches, keys: switcherKeys,
-                      folders: folders)
+                      folders: folders, colors: listedColors)
         switcher.select(index)
         let none: Bool = searching && shown.isEmpty
         noMatch.stringValue = none ? SwitcherSearch.noMatch(query) : ""
         noMatch.isHidden = !none
         emptyList.isHidden = searching || !list.isEmpty
         showSelection(reloadSessions: reloadSessions)
+    }
+
+    /// Each listed project's colour, by path, as View › Project Color keeps it: an open project's as its window has it, a
+    /// closed one's under the key read with its title (a worktree's is its repository's), or its own folder until then.
+    /// None while Show Project Colors is off, and none for a project never opened since there were colours.
+    private func projectColors() -> [String: ProjectColor] {
+        guard ProjectColorStore.isShown else { return [:] }
+        var keys: [String: String] = colorKeys
+        for controller in AppDelegate.shared.controllers where !controller.hasClosed {
+            if let project = controller.project, let key = controller.projectColorKey { keys[project] = key }
+        }
+        let kept: ProjectColors = ProjectColorStore.read()
+        var colors: [String: ProjectColor] = [:]
+        for project in list.projects {
+            let key: String = keys[project.path] ?? project.path
+            if let color = kept.entry(for: key)?.color { colors[project.path] = color }
+        }
+        return colors
     }
 
     /// The jumps' and Close's keys as the menus have them now, so a rebinding carries over.
@@ -685,12 +735,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Reads `path`'s sessions after `delay`, while it is still the project shown; a read asked for since takes its
     /// place. Reads run one at a time off the main thread, so one per project passed would queue up behind each other.
+    /// They come from the agents' own folders; the project's is not looked at while the list may not look in it
+    /// (`mayLook`: one in ~/Documents that no window has open, which the list may have selected by itself).
     private func readSessions(of path: String, after delay: TimeInterval) {
         pendingSessionRead?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.selectedProject == path else { return }
             self.pendingSessionRead = nil
-            SessionStore.load(path) { [weak self] listing, tabs in
+            let resolving: Bool = Self.mayLook(inside: path, open: Self.openProjects())
+            SessionStore.load(path, resolving: resolving) { [weak self] listing, tabs in
                 guard let self else { return }
                 self.cache[path] = listing.sessions
                 guard self.selectedProject == path else { return }
@@ -714,7 +767,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let font = NSFont.systemFont(ofSize: 12)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.textDim]
         let line = NSMutableAttributedString(string: RecentProjects.abbreviate(path), attributes: attributes)
-        if let branch = branches[path] ?? SessionStore.branch(of: path) {
+        let readable: Bool = Self.mayLook(inside: path, open: Self.openProjects())
+        if let branch = branches[path] ?? (readable ? SessionStore.branch(of: path) : nil) {
             line.append(Typography.gap(14, font: font))
             line.append(SwitcherRowStyle.branch(branch, font: font, symbolSize: 11, color: Theme.textDim))
         }

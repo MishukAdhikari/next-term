@@ -56,6 +56,9 @@ final class NextTermView: LocalProcessTerminalView {
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
+    /// Each write `inputWrites` counts, as it comes, before that gate: a line it ends is one Next Term can no longer name
+    /// for zsh's history (TerminalTab.history).
+    var onWrite: ((ArraySlice<UInt8>) -> Void)?
     /// Writes into the shell other than the terminal's own answers: every key, paste and drop, and all text anything types
     /// into the tab (Insert Path, a suggested command, Send to Agent, MCP, the restore itself). A restored action types
     /// only onto a line nothing else wrote to (`RestoreLayout.LineWatch`), whether or not what wrote said it was the user.
@@ -132,7 +135,10 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
-        if !answering { inputWrites += 1 }
+        if !answering {
+            inputWrites += 1
+            onWrite?(data)
+        }
         if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -266,18 +272,22 @@ final class NextTermView: LocalProcessTerminalView {
     }
 
     /// Types text at the prompt as a paste: with bracketed paste on (zsh's default), the line editor
-    /// inserts it literally and never runs it, even if it contained a newline.
-    func typeIn(_ text: String) {
+    /// inserts it literally and never runs it, even if it contained a newline. Returns the text as typed.
+    @discardableResult
+    func typeIn(_ text: String) -> String {
         let clean = String(text.unicodeScalars.filter { !ShellQuote.isControl($0) })
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + clean + "\u{1b}[201~" : clean)
+        return clean
     }
 
     /// Types text as a paste that keeps its line breaks (a prompt for an agent): other control
-    /// characters are dropped, so the text cannot end the paste early or press keys.
-    func typeText(_ text: String) {
+    /// characters are dropped, so the text cannot end the paste early or press keys. Returns the text as typed.
+    @discardableResult
+    func typeText(_ text: String) -> String {
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+        return lines
     }
 
     // MARK: links (⌘-click): web and mail links open; files open safely; other schemes are refused
@@ -357,7 +367,9 @@ final class NextTermView: LocalProcessTerminalView {
 
     /// SwiftTerm 1.20 snaps its cell width to the pixel grid only when the font (or the line spacing) is set, at the
     /// scale of the window then, or of the main screen before there is one: on a screen of another scale it drew and
-    /// hit-tested cells snapped for the old one. Setting the font again snaps them for this screen.
+    /// hit-tested cells snapped for the old one, and a table's box lines drifted from its text a little more each column.
+    /// Setting the font again snaps them for this screen. AppKit calls this also when the view first goes into a window
+    /// of another scale (a tab's font is set before it has one); SelfTestCellSnap checks both.
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         guard let scale = window?.backingScaleFactor else { return }
@@ -539,6 +551,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var execWatcher: DispatchSourceProcess?
     /// Tab completion in this tab.
     private(set) lazy var completion = CompletionSession(tab: self)
+    /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
+    /// (ShellHistory, submitOwnLine).
+    private(set) var history = ShellHistory.Readiness()
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil, id: UUID = UUID()) {
@@ -563,6 +578,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
+        view.onWrite = { [weak self] data in self?.history.input(data) }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
         // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
@@ -662,6 +678,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.programTitle = nil
             self.status.shellReplaced()
             self.completion.shellReplaced()
+            self.history.shellReplaced()
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -772,11 +789,44 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.runWhenReady(command, waited: waited + 0.1) }
             return
         }
-        view.typeText(command)
+        let typed = view.typeText(command)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.exited else { return }
-            self.view.send(txt: "\r")
+            self.submitOwnLine(typed)
         }
+    }
+
+    /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
+    /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, run_with_secrets,
+    /// runWhenReady's resumes and clients, a restore's resume). Where the tab's zsh can take history's key now, the key
+    /// names the line first, in the same write, so zsh keeps the line out of its history, ↑ and autosuggestions
+    /// (ShellHistory). Anywhere else (bash, fish, a server, a program in front, a zsh without the hook) a plain Return, as
+    /// before; and zsh keeps out only that line to the byte, so one the user typed on too goes in as theirs.
+    ///
+    /// Typed as a new prompt comes (a new tab's first, or just after a command ended), the line gets its Return once the
+    /// hook has marked it, a moment later at most. zsh's line editor turns bracketed paste on just after that mark: on,
+    /// the mark has come or never will. `then` runs once the Return went, or once the tab can no longer take it.
+    func submitOwnLine(_ typed: String, then: (() -> Void)? = nil) {
+        if history.awaitsMark(at: Self.now), !view.getTerminal().bracketedPasteMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, !self.exited, self.view.acceptsInput else {
+                    then?()
+                    return
+                }
+                self.submitOwnLine(typed, then: then)
+            }
+            return
+        }
+        // zle names the line only while it has the tty to itself: not under a program a widget started (^X^E's editor,
+        // fzf's or atuin's ^R), which would read the name as typed keys.
+        let pid = view.process.shellPid
+        let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd, shellPid: pid, shellName: shellName)
+        let inFront = foreground?.isShell == true
+        // A widget's $(...) (fzf, atuin) runs in the shell's own group: a child there means a program reads the tty.
+        let substituting = ProcessInspector.children(of: pid).contains { getpgid($0) == pid }
+        let bytes = ShellHistory.submit(typed: typed, armed: history.armed && inFront && !substituting)
+        view.send(data: bytes[...])
+        then?()
     }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
@@ -1231,9 +1281,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         switch event {
         case .completion(let message):
             return completion.handle(message)
+        case .history(let version):
+            return history.marked(version: version)
         case .commandStarted(let line, let expanded):
             onCommandMark?(event)
             completion.disarm()
+            history.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
@@ -1244,6 +1297,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             onCommandMark?(event)
+            history.prompted(at: Self.now)
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
@@ -1527,7 +1581,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
-        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
+        // Its project, or its own folder where it has none (the home folder: ProjectRoot.project).
+        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.project(from: directory) ?? directory))
         // `nxtrm mcp`, started by an agent in this tab, reaches this copy of Next Term.
         if MCPControlServer.shared.isRunning { env[MCPServer.socketVariable] = MCPControlServer.shared.path }
         // `nxtrm` works in every tab from the first launch, with no install step.

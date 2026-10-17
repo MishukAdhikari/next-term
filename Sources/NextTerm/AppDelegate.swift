@@ -255,17 +255,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own root): Gemini CLI and
-    /// Qwen Code connect only from inside one of these.
+    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own project): Gemini CLI and
+    /// Qwen Code connect only from inside one of these. Never a folder that is never a project (the home folder, /:
+    /// ProjectRoot.isNeverRoot), from which they would connect wherever they start.
     var agentWorkspaces: [String] {
         var roots: [String] = []
         for controller in controllers {
             if let project = controller.project { roots.append(project) }
             if let root = controller.sidebar.root?.path { roots.append(root) }
-            roots += controller.tabs.map { ProjectRoot.find(from: $0.directory) }
+            roots += controller.tabs.compactMap { (tab: TerminalTab) -> String? in ProjectRoot.project(from: tab.directory) }
         }
         var seen = Set<String>()
-        return roots.map(canonicalPath).filter { seen.insert($0).inserted }
+        return roots.map(canonicalPath).filter { !ProjectRoot.isNeverRoot($0) && seen.insert($0).inserted }
     }
 
     /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
@@ -551,7 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
-        case .newTerminal: openWindow(directory: nil)
+        case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
         }
     }
 
@@ -624,7 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
-    /// on the file's project (its git root, or its folder).
+    /// on the file's project (its git root, or its folder), or one with no project when its folder is never one.
     /// `forAgent`: open_in_editor. The file opens without taking the keyboard, and its window comes forward as
     /// AgentArrival says, not as a window the user went to.
     func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool, forAgent: Bool = false) {
@@ -635,10 +636,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let target: TerminalWindowController
         if !newWindow, let window = owner ?? front {
             target = window
-        } else {
-            let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
+        } else if let root = ProjectRoot.project(from: (path as NSString).deletingLastPathComponent) {
             recent.add(root)
             target = openWindow(directory: root, project: root, forAgent: forAgent)
+        } else {
+            // A file in a folder that is never a project (~/notes.txt): a window with no project, in that folder.
+            target = openWindow(directory: (path as NSString).deletingLastPathComponent, forAgent: forAgent)
         }
         closeWelcome(forAgent: forAgent)
         if forAgent {
@@ -964,10 +967,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidBecomeActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() } // the window in front has its project's glow at full strength again
     }
 
     func applicationDidResignActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() }
     }
 
     // MARK: windows
@@ -1024,8 +1029,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// New Terminal (File › New Window, ⌘N, the Welcome window's row): a window with no project, its shell where Settings ›
+    /// Terminal › New tabs says, as ⌘T with no window open (the home folder unless a folder is chosen there).
     @objc func newWindow(_ sender: Any?) {
-        openWindow(directory: nil)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// A worktree's own window, with one shell tab in its folder, titled "xCloud ▸ 7027-sso": the window
@@ -1049,17 +1056,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
-    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
-    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
-    func copiesIgnoredFiles(for main: String) -> Bool {
-        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    /// Open in New Worktree's choice for the ignored files (Copy, Link or Leave Out), as it was last left for the
+    /// repository whose main checkout is `main`: before there was a choice, Copy where "Copy ignored files too" was
+    /// ticked; Leave Out for one never seen. Saved when Create is pressed; the choice is the setting.
+    func ignoredFilesChoice(for main: String) -> WorktreeCopy.Choice {
+        let path = canonicalPath(main)
+        let saved = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles")?[path] as? String
+        let before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[path] as? Bool
+        return WorktreeCopy.Choice.remembered(saved, copiedBefore: before)
     }
 
-    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
-        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+    func setIgnoredFilesChoice(_ choice: WorktreeCopy.Choice, for main: String) {
+        let path = canonicalPath(main)
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles") ?? [:]
         choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
-        choices[canonicalPath(main)] = on
-        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+        choices[path] = choice.rawValue
+        UserDefaults.standard.set(choices, forKey: "worktreeIgnoredFiles")
+        // The checkbox's own setting, now the choice holds it.
+        if var before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored"), before.removeValue(forKey: path) != nil {
+            if before.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "worktreeCopiesIgnored")
+            } else {
+                UserDefaults.standard.set(before, forKey: "worktreeCopiesIgnored")
+            }
+        }
     }
 
     // MARK: projects
@@ -1070,6 +1090,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
             // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
             if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+            // And every window's "No project open", which otherwise refreshes only when its window becomes key.
+            let showing: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+                controller.sidebar.showsNoProject
+            }
+            guard !showing.isEmpty else { return }
+            let shown: [String] = newValue.existing()
+            for controller in showing { controller.sidebar.noProject.show(recent: shown) }
         }
     }
 
@@ -1124,19 +1151,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
     /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
     @objc func chooseProjectFolder(_ sender: Any?) {
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
+        chooseProjectFolder(from: from, over: overWelcome)
+    }
+
+    /// The same panel for a window that asked itself, not the key one (a notice in it, which can't be key): over `sheet`,
+    /// else over `from`'s window, or on its own with neither; the folder chosen opens as if from `from`.
+    func chooseProjectFolder(from: TerminalWindowController?, over sheet: NSWindow? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
-        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = sheet ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
 
     /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen
@@ -1318,7 +1351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// ⌘T with no window open (every window closed, app still running), where Settings › Terminal › New tabs says.
     @objc func newTab(_ sender: Any?) {
-        openWindow(directory: newTabWindowDirectory)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,
@@ -1398,6 +1431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return terminalTabs.listSide != nil // a second line for the list's rows: the bar has none
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
+        if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
@@ -1409,6 +1443,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
         }
         return true
+    }
+
+    /// View › Project Color › Show Project Colors (and Settings › General): every window's colour, shown or not. Each
+    /// project keeps its own while they are hidden.
+    @objc func toggleProjectColors(_ sender: Any?) {
+        ProjectColorStore.isShown.toggle()
     }
 
     /// View › Agent Spinner: Spinning, Still or Off, for every window at once.
@@ -1750,6 +1790,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
         }
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
+        // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
+        view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)

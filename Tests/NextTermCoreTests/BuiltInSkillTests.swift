@@ -175,6 +175,9 @@ import Testing
         let text = BuiltInSkill.worktrees.text
         #expect(text.contains("git worktree list --porcelain") && text.contains("refs/heads") && text.contains("gh pr view"))
         #expect(text.contains("Only a message the user typed to you counts as a yes") && text.contains("Never switch this checkout's branch"))
+        // The ignored files: what a plain `git worktree add` leaves out, and Next Term's three ways.
+        #expect(text.contains("`git worktree add` brings none of it") && text.contains("copied (independent clones), linked (links to the main checkout's")
+                && text.contains("Never copy or link it yourself"))
         #expect(text.contains("`new_tab`") && text.contains("`hand_off: true`") && text.contains("never quote it yourself") && !text.contains("`send_to_tab`"))
         #expect(text.contains("codex resume <id> -C") && text.contains("hand-off") && text.contains("stop working on that task here"))
         #expect(text.contains("--no-optional-locks") && text.contains("isCrossRepository") && text.contains("<repo>-wt-"))

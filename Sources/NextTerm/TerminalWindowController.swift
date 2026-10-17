@@ -94,6 +94,8 @@ class HairlineSplitView: NSSplitView {
 
     /// The lines drawn, in this view's coordinates.
     var drawnLines: [NSRect] { lines.filter { !$0.isHidden }.map(\.frame) }
+    /// The panes were placed again (they moved, showed or hid): the top row's glow, placed in the window, follows.
+    var onPanesPlaced: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -156,6 +158,7 @@ class HairlineSplitView: NSSplitView {
             if line.isHidden == shows { line.isHidden = !shows }
             line.color = lineColor
         }
+        onPanesPlaced?()
     }
 
     /// One line: a layer's colour, no drawing of its own. Presses go through to the split view, which
@@ -216,6 +219,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
+    /// The offer to open a project for an agent in the home folder came up here (offerProjectForHomeAgent): once a window.
+    private(set) var offeredProjectForAgent = false
+    /// Browse Home Folder was clicked in this window's "No project open": while its tab is in no project, the tree shows
+    /// the home folder, as files only (ProjectSidebarView.browsingOnly).
+    private(set) var browsesHome = false
     private var ticker: Timer?
     private var tickCount = 0
     private var closeConfirmed = false
@@ -225,21 +233,34 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The project this window is for: the sidebar stays on it and new tabs open in it by default
     /// (you can still `cd` anywhere). nil: a plain terminal window whose sidebar follows the active tab.
     private(set) var project: String? {
-        didSet { projectTitle = Self.title(ofProject: project) }
+        didSet {
+            let repository = project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
+            projectTitle = Self.title(ofProject: project, repository: repository)
+            projectColorKey = ProjectColors.key(forProject: project, repository: repository)
+            takeProjectColor()
+        }
     }
     /// The project's name in the title, the Window menu and notifications: its folder's, or for a linked
     /// worktree "xCloud ▸ 7027-sso", its repository's and its own.
     private(set) var projectTitle = ""
+    /// Where the project keeps its colour (ProjectColors.key): for a linked worktree its repository's main checkout, so
+    /// every worktree window of a repository has one colour. nil with no project, or the home folder: no colour.
+    private(set) var projectColorKey: String?
+    /// The project's colour as View › Project Color keeps it (nil: none, or None for This Project, or no project).
+    private(set) var projectColorEntry: ProjectColors.Entry?
+    var projectColor: ProjectColor? { projectColorEntry?.color }
     /// The window is being made key to bring an agent's tab forward (AgentArrival), not by the user.
     var keyingForAgent = false
     /// The window closed. AppDelegate drops it from its windows a moment later (windowClosed): until then, nothing may
     /// open a project or a tab in it.
     private(set) var hasClosed = false
 
-    static func title(ofProject project: String?) -> String {
+    /// `repository`: the one `project` is a linked worktree of (WorktreeWindow.repository), read once for the title and
+    /// the colour.
+    static func title(ofProject project: String?, repository: WorktreeWindow.Repository?) -> String {
         guard let project else { return "" }
         let folder = (project as NSString).lastPathComponent
-        guard let repository = WorktreeWindow.repository(ofLinkedWorktree: project) else { return folder }
+        guard let repository else { return folder }
         return WorktreeWindow.title(repository: repository.name, folder: folder)
     }
     private var opensWelcome = false
@@ -266,7 +287,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
     init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
-        projectTitle = Self.title(ofProject: self.project)
+        // Swift runs no didSet in init: the title and the colour's key here, the colour once the bars exist.
+        let repository = self.project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
+        projectTitle = Self.title(ofProject: self.project, repository: repository)
+        projectColorKey = ProjectColors.key(forProject: self.project, repository: repository)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -342,12 +366,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onSync = { [weak self] pull in pull ? self?.gitUpdate(nil) : self?.gitPush(nil) }
         sidebar.header.onSummaryClick = { [weak self] in self?.showUncommittedChanges() }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
+        sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
+        // A right-click on the top row, whichever bar is there: View › Project Color's choices for this window.
+        let colorMenu: () -> NSMenu? = { [weak self] in self?.projectColorMenu() }
+        for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
+        sidebar.header.onTopRowMenu = colorMenu
+        terminalRail.onTopRowMenu = colorMenu
+        NotificationCenter.default.addObserver(self, selector: #selector(projectColorsChanged), name: ProjectColorStore.changed, object: nil)
+        for split in [splitView, workSplit] as [HairlineSplitView] { split.onPanesPlaced = { [weak self] in self?.projectGlowMoved() } }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         // Lines selected in a diff go to the agents, as the editor's selection does.
         NotificationCenter.default.addObserver(self, selector: #selector(diffSelectionChanged(_:)), name: DiffShare.changed, object: nil)
         applyLayout() // the editor area starts hidden: nothing is open
         setSidebarVisible(AppDelegate.shared.sidebarVisible)
+        takeProjectColor()
 
         let ticker = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
         ticker.tolerance = 0.03
@@ -869,6 +902,36 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         updateProjectRoot()
         updateTabPlace()
         noteAgentTabs()
+        offerProjectForHomeAgent()
+    }
+
+    /// An agent Next Term recognises runs here, in a window with no project, in the home folder: once in this window, a
+    /// notice offers to open a project for it (Choose Folder…, as Open… does), with Don’t Ask Again for every window
+    /// (HomeAgentOffer). The agent is never held: the notice only offers.
+    private func offerProjectForHomeAgent() {
+        guard project == nil, !offeredProjectForAgent else { return }
+        let agents: [TerminalTab] = tabs.filter { (tab: TerminalTab) -> Bool in tab.status.running && tab.status.kind == .agent }
+        guard !agents.isEmpty else { return }
+        let home: String = ProtectedPlaces.current.home
+        let rows: [HomeAgentOffer.Tab] = agents.map { (tab: TerminalTab) -> HomeAgentOffer.Tab in
+            // The agent's own folder: `cd ~/app && claude` runs in app, though the tab's folder is still the prompt's
+            // until the next precmd. While the shell is still in front, no folder yet: a later tick asks again.
+            let pgid: pid_t = tcgetpgrp(tab.view.process.childfd)
+            let leads: Bool = pgid > 0 && pgid != tab.view.process.shellPid
+            let folder: String = leads ? (ProcessInspector.currentDirectory(of: pgid) ?? "") : ""
+            let local: String = folder.isEmpty ? "" : canonicalPath(folder)
+            return HomeAgentOffer.Tab(directory: tab.remote != nil ? tab.directory : local, runsAgent: true, remote: tab.remote != nil)
+        }
+        let on: Bool = HomeAgentOffer.isOn(.standard)
+        guard HomeAgentOffer.offers(on: on, windowProject: project, offered: false, tabs: rows, home: home) else { return }
+        offeredProjectForAgent = true
+        let tab: TerminalTab? = zip(agents, rows).first { $0.1.directory == home && !$0.1.remote }?.0
+        let text: String = HomeAgentOffer.text(agent: tab.map(Self.agentName(of:)) ?? "An agent")
+        // The panel comes over this window, not the key one: the notice can't be key, so a click on it leaves another
+        // window key, or none. Weak, as the notice keeps its action while it shows.
+        let choose: () -> Void = { [weak self] in AppDelegate.shared.chooseProjectFolder(from: self) }
+        GitToast.show(text, in: window, button: "Choose Folder…", action: choose,
+                      other: "Don’t Ask Again", otherAction: { HomeAgentOffer.turnOff(.standard) })
     }
 
     /// Needs you, then working, failed, done, idle. With Agent Spinner off a working pane shows no mark, so it never
@@ -910,14 +973,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     var isSidebarVisible: Bool { !sidebar.isHidden }
 
-    /// A project window's tree stays on its project. Otherwise it follows the active tab: its git work
-    /// tree, or its folder when outside one.
+    /// A project window's tree stays on its project. Otherwise it follows the active tab into the project it is in (its
+    /// git work tree, or its folder when outside one), offering Open as Project Window; in a folder that is never a
+    /// project (the home folder, /: ProjectRoot.project) it shows "No project open", and nothing there is read.
     private func updateProjectRoot() {
         guard isSidebarVisible else { return }
         if let project {
             guard projectKey != project else { return }
             projectKey = project
-            sidebar.setRoot(project)
+            sidebar.offerProjectWindow(nil)
+            // A folder that is never a project (the home folder opened as one): its files, and nothing scanned there.
+            sidebar.setRoot(project, browsing: ProjectRoot.isNeverRoot(project))
             return
         }
         // A remote tab's folder is on its host, not this Mac: the tree stays where it was.
@@ -925,15 +991,42 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let key = tab.id.uuidString + "\u{0}" + tab.directory
         guard key != projectKey else { return }
         projectKey = key
-        sidebar.setRoot(ProjectRoot.find(from: tab.directory))
+        if let root = ProjectRoot.project(from: tab.directory) {
+            sidebar.setRoot(root)
+            sidebar.offerProjectWindow(sidebar.root?.path ?? root)
+        } else if browsesHome {
+            sidebar.offerProjectWindow(nil)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+        } else {
+            sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
+        }
         AppDelegate.shared.projectsChanged()
+    }
+
+    /// Browse Home Folder: the home folder's tree in this window, while its tab is in no project. Never a project: no git,
+    /// Databases, Services or Agent Sessions there, and each folder in it, Desktop and Documents too, read only as the user
+    /// opens it (when macOS asks for those, it is because the user did).
+    func browseHomeFolder() {
+        browsesHome = true
+        projectKey = nil
+        // With a remote tab in front the tree stays as it was (updateProjectRoot), but this click asks for it to change.
+        // The next local tab is placed afresh: in the home folder it keeps this tree, in a project it shows that one.
+        if activeTab?.remote != nil {
+            sidebar.offerProjectWindow(nil)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+            return
+        }
+        updateProjectRoot()
     }
 
     // MARK: find and replace in files
 
-    /// The folder searches cover: the project, else what the sidebar shows, else the tab's git root.
+    /// The folder searches cover: the project, else what the sidebar shows, else the project the tab is in, else its
+    /// folder (the home folder, whose protected places the searches leave out: ProtectedPlaces).
     var searchRoot: String {
-        project ?? sidebar.root?.path ?? activeTab.flatMap { $0.remote == nil ? ProjectRoot.find(from: $0.directory) : nil } ?? NSHomeDirectory()
+        if let root = project ?? sidebar.root?.path { return root }
+        guard let tab = activeTab, tab.remote == nil else { return NSHomeDirectory() }
+        return ProjectRoot.project(from: tab.directory) ?? tab.directory
     }
 
     @objc func findInFiles(_ sender: Any?) {
@@ -1006,6 +1099,103 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if window.isVisible && window.attachedSheet == nil { opensWelcome = false } // close was refused
     }
 
+    // MARK: project colour
+
+    /// The project's colour on the top row: as kept, or on the project's first open the colour the other project windows
+    /// use least, kept from then on. When the window takes its project and when a colour or Show Project Colors changes;
+    /// never in `refresh`.
+    private func takeProjectColor() {
+        projectColorEntry = projectColorKey.flatMap { (key: String) -> ProjectColors.Entry? in
+            ProjectColorStore.entry(for: key, inUse: colorsInUse(besides: key), open: openColorKeys)
+        }
+        paintProjectColor()
+    }
+
+    /// The other project windows' colours, one for each window, leaving out `key`'s own (a worktree window of this
+    /// repository): what a pick for `key` should not take while another is free.
+    private func colorsInUse(besides key: String) -> [ProjectColor] {
+        let others: [TerminalWindowController] = AppDelegate.shared.controllers.filter { (other: TerminalWindowController) -> Bool in
+            other !== self && !other.hasClosed && other.projectColorKey != key
+        }
+        return others.compactMap(\.projectColor)
+    }
+
+    private var openColorKeys: Set<String> {
+        Set(AppDelegate.shared.controllers.compactMap(\.projectColorKey) + [projectColorKey].compactMap { $0 })
+    }
+
+    /// The bars of the top row, each with its slice of the glow.
+    private var projectGlows: [ProjectGlow] {
+        [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow]
+    }
+
+    private func paintProjectColor() {
+        let peak: NSColor? = ProjectColorStore.isShown ? projectColor?.glowColor : nil
+        let dimmed: Bool = !isActiveWindow
+        for glow in projectGlows {
+            glow.peak = peak
+            glow.dimmed = dimmed
+        }
+    }
+
+    /// The window in use: in front of the active app, its traffic lights in colour. The others' glow is dimmed.
+    private var isActiveWindow: Bool {
+        guard let window, NSApp.isActive else { return false }
+        return window.isMainWindow || window.isKeyWindow
+    }
+
+    /// The window came into use or went out of it, or the app did.
+    func activityChanged() {
+        let dimmed: Bool = !isActiveWindow
+        for glow in projectGlows { glow.dimmed = dimmed }
+    }
+
+    /// A pane moved, showed or hid (HairlineSplitView.onPanesPlaced): each bar of the top row draws its slice again if it
+    /// moved within the glow's reach.
+    private func projectGlowMoved() {
+        for glow in projectGlows { glow.moved() }
+    }
+
+    /// This window's project's colour, or another's that its repository's worktree windows share, or Show Project Colors.
+    @objc private func projectColorsChanged() { takeProjectColor() }
+
+    /// View › Project Color: a colour for this window's project, which its repository's worktree windows share,
+    /// Automatic, or None for This Project.
+    @objc func setProjectColor(_ sender: NSMenuItem) {
+        guard let key = projectColorKey, let id = sender.representedObject as? String else { return NSSound.beep() }
+        switch id {
+        case ProjectColorMenu.automaticID:
+            ProjectColorStore.automatic(for: key, inUse: colorsInUse(besides: key), open: openColorKeys)
+        case ProjectColorMenu.noneID:
+            ProjectColorStore.choose(nil, for: key, open: openColorKeys)
+        default:
+            guard let color = ProjectColor(id: id) else { return }
+            ProjectColorStore.choose(color, for: key, open: openColorKeys)
+        }
+    }
+
+    /// The window's colour checked, and Automatic while it is the one picked for it; nothing to choose without a project
+    /// or while Show Project Colors is off.
+    private func validateProjectColor(_ item: NSMenuItem) -> Bool {
+        let id: String? = item.representedObject as? String
+        let entry: ProjectColors.Entry? = projectColorEntry
+        let on: Bool
+        if id == ProjectColorMenu.automaticID {
+            on = entry?.chosen == false
+        } else if id == ProjectColorMenu.noneID {
+            on = entry != nil && entry?.color == nil
+        } else {
+            on = entry?.color != nil && entry?.color?.id == id
+        }
+        item.state = on ? .on : .off
+        return projectColorKey != nil && ProjectColorStore.isShown
+    }
+
+    /// The top row's right-click; none in a window with no project, which has no colour.
+    func projectColorMenu() -> NSMenu? {
+        projectColorKey == nil ? nil : ProjectColorMenu.contextMenu(for: self)
+    }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let valid = validateTabCommand(item) { return valid } // TabMenus.swift
         let gitActions: [Selector] = [#selector(showBranches(_:)), #selector(showWorktrees(_:)), #selector(gitFetch(_:)), #selector(gitUpdate(_:)), #selector(gitCommit(_:)),
@@ -1016,6 +1206,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(setProjectColor(_:)) { return validateProjectColor(item) }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
@@ -1162,7 +1353,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// The traffic lights sit over whichever pane is top-left; full screen has none. Tab bars along the
-    /// top of the window drag it, like a title bar; one lower down does not.
+    /// top of the window drag it, like a title bar, and have the project's glow; one lower down has neither.
     private func updateInsets() {
         let lights: CGFloat = isFullScreen ? 8 : 78
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
@@ -1177,11 +1368,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let editorAtTop = terminalPosition != .top
         tabBar.leadingInset = terminalAtCorner ? corner : 8
         tabBar.dragsWindow = terminalAtTop
+        tabBar.projectGlow.onTopRow = terminalAtTop
         let afterRail = max(8, corner - TerminalRail.width - workSplit.dividerThickness)
         editorArea.tabBar.leadingInset = terminalAtCorner ? 8 : (railedLeft ? afterRail : corner)
         // The rail itself under the traffic lights: its arrow goes below them.
         terminalRail.topInset = railedLeft && corner > 8 ? TabBarView.height : 0
         editorArea.tabBar.dragsWindow = editorAtTop
+        editorArea.tabBar.projectGlow.onTopRow = editorAtTop
         // The sidebar hidden: the bar at the top-left corner offers it back.
         tabBar.showsSidebarButton = !isSidebarVisible && terminalAtCorner
         editorArea.tabBar.showsSidebarButton = !isSidebarVisible && !terminalAtCorner
@@ -2344,16 +2537,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowDidBecomeKey(_ notification: Notification) {
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
+        activityChanged()
         refreshVisibility()
         refresh()
+        // Another window may have opened a project since: "No project open" lists it.
+        if sidebar.showsNoProject { sidebar.noProject.show(recent: AppDelegate.shared.recentProjects) }
+        sidebar.retryDenied() // back from System Settings, perhaps, with a folder allowed
         sidebar.scheduleSessionsReload() // agents in other terminals may have kept new ones
         if let view = activeTab?.view, window?.firstResponder !== view, !(window?.firstResponder is NSTextView), !terminalCollapsed {
             window?.makeFirstResponder(view)
         }
     }
 
-    func windowDidResignKey(_ notification: Notification) { refreshVisibility() }
-    func windowDidResignMain(_ notification: Notification) { refreshVisibility() }
+    func windowDidResignKey(_ notification: Notification) {
+        activityChanged()
+        refreshVisibility()
+    }
+    func windowDidBecomeMain(_ notification: Notification) { activityChanged() }
+    func windowDidResignMain(_ notification: Notification) {
+        activityChanged()
+        refreshVisibility()
+    }
 
     func windowWillEnterFullScreen(_ notification: Notification) { isFullScreen = true; updateInsets() }
     func windowWillExitFullScreen(_ notification: Notification) { isFullScreen = false; updateInsets() }

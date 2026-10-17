@@ -10,7 +10,10 @@ import Foundation
 ///     ESC ] 6973 ; <nonce> ; cwd ; <base64 directory> BEL                    precmd, the working directory
 ///     ESC ] 6973 ; <nonce> ; jobs ; <count> ; <base64 job list> BEL          precmd, suspended/background jobs
 ///
-/// Tab completion's hook (ZshCompletionScript) adds arm, tab, comp, done and line (see CompletionProtocol).
+/// Tab completion's hook (ZshCompletionScript) adds arm, tab, comp, done and line (see CompletionProtocol), and the
+/// history hook (ZshHistoryScript) one more, at each new line:
+///
+///     ESC ] 6973 ; <nonce> ; hist ; <version> BEL                            zle-line-init, history's key is bound
 ///
 /// "expanded" is the line with aliases expanded, so `claude-auto` (an alias for `claude …`) is seen as an agent.
 ///
@@ -37,6 +40,8 @@ public enum ShellIntegration {
         case directory(String)
         case jobs(Int, summary: String)
         case completion(CompletionProtocol.Message)
+        /// A line is being edited and history's key is bound (ShellHistory), by a hook of this version.
+        case history(version: Int)
     }
 
     /// Parses an OSC 6973 payload (everything after `6973;`). Returns nil unless it carries `nonce`.
@@ -61,6 +66,9 @@ public enum ShellIntegration {
         case "cwd":
             guard let dir = decode(value), dir.hasPrefix("/"), dir.utf8.count <= 4096 else { return nil }
             return .directory(dir)
+        case "hist":
+            guard value.count <= 9, let version = Int(value), version >= 1 else { return nil }
+            return .history(version: version)
         case let kind where CompletionProtocol.markKinds.contains(kind):
             return CompletionProtocol.parse(kind: kind, value: value).map(Event.completion)
         default:
@@ -74,12 +82,17 @@ public enum ShellIntegration {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Writes `.zshenv`, and Tab completion's `completion.zsh` beside it, under `directory` (each only if it
-    /// changed) and returns the directory to use as `ZDOTDIR`.
+    /// Writes `.zshenv`, and beside it Tab completion's `completion.zsh` and the history hook's `history.zsh`, under
+    /// `directory` (each only if it changed) and returns the directory to use as `ZDOTDIR`.
     public static func install(in directory: URL) throws -> URL {
         let zdotdir = directory.appendingPathComponent("shell/zsh", isDirectory: true)
         try FileManager.default.createDirectory(at: zdotdir, withIntermediateDirectories: true)
-        for (name, script) in [(".zshenv", zshenvScript), ("completion.zsh", ZshCompletionScript.script)] {
+        let files: [(name: String, script: String)] = [
+            (".zshenv", zshenvScript),
+            ("completion.zsh", ZshCompletionScript.script),
+            ("history.zsh", ZshHistoryScript.script),
+        ]
+        for (name, script) in files {
             let file = zdotdir.appendingPathComponent(name)
             let data = Data(script.utf8)
             if (try? Data(contentsOf: file)) != data {
@@ -139,7 +152,9 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
 
   __nextterm_preexec() {
     emulate -L zsh
-    local line=$1 expanded=${3-$1}
+    # A line the history hook kept out of the history (history.zsh) comes with no typed text: the hook kept it.
+    local line=${1:-${__nextterm_hran-}} expanded=${3-$1}
+    [[ -n ${__nextterm_hran-} ]] && __nextterm_hran=
     __nextterm_jobtext "$line"
     [[ -n $REPLY ]] && line=$REPLY expanded=$REPLY
     builtin printf '\033]6973;%s;cmd;%s;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$line")" "$(__nextterm_b64 "$expanded")"
@@ -160,6 +175,12 @@ if [[ -o interactive && -n "${__nextterm_nonce-}" && -z "${__nextterm_hooked-}" 
       typeset -g __nextterm_cstart=$__nextterm_completion
       __nextterm_completion=
       [[ -r $__nextterm_dir/completion.zsh ]] && builtin source "$__nextterm_dir/completion.zsh"
+    fi
+    # The history hook, once, the same way, with Tab completion on or off: a line Next Term or an agent submits by
+    # itself stays out of the history (history.zsh).
+    if [[ -z ${__nextterm_hloaded-} ]]; then
+      typeset -g __nextterm_hloaded=1
+      [[ -r $__nextterm_dir/history.zsh ]] && builtin source "$__nextterm_dir/history.zsh"
     fi
   }
 
