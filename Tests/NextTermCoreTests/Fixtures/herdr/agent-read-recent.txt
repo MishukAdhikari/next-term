@@ -1,0 +1,8 @@
+> run the tests
+⏺ Running the test suite.
+  ⎿  42 passed, 0 failed
+⏺ All 42 tests pass.
+
+╭──────────────────────────────────────────╮
+│ >                                        │
+╰──────────────────────────────────────────╯

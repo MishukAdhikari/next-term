@@ -31,7 +31,8 @@ import Testing
         let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.9.1.json"), exit: 0)))
         #expect(listed == [
             HerdrAgent(paneID: "w1:p1", customName: "api", kind: "claude", status: .working, title: "Fix the login",
-                       directory: "/home/me/api/src", workspaceID: "w1", tabID: "w1:t1", focused: true, stateSeq: 9),
+                       directory: "/home/me/api/src", workspaceID: "w1", tabID: "w1:t1", focused: true, stateSeq: 9,
+                       session: AgentSessionRef(source: "hook", agent: "claude", kind: "id", value: "7d2e")),
             HerdrAgent(paneID: "w2:p1", kind: "codex", status: .blocked, directory: "/home/me/web", workspaceID: "w2", tabID: "w2:t1",
                        stateSeq: 4),
         ])
@@ -59,8 +60,28 @@ import Testing
 
     @Test func herdr070AndItsCustomStatusRead() throws {
         let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.7.0.json"))))
-        #expect(listed == [HerdrAgent(paneID: "w1:p1", kind: "Claude Code", status: .idle, title: "Refactor the poller",
-                                      directory: "/srv/app/api", workspaceID: "w1", tabID: "w1:t1", focused: true)])
+        // herdr's display name is the name shown; the kind stays what runs.
+        let session = AgentSessionRef(source: "hook", agent: "claude", kind: "session_id", value: "a1b2")
+        #expect(listed == [HerdrAgent(paneID: "w1:p1", kind: "claude", displayName: "Claude Code", status: .idle,
+                                      title: "Refactor the poller", directory: "/srv/app/api", workspaceID: "w1", tabID: "w1:t1",
+                                      focused: true, session: session)])
+        #expect(listed.first?.name == "Claude Code")
+    }
+
+    @Test func herdr095sNamesAndTitlesAreItsPresentationOnes() throws {
+        let listed = try #require(agents(HerdrAgent.listing(output: try fixture("agent-list-0.9.5-metadata.json"))))
+        // A naming plugin's display name and title, over the terminal's own title.
+        #expect(listed[0].name == "Claude: auth" && listed[0].kind == "claude" && listed[0].displayName == "Claude: auth")
+        #expect(listed[0].title == "Refactor auth middleware")
+        #expect(listed[0].session == AgentSessionRef(source: "herdr:claude", agent: "claude", kind: "id", value: "6f1c2a"))
+        // No metadata: the terminal's title without its spinner, and the kind as the name.
+        #expect(listed[1].name == "codex" && listed[1].displayName == nil && listed[1].title == "Fix login" && listed[1].session == nil)
+        // A display name that is only the kind again adds nothing: the name it was given shows.
+        let same = #"{"agents":[{"pane_id":"w1:p1","name":"api","agent":"claude","display_agent":"claude","agent_status":"idle"}]}"#
+        #expect(agents(HerdrAgent.listing(output: same))?.first?.name == "api")
+        // A session reference without a value is none.
+        let empty = #"{"agents":[{"pane_id":"w1:p1","agent":"claude","agent_status":"idle","agent_session":{"kind":"id"}}]}"#
+        #expect(agents(HerdrAgent.listing(output: empty))?.first?.session == nil)
     }
 
     @Test func herdr0510sMinimalShapeAndOldPaneIDsRead() throws {

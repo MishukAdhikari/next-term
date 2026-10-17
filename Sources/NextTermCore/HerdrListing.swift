@@ -105,10 +105,15 @@ public struct HerdrAgent: Equatable, Sendable {
     public var paneID: String
     /// The name the user gave it in herdr (`name`), nil when it has none.
     public var customName: String?
-    /// What runs in the pane, as herdr names it (`display_agent`, else `agent`; a pane's `label` before herdr had
-    /// either): "claude", "Claude Code".
+    /// What runs in the pane, as herdr names it (`agent`; a pane's `label` before herdr had it): "claude", "codex". The
+    /// rules for one kind of agent (its question's reader, Codex's `unknown` at rest) key on it.
     public var kind: String?
+    /// The name herdr shows for it (`display_agent`), which naming plugins set through herdr's metadata ("Claude:
+    /// auth"); nil when herdr gives none, or only the kind again.
+    public var displayName: String?
     public var status: Status
+    /// herdr's title for it: its presentation `title` (what naming plugins write), else its terminal's title without
+    /// the spinner herdr strips (`terminal_title_stripped`). A `title` that is only the terminal's own is shown stripped.
     public var title: String?
     public var directory: String?
     /// herdr's workspace and tab ids for the pane (`w1`, `w1:t1`), when its list gives them.
@@ -122,13 +127,18 @@ public struct HerdrAgent: Equatable, Sendable {
     public var completionSeq: Int?
     /// herdr is still starting the agent.
     public var launchPending: Bool
+    /// The agent's own session herdr keeps a reference to (`agent_session`, herdr 0.6.5 and later), the one place its
+    /// transcript is looked for; nil when herdr names none.
+    public var session: AgentSessionRef?
 
-    public init(paneID: String, customName: String? = nil, kind: String? = nil, status: Status, title: String? = nil,
-                directory: String? = nil, workspaceID: String? = nil, tabID: String? = nil, focused: Bool = false,
-                stateSeq: Int? = nil, completionSeq: Int? = nil, launchPending: Bool = false) {
+    public init(paneID: String, customName: String? = nil, kind: String? = nil, displayName: String? = nil, status: Status,
+                title: String? = nil, directory: String? = nil, workspaceID: String? = nil, tabID: String? = nil,
+                focused: Bool = false, stateSeq: Int? = nil, completionSeq: Int? = nil, launchPending: Bool = false,
+                session: AgentSessionRef? = nil) {
         self.paneID = paneID
         self.customName = customName
         self.kind = kind
+        self.displayName = displayName
         self.status = status
         self.title = title
         self.directory = directory
@@ -138,10 +148,11 @@ public struct HerdrAgent: Equatable, Sendable {
         self.stateSeq = stateSeq
         self.completionSeq = completionSeq
         self.launchPending = launchPending
+        self.session = session
     }
 
-    /// What the agent is called: the name it was given, else what runs.
-    public var name: String { customName ?? kind ?? "agent" }
+    /// What the agent is called, as herdr shows it: its display name, else the name it was given, else what runs.
+    public var name: String { displayName ?? customName ?? kind ?? "agent" }
 
     /// The most agents one list gives.
     static let maxAgents = 500
@@ -316,19 +327,27 @@ public struct HerdrAgent: Equatable, Sendable {
         }
         let said = first(["agent_status", "agent_state", "status", "state"], max: 40) ?? ""
         let status = Status(rawValue: said.trimmingCharacters(in: .whitespaces).lowercased()) ?? .unknown
+        let kind = first(["agent", "label"], max: 80)
+        let shown = first(["display_agent"], max: 80)
+        // herdr's presentation title, unless it is only the terminal's raw title, which herdr gives stripped too.
+        let presented = first(["title"], max: 80)
+        let terminal = first(["terminal_title"], max: 80)
+        let title = presented.flatMap { $0 == terminal ? nil : $0 } ?? first(["terminal_title_stripped"], max: 80) ?? presented
         return HerdrAgent(
             paneID: first(["pane_id", "terminal_id"], max: 80) ?? "",
             customName: first(["name"], max: 80),
-            kind: first(["display_agent", "agent", "label"], max: 80),
+            kind: kind,
+            displayName: shown.flatMap { $0 == kind ? nil : $0 },
             status: status,
-            title: first(["terminal_title_stripped", "title"], max: 80),
+            title: title,
             directory: first(["foreground_cwd", "cwd"], max: 1024),
             workspaceID: first(["workspace_id"], max: 80),
             tabID: first(["tab_id"], max: 80),
             focused: boolean(item["focused"]),
             stateSeq: count(item["state_change_seq"]),
             completionSeq: count(item["completion_seq"]),
-            launchPending: boolean(item["launch_pending"])
+            launchPending: boolean(item["launch_pending"]),
+            session: AgentSessionRef(item["agent_session"])
         )
     }
 
@@ -432,5 +451,30 @@ public struct HerdrWatch: Equatable, Sendable {
         case .missing: return "herdr not answering: the status check didn’t find herdr on the host"
         case .agents, .needsRestart: return "herdr not answering"
         }
+    }
+}
+
+/// The agent's own session, as herdr keeps a reference to it (`agent_session`): whose store it is in (`source`, `agent`)
+/// and an id or a path in it (`kind` "id" or "path", `value`). herdr's words, kept as given.
+public struct AgentSessionRef: Equatable, Sendable {
+    public var source: String
+    public var agent: String
+    public var kind: String
+    public var value: String
+
+    public init(source: String, agent: String, kind: String, value: String) {
+        self.source = source
+        self.agent = agent
+        self.kind = kind
+        self.value = value
+    }
+
+    /// herdr's object, or nil without a value in it.
+    init?(_ value: Any?) {
+        guard let object = value as? [String: Any] else { return nil }
+        let text = { (key: String, max: Int) in HerdrAgent.string(object[key], max: max) ?? "" }
+        let found = text("value", 1024)
+        guard !found.isEmpty else { return nil }
+        self.init(source: text("source", 80), agent: text("agent", 80), kind: text("kind", 20), value: found)
     }
 }
