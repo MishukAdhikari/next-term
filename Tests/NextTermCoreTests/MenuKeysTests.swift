@@ -56,6 +56,20 @@ struct MenuKeysTests {
         }
     }
 
+    @Test func goToNextAgentNeedingYouIsShiftCommandUInEverySet() {
+        // ⇧⌘U is no other command's in Next Term's set, VS Code's or JetBrains', the keys outside the menus included.
+        let key = KeyChord(key: "u", command: true, shift: true)
+        let bindings = KeyBindings()
+        for preset in KeymapPreset.allCases {
+            let keys = Self.defaults(under: preset)
+            #expect((keys["goToNextAgentNeedingYou:"] ?? nil) == key, "\(preset.name)")
+            let others: [String] = bindings.owners(of: key, defaults: keys, except: "goToNextAgentNeedingYou:")
+            #expect(others.isEmpty, "\(preset.name): \(others)")
+            #expect(bindings.sharers(of: key, defaults: keys, except: "goToNextAgentNeedingYou:").isEmpty, "\(preset.name)")
+        }
+        #expect(key.display == "⇧⌘U")
+    }
+
     @Test func fetchSharesCommandRWithTheBranchPopupsFetch() {
         let bindings = KeyBindings()
         let keys = Self.defaults(under: .nextTerm)

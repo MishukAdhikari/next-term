@@ -81,13 +81,18 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   menu or Settings › Terminal. ⌘J folds the terminal away so the editor gets the room, and brings it back
   at its size.
 - **Projects.** ⌘O brings up the Welcome window with the keyboard in its search: type a few letters, and
-  Return goes to the window of an open project, opens a closed one, or connects to a saved server. Open
-  projects come first, each marked with a filled dot and counted (a closed one has a ring), then the ones
-  you used last, including those an agent, a worktree window or a restore opened. ⌘1–⌘9 jump to the first
-  nine projects, and ⌘Return opens one in a new window. The list keeps your last 50 projects; Open Recent
-  shows 10. ⌘O again there (or Open…) opens any folder as a project. Its window keeps the project in the
-  sidebar, and new tabs open in it by default. Next Term opens to the Welcome window, reopens your last
-  projects, or opens a new terminal, as you choose. Open Recent and Close Project too.
+  Return goes to the window of an open project, opens a closed one, or goes to a saved server's window,
+  connecting when none is open. Open projects come first, each marked with a filled dot and counted (a
+  closed one has a ring), then the ones you used last, including those an agent, a worktree window or a
+  restore opened. Every open window has a row: a project's other windows under it, and New Terminal's and
+  a server's windows too, each with its agents' marks as the tab bar shows them, a lost connection's
+  server mark among them. ⌘1–⌘9 jump to the first nine rows, and ⌘Return opens a project, or connects to a
+  server, in a new window. The list keeps your last 50 projects; Open Recent shows 10. ⌘O again there (or
+  Open…) opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in
+  it by default. Window titles start with the project ("shop ▸ fix-login — claude"; "~/Downloads — vim"
+  with no project), so the Window menu and Mission Control tell windows apart. Next Term resumes where you
+  left off by default (the first launch shows the Welcome window), or opens to the Welcome window or a new
+  terminal, as you choose. Open Recent and Close Project too.
 - **Project colours.** Each project's window has a colour of its own, a soft glow along its top row,
   strongest behind the window's buttons and gone 320 points in, so two windows side by side are told
   apart at a glance. It is picked the first time a project opens (the colour the open windows use least)
@@ -164,7 +169,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   a preview of every replacement; a file an agent changed since the search is never overwritten.
 - **Dock badge and notifications** for agents that finished, in another app or in a tab you are not
   looking at, and for commands that finished while you were in another app. Settings > Notifications
-  chooses which ones notify, after how long, and with or without a sound.
+  chooses which ones notify, after how long, and with or without a sound. Agents › Go to Next Agent
+  Needing You (⇧⌘U) goes to the one that has waited longest, in any window: a decision first, then a
+  failure, then a finished agent; press it again for the next. The Dock menu lists the windows waiting.
 - **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
   command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code or an editor built on it (Cursor, Devin Desktop, Trae,
@@ -247,6 +254,23 @@ How it knows, most reliable first:
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
 
+## Many projects and agents
+
+One window per project, and a few keys to move between them:
+
+1. In Settings › General, leave At launch on Resume where I left off (the default), and set Projects to
+   Open in New Window (or File › Open Projects In › New Window), so opening a project never asks.
+2. Keep one window per repository for your own work. For an agent's task that would edit the same files,
+   choose Open in New Worktree… on a branch (⌥⌘B): the task gets its own branch and window ("shop ▸
+   fix-login"). Rename the agent's tab after its task (⌥⌘R). Plain shells go in tabs (⌘T).
+3. Press ⇧⌘U until nothing needs you. The Dock badge counts what you have not looked at yet; a question
+   you looked at but did not answer keeps its amber mark in ⌘O.
+4. ⌘O then ↩ goes back to the window you used last; ⌘O and a few letters goes anywhere, and shows every
+   window's agents. ⌘` moves between windows.
+5. View › Terminal Tabs › Left keeps tab names and marks readable; View › Project Color gives each
+   repository its colour.
+6. When a worktree's branch is merged, close its window with Close and Remove Worktree.
+
 ## Keyboard
 
 | Action | Keys |
@@ -256,6 +280,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New remote tab (on one of your servers) | ⌥⌘T |
 | Switch to or open a project (the Welcome window: ↩ go there, ⌘↩ new window, ⌘1–⌘9 the first nine; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
+| Go to the next agent needing you, in any window (again for the one after) | ⇧⌘U |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down (in the editor, ⌘D duplicates the line) | ⌘D / ⌘⇧D |

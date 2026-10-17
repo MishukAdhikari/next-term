@@ -5,7 +5,7 @@ import Testing
 @Suite struct LaunchSettingsTests {
     @Test func defaults() {
         let s = LaunchSettings()
-        #expect(s.opens == LaunchOpens.welcome)
+        #expect(s.opens == LaunchOpens.lastProjects && LaunchOpens.standard == .lastProjects)
         #expect(!s.opensChosen)
         #expect(s.askToReopenOnQuit)
         #expect(s.keepScrollback)
@@ -18,7 +18,7 @@ import Testing
 
     @Test func aStoredNewTerminalReadsBack() throws {
         // "Open a new terminal" is kept as `newTerminal`. A build from before it reads that as any unknown value, the
-        // Welcome window, and so does this one for a value it does not know.
+        // Welcome window; this one reads a value it does not know as the default, Resume.
         let (defaults, name) = try TestDefaults.make("launch-settings-new-terminal")
         defer { TestDefaults.remove(defaults, name) }
         var terminal = LaunchSettings()
@@ -31,14 +31,14 @@ import Testing
         #expect(read.opens.title == "Open a new terminal")
         defaults.set("newTerminals", forKey: LaunchSettings.Key.opens)
         let unknown = LaunchSettings(defaults: defaults)
-        #expect(unknown.opens == .welcome && !unknown.opensChosen)
+        #expect(unknown.opens == .lastProjects && !unknown.opensChosen)
     }
 
     @Test func readAndSavedInTheDefaults() throws {
         let (defaults, name) = try TestDefaults.make("launch-settings-tests")
         defer { TestDefaults.remove(defaults, name) }
-        // Never set, for a new user and for one updating into this release: the Welcome window, never chosen, Ask on, and
-        // scrollback kept.
+        // Never set, for a new user and for one updating into this release: Resume, never chosen, Ask on, and scrollback
+        // kept.
         #expect(LaunchSettings(defaults: defaults) == LaunchSettings())
         #expect(!LaunchSettings(defaults: defaults).opensChosen)
         var changed = LaunchSettings()
@@ -143,10 +143,28 @@ import Testing
         }
     }
 
-    @Test func aNormalLaunchShowsTheWelcomeWindowByDefault() {
+    @Test func aNormalLaunchUnderWelcomeShowsTheWelcomeWindow() {
         // AE1: the projects from the last quit are there, and only listed.
         #expect(decide(input(.normal)) == .welcome)
         #expect(decide(input(.normal, .welcome), existing: []) == .welcome)
+    }
+
+    @Test func aLaunchThatChoseNothingResumesAndTheFirstShowsTheWelcomeWindow() {
+        // Never chosen: what was open at the last quit comes back.
+        var unchosen = LaunchInput(kind: .normal, restore: .notRun, terminalWindowOpen: false, settings: LaunchSettings(),
+                                   sessionProjects: [app, api], recentProjects: [api, app], mayOfferImport: false)
+        #expect(!unchosen.settings.opensChosen)
+        #expect(decide(unchosen) == .reopen([app, api]))
+        // The very first run has nothing to bring back: the import offer, then the Welcome window; or that window alone.
+        unchosen.sessionProjects = []
+        unchosen.recentProjects = []
+        #expect(decide(unchosen) == .welcome)
+        unchosen.mayOfferImport = true
+        #expect(decide(unchosen) == .importThenWelcome)
+        // A Dock click with every window closed opens the most recent project, as Resume does.
+        var dock = input(.dockReopen)
+        dock.settings = LaunchSettings()
+        #expect(decide(dock) == .reopen([api]))
     }
 
     @Test func reopenBringsBackTheProjectsOpenAtTheLastQuitThatStillExist() {
@@ -652,7 +670,9 @@ enum RestoreFixture {
         let restore = decision.launchRestore(openedWindow: false)
         #expect(restore == .notRun)
         let app = "/Users/x/Code/app"
-        var launch = LaunchInput(kind: .normal, restore: restore, terminalWindowOpen: false, settings: LaunchSettings(),
+        var welcome = LaunchSettings()
+        welcome.opens = .welcome
+        var launch = LaunchInput(kind: .normal, restore: restore, terminalWindowOpen: false, settings: welcome,
                                  sessionProjects: [app], recentProjects: [app], mayOfferImport: false)
         #expect(LaunchDecision.opening(launch) { _ in true } == .welcome)
         launch.settings.opens = .lastProjects

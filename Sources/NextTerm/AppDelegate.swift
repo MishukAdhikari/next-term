@@ -495,7 +495,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
-            openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
+            var welcomeFirst = LaunchSettings()
+            welcomeFirst.opens = .welcome
+            openAtLaunch(kind: .normal, restore: .notRun, settings: welcomeFirst, mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
@@ -1017,6 +1019,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// A terminal window closed.
     private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
+        // Out of the index at once: Go to Next Agent Needing You and the Welcome window never go to a closed window.
+        windowIndex.remove(window: closed.indexID)
+        self.welcome?.windowsChanged()
         // Defer: the window is still mid-close in this call.
         DispatchQueue.main.async { [self] in
             controllers.removeAll { $0 === closed }
@@ -1127,9 +1132,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
     typealias ProjectTarget = ProjectOpening.Setting
 
+    /// File › Open Projects In, Settings › General's Projects row, the Ask dialog's remembered choice or an import set
+    /// `projectTarget`: the Settings row follows.
+    static let projectTargetChanged = Notification.Name("NextTermProjectTargetChanged")
+
     var projectTarget: ProjectTarget {
         get { ProjectTarget(rawValue: UserDefaults.standard.string(forKey: "openProjectsIn") ?? "") ?? .ask }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn") }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn")
+            NotificationCenter.default.post(name: Self.projectTargetChanged, object: self)
+        }
     }
 
     private var welcome: WelcomeWindowController?
@@ -1303,6 +1315,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
+        // The windows with a terminal that needs you, first: the one Go to Next Agent Needing You goes to at the top, each
+        // with its most urgent mark, as its tab bar shows it.
+        refreshWindowIndex()
+        for window in windowIndex.windowsWaiting {
+            guard let waiting = windowIndex.firstWaiting(in: window.id) else { continue }
+            let item = menu.addItem(withTitle: window.title, action: #selector(goToWaitingWindow(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = window.id
+            item.image = StatusGlyph.image(for: waiting.state)
+            item.toolTip = window.marks.spoken(working: false)
+        }
+        if menu.numberOfItems > 0 { menu.addItem(.separator()) }
         menu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "").target = self
         let projects = recentProjects
         if !projects.isEmpty {
@@ -1495,6 +1519,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     static func clampedFontSize(_ size: CGFloat) -> CGFloat {
         min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
+    }
+
+    // MARK: every window's agents
+
+    /// Every terminal window and what its terminals show (WindowIndex): for Agents › Go to Next Agent Needing You, the
+    /// Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own status, so
+    /// nothing is polled for it, and leaves it as it closes.
+    private(set) var windowIndex = WindowIndex()
+
+    /// A window refreshed: its entry as it is now. A change reaches the Welcome window while it shows.
+    func indexed(_ controller: TerminalWindowController) {
+        // A window being made is told once it is listed; one closing, never again.
+        guard !controller.hasClosed, controllers.contains(where: { $0 === controller }) else { return }
+        guard windowIndex.update(controller.indexEntry) else { return }
+        welcome?.windowsChanged()
+    }
+
+    /// Every window's entry as it is this moment, not at its last refresh (a window no one can see refreshes once a
+    /// second): before a key or a menu reads the index.
+    func refreshWindowIndex() {
+        for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
+    }
+
+    /// Agents › Go to Next Agent Needing You: the terminal that has waited longest for you (a decision, then a failure,
+    /// then a finished agent or command), its window brought forward and its tab or pane selected; pressed again there,
+    /// the next one, round to the first. With none, a notice says so and nothing beeps.
+    @objc func goToNextAgentNeedingYou(_ sender: Any?) {
+        refreshWindowIndex()
+        let key = NSApp.keyWindow?.windowController as? TerminalWindowController
+        // The tab in front counts as gone to only while it shows; folded, what it holds is news like any other tab's.
+        let front: TerminalTab? = key?.activeTab.flatMap { (tab: TerminalTab) -> TerminalTab? in
+            key?.isOnScreen(tab) == true ? tab : nil
+        }
+        guard let next = windowIndex.next(from: front?.id) else {
+            let shown: NSWindow? = NSApp.keyWindow ?? TerminalWindow.front
+            GitToast.show(WindowIndex.nothingWaiting, in: shown)
+            return
+        }
+        go(to: next)
+    }
+
+    /// The Dock menu's item for a window waiting for you (its `tag`, the window's id): its terminal that needs you most;
+    /// seen since, the window as it is.
+    @objc func goToWaitingWindow(_ sender: NSMenuItem) {
+        refreshWindowIndex()
+        if let waiting = windowIndex.firstWaiting(in: sender.tag) { return go(to: waiting) }
+        let controller = controllers.first { $0.indexID == sender.tag && !$0.hasClosed }
+        NSApp.activate(ignoringOtherApps: true)
+        controller?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does.
+    private func go(to waiting: WindowIndex.Waiting) {
+        guard let controller = controllers.first(where: { $0.indexID == waiting.window && !$0.hasClosed }),
+              let tab = controller.tabs.first(where: { $0.id == waiting.tab }) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.show(tab)
     }
 
     // MARK: dock badge and notifications
@@ -1802,6 +1884,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let agents = submenu(main, "Agents")
         let skills = item(agents, SkillsMenuItem.title, #selector(showSkillsSettings(_:)), "", target: self)
         MainActor.assumeIsolated { SkillsMenuItem.follow(skills) } // with the count of skill updates
+        agents.addItem(.separator())
+        // Across every window, the agent waiting longest, then the next. ⇧⌘U, U for Unread, as agent apps have it; free in
+        // every shortcut set (MenuKeys).
+        item(agents, "Go to Next Agent Needing You", #selector(goToNextAgentNeedingYou(_:)), "u", [.command, .shift], target: self)
         agents.addItem(.separator())
         item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
