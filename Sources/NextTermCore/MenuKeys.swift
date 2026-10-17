@@ -6,10 +6,10 @@ import Foundation
 public enum MenuKeys {
     /// Every menu command that has a key before the user's changes. Commands without one are left out.
     public static let defaults: [String: KeyChord] = {
-        let cmd = { (key: String) in KeyChord(key: key, command: true) }
-        let shiftCmd = { (key: String) in KeyChord(key: key, command: true, shift: true) }
-        let optCmd = { (key: String) in KeyChord(key: key, command: true, option: true) }
-        let ctrlCmd = { (key: String) in KeyChord(key: key, command: true, control: true) }
+        let cmd: (String) -> KeyChord = { KeyChord(key: $0, command: true) }
+        let shiftCmd: (String) -> KeyChord = { KeyChord(key: $0, command: true, shift: true) }
+        let optCmd: (String) -> KeyChord = { KeyChord(key: $0, command: true, option: true) }
+        let ctrlCmd: (String) -> KeyChord = { KeyChord(key: $0, command: true, control: true) }
         let up = "\u{F700}", down = "\u{F701}", left = "\u{F702}", right = "\u{F703}"
         var keys: [String: KeyChord] = [
             // Next Term
