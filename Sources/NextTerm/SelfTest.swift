@@ -4277,11 +4277,12 @@ enum SelfTest {
             delegate.editorLineHeight = savedHeight
         }
 
-        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
-        let wide = proj.appendingPathComponent("wide.md")
+        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off. (Plain text: a Markdown
+        // paragraph's wrapped rows start at the margin, as prose's do.)
+        let wide = proj.appendingPathComponent("wide.txt")
         try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)
         c.openFile(wide)
-        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.md", let layout = wideEditor.textView.layoutManager,
+        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.txt", let layout = wideEditor.textView.layoutManager,
            let container = wideEditor.textView.textContainer {
             func rows() -> Int {
                 layout.ensureLayout(for: container)
@@ -4331,7 +4332,7 @@ enum SelfTest {
             area.applyWrap()
             area.closeActive()
         } else {
-            check(false, "a markdown file opens")
+            check(false, "a file with a long line opens")
         }
         try? FileManager.default.removeItem(at: wide)
 

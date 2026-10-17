@@ -567,8 +567,9 @@ final class LineNumberRuler: NSRulerView {
 
 /// Line height for code: every line the same height (the font's natural height times the user's
 /// factor), with the text centred in it rather than sitting on the bottom as a paragraph style would
-/// put it. The gutter and the current-line band follow the same line fragments.
-final class LineSpacing: NSObject, NSLayoutManagerDelegate {
+/// put it. The gutter and the current-line band follow the same line fragments. (A Markdown file's
+/// headings have their own: MarkdownSpacing.)
+class LineSpacing: NSObject, NSLayoutManagerDelegate {
     var factor: CGFloat = 1.35
     var font: NSFont = Theme.monoFont(size: 13)
 
@@ -593,12 +594,16 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     let scrollView = NSScrollView()
     let textView: CodeTextView
     private let ruler: LineNumberRuler
-    let spacing = LineSpacing()
+    let spacing: LineSpacing
     /// A .env file's values, drawn hidden (EditorEnvValues.swift).
     let envValues = EnvValueMask()
+    /// A Markdown file's styles (up to MarkdownSyntax.previewMaxLength): nil for every other file.
+    private(set) var markdown: MarkdownStyler?
 
     init(document: EditorDocument) {
         self.document = document
+        let styled = MarkdownSyntax.isMarkdown(fileName: document.name) && document.storage.length <= MarkdownSyntax.previewMaxLength
+        spacing = styled ? MarkdownSpacing() : LineSpacing()
         let layoutManager = CodeLayoutManager()
         layoutManager.allowsNonContiguousLayout = true
         layoutManager.delegate = spacing
@@ -651,6 +656,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.delegate = self
         textView.setAccessibilityLabel(document.name)
+        if styled { startMarkdown(layoutManager) }
         applyFont()
         document.onTextReplaced = { [weak self] in
             self?.restyleReplacedLines()
@@ -659,6 +665,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         document.onLinesEdited = { [weak self] old, newLast in
             self?.shiftBlame(old, newLast)
             self?.envValues.textEdited()
+            self?.markdown?.textEdited(old, newLast: newLast)
         }
         layoutManager.hiddenRanges = { [weak self] in self?.hiddenEnvValues() ?? [] }
         ruler.blameSource = { [weak self] in self?.editedBlame }
@@ -720,6 +727,8 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     func applyFont() {
         let font = EditorDocument.font
         spacing.font = font
+        markdown?.fonts = MarkdownFonts(base: font)
+        markdownStyles = [:]
         spacing.factor = AppDelegate.shared?.editorLineHeight ?? 1.35
         textView.font = font
         textView.typingAttributes = EditorDocument.attributes
@@ -740,6 +749,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         document.storage.addAttributes([.font: font, .paragraphStyle: style], range: NSRange(location: 0, length: document.storage.length))
         if document.lines.count > 0 { applyWrapIndents(0...(document.lines.count - 1)) }
         document.storage.endEditing()
+        markdown?.restyleAll(storageIsBase: true)
         textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: document.storage.length), actualCharacterRange: nil)
         ruler.updateThickness()
         ruler.needsDisplay = true
@@ -755,6 +765,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     /// A wrapped line continues under its own indentation plus two columns, so a long line still reads
     /// as one statement at its level instead of spilling back to the margin.
     private func applyWrapIndents(_ lineRange: ClosedRange<Int>) {
+        guard markdown == nil else { return } // a Markdown file's lines hang as MarkdownStyler says
         let text = document.storage.string as NSString
         let index = document.lines
         let tabColumns = 4
@@ -779,6 +790,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
 
     private func restyleReplacedLines() {
+        markdown?.run()
         guard let lines = document.takePendingIndentLines() else { return }
         document.storage.beginEditing()
         applyWrapIndents(lines)
@@ -802,8 +814,10 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             applyWrapIndents(lines)
             document.storage.endEditing()
         }
-        // Colour the edited line now, before it is drawn; longer runs continue on later turns.
+        // Colour and style the edited line now, before it is drawn; longer runs continue on later turns. A line an input
+        // method is composing in keeps its look until the text is committed.
         document.highlighter?.run()
+        if !textView.hasMarkedText() { markdown?.run() }
         ruler.updateThickness()
         ruler.needsDisplay = true
         scheduleChangeMarks()
@@ -1047,5 +1061,38 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {
         textView.isEditable
+    }
+
+    // MARK: Markdown
+
+    /// A Markdown file's styler, set up before the first font is applied (which styles it).
+    private func startMarkdown(_ layoutManager: CodeLayoutManager) {
+        // The grammar colours links; without the highlighting bundle, the styler does.
+        let colorsLinks = SyntaxEngine.shared == nil || document.grammar == nil
+        let lines: () -> LineIndex = { [weak document] in document?.lines ?? LineIndex() }
+        markdown = MarkdownStyler(storage: document.storage, layoutManager: layoutManager, font: EditorDocument.font, colorsLinks: colorsLinks,
+                                  index: lines) { [weak self] hang, heading in
+            self?.markdownParagraphStyle(hang: hang, heading: heading) ?? .default
+        }
+    }
+
+    private var markdownStyles: [Int: NSParagraphStyle] = [:]
+
+    /// A Markdown line's paragraph style: wrapped rows start at its text's column (an item's text, past a quote's bar),
+    /// and a heading's line is as tall as its font, at the user's line height.
+    private func markdownParagraphStyle(hang: Int, heading: Int) -> NSParagraphStyle {
+        let columns = min(hang, 40) // never so deep that a wrapped row has no room
+        let key = heading << 8 | columns
+        if let style = markdownStyles[key] { return style }
+        let made = (baseStyle.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        made.headIndent = CGFloat(columns) * spaceWidth
+        if heading > 0, let font = markdown?.fonts.font(heading: heading) {
+            let natural = ceil(font.ascender - font.descender + font.leading)
+            let height = max(natural, round(natural * spacing.factor))
+            made.minimumLineHeight = height
+            made.maximumLineHeight = height
+        }
+        markdownStyles[key] = made
+        return made
     }
 }
