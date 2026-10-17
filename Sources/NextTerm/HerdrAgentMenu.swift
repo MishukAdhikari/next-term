@@ -161,6 +161,15 @@ enum HerdrAgentMenu {
                 entry.toolTip = mask.mask(item.tooltip)
                 entry.image = StatusGlyph.image(for: item.state)
                 menu.addItem(entry)
+                // Holding ⌥: Peek at it instead, which moves nothing.
+                let peek = NSMenuItem(title: "Peek at " + entry.title, action: #selector(Target.peek(_:)), keyEquivalent: digit)
+                peek.keyEquivalentModifierMask = [.option]
+                peek.isAlternate = true
+                peek.target = Target.shared
+                peek.representedObject = entry.representedObject
+                peek.indentationLevel = 1
+                peek.image = entry.image
+                menu.addItem(peek)
                 if let answers = answerItem(item) { menu.addItem(answers) }
             }
         }
@@ -249,6 +258,8 @@ enum HerdrAgentMenu {
         }
         let agent = AgentChoice(tab: tab, pane: pane)
         add("Show in herdr", #selector(Target.show(_:)), agent)
+        add("Peek", #selector(Target.peekRow(_:)), agent)
+        add("Why This State?", #selector(Target.explain(_:)), agent)
         menu.addItem(.separator())
         // Next Term's own flag: herdr's state stays as it is. Not for an agent at work or waiting on a decision.
         let unread = tab.herdrTracker.isUnread(pane)
@@ -292,6 +303,23 @@ enum HerdrAgentMenu {
         @objc func answer(_ sender: NSMenuItem) {
             guard let answer = sender.representedObject as? Answer, let tab = answer.tab, !tab.exited else { return NSSound.beep() }
             HerdrAgentMenu.answer(tab: tab, pane: answer.pane, question: answer.question, choice: answer.choice)
+        }
+
+        @objc func peek(_ sender: NSMenuItem) {
+            guard let choice = sender.representedObject as? Choice else { return NSSound.beep() }
+            AgentPeek.show(choice.target)
+        }
+
+        @objc func peekRow(_ sender: NSMenuItem) {
+            guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
+            AgentPeek.show(tab, pane: choice.pane)
+        }
+
+        /// Why This State?: Peek, showing herdr's own reasons.
+        @objc func explain(_ sender: NSMenuItem) {
+            guard let choice = sender.representedObject as? AgentChoice, let tab = choice.tab, !tab.exited else { return NSSound.beep() }
+            AgentPeek.show(tab, pane: choice.pane)
+            AgentPeek.current?.explain()
         }
 
         @objc func show(_ sender: NSMenuItem) {

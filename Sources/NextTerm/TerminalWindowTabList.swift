@@ -307,6 +307,18 @@ extension TerminalWindowController: TabListViewDelegate {
         refresh()
     }
 
+    /// Peek at an agent's row, or at a tab row whose tab runs an agent; anything else beeps.
+    func tabList(_ list: TabListView, peekAt pane: String?, of index: Int, row: NSView) {
+        if let pane {
+            guard let tab = herdrTab(showing: pane, in: index) else { return NSSound.beep() }
+            return AgentPeek.show(tab, pane: pane, relativeTo: row.bounds, of: row)
+        }
+        guard let tab = groups[safe: index]?.focused, tab.status.running, tab.status.kind == .agent, !tab.followsHerdr else {
+            return NSSound.beep()
+        }
+        AgentPeek.show(tab, pane: nil, relativeTo: row.bounds, of: row)
+    }
+
     /// The pane of tab `index` whose herdr lists `pane`.
     private func herdrTab(showing pane: String, in index: Int) -> TerminalTab? {
         groups[safe: index]?.panes.first { tab in tab.herdrRows.contains { $0.pane == pane } }

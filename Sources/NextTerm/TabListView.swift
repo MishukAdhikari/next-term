@@ -15,6 +15,9 @@ protocol TabListViewDelegate: AnyObject {
     /// The row of tab `index`'s folded idle herdr agents was clicked or pressed (`open` nil: the other way), or an arrow
     /// opened or closed it.
     func tabList(_ list: TabListView, foldIdleAgentsOf index: Int, open: Bool?)
+    /// ⌥-click on an agent's row (`pane`, herdr's id for it) or on the row of a tab whose program is an agent (`pane`
+    /// nil): Peek at it, over the row, without bringing anything forward.
+    func tabList(_ list: TabListView, peekAt pane: String?, of index: Int, row: NSView)
     func tabList(_ list: TabListView, didClose index: Int)
     func tabList(_ list: TabListView, didMove from: Int, to: Int)
     /// `title` nil means "back to the automatic title".
@@ -489,6 +492,11 @@ final class TabListView: NSView {
 
     func rowMouseDown(_ view: TabListRowView, event: NSEvent) {
         guard let place = place(of: view) else { return }
+        // ⌥: Peek at the agent, as Quick Look does for a file.
+        if event.modifierFlags.contains(.option), rows[place.row].herdrPane != nil || !rows[place.row].isPane {
+            delegate?.tabList(self, peekAt: rows[place.row].herdrPane, of: place.tab, row: view)
+            return
+        }
         // An agent's row is never dragged: it goes to its agent; the folded row opens or closes.
         if let agent = rows[place.row].herdrPane {
             delegate?.tabList(self, didSelectAgent: agent, of: place.tab)
