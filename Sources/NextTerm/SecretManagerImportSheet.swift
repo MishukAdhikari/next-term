@@ -29,6 +29,8 @@ final class SecretManagerImportSheet: NSWindowController, NSWindowDelegate {
     let say: (String) -> Void
     /// The sheet has gone.
     let done: () -> Void
+    /// Open in a New Tab made its tab: an agent's import_secrets request waits for that tab's pipe.
+    var opened: ((TerminalTab) -> Void)?
     private(set) var commandField = NSTextField(wrappingLabelWithString: "")
     private(set) var openButton = NSButton(title: SecretManagerImportSheet.openTitle, target: nil, action: nil)
     private(set) var cancelButton = NSButton(title: "Cancel", target: nil, action: nil)

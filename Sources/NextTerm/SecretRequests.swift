@@ -91,6 +91,8 @@ final class SecretRequests {
         case unanswered
         /// "Allow once" starts one command, and an identical request that waited on the same panel used it.
         case usedAlready
+        /// import_secrets' own answer, made by `SecretImportAsk` (names and counts from `SecretSources.answer(for:)`).
+        case answered([String: Any])
     }
 
     /// What a request asks for: to use keys (the panel's Allow), to save the agent's value (store_secret's panel), or
@@ -100,6 +102,8 @@ final class SecretRequests {
         /// The agent's value, held while the panel waits, wiped when the request ends.
         case store(SecretBytes)
         case add(SecretRequestWindow.Content)
+        /// import_secrets: Import from a File's sheet, or a password manager's, with the agent's banner.
+        case importKeys(SecretImportAsk)
     }
 
     /// One request, waiting for its panel or in it.
@@ -160,6 +164,10 @@ final class SecretRequests {
         var isUse: Bool {
             if case .use = kind { return true }
             return false
+        }
+        var importAsk: SecretImportAsk? {
+            if case .importKeys(let ask) = kind { return ask }
+            return nil
         }
     }
 
@@ -306,10 +314,22 @@ final class SecretRequests {
     }
 
     /// The request in the panel or the request window now, if any.
-    var showing: Request? { queue.first { $0.panel != nil || $0.requestWindow != nil } }
+    var showing: Request? { queue.first { $0.panel != nil || $0.requestWindow != nil || $0.importAsk?.isOnScreen == true } }
 
     private func showNext() {
-        guard showing == nil, let next = queue.first(where: { !$0.isAnswered }) else { return }
+        // An import waiting for its tab's pipe has had its turn.
+        let next: Request? = queue.first { (request: Request) -> Bool in
+            !request.isAnswered && request.importAsk?.wasOpened != true
+        }
+        guard showing == nil, let next else { return }
+        if let ask = next.importAsk {
+            return ask.open(ended: { [weak self, weak next] (end: SecretImportAsk.End) in
+                guard let self, let next else { return }
+                self.importEnded(next, end)
+            }, leftScreen: { [weak self] in
+                self?.showNext()
+            })
+        }
         if case .add(let content) = next.kind {
             let window = SecretRequestWindow(content, onSave: { [weak self, weak next] form in
                 guard let self, let next else { return }
@@ -490,6 +510,13 @@ final class SecretRequests {
         finish(request, outcome: .declined, decision: .declined(stopAsking: stopAsking))
     }
 
+    /// import_secrets' sheet ended: a decline counts and pauses as any other; any other end answers as it is.
+    private func importEnded(_ request: Request, _ end: SecretImportAsk.End) {
+        guard !request.isAnswered else { return }
+        if case .declined = end { return decline(request, stopAsking: false) }
+        finish(request, outcome: .allowed, decision: .answered(end.answer))
+    }
+
     /// "Pause Key Requests for 1 Hour…", after its confirm: this and every waiting request are declined, new ones are
     /// refused for an hour, and every grant ends.
     func pauseForAnHour(from request: Request?) {
@@ -516,6 +543,7 @@ final class SecretRequests {
         request.panel = nil
         request.requestWindow?.finish()
         request.requestWindow = nil
+        request.importAsk?.close()
         request.kind = .use // store_secret's value goes with its SecretBytes, wiped
         queue.removeAll { $0 === request }
         showNext()
@@ -843,6 +871,7 @@ final class SecretRequests {
             request.panel = nil
             request.requestWindow?.finish()
             request.requestWindow = nil
+            request.importAsk?.close()
             request.kind = .use
         }
         queue.removeAll()

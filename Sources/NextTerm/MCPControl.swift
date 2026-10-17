@@ -310,7 +310,7 @@ enum MCPControl {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
                                requester: requester, reply: reply)
             }
-        case "list_secrets", "request_secret", "store_secret", "run_with_secrets":
+        case "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets":
             MainActor.assumeIsolated {
                 SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
                                 reply: reply)

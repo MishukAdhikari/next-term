@@ -2,7 +2,8 @@ import AppKit
 import CryptoKit
 import NextTermCore
 
-/// Secrets' MCP tools: `list_secrets`, `request_secret`, `store_secret` and `run_with_secrets`.
+/// Secrets' MCP tools: `list_secrets`, `request_secret`, `store_secret`, `run_with_secrets` and `import_secrets`
+/// (`SecretsMCPImport.swift`).
 /// Names in, status out: no answer holds a stored key's value, and a request id only reports status.
 ///
 /// - `list_secrets` reads the index; it needs no Touch ID.
@@ -50,12 +51,13 @@ enum SecretsMCP {
     /// The remote rules hold whatever `approval` says: a connection's "Ask on this Mac before changes" being off
     /// (`.preApprovedByGrant`) never lets `run_with_secrets` skip its panel and Touch ID, so `approval` is not read here.
     /// A remote `run_with_secrets` shows the panel with the connection's name and only "Allow once", and never makes or
-    /// uses a grant (`SecretRequests`). Remote `request_secret` and `store_secret` are refused. `list_secrets` is the
-    /// same as on the Mac: names, never a value.
+    /// uses a grant (`SecretRequests`). Remote `request_secret`, `store_secret` and `import_secrets` are refused.
+    /// `list_secrets` is the same as on the Mac: names, never a value.
     static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, pid: pid_t?, approval: MCPApproval = .askOnMac,
                      requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         if tool == "list_secrets" { return reply(MCPControl.ok(listSecrets())) }
-        if isRemote(requester: requester, connection: connection), tool == "request_secret" || tool == "store_secret" {
+        let adds: Bool = tool == "request_secret" || tool == "store_secret" || tool == importTool
+        if isRemote(requester: requester, connection: connection), adds {
             let name = (arguments["name"] as? String).flatMap { StoredSecretName.isValid($0) ? $0 : nil }
             let who = "the remote connection “\(connectionName(requester ?? "a remote connection"))”"
             SecretsStore.shared.record(SecretAudit.Line(event: .refused, names: name.map { [$0] } ?? [], who: who,
@@ -72,6 +74,7 @@ enum SecretsMCP {
         switch tool {
         case "request_secret": requestSecret(arguments, asker: asker, facts: facts, words: words, reply: reply)
         case "store_secret": storeSecret(arguments, asker: asker, facts: facts, words: words, reply: reply)
+        case importTool: importSecrets(arguments, caller: caller, asker: asker, facts: facts, words: words, reply: reply)
         default: runWithSecrets(arguments, caller: caller, asker: asker, facts: facts, words: words, reply: reply)
         }
     }
@@ -428,7 +431,12 @@ enum SecretsMCP {
 
     /// A decision as the tool answers it. Never a value: `allowed` becomes `started`.
     static func answer(for decision: SecretRequests.Decision, tool: String) -> [String: Any] {
-        let nothing = tool == "run_with_secrets" ? "nothing ran" : "nothing was saved"
+        let nothing: String
+        switch tool {
+        case "run_with_secrets": nothing = "nothing ran"
+        case importTool: nothing = "no key was imported"
+        default: nothing = "nothing was saved"
+        }
         switch decision {
         case .allowed(_, let how):
             let approved: String
@@ -446,6 +454,8 @@ enum SecretsMCP {
             let note = stopAsking ? "The user chose Decline and Stop Asking: Next Term won't ask them for you again until it quits."
                 : "The user declined, so \(nothing)."
             return ["status": Status.declined.rawValue, "note": note]
+        case .answered(let answer):
+            return answer
         case .refused(let refusal):
             return refusalAnswer(refusal)
         case .failed(let failure):

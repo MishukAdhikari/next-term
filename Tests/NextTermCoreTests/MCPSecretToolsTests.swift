@@ -48,4 +48,21 @@ import Testing
         #expect(description.contains("in that command's environment, never the tab's shell's"))
         #expect(description.contains("While the command runs, any program running as the user can read that environment"))
     }
+
+    /// import_secrets opens the user's import window and answers names and counts, never a value; it never tells an
+    /// agent to run a password manager's CLI itself.
+    @Test func importSecretsSaysItAnswersNamesAndCountsOnly() throws {
+        let tool = try #require(MCPServer.tool(named: "import_secrets"))
+        #expect(tool.scope == .write && !tool.readOnly && tool.destructive && tool.timeout == 60)
+        let description: String = tool.description
+        #expect(description.contains("Opens the user's import window on the Mac"))
+        #expect(description.contains("Returns names and counts, never values"))
+        for status in ["imported", "declined", "nothing_found", "unreadable", "refused", "busy", "pending"] {
+            #expect(description.contains(status), "\(status)")
+        }
+        #expect(description.contains("source: 1password, bitwarden or bws"))
+        #expect(description.contains("the user runs in a new tab"))
+        for program in ["op ", "bw ", "bws secret", "nxtrm"] { #expect(!description.contains(program), "\(program)") }
+    }
 }
+

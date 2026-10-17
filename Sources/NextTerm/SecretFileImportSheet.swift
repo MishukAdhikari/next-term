@@ -64,6 +64,8 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
     let scroll = NSScrollView()
     /// `nxtrm secret import`'s importer: where its keys came from, told when the sheet ends.
     let client: SecretImportClient?
+    /// An agent's import_secrets request, answered with names and counts when the sheet ends.
+    var asked: SecretImportAsk?
 
     /// `report` is checked against the keys stored as the sheet opens, which may be more than when the file was read:
     /// the move import stores its keys before the keys outside its servers open here.

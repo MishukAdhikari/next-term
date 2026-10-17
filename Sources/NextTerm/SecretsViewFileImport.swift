@@ -119,10 +119,12 @@ extension SecretsView {
 
     /// The copy sheet for `report`. When it closes, the list says what it did and may open Rotate… for a key. `client`
     /// is `nxtrm secret import`'s importer, told when the sheet opens and how it ends; `busy` when another is open.
+    /// `asked` is an agent's import_secrets request: the sheet shows its banner and answers it.
     func openFileImport(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool,
-                        client: SecretImportClient? = nil) {
+                        client: SecretImportClient? = nil, asked: SecretImportAsk? = nil) {
         guard fileImportSheet == nil, let window else {
             client?.end(.busy)
+            asked?.end(.busy)
             return
         }
         let sheet = SecretFileImportSheet(path: path, report: report, outsideServers: outsideServers, inGit: inGit,
@@ -137,6 +139,10 @@ extension SecretsView {
             }
         }
         fileImportSheet = sheet
+        if let asked {
+            sheet.asked = asked
+            asked.showing(sheet)
+        }
         sheet.begin(on: window)
         if let report = sheet.report { client?.opened(report) }
     }

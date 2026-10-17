@@ -54,11 +54,15 @@ enum SecretPipeImport {
         return origin
     }
 
-    /// The copy sheet for piped keys.
+    /// The copy sheet for piped keys. From the tab an agent's import_secrets request opened (Open in a New Tab), it
+    /// shows that request's banner and answers it.
     static func openPiped(_ report: SourceReport, origin: Origin, channel: SecretPipeSocket.Channel) {
         let client = SecretImportClient(origin: origin, channel: channel)
         guard let view = secretsView(for: client) else { return }
-        view.openFileImport(path: "", report: report, inGit: false, client: client)
+        let asked: SecretImportAsk? = origin.tabID.flatMap { (id: UUID) -> SecretImportAsk? in
+            SecretImportAsk.waiting(onTab: id)
+        }
+        view.openFileImport(path: "", report: report, inGit: false, client: client, asked: asked)
     }
 
     /// The file given, read as Import From › A File… reads a picked one: an agent's MCP config opens the MCP-config

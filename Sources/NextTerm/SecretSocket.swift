@@ -216,7 +216,7 @@ enum SecretSocket {
             return SecretRun.Answer(status: .expired, names: request.names)
         case .usedAlready:
             return SecretRun.Answer(status: .usedAlready, names: request.names)
-        case .saved, .unanswered:
+        case .saved, .unanswered, .answered:
             return SecretRun.Answer(status: .refused, names: request.names)
         }
     }

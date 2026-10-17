@@ -106,7 +106,7 @@ extension SecretFileImportSheet {
         Task { @MainActor in
             do {
                 let saved = try await SecretsStore.shared.performCopyIn(planned, source: source, format: format,
-                                                                        reason: reason)
+                                                                        reason: reason, asked: self.asked)
                 self.isBusy = false
                 self.showDone(saved.record, undoSaved: saved.undoSaved, readAs: readAs)
             } catch SecretsStore.Failure.cancelled {
@@ -144,6 +144,10 @@ extension SecretFileImportSheet {
         // `nxtrm secret import` hears it now, not as the sheet closes: its tab says "Imported 2 keys." and the rest of
         // its line runs (Bitwarden's bw lock) while the done view is up. Closing the sheet tells it nothing more.
         client?.ended(copied: saved.names.count)
+        if let report {
+            let outcome = SecretSources.CopyInOutcome.imported(saved.names, replaced: saved.replaced, from: report)
+            asked?.end(.outcome(outcome))
+        }
         for row in rows {
             row.box.isEnabled = false
             row.nameField.isEnabled = false
@@ -247,10 +251,19 @@ extension SecretFileImportSheet {
         finishSheet(Ending(said: nil, rotate: nil))
     }
 
+    /// How an agent's request ends when the sheet closes with nothing copied in: the file couldn't be read, it held no
+    /// key, or the user cancelled. A copy-in answers as it is saved (`showDone`).
+    static func askedEnd(_ report: SourceReport) -> SecretImportAsk.End {
+        if let reason = report.unreadable { return .outcome(.unreadable(reason)) }
+        if report.rows.isEmpty { return .outcome(.nothingFound(format: report.format)) }
+        return .declined
+    }
+
     /// Closes the sheet and releases the report, which wipes every value it held.
     private func finishSheet(_ ending: Ending) {
         guard let window else { return }
         client?.ended(copied: record?.names.count ?? 0)
+        if let report { asked?.end(Self.askedEnd(report)) }
         confirmAlert = nil
         awaitingConfirm = nil
         rows = []

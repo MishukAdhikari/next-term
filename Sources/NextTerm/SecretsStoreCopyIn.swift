@@ -9,11 +9,14 @@ extension SecretsStore {
     /// from a .env file") and the record for Undo in `imports/`. The record is written after the vault: a record that
     /// failed to save leaves the keys in, with no Undo, and `undoSaved` says so for the done view. Nothing is saved on
     /// a failure.
+    /// An agent's import_secrets request (`asked`) puts who asked and its reason on the audit line, never on a key.
     func performCopyIn(_ planned: [SecretCopyIn.Planned], source: String, format: SecretSources.Format,
-                       reason: String) async throws -> (record: SecretCopyIn.Record, undoSaved: Bool) {
+                       reason: String, asked: SecretImportAsk? = nil) async throws -> (record: SecretCopyIn.Record, undoSaved: Bool) {
         let names: [String] = planned.map(\.name)
         let remindDays: Int? = SecretReminderRecords.newKeyDays // new keys start with Settings › Secrets' reminder
         let id: String = UUID().uuidString.lowercased()
+        let who: String? = asked?.askedBy
+        let command: String? = asked?.command
         let box = CopyInBox()
         try await run(makes: true, names: names, reason: reason) {
             (vault: SecretVault, maskKey: SymmetricKey?) -> Data? in
@@ -24,7 +27,7 @@ extension SecretsStore {
             return done.file
         } line: { () -> SecretAudit.Line in
             let outcome: String = SecretCopyIn.auditOutcome(count: names.count, format: format)
-            return SecretAudit.Line(event: .import, names: names, outcome: outcome)
+            return SecretAudit.Line(event: .import, names: names, who: who, command: command, outcome: outcome)
         }
         guard let record = box.record else { throw Failure.vault(.changed) }
         let undoSaved: Bool = (try? saveCopyIn(record)) != nil

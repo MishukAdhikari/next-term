@@ -105,6 +105,7 @@ extension SecretManagerImportSheet {
         let tab: TerminalTab = controller.addTab(directory: home, select: true)
         tab.userTitle = preset.tabTitle
         Self.register(tab, preset: preset)
+        opened?(tab)
         controller.refresh()
         controller.window?.makeKeyAndOrderFront(nil)
         let preset: SecretImportPreset = self.preset
