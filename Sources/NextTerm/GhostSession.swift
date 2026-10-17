@@ -244,6 +244,29 @@ final class GhostSession {
         if overlayMade { overlay.hide() }
     }
 
+    // MARK: keys (GhostController)
+
+    /// A key that takes the suggestion showing, or Esc: true, taken, so SwiftTerm never sees it. An accept goes to the
+    /// hook as a frame (GhostState.accept) through the tab's ordered writer, with the bytes the key sends otherwise,
+    /// which the hook gives back to zsh where the line or the key's binding changed. Esc hides the suggestion for the
+    /// rest of the line, and goes on to zsh in vi insert mode.
+    func press(_ key: GhostKeys.Key) -> Bool {
+        guard isShowing, let view = tab?.view else { return false }
+        if key == .escape {
+            let goesOn = state.escapeGoesOn
+            state.escape()
+            hideOverlay()
+            return !goesOn
+        }
+        let terminal = view.getTerminal()
+        let bytes = GhostKeys.bytes(key, applicationCursor: terminal.applicationCursor, optionAsMeta: view.optionAsMetaKey)
+        guard let frame = state.accept(key, bytes: bytes) else { return false }
+        placing = nil
+        hideOverlay()
+        view.send(data: frame[...])
+        return true
+    }
+
     // MARK: what the tab says
 
     /// The facts the state needs besides the line: the cheap ones first, the shell's process group last.

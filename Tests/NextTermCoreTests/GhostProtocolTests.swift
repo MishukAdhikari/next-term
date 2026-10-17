@@ -92,6 +92,7 @@ import Testing
         #expect(values["@NG_VERSION@"] == String(GhostProtocol.version))
         #expect(values["@NG_MAX_LINE@"] == String(GhostProtocol.maxLineBytes))
         #expect(values["@NG_FRAME_WAIT@"].flatMap(Double.init) == GhostProtocol.frameWait)
+        #expect(values["@NG_MAX_PAYLOAD@"] == String(GhostProtocol.maxPayload))
         #expect(values.keys.allSatisfy { ZshGhostScript.template.contains($0) })
         #expect(!ZshGhostScript.script.contains("@NG_"))
         // Each hook keeps a key of its own.
@@ -109,6 +110,18 @@ import Testing
         #expect(script.range(of: #"\beval\b"#, options: .regularExpression) == nil, "the hook evaluates text")
         #expect(script.contains("(( PENDING || ${KEYS_QUEUED_COUNT:-0} )) && return 0"))
         #expect(script.contains("add-zle-hook-widget $hook $fn") && script.contains("line-pre-redraw __nextterm_gredraw"))
+    }
+
+    /// An accept frame: the ghost key, `a`, the generation as its 6-digit id, the payload's length, and the line seen, the new
+    /// line and the key's bytes, escaped as Tab completion's fields are (control bytes as `\xHH`).
+    @Test func anAcceptFrameIsFramedAndEscaped() {
+        let frame = GhostProtocol.acceptFrame(gen: 1_000_042, seen: "git ch", new: "git checkout main", key: [0x1B, 0x5B, 0x43])
+        let payload = #"git\x20ch;git\x20checkout\x20main;\x1b[C"#
+        #expect(frame.map { String(decoding: $0, as: UTF8.self) } == "\u{1b}[6975~a000042" + String(format: "%06d", payload.utf8.count) + payload)
+        // Too long for the hook to read: none.
+        let long = String(repeating: "\u{1}", count: 20_000)
+        #expect(GhostProtocol.acceptFrame(gen: 1, seen: long, new: long, key: []) == nil)
+        #expect(GhostProtocol.acceptFrame(gen: 1, seen: "a", new: String(repeating: "b", count: GhostProtocol.maxPayload - 3), key: []) != nil)
     }
 
     @Test func installWritesTheHookAndTheIntegrationLoadsIt() throws {

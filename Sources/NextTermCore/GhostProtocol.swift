@@ -16,8 +16,17 @@ import Foundation
 /// number goes up too. The cursor is zsh's CURSOR, in characters. Flags: `l`, BUFFER was over `maxLineBytes` and is sent
 /// empty; `L`, the same for POSTDISPLAY; `r`, a region is active; `i`, an incremental search is.
 ///
+/// The keymap is zsh's KEYMAP, with `main` named as the keymap it is (`emacs` or `viins`; `main` when that couldn't be
+/// read).
+///
 /// App to shell: the private key `prefix`, then a frame as CompletionProtocol.frame makes one (a kind letter, a 6-digit
 /// id, a 6-digit length and the payload). Its own key, so each hook keeps its own.
+///
+///     a  id: the generation   line seen ; new line ; the key's bytes      accept (→, End, ⌃E, ⌃F, ⌥→)
+///
+/// An accept replaces the line only while it is the one Next Term saw, at that generation, with the cursor at its end,
+/// and while the key only moves the cursor in that keymap (or does nothing): otherwise the key's own bytes go back to
+/// zsh, which does what that key does.
 public enum GhostProtocol {
     /// ESC [ 6975 ~: as safe as Tab completion's and history's keys (CompletionProtocol.prefix, ShellHistory.prefix), and
     /// neither of them: unbound in stock keymaps, and not the start of any reply a terminal sends.
@@ -30,6 +39,27 @@ public enum GhostProtocol {
     public static let frameWait = 0.5
 
     public static let markKinds: Set<Substring> = ["ghost", "buf", "gfb"]
+    /// The longest payload the hook reads after its key.
+    public static let maxPayload = 65_536
+
+    // MARK: app to shell
+
+    public enum Kind: UInt8, Sendable {
+        case accept = 0x61 // a
+    }
+
+    /// An accept: `seen` (the line the suggestion showed on, at generation `gen`) becomes `new`, the cursor at its end; or,
+    /// where the shell's line or the key's binding says otherwise, `key` (the bytes that key sends) goes back to zsh. nil
+    /// when the frame would be too long for the hook to read.
+    public static func acceptFrame(gen: Int, seen: String, new: String, key: [UInt8]) -> [UInt8]? {
+        frame(.accept, id: gen, fields: [seen, new, String(decoding: key, as: UTF8.self)])
+    }
+
+    static func frame(_ kind: Kind, id: Int, fields: [String]) -> [UInt8]? {
+        let bytes = CompletionProtocol.frame(prefix: prefix, kind: kind.rawValue, id: id, fields: fields)
+        let header = prefix.utf8.count + 1 + 2 * CompletionProtocol.idWidth
+        return bytes.count - header > maxPayload ? nil : bytes
+    }
 
     // MARK: shell to app
 

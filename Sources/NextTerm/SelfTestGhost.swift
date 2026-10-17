@@ -20,6 +20,8 @@ extension SelfTest {
         defer { GhostPreferences.testIsOn = nil }
         await ghostRecordChecks(c, dir: dir)
         await ghostOverlayChecks(c, dir: dir)
+        await ghostKeyChecks(c, dir: dir)
+        await ghostViChecks(c, dir: dir)
         #else
         note("Suggestions while typing: skipped in a release build (its tabs need the debug build's own zsh config)")
         #endif
@@ -239,6 +241,109 @@ extension SelfTest {
             check(false, "suggestions: beside a right prompt: it showed")
         }
         note("suggestions: a server tab gets no ghost marks (its hook is Tab completion's alone, RemoteCompletionConsent); a paste's hide is the clipboard's, not checked here")
+    }
+
+    /// The keys that take a suggestion, each as the keyboard sends it.
+    static let ghostAcceptKeys: [(name: String, characters: String, code: UInt16, flags: NSEvent.ModifierFlags, key: GhostKeys.Key)] = [
+        ("→", "\u{F703}", 124, [.function, .numericPad], .right),
+        ("End", "\u{F72B}", 119, [.function], .end),
+        ("⌃E", "e", 14, [.control], .ctrlE),
+        ("⌃F", "f", 3, [.control], .ctrlF),
+    ]
+
+    /// Accepting: each key puts the whole command on the line and runs nothing, ⌥→ one word, Esc hides it without a
+    /// write (and goes on to zsh in vi insert mode), Return runs only what was typed, Tab is the Tab list's; and with no
+    /// suggestion, what SwiftTerm writes for each key is what GhostKeys says, in both cursor key modes.
+    static func ghostKeyChecks(_ c: TerminalWindowController, dir: URL) async {
+        await ghostSeed("git checkout main", folder: dir.path)
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc, name: "keys"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        func line(_ text: String) async -> Bool { await wait(3) { tab.lastBuffer?.report.buffer == text } }
+        for press in ghostAcceptKeys {
+            await ghostClear(tab)
+            typeKeys(window, "git ch")
+            guard await ghostShows(tab) else {
+                check(false, "suggestions: \(press.name) takes it: it showed first", "\(tab.ghost.state)")
+                continue
+            }
+            let started = tab.status.commandsStarted
+            pressKey(window, press.characters, code: press.code, flags: press.flags)
+            check(await line("git checkout main") && tab.status.commandsStarted == started && !tab.ghost.isShowing,
+                  "suggestions: \(press.name) makes the line `git checkout main`, and nothing runs", "\(String(describing: tab.lastBuffer?.report))")
+        }
+        // ⌥→ with Option as Meta: one word.
+        await ghostClear(tab)
+        let meta = tab.view.optionAsMetaKey
+        tab.view.optionAsMetaKey = true
+        typeKeys(window, "git ch")
+        if await ghostShows(tab) {
+            pressKey(window, "\u{F703}", code: 124, flags: [.function, .numericPad, .option])
+            check(await line("git checkout"), "suggestions: ⌥→ (Option as Meta) makes the line `git checkout`",
+                  "\(String(describing: tab.lastBuffer?.report))")
+        } else {
+            check(false, "suggestions: ⌥→ takes a word: it showed first")
+        }
+        tab.view.optionAsMetaKey = meta
+        // Esc: hidden, and nothing written.
+        await ghostClear(tab)
+        typeKeys(window, "git ch")
+        if await ghostShows(tab) {
+            let writes = tab.view.inputWrites
+            pressKey(window, "\u{1b}", code: 53)
+            check(!tab.ghost.isShowing && tab.view.inputWrites == writes, "suggestions: Esc hides it, and nothing is sent")
+            typeKeys(window, "e")
+            check(!(await ghostShows(tab, within: 1)), "suggestions: after Esc, none for the rest of the line")
+        } else {
+            check(false, "suggestions: Esc hides it: it showed first")
+        }
+        // Return after one showed: what runs is what was typed.
+        await ghostClear(tab)
+        typeKeys(window, "git ch")
+        if await ghostShows(tab) {
+            pressKey(window, "\r", code: 36)
+            check(await wait(3) { tab.status.command == "git ch" }, "suggestions: Return runs only what was typed", tab.status.command)
+            _ = await wait(3) { !tab.status.running }
+        }
+        // Tab with one showing: the Tab list's, and the suggestion hides.
+        await ghostClear(tab)
+        typeKeys(window, "git ch")
+        if await ghostShows(tab) {
+            pressKey(window, "\t", code: 48)
+            check(await wait(1) { !tab.ghost.isShowing }, "suggestions: Tab with one showing is the Tab list's, and hides it")
+            pressKey(window, "\u{1b}", code: 53)
+        }
+
+        // With no suggestion, SwiftTerm writes for each key what GhostKeys says, with application cursor keys off and on.
+        await ghostClear(tab)
+        var written: [UInt8] = []
+        let onWrite = tab.view.onWrite
+        tab.view.onWrite = { data in
+            written = Array(data)
+            onWrite?(data)
+        }
+        for application in [false, true] {
+            if application { tab.view.feed(text: "\u{1b}[?1h") }
+            for press in ghostAcceptKeys {
+                written = []
+                pressKey(window, press.characters, code: press.code, flags: press.flags)
+                let expected = GhostKeys.bytes(press.key, applicationCursor: application, optionAsMeta: tab.view.optionAsMetaKey)
+                check(written == expected, "suggestions: with none showing, \(press.name) sends what GhostKeys says\(application ? " (application cursor keys)" : "")",
+                      "\(written) for \(expected)")
+            }
+            if application { tab.view.feed(text: "\u{1b}[?1l") }
+        }
+        tab.view.onWrite = onWrite
+    }
+
+    /// In vi insert mode, Esc hides the suggestion and goes on to zsh, which leaves insert mode.
+    static func ghostViChecks(_ c: TerminalWindowController, dir: URL) async {
+        guard let tab = await ghostTab(c, in: dir, zshrc: plainZshrc + "bindkey -v\n", name: "vi"), let window = c.window else { return }
+        defer { c.remove(tab) }
+        typeKeys(window, "git ch")
+        guard await ghostShows(tab) else { return check(false, "suggestions in vi insert mode: it showed first", "\(tab.ghost.state)") }
+        pressKey(window, "\u{1b}", code: 53)
+        check(await wait(2) { !tab.ghost.isShowing && tab.lastBuffer?.report.keymap == "vicmd" },
+              "suggestions: Esc in vi insert mode hides it and goes on to zsh (vicmd)", "\(String(describing: tab.lastBuffer?.report))")
     }
 
     /// The record of your commands: a line an agent runs over MCP is never in it; one you type and run is, with its exit,

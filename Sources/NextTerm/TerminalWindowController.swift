@@ -290,7 +290,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
         window.delegate = self
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
-        window.onTerminalKey = { [weak self] event, view in self?.completions.handle(event, in: view) ?? false }
+        // Tab completion's list first, then a suggestion's keys.
+        window.onTerminalKey = { [weak self] event, view in
+            guard let self else { return false }
+            if self.completions.handle(event, in: view) {
+                self.ghosts.tabListTook(in: view)
+                return true
+            }
+            return self.ghosts.handle(event, in: view)
+        }
         window.onFirstResponderChange = { [weak self] responder in
             self?.completions.responderChanged()
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
@@ -1614,6 +1622,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Tab completion at this window's keyboard.
     private(set) lazy var completions = CompletionController(owner: self)
+    /// Suggestions while typing: their keys at this window's keyboard.
+    private(set) lazy var ghosts = GhostController(owner: self)
 
     private(set) lazy var fileFinder: GoToFileController = {
         let finder = GoToFileController()

@@ -1600,6 +1600,85 @@ if zsh58:
 else:
     skip("the ghost hook on zsh 5.8: not found (NT_ZSH58)")
 
+# 13b. Accepting (the `a` frame): the line Next Term saw becomes the new one only at that generation, with the line and the
+# cursor as seen, for a key that would only move the cursor (or does nothing); otherwise the key's own bytes go back to zsh,
+# which does what that key does. Nothing runs either way.
+def gframe(kind, ident, fields=()):
+    """A frame behind the ghost hook's key (GhostProtocol.frame): the kind, the id, the payload's length and the payload."""
+    payload = b";".join(escape(f) for f in fields)
+    return GKEY + kind.encode() + b"%06d" % (ident % 1000000) + b"%06d" % len(payload) + payload
+
+RIGHT, END, CTRL_B, CTRL_F, META_RIGHT = "\x1b[C", "\x1b[F", "\x02", "\x06", "\x1b[1;3C"
+
+def accept_checks(label, extra):
+    folder, _ = history_rc("__mine() { LBUFFER+=MINE }\nzle -N __mine\nbindkey '^F' __mine\n" + extra)
+    sh = Shell(f"ghost accept {label}", folder)
+    def typed(text):
+        sh.send("\x03", 0.4)
+        start = len(sh.buf)
+        sh.send(text, 0.5)
+        return last_buf(sh, start, lambda x: x[6] == text)
+    def after(data, pred=lambda x: True):
+        start = len(sh.buf)
+        sh.send(data, 0.6)
+        return start, last_buf(sh, start, pred)
+
+    for key, name in ((RIGHT, "→"), (END, "End (unbound here)"), (META_RIGHT, "⌥→ with Option as Meta (unbound here)"), ("", "⌥→ without Meta (no bytes)")):
+        b = typed("git ch")
+        new = "git checkout" if "⌥" in name else "git checkout main"
+        start, a = after(gframe("a", b[1], ["git ch", new, key]), lambda x: x[6] == new)
+        check(a is not None and a[6] == new and a[2] == len(new) and not cmds(sh, start),
+              f"[ghost accept {label}] {name}: the line becomes `{new}`, the cursor at its end, and nothing runs", str(a))
+    # An older generation: the key's own bytes (⌃B: the cursor moves left), and the line as it was.
+    b = typed("git ch")
+    _, a = after(gframe("a", b[1] - 1, ["git ch", "git checkout main", CTRL_B]), lambda x: x[2] == 5)
+    check(a is not None and a[6] == "git ch" and a[2] == 5, f"[ghost accept {label}] an older generation: the key does its own job", str(a))
+    b = typed("git ch")
+    after(gframe("a", b[1] - 1, ["git ch", "git checkout main", RIGHT]))
+    _, a = after("x", lambda x: x[6] == "git chx")
+    check(a is not None and a[6] == "git chx", f"[ghost accept {label}] and with → the line stays as it was", str(a))
+    # Another line than the one seen: the same.
+    b = typed("git ch")
+    _, a = after(gframe("a", b[1], ["git c", "git checkout main", CTRL_B]), lambda x: x[2] == 5)
+    check(a is not None and a[6] == "git ch" and a[2] == 5, f"[ghost accept {label}] another line than the one seen: the key does its own job",
+          str(a))
+    # A key bound to something else than a cursor move (⌃F, to the config's own widget): that widget runs.
+    b = typed("git ch")
+    _, a = after(gframe("a", b[1], ["git ch", "git checkout main", CTRL_F]), lambda x: x[6] == "git chMINE")
+    check(a is not None and a[6] == "git chMINE", f"[ghost accept {label}] ⌃F bound to the config's widget: that widget runs", str(a))
+    # Malformed, or cut short: nothing lands on the line.
+    b = typed("git ch")
+    after(gframe("a", b[1], ["git ch"]))
+    after(GKEY + b"a" + b"%06d" % (b[1] % 1000000) + b"000400git", 0)
+    sh.read_for(0.8 * SLOW)
+    _, a = after("x", lambda x: x[6].endswith("x"))
+    check(a is not None and a[6] == "git chx", f"[ghost accept {label}] a frame short of its fields, or cut short, leaves the line as it was",
+          str(a))
+    errors = sh.errors()
+    for l in errors:
+        print("  hook error:", l.strip()[:200])
+    check(not errors, f"[ghost accept {label}] no errors")
+    sh.close()
+    shutil.rmtree(folder, ignore_errors=True)
+
+accept_checks("stock", "")
+accept_checks("hostile", "setopt nounset ksh_arrays err_return")
+
+# vi insert mode: `main` is reported as viins, and Esc's own job (vicmd) is reported too.
+folder, _ = history_rc("bindkey -v\n")
+sh = Shell("ghost: vi mode", folder)
+start = len(sh.buf)
+sh.send("git", 0.5)
+b = last_buf(sh, start, lambda x: x[6] == "git")
+check(b is not None and b[3] == "viins", "[ghost vi] with bindkey -v, main is reported as viins", str(b))
+start = len(sh.buf)
+sh.send("\x1b", 0.8)
+b = last_buf(sh, start, lambda x: x[3] == "vicmd")
+check(b is not None and b[3] == "vicmd", "[ghost vi] Esc: vicmd", str(b))
+check(not sh.errors(), "[ghost vi] no errors")
+sh.close()
+shutil.rmtree(folder, ignore_errors=True)
+
 # A plugin's ghost (a stand-in): its POSTDISPLAY reaches the report.
 folder, _ = history_rc(STANDIN)
 sh = Shell("ghost: a stand-in plugin", folder)

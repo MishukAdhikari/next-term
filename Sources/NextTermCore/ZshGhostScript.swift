@@ -20,14 +20,18 @@ public enum ZshGhostScript {
         ("@NG_VERSION@", #"1"#),
         ("@NG_MAX_LINE@", #"2048"#),
         ("@NG_FRAME_WAIT@", #"0.5"#),
+        ("@NG_MAX_PAYLOAD@", #"65536"#),
     ]
 
     static let template = #"""
 # Next Term: the ghost hook (see GhostProtocol). The integration's first precmd sources this file, after the user's .zshrc
 # and plugins have loaded, in every local tab. As the line changes it reports the line, once no key is pending; at each new
 # line it says whether zsh-autosuggestions draws its suggestions here. Next Term draws its own over the terminal, never into
-# the line. Nothing here starts a process, writes a file, evaluates the line, or sets a history option.
+# the line, and puts one on the line only through its key, while the line is still the one it saw. Nothing here starts a
+# process, writes a file of the user's, evaluates the line, or sets a history option.
 zmodload zsh/zleparameter zsh/parameter 2>/dev/null || return 0
+zmodload -F zsh/system b:sysopen b:sysseek 2>/dev/null
+zmodload -F zsh/files b:zf_rm 2>/dev/null
 builtin autoload -Uz add-zle-hook-widget
 
 typeset -g __nextterm_gkey=$'@NG_PREFIX@'
@@ -37,6 +41,35 @@ typeset -gi __nextterm_gline=0 __nextterm_ggen=0
 typeset -g __nextterm_gbuf= __nextterm_gcur= __nextterm_gpost= __nextterm_gsent=
 typeset -g __nextterm_gk= __nextterm_gid=
 typeset -ga __nextterm_gf
+# The keymap `main` is, read at each new line: emacs or viins (`bindkey -v`), or main when it can't be read.
+typeset -g __nextterm_gmain=main
+typeset -gi __nextterm_gfd=-1
+
+# A scratch descriptor of this hook's own (close-on-exec, its file already removed) to read what `bindkey` prints without a
+# subshell, as Tab completion's hook has its own.
+() {
+  emulate -L zsh
+  local f=${TMPDIR:-/tmp}/.nextterm-g-$$-$RANDOM$RANDOM
+  sysopen -rw -o cloexec,creat,excl -m 600 -u __nextterm_gfd $f 2>/dev/null && zf_rm -f -- $f 2>/dev/null
+}
+
+# REPLY: the first line `bindkey` prints for its arguments ("" when it can't be read).
+__nextterm_gbindkey() {
+  emulate -L zsh
+  REPLY=
+  (( __nextterm_gfd >= 0 )) || return 1
+  sysseek -u $__nextterm_gfd 0 && builtin bindkey "$@" >&$__nextterm_gfd 2>/dev/null &&
+    sysseek -u $__nextterm_gfd 0 && IFS= read -r -u $__nextterm_gfd REPLY
+}
+
+# __nextterm_gmain: what `main` is linked to, read at each new line.
+__nextterm_gmainmap() {
+  emulate -L zsh
+  __nextterm_gmain=main
+  __nextterm_gbindkey -lL main || return 0
+  [[ $REPLY == 'bindkey -A '(emacs|viins)' main' ]] && __nextterm_gmain=${${REPLY#bindkey -A }% main}
+  return 0
+}
 
 # reply: each argument percent-encoded as Tab completion's fields are (every byte outside ! to ~, and % ; ,). Printable
 # ASCII, nearly every line, only has its % and ; replaced, which costs far less.
@@ -70,15 +103,16 @@ __nextterm_ghook() {
 }
 
 # The `buf` mark for the line now. BUFFER and POSTDISPLAY over @NG_MAX_LINE@ bytes go empty, flagged; CURSOR is zsh's own
-# count, in characters.
+# count, in characters; `main` is named as the keymap it is.
 __nextterm_greport() {
   emulate -L zsh +o multibyte
-  local flags= buf=$BUFFER post=$POSTDISPLAY
+  local flags= buf=$BUFFER post=$POSTDISPLAY km=${KEYMAP-}
+  [[ $km == main ]] && km=$__nextterm_gmain
   (( ${#buf} > @NG_MAX_LINE@ )) && flags+=l buf=
   (( ${#post} > @NG_MAX_LINE@ )) && flags+=L post=
   (( ${REGION_ACTIVE:-0} )) && flags+=r
   (( ${ISEARCHMATCH_ACTIVE:-0} )) && flags+=i
-  __nextterm_gencall "${KEYMAP-}" "${CONTEXT-}" "$buf" "$post"
+  __nextterm_gencall "$km" "${CONTEXT-}" "$buf" "$post"
   __nextterm_gmark buf $__nextterm_gline $__nextterm_ggen $CURSOR "$reply[1]" "$reply[2]" "$flags" "$reply[3]" "$reply[4]"
   __nextterm_gsent=1
 }
@@ -112,6 +146,7 @@ __nextterm_gsuggest() {
 __nextterm_ginit() {
   emulate -L zsh
   (( __nextterm_gline = (__nextterm_gline + 1) % 1000000000, __nextterm_ggen = (__nextterm_ggen + 1) % 1000000000 ))
+  __nextterm_gmainmap
   __nextterm_ghook
   __nextterm_gbuf=$BUFFER __nextterm_gcur=$CURSOR __nextterm_gpost=$POSTDISPLAY
   __nextterm_greport
@@ -127,7 +162,7 @@ __nextterm_gframe() {
   __nextterm_gf=()
   read -t @NG_FRAME_WAIT@ -k 1 kind && read -t @NG_FRAME_WAIT@ -k 6 id && read -t @NG_FRAME_WAIT@ -k 6 len || return 1
   [[ $kind == [a-z] && $id == <-> && $len == <-> ]] || return 1
-  (( len = 10#$len, len <= 65536 )) || return 1
+  (( len = 10#$len, len <= @NG_MAX_PAYLOAD@ )) || return 1
   if (( len )); then read -t @NG_FRAME_WAIT@ -k $len payload || return 1; fi
   __nextterm_gk=$kind __nextterm_gid=$id
   for f in "${(@s:;:)payload}"; do
@@ -137,11 +172,46 @@ __nextterm_gframe() {
   return 0
 }
 
+# True when the keys $1 do nothing in this keymap, only move the cursor on, or take zsh-autosuggestions' suggestion (which
+# Next Term's stands in for): what an accept may take them for. No keys at all (⌥→ without Option as Meta) do nothing. The
+# binding is read here, when a key accepts, so a prompt costs nothing.
+__nextterm_gmotion() {
+  emulate -L zsh
+  [[ -n $1 ]] || return 0
+  __nextterm_gbindkey -M ${KEYMAP:-main} "$1" || return 1
+  [[ ${REPLY##* } == (.|)(undefined-key|forward-char|vi-forward-char|end-of-line|vi-end-of-line|vi-add-eol|forward-word|emacs-forward-word|vi-forward-word|vi-forward-blank-word|autosuggest-accept|autosuggest-partial-accept) ]]
+}
+
+# An accept (a): the line Next Term saw becomes the new line, the cursor at its end, while the generation (the frame's id),
+# the line and the cursor are as Next Term saw them and the key would only move the cursor (__nextterm_gmotion). Otherwise
+# the key's own bytes go back to zsh, which does what that key does; with none, nothing happens. Nothing runs either way.
+__nextterm_gaccept() {
+  emulate -L zsh
+  (( ${#__nextterm_gf} == 3 )) || return 0
+  local seen=$__nextterm_gf[1] new=$__nextterm_gf[2] key=$__nextterm_gf[3]
+  if (( 10#$__nextterm_gid == __nextterm_ggen % 1000000 && CURSOR == ${#BUFFER} )) && [[ $BUFFER == "$seen" ]] && __nextterm_gmotion "$key"; then
+    BUFFER=$new
+    CURSOR=${#BUFFER}
+  elif [[ -n $key ]]; then
+    zle -U "$key"
+  fi
+  return 0
+}
+
 # The private key's widget: what Next Term sent, by kind. Anything else (a kind this version doesn't know, a frame that
 # doesn't all arrive at once) is read and dropped, so it never lands on the line.
 __nextterm_gkeywidget() {
   emulate -L zsh
   __nextterm_gframe || return 0
+  local before=$BUFFER
+  case $__nextterm_gk in
+    (a) __nextterm_gaccept ;;
+  esac
+  # zsh-autosuggestions never wraps this widget: a line changed here is asked for a suggestion that fits it, as Tab
+  # completion's widget does.
+  if [[ $BUFFER != $before ]] && (( ${+widgets[autosuggest-fetch]} && ! ${+_ZSH_AUTOSUGGEST_DISABLED} )); then
+    zle autosuggest-fetch
+  fi
   return 0
 }
 

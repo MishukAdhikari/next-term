@@ -123,4 +123,66 @@ import Testing
         let step19 = untouched.report(report("git ch", gen: 2), gates: GhostGates())
         #expect(step19 == .none)
     }
+
+    // MARK: keys
+
+    @Test func theKeysSendWhatSwiftTermSends() {
+        #expect(GhostKeys.bytes(.right, applicationCursor: false, optionAsMeta: false) == [0x1B, 0x5B, 0x43])
+        #expect(GhostKeys.bytes(.right, applicationCursor: true, optionAsMeta: false) == [0x1B, 0x4F, 0x43])
+        #expect(GhostKeys.bytes(.end, applicationCursor: false, optionAsMeta: false) == [0x1B, 0x5B, 0x46])
+        #expect(GhostKeys.bytes(.end, applicationCursor: true, optionAsMeta: false) == [0x1B, 0x4F, 0x46])
+        #expect(GhostKeys.bytes(.ctrlE, applicationCursor: true, optionAsMeta: true) == [0x05])
+        #expect(GhostKeys.bytes(.ctrlF, applicationCursor: false, optionAsMeta: false) == [0x06])
+        #expect(GhostKeys.bytes(.optionRight, applicationCursor: false, optionAsMeta: true) == Array("\u{1b}[1;3C".utf8))
+        #expect(GhostKeys.bytes(.optionRight, applicationCursor: false, optionAsMeta: false).isEmpty)
+    }
+
+    /// A state showing `git checkout main` after `git ch`, in `keymap`.
+    func showing(keymap: String = "emacs") -> GhostState {
+        var state = keyed()
+        _ = state.report(report("git ch", gen: 12, keymap: keymap), gates: GhostGates())
+        _ = state.answer(gen: 12, command: "git checkout main")
+        return state
+    }
+
+    @Test func whichKeysAreTaken() {
+        let emacs = showing()
+        #expect([.right, .end, .ctrlE, .ctrlF, .optionRight, .escape].allSatisfy { emacs.takes($0) } && !emacs.escapeGoesOn)
+        let vi = showing(keymap: "viins")
+        #expect(!vi.takes(.ctrlE) && !vi.takes(.ctrlF) && vi.takes(.right) && vi.takes(.end) && vi.escapeGoesOn)
+        // Nothing showing: nothing taken.
+        var none = keyed()
+        _ = none.report(report("git ch", gen: 3), gates: GhostGates())
+        #expect(!none.takes(.right))
+        #expect(none.accept(.right, bytes: [0x1B, 0x5B, 0x43]) == nil)
+    }
+
+    @Test func acceptingAllSendsTheWholeCommand() {
+        var state = showing()
+        let frame = state.accept(.right, bytes: [0x1B, 0x5B, 0x43])
+        let expected = GhostProtocol.acceptFrame(gen: 12, seen: "git ch", new: "git checkout main", key: [0x1B, 0x5B, 0x43])
+        #expect(frame != nil && frame == expected && state.shown == nil)
+        // The shell's report of the whole line asks again (a longer command may start with it).
+        let step = state.report(report("git checkout main", gen: 13), gates: GhostGates())
+        #expect(step == .ask(gen: 13, prefix: "git checkout main"))
+    }
+
+    @Test func acceptingAWordKeepsTheRest() {
+        var state = showing()
+        let frame = state.accept(.optionRight, bytes: [])
+        #expect(frame == GhostProtocol.acceptFrame(gen: 12, seen: "git ch", new: "git checkout", key: []))
+        // The shell's report of the longer line trims it, with no ask; ⌥→ again takes the rest.
+        let step = state.report(report("git checkout", gen: 13), gates: GhostGates())
+        #expect(step == .trimmed && state.shown?.remainder == " main")
+        #expect(state.accept(.optionRight, bytes: []) == GhostProtocol.acceptFrame(gen: 13, seen: "git checkout", new: "git checkout main", key: []))
+    }
+
+    /// Smart case: the line takes the command's own case.
+    @Test func acceptingTakesTheCommandsCase() {
+        var state = keyed()
+        _ = state.report(report("cd ~/code", gen: 2), gates: GhostGates())
+        _ = state.answer(gen: 2, command: "cd ~/Code/next-term")
+        #expect(state.accept(.end, bytes: [0x1B, 0x5B, 0x46]) == GhostProtocol.acceptFrame(gen: 2, seen: "cd ~/code", new: "cd ~/Code/next-term",
+                                                                                           key: [0x1B, 0x5B, 0x46]))
+    }
 }

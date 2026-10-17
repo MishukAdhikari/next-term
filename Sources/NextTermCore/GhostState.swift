@@ -34,6 +34,30 @@ public struct GhostGates: Equatable, Sendable {
     public var open: Bool { on && shellAlone && viewReady && noTabList && focused && notDriven && noPlugin }
 }
 
+/// The keys that take a suggestion, and the bytes each sends without one, which Next Term writes itself into the accept
+/// frame (the hook pushes them back when it doesn't accept): SwiftTerm's own, so a key the hook gives back does what it
+/// always does.
+public enum GhostKeys {
+    public enum Key: Equatable, Sendable {
+        case right, end, ctrlE, ctrlF, optionRight, escape
+    }
+
+    /// What `key` sends: → and End in the cursor keys' mode (`ESC [ C`, or `ESC O C` with application cursor keys), ⌃E
+    /// and ⌃F their control bytes, Esc its own. ⌥→ sends `ESC [ 1 ; 3 C` with Option as Meta, as SwiftTerm 1.20 encodes
+    /// it, and nothing without: there accepting a word is all it does.
+    public static func bytes(_ key: Key, applicationCursor: Bool, optionAsMeta: Bool) -> [UInt8] {
+        let introducer: [UInt8] = applicationCursor ? [0x1B, 0x4F] : [0x1B, 0x5B]
+        switch key {
+        case .right: return introducer + [0x43]
+        case .end: return introducer + [0x46]
+        case .ctrlE: return [0x05]
+        case .ctrlF: return [0x06]
+        case .optionRight: return optionAsMeta ? Array("\u{1b}[1;3C".utf8) : []
+        case .escape: return [0x1B]
+        }
+    }
+}
+
 /// One tab's line, as far as suggestions go: what shows, and when to ask the record for one. The app feeds it the ghost
 /// hook's reports (GhostProtocol.BufferReport) with the gates, and its answers; it says what to do (`Step`).
 ///
@@ -105,6 +129,37 @@ public struct GhostState: Sendable {
         guard let command, let suggestion = GhostSuggestion(typed: buffer, command: command) else { return false }
         shown = suggestion
         return true
+    }
+
+    // MARK: keys
+
+    /// Whether `key` is taken while the suggestion shows, in the last report's keymap: ⌃E and ⌃F only in emacs keymaps
+    /// (vi insert mode has its own use for them), the others in each keymap a suggestion shows in. Not while nothing
+    /// shows.
+    public func takes(_ key: GhostKeys.Key) -> Bool {
+        guard shown != nil, let keymap = report?.keymap else { return false }
+        switch key {
+        case .ctrlE, .ctrlF: return keymap != "viins"
+        case .right, .end, .optionRight, .escape: return Self.keymaps.contains(keymap)
+        }
+    }
+
+    /// Esc is taken and never sent in emacs keymaps, as the Tab list takes it; vi insert mode needs it to leave insert
+    /// mode, so there it hides the suggestion and goes on to zsh.
+    public var escapeGoesOn: Bool { report?.keymap == "viins" }
+
+    /// An accepting key (→, End, ⌃E, ⌃F: the whole command; ⌥→: its next word), with `bytes`, what that key sends: the
+    /// frame for the hook (GhostProtocol.acceptFrame), or nil when it isn't taken. The overlay hides at once. After a
+    /// word, the suggestion goes on, trimmed, once the shell reports the longer line; after the whole command, the shell's
+    /// next report asks again.
+    public mutating func accept(_ key: GhostKeys.Key, bytes: [UInt8]) -> [UInt8]? {
+        guard key != .escape, takes(key), let shown, let report, report.buffer == shown.typed else { return nil }
+        let word = key == .optionRight
+        let new = word ? shown.acceptWord : shown.acceptAll
+        guard let frame = GhostProtocol.acceptFrame(gen: report.gen, seen: shown.typed, new: new, key: bytes) else { return nil }
+        if !word { self.shown = nil }
+        asked = nil
+        return frame
     }
 
     /// Esc: hidden for the rest of the line.
