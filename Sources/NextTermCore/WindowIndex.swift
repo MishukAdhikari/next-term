@@ -29,6 +29,9 @@ public struct AgentMarks: Equatable, Sendable {
     /// An agent that stopped, or a command that finished, not seen yet.
     public var done = 0
     public var working = 0
+    /// A terminal on a server whose connection dropped, with nothing else to show: what it holds now is not known, so
+    /// it is not counted idle. Go to Next Agent Needing You leaves it out.
+    public var disconnected = 0
 
     public init() {}
 
@@ -53,24 +56,30 @@ public struct AgentMarks: Equatable, Sendable {
     public struct Mark: Equatable, Sendable {
         public let state: TabState
         public let count: Int
+        /// The server mark of a lost connection, drawn as the tab bar draws it, for terminals whose `state` is idle as
+        /// far as they know.
+        public let disconnected: Bool
 
-        public init(state: TabState, count: Int) {
+        public init(state: TabState, count: Int, disconnected: Bool = false) {
             self.state = state
             self.count = count
+            self.disconnected = disconnected
         }
     }
 
-    /// The marks to show, in the order Go to Next Agent Needing You goes through them, then working; none for a mark no
-    /// terminal has. `working` false leaves working out, as the tab bar does with View › Agent Spinner set to Off.
+    /// The marks to show, in the order Go to Next Agent Needing You goes through them, then working, then a lost
+    /// connection; none for a mark no terminal has. `working` false leaves working out, as the tab bar does with View ›
+    /// Agent Spinner set to Off.
     public func shown(working showsWorking: Bool = true) -> [Mark] {
         let all: [Mark] = [
             Mark(state: .attention, count: attention), Mark(state: .failed, count: failed), Mark(state: .done, count: done),
             Mark(state: .working, count: showsWorking ? working : 0),
+            Mark(state: .idle, count: disconnected, disconnected: true),
         ]
         return all.filter { (mark: Mark) -> Bool in mark.count > 0 }
     }
 
-    /// What VoiceOver hears of them: "1 needs you, 2 done"; nil with none shown.
+    /// What VoiceOver hears of them: "1 needs you, 2 done, 1 disconnected"; nil with none shown.
     public func spoken(working showsWorking: Bool = true) -> String? {
         let parts: [String] = shown(working: showsWorking).map { (mark: Mark) -> String in
             "\(mark.count) " + Self.words(mark)
@@ -79,6 +88,7 @@ public struct AgentMarks: Equatable, Sendable {
     }
 
     private static func words(_ mark: Mark) -> String {
+        if mark.disconnected { return "disconnected" }
         switch mark.state {
         case .attention: return mark.count == 1 ? "needs you" : "need you"
         case .failed: return "failed"
@@ -97,11 +107,14 @@ public struct WindowIndex: Sendable {
         /// Its title as its tab shows it, an agent's spinner frame left out.
         public let title: String
         public let state: TabState
+        /// On a server, and its connection dropped: its status was cleared with it, so an idle `state` says nothing.
+        public let disconnected: Bool
 
-        public init(id: UUID, title: String, state: TabState) {
+        public init(id: UUID, title: String, state: TabState, disconnected: Bool = false) {
             self.id = id
             self.title = title
             self.state = state
+            self.disconnected = disconnected
         }
     }
 
@@ -114,7 +127,7 @@ public struct WindowIndex: Sendable {
         /// The window's name, first in its title: the project's ("xCloud ▸ 7027-sso"), else its tab's folder
         /// ("~/Downloads") or server ("web-1").
         public let name: String
-        /// The whole title, as the Window menu, ⌘` and Mission Control read it (WindowTitle).
+        /// The whole title, as the Window menu, Mission Control and VoiceOver read it (WindowTitle).
         public let title: String
         /// When it last had the keyboard; `Date.distantPast` for one that never had.
         public let lastKey: Date
@@ -135,8 +148,12 @@ public struct WindowIndex: Sendable {
             self.destination = destination
         }
 
+        /// Its terminals' marks; an idle one whose connection dropped shows that instead.
         public var marks: AgentMarks {
-            AgentMarks(tabs.map { (tab: Tab) -> TabState in tab.state })
+            var marks = AgentMarks(tabs.map { (tab: Tab) -> TabState in tab.state })
+            let lost: [Tab] = tabs.filter { (tab: Tab) -> Bool in tab.disconnected && tab.state == .idle }
+            marks.disconnected = lost.count
+            return marks
         }
     }
 
@@ -279,8 +296,8 @@ public struct WindowIndex: Sendable {
     }
 }
 
-/// A terminal window's title, as the Window menu, ⌘` and Mission Control read it: its name first, so each window leads
-/// with its project, then what is in front in it. "xCloud ▸ 7027-sso — claude", "~/Downloads — vim", "web-1 — app".
+/// A terminal window's title, as the Window menu, Mission Control and VoiceOver read it: its name first, so each window
+/// leads with its project, then what is in front in it. "xCloud ▸ 7027-sso — claude", "~/Downloads — vim", "web-1 — app".
 public enum WindowTitle {
     /// The name of a window with no project, from its tab's folder: "~/Downloads", "~" for the home folder, any other
     /// folder as it is.

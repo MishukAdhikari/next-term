@@ -3,7 +3,8 @@ import Foundation
 /// Where a folder opens as a project (⌘O, Open Recent, a folder dropped on the Dock icon or named by `open -a` once the
 /// launch is done), and when what a launch names opens (R32).
 public enum ProjectOpening {
-    /// Settings › "Open Projects In", and the Ask dialog's remembered choice, by the words they are saved as.
+    /// Settings › General's Projects row and File › "Open Projects In", and the Ask dialog's remembered choice, by the
+    /// words they are saved as.
     public enum Setting: String, CaseIterable, Sendable {
         case ask, thisWindow, newWindow
     }

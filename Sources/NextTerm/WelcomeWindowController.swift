@@ -487,16 +487,19 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         listedColors = projectColors()
     }
 
-    /// A window's entry in the index changed (a mark, a title, one opened or closed): while the window shows, its list
-    /// follows, once for the changes that come together, with no git file read again.
+    /// A window's entry in the index changed (a mark, a title, one opened or closed): while the window can be seen, its
+    /// list follows, once for the changes that come together, with no git file read again, and only when a row shows
+    /// what changed (not a background tab's title). Covered by other windows, it catches up as it is uncovered.
     func windowsChanged() {
-        guard window?.isVisible == true, !windowsChangePending else { return }
+        guard window?.canBeSeen == true, !windowsChangePending else { return }
         windowsChangePending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self else { return }
             self.windowsChangePending = false
-            guard self.window?.isVisible == true else { return }
+            guard self.window?.canBeSeen == true else { return }
+            let before: SwitcherList = self.list
             self.buildList()
+            guard self.list != before else { return }
             self.applySearch(.keep)
         }
     }
@@ -605,6 +608,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         appliedQuery = query
         let kept: SwitcherEntry.ID? = switcher.selectedEntry?.id
         let keptIndex: Int? = switcher.selectedIndex
+        // A kept selection scrolled out of view stays out of it: the user scrolled the list to look elsewhere.
+        let keptInView: Bool = keptIndex == nil || switcher.selectedRowVisible
         let lastPick: String? = UserDefaults.standard.string(forKey: SwitcherSelection.lastPickKey)
         let home: String = NSHomeDirectory()
         let shown: SwitcherShown = SwitcherSearch.filter(list, query: query, home: home, branches: branches,
@@ -624,7 +629,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         for host in hosts { folders[host.id] = host.directory }
         switcher.show(shown, openCount: list.openCount, searching: searching, branches: branches, keys: switcherKeys,
                       folders: folders, colors: listedColors)
-        switcher.select(index)
+        switcher.select(index, scrolls: selection == .start || keptInView)
         let none: Bool = searching && shown.isEmpty
         noMatch.stringValue = none ? SwitcherSearch.noMatch(query) : ""
         noMatch.isHidden = !none
@@ -692,7 +697,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let host: RemoteHost? = entry?.server.flatMap { (server: SwitcherServer) -> RemoteHost? in
             hosts.first { (host: RemoteHost) -> Bool in host.id == server.id }
         }
-        if let host { serverPane.show(host) }
+        if let host { serverPane.show(host, windowOpen: serverWindow(of: host.id) != nil) }
         let cards: Bool = SwitcherWaysIn.showsCards(list, query: appliedQuery)
         waysInCards.isHidden = !cards
         serverPane.isHidden = host == nil || cards
@@ -702,7 +707,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         updateHint()
     }
 
-    /// Return acts on the selection only, through the right pane's button: Go to Window or Open Project, or Connect.
+    /// Return acts on the selection only, through the right pane's button: Go to Window or Open Project, or for a server
+    /// Go to Window or Connect.
     /// With nothing selected (nothing listed, or nothing matching) no button has it, and Return does nothing. Outside
     /// the sessions search (where it resumes, `handleKeyEquivalent`) it never resumes a session.
     private func updateReturnKey() {
@@ -813,7 +819,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// An open project: its window comes forward and this one closes. A window's own row: that window. A closed project
     /// opens as Open Project does, by the "Open projects in" setting. `newWindow` (⌘↩): in a new window without asking, a
-    /// second one on an open project. A server: a window with a tab on it, remembered so the next show starts on it.
+    /// second one on an open project. A server, remembered so the next show starts on it: its window in front last, as a
+    /// project's row goes to its own; with none open, or with `newWindow`, a new window with a tab on it.
     private func activate(_ entry: SwitcherEntry, newWindow: Bool) {
         switch entry {
         case .project(let project):
@@ -844,7 +851,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         case .server(let server):
             guard let host = hosts.first(where: { (host: RemoteHost) -> Bool in host.id == server.id }) else { return }
             UserDefaults.standard.set(host.id, forKey: SwitcherSelection.lastPickKey)
-            AppDelegate.shared.connect(to: host)
+            if !newWindow, let open = serverWindow(of: host.id) {
+                open.makeKeyAndOrderFront(nil)
+                close()
+            } else {
+                AppDelegate.shared.connect(to: host)
+            }
         }
     }
 
@@ -862,6 +874,19 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let controllers: [TerminalWindowController] = AppDelegate.shared.controllers
         let windows: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
             controller.project == path && !controller.hasClosed
+        }
+        let newest: TerminalWindowController? = windows.max { (a: TerminalWindowController, b: TerminalWindowController) -> Bool in
+            a.lastKey < b.lastKey
+        }
+        return newest?.window
+    }
+
+    /// The window on the server `hostID` that was in front last: a server's window, its tab in front on that server, as
+    /// its row in the list is.
+    private func serverWindow(of hostID: String) -> NSWindow? {
+        let controllers: [TerminalWindowController] = AppDelegate.shared.controllers
+        let windows: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+            !controller.hasClosed && controller.windowKind == .server && controller.activeTab?.remote?.host.id == hostID
         }
         let newest: TerminalWindowController? = windows.max { (a: TerminalWindowController, b: TerminalWindowController) -> Bool in
             a.lastKey < b.lastKey
@@ -995,8 +1020,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         waysInCards.show(waysIn)
         let selection: SwitcherEntry? = switcher.selectedEntry
         let empty: Bool = search.stringValue.isEmpty
+        // A server with a window open on it: Return goes there, and ⌘↩ connects again.
+        let server: SwitcherServer? = selection?.server
+        let serverOpen: Bool = server.map { (server: SwitcherServer) -> Bool in serverWindow(of: server.id) != nil } ?? false
         let parts: [String] = SwitcherHint.parts(selection: selection, searchEmpty: empty, otherWindows: otherWindowsOpen,
-                                                 waysIn: waysIn)
+                                                 waysIn: waysIn, serverWindowOpen: serverOpen)
         hintLine.show(parts)
     }
 
@@ -1074,6 +1102,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Brought back from the Dock, the keyboard is in the search, as at a show.
     func windowDidDeminiaturize(_ notification: Notification) {
         focusSearch()
+    }
+
+    /// Uncovered without coming to the front (on another display, a window over it moved away): the windows' rows catch
+    /// up with what changed while it was covered.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        windowsChanged()
     }
 
     /// The list follows what it lists while the window shows; hidden, the next show reads it.

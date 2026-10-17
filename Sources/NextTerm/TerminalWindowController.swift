@@ -954,7 +954,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// "xCloud ▸ 7027-sso — claude" in the terminal, "xCloud — Alertable.php" while editing, "xCloud — claude — on
     /// web-1" in a remote tab (or "xCloud — web-1: app" when the tab's name says it already); with no project
     /// "~/Downloads — vim", or "web-1 — app" with a server's tab in front. The window's name comes first, so the Window
-    /// menu, ⌘`, Mission Control and VoiceOver lead with the project (WindowTitle).
+    /// menu, Mission Control and VoiceOver lead with the project (WindowTitle).
     func updateTitle() {
         window?.title = windowTitle
     }
@@ -998,7 +998,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status.
     var indexEntry: WindowIndex.Window {
         let terminals: [WindowIndex.Tab] = tabs.map { (tab: TerminalTab) -> WindowIndex.Tab in
-            WindowIndex.Tab(id: tab.id, title: AgentTitle.withoutSpinnerFrame(tab.title), state: tab.status.state)
+            let title: String = AgentTitle.withoutSpinnerFrame(tab.title)
+            // A lost connection cleared the tab's status: what an agent asked there may still wait on the host.
+            let lost: Bool = tab.remoteLink == .disconnected
+            return WindowIndex.Tab(id: tab.id, title: title, state: tab.status.state, disconnected: lost)
         }
         let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
         return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,

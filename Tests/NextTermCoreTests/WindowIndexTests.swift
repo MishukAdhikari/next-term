@@ -204,6 +204,24 @@ import Testing
         let marked: WindowIndex.Window = window(1, [terminal(1, .done), terminal(2, .working)])
         #expect(marked.marks == AgentMarks([.done, .working]))
     }
+
+    @Test func anIdleTabWhoseConnectionDroppedShowsThatAndIsNotWaiting() {
+        let lost = WindowIndex.Tab(id: tab(1), title: "claude", state: .idle, disconnected: true)
+        // A lost tab with news of its own shows that news: what it finished is known.
+        let finished = WindowIndex.Tab(id: tab(2), title: "make", state: .done, disconnected: true)
+        var index = WindowIndex()
+        index.update(window(1, [lost, finished, terminal(3, .idle)], kind: .server, name: "web-1"))
+        let marks: AgentMarks = index.windows[0].marks
+        #expect(marks.disconnected == 1 && marks.done == 1 && marks.needingYou == 1)
+        let shown: [AgentMarks.Mark] = marks.shown()
+        #expect(shown.last == AgentMarks.Mark(state: .idle, count: 1, disconnected: true))
+        #expect(shown.count == 2 && marks.shown(working: false).count == 2)
+        #expect(marks.spoken() == "1 done, 1 disconnected")
+        check(tabs(index.waiting), [2])
+        // Back up, it is an idle tab again.
+        index.update(window(1, [terminal(1, .idle), finished], kind: .server, name: "web-1"))
+        #expect(index.windows[0].marks.disconnected == 0 && index.windows[0].marks.spoken() == "1 done")
+    }
 }
 
 /// The window title: its name first, then what is in front.

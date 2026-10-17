@@ -531,8 +531,9 @@ public enum SwitcherAction: Equatable, Sendable {
     case move(Int)
     /// By pages: Page Down and Page Up.
     case page(Int)
-    /// To the selected project's window, or open it, or connect to the selected server. With `newWindow`, the project
-    /// opens in a new window without asking, a second one when it is open already.
+    /// To the selected project's window, or open it; to the selected server's window, or connect to it. With
+    /// `newWindow`, the project opens in a new window without asking, a second one when it is open already, and the
+    /// server connects in a new window though one is open on it.
     case activate(newWindow: Bool)
     /// The project at this index in the list, as Return would.
     case jump(Int)
@@ -634,9 +635,10 @@ public struct SwitcherKeys: Equatable, Sendable {
         case Self.down: return .move(1)
         case Self.up: return .move(-1)
         case Self.newWindow:
-            // A server has no second window: ⌘↩ connects, as Return does. A window with no project has nothing to open
-            // again: ⌘↩ goes to it.
+            // A server: ⌘↩ connects in a new window, though Return would go to one open on it. A window with no project
+            // has nothing to open again: ⌘↩ goes to it.
             guard let selection else { return nil }
+            if selection.server != nil { return .activate(newWindow: true) }
             return .activate(newWindow: selection.project?.hasProject ?? false)
         case Self.forget:
             // With text, the field's, held or not. On the empty search a repeat does nothing: held down, each forget
@@ -790,11 +792,12 @@ public enum SwitcherWayIn: CaseIterable, Sendable {
 /// The hint line under the list: what the keys do for the selection. Its parts are plain strings; the window sets
 /// the gaps between them, never typed spaces.
 public enum SwitcherHint {
-    /// "↩ go to window", "↩ open" or "↩ connect"; then "⌘↩ new window" for a project; then "esc close" while Esc
-    /// closes the window (the search is empty and another window is open). With nothing selected, no match or nothing
-    /// listed, the three ways in with their keys instead, leaving out one with no key.
+    /// "↩ go to window", "↩ open" or "↩ connect"; then "⌘↩ new window" for a project, and for a server with a window
+    /// open on it (`serverWindowOpen`), where Return goes to that window; then "esc close" while Esc closes the window
+    /// (the search is empty and another window is open). With nothing selected, no match or nothing listed, the three
+    /// ways in with their keys instead, leaving out one with no key.
     public static func parts(selection: SwitcherEntry?, searchEmpty: Bool, otherWindows: Bool,
-                             waysIn: SwitcherWaysIn = .standard) -> [String] {
+                             waysIn: SwitcherWaysIn = .standard, serverWindowOpen: Bool = false) -> [String] {
         let enter: String = KeyChord(key: "\r").display
         var parts: [String] = []
         switch selection {
@@ -802,7 +805,8 @@ public enum SwitcherHint {
             parts.append(enter + " " + (project.isOpen ? "go to window" : "open"))
             if project.hasProject { parts.append(SwitcherKeys.newWindow.display + " new window") }
         case .server?:
-            parts.append(enter + " connect")
+            parts.append(enter + " " + (serverWindowOpen ? "go to window" : "connect"))
+            if serverWindowOpen { parts.append(SwitcherKeys.newWindow.display + " new window") }
         case nil:
             for way in SwitcherWayIn.allCases {
                 if let key = waysIn.key(for: way) { parts.append(key.display + " " + way.hintLabel) }

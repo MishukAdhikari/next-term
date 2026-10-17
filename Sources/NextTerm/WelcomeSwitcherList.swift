@@ -98,8 +98,15 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
         selectedIndex.flatMap { (index: Int) -> SwitcherEntry? in shown.entries[safe: index] }
     }
 
-    /// Selects the entry at `index` in `shown.entries` and scrolls it into view; nil leaves no row selected.
-    func select(_ index: Int?) {
+    /// Whether the selected row is in view, wholly or in part.
+    var selectedRowVisible: Bool {
+        let row: Int = table.selectedRow
+        return row >= 0 && table.rows(in: table.visibleRect).contains(row)
+    }
+
+    /// Selects the entry at `index` in `shown.entries` and, unless `scrolls` is false, scrolls it into view; nil leaves
+    /// no row selected.
+    func select(_ index: Int?, scrolls: Bool = true) {
         selecting = true
         defer { selecting = false }
         guard let index, let row = rows.firstIndex(of: .entry(index)) else {
@@ -110,6 +117,7 @@ final class WelcomeSwitcherList: NSObject, NSTableViewDataSource, NSTableViewDel
             return
         }
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        guard scrolls else { return }
         // The heading over the first row comes into view with it.
         let top: Int = index == 0 || index == shown.projects.count ? max(0, row - 1) : row
         table.scrollRowToVisible(top)
@@ -331,11 +339,13 @@ final class SwitcherHeaderCell: NSTableCellView {
 }
 
 /// What a row's window shows of its agents, at the right of the row's second line: each mark its terminals show, drawn
-/// as the tab bar draws it (StatusDotView, without the amber pulse: the list is looked at, not watched), with how many
-/// show it when more than one ("2"). The row says it to VoiceOver in words.
+/// as the tab bar draws it (StatusDotView, without the amber pulse: the list is looked at, not watched; a lost
+/// connection as RemoteMarkView), with how many show it when more than one ("2"). The row says it to VoiceOver in words.
 final class SwitcherMarksView: NSStackView {
     private(set) var shown: [AgentMarks.Mark] = []
     private var counts: [NSTextField] = []
+    /// The server marks, in the row's secondary colour as the counts are.
+    private var links: [RemoteMarkView] = []
 
     init() {
         super.init(frame: .zero)
@@ -349,6 +359,7 @@ final class SwitcherMarksView: NSStackView {
 
     func show(_ marks: [AgentMarks.Mark], color: NSColor) {
         for count in counts { count.textColor = color }
+        for link in links { link.tint = color }
         guard marks != shown else { return }
         shown = marks
         for view in arrangedSubviews {
@@ -356,25 +367,43 @@ final class SwitcherMarksView: NSStackView {
             view.removeFromSuperview()
         }
         counts = []
+        links = []
         for mark in marks {
-            let dot = StatusDotView()
-            dot.pulsesForAttention = false
-            dot.state = mark.state
-            dot.translatesAutoresizingMaskIntoConstraints = false
-            dot.widthAnchor.constraint(equalToConstant: 10).isActive = true
-            dot.heightAnchor.constraint(equalToConstant: 10).isActive = true
-            dot.setAccessibilityElement(false)
-            addArrangedSubview(dot)
+            let view: NSView = mark.disconnected ? link(color) : dot(mark.state)
+            addArrangedSubview(view)
             guard mark.count > 1 else { continue }
             let count = NSTextField(labelWithString: "\(mark.count)")
             count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
             count.textColor = color
             count.setAccessibilityElement(false)
             addArrangedSubview(count)
-            setCustomSpacing(3, after: dot)
+            setCustomSpacing(3, after: view)
             counts.append(count)
         }
         isHidden = marks.isEmpty
+    }
+
+    private func dot(_ state: TabState) -> StatusDotView {
+        let dot = StatusDotView()
+        dot.pulsesForAttention = false
+        dot.state = state
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        dot.setAccessibilityElement(false)
+        return dot
+    }
+
+    /// A lost connection: the server with its barred red dot, as on the tab.
+    private func link(_ color: NSColor) -> RemoteMarkView {
+        let mark = RemoteMarkView()
+        mark.link = .disconnected
+        mark.tint = color
+        mark.translatesAutoresizingMaskIntoConstraints = false
+        mark.widthAnchor.constraint(equalToConstant: RemoteMarkView.size.width).isActive = true
+        mark.heightAnchor.constraint(equalToConstant: RemoteMarkView.size.height).isActive = true
+        links.append(mark)
+        return mark
     }
 }
 

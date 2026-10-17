@@ -384,8 +384,8 @@ import Testing
         #expect(act(command("w"), .elsewhere) == .close)
         #expect(act(SwitcherKeys.newWindow) == .activate(newWindow: true))
         #expect(act(SwitcherKeys.newWindow, selection: closedDocs) == .activate(newWindow: true))
-        // On a server ⌘↩ does what Return does.
-        #expect(act(SwitcherKeys.newWindow, selection: prod) == .activate(newWindow: false))
+        // On a server ⌘↩ connects in a new window, where Return goes to one open on it.
+        #expect(act(SwitcherKeys.newWindow, selection: prod) == .activate(newWindow: true))
         // ⌥⌘O gives ⌘↩ to Fork: the sessions search keeps it.
         #expect(act(SwitcherKeys.newWindow, .sessions) == nil)
         #expect(act(SwitcherKeys.newWindow, .elsewhere) == nil)
@@ -541,6 +541,9 @@ import Testing
         check(closed, ["↩ open", "⌘↩ new window", "esc close"])
         let server = SwitcherHint.parts(selection: prod, searchEmpty: true, otherWindows: true)
         check(server, ["↩ connect", "esc close"])
+        // A server with a window open on it: Return goes there, and ⌘↩ connects again.
+        let serverOpen = SwitcherHint.parts(selection: prod, searchEmpty: true, otherWindows: true, serverWindowOpen: true)
+        check(serverOpen, ["↩ go to window", "⌘↩ new window", "esc close"])
         // At launch, the only window: Esc does not close it.
         let alone = SwitcherHint.parts(selection: openShop, searchEmpty: true, otherWindows: false)
         check(alone, ["↩ go to window", "⌘↩ new window"])

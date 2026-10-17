@@ -1119,9 +1119,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
     typealias ProjectTarget = ProjectOpening.Setting
 
+    /// File › Open Projects In, Settings › General's Projects row, the Ask dialog's remembered choice or an import set
+    /// `projectTarget`: the Settings row follows.
+    static let projectTargetChanged = Notification.Name("NextTermProjectTargetChanged")
+
     var projectTarget: ProjectTarget {
         get { ProjectTarget(rawValue: UserDefaults.standard.string(forKey: "openProjectsIn") ?? "") ?? .ask }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn") }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn")
+            NotificationCenter.default.post(name: Self.projectTargetChanged, object: self)
+        }
     }
 
     private var welcome: WelcomeWindowController?
@@ -1528,7 +1535,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc func goToNextAgentNeedingYou(_ sender: Any?) {
         refreshWindowIndex()
         let key = NSApp.keyWindow?.windowController as? TerminalWindowController
-        guard let next = windowIndex.next(from: key?.activeTab?.id) else {
+        // The tab in front counts as gone to only while it shows; folded, what it holds is news like any other tab's.
+        let front: TerminalTab? = key?.activeTab.flatMap { (tab: TerminalTab) -> TerminalTab? in
+            key?.isOnScreen(tab) == true ? tab : nil
+        }
+        guard let next = windowIndex.next(from: front?.id) else {
             let shown: NSWindow? = NSApp.keyWindow ?? TerminalWindow.front
             GitToast.show(WindowIndex.nothingWaiting, in: shown)
             return
