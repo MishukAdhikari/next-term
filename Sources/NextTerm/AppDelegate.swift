@@ -13,9 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastNotified: [UUID: (at: Date, key: String)] = [:]
     /// The same for each of herdr's agents, by its id ("<tab id>/<pane>").
     private var lastHerdrNotified: [String: (at: Date, key: String)] = [:]
-    /// herdr agents' notices still in Notification Center, by id: the tab that posted each, and whether it was about a
-    /// decision (else a finish), so each is withdrawn once its agent no longer needs the user that way.
-    private var herdrDelivered: [String: (tab: UUID, decision: Bool)] = [:]
+    /// herdr agents' notices still in Notification Center, by id: who posted each (a tab's id, or "host:<id>" for a host
+    /// with no herdr tab), its agent's pane, and whether it was about a decision (else a finish), so each is withdrawn
+    /// once its agent no longer needs the user that way.
+    private var herdrDelivered: [String: (owner: String, pane: String, decision: Bool)] = [:]
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
@@ -1502,6 +1503,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for tab in controllers.flatMap(\.tabs) where tab.followsHerdr {
             for pane in tab.herdrTracker.needsYou { agents.insert(tab.herdrPlace + "\u{0}" + pane) }
         }
+        // Hosts with no herdr tab, counted once with any tab of the same session.
+        for overview in RemotePoller.shared.overviews {
+            for pane in overview.tracker.needsYou { agents.insert(overview.place + "\u{0}" + pane) }
+        }
         let count = controllers.reduce(0) { $0 + $1.unseenTabCount } + agents.count
         guard count != lastBadge else { return }
         lastBadge = count
@@ -1597,7 +1602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if audible { lastSoundAt = Date() }
         content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString, "herdr_pane": agent.paneID]
-        herdrDelivered[id] = (tab.id, question != nil)
+        herdrDelivered[id] = (tab.id.uuidString, agent.paneID, question != nil)
         deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
@@ -1613,19 +1618,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// agent is not blocked, a finish's once it is neither done nor kept unread, and either once herdr no longer lists
     /// it or the agent is on screen.
     func withdrawStaleHerdrNotices(of tab: TerminalTab) {
-        let tracker = tab.herdrTracker
-        for (id, posted) in herdrDelivered where posted.tab == tab.id {
-            guard let target = HerdrTarget.parse(id) else { continue }
-            let agent = tracker.agents.first { $0.paneID == target.pane }
+        withdrawStaleHerdrNotices(owner: tab.id.uuidString, tracker: tab.herdrTracker)
+    }
+
+    /// The same for any owner of notices (a tab, or a host with no herdr tab), from its tracker.
+    func withdrawStaleHerdrNotices(owner: String, tracker: HerdrAgents) {
+        for (id, posted) in herdrDelivered where posted.owner == owner {
+            let agent = tracker.agents.first { $0.paneID == posted.pane }
             let finished = agent.map { $0.status == .done || tracker.isUnread($0.paneID) } ?? false
             let still = posted.decision ? agent?.status == .blocked : finished && agent?.status != .blocked
-            if !still || tracker.isOnScreen(target.pane) { withdrawHerdrNotice(id) }
+            if !still || tracker.isOnScreen(posted.pane) { withdrawHerdrNotice(id) }
         }
     }
 
     /// Withdraws every notice of `tab`'s agents: the tab closed, or no longer follows herdr.
     func withdrawHerdrNotices(of tab: TerminalTab) {
-        for (id, posted) in herdrDelivered where posted.tab == tab.id { withdrawHerdrNotice(id) }
+        withdrawHerdrNotices(owner: tab.id.uuidString)
+    }
+
+    func withdrawHerdrNotices(owner: String) {
+        for (id, posted) in herdrDelivered where posted.owner == owner { withdrawHerdrNotice(id) }
+    }
+
+    /// A notice for an agent of a connected host with no herdr tab (HerdrOverview), as `post(herdrAgent:)` posts one: the
+    /// host in the subtitle, its own id, withdrawn as the agent moves on. A click opens a herdr tab there, on that pane.
+    func post(overviewAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, overview: HerdrOverview,
+              appActive: Bool? = nil) {
+        guard !overview.tracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: false) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = Typography.shortened(overview.host.name, to: 40) + " — no herdr tab"
+        let id = overview.noticeID(agent.paneID)
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = overview.host.name
+        content.userInfo = ["herdr_host": overview.host.id, "herdr_pane": agent.paneID]
+        herdrDelivered[id] = (overview.owner, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
     /// While the self-test runs, notifications land here instead of in Notification Center: it checks what
@@ -1705,8 +1750,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let tabID = response.notification.request.content.userInfo["tab"] as? String
         // One of herdr's agents: herdr's view moves to its pane too (the user clicked, so nothing asks).
         let pane = response.notification.request.content.userInfo["herdr_pane"] as? String
+        // An agent of a host with no herdr tab: a herdr tab opens there, on its pane.
+        let host = response.notification.request.content.userInfo["herdr_host"] as? String
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let host, let pane {
+                HerdrAgentMenu.go(to: .host(id: host, pane: pane))
+                return completionHandler()
+            }
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
                     if let pane {

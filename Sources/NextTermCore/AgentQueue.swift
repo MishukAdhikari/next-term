@@ -18,6 +18,11 @@ public struct AgentQueue: Equatable, Sendable {
             case tab(String)
             /// One of herdr's agents: the id of a Next Term tab that shows its herdr, and herdr's pane id.
             case herdr(tab: String, pane: String)
+            /// One of herdr's agents on a connected host with no herdr tab: the host's id and herdr's pane id. Choosing
+            /// it opens a herdr tab there.
+            case host(id: String, pane: String)
+            /// A saved host kept with herdr that is not connected: choosing it opens a herdr tab there.
+            case saved(id: String)
         }
 
         public var target: Target
@@ -102,6 +107,20 @@ public struct AgentQueue: Equatable, Sendable {
 
     /// The heading of this Mac's own agents, which comes before every host's.
     public static let thisMac = "This Mac"
+    /// The heading of the saved herdr hosts that are not connected.
+    public static let notConnected = "Not Connected"
+
+    /// The heading of a connected host's agents while no tab shows its herdr: "web-2 (no herdr tab)".
+    public static func noHerdrTab(_ host: String) -> String { "\(host) (no herdr tab)" }
+
+    /// One item per saved host kept with herdr that has no connection ("web-3 — not connected"), in the hosts' order;
+    /// none for a host kept another way, or connected. Nothing is run for them.
+    public static func notConnected(_ hosts: [(id: String, name: String, keep: KeepMode)], connected: Set<String>) -> [Item] {
+        hosts.filter { $0.keep == .herdr && !connected.contains($0.id) }.map { host in
+            Item(target: .saved(id: host.id), key: "saved \(host.id)", name: host.name, group: notConnected, state: .idle,
+                 words: "not connected", tooltip: "Opens a herdr tab on \(host.name)")
+        }
+    }
     /// The heading of what needs the user.
     public static let needsYouTitle = "Needs You"
 

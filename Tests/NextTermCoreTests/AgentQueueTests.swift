@@ -92,4 +92,20 @@ import Testing
         named.words = "Needs your decision"
         #expect(named.dockTitle == "codex — web-1 — Needs your decision")
     }
+
+    @Test func savedHerdrHostsThatAreNotConnectedAreOneItemEachAndHostsWithNoHerdrTabKeyAsItsTabWould() {
+        let hosts: [(id: String, name: String, keep: KeepMode)] = [("h1", "web-1", .herdr), ("h2", "web-2", .tmux), ("h3", "web-3", .herdr)]
+        let saved = AgentQueue.notConnected(hosts, connected: ["h1"])
+        #expect(saved.map(\.name) == ["web-3"] && saved.first?.target == .saved(id: "h3"))
+        #expect(saved.first?.menuTitle(now: nil) == "web-3 — not connected" && saved.first?.group == AgentQueue.notConnected)
+        // An agent of a host with no herdr tab and the same agent in a herdr tab of its default session are one.
+        let overview = AgentQueue.Item(target: .host(id: "h1", pane: "w1:p1"), key: "herdr h1 \u{0}w1:p1", name: "codex",
+                                       group: AgentQueue.noHerdrTab("web-1"), state: .attention, words: "Needs your decision", needsSince: 5)
+        let inTab = AgentQueue.Item(target: .herdr(tab: "T", pane: "w1:p1"), key: "herdr h1 \u{0}w1:p1", name: "codex", group: "web-1",
+                                    state: .attention, words: "Needs your decision", needsSince: 5)
+        let queue = AgentQueue([inTab, overview] + saved)
+        #expect(queue.items.count == 2 && queue.needsYou.map(\.target) == [.herdr(tab: "T", pane: "w1:p1")])
+        #expect(AgentQueue.noHerdrTab("web-2") == "web-2 (no herdr tab)")
+        #expect(queue.groups.map(\.title) == [AgentQueue.notConnected])
+    }
 }

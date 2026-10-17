@@ -94,6 +94,8 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         case .tab(let id):
             guard let tab = HerdrAgentMenu.tab(id) else { return NSSound.beep() }
             show(tab, pane: nil)
+        case .host, .saved:
+            NSSound.beep() // no herdr tab to read it through: choosing it opens one
         }
     }
 

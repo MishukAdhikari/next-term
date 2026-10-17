@@ -481,14 +481,18 @@ public struct AgentSessionRef: Equatable, Sendable {
 }
 
 /// One herdr session a host's status check asks for its agents: nil for herdr's default. `wantsFocus`: one of its tabs is
-/// on screen, so the check also asks which herdr tab has the focus when no agent has it.
+/// on screen, so the check also asks which herdr tab has the focus when no agent has it. `overview`: asked for a
+/// connection that has no herdr tab, on a host kept with herdr, only where herdr already runs or a tab once found it
+/// (the finder's cache), so a check never runs a herdr no tab has used.
 public struct HerdrPollSession: Equatable, Sendable {
     public var name: String?
     public var wantsFocus: Bool
+    public var overview: Bool
 
-    public init(name: String?, wantsFocus: Bool = false) {
+    public init(name: String?, wantsFocus: Bool = false, overview: Bool = false) {
         self.name = name
         self.wantsFocus = wantsFocus
+        self.overview = overview
     }
 
     /// The most sessions one check asks: more take turns, check by check.

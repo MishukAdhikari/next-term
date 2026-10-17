@@ -410,6 +410,26 @@ import Testing
         #expect(poll.tabs["tab6"]?.plain == true && poll.tabs["tab6"]?.plainReason == "herdr on this host lists no session old")
     }
 
+    @Test func aHostWithNoHerdrTabIsAskedOnlyForAHerdrATabFoundBefore() throws {
+        let path = home + "/.local/bin/herdr"
+        let list = #"{"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","agent_status":"blocked","state_change_seq":2}]}}"#
+        try herdr(at: path, list: list)
+        let poll = RemoteShell.pollScript(tabs: [(id: "tab9", keep: .tmux, session: "nt-x")], herdrSessions: [HerdrPollSession(name: nil, overview: true)])
+        // No herdr tab ever found it here, and no herdr server runs: nothing is asked, though a copy is installed.
+        let before = try #require(RemotePoll.parse(try run(poll)))
+        #expect(before.herdrSessions.isEmpty)
+        // Once a tab has found it (the cache names it), the check reads its default session.
+        let cache = home + "/.cache/next-term"
+        try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+        try "path\t\(path)\nhow\tlocal-bin\n".write(toFile: cache + "/herdr", atomically: true, encoding: .utf8)
+        let after = try #require(RemotePoll.parse(try run(poll)))
+        guard case .agents(let agents) = after.herdr?.listing else {
+            Issue.record("\(after.herdrSessions)")
+            return
+        }
+        #expect(agents.map(\.paneID) == ["w1:p1"] && agents.first?.status == .blocked)
+    }
+
     // MARK: check_host
 
     @Test func checkHostSaysWhereHerdrIsAndHowItWasFound() throws {

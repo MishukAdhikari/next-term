@@ -11,17 +11,53 @@ enum HerdrAgentMenu {
     static var hasAgents: Bool { !queue().isEmpty }
 
     /// Every agent in every window, as the queue orders them: herdr's agents of each tab that follows herdr, in herdr's
-    /// order, and each tab whose program is an agent, in tab order.
+    /// order, and each tab whose program is an agent, in tab order; then those of connected hosts with no herdr tab, and
+    /// one item per saved herdr host that is not connected.
     static func queue() -> AgentQueue {
         var items: [AgentQueue.Item] = []
-        for tab in AppDelegate.shared.controllers.flatMap(\.tabs) where !tab.exited {
+        let tabs = AppDelegate.shared.controllers.flatMap(\.tabs).filter { !$0.exited }
+        for tab in tabs {
             if tab.followsHerdr {
                 items += herdrItems(tab)
             } else if let item = tabItem(tab) {
                 items.append(item)
             }
         }
+        for overview in RemotePoller.shared.overviews { items += overviewItems(overview) }
+        let connected = Set(tabs.compactMap { tab in tab.remoteConnected ? tab.remote?.host.id : nil })
+        let saved = RemoteHosts.all.map { (id: $0.id, name: $0.name, keep: $0.keep) }
+        items += AgentQueue.notConnected(saved, connected: connected)
         return AgentQueue(items)
+    }
+
+    /// The agents of a connected host with no herdr tab, under "web-2 (no herdr tab)", keyed as a herdr tab of its default
+    /// session keys them, so a tab that opens there takes them over.
+    private static func overviewItems(_ overview: HerdrOverview) -> [AgentQueue.Item] {
+        let group = AgentQueue.noHerdrTab(overview.host.name)
+        return overview.tracker.rows.map { row -> AgentQueue.Item in
+            AgentQueue.Item(target: .host(id: overview.host.id, pane: row.pane), key: "herdr \(overview.place)\u{0}\(row.pane)",
+                            name: row.name, group: group, state: row.state, words: row.words, needsSince: row.needsSince,
+                            workSince: row.workSince, tooltip: row.tooltip(now: TerminalTab.now) + "\nOpens a herdr tab on \(overview.host.name)")
+        }
+    }
+
+    /// For the Welcome window's server pane: "herdr: 1 needs you, 3 working" for a connected host's herdr agents, as its
+    /// herdr tabs and its check without one see them; nil while nothing here follows herdr there.
+    static func summary(host: RemoteHost) -> String? {
+        let items = queue().items.filter { item in
+            switch item.target {
+            case let .herdr(id, _): return tab(id)?.remote?.host.id == host.id
+            case let .host(id, _): return id == host.id
+            case .tab, .saved: return false
+            }
+        }
+        let followed = AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0.remote?.host.id == host.id && $0.followsHerdr }
+            || RemotePoller.shared.overviews.contains { $0.host.id == host.id }
+        guard followed else { return nil }
+        let needs = items.filter(\.needsYou).count, working = items.filter { $0.state == .working }.count
+        let parts = [needs > 0 ? "\(needs) need\(needs == 1 ? "s" : "") you" : nil, working > 0 ? "\(working) working" : nil].compactMap { $0 }
+        guard !parts.isEmpty else { return items.isEmpty ? "herdr: no agents" : "herdr: \(items.count) idle" }
+        return "herdr: " + parts.joined(separator: ", ")
     }
 
     /// The agents of a tab that follows herdr, under its host and herdr session.
@@ -72,7 +108,40 @@ enum HerdrAgentMenu {
             guard let tab = tab(id), let controller = MCPControl.controller(of: tab) else { return NSSound.beep() }
             controller.window?.makeKeyAndOrderFront(nil)
             controller.show(tab)
+        case let .host(id, pane):
+            guard let host = RemoteHosts.find(id) else { return NSSound.beep() }
+            openHerdrTab(on: host, focusing: pane)
+        case .saved(let id):
+            guard let host = RemoteHosts.find(id) else { return NSSound.beep() }
+            openHerdrTab(on: host, focusing: nil)
         }
+    }
+
+    /// A herdr tab of herdr's default session on `host`, in the window that holds that host's tabs, else the one in
+    /// front; once herdr lists `pane` there, its view moves to it. It logs in as any new tab does when nothing is
+    /// connected (only on the user's own choice).
+    static func openHerdrTab(on host: RemoteHost, focusing pane: String?) {
+        let app = AppDelegate.shared!
+        let holding = app.controllers.first { $0.tabs.contains { $0.remote?.host.id == host.id } }
+        let front = NSApp.keyWindow?.windowController as? TerminalWindowController
+        let tab: TerminalTab
+        if let controller = holding ?? front ?? app.controllers.first {
+            tab = controller.addRemoteTab(RemoteTab(host: host, keep: .herdr))
+            controller.window?.makeKeyAndOrderFront(nil)
+        } else {
+            let controller = app.openWindow(remote: RemoteTab(host: host, keep: .herdr))
+            guard let opened = controller.tabs.last else { return }
+            tab = opened
+        }
+        guard let pane else { return }
+        focus(pane, in: tab, until: TerminalTab.now + 30)
+    }
+
+    /// Moves herdr's view to `pane` once the new tab follows herdr and herdr lists it, or gives up at `deadline`.
+    private static func focus(_ pane: String, in tab: TerminalTab, until deadline: TimeInterval) {
+        guard !tab.exited, TerminalTab.now < deadline else { return }
+        if tab.followsHerdr, tab.herdrTracker.agents.contains(where: { $0.paneID == pane }) { return show(tab: tab, pane: pane) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { focus(pane, in: tab, until: deadline) }
     }
 
     /// The agent Go to Next Agent Needing You went to last, so pressing it again moves on.

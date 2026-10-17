@@ -524,7 +524,15 @@ public enum RemoteShell {
         }
         if !herdrSessions.isEmpty {
             lines.append(findHerdr)
-            lines += herdrSessions.map { herdrSection(session: $0.name, wantsFocus: $0.wantsFocus) }
+            for session in herdrSessions {
+                let section = herdrSection(session: session.name, wantsFocus: session.wantsFocus)
+                guard session.overview else {
+                    lines.append(section)
+                    continue
+                }
+                // No herdr tab on this connection: only a herdr that runs, or one a tab found before.
+                lines += ["if [ -n \"$H\" ] && { [ \"$HW\" = running ] || [ -f \"$C/herdr\" ]; }; then", section, "fi"]
+            }
         }
         return lines.joined(separator: "\n")
     }

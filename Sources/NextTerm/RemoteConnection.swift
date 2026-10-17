@@ -532,6 +532,10 @@ final class RemotePoller {
     private var inFlight: Set<String> = []
     /// Checks made per connection, for the herdr sessions' turns.
     private var rounds: [String: Int] = [:]
+    /// herdr's agents on connected hosts kept with herdr where no tab shows herdr, by connection.
+    private var overviewsByPath: [String: HerdrOverview] = [:]
+    /// Those agents' hosts, as followed now.
+    var overviews: [HerdrOverview] { Array(overviewsByPath.values) }
 
     func start() {
         guard timer == nil else { return }
@@ -555,7 +559,9 @@ final class RemotePoller {
         }
         let tabs = remoteTabs.filter { !$0.disconnected && $0.controlPath != nil }
         // By connection (control path), not host id: a host edited while its tabs are open has two.
-        for (path, hostTabs) in Dictionary(grouping: tabs, by: { $0.controlPath! }) where !inFlight.contains(path) && (only ?? path) == path {
+        let connections = Dictionary(grouping: tabs, by: { $0.controlPath! })
+        if only == nil { endOverviews(keeping: Set(connections.keys)) }
+        for (path, hostTabs) in connections where !inFlight.contains(path) && (only ?? path) == path {
             guard let host = hostTabs.first?.remote?.host, RemoteConnection.masterAlive(path: path) else { continue }
             inFlight.insert(path)
             // A tab that fell back is checked as the plain shell it is (its folder too), and herdr is still asked
@@ -563,11 +569,16 @@ final class RemotePoller {
             let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep.shown(fellBack: $0.fellBack), session: $0.remote!.session) }
             let round = rounds[path, default: 0]
             rounds[path] = round &+ 1
-            let sessions = HerdrPollSession.plan(hostTabs.compactMap(Self.herdrSession), round: round)
+            let herdrTabs = hostTabs.compactMap(Self.herdrSession)
+            var sessions = HerdrPollSession.plan(herdrTabs, round: round)
+            // A host kept with herdr where no tab here shows herdr: its default session, for Go to Agent and the badge.
+            let overview = herdrTabs.isEmpty && (RemoteHosts.find(host.id)?.keep ?? host.keep) == .herdr
+            if overview { sessions = [HerdrPollSession(name: nil, overview: true)] } else { endOverview(path) }
             let script = RemoteShell.pollScript(tabs: specs, herdrSessions: sessions)
             RemoteConnection.run(host, path: path, script: script, timeout: 10) { [weak self] result in
                 self?.inFlight.remove(path)
                 guard let poll = RemotePoll.parse(result.output) else { return }
+                if overview, let report = poll.herdrSessions[""] { self?.overview(path, host: host).apply(report) }
                 for tab in hostTabs {
                     if let report = poll.tabs[tab.remoteKey] { tab.applyRemote(report) }
                     // A session whose turn this check was not keeps what it had.
@@ -599,4 +610,21 @@ final class RemotePoller {
     }
 
     private var soon: Set<String> = []
+
+    private func overview(_ path: String, host: RemoteHost) -> HerdrOverview {
+        if let known = overviewsByPath[path] { return known }
+        let made = HerdrOverview(host: host, path: path)
+        overviewsByPath[path] = made
+        return made
+    }
+
+    /// The connection at `path` has a herdr tab now, or is gone: its tab's tracker, if any, takes over.
+    private func endOverview(_ path: String) {
+        overviewsByPath.removeValue(forKey: path)?.end()
+    }
+
+    private func endOverviews(keeping paths: Set<String>) {
+        for path in overviewsByPath.keys where !paths.contains(path) { endOverview(path) }
+        for path in rounds.keys where !paths.contains(path) { rounds[path] = nil }
+    }
 }
