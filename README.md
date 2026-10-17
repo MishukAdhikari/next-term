@@ -23,7 +23,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
-  follows; if you have unsaved edits it asks first.
+  follows; if you have unsaved edits it asks first. Markdown files open in Live Preview, styled where you type,
+  with the syntax showing only on the lines you are on: a click ticks a box, ⌘-click follows a link, Return
+  continues a list, Edit › Markdown formats in the markers the file already uses, Go to Heading jumps through it
+  with a word count, and the file's bytes never change unless you type (⇧⌘V shows its source).
 - **Jupyter notebooks, read-only.** A `.ipynb` opens as cells: Markdown laid out, code coloured in the
   kernel's language, and the outputs saved in the file (text, tables as text, images and errors). Nothing
   runs (there is no kernel); Open as JSON shows the file itself.
@@ -252,18 +255,22 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Select tab 1–8 / last tab | ⌘1…⌘8 / ⌘9 |
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |
 | Rename tab | ⌥⌘R, or double-click the tab |
-| Project sidebar | ⌘B |
+| Project sidebar (in a Markdown file, ⌘B is Bold) | ⌘B |
 | Fold the terminal away (and back) | ⌘J |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
-| Clear | ⌘K |
+| Clear (in a Markdown file, ⌘K makes a link) | ⌘K |
 | Font size | ⌘+ / ⌘- / ⌘0 |
 | Option as Meta (for Emacs-style keys) | File menu, off by default |
 | Save / Save All | ⌘S / ⌥⌘S |
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
+| Markdown Live Preview or its source (the Markdown file in front) | ⇧⌘V |
+| Bold / Italic / Link / Strikethrough (in a Markdown file) | ⌘B / ⌘I / ⌘K / ⇧⌘X |
+| Heading 1–6 / Body Text (in a Markdown file) | ⌥⌘1…⌥⌘6 / ⌥⌘0 |
+| Toggle Task / Go to Heading (in a Markdown file) | ⇧⌘L / ⇧⌘O |
 | Soft wrap | ⌥⌘W |
 | Show a file's changes | ⌥⌘G |
 | Git Diff (the changed files and their diffs) | ⌃⌘G |
