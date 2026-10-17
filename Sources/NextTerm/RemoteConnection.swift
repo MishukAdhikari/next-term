@@ -543,9 +543,10 @@ final class RemotePoller {
         self.timer = timer
     }
 
-    func poll() {
+    /// One check of every connection, or with `only`, of that one.
+    func poll(only: String? = nil) {
         let controllers = AppDelegate.shared.controllers
-        RemoteConnection.saveTabs(controllers)
+        if only == nil { RemoteConnection.saveTabs(controllers) }
         let remoteTabs = controllers.flatMap(\.tabs).filter { $0.remote != nil && !$0.exited }
         // A master came up again (another tab reconnected, or the network is back): kept tabs that lost
         // theirs with it come back at once, once, without waiting for their timers.
@@ -554,7 +555,7 @@ final class RemotePoller {
         }
         let tabs = remoteTabs.filter { !$0.disconnected && $0.controlPath != nil }
         // By connection (control path), not host id: a host edited while its tabs are open has two.
-        for (path, hostTabs) in Dictionary(grouping: tabs, by: { $0.controlPath! }) where !inFlight.contains(path) {
+        for (path, hostTabs) in Dictionary(grouping: tabs, by: { $0.controlPath! }) where !inFlight.contains(path) && (only ?? path) == path {
             guard let host = hostTabs.first?.remote?.host, RemoteConnection.masterAlive(path: path) else { continue }
             inFlight.insert(path)
             // A tab that fell back is checked as the plain shell it is (its folder too), and herdr is still asked
@@ -584,4 +585,18 @@ final class RemotePoller {
         if tab.fellBack { return remote.herdrSession == nil ? (nil, false) : nil }
         return (remote.herdrSession, tab.isOnScreen)
     }
+
+    /// Checks the connection at `path` again soon (after a herdr command changed what herdr shows): one extra check
+    /// per 300 ms at most, besides the 2-second one.
+    func pollSoon(_ path: String) {
+        guard !soon.contains(path) else { return }
+        soon.insert(path)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.soon.remove(path)
+            self.poll(only: path)
+        }
+    }
+
+    private var soon: Set<String> = []
 }

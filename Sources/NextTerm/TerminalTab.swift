@@ -1591,7 +1591,34 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let before = (status.state, status.question)
         status.observeAgentHost("herdr", at: Self.now)
         status.observe(agentScreen: herdrTracker.activity, at: Self.now)
+        readHerdrQuestion()
         if before != (status.state, status.question) { delegate?.tabDidChange(self) }
+    }
+
+    /// A read of a blocked agent's pane is running: one at a time per tab.
+    private var herdrReading = false
+
+    /// Reads the next blocked agent's question from its own pane (what it shows now), as a local agent's screen is read:
+    /// its words and choices then stand for herdr's "needs a decision". A pane that shows none, or a read that fails,
+    /// leaves herdr's words until herdr counts a change.
+    private func readHerdrQuestion() {
+        guard !herdrReading, !exited, let next = herdrTracker.nextRead else { return }
+        herdrReading = true
+        HerdrRunner.readVisible(next.pane, in: self) { [weak self] result in
+            guard let self else { return }
+            self.herdrReading = false
+            var found: (text: String, menu: AgentMenu?)?
+            if case .text(let screen) = result { found = HerdrAgents.question(onScreen: screen) }
+            self.herdrQuestionRead(next.pane, seq: next.seq, text: found?.text, menu: found?.menu)
+            self.readHerdrQuestion()
+        }
+    }
+
+    /// What a read of a blocked agent's pane found (here, or answer_agent's own read): its question, or none.
+    func herdrQuestionRead(_ pane: String, seq: Int?, text: String?, menu: AgentMenu?) {
+        herdrTracker.setQuestion(pane: pane, seq: seq, text: text, choices: menu?.choices ?? [], style: menu?.style)
+        status.observe(agentScreen: herdrTracker.activity, at: Self.now)
+        delegate?.tabDidChange(self)
     }
 
     /// The tab is on screen: in front of its window's visible terminal (TerminalWindowController.isOnScreen).
