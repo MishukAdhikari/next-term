@@ -46,15 +46,15 @@ extension SelfTest {
         defer { restore() }
         let view = GeneralSettingsView(frame: .zero)
         let titles: [String] = view.opens.map(\.title)
-        let othersOff = view.radio(.lastProjects).state == .off && view.radio(.newTerminal).state == .off
-        let welcome = view.radio(.welcome).state == .on && othersOff
+        let othersOff = view.radio(.welcome).state == .off && view.radio(.newTerminal).state == .off
+        let resume = view.radio(.lastProjects).state == .on && othersOff
         let asks = view.askToResume.state == .on
         let keeps = view.keepScrollback.state == .on
         let labels = view.askToResume.title == "Ask whether to resume when quitting" && view.keepScrollback.title == "Keep scrollback"
         let expected: [String] = ["Show the Welcome window", "Resume where I left off", "Open a new terminal"]
-        check(titles == expected && welcome && asks && keeps && labels,
-              "Settings › General: At launch shows the Welcome window, At quit asks whether to resume, and scrollback is kept, until changed",
-              "\(titles), Welcome \(welcome), asks \(asks), keeps scrollback \(keeps), \(view.askToResume.title), \(view.keepScrollback.title)")
+        check(titles == expected && resume && asks && keeps && labels,
+              "Settings › General: At launch resumes where you left off, At quit asks whether to resume, and scrollback is kept, until changed",
+              "\(titles), Resume \(resume), asks \(asks), keeps scrollback \(keeps), \(view.askToResume.title), \(view.keepScrollback.title)")
         let group = view.opensGroup
         let role = group.accessibilityRole()
         check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "At launch",
@@ -74,6 +74,13 @@ extension SelfTest {
         let scrollbackOff = defaults.object(forKey: LaunchSettings.Key.keepScrollback) as? Bool == false
         check(scrollbackOff && stored == [LaunchSettings.Key.keepScrollback] && !LaunchSettings(defaults: defaults).opensChosen,
               "unchecking Keep scrollback saves it alone, and At launch stays never chosen", "stored \(stored)")
+        // The Welcome window chosen is saved, so it stays whatever the default; then Resume, chosen again, is saved too.
+        view.radio(.welcome).performClick(nil)
+        let welcomeSaved = defaults.string(forKey: LaunchSettings.Key.opens)
+        let welcomeAlone = view.radio(.lastProjects).state == .off && view.radio(.newTerminal).state == .off
+        check(welcomeSaved == "welcome" && welcomeAlone && LaunchSettings(defaults: defaults).opens == .welcome,
+              "Show the Welcome window saves its choice, which the next launch reads, the other two off",
+              "\(welcomeSaved ?? "nothing saved"), others off \(welcomeAlone)")
         view.radio(.lastProjects).performClick(nil)
         view.askToResume.performClick(nil)
         let saved = LaunchSettings(defaults: defaults)
@@ -285,7 +292,9 @@ extension SelfTest {
         ProjectHistoryRecorder.shared.clear()
 
         // "Show the Welcome window": the Welcome window, though a recent project is there.
-        LaunchSettings().save(to: defaults)
+        var welcomeChosen = LaunchSettings()
+        welcomeChosen.opens = .welcome
+        welcomeChosen.save(to: defaults)
         let welcomeHandled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
         let welcome = await wait(5) { app.welcomeController?.window?.isVisible == true }
         check(welcome && app.controllers.isEmpty && !welcomeHandled,

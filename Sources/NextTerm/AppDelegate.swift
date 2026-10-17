@@ -495,7 +495,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
-            openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
+            var welcomeFirst = LaunchSettings()
+            welcomeFirst.opens = .welcome
+            openAtLaunch(kind: .normal, restore: .notRun, settings: welcomeFirst, mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
