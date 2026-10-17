@@ -70,6 +70,21 @@ struct MenuKeysTests {
         #expect(key.display == "⇧⌘U")
     }
 
+    /// Tasks sits right after Agents, and Add Task… has ⌃⌘T in every set: no set gives that key to anything else.
+    @Test func tasksComesAfterAgentsAndAddTaskIsControlCommandT() {
+        #expect(MenuBar.titles == ["File", "Edit", "View", "Agents", "Tasks", "Git", "Notifications", "Window"])
+        let tasks = MenuBar.neighbours(of: "Tasks"), notifications = MenuBar.neighbours(of: "Notifications")
+        #expect(tasks.before == "Agents" && tasks.after == "Git")
+        #expect(notifications.before == "Git" && notifications.after == "Window" && MenuBar.neighbours(of: "File").before == nil)
+        let chord = KeyChord(key: "t", command: true, control: true)
+        for preset in KeymapPreset.allCases {
+            let keys = Self.defaults(under: preset)
+            #expect(keys["addTask:"] == .some(chord), "\(preset.name)")
+            #expect(KeyBindings().owners(of: chord, defaults: keys, except: "addTask:").isEmpty, "\(preset.name)")
+        }
+        #expect(chord.display == "⌃⌘T")
+    }
+
     @Test func fetchSharesCommandRWithTheBranchPopupsFetch() {
         let bindings = KeyBindings()
         let keys = Self.defaults(under: .nextTerm)

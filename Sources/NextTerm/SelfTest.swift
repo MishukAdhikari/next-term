@@ -643,7 +643,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -663,6 +663,7 @@ enum SelfTest {
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
         case "secrets": return await secretsChecks(c, proj: proj)
+        case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
         case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
         case "terminalPosition": return await terminalPositionChecks(c, proj: proj) // a position chosen again, folds, shares
@@ -1021,6 +1022,7 @@ enum SelfTest {
         await cellSnapChecks(c)
         await notificationChecks(c)
         notificationsMenuChecks()
+        await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
         await skillsChecks()
         await secretsChecks(c, proj: proj)
@@ -4438,10 +4440,11 @@ enum SelfTest {
         check(shortcuts.chord(for: "newTab:")?.display == "⌘T" && shortcuts.chord(for: "showNextTab:")?.display == "⇧⌘]",
               "today's shortcuts are the defaults", shortcuts.chord(for: "showNextTab:")?.display ?? "none")
         let newTabItem = shortcuts.commands.first { $0.id == "newTab:" }?.item
-        shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
-        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
+        // ⌃⌥⌘T: a key no command has (⌃⌘T is Add Task…).
+        shortcuts.set(KeyChord(key: "t", command: true, option: true, control: true), for: "newTab:")
+        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .option, .control],
               "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
-        check(c.tabBar.newTabToolTip == "New tab (⌃⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
+        check(c.tabBar.newTabToolTip == "New tab (⌃⌥⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
         check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
               "a shortcut already in use is found, so it can be moved deliberately")
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
