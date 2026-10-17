@@ -387,6 +387,29 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab7.plain"))
     }
 
+    @Test func aTabOpensANamedHerdrSessionOnlyWhileHerdrListsIt() throws {
+        let list = #"{"sessions":[{"name":"default","default":true,"running":true},{"name":"review","default":false,"running":true}]}"#
+        try script(home + "/.local/bin/herdr", """
+            case "$1 $2" in
+              '--version '*) echo 'herdr 0.9.4' ;;
+              'session list') echo \(RemoteShell.quote(list)) ;;
+            esac
+            """, warm: ["--version"])
+        func opened(_ session: String) throws -> String {
+            let tab = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "tab6", herdrSession: session)
+                .replacingOccurrences(of: "exec \"$H\" --session", with: "printf 'runs %s with %s\\n' \"$H\"")
+                .replacingOccurrences(of: "exec \"${SHELL:-/bin/sh}\" -l", with: "exit 0")
+            return try run(tab)
+        }
+        #expect(try opened("review").hasSuffix("runs \(home)/.local/bin/herdr with review\n"))
+        #expect(!FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab6.plain"))
+        // A session herdr no longer lists: a plain shell that says so, and the check carries why.
+        let gone = try opened("old")
+        #expect(gone.contains("Next Term: herdr on this host lists no session “old”") && !gone.contains("runs \(home)"))
+        let poll = try #require(RemotePoll.parse(try run(RemoteShell.pollScript(tabs: [(id: "tab6", keep: .off, session: "")]))))
+        #expect(poll.tabs["tab6"]?.plain == true && poll.tabs["tab6"]?.plainReason == "herdr on this host lists no session old")
+    }
+
     // MARK: check_host
 
     @Test func checkHostSaysWhereHerdrIsAndHowItWasFound() throws {

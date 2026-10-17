@@ -30,19 +30,26 @@ public struct HerdrReport: Equatable, Sendable {
     /// PATH), known (an install folder), or cache (where a tab found it, without saying how).
     public var how: String?
     public var listing: HerdrListing
+    /// The herdr session asked; nil for herdr's default.
+    public var session: String?
+    /// The herdr tab its focus is in, as `herdr tab list` said, when the check asked (no agent had the focus).
+    public var focusedTab: String?
 
-    public init(path: String? = nil, how: String? = nil, listing: HerdrListing) {
+    public init(path: String? = nil, how: String? = nil, listing: HerdrListing, session: String? = nil, focusedTab: String? = nil) {
         self.path = path
         self.how = how
         self.listing = listing
+        self.session = session
+        self.focusedTab = focusedTab
     }
 
     /// The most the check keeps of herdr's answer (`head -c`): one that long was cut.
     static let outputCap = 1_000_000
 
-    /// The section after `RemoteShell.herdrMarker`: `missing<TAB>…`, or `where<TAB>path<TAB>how`, `exit<TAB>status<TAB>command`
-    /// and `out<TAB>what herdr said`, then the end marker. Returns the report and how many lines it took, the end
-    /// marker's included. No end marker: the answer was cut.
+    /// The section after `RemoteShell.herdrMarker`: `session<TAB>name` for a named session, `missing<TAB>…`, or
+    /// `where<TAB>path<TAB>how`, `exit<TAB>status<TAB>command`, `out<TAB>what herdr said` and maybe `tabs<TAB>what herdr's
+    /// tab list said`, then the end marker. Returns the report and how many lines it took, the end marker's included. No
+    /// end marker: the answer was cut.
     public static func parse(section lines: ArraySlice<Substring>) -> (report: HerdrReport, consumed: Int) {
         var report = HerdrReport(listing: .cut)
         var missing = false, ended = false
@@ -60,6 +67,10 @@ public struct HerdrReport: Equatable, Sendable {
             switch fields[0] {
             case "missing":
                 missing = true
+            case "session" where fields.count >= 2:
+                report.session = fields[1].isEmpty ? nil : fields[1]
+            case "tabs":
+                report.focusedTab = HerdrTabs.focusedTab(String(line.dropFirst(min(5, line.count))))
             case "where" where fields.count >= 2:
                 report.path = fields[1].isEmpty ? nil : fields[1]
                 report.how = fields.count > 2 && !fields[2].isEmpty ? fields[2] : nil
@@ -385,16 +396,6 @@ public struct HerdrAgent: Equatable, Sendable {
         let cut = masked.prefix(200)
         return cut.count < masked.count ? String(cut) + "…" : String(cut)
     }
-
-    /// What a tab showing herdr reports for all its agents together: a decision first, then work.
-    public static func activity(_ agents: [HerdrAgent]) -> AgentActivity {
-        if let blocked = agents.first(where: { $0.status == .blocked }) {
-            let others = agents.filter { $0.status == .blocked }.count - 1
-            return .asking("\(blocked.name) (\(blocked.paneID)) needs a decision" + (others > 0 ? ", and \(others) more" : ""))
-        }
-        if agents.contains(where: { $0.status == .working }) { return .working }
-        return .idle
-    }
 }
 
 /// What a herdr tab makes of each status check: herdr's agents while it answers, and a line for the tab's tooltip (and
@@ -476,5 +477,37 @@ public struct AgentSessionRef: Equatable, Sendable {
         let found = text("value", 1024)
         guard !found.isEmpty else { return nil }
         self.init(source: text("source", 80), agent: text("agent", 80), kind: text("kind", 20), value: found)
+    }
+}
+
+/// One herdr session a host's status check asks for its agents: nil for herdr's default. `wantsFocus`: one of its tabs is
+/// on screen, so the check also asks which herdr tab has the focus when no agent has it.
+public struct HerdrPollSession: Equatable, Sendable {
+    public var name: String?
+    public var wantsFocus: Bool
+
+    public init(name: String?, wantsFocus: Bool = false) {
+        self.name = name
+        self.wantsFocus = wantsFocus
+    }
+
+    /// The most sessions one check asks: more take turns, check by check.
+    public static let perPoll = 4
+
+    /// The sessions a check asks, from the host's herdr tabs (each one's session, and whether it is on screen): each
+    /// once, in the tabs' order, wanting the focus when any of its tabs is on screen. Of more than `perPoll`, check
+    /// `round` asks the next `perPoll` in turn.
+    public static func plan(_ tabs: [(session: String?, onScreen: Bool)], round: Int) -> [HerdrPollSession] {
+        var sessions: [HerdrPollSession] = []
+        for tab in tabs {
+            if let index = sessions.firstIndex(where: { $0.name == tab.session }) {
+                if tab.onScreen { sessions[index].wantsFocus = true }
+            } else {
+                sessions.append(HerdrPollSession(name: tab.session, wantsFocus: tab.onScreen))
+            }
+        }
+        guard sessions.count > perPoll else { return sessions }
+        let start = (max(0, round) * perPoll) % sessions.count
+        return (0..<perPoll).map { sessions[(start + $0) % sessions.count] }
     }
 }

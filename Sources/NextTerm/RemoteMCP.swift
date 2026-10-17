@@ -228,16 +228,45 @@ enum RemoteMCP {
                 return entry
             }]
             if let report = listed.herdr, report.listing != .missing, let problem = report.problem { info["herdr"] = problem }
-            if let report = listed.herdr, case .agents(let agents) = report.listing {
-                info["herdr_agents"] = agents.map { agent -> [String: Any] in
-                    var entry: [String: Any] = ["pane": agent.paneID, "agent": agent.name, "state": agent.status.rawValue]
-                    if let title = agent.title { entry["title"] = title }
-                    if let directory = agent.directory { entry["directory"] = directory }
-                    return entry
-                }
-            }
+            info.merge(herdrFields(listed.herdr, sessions: listed.herdrSessions, named: listed.herdrReports, host: found)) { $1 }
             reply(ok(info))
         }
+    }
+
+    /// herdr's sessions on a host (`herdr_sessions`: name, default, running, and the tab showing it, if one does) and the
+    /// agents of the running ones (`herdr_agents`, each with its session), from sessionsScript's answer.
+    static func herdrFields(_ fallback: HerdrReport?, sessions: [HerdrSession]?, named: [String: HerdrReport],
+                            host: RemoteHost) -> [String: Any] {
+        var info: [String: Any] = [:]
+        let tabs = AppDelegate.shared.controllers.flatMap(\.tabs).filter { tab in
+            tab.remote?.host.id == host.id && tab.remote?.keep == .herdr && !tab.exited && !tab.fellBack
+        }
+        // The tab showing a session: herdr's default is a tab with none.
+        func tab(showing session: String?) -> TerminalTab? { tabs.first { $0.remote?.herdrSession == session } }
+        let defaultName = sessions?.first(where: \.isDefault)?.name
+        if let sessions {
+            info["herdr_sessions"] = sessions.map { session -> [String: Any] in
+                var entry: [String: Any] = ["name": session.name, "default": session.isDefault, "running": session.running]
+                if let shown = tab(showing: session.isDefault ? nil : session.name) { entry["tab_id"] = shown.id.uuidString.lowercased() }
+                return entry
+            }
+        }
+        var agents: [[String: Any]] = []
+        var answered = false
+        let reports: [(String?, HerdrReport?)] = [(nil, fallback)] + named.keys.sorted().map { ($0, named[$0]) }
+        for (session, report) in reports {
+            guard let report, case .agents(let listed) = report.listing else { continue }
+            answered = true
+            for agent in listed {
+                var entry: [String: Any] = ["pane": agent.paneID, "agent": agent.name, "state": agent.status.rawValue]
+                if let title = agent.title { entry["title"] = title }
+                if let directory = agent.directory { entry["directory"] = directory }
+                if let name = session ?? defaultName { entry["session"] = name }
+                agents.append(entry)
+            }
+        }
+        if answered { info["herdr_agents"] = agents }
+        return info
     }
 
     private static func hostChanges(_ arguments: [String: Any], reply: @escaping Reply) {

@@ -9,17 +9,21 @@ struct RemoteTab {
     /// Next Term's tmux session for this tab (tmux mode); a name either way, for the tab's records.
     var session: String
     var keep: KeepMode
+    /// A herdr tab's herdr session (`herdr --session`), as herdr lists it; nil for herdr's default, and for any other tab.
+    var herdrSession: String?
 
-    init(host: RemoteHost, directory: String? = nil, session: String? = nil, keep: KeepMode? = nil) {
+    init(host: RemoteHost, directory: String? = nil, session: String? = nil, keep: KeepMode? = nil, herdrSession: String? = nil) {
         self.host = host
         let folder = directory ?? host.directory
         self.directory = folder
         self.session = session.map(RemoteShell.safeName).flatMap { $0.isEmpty ? nil : $0 } ?? RemoteShell.newSessionName(directory: folder)
         self.keep = keep ?? host.keep
+        self.herdrSession = self.keep == .herdr ? herdrSession : nil
     }
 
-    /// Another tab on the same host, in `directory`, with its own session (a split beside this one).
-    func sibling(directory: String) -> RemoteTab { RemoteTab(host: host, directory: directory, keep: keep) }
+    /// Another tab on the same host, in `directory`, with its own session (a split beside this one); beside a herdr tab,
+    /// the same herdr session.
+    func sibling(directory: String) -> RemoteTab { RemoteTab(host: host, directory: directory, keep: keep, herdrSession: herdrSession) }
 }
 
 /// The hosts the user saved. In the app's defaults: no passwords or keys, only where to connect.
@@ -181,7 +185,7 @@ enum RemoteConnection {
     /// ssh's arguments for a tab; `token` is this connection's (see RemoteShell.tabScript).
     static func tabArguments(_ remote: RemoteTab, path: String, tabKey: String, token: String) -> [String] {
         let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey, token: token,
-                                           completionHook: RemoteCompletionConsent.startsHooked(remote))
+                                           completionHook: RemoteCompletionConsent.startsHooked(remote), herdrSession: remote.herdrSession)
         return SSHArguments.tab(remote.host, controlPath: path, configFile: configFile, command: RemoteShell.command(script))
     }
 
@@ -389,7 +393,8 @@ enum RemoteConnection {
                 guard let remote = tab.remote, !tab.exited, remote.keep != .off, !tab.fellBack else { return nil }
                 return RemoteTabRecord(hostID: remote.host.id, destination: remote.host.destination, port: remote.host.port,
                                        directory: remote.keep == .tmux ? remote.directory : tab.directory,
-                                       session: remote.session, keep: remote.keep, project: controller.project, title: tab.userTitle)
+                                       session: remote.session, keep: remote.keep, project: controller.project, title: tab.userTitle,
+                                       herdrSession: remote.herdrSession)
             }
         }
         let records = queue.saved(with: open)
@@ -480,8 +485,9 @@ enum RemoteConnection {
                 app.controllers.first { $0.project == path }
             } ?? app.controllers.first
             guard let controller = target else { continue }
-            let tab = controller.addRemoteTab(RemoteTab(host: host, directory: record.directory, session: record.session, keep: record.keep),
-                                              select: false, atEnd: true)
+            let remote = RemoteTab(host: host, directory: record.directory, session: record.session, keep: record.keep,
+                                   herdrSession: record.herdrSession)
+            let tab = controller.addRemoteTab(remote, select: false, atEnd: true)
             if let title = record.title { tab.userTitle = title }
             controller.refresh()
         }
@@ -517,12 +523,15 @@ enum RemoteConnection {
 
 /// Every 2 seconds, one check per connection for all of its tabs: whether each tab's own login reached
 /// the host, what runs in front of its shell (so agents get the same status as local ones), its folder
-/// and jobs, and herdr's agents. Only as a session on a master a tab opened: a check never logs in.
-/// When a master is up, kept tabs on it that lost their connection are reconnected.
+/// and jobs, and herdr's agents in each herdr session its tabs show (HerdrPollSession: at most 4 a check, taking
+/// turns past that). Only as a session on a master a tab opened: a check never logs in. When a master is up, kept
+/// tabs on it that lost their connection are reconnected.
 final class RemotePoller {
     static let shared = RemotePoller()
     private var timer: Timer?
     private var inFlight: Set<String> = []
+    /// Checks made per connection, for the herdr sessions' turns.
+    private var rounds: [String: Int] = [:]
 
     func start() {
         guard timer == nil else { return }
@@ -551,16 +560,28 @@ final class RemotePoller {
             // A tab that fell back is checked as the plain shell it is (its folder too), and herdr is still asked
             // for, so a herdr tab that fell back learns when herdr is there.
             let specs = hostTabs.map { (id: $0.remoteKey, keep: $0.remote!.keep.shown(fellBack: $0.fellBack), session: $0.remote!.session) }
-            let herdr = hostTabs.contains { $0.remote?.keep == .herdr }
-            let script = RemoteShell.pollScript(tabs: specs, herdr: herdr)
+            let round = rounds[path, default: 0]
+            rounds[path] = round &+ 1
+            let sessions = HerdrPollSession.plan(hostTabs.compactMap(Self.herdrSession), round: round)
+            let script = RemoteShell.pollScript(tabs: specs, herdrSessions: sessions)
             RemoteConnection.run(host, path: path, script: script, timeout: 10) { [weak self] result in
                 self?.inFlight.remove(path)
                 guard let poll = RemotePoll.parse(result.output) else { return }
                 for tab in hostTabs {
                     if let report = poll.tabs[tab.remoteKey] { tab.applyRemote(report) }
-                    if tab.remote?.keep == .herdr, let report = poll.herdr { tab.applyHerdr(report) }
+                    // A session whose turn this check was not keeps what it had.
+                    if let asked = Self.herdrSession(tab), let report = poll.herdrSessions[asked.session ?? ""] { tab.applyHerdr(report) }
                 }
             }
         }
+    }
+
+    /// The herdr session a tab's check asks, and whether the tab is on screen; nil for a tab herdr says nothing about. A
+    /// herdr tab that fell back to a plain shell is asked herdr's default session, so it learns once herdr is there; one
+    /// whose named session herdr no longer lists is not asked (the default session's answer is not about it).
+    private static func herdrSession(_ tab: TerminalTab) -> (session: String?, onScreen: Bool)? {
+        guard let remote = tab.remote, remote.keep == .herdr else { return nil }
+        if tab.fellBack { return remote.herdrSession == nil ? (nil, false) : nil }
+        return (remote.herdrSession, tab.isOnScreen)
     }
 }

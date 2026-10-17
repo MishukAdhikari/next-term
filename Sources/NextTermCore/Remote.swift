@@ -215,9 +215,11 @@ public struct RemoteTabRecord: Codable, Equatable, Sendable {
     /// The project window it was in, if any.
     public var project: String?
     public var title: String?
+    /// A herdr tab's herdr session (`herdr --session`); nil for herdr's default, and in a record saved before tabs had one.
+    public var herdrSession: String?
 
     public init(hostID: String, destination: String? = nil, port: Int? = nil, directory: String, session: String, keep: KeepMode,
-                project: String? = nil, title: String? = nil) {
+                project: String? = nil, title: String? = nil, herdrSession: String? = nil) {
         self.hostID = hostID
         self.destination = destination
         self.port = port
@@ -226,6 +228,7 @@ public struct RemoteTabRecord: Codable, Equatable, Sendable {
         self.keep = keep
         self.project = project
         self.title = title
+        self.herdrSession = herdrSession
     }
 }
 
@@ -373,8 +376,10 @@ public enum RemoteShell {
     /// ssh's login), it is how this tab, and only it, learns that its own connection is up.
     /// `completionHook`: the user allowed Tab completion's hook on this host (RemoteCompletionHook), so a plain
     /// or tmux tab starts its shell through the hook's start command while the hook's files are there.
+    /// `herdrSession`: a herdr tab's named herdr session, opened only while herdr lists it, so a restored tab never makes
+    /// one by its name; nil for herdr's default.
     public static func tabScript(keep: KeepMode, directory: String, session: String, tabID: String, token: String = "",
-                                 completionHook: Bool = false) -> String {
+                                 completionHook: Bool = false, herdrSession: String? = nil) -> String {
         // K: this tab's files on the host. K.plain: tmux or herdr was missing, so this is a plain shell (it holds why,
         // when a copy was there but did not run). K.nodir: the folder was not there.
         var lines = [
@@ -416,16 +421,47 @@ public enum RemoteShell {
                 herdrMissingNote,
                 "  exec \"${SHELL:-/bin/sh}\" -l",
                 "fi",
-                "exec \"$H\"",
             ]
+            if let herdrSession {
+                // A named session: herdr's own socket variables name the default session's, so they go.
+                lines.append(herdrSessionCheck(herdrSession))
+                lines.append("unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session \(quote(herdrSession))")
+            } else {
+                lines.append("exec \"$H\"")
+            }
         }
         return lines.joined(separator: "\n")
     }
 
+    /// A herdr tab's named session is opened only when `herdr session list --json` lists it: else (removed since the tab
+    /// was saved, or a herdr without named sessions) the tab is a plain shell that says why, as for a missing herdr, and
+    /// K.plain holds the reason for the status check. A name outside herdr's rules is never listed.
+    static func herdrSessionCheck(_ name: String) -> String {
+        let stops = "so this tab is a plain shell: what runs in it stops if the connection drops."
+        let listed = HerdrTarget.isSession(name)
+            ? "printf '%s' \"$nt_sl\" | tr -d '\\n\\r' | grep -Eq \(quote("\"name\"[[:space:]]*:[[:space:]]*\"\(name)\""))" : "false"
+        let shown = String(name.unicodeScalars.filter { !ShellQuote.isControl($0) }.map(Character.init).prefix(64))
+        return [
+            "nt_sl=$(\"$H\" session list --json 2>&1 </dev/null); nt_slx=$?",
+            "if [ \"$nt_slx\" -ne 0 ] || ! \(listed); then",
+            "  printf 'herdr on this host lists no session %s\\n' \(quote(shown)) > \"$K.plain\" 2>/dev/null",
+            "  printf '%s\\r\\n' \(quote("Next Term: herdr on this host lists no session “\(shown)” (it may have been removed, or this herdr has no named sessions), " + stops))",
+            "  exec \"${SHELL:-/bin/sh}\" -l",
+            "fi",
+        ].joined(separator: "\n")
+    }
+
     /// One status check for every tab on a host: what runs in front of each tab's shell, its folder, and
     /// (if a tab uses herdr) herdr's list of agents. `herdr`: a tab was opened with herdr, even one that fell back to a
-    /// plain shell (checked as one), which then learns when herdr is there.
+    /// plain shell (checked as one), which then learns when herdr is there: herdr's default session is asked.
     public static func pollScript(tabs: [(id: String, keep: KeepMode, session: String)], herdr: Bool = false) -> String {
+        let asked = herdr || tabs.contains { $0.keep == .herdr }
+        return pollScript(tabs: tabs, herdrSessions: asked ? [HerdrPollSession(name: nil)] : [])
+    }
+
+    /// The same, asking each of `herdrSessions` (HerdrPollSession.plan: the herdr sessions the host's tabs show, at most
+    /// `HerdrPollSession.perPoll`) for its agents, one section each.
+    public static func pollScript(tabs: [(id: String, keep: KeepMode, session: String)], herdrSessions: [HerdrPollSession]) -> String {
         var lines = [
             "C=\(cacheDir)",
             findTmux,
@@ -486,8 +522,9 @@ public enum RemoteShell {
                 "[ -e \"$C/tabs/\(id).nodir\" ] && printf '%s\\tnodir\\n' \(quote(id))",
             ]
         }
-        if herdr || tabs.contains(where: { $0.keep == .herdr }) {
-            lines += [findHerdr, herdrSection]
+        if !herdrSessions.isEmpty {
+            lines.append(findHerdr)
+            lines += herdrSessions.map { herdrSection(session: $0.name, wantsFocus: $0.wantsFocus) }
         }
         return lines.joined(separator: "\n")
     }
@@ -517,7 +554,10 @@ public enum RemoteShell {
         """
     }
 
-    /// The kept sessions on a host: Next Term's tmux sessions, and herdr's agents.
+    /// The kept sessions on a host: Next Term's tmux sessions, herdr's agents in its default session, herdr's sessions
+    /// (`herdr-sessions<TAB>` and what `herdr session list --json` said, on one line), and the agents of up to
+    /// `herdrSessionsListed` of its other running sessions, a section each. Their names are taken from herdr's JSON only
+    /// as herdr's rule for a name allows (letters, digits, `_` and `-`), so splitting the list on spaces is safe.
     public static let sessionsScript = """
         C=\(cacheDir)
         printf '\\n%s\\n' \(quote(marker))
@@ -525,8 +565,19 @@ public enum RemoteShell {
         [ -n "$T" ] && "$T" -L nextterm list-sessions -F 'session\t#{session_name}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}' 2>/dev/null
         \(findHerdr)
         \(herdrSection)
+        if [ -n "$H" ]; then
+          nt_sl=$("$H" session list --json 2>/dev/null </dev/null)
+          printf 'herdr-sessions\t'; printf '%s' "$nt_sl" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\037\\177' | head -c 200000; echo
+          nt_names=$(printf '%s' "$nt_sl" | tr '{}\\n' '\\n\\n ' | grep -E '"running"[[:space:]]*:[[:space:]]*true' | grep -vE '"default"[[:space:]]*:[[:space:]]*true' | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\\([A-Za-z0-9_-]\\{1,64\\}\\)".*/\\1/p' | head -n \(herdrSessionsListed))
+          for nt_n in $nt_names; do
+        \(herdrSection(word: "\"$nt_n\"", wantsFocus: false))
+          done
+        fi
         true
         """
+
+    /// The most of herdr's other running sessions whose agents sessionsScript lists.
+    public static let herdrSessionsListed = 8
 
     /// Ends one of Next Term's tmux sessions (End Session on close, MCP close_tab with force).
     public static func killSessionScript(session: String) -> String {
@@ -606,8 +657,11 @@ public struct RemoteTabReport: Equatable, Sendable {
 
 public struct RemotePoll: Equatable, Sendable {
     public var tabs: [String: RemoteTabReport] = [:]
-    /// What herdr said, when a tab on this host was opened with herdr: its agents, or why there are none.
-    public var herdr: HerdrReport?
+    /// What herdr said, when a tab on this host was opened with herdr: its agents, or why there are none, by herdr session
+    /// ("" for herdr's default, and for a section from before sessions, which named none).
+    public var herdrSessions: [String: HerdrReport] = [:]
+    /// herdr's default session's report.
+    public var herdr: HerdrReport? { herdrSessions[""] }
 
     public init() {}
 
@@ -620,7 +674,7 @@ public struct RemotePoll: Equatable, Sendable {
             index += 1
             if line == RemoteShell.herdrMarker {
                 let (report, consumed) = HerdrReport.parse(section: lines[index...])
-                poll.herdr = report
+                poll.herdrSessions[report.session ?? ""] = report
                 index += consumed
                 continue
             }
@@ -763,25 +817,34 @@ public struct RemoteSession: Equatable, Sendable {
         program = fields[4]
     }
 
-    public static func parseList(_ output: String) -> (sessions: [RemoteSession], herdr: HerdrReport?)? {
+    /// sessionsScript's answer: the tmux sessions, herdr's default session's report, herdr's sessions (nil when it listed
+    /// none: herdr is missing, or has no named sessions), and the reports of the other running sessions it asked, by name.
+    public static func parseList(_ output: String)
+        -> (sessions: [RemoteSession], herdr: HerdrReport?, herdrSessions: [HerdrSession]?, herdrReports: [String: HerdrReport])? {
         guard let lines = RemoteShell.payload(output) else { return nil }
         var sessions: [RemoteSession] = []
-        var herdr: HerdrReport?
+        var reports: [String: HerdrReport] = [:]
+        var herdrSessions: [HerdrSession]?
         var index = 0
         while index < lines.count {
             let line = lines[index]
             index += 1
             if line == RemoteShell.herdrMarker {
                 let (report, consumed) = HerdrReport.parse(section: lines[index...])
-                herdr = report
+                reports[report.session ?? ""] = report
                 index += consumed
+                continue
+            }
+            if line.hasPrefix("herdr-sessions\t") {
+                herdrSessions = HerdrSession.parse(String(line.dropFirst("herdr-sessions\t".count)))
                 continue
             }
             if let session = RemoteSession(fields: line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)) {
                 sessions.append(session)
             }
         }
-        return (sessions, herdr)
+        let named = reports.filter { !$0.key.isEmpty }
+        return (sessions, reports[""], herdrSessions, named)
     }
 }
 
