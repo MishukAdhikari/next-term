@@ -148,9 +148,10 @@ extension SelfTest {
         let opened = await wait(30) { worktreeWindow(sibling) != nil }
         made.append(sibling)
         if let w = worktreeWindow(sibling) {
-            _ = await wait(5) { NSApp.keyWindow === w.window && w.window?.title.contains("xCloud ▸ 7027-sso") == true }
-            check(w.projectTitle == "xCloud ▸ 7027-sso" && w.window?.title.contains("xCloud ▸ 7027-sso") == true && NSApp.keyWindow === w.window,
-                  "worktrees: a window “xCloud ▸ 7027-sso” opens in front (AE1)", "\(w.projectTitle) | \(w.window?.title ?? "")")
+            // Its title leads with it, "xCloud ▸ 7027-sso — …", so the Window menu and Mission Control name it first.
+            _ = await wait(5) { NSApp.keyWindow === w.window && w.window?.title.hasPrefix("xCloud ▸ 7027-sso") == true }
+            check(w.projectTitle == "xCloud ▸ 7027-sso" && w.window?.title.hasPrefix("xCloud ▸ 7027-sso") == true && NSApp.keyWindow === w.window,
+                  "worktrees: a window “xCloud ▸ 7027-sso” opens in front, its title leading with it (AE1)", "\(w.projectTitle) | \(w.window?.title ?? "")")
             check(w.tabs.count == 1 && canonicalPath(w.tabs[0].directory) == canonicalPath(sibling), "worktrees: with one shell tab in the new folder",
                   w.tabs.map(\.directory).joined(separator: ", "))
         } else {

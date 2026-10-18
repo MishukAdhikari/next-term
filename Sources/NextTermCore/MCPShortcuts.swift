@@ -28,7 +28,7 @@ public enum MCPShortcuts {
     }
 
     /// The Settings tabs show_settings opens, by SettingsWindowController's identifiers.
-    public static let settingsTabs = ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "secrets"]
+    public static let settingsTabs = ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "tasks", "secrets"]
 
     /// list_shortcuts' answer: the set, and the commands `query` matches (all without one).
     public static func answer(set: String, commands: [Command], query: String?) -> [String: Any] {

@@ -1,7 +1,7 @@
 import AppKit
 import NextTermCore
 
-/// The Secrets menu, after Agents, whose servers and commands use its keys: Show Secrets, Add Key…, Import From, Keys
+/// The Secrets menu, after Tasks (the agents’ servers and commands use its keys): Show Secrets, Add Key…, Import From, Keys
 /// Due to Rotate, Show Key Request, Pause Key Requests for 1 Hour… (Resume Key Requests while paused) and Revoke All
 /// Approvals…. Each acts through the Secrets window or a sheet: Add Key… and the imports open their sheets on the list
 /// in front; a due key opens Rotate…; Pause and Revoke All confirm in a sheet on the list, Cancel the default; Resume

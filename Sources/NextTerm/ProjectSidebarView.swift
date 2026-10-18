@@ -650,19 +650,19 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// Opens the folders down to a file (reading them as needed), selects it and scrolls it into view,
-    /// leaving the keyboard where it is. Files outside the tree are left alone.
-    func reveal(_ path: String) {
+    /// leaving the keyboard where it is. Files outside the tree are left alone. `expanding`: a folder is opened too.
+    func reveal(_ path: String, expanding: Bool = false) {
         let target = canonicalPath(path)
         guard let root, target.hasPrefix(root.path + "/") else { return }
         let names = target.dropFirst(root.path.count + 1).split(separator: "/").map(String.init)
         // Selecting another row would take the selection from a name being edited.
         whenNotRenaming("reveal") { [weak self] in
             guard let self, self.root === root else { return }
-            self.revealStep(root, names[...])
+            self.revealStep(root, names[...], expanding: expanding)
         }
     }
 
-    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>) {
+    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>, expanding: Bool = false) {
         load(node) { [weak self] in
             guard let self, let name = rest.first, let child = node.children?.first(where: { $0.name == name }) else { return }
             if !self.outline.isItemExpanded(node) { self.outline.expandItem(node) }
@@ -671,8 +671,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 guard row >= 0 else { return }
                 self.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 self.outline.scrollRowToVisible(row)
+                if expanding, child.isDirectory { self.load(child) { self.outline.expandItem(child) } }
             } else if child.isDirectory {
-                self.revealStep(child, rest.dropFirst())
+                self.revealStep(child, rest.dropFirst(), expanding: expanding)
             }
         }
     }

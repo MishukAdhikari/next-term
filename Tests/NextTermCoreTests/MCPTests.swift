@@ -86,8 +86,8 @@ import Testing
         }
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
-        let loaded = tools.filter { !MCPServer.isImportTool($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - MCPServer.importTools.count
+        let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
+        let loadedCount: Int = tools.count - MCPServer.importTools.count - MCPServer.taskTools.count
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]

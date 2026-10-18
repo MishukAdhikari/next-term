@@ -98,8 +98,9 @@ extension SelfTest {
     /// asked for keys. The top menu has no delegate, so the keys given its items always fire.
     static func secretsMenuShapeChecks(_ secrets: NSMenu) {
         let bar: [String] = (NSApp.mainMenu?.items ?? []).dropFirst().map(\.title)
-        check(bar == ["File", "Edit", "View", "Agents", "Secrets", "Git", "Notifications", "Window"],
-              "secrets menu: it sits between Agents and Git", bar.joined(separator: ", "))
+        let around = MenuBar.neighbours(of: "Secrets")
+        check(bar == MenuBar.titles, "secrets menu: it sits between \(around.before ?? "") and \(around.after ?? "")",
+              bar.joined(separator: ", "))
         let listed: [String] = secretsMenuTitles(secrets)
         let expected: [String] = [SecretsMenuModel.showTitle, SecretsMenuModel.addTitle, SecretsMenuModel.importTitle, "—",
                                   SecretsMenuModel.dueTitle, "—", SecretsMenuModel.showRequestTitle,
