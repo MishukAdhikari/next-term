@@ -314,6 +314,10 @@ enum MCPControl {
                 SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
                                 reply: reply)
             }
+        case "add_task":
+            MainActor.assumeIsolated {
+                TasksMCP.addTask(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
         case _ where MCPServer.isImportTool(tool):
             MainActor.assumeIsolated {
                 MCPImportControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)

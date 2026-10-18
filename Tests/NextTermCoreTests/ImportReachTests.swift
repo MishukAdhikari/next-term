@@ -123,11 +123,14 @@ import Testing
         let titles = ["clearBuffer:": "Clear Buffer", "gitCommit:": "Commit…"]
         #expect(KeyBindings.sharingNote(commandK, ["gitCommit:", "clearBuffer:"], title: { titles[$0] ?? $0 })
                 == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else")
-        // Under Next Term's own set, a Commit… key on ⌘K shares it with Clear Buffer instead of taking it away.
+        // Under Next Term's own set, a Commit… key on ⌘K shares it with Clear Buffer and Link instead of taking it away
+        // (with the menu's title for Link, as the app gives it).
         let row = ImportShortcuts.row("gitCommit:", commandK, source: "keymap: CheckinProject")
-        let plan = ImportPlan(preset: .nextTerm, shortcuts: [row]).settlingShortcuts(current: ImportShortcutsTests.current())
+        let plan = ImportPlan(preset: .nextTerm, shortcuts: [row])
+            .settlingShortcuts(current: ImportShortcutsTests.current(), titles: ["insertMarkdownLink:": "Link"])
         #expect(plan.shortcuts.first?.ticked == true)
-        #expect(plan.shortcuts.first?.note == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else")
+        #expect(plan.shortcuts.first?.note == "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer while a terminal has "
+                + "the keyboard, Commit… everywhere else")
     }
 
     // MARK: Undo names them

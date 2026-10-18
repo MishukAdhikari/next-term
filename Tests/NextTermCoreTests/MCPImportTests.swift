@@ -23,8 +23,8 @@ import Testing
             #expect(schema?["type"] as? String == "object", "\(name)")
             #expect(tool.description.contains("This Mac only"), "\(name)")
         }
-        // Every other tool stays loaded.
-        for tool in MCPServer.tools where !MCPServer.isImportTool(tool.name) { #expect(tool.alwaysLoad, "\(tool.name)") }
+        // Every other tool stays loaded, but add_task.
+        for tool in MCPServer.tools where !MCPServer.isDeferred(tool.name) { #expect(tool.alwaysLoad, "\(tool.name)") }
         #expect(MCPServer.tool(named: "list_import_sources")?.scope == .read)
         #expect(MCPServer.tool(named: "preview_import")?.scope == .read)
         #expect(MCPServer.tool(named: "apply_import")?.scope == .write)
