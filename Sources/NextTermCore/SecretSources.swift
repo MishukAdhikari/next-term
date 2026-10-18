@@ -35,6 +35,9 @@ public struct SourceRow: Sendable, GroupableValue {
     /// The last 4 characters, for a value of 12 characters or more; nil for a shorter one, which shows as dots. Taken
     /// once, from the text the parse made, so reading it makes no copy of the value.
     public let lastFour: String?
+    /// A website's sign-in password with no key's shape, from a password manager or a browser: it starts unticked, and
+    /// past the most the sheet lists it is counted, not listed.
+    let isWebsitePassword: Bool
     /// The section it was found in (a JSON object's path, or the file): a name set twice in one section is set again,
     /// in two sections it is two keys.
     let scope: String
@@ -44,7 +47,7 @@ public struct SourceRow: Sendable, GroupableValue {
     /// A row for `text`, the value as the parse found it (trimmed), which goes into `SecretBytes` here.
     init(name: String, text: String, kind: String, place: String, line: Int?, link: SecretSources.LinkHint? = nil,
          ticked: Bool, note: SecretSources.Note? = nil, refusal: SecretSources.Refusal? = nil, scope: String,
-         fromTitle: Bool = false) {
+         fromTitle: Bool = false, isWebsitePassword: Bool = false) {
         self.name = name
         value = SecretBytes(utf8: text)
         self.kind = kind
@@ -57,6 +60,7 @@ public struct SourceRow: Sendable, GroupableValue {
         lastFour = SecretSources.lastFour(of: text)
         self.scope = scope
         self.fromTitle = fromTitle
+        self.isWebsitePassword = isWebsitePassword
     }
 }
 
@@ -66,6 +70,9 @@ public final class SourceReport: Sendable {
     public let format: SecretSources.Format
     public let rows: [SourceRow]
     public let notKeys: [SecretSources.NotKey]
+    /// The website passwords past the most the sheet lists (`SecretSources.maxListed`): counted, not listed. Their
+    /// values were wiped as they were left out.
+    public let unlisted: Int
     public let unreadable: SecretSources.Unreadable?
     /// What each key copied in is for: fixed text from the file's name and folder, or the app that wrote an export,
     /// never from its content.
@@ -81,12 +88,13 @@ public final class SourceReport: Sendable {
     /// "Set again on line 9") takes this one's place on that row, so the header is where it always shows.
     public let fileNote: SecretSources.Note?
 
-    init(format: SecretSources.Format, rows: [SourceRow] = [], notKeys: [SecretSources.NotKey] = [],
+    init(format: SecretSources.Format, rows: [SourceRow] = [], notKeys: [SecretSources.NotKey] = [], unlisted: Int = 0,
          unreadable: SecretSources.Unreadable? = nil, purpose: String, exportedBy: String? = nil, agent: String? = nil,
          fileNote: SecretSources.Note? = nil) {
         self.format = format
         self.rows = rows
         self.notKeys = notKeys
+        self.unlisted = unlisted
         self.unreadable = unreadable
         self.exportedBy = exportedBy
         self.agent = agent
@@ -94,13 +102,37 @@ public final class SourceReport: Sendable {
         self.purpose = exportedBy.map { (app: String) -> String in "From " + app } ?? purpose
     }
 
-    /// "4 other values aren't keys.", or nil when there are none.
+    /// "200 more website passwords aren't listed: Next Term lists 1,000 at most. 4 other values aren't keys.", each
+    /// part when there are some; nil when there are none.
     public var footer: String? {
-        switch notKeys.count {
-        case 0: return nil
-        case 1: return "1 other value isn\u{2019}t a key."
-        default: return "\(notKeys.count) other values aren\u{2019}t keys."
+        var parts: [String] = []
+        if unlisted > 0 {
+            let most: String = SecretSources.maxListed.formatted()
+            let more: String = unlisted == 1 ? "1 more website password isn\u{2019}t"
+                : "\(unlisted.formatted()) more website passwords aren\u{2019}t"
+            parts.append(more + " listed: Next Term lists \(most) at most.")
         }
+        switch notKeys.count {
+        case 0: break
+        case 1: parts.append("1 other value isn\u{2019}t a key.")
+        default: parts.append("\(notKeys.count) other values aren\u{2019}t keys.")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// The most values that aren't keys Show Them lists: a crafted file may hold tens of thousands, and the sheet lays
+    /// the text out on the main thread.
+    public static let notKeysShown = 20
+
+    /// Show Them's text: "CHUNK_SIZE, line 6: A setting", a line for each of the first `limit` values that aren't
+    /// keys, then "And 12 more." for the rest.
+    public func notKeysText(limit: Int = notKeysShown) -> String {
+        var lines: [String] = notKeys.prefix(limit).map { (item: SecretSources.NotKey) -> String in
+            "\(item.name), \(item.place): \(item.reason.sentence)"
+        }
+        let more: Int = notKeys.count - lines.count
+        if more > 0 { lines.append("And \(more.formatted()) more.") }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -261,7 +293,8 @@ extension SecretSources {
         case notText
         case notJSON
         case tooMany
-        /// More keys than the copy sheet lists (`maxListed`): it builds a row for each on the main thread.
+        /// More keys than the copy sheet lists (`maxListed`), website passwords aside: it builds a row for each on the
+        /// main thread.
         case tooManyToList
         /// A Bitwarden export sealed by the account's key or a password.
         case encryptedExport
@@ -289,7 +322,9 @@ extension SecretSources {
             case .notJSON: return "It isn\u{2019}t JSON Next Term can read."
             case .tooMany: return "It holds more values than Next Term reads."
             case .tooManyToList:
-                return "It holds more than 1,000 keys, more than Next Term lists. Import from a smaller file."
+                let most: String = SecretSources.maxListed.formatted()
+                let held: String = "It holds more than \(most) keys, more than Next Term lists at once."
+                return held + " Import them in smaller parts."
             case .encryptedExport:
                 let again = "Export again as .json (unencrypted), or use Import from Bitwarden\u{2026}"
                 return "This export is encrypted. " + again
@@ -332,8 +367,9 @@ extension SecretSources {
     /// The most an archive (1Password's `.1pux`) may hold: its `export.data` is read from it in memory.
     public static let maxArchiveBytes = ZipReader.maxEntryBytes
     static let maxValues = 50_000
-    /// The most keys a report lists: the copy sheet builds a row for each on the main thread, so a file of more,
-    /// picked, piped in or named by an agent, is reported as too many, as the MCP-config import reports one.
+    /// The most rows a report lists: the copy sheet builds a row for each on the main thread, so a file of more keys,
+    /// picked, piped in or named by an agent, is reported as too many, as the MCP-config import reports one. A
+    /// password manager's or a browser's website passwords past it are counted instead (`listed`).
     public static let maxListed = 1_000
 
     /// The last 4 characters of a value of 12 characters or more, counted as the preview shows them (a character of
@@ -363,7 +399,7 @@ extension SecretSources {
         case unreadable(Unreadable)
 
         public static func imported(_ names: [String], replaced: [String], from report: SourceReport) -> CopyInOutcome {
-            .imported(names, replaced: replaced, found: report.rows.count, format: report.format)
+            .imported(names, replaced: replaced, found: report.rows.count + report.unlisted, format: report.format)
         }
     }
 
@@ -551,7 +587,8 @@ extension SecretSources {
 
     /// The rules run over each value, trimmed (a blank or a line break at either end is a copy's, not the key's), then
     /// the links, then the file's own rules: a name set again, the same name in two sections, and a name already in the
-    /// vault. More rows than `maxListed` are too many to list: the report has none.
+    /// vault. Past `maxListed`, website passwords are counted, not listed; more keys than that are too many to list,
+    /// and the report has none.
     static func report(_ found: [Found], format: Format, purpose: String, stored: Set<String>, now: Date,
                        exportedBy: String? = nil, agent: String? = nil, fileNote: Note? = nil) -> SourceReport {
         var rows: [SourceRow] = []
@@ -584,7 +621,7 @@ extension SecretSources {
                 let keeps: Bool = extra?.keepsTick ?? true
                 rows.append(SourceRow(name: item.name, text: text, kind: kind, place: item.place, line: item.line,
                                       ticked: ticked && keeps, note: note ?? extra, refusal: refusal, scope: item.scope,
-                                      fromTitle: item.fromTitle))
+                                      fromTitle: item.fromTitle, isWebsitePassword: note == .websitePassword))
                 sources.append(item.link)
             }
         }
@@ -592,13 +629,37 @@ extension SecretSources {
         rows = settingAgain(rows)
         rows = sectioned(rows)
         rows = replacing(rows, stored: stored)
-        // Counted once one key's rows are merged. The rows are dropped here, off the main thread, which wipes them.
-        guard rows.count <= maxListed else {
+        // Counted once one key's rows are merged. The rows left out are dropped here, off the main thread, which
+        // wipes them.
+        guard let shown = listed(rows) else {
             return SourceReport(format: format, unreadable: .tooManyToList, purpose: purpose, exportedBy: exportedBy,
                                 agent: agent, fileNote: fileNote)
         }
-        return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose, exportedBy: exportedBy,
-                            agent: agent, fileNote: fileNote)
+        return SourceReport(format: format, rows: shown.rows, notKeys: notKeys, unlisted: shown.unlisted,
+                            purpose: purpose, exportedBy: exportedBy, agent: agent, fileNote: fileNote)
+    }
+
+    /// The rows the sheet lists, at most `maxListed`, in the file's order: every row but the website passwords, then as
+    /// many of those as there is room for; the rest are counted. A website password starts unticked and says it is
+    /// usually not an API key, so a vault of thousands of sign-ins still lists its keys. Nil when the other rows alone
+    /// are more than the sheet lists.
+    static func listed(_ rows: [SourceRow]) -> (rows: [SourceRow], unlisted: Int)? {
+        guard rows.count > maxListed else { return (rows, 0) }
+        let isCounted: (SourceRow) -> Bool = { (row: SourceRow) -> Bool in row.isWebsitePassword && !row.ticked }
+        let counted: Int = rows.reduce(0) { (sum: Int, row: SourceRow) -> Int in sum + (isCounted(row) ? 1 : 0) }
+        let others: Int = rows.count - counted
+        guard others <= maxListed else { return nil }
+        var room: Int = maxListed - others
+        var shown: [SourceRow] = []
+        shown.reserveCapacity(maxListed)
+        for row in rows {
+            if isCounted(row) {
+                guard room > 0 else { continue }
+                room -= 1
+            }
+            shown.append(row)
+        }
+        return (shown, rows.count - shown.count)
     }
 
     /// Each row's link: the source's own (`sources`, by row) when it passes the link rules and holds no value in the

@@ -102,6 +102,12 @@ extension SecretsView {
                 // The MCP-config import asks its own way: the importer is told that, and goes.
                 client?.end(.moved)
                 self.openMoveImport(only: source) { [weak self] in
+                    // Keys outside its servers that couldn't be listed, such as more than the sheet lists: the line
+                    // under the list says so, instead of nothing.
+                    if let unreadable = rest.unreadable {
+                        self?.say(Self.outsideServersUnlistedLine + " " + unreadable.sentence)
+                        return
+                    }
                     guard !rest.rows.isEmpty else { return }
                     // After the move sheet has gone: the keys outside its servers, to copy in. The sheet checks
                     // them against the keys the move just stored.
@@ -146,6 +152,9 @@ extension SecretsView {
 extension SecretsView {
     /// For a file the user picked: a sheet opened while it was read.
     static let pickBusyLine = "Finish what\u{2019}s open here, then choose the file again."
+    /// After the MCP-config import of a file whose keys outside its servers couldn't be listed; the reason follows.
+    static let outsideServersUnlistedLine = "Next Term didn\u{2019}t list the keys outside the file\u{2019}s MCP "
+        + "servers."
 
     /// Nothing opens while a sheet is open: the line under the list says who asked, and the importer or the agent's
     /// request hears `busy`.

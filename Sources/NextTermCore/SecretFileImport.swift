@@ -54,8 +54,8 @@ extension SourceReport {
     /// target's servers do once the move import has stored its own.
     public func checked(against stored: Set<String>) -> SourceReport {
         let marked: [SourceRow] = SecretSources.replacing(rows, stored: stored)
-        return SourceReport(format: format, rows: marked, notKeys: notKeys, unreadable: unreadable, purpose: purpose,
-                            exportedBy: exportedBy, agent: agent, fileNote: fileNote)
+        return SourceReport(format: format, rows: marked, notKeys: notKeys, unlisted: unlisted, unreadable: unreadable,
+                            purpose: purpose, exportedBy: exportedBy, agent: agent, fileNote: fileNote)
     }
 }
 

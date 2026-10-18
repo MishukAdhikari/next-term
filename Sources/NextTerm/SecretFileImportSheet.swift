@@ -196,7 +196,7 @@ extension SecretFileImportSheet {
     }
 
     /// The header (the file, how it was read, what to know about it), the line above the rows, the rows, and the
-    /// footer's count of values that aren't keys.
+    /// footer's counts of website passwords not listed and of values that aren't keys.
     func show(_ report: SourceReport) {
         let fileHeader: String = "\(SecretImportSheet.file(path)), read as \(Self.formatText(report))."
         var header: String = isPiped ? pipedHeader(report) : fileHeader
@@ -207,10 +207,9 @@ extension SecretFileImportSheet {
         if let warning = client?.origin.warning { addOriginWarning(warning) }
         footerLabel.stringValue = report.footer ?? ""
         notKeysButton.isHidden = report.notKeys.isEmpty
-        footerLabel.isHidden = report.notKeys.isEmpty
-        notKeysLabel.stringValue = report.notKeys.map { (item: SecretSources.NotKey) -> String in
-            "\(item.name), \(item.place): \(item.reason.sentence)"
-        }.joined(separator: "\n")
+        footerLabel.isHidden = report.footer == nil
+        // The first few only, then how many more: the label is laid out here, on the main thread.
+        notKeysLabel.stringValue = report.notKeysText()
         if report.unreadable != nil || report.rows.isEmpty {
             importButton.isHidden = true
             cancelButton.title = "Close"

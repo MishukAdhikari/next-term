@@ -87,24 +87,22 @@ import Testing
     }
 
     /// A browser's CSV and a Bitwarden export of 5,000 sites each: every row named and linked in seconds, so a step
-    /// that grows with the square of the rows shows here, then reported as more than the sheet lists. At the most it
-    /// lists, every row is there with its link.
+    /// that grows with the square of the rows shows here. The sheet lists as many as it lists, in the file's order,
+    /// each with its link, and the website passwords past them are counted.
     @Test func aLargeBrowserCSVAndExportAreReadInSeconds() {
-        var (csv, json) = Self.exports(5_000)
+        let count = 5_000
+        var (csv, json) = Self.exports(count)
         var browser: SourceReport?
         var bitwarden: SourceReport?
         let clock = ContinuousClock()
         let csvTime: Duration = clock.measure { browser = SecretSources.read(&csv, name: "Chrome Passwords.csv") }
         let jsonTime: Duration = clock.measure { bitwarden = SecretSources.read(&json, name: "bitwarden.json") }
         #expect(csvTime < .seconds(15) && jsonTime < .seconds(15), "\(csvTime), \(jsonTime)")
-        #expect(browser?.exportedBy == "Chrome" && browser?.unreadable == .tooManyToList)
-        #expect(bitwarden?.format == .bitwarden && bitwarden?.unreadable == .tooManyToList)
-        let count: Int = SecretSources.maxListed
-        var (listedCSV, listedJSON) = Self.exports(count)
-        let listed: SourceReport = SecretSources.read(&listedCSV, name: "Chrome Passwords.csv")
-        let listedExport: SourceReport = SecretSources.read(&listedJSON, name: "bitwarden.json")
-        #expect(listed.exportedBy == "Chrome" && listed.rows.count == count)
-        #expect(listedExport.format == .bitwarden && listedExport.rows.count == count)
-        #expect(listed.rows.last?.link?.url.host == "site\(count - 1).example.com")
+        let listed: Int = SecretSources.maxListed
+        #expect(browser?.exportedBy == "Chrome" && browser?.unreadable == nil)
+        #expect(browser?.rows.count == listed && browser?.unlisted == count - listed)
+        #expect(bitwarden?.format == .bitwarden && bitwarden?.unreadable == nil)
+        #expect(bitwarden?.rows.count == listed && bitwarden?.unlisted == count - listed)
+        #expect(browser?.rows.last?.link?.url.host == "site\(listed - 1).example.com")
     }
 }

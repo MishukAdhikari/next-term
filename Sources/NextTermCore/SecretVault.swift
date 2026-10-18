@@ -804,9 +804,10 @@ public final class SecretVault {
         return try Self.open(entry, key: key) == wanted
     }
 
-    /// Whether an import may keep the key `name` for `value` instead of storing the value again: a key an earlier move
-    /// stored (origin `import`), not write-only, that holds `value` (`holds`). A key added in Settings or by an agent
-    /// is the user's own, and a write-only one couldn't be put back by an Undo of the move that used it.
+    /// Whether an import may keep the key `name` for `value` instead of storing the value again: a key an earlier
+    /// import stored (origin `import`), a move's or a copy from a file's, whose Undo keeps a key a move's entries name;
+    /// not write-only, and holding `value` (`holds`). A key added in Settings or by an agent is the user's own, and a
+    /// write-only one couldn't be put back by an Undo of the move that used it.
     public func isReusable(_ name: String, for value: SecretBytes) throws -> Bool {
         guard let entry = index.entry(named: name), entry.origin == .import, !entry.writeOnly else { return false }
         return try holds(name, value: value)
