@@ -456,6 +456,8 @@ extension SelfTest {
         }
         c.remove(plain)
         await remoteHerdrChecks(c, host: host, base: base, home: home, bin: bin, flag: flag)
+        await herdrAgentChecks(c, host: host, base: base, home: home, bin: bin, flag: flag)
+        await localHerdrChecks(c, base: base)
 
         // tmux: the session outlives the connection, and the tab reattaches to it by itself.
         guard tmux != nil else {

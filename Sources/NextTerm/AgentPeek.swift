@@ -575,3 +575,21 @@ final class PeekView: NSView {
         return true
     }
 }
+
+#if DEBUG
+// MARK: for the self-test
+
+extension AgentPeek {
+    /// What the text area, the buttons and the note line show.
+    var shownText: String { text.string }
+    var shownChoices: [String] { choices.arrangedSubviews.compactMap { ($0 as? NSButton)?.title } }
+    var shownNote: String { note.stringValue }
+    var shownHints: String { hints.stringValue }
+
+    /// The line typed into the field, and Return.
+    func send(line: String) {
+        field.stringValue = line
+        send()
+    }
+}
+#endif
