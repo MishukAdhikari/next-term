@@ -85,8 +85,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   secret, and nothing while View › Private Mode is on; until that record has your commands, zsh's own history
   in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it, when that
   is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and asks once
-  which you want, without touching your `.zshrc`. Settings › Terminal › While typing turns it off, says how many
-  commands are kept and clears them.
+  which you want, without touching your `.zshrc`. View › Suggestions While Typing turns it off or on, and
+  Settings › Terminal › While typing does too, says how many commands are kept and clears them.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
