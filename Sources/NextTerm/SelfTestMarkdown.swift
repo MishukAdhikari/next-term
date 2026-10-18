@@ -3,9 +3,9 @@ import NextTermCore
 
 /// The markdown part (NEXTTERM_SELFTEST_ONLY=markdown): Live Preview, in a scratch folder of the project. Every Markdown
 /// fixture keeps its bytes when it is opened, switched, scrolled, selected and saved; the syntax is hidden but on the
-/// caret's line; the switch changes no text, dirty flag or undo; a .env file's mask still draws; the commands, their keys,
-/// Return, Tab and a box's click each make one edit; ⌘-click opens a link at its heading; Go to Heading; an agent's
-/// write; diffs as source; and notes on the time large files take.
+/// caret's line; the gutter's numbers sit on their own lines, however tall; the switch changes no text, dirty flag or undo; a
+/// .env file's mask still draws; the commands, their keys, Return, Tab and a box's click each make one edit; ⌘-click opens a
+/// link at its heading; Go to Heading; an agent's write; diffs as source; and notes on the time large files take.
 extension SelfTest {
     static func markdownChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let app = AppDelegate.shared else { return }
@@ -21,6 +21,7 @@ extension SelfTest {
         app.markdownLivePreview = true
         await markdownBytesChecks(c, folder: folder)
         await markdownPreviewChecks(c, folder: folder)
+        await markdownGutterChecks(c, folder: folder)
         markdownEnvMaskCheck(c, folder: folder)
         await markdownCommandChecks(c, folder: folder)
         await markdownHeadingChecks(c, folder: folder)
@@ -166,6 +167,67 @@ extension SelfTest {
         check(c.validateMenuItem(item) && item.state == .off && item.title == "Markdown Live Preview", "markdown: its menu item is on, unchecked")
         c.toggleMarkdownPreview(nil)
         check(editor.showsLivePreview && null(0) && c.validateMenuItem(item) && item.state == .on, "markdown: and back to Live Preview, checked")
+    }
+
+    /// Each line's number in the gutter sits in its own row, on its text's baseline, in Live Preview and in Source: a heading's
+    /// in its taller row, and a line whose syntax at its start is hidden too (a heading's #s, a leading **). Those are null
+    /// glyphs, which TextKit puts at the end of the row above, so the row of a line's first glyph is the line above's. The
+    /// row each number is checked against is read from the layout apart from the gutter: the row of the line's break (no line
+    /// here wraps), or the empty last line's.
+    private static func markdownGutterChecks(_ c: TerminalWindowController, folder: URL) async {
+        guard let window = c.window else { return }
+        let url = folder.appendingPathComponent("gutter.md")
+        let text = "Intro text\n## A heading\nSome words\n**Bold** at the start\n\n# Big heading\nLast line\n"
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+        guard let editor = await openMarkdown(c, url), let manager = editor.textView.layoutManager else { return check(false, "markdown: gutter.md opens") }
+        let view = editor.textView, doc = editor.document
+        defer { c.editorArea.close(editor) }
+        window.makeFirstResponder(view)
+        // The caret on the first line, placed by no click or key: no line shows its syntax.
+        view.caretPlacedByUser = false
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        func layOut() { manager.ensureLayout(forCharacterRange: NSRange(location: 0, length: doc.storage.length)) }
+        func null(_ character: Int) -> Bool { manager.propertyForGlyph(at: manager.glyphIndexForCharacter(at: character)).contains(.null) }
+        func row(ofLine line: Int) -> NSRect {
+            let range = doc.lines.range(ofLine: line)
+            let rect = range.length == 0 ? manager.extraLineFragmentRect
+                : manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: NSMaxRange(range) - 1), effectiveRange: nil)
+            return rect.offsetBy(dx: 0, dy: view.textContainerOrigin.y)
+        }
+        func baseline(at character: Int) -> CGFloat {
+            let glyph = manager.glyphIndexForCharacter(at: character)
+            return manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY + manager.location(forGlyphAt: glyph).y + view.textContainerOrigin.y
+        }
+        func misplaced() -> [String] {
+            (0..<doc.lines.count).compactMap { line in
+                guard let number = editor.gutterNumber(line: line) else { return "\(line + 1) has none" }
+                let own = row(ofLine: line)
+                guard number.minY < own.minY - 0.5 || number.maxY > own.maxY + 0.5 else { return nil }
+                return String(format: "%ld at %.1f-%.1f, its row %.1f-%.1f", line + 1, number.minY, number.maxY, own.minY, own.maxY)
+            }
+        }
+        let heading = doc.lines.starts[1], big = doc.lines.starts[5]
+        func headingNumber() -> String {
+            guard let number = editor.gutterNumber(line: 1) else { return "none" }
+            return String(format: "at %.1f-%.1f, baseline %.1f; the heading's row %.1f-%.1f, baseline %.1f; the row above ends at %.1f",
+                          number.minY, number.maxY, number.baseline, row(ofLine: 1).minY, row(ofLine: 1).maxY, baseline(at: heading + 3), row(ofLine: 0).maxY)
+        }
+        func headingNumberPlaced() -> Bool {
+            guard let number = editor.gutterNumber(line: 1) else { return false }
+            return abs(number.baseline - baseline(at: heading + 3)) < 0.5 && number.minY >= row(ofLine: 0).maxY
+        }
+        layOut()
+        check(null(heading) && null(big) && null(doc.lines.starts[3]) && row(ofLine: 1).height > row(ofLine: 2).height,
+              "markdown: in gutter.md the headings' #s and a leading ** are hidden, and a heading's row is taller")
+        let live = misplaced()
+        check(live.isEmpty, "markdown: in Live Preview each line's number sits in its own row, a heading's in its taller one", live.joined(separator: "; "))
+        check(headingNumberPlaced(), "markdown: a heading's number is on the heading's baseline, clear of the line above", headingNumber())
+        editor.toggleMarkdownPreview()
+        layOut()
+        let source = misplaced()
+        check(!editor.showsLivePreview && source.isEmpty && headingNumberPlaced(), "markdown: and in Source, every number in its own row",
+              source.joined(separator: "; ") + " " + headingNumber())
+        editor.toggleMarkdownPreview()
     }
 
     /// A .env file's values still draw as bullets: they come through the same draw-over hook as Live Preview's marks.

@@ -206,6 +206,8 @@ final class MarkdownPreview {
         layoutManager.invalidateGlyphs(forCharacterRange: range, changeInLength: 0, actualCharacterRange: nil)
         layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
         textView?.needsDisplay = true
+        // Syntax shown or hidden can change how many rows a wrapped line takes, and so where the lines below it are.
+        textView?.enclosingScrollView?.verticalRulerView?.needsDisplay = true
     }
 
     // MARK: the caret
