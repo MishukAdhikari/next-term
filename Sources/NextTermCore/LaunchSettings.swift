@@ -9,8 +9,10 @@ public enum LaunchOpens: String, CaseIterable, Sendable {
     /// as any value it does not know, the Welcome window.
     case welcome, lastProjects, newTerminal
 
-    /// For new users, and for existing users after the update that brought the choice.
-    public static let standard = LaunchOpens.welcome
+    /// For new users, and for existing users who never chose: the windows open at the last quit come back, as a Mac app
+    /// restores its state. A first launch has nothing to bring back, and shows the Welcome window (LaunchDecision). A
+    /// choice stored, even the Welcome window, stays.
+    public static let standard = LaunchOpens.lastProjects
 
     /// "Resume where I left off" keeps 0.10's stored value, `lastProjects`, so a choice of "Reopen the projects that were
     /// open" carries over. "Open a new terminal" is for the user who wants a shell at once and never the Welcome window.
@@ -30,8 +32,8 @@ public struct LaunchSettings: Equatable, Sendable {
     public var opens = LaunchOpens.standard {
         didSet { opensChosen = true }
     }
-    /// "At launch" was chosen: it is stored, or was set since. Never chosen reads as the Welcome window, and a quit's
-    /// resume checkbox then starts checked.
+    /// "At launch" was chosen: it is stored, or was set since. Never chosen reads as Resume, and a quit's resume checkbox
+    /// then starts checked.
     public private(set) var opensChosen = false
     /// "Ask whether to resume when quitting": the plain quit dialog, or the checkbox on the save-changes or "Quitting
     /// stops…" alert. Unsaved files and running work are asked about anyway.
@@ -55,7 +57,7 @@ public struct LaunchSettings: Equatable, Sendable {
     public init() {}
 
     /// What is saved, with the default for anything missing or not one of the choices. There is no
-    /// migration: an existing user, who never saved one, gets the Welcome window too.
+    /// migration: an existing user, who never saved one, gets Resume too.
     public init(defaults: UserDefaults) {
         if let stored = LaunchOpens(rawValue: defaults.string(forKey: Key.opens) ?? "") {
             opens = stored

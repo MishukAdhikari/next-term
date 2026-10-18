@@ -3,7 +3,7 @@ import NextTermCore
 
 /// The Welcome window's right pane while a saved server is selected: its name, where it points and the folder its tabs
 /// open in, how it is kept, while it is connected what its herdr agents need ("herdr: 1 needs you, 3 working"), and
-/// Connect, which Return presses.
+/// Connect, which Return presses; Go to Window in its place while a window is open on it.
 final class WelcomeServerPane: NSView {
     let connectButton = NSButton(title: "Connect", target: nil, action: nil)
     private let name = NSTextField(labelWithString: "")
@@ -29,9 +29,7 @@ final class WelcomeServerPane: NSView {
         Typography.singleLine(herdr, truncation: .byTruncatingTail)
         note.font = .systemFont(ofSize: 12)
         note.textColor = Theme.textDim
-        note.stringValue = "Connect opens a window with a tab on it, in its folder."
         connectButton.bezelStyle = .rounded
-        connectButton.toolTip = "Open a window with a tab on this server, over ssh"
         for view in [name, place, kept, herdr, note, connectButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -62,7 +60,8 @@ final class WelcomeServerPane: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func show(_ host: RemoteHost) {
+    /// `windowOpen`: a window with its tab in front on the server is open, and the button goes to it.
+    func show(_ host: RemoteHost, windowOpen: Bool = false) {
         self.host = host
         name.stringValue = host.name
         name.toolTip = host.name
@@ -79,7 +78,15 @@ final class WelcomeServerPane: NSView {
         let agents = host.keep == .herdr ? HerdrAgentMenu.summary(host: host) : nil
         herdr.stringValue = agents ?? ""
         herdr.isHidden = agents == nil
-        connectButton.setAccessibilityHelp("Opens a window with a tab on \(host.name), in \(host.directory)")
+        connectButton.title = windowOpen ? "Go to Window" : "Connect"
+        connectButton.toolTip = windowOpen ? "Bring its window to the front, the one you were in last"
+            : "Open a window with a tab on this server, over ssh"
+        let newWindow: String = SwitcherKeys.newWindow.display
+        note.stringValue = windowOpen ? "A window on it is open. \(newWindow) connects again, in a new window."
+            : "Connect opens a window with a tab on it, in its folder."
+        let help: String = windowOpen ? "Brings the window on \(host.name) to the front"
+            : "Opens a window with a tab on \(host.name), in \(host.directory)"
+        connectButton.setAccessibilityHelp(help)
     }
 
     /// How the server keeps what runs on it: "kept with tmux", "kept with herdr", or "plain ssh".

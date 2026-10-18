@@ -540,8 +540,8 @@ extension SelfTest {
         let placed: CGRect = footer.convert(footer.bounds, to: nil)
         let shown: Bool = !footer.isHiddenOrHasHiddenAncestor && placed.width > 0 && content.contains(placed)
         let general = GeneralSettingsView(frame: .zero)
-        check(titles == expected && general.opens.map(\.title) == expected && footer.choice == .welcome && shown,
-              "Welcome: its footer's At launch offers Settings › General's three choices, “Open a new terminal” too, “Show the Welcome window” until changed",
+        check(titles == expected && general.opens.map(\.title) == expected && footer.choice == LaunchOpens.standard && shown,
+              "Welcome: its footer's At launch offers Settings › General's three choices, “Open a new terminal” too, “Resume where I left off” until changed",
               "\(titles), selected \(footer.popUp.titleOfSelectedItem ?? "none"), shown \(shown) at \(NSStringFromRect(placed))")
 
         footer.choose(.newTerminal)
@@ -927,9 +927,10 @@ extension SelfTest {
 
 #if DEBUG
 extension SelfTest {
-    /// ⌘3 does to the third project listed what Return would: with the worktree's window closed, that is the worktree,
-    /// which opens in a window of its own and stays out of File › Open Recent. ↓ moves the selection with the keyboard
-    /// still in the search, and ⌘↩ on an open project opens a second window on it, without asking.
+    /// ⌘1–⌘9 do to their row what Return would: with the worktree's window closed, its row's key opens the worktree in
+    /// a window of its own, which stays out of File › Open Recent (shop's two windows have a row each above it, so it
+    /// is not always third); with no worktree, ⌘3 on the third row. ↓ moves the selection with the keyboard still in the
+    /// search, and ⌘↩ on an open project opens a second window on it, without asking.
     private static func jumpChecks(_ app: AppDelegate, _ fixtures: SwitcherFixtures, from origin: NSWindow) async {
         if let tree = fixtures.worktree {
             for controller in fixtures.windows(on: tree) { await closeSwitcherWindow(controller) }
@@ -941,17 +942,21 @@ extension SelfTest {
         guard list.shown.projects.count >= 3 else {
             return check(false, "Welcome: three projects or more are listed for ⌘3", names(welcome.shownProjects))
         }
-        let third: SwitcherProject = list.shown.projects[2]
-        let before: Int = fixtures.windows(on: third.path).count
-        guard switcherKey(SwitcherKeyCode.digit(2), .command, to: window) else { return }
-        let acted: Bool = await wait(5) {
-            let windows: [TerminalWindowController] = fixtures.windows(on: third.path)
-            let front: Bool = windows.contains { (controller: TerminalWindowController) -> Bool in controller.window?.isKeyWindow == true }
-            return third.isOpen ? front : windows.count == before + 1
+        let treeRow: Int? = fixtures.worktree.flatMap { (tree: String) -> Int? in
+            list.shown.projects.firstIndex { (project: SwitcherProject) -> Bool in project.path == tree }
         }
-        check(acted && !window.isVisible, "Welcome: ⌘3 does what Return does to the third project listed, \(third.title), and closes the Welcome window",
-              "open before \(third.isOpen), windows on it \(fixtures.windows(on: third.path).count), Welcome up \(window.isVisible)")
-        if let tree = fixtures.worktree, third.path == tree {
+        let row: Int = treeRow.flatMap { (row: Int) -> Int? in row < 9 ? row : nil } ?? 2
+        let jumped: SwitcherProject = list.shown.projects[row]
+        let before: Int = fixtures.windows(on: jumped.path).count
+        guard switcherKey(SwitcherKeyCode.digit(row), .command, to: window) else { return }
+        let acted: Bool = await wait(5) {
+            let windows: [TerminalWindowController] = fixtures.windows(on: jumped.path)
+            let front: Bool = windows.contains { (controller: TerminalWindowController) -> Bool in controller.window?.isKeyWindow == true }
+            return jumped.isOpen ? front : windows.count == before + 1
+        }
+        check(acted && !window.isVisible, "Welcome: ⌘\(row + 1) does what Return does to its row, \(jumped.title), and closes the Welcome window",
+              "open before \(jumped.isOpen), windows on it \(fixtures.windows(on: jumped.path).count), Welcome up \(window.isVisible)")
+        if let tree = fixtures.worktree, jumped.path == tree {
             check(!app.recentProjects.contains(tree), "Welcome: the closed worktree opened from the list stays out of File › Open Recent")
         }
 

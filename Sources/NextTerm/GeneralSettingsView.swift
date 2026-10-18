@@ -2,10 +2,11 @@ import AppKit
 import NextTermCore
 
 /// Settings › General: what a launch that names no folder or file shows, whether a quit with a terminal window open asks
-/// about resuming, whether a restore brings scrollback back, whether windows show their project's colour, and Full Disk
-/// Access… for the user who wants it. Each control saves only its own choice, as it changes, and it is read at the next
-/// launch, reopen or quit (LaunchSettings): "At launch" counts as chosen only once the user chose it. The project colours
-/// show or hide at once, as View › Project Color › Show Project Colors does.
+/// about resuming, whether a restore brings scrollback back, whether windows show their project's colour, where a
+/// project opens when the window in front is in use, and Full Disk Access… for the user who wants it. Each control saves
+/// only its own choice, as it changes, and it is read at the next launch, reopen or quit (LaunchSettings): "At launch"
+/// counts as chosen only once the user chose it. The project colours show or hide at once, as View › Project Color ›
+/// Show Project Colors does, and where projects open is File › Open Projects In's setting, read at the next open.
 final class GeneralSettingsView: NSView {
     /// A radio button for each choice, in LaunchOpens' order, beside "At launch:".
     let opens: [NSButton] = LaunchOpens.allCases.map { NSButton(radioButtonWithTitle: $0.title, target: nil, action: nil) }
@@ -17,6 +18,8 @@ final class GeneralSettingsView: NSView {
     let keepScrollback = NSButton(checkboxWithTitle: "Keep scrollback", target: nil, action: nil)
     /// Beside "Windows:": Show Project Colors.
     let projectColors = NSButton(checkboxWithTitle: "Show project colors", target: nil, action: nil)
+    /// Beside "Projects:", after "Open in": File › Open Projects In's choices, in its order.
+    let projectsIn = NSPopUpButton(frame: .zero, pullsDown: false)
     /// Beside "Privacy:": System Settings' Full Disk Access pane, opened when clicked. Nothing asks for it by itself.
     let fullDiskAccess = NSButton(title: "Full Disk Access…", target: nil, action: nil)
     /// The labels in the 110 pt column on the left, as in the other tabs.
@@ -24,6 +27,7 @@ final class GeneralSettingsView: NSView {
     let quitLabel = NSTextField(labelWithString: "At quit:")
     let sessionsLabel = NSTextField(labelWithString: "Sessions:")
     let windowsLabel = NSTextField(labelWithString: "Windows:")
+    let projectsLabel = NSTextField(labelWithString: "Projects:")
     let privacyLabel = NSTextField(labelWithString: "Privacy:")
     /// Where the choices are kept: the defaults the launch and the quit read them from.
     private let defaults: UserDefaults = AppDelegate.shared?.launchDefaults ?? .standard
@@ -48,6 +52,16 @@ final class GeneralSettingsView: NSView {
         keepScrollback.action = #selector(keepScrollbackChanged)
         projectColors.target = self
         projectColors.action = #selector(projectColorsChanged)
+        let targets: [(String, AppDelegate.ProjectTarget)] = [
+            ("Ask Each Time", .ask), ("This Window", .thisWindow), ("New Window", .newWindow),
+        ]
+        for (title, target) in targets {
+            projectsIn.addItem(withTitle: title)
+            projectsIn.lastItem?.representedObject = target.rawValue
+        }
+        projectsIn.target = self
+        projectsIn.action = #selector(projectsInChanged)
+        projectsIn.setAccessibilityLabel("Open projects in")
         fullDiskAccess.bezelStyle = .rounded
         fullDiskAccess.target = self
         fullDiskAccess.action = #selector(openFullDiskAccess)
@@ -62,16 +76,18 @@ final class GeneralSettingsView: NSView {
             note.preferredMaxLayoutWidth = noteWidth
             return note
         }
-        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon shows the Welcome window or, with Resume chosen, opens the most recent project; with “Open a new terminal” chosen, it opens a shell window.")
+        let opensNote = note("Brings back windows, tabs, splits, scrollback and agents. Resume is the default; with nothing to bring back, as at the first launch, the Welcome window shows. Agents resume by themselves only after a quit with “Reopen windows and resume sessions” checked; otherwise each agent’s resume command waits on the line. A folder or file named at launch opens too. With every window closed, a click on the Dock icon opens the most recent project under Resume, shows the Welcome window under “Show the Welcome window”, and opens a shell window under “Open a new terminal”.")
         let askNote = note("Asks only when a terminal window is open. Unsaved files and running work are always asked about.")
         let scrollbackNote = note("Brings shell output back when windows resume after a quit or an update. It is kept in private files, with secrets masked on a best-effort basis, until Next Term next opens.")
         let colorsNote = note("A soft glow of each project’s colour along the top of its window, behind the window’s buttons. A worktree’s window has its repository’s. Choose another in View › Project Color, or right-click the window’s top row.")
+        let projectsNote = note("Where Open Project and Open as Project Window go when the window in front is in use. An unused window always takes the project. Also in File › Open Projects In.")
         let privacyNote = note("Only if you want Next Term and the commands in it to reach every folder without macOS asking: this opens System Settings, where you add Next Term yourself.")
         // VoiceOver reads each note with the controls it is about.
         for radio in opens { radio.setAccessibilityHelp(opensNote.stringValue) }
         askToResume.setAccessibilityHelp(askNote.stringValue)
         keepScrollback.setAccessibilityHelp(scrollbackNote.stringValue)
         projectColors.setAccessibilityHelp(colorsNote.stringValue)
+        projectsIn.setAccessibilityHelp(projectsNote.stringValue)
         fullDiskAccess.setAccessibilityHelp(privacyNote.stringValue)
         // A label in the 110 pt column on the left, as in the other tabs, and its controls beside it: on the first line's
         // baseline, for the radio buttons' two lines.
@@ -99,9 +115,15 @@ final class GeneralSettingsView: NSView {
         let scrollbackNoteRow = row(blank(), [scrollbackNote])
         let windowsRow = row(windowsLabel, [projectColors])
         let colorsNoteRow = row(blank(), [colorsNote])
+        // "Open in" before the pop-up, which VoiceOver names "Open projects in" itself.
+        let openIn = NSTextField(labelWithString: "Open in")
+        openIn.setAccessibilityElement(false)
+        let projectsRow = row(projectsLabel, [openIn, projectsIn])
+        projectsRow.setCustomSpacing(6, after: openIn)
+        let projectsNoteRow = row(blank(), [projectsNote])
         let privacyRow = row(privacyLabel, [fullDiskAccess])
         let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, windowsRow, colorsNoteRow,
-                              privacyRow, row(blank(), [privacyNote])]
+                              projectsRow, projectsNoteRow, privacyRow, row(blank(), [privacyNote])]
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -110,6 +132,7 @@ final class GeneralSettingsView: NSView {
         stack.setCustomSpacing(20, after: askNoteRow)
         stack.setCustomSpacing(20, after: scrollbackNoteRow)
         stack.setCustomSpacing(20, after: colorsNoteRow)
+        stack.setCustomSpacing(20, after: projectsNoteRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -123,6 +146,9 @@ final class GeneralSettingsView: NSView {
         NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: LaunchSettings.changed, object: nil)
         // Show Project Colors from the View menu, while this shows.
         NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: ProjectColorStore.changed, object: nil)
+        // File › Open Projects In, or the Ask dialog's "Always do this".
+        let targetChanged: Notification.Name = AppDelegate.projectTargetChanged
+        NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: targetChanged, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -147,6 +173,9 @@ final class GeneralSettingsView: NSView {
         askToResume.state = settings.askToReopenOnQuit ? .on : .off
         keepScrollback.state = settings.keepScrollback ? .on : .off
         projectColors.state = ProjectColorStore.isShown ? .on : .off
+        let target: AppDelegate.ProjectTarget = AppDelegate.shared?.projectTarget ?? .ask
+        let index: Int = projectsIn.indexOfItem(withRepresentedObject: target.rawValue)
+        projectsIn.selectItem(at: max(index, 0))
     }
 
     @objc private func opensChanged(_ sender: NSButton) {
@@ -168,6 +197,13 @@ final class GeneralSettingsView: NSView {
     /// Full Disk Access…: System Settings' pane, for the user to add Next Term there if they want to.
     @objc private func openFullDiskAccess() {
         NSWorkspace.shared.open(PrivacySettings.url(.fullDiskAccess))
+    }
+
+    /// Where Open Project goes from a window in use, as File › Open Projects In sets it.
+    @objc private func projectsInChanged() {
+        let raw: String? = projectsIn.selectedItem?.representedObject as? String
+        guard let target = raw.flatMap(AppDelegate.ProjectTarget.init(rawValue:)) else { return }
+        AppDelegate.shared?.projectTarget = target
     }
 
     /// Every window's project colour, shown or hidden at once.

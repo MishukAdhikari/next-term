@@ -328,7 +328,7 @@ final class DeniedFolderCellView: NSTableCellView {
 // MARK: - a window with no project, its tab in one
 
 /// Under the header while a window with no project shows the project its tab is in: Open as Project Window, which opens
-/// that folder as Open Project does (Settings › General › Open projects in), keeping the sidebar on it.
+/// that folder as Open Project does (Settings › General › Projects, File › Open Projects In), keeping the sidebar on it.
 final class ProjectOfferNote: NSView {
     static let height: CGFloat = 28
     let button = NSButton(title: "Open as Project Window", target: nil, action: nil)

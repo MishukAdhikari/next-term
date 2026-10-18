@@ -102,6 +102,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     var headerInset: CGFloat = 70 { didSet { needsLayout = true } }
 
     private(set) var root: FileNode?
+    /// The main checkout of the linked worktree the tree shows, as the kernel spells it (WorktreeWindow): a link into it
+    /// has the link mark and says where it leads (`linkedTarget`). Nil for any other folder.
+    private var linkedMain: String?
     let header = SidebarHeaderView()
     /// "Files on this Mac", while the active tab runs on a server.
     let remoteNote = RemoteFilesNote()
@@ -341,6 +344,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         rowCache.removeAll()
         servicesGroup.clear()
         root = nil
+        linkedMain = nil
         browsingOnly = false
         outline.reloadData()
         watcher = nil
@@ -366,6 +370,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         scrollView.isHidden = false
         guard canonical != root?.path, !closed else { return }
         browsingOnly = browsing
+        // git's own files, read without running git.
+        linkedMain = browsing ? nil : WorktreeWindow.repository(ofLinkedWorktree: canonical)?.mainCheckout
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
@@ -644,19 +650,19 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// Opens the folders down to a file (reading them as needed), selects it and scrolls it into view,
-    /// leaving the keyboard where it is. Files outside the tree are left alone.
-    func reveal(_ path: String) {
+    /// leaving the keyboard where it is. Files outside the tree are left alone. `expanding`: a folder is opened too.
+    func reveal(_ path: String, expanding: Bool = false) {
         let target = canonicalPath(path)
         guard let root, target.hasPrefix(root.path + "/") else { return }
         let names = target.dropFirst(root.path.count + 1).split(separator: "/").map(String.init)
         // Selecting another row would take the selection from a name being edited.
         whenNotRenaming("reveal") { [weak self] in
             guard let self, self.root === root else { return }
-            self.revealStep(root, names[...])
+            self.revealStep(root, names[...], expanding: expanding)
         }
     }
 
-    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>) {
+    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>, expanding: Bool = false) {
         load(node) { [weak self] in
             guard let self, let name = rest.first, let child = node.children?.first(where: { $0.name == name }) else { return }
             if !self.outline.isItemExpanded(node) { self.outline.expandItem(node) }
@@ -665,8 +671,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 guard row >= 0 else { return }
                 self.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 self.outline.scrollRowToVisible(row)
+                if expanding, child.isDirectory { self.load(child) { self.outline.expandItem(child) } }
             } else if child.isDirectory {
-                self.revealStep(child, rest.dropFirst())
+                self.revealStep(child, rest.dropFirst(), expanding: expanding)
             }
         }
     }
@@ -1103,9 +1110,20 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                   lines: git.snapshot?.stats(at: entry.relative, isDirectory: entry.isDirectory))
         } else if let node = item as? FileNode {
             let (change, lines) = gitState(for: node)
-            cell.configure(node: node, isRoot: node === root, expanded: outlineView.isItemExpanded(node), change: change, lines: lines)
+            cell.configure(node: node, isRoot: node === root, expanded: outlineView.isItemExpanded(node), change: change, lines: lines,
+                           linkedTo: linkedTarget(of: node))
         }
         return cell
+    }
+
+    /// Where a link in the tree leads, when that is in the main checkout of the linked worktree the tree shows (Open in New
+    /// Worktree's Link): the row says so, with a mark.
+    private func linkedTarget(of node: FileNode) -> String? {
+        guard node.isSymlink, let linkedMain, let target = node.linkTarget, target.hasPrefix(linkedMain + "/") else { return nil }
+        // A worktree nested in its main checkout (.claude/worktrees/x): a link within the worktree itself is no link into
+        // the main checkout. Both spelled from real folders (setRoot's canonical path, `linkTarget`).
+        if let root, target == root.path || target.hasPrefix(root.path + "/") { return nil }
+        return target
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }

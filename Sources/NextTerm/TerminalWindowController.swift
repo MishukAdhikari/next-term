@@ -236,6 +236,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         didSet {
             let repository = project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
             projectTitle = Self.title(ofProject: project, repository: repository)
+            isWorktree = repository != nil
             projectColorKey = ProjectColors.key(forProject: project, repository: repository)
             takeProjectColor()
         }
@@ -243,6 +244,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The project's name in the title, the Window menu and notifications: its folder's, or for a linked
     /// worktree "xCloud ▸ 7027-sso", its repository's and its own.
     private(set) var projectTitle = ""
+    /// The project is a linked worktree, read with its title.
+    private(set) var isWorktree = false
+    /// The window's id in the index of every window (AppDelegate.windowIndex): its own, the same while it is open.
+    let indexID: Int
+    private static var lastIndexID = 0
     /// Where the project keeps its colour (ProjectColors.key): for a linked worktree its repository's main checkout, so
     /// every worktree window of a repository has one colour. nil with no project, or the home folder: no colour.
     private(set) var projectColorKey: String?
@@ -287,9 +293,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// the window over MCP, so its first tab waits for the user to choose it (AgentArrival).
     init(directory: String?, project: String? = nil, firstTab: Bool = true, byAgent: Bool = false) {
         self.project = project.map(canonicalPath)
+        Self.lastIndexID += 1
+        indexID = Self.lastIndexID
         // Swift runs no didSet in init: the title and the colour's key here, the colour once the bars exist.
         let repository = self.project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
         projectTitle = Self.title(ofProject: self.project, repository: repository)
+        isWorktree = repository != nil
         projectColorKey = ProjectColors.key(forProject: self.project, repository: repository)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -297,7 +306,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             backing: .buffered,
             defer: false
         )
-        window.title = "Next Term"
+        window.title = "Next Term" // until its first tab names it (updateTitle)
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Theme.background
@@ -309,9 +318,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
         window.delegate = self
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
-        window.onTerminalKey = { [weak self] event, view in self?.completions.handle(event, in: view) ?? false }
+        // Tab completion's list first, then a suggestion's keys.
+        window.onTerminalKey = { [weak self] event, view in
+            guard let self else { return false }
+            if self.completions.handle(event, in: view) {
+                self.ghosts.tabListTook(in: view)
+                return true
+            }
+            return self.ghosts.handle(event, in: view)
+        }
         window.onFirstResponderChange = { [weak self] responder in
             self?.completions.responderChanged()
+            self?.ghosts.responderChanged(to: responder)
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
             // Typing into a folded terminal (behind the rail, or under its bar above or below the editor): it opens.
             if self.terminalCollapsed { self.expandTerminal() }
@@ -809,12 +827,6 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         HerdrAgentMenu.popUp(in: self)
     }
 
-    /// Window › Go to Next Agent Needing You (⌃⌘N): the agent that has waited longest, herdr's or an agent tab's, as
-    /// choosing it in Go to Agent would; pressed again, the next, round to the first. A beep when nothing needs you.
-    @objc func goToNextAgentNeedingYou(_ sender: Any?) {
-        HerdrAgentMenu.goToNext()
-    }
-
     // MARK: status
 
     /// The user can see the active tab only while this window is in front in the active app: key, or main
@@ -913,6 +925,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         updateRailMarks(items)
         announceBackgroundChanges()
         updateTitle()
+        AppDelegate.shared.indexed(self) // its marks across windows: Go to Next Agent Needing You, ⌘O, the Dock menu
         AppDelegate.shared.updateBadge()
         updateProjectRoot()
         updateTabPlace()
@@ -956,16 +969,61 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return order.first { states.contains($0) } ?? .idle
     }
 
-    /// "Alertable.php — xCloud" while editing, "zsh — xCloud" in the terminal, "claude — on web-1 — xCloud"
-    /// in a remote tab (the Window menu, Mission Control and VoiceOver say where it runs), but "web-1: app —
-    /// xCloud" when the tab's name says it already.
+    /// "xCloud ▸ 7027-sso — claude" in the terminal, "xCloud — Alertable.php" while editing, "xCloud — claude — on
+    /// web-1" in a remote tab (or "xCloud — web-1: app" when the tab's name says it already); with no project
+    /// "~/Downloads — vim", or "web-1 — app" with a server's tab in front. The window's name comes first, so the Window
+    /// menu, Mission Control and VoiceOver lead with the project (WindowTitle).
     func updateTitle() {
-        let name = project.map { _ in projectTitle }
-        let focus = isEditorFocused ? editorArea.activeName : activeTab?.title
-        let host = isEditorFocused ? nil : activeTab?.remote.flatMap { remote -> String? in
-            focus?.hasPrefix(remote.host.name + ": ") == true ? nil : "on \(remote.host.name)"
+        window?.title = windowTitle
+    }
+
+    var windowTitle: String {
+        let tab: TerminalTab? = isEditorFocused ? nil : activeTab
+        // An agent's spinner frame left out: the title holds still while it works.
+        let shown: String? = tab.map { (tab: TerminalTab) -> String in AgentTitle.withoutSpinnerFrame(tab.title) }
+        let front: String? = isEditorFocused ? editorArea.activeName : shown
+        return WindowTitle.make(name: windowName, front: front, folderName: folderName, host: tab?.remote?.host.name)
+    }
+
+    /// What the window is for, which names it: a project, a linked worktree, or no project, its tab in front on this
+    /// Mac or on a server.
+    var windowKind: WindowKind {
+        if project != nil { return isWorktree ? .worktree : .project }
+        return activeTab?.remote != nil ? .server : .plain
+    }
+
+    /// The name its title starts with: its project's title ("xCloud ▸ 7027-sso"); with no project, its tab in front's
+    /// server ("web-1") or folder ("~/Downloads", "~").
+    var windowName: String {
+        if project != nil { return projectTitle }
+        guard let tab = activeTab else { return "Next Term" }
+        if let remote = tab.remote { return remote.host.name }
+        let home: String = FileManager.default.homeDirectoryForCurrentUser.path
+        return WindowTitle.name(ofFolder: tab.directory, home: home)
+    }
+
+    /// The title a tab at its prompt in the window's own folder has (TerminalTab.title): its project's folder name, or
+    /// with no project its tab's ("~" at home). The name says it already, so the title leaves it out. None on a server.
+    private var folderName: String? {
+        if let project { return (project as NSString).lastPathComponent }
+        guard let tab = activeTab, tab.remote == nil else { return nil }
+        if tab.directory == FileManager.default.homeDirectoryForCurrentUser.path { return "~" }
+        let last: String = (tab.directory as NSString).lastPathComponent
+        return last.isEmpty ? tab.directory : last
+    }
+
+    /// What the index of every window holds for this one (AppDelegate.windowIndex): its name and title, and its
+    /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status.
+    var indexEntry: WindowIndex.Window {
+        let terminals: [WindowIndex.Tab] = tabs.map { (tab: TerminalTab) -> WindowIndex.Tab in
+            let title: String = AgentTitle.withoutSpinnerFrame(tab.title)
+            // A lost connection cleared the tab's status: what an agent asked there may still wait on the host.
+            let lost: Bool = tab.remoteLink == .disconnected
+            return WindowIndex.Tab(id: tab.id, title: title, state: tab.status.state, disconnected: lost)
         }
-        window?.title = [focus, host, name, "Next Term"].compactMap { $0 }.joined(separator: " — ")
+        let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
+        return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,
+                                  lastKey: lastKey, tabs: terminals, destination: destination)
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
@@ -1227,6 +1285,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(goToHeading(_:)) { return editorArea.activeEditor?.markdown != nil }
         if item.action == #selector(gitRollback(_:)) { return gitFolder != nil && window?.attachedSheet == nil && !rollbackTargets.isEmpty }
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
@@ -1262,9 +1321,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
         }
         if item.action == #selector(revealInSidebar(_:)) { return editorArea.activePath != nil }
+        if item.action == #selector(forgetSuggestion(_:)) { return activeTab?.ghost.isShowing == true }
         if item.action == #selector(toggleEnvValues(_:)) {
             item.state = editorArea.activeEditor?.hidesEnvValues == true ? .on : .off
             return editorArea.activeEditor?.isEnvFile == true
+        }
+        if item.action == #selector(toggleMarkdownPreview(_:)) {
+            let editor = editorArea.activeEditor
+            item.title = editor?.markdownTooLarge == true ? "Markdown Live Preview (file too large)" : "Markdown Live Preview"
+            item.state = editor?.showsLivePreview == true ? .on : .off
+            return editor?.preview != nil
         }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
@@ -1757,12 +1823,37 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Tab completion at this window's keyboard.
     private(set) lazy var completions = CompletionController(owner: self)
+    /// Suggestions while typing: their keys at this window's keyboard.
+    private(set) lazy var ghosts = GhostController(owner: self)
 
     private(set) lazy var fileFinder: GoToFileController = {
         let finder = GoToFileController()
         finder.onOpen = { [weak self] path, line, column in self?.openFile(URL(fileURLWithPath: path), line: line, column: column) }
         return finder
     }()
+
+    private(set) lazy var headingFinder: GoToHeadingController = {
+        let finder = GoToHeadingController()
+        finder.onJump = { [weak self] line in
+            guard let editor = self?.editorArea.activeEditor else { return }
+            self?.window?.makeFirstResponder(editor.textView)
+            editor.textView.go(toLine: line + 1)
+        }
+        return finder
+    }()
+
+    /// Edit › Go to Heading… in a Markdown file (one Live Preview reads: up to 2 MB): its headings to jump to, and its
+    /// counts, or the selection's. The lines come as the styler has read them, so nothing is read again.
+    @objc func goToHeading(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, let styler = editor.markdown, let window else { return NSSound.beep() }
+        let text = editor.document.storage.string as NSString, index = editor.document.lines
+        let lines = styler.allLines()
+        let selection = editor.textView.selectedRange()
+        let chosen = selection.length > 0 ? selection : nil
+        let stats = MarkdownOutline.stats(lines, in: text, index, selection: chosen)
+        let headings = MarkdownOutline.headings(lines, in: text, index)
+        headingFinder.show(headings: headings, stats: stats, ofSelection: chosen != nil, over: window)
+    }
 
     /// ⌘P: any file in the project, by a few letters of its name or path. Selected text (in the editor or
     /// the terminal) starts the search, as it does for Find; `app/User.php:42` in a log opens at line 42.
@@ -2228,6 +2319,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         editor.toggleEnvValues()
     }
 
+    /// View › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
+    /// (Settings › Editor sets what the others open in).
+    @objc func toggleMarkdownPreview(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, editor.preview != nil else { return NSSound.beep() }
+        editor.toggleMarkdownPreview()
+    }
+
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String) {
         addTab(directory: directory)
     }
@@ -2437,6 +2535,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // Not selectNextTab:/selectPreviousTab:: NSWindow implements those (system tabs) and would swallow them.
     @objc func showNextTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: 1) : cycleTab(by: 1) }
     @objc func showPreviousTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: -1) : cycleTab(by: -1) }
+
+    /// Edit › Forget This Suggestion (⇧⌘⌫): the suggestion showing in the terminal with the keyboard leaves the record.
+    @objc func forgetSuggestion(_ sender: Any?) {
+        if activeTab?.ghost.forget() != true { NSSound.beep() }
+    }
 
     @objc func clearBuffer(_ sender: Any?) {
         if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }

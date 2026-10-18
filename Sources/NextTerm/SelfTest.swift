@@ -52,6 +52,13 @@ enum SelfTest {
         return support?.appendingPathComponent("Next Term", isDirectory: true)
     }
 
+    /// Where the record of your commands is kept (CommandHistoryStore): `supportFolder`, the relaunch harness's own in its
+    /// runs; for the plain self-test a temporary folder of its own, so it never reads or writes yours.
+    nonisolated static var historyFolder: URL? {
+        guard mode == .plain else { return supportFolder }
+        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nextterm-history-\(getpid())", isDirectory: true)
+    }
+
     /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
     /// saves or restores sessions.
     nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }
@@ -80,6 +87,14 @@ enum SelfTest {
     private static var failures = 0
 
     static func run() {
+        #if DEBUG
+        // An exception nothing catches ends the run with a crash report, rather than AppKit logging it and the run going on
+        // half done or stalling where it was (the script then says the run did not finish). In this process's registration
+        // domain only, so never in your defaults.
+        UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
+        #endif
+        // Suggestions while typing only in their own part (ghostText): elsewhere → and End move the cursor, as before.
+        GhostPreferences.testIsOn = false
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
@@ -643,7 +658,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap or projectColor), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -656,6 +671,7 @@ enum SelfTest {
             await arrivalChecks(c, proj: proj)
             return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
+        case "markdown": return await markdownChecks(c, proj: proj) // Live Preview: bytes kept, hiding, commands, Go to Heading
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
         case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
         case "notifications":
@@ -663,16 +679,20 @@ enum SelfTest {
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
         case "secrets": return await secretsChecks(c, proj: proj)
+        case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
         case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
         case "terminalPosition": return await terminalPositionChecks(c, proj: proj) // a position chosen again, folds, shares
         case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
+        case "ghostText": return await ghostTextChecks(c) // what read_tab says is typed, and suggestions while typing
+        case "gitRefresh": return await gitRefreshChecks(c) // the sidebar's git refresh and Databases scan, in a repository of its own
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
         case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
         case "newTerminal": return await newTerminalChecks() // a window with no project: "No project open", no protected place read
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
+        case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         default: break
         }
         #endif
@@ -830,6 +850,7 @@ enum SelfTest {
         await closeWorktreeChecks()
         await projectColorChecks()
         await newTerminalChecks()
+        await windowNavChecks()
         await parallelTabsChecks(c, proj: proj)
         await arrivalChecks(c, proj: proj)
         await branchCompareChecks(c)
@@ -840,6 +861,7 @@ enum SelfTest {
         await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
+        await markdownChecks(c, proj: proj)
         await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
@@ -1019,6 +1041,7 @@ enum SelfTest {
         await cellSnapChecks(c)
         await notificationChecks(c)
         notificationsMenuChecks()
+        await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
         await skillsChecks()
         await secretsChecks(c, proj: proj)
@@ -1027,6 +1050,7 @@ enum SelfTest {
         await restoreMCPChecks(proj: proj)
         await endStrayQuestions(after: "the MCP restore checks")
         await completionChecks(c)
+        await ghostTextChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
     }
@@ -4277,11 +4301,12 @@ enum SelfTest {
             delegate.editorLineHeight = savedHeight
         }
 
-        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
-        let wide = proj.appendingPathComponent("wide.md")
+        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off. (Plain text: a Markdown
+        // paragraph's wrapped rows start at the margin, as prose's do.)
+        let wide = proj.appendingPathComponent("wide.txt")
         try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)
         c.openFile(wide)
-        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.md", let layout = wideEditor.textView.layoutManager,
+        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.txt", let layout = wideEditor.textView.layoutManager,
            let container = wideEditor.textView.textContainer {
             func rows() -> Int {
                 layout.ensureLayout(for: container)
@@ -4331,7 +4356,7 @@ enum SelfTest {
             area.applyWrap()
             area.closeActive()
         } else {
-            check(false, "a markdown file opens")
+            check(false, "a file with a long line opens")
         }
         try? FileManager.default.removeItem(at: wide)
 
@@ -4436,10 +4461,11 @@ enum SelfTest {
         check(shortcuts.chord(for: "newTab:")?.display == "⌘T" && shortcuts.chord(for: "showNextTab:")?.display == "⇧⌘]",
               "today's shortcuts are the defaults", shortcuts.chord(for: "showNextTab:")?.display ?? "none")
         let newTabItem = shortcuts.commands.first { $0.id == "newTab:" }?.item
-        shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
-        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
+        // ⌃⌥⌘T: a key no command has (⌃⌘T is Add Task…).
+        shortcuts.set(KeyChord(key: "t", command: true, option: true, control: true), for: "newTab:")
+        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .option, .control],
               "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
-        check(c.tabBar.newTabToolTip == "New tab (⌃⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
+        check(c.tabBar.newTabToolTip == "New tab (⌃⌥⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
         check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
               "a shortcut already in use is found, so it can be moved deliberately")
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,

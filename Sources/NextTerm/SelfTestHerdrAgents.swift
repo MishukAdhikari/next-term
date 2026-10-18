@@ -135,9 +135,6 @@ extension SelfTest {
         let item = windowMenu?.items.first { $0.action == #selector(TerminalWindowController.goToAgent(_:)) }
         check(item?.keyEquivalent == "a" && item?.keyEquivalentModifierMask == [.command, .control] && c.validateMenuItem(item ?? NSMenuItem()),
               "herdr agents: Window › Go to Agent… is ⌃⌘A, on while agents are known")
-        let next = windowMenu?.items.first { $0.action == #selector(TerminalWindowController.goToNextAgentNeedingYou(_:)) }
-        check(next?.keyEquivalent == "n" && next?.keyEquivalentModifierMask == [.command, .control],
-              "herdr agents: Window › Go to Next Agent Needing You is ⌃⌘N")
 
         // A blocked of one check posts nothing; of two, one notice with the question read from its pane, with its choices.
         let other = c.addTab(directory: base.path) // herdr's tab off screen: its agents' notices are the user's news
@@ -164,7 +161,7 @@ extension SelfTest {
         check(tab.status.question == "codex: Allow rm -rf build?", "herdr agents: the tab's question is the agent's own, named", tab.status.question ?? "none")
         check(tab.herdrTracker.needsYou.contains("w2:p1"), "herdr agents: the agent needing a decision counts toward the badge", "\(tab.herdrTracker.needsYou)")
 
-        // The queue: Needs You first, a digit each, the time it has waited; ⌃⌘N and the Dock menu go to the same one.
+        // The queue: Needs You first, a digit each, the time it has waited.
         let menu = HerdrAgentMenu.menu()
         let titles = agentItems(menu).map(\.title)
         check(titles.first?.hasPrefix("codex — Needs your decision") == true && titles.count == 2 && agentItems(menu).first?.keyEquivalent == "1",
@@ -173,11 +170,6 @@ extension SelfTest {
         let waited = HerdrAgentMenu.queue().needsYou.first
         check(waited?.menuTitle(now: (waited?.needsSince ?? 0) + 70).hasSuffix("waiting 1 min") == true,
               "herdr agents: an item says how long its agent has waited", waited?.menuTitle(now: (waited?.needsSince ?? 0) + 70) ?? "none")
-        let dock = app.applicationDockMenu(NSApp)?.items.map(\.title) ?? []
-        check(dock.first == "codex — \(host.name) — Needs your decision", "herdr agents: the Dock menu lists what needs you first", dock.joined(separator: "; "))
-        clearCalls()
-        HerdrAgentMenu.goToNext()
-        check(await wait(10) { read().contains("agent focus w2:p1|") }, "herdr agents: ⌃⌘N goes to the agent that has waited longest", read())
         c.show(other)
 
         // Answering from the notice: the second choice, through a read before the keys and one before Return.

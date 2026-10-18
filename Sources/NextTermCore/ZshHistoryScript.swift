@@ -88,6 +88,8 @@ __nextterm_hprecmd() {
   local -a list
   zstyle -g list zle-line-init widgets
   [[ ${widgets[zle-line-init]-} == user:azhw:zle-line-init && -n ${(M)list:#<->:__nextterm_hready} ]] && return 0
+  # The plugin's widget stays, and runs first: ours out of the list, so the re-add keeps it as entry 0.
+  [[ -n ${(M)list:#<->:__nextterm_hready} ]] && add-zle-hook-widget -d line-init __nextterm_hready
   add-zle-hook-widget line-init __nextterm_hready
   return 0
 }

@@ -29,7 +29,7 @@ public enum MCPServer {
         and get_skill give your project's, the user's and Next Term's skills: read one that fits and your \
         agent doesn't load itself. propose_edit shows an edit for the user to accept. write_file, \
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
-        install_skill, remove_skill, apply_import and undo_import ask the user on the Mac first, and change \
+        install_skill, remove_skill, apply_import, undo_import and add_task ask the user on the Mac first, and change \
         nothing when declined. For settings from another app use list_import_sources and preview_import, \
         never its files. A tab Next Term brings back after an update or a quit keeps its id. list_secrets \
         lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a command \
@@ -82,7 +82,7 @@ public enum MCPServer {
         /// Reaches another machine (a server over ssh), not only this Mac.
         public var openWorld = false
         /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (the
-        /// import tools) leave it off, so they cost nothing until tool search finds them.
+        /// import tools and add_task, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
         public var alwaysLoad = true
     }
 
@@ -100,11 +100,11 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "Only the window of this project folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "read_tab", title: "Read a tab's screen",
-             description: "The text at the end of a tab's terminal (what the agent or command printed last), and the tab's state. With a herdr agent's id, that agent's pane, read through herdr.",
+             description: "The text at the end of a tab's terminal (what the agent or command printed last), and the tab's state. At a zsh prompt in a tab on this Mac, also input: the line being typed (line, and cursor in characters) and, where a plugin such as zsh-autosuggestions shows one, its suggestion, which is not typed and is left out of screen. With a herdr agent's id, that agent's pane, read through herdr.",
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "lines": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "How many lines from the end. Default 80."}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "wait_for_tab", title: "Wait for a tab",
-             description: "Waits until the tab's agent stops working (done, or waiting for input or a decision), or until its command finishes, then returns the state and the last lines of the screen. Returns early with \"timed_out\": true; call again to keep waiting. With a herdr agent's id, until herdr says that agent stopped working.",
+             description: "Waits until the tab's agent stops working (done, or waiting for input or a decision), or until its command finishes, then returns the state and the last lines of the screen, with input at a zsh prompt as read_tab gives it. Returns early with \"timed_out\": true; call again to keep waiting. With a herdr agent's id, until herdr says that agent stopped working.",
              inputSchema: #"{"type": "object", "properties": {\#(agentTabID), "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Default 50 (some clients give up on a tool after 60 seconds); call again to keep waiting."}}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 300),
         Tool(name: "list_projects", title: "List projects",
@@ -204,8 +204,8 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {"query": {"type": "string", "description": "Words in the command's title or menu path (\"split\", \"terminal position\"), or a key such as ⌘T. Default: every command."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "show_settings", title: "Show Settings",
-             description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, skills or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
-             inputSchema: #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "secrets"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#,
+             description: "Opens Next Term's Settings at a tab, in front of the user, for what agents don't change themselves: general, editor, terminal, notifications, keys (Keyboard Shortcuts), import, skills, tasks (where the todo folder is) or secrets. It changes no setting (settings_set and set_layout change the ones agents may). front is false when Next Term isn't the app in front: its Dock icon bounces instead.",
+             inputSchema: #"{"type": "object", "properties": {"tab": {"type": "string", "enum": ["general", "editor", "terminal", "notifications", "keys", "import", "skills", "tasks", "secrets"], "description": "The Settings tab."}}, "required": ["tab"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "install_skill", title: "Ask to install a skill",
              description: "Asks the user to install an agent skill from a public GitHub repository. Nothing is fetched or written on this request alone: the user sees it in Next Term, chooses to review the skill's files, and decides. Answers within about 50 seconds: installed (with the names), declined, failed (with a note saying why), busy (another request is waiting; ask later), or pending with a request_id: call again with only request_id to keep waiting. A source the user declined stays declined until Next Term quits.",
@@ -219,7 +219,7 @@ public enum MCPServer {
              description: "Opens a file in Next Term's editor, at a line and column if given (1-based).",
              inputSchema: #"{"type": "object", "properties": {"path": {"type": "string", "description": "Absolute file path."}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "required": ["path"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 15),
-    ] + controlTools + importTools + secretTools
+    ] + controlTools + importTools + taskTools + secretTools
 
     public static func tool(named name: String) -> Tool? { tools.first { $0.name == name } }
 

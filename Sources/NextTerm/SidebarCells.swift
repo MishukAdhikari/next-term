@@ -632,10 +632,15 @@ final class FileCellView: NSTableCellView {
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private let stats = NSTextField(labelWithString: "")
+    /// At the row's end, for a link into the main checkout of the linked worktree the tree shows (Open in New Worktree's
+    /// Link), in place of the counts git never has for it.
+    private let linkMark = NSImageView()
     private(set) weak var node: FileNode?
     private(set) var isRenaming = false
     /// While renaming, the field takes the row's free width (up to the counts), as in Finder.
     private lazy var renameWidth = name.trailingAnchor.constraint(equalTo: stats.leadingAnchor, constant: -6)
+    /// While the link mark shows, the name gives way to it.
+    private lazy var linkRoom = name.trailingAnchor.constraint(lessThanOrEqualTo: linkMark.leadingAnchor, constant: -4)
 
     init() {
         super.init(frame: .zero)
@@ -645,7 +650,11 @@ final class FileCellView: NSTableCellView {
         stats.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         stats.alignment = .right
         Typography.singleLine(stats, truncation: .byClipping)
-        [icon, name, stats].forEach {
+        linkMark.image = NSImage(systemSymbolName: "link", accessibilityDescription: "linked")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .regular))
+        linkMark.contentTintColor = Theme.textDim
+        linkMark.isHidden = true
+        [icon, name, stats, linkMark].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             addSubview($0)
         }
@@ -666,14 +675,19 @@ final class FileCellView: NSTableCellView {
             name.trailingAnchor.constraint(lessThanOrEqualTo: stats.leadingAnchor, constant: -6),
             stats.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             stats.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
+            linkMark.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            linkMark.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func configure(node: FileNode, isRoot: Bool, expanded: Bool, change: GitChange?, lines: LineStats?) {
+    /// `linkedTo`: where the link the row shows leads, in the main checkout of the linked worktree the tree shows; the
+    /// row then has the link mark, and its tooltip says where.
+    func configure(node: FileNode, isRoot: Bool, expanded: Bool, change: GitChange?, lines: LineStats?, linkedTo: String? = nil) {
         self.node = node
         guard !isRenaming else { return }
+        showLinkMark(linkedTo != nil)
         icon.image = FileIcons.image(for: node, expanded: expanded)
         icon.alphaValue = change == .ignored ? 0.55 : 1
         let color = change == nil && node.name.hasPrefix(".") ? Theme.textDim : Theme.color(for: change)
@@ -695,8 +709,9 @@ final class FileCellView: NSTableCellView {
                 .paragraphStyle: Typography.paragraph(.byTruncatingMiddle),
             ])
         }
-        showStats(isRoot ? nil : lines, isDirectory: node.isDirectory)
+        showStats(isRoot || linkedTo != nil ? nil : lines, isDirectory: node.isDirectory)
         var tip = node.path
+        if let linkedTo { tip += "\nLinked to " + linkedTo }
         if let change {
             let word = Self.word(for: change)
             tip += "\n" + word.prefix(1).uppercased() + word.dropFirst()
@@ -705,9 +720,18 @@ final class FileCellView: NSTableCellView {
             tip += "\n+\(lines.added) −\(lines.removed) lines" + (node.isDirectory ? " in \(lines.files) file\(lines.files == 1 ? "" : "s")" : "")
         }
         tipText = tip // shown by the sidebar, for visible rows only (see ProjectSidebarView.updateToolTips)
-        setAccessibilityLabel([node.name, change.map(Self.word(for:)), stats.stringValue.isEmpty ? nil : stats.stringValue]
+        let linked = linkedTo.map { "linked to " + $0 }
+        setAccessibilityLabel([node.name, linked, change.map(Self.word(for:)), stats.stringValue.isEmpty ? nil : stats.stringValue]
             .compactMap { $0 }.joined(separator: ", "))
     }
+
+    private func showLinkMark(_ shown: Bool) {
+        linkMark.isHidden = !shown
+        linkRoom.isActive = shown
+    }
+
+    /// The row has the link mark, for the self-test.
+    var showsLinkMark: Bool { !linkMark.isHidden }
 
     /// "+12 −3", like a pull request: lines added and removed in this file or below this folder.
     private func showStats(_ lines: LineStats?, isDirectory: Bool) {
@@ -730,6 +754,7 @@ final class FileCellView: NSTableCellView {
     func configureDeleted(_ entry: DeletedEntry, expanded: Bool, lines: LineStats?) {
         node = nil
         guard !isRenaming else { return }
+        showLinkMark(false)
         icon.image = FileIcons.image(forDeleted: entry.name, parent: entry.url.deletingLastPathComponent().lastPathComponent,
                                      isDirectory: entry.isDirectory, expanded: expanded)
         icon.alphaValue = 0.45
@@ -772,6 +797,7 @@ final class FileCellView: NSTableCellView {
 
     func configureHidden(_ entries: HiddenEntries) {
         node = nil
+        showLinkMark(false)
         icon.image = nil
         stats.stringValue = ""
         let more = "\(entries.count.formatted()) more item\(entries.count == 1 ? "" : "s")"
@@ -804,6 +830,7 @@ final class FileCellView: NSTableCellView {
     func beginRename(delegate: NSTextFieldDelegate) {
         guard let node else { return }
         isRenaming = true
+        showLinkMark(false) // the field takes the row, up to the counts
         name.isEditable = true
         name.isSelectable = true
         name.isBezeled = true

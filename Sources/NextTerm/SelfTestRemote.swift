@@ -258,16 +258,21 @@ extension SelfTest {
               "remote: once connected, the tab's mark and its spoken label say so", "\(up.link?.rawValue ?? "no mark") / \(up.spoken)")
         check(plain.paneSummary == "\(plain.title): \(plain.stateDescription)", "remote: and a split tab's line for the pane gives its state",
               plain.paneSummary)
-        // The window title names the host once: "selftest: app — …", or "sleep — on selftest — …" (below).
+        // The window title names the host once, first: this window has no project, so with the server's tab in front it is
+        // named after the server, "selftest — app", or "selftest — sleep" (below), never "selftest — selftest: app".
         // It names the editor's file while that has the keyboard, so the tab takes it first.
         c.window?.makeFirstResponder(plain.view)
         c.refresh()
         check(c.activeTab === plain && !c.isEditorFocused, "remote: the new remote tab has the keyboard",
               "\(c.activeTab?.title ?? "no tab") / \(c.window?.firstResponder.map { "\(type(of: $0))" } ?? "nothing")")
         let windowTitle = c.window?.title ?? ""
-        check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
-              && windowTitle.hasPrefix("selftest: ") != windowTitle.contains("— on selftest —"),
-              "remote: the sidebar says its files are this Mac's, and the window title names the host once",
+        // With a project (a check before may have given the window one), the project first and the host after the tab.
+        let named: String = c.project == nil ? "selftest" : c.projectTitle
+        let tabTitle: String = AgentTitle.withoutSpinnerFrame(plain.title)
+        let hostOnce: Bool = windowTitle == WindowTitle.make(name: named, front: tabTitle, host: "selftest")
+            && windowTitle.hasPrefix(named + " — ") && (c.project != nil || c.windowKind == .server)
+        check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest" && hostOnce,
+              "remote: the sidebar says its files are this Mac's, and the window title names the host once, first in a window with no project",
               "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(windowTitle)")
         let local = c.groups.firstIndex { $0.focused.remote == nil }
         check(local.map { c.tabBar.shownRemoteLink(at: $0) == nil && !(c.tabBar.spokenLabel(at: $0) ?? "").contains("Remote") } ?? true,
@@ -286,8 +291,9 @@ extension SelfTest {
               "\(plain.status.running) \(plain.status.program)")
         c.window?.makeFirstResponder(plain.view)
         c.refresh()
-        check(c.activeTab === plain && c.window?.title.contains(" — on selftest — ") == true,
-              "remote: while a program runs, the window title says on which host", c.window?.title ?? "")
+        let running: String = WindowTitle.make(name: named, front: "sleep", host: "selftest") // "selftest — sleep"
+        check(c.activeTab === plain && c.window?.title == running,
+              "remote: while a program runs, the window title says what runs, and on which host", c.window?.title ?? "")
         check(await wait(10) { !plain.status.running }, "remote: and when it ends")
         plain.view.send(txt: "sleep 60 &\r")
         check(await wait(8) { plain.closeWarning?.contains("sleep") == true }, "remote: closing warns about the shell's background jobs on the host",

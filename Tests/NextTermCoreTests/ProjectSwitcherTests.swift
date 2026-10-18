@@ -8,9 +8,16 @@ import Testing
 
     private func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
 
-    private func window(_ path: String, _ seconds: Double, title: String? = nil) -> SwitcherList.Window {
-        let name: String = (path as NSString).lastPathComponent
-        return SwitcherList.Window(path: path, title: title ?? name, lastKey: at(seconds))
+    /// A project's window in front last at `seconds`, its id those seconds unless given, a terminal for each of `states`.
+    private func window(_ path: String, _ seconds: Double, title: String? = nil, id: Int? = nil,
+                        states: [TabState] = []) -> WindowIndex.Window {
+        let name: String = title ?? (path as NSString).lastPathComponent
+        return WindowIndex.Window(id: id ?? Int(seconds), kind: .project, project: path, name: name, title: name + " — zsh",
+                                  lastKey: at(seconds), tabs: terminals(states))
+    }
+
+    private func terminals(_ states: [TabState]) -> [WindowIndex.Tab] {
+        states.map { (state: TabState) -> WindowIndex.Tab in WindowIndex.Tab(id: UUID(), title: "claude", state: state) }
     }
 
     private func used(_ path: String, _ seconds: Double) -> ProjectHistory.Entry {
@@ -43,7 +50,7 @@ import Testing
     // MARK: the list
 
     @Test func openProjectsComeFirstByTheirNewestWindowThenTheHistoryThenRecents() {
-        let windows: [SwitcherList.Window] = [
+        let windows: [WindowIndex.Window] = [
             window("/Users/sam/Code/api", 100),
             window("/Users/sam/Code/shop", 300),
             window("/Users/sam/Code/api", 200),
@@ -58,27 +65,32 @@ import Testing
             "/Users/sam/Code/wiki", "/Users/sam/Code/old", "/Users/sam/Code/shop", "/Users/sam/Code/old",
         ]
         let list = SwitcherList.build(open: windows, history: history, recents: recents, servers: [])
-        let expected: [String] = ["shop", "api", "docs", "wiki", "old"].map { "/Users/sam/Code/" + $0 }
+        // api's row goes to its window in front last; its other window has a row of its own under it.
+        let expected: [String] = ["shop", "api", "api", "docs", "wiki", "old"].map { "/Users/sam/Code/" + $0 }
         check(paths(list.projects), expected)
         #expect(list.projects[0].windows == 1)
         #expect(list.projects[0].lastUsed == at(300))
         #expect(list.projects[1].windows == 2)
         #expect(list.projects[1].lastUsed == at(200))
-        #expect(list.projects[2].windows == 0)
-        #expect(list.projects[2].lastUsed == at(250))
-        #expect(list.projects[4].lastUsed == nil)
+        #expect(list.projects[1].window == nil && list.projects[1].title == "api")
+        #expect(list.projects[2].window == SwitcherWindow(id: 100, kind: .project))
+        #expect(list.projects[2].title == "api — zsh" && list.projects[2].lastUsed == at(100))
+        #expect(list.projects[3].windows == 0)
+        #expect(list.projects[3].lastUsed == at(250))
+        #expect(list.projects[5].lastUsed == nil)
         #expect(list.openCount == 2)
-        #expect(list.projects[0].isOpen && !list.projects[2].isOpen)
+        #expect(list.projects[0].isOpen && list.projects[2].isOpen && !list.projects[3].isOpen)
     }
 
     @Test func openProjectsInFrontAtTheSameMomentKeepTheOrderGiven() {
-        let windows: [SwitcherList.Window] = [
-            window("/Users/sam/b", 100), window("/Users/sam/a", 100), window("/Users/sam/c", 200),
+        let windows: [WindowIndex.Window] = [
+            window("/Users/sam/b", 100, id: 1), window("/Users/sam/a", 100, id: 2), window("/Users/sam/c", 200, id: 3),
         ]
         let list = SwitcherList.build(open: windows, history: [], recents: [], servers: [])
         check(paths(list.projects), ["/Users/sam/c", "/Users/sam/b", "/Users/sam/a"])
         // A window never in front sorts after every other, and is still open.
-        let never = SwitcherList.Window(path: "/Users/sam/d", title: "d", lastKey: .distantPast)
+        let never = WindowIndex.Window(id: 4, kind: .project, project: "/Users/sam/d", name: "d", title: "d",
+                                       lastKey: .distantPast, tabs: [])
         let withNever = SwitcherList.build(open: [never] + windows, history: [], recents: [], servers: [])
         #expect(withNever.projects.last?.path == "/Users/sam/d")
         #expect(withNever.projects.last?.isOpen == true)
@@ -223,7 +235,7 @@ import Testing
 
     /// shop and api open, shop's window in front last; docs closed; the servers staging and prod.
     private var twoOpen: SwitcherShown {
-        let windows: [SwitcherList.Window] = [window("/Users/sam/Code/api", 100), window("/Users/sam/Code/shop", 200)]
+        let windows: [WindowIndex.Window] = [window("/Users/sam/Code/api", 100), window("/Users/sam/Code/shop", 200)]
         let history: [ProjectHistory.Entry] = [used("/Users/sam/Code/docs", 50)]
         let servers: [SwitcherServer] = [server("prod"), server("staging")]
         let list = SwitcherList.build(open: windows, history: history, recents: [], servers: servers)
@@ -241,7 +253,7 @@ import Testing
     }
 
     @Test func fromTheOnlyOpenProjectOnTheFirstClosedOne() {
-        let windows: [SwitcherList.Window] = [window("/Users/sam/Code/shop", 200)]
+        let windows: [WindowIndex.Window] = [window("/Users/sam/Code/shop", 200)]
         let history: [ProjectHistory.Entry] = [used("/Users/sam/Code/docs", 50), used("/Users/sam/Code/wiki", 40)]
         let list = SwitcherList.build(open: windows, history: history, recents: [], servers: [server("prod")])
         let shown = SwitcherSearch.filter(list, query: "", home: home)
@@ -372,8 +384,8 @@ import Testing
         #expect(act(command("w"), .elsewhere) == .close)
         #expect(act(SwitcherKeys.newWindow) == .activate(newWindow: true))
         #expect(act(SwitcherKeys.newWindow, selection: closedDocs) == .activate(newWindow: true))
-        // On a server ⌘↩ does what Return does.
-        #expect(act(SwitcherKeys.newWindow, selection: prod) == .activate(newWindow: false))
+        // On a server ⌘↩ connects in a new window, where Return goes to one open on it.
+        #expect(act(SwitcherKeys.newWindow, selection: prod) == .activate(newWindow: true))
         // ⌥⌘O gives ⌘↩ to Fork: the sessions search keeps it.
         #expect(act(SwitcherKeys.newWindow, .sessions) == nil)
         #expect(act(SwitcherKeys.newWindow, .elsewhere) == nil)
@@ -529,6 +541,9 @@ import Testing
         check(closed, ["↩ open", "⌘↩ new window", "esc close"])
         let server = SwitcherHint.parts(selection: prod, searchEmpty: true, otherWindows: true)
         check(server, ["↩ connect", "esc close"])
+        // A server with a window open on it: Return goes there, and ⌘↩ connects again.
+        let serverOpen = SwitcherHint.parts(selection: prod, searchEmpty: true, otherWindows: true, serverWindowOpen: true)
+        check(serverOpen, ["↩ go to window", "⌘↩ new window", "esc close"])
         // At launch, the only window: Esc does not close it.
         let alone = SwitcherHint.parts(selection: openShop, searchEmpty: true, otherWindows: false)
         check(alone, ["↩ go to window", "⌘↩ new window"])
@@ -770,6 +785,123 @@ import Testing
         #expect(shown.entries[0].project?.path == "/Users/sam/Code/shop")
         #expect(shown.entries[4].server?.name == "staging")
         #expect(shown.entries[4].project == nil)
+    }
+
+    // MARK: a row for every window
+
+    /// shop in two windows (the one in front last needing you, the other with an agent done), a New Terminal window and
+    /// a server's, each in front at its own time; wiki closed, used later than all of them; the server prod saved.
+    private var everyWindow: SwitcherList {
+        let shop = "/Users/sam/Code/shop"
+        let front: WindowIndex.Window = window(shop, 300, id: 1, states: [.attention, .working, .idle])
+        let other = WindowIndex.Window(id: 2, kind: .project, project: shop, name: "shop", title: "shop — claude",
+                                       lastKey: at(100), tabs: terminals([.done]))
+        let plain = WindowIndex.Window(id: 3, kind: .plain, project: nil, name: "~/Downloads", title: "~/Downloads — vim",
+                                       lastKey: at(200), tabs: terminals([.idle]))
+        let remote = WindowIndex.Window(id: 4, kind: .server, project: nil, name: "web-1", title: "web-1 — app",
+                                        lastKey: at(50), tabs: terminals([.failed]), destination: "deploy@203.0.113.5")
+        let history: [ProjectHistory.Entry] = [used("/Users/sam/Code/wiki", 400)]
+        return SwitcherList.build(open: [other, plain, remote, front], history: history, recents: [],
+                                  servers: [server("prod")])
+    }
+
+    @Test func everyWindowHasARowAndAProjectsOtherWindowsFollowIt() {
+        let list = everyWindow
+        check(list.projects.map(\.title), ["shop", "shop — claude", "~/Downloads — vim", "web-1 — app", "wiki"])
+        let windows: [Int?] = list.projects.map { (project: SwitcherProject) -> Int? in project.window?.id }
+        #expect(windows == [nil, 2, 3, 4, nil])
+        let kinds: [WindowKind?] = list.projects.map { (project: SwitcherProject) -> WindowKind? in project.window?.kind }
+        #expect(kinds == [nil, .project, .plain, .server, nil])
+        // The heading counts projects, not windows.
+        #expect(list.openCount == 1)
+        #expect(list.projects[0].windows == 2 && list.projects[1].windows == 1 && list.projects[2].path.isEmpty)
+        // Each row has the marks of the window it goes to: the project's, its window in front last.
+        #expect(list.projects[0].marks == AgentMarks([.attention, .working]))
+        #expect(list.projects[1].marks == AgentMarks([.done]))
+        #expect(list.projects[3].marks.failed == 1 && list.projects[4].marks == AgentMarks())
+        // A window with no project opens nothing new; a project's other window can.
+        #expect(list.projects[1].hasProject && !list.projects[2].hasProject && !list.projects[3].hasProject)
+        #expect(list.projects[0].hasProject && list.projects[4].hasProject)
+    }
+
+    @Test func aWindowsRowIsFoundByItsWindow() {
+        let shown = SwitcherSearch.filter(everyWindow, query: "", home: home)
+        let ids: [SwitcherEntry.ID] = shown.entries.map(\.id)
+        let expected: [SwitcherEntry.ID] = [
+            .project("/Users/sam/Code/shop"), .window(2), .window(3), .window(4), .project("/Users/sam/Code/wiki"),
+            .server("id-prod"),
+        ]
+        #expect(ids == expected)
+        #expect(shown.index(of: .window(3)) == 2)
+        #expect(shown.index(of: .project("/Users/sam/Code/shop")) == 0)
+        #expect(shown.index(of: .window(9)) == nil)
+    }
+
+    @Test func aWindowsRowIsFoundByItsTitle() {
+        let list = everyWindow
+        check(SwitcherSearch.filter(list, query: "down", home: home).projects.map(\.title), ["~/Downloads — vim"])
+        check(SwitcherSearch.filter(list, query: "web", home: home).projects.map(\.title), ["web-1 — app"])
+        // A project's windows rank alike and keep the list's order.
+        check(SwitcherSearch.filter(list, query: "shop", home: home).projects.map(\.title), ["shop", "shop — claude"])
+        check(SwitcherSearch.filter(list, query: "claude", home: home).projects.map(\.title), ["shop — claude"])
+    }
+
+    @Test func fromAnyWindowOnTheOtherOneUsedLast() {
+        let shown = SwitcherSearch.filter(everyWindow, query: "", home: home)
+        // From shop's window: neither of shop's rows, but the New Terminal window.
+        #expect(SwitcherSelection.initial(shown, origin: "/Users/sam/Code/shop", originWindow: 1, lastPick: nil) == 2)
+        // From the New Terminal window, or the server's: shop, used last of the others.
+        #expect(SwitcherSelection.initial(shown, origin: nil, originWindow: 3, lastPick: "id-prod") == 0)
+        #expect(SwitcherSelection.initial(shown, origin: nil, originWindow: 4, lastPick: nil) == 0)
+        // From no window: the server picked last, as before.
+        #expect(SwitcherSelection.initial(shown, origin: nil, lastPick: "id-prod") == 5)
+        // The only window open, and it has no project: the server picked last, else the first row.
+        let alone = WindowIndex.Window(id: 3, kind: .plain, project: nil, name: "~", title: "~", lastKey: at(10), tabs: [])
+        let list = SwitcherList.build(open: [alone], history: [used("/Users/sam/Code/wiki", 5)], recents: [],
+                                      servers: [server("prod")])
+        let aloneShown = SwitcherSearch.filter(list, query: "", home: home)
+        #expect(SwitcherSelection.initial(aloneShown, origin: nil, originWindow: 3, lastPick: "id-prod") == 2)
+        #expect(SwitcherSelection.initial(aloneShown, origin: nil, originWindow: 3, lastPick: nil) == 0)
+    }
+
+    @Test func returnGoesToAWindowAndCommandReturnOpensANewOneOnlyOnAProject() {
+        let rows: [SwitcherProject] = everyWindow.projects
+        let keys = SwitcherKeys.standard
+        func act(_ row: SwitcherProject) -> SwitcherAction? {
+            keys.action(chord: SwitcherKeys.newWindow, focus: .projects, searchEmpty: true, selection: .project(row),
+                        projects: rows.count)
+        }
+        #expect(act(rows[1]) == .activate(newWindow: true))
+        #expect(act(rows[2]) == .activate(newWindow: false))
+        #expect(act(rows[3]) == .activate(newWindow: false))
+        // A window's row is open: ⌘⌫ never forgets it.
+        let forget: SwitcherAction? = keys.action(chord: SwitcherKeys.forget, focus: .projects, searchEmpty: true,
+                                                  selection: .project(rows[2]), projects: rows.count)
+        #expect(forget == nil)
+        let plain = SwitcherHint.parts(selection: .project(rows[2]), searchEmpty: true, otherWindows: true)
+        check(plain, ["↩ go to window", "esc close"])
+        let other = SwitcherHint.parts(selection: .project(rows[1]), searchEmpty: true, otherWindows: true)
+        check(other, ["↩ go to window", "⌘↩ new window", "esc close"])
+    }
+
+    @Test func aWindowsRowSaysWhatItIs() {
+        let rows: [SwitcherProject] = everyWindow.projects
+        #expect(SwitcherText.windows(rows[0]) == "2 windows")
+        #expect(SwitcherText.windows(rows[1]) == "another window")
+        #expect(SwitcherText.windows(rows[2]) == nil && SwitcherText.windows(rows[4]) == nil)
+        #expect(SwitcherText.folder(of: rows[1], home: home) == "~/Code")
+        #expect(SwitcherText.folder(of: rows[2], home: home) == "No project")
+        #expect(SwitcherText.folder(of: rows[3], home: home) == "deploy@203.0.113.5")
+        let shop: String = SwitcherText.accessibilityLabel(rows[0], branch: "main", home: home)
+        #expect(shop == "shop, open in 2 windows, 1 needs you, 1 working, branch main")
+        let still: String = SwitcherText.accessibilityLabel(rows[0], branch: "main", home: home, working: false)
+        #expect(still == "shop, open in 2 windows, 1 needs you, branch main")
+        let other: String = SwitcherText.accessibilityLabel(rows[1], branch: "main", home: home)
+        #expect(other == "shop — claude, another window, 1 done, in ~/Code, branch main")
+        let plain: String = SwitcherText.accessibilityLabel(rows[2], branch: nil, home: home)
+        #expect(plain == "~/Downloads — vim, a window with no project")
+        let remote: String = SwitcherText.accessibilityLabel(.project(rows[3]), branch: nil, home: home)
+        #expect(remote == "web-1 — app, a window on deploy@203.0.113.5, 1 failed")
     }
 
     @Test func aSavedHostIsListedByItsNameAndDestination() {

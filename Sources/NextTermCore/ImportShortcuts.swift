@@ -67,7 +67,6 @@ public enum ImportShortcuts {
             "selectNextPane:": "Select Next Pane",
             "selectPreviousPane:": "Select Previous Pane",
             "goToAgent:": "Go to Agent…",
-            "goToNextAgentNeedingYou:": "Go to Next Agent Needing You",
             "selectTabByNumber:#9": "Select Last Tab",
             "closeOtherTabs:": "Close Other Tabs",
             "closeTabsToTheRight:": "Close Tabs to the Right",
@@ -82,6 +81,7 @@ public enum ImportShortcuts {
             "gitUpdate:": "Update Project",
             "gitFetch:": "Fetch",
             "showBranches:": "Branches…",
+            "toggleMarkdownPreview:": "Markdown Live Preview",
         ]
         for position in ["bottom", "right", "left", "top"] {
             titles["setTerminalPosition:" + position] = "Terminal Position › " + position.capitalized

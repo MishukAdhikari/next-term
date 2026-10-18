@@ -53,6 +53,10 @@ import Testing
         }
         #expect(hints("list_tabs")["readOnlyHint"] as? Bool == true)
         #expect(hints("read_tab")["readOnlyHint"] as? Bool == true)
+        // read_tab and wait_for_tab say what is typed at a zsh prompt, and that a plugin's ghost is not.
+        func described(_ name: String) -> String { tools.first { $0["name"] as? String == name }?["description"] as? String ?? "" }
+        #expect(described("read_tab").contains("input: the line being typed") && described("read_tab").contains("left out of screen"))
+        #expect(described("wait_for_tab").contains("with input at a zsh prompt as read_tab gives it"))
         // Typing into a terminal can run anything: clients must be able to ask first.
         #expect(hints("send_to_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("new_tab")["destructiveHint"] as? Bool == true)
@@ -87,8 +91,8 @@ import Testing
         }
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
-        let loaded = tools.filter { !MCPServer.isImportTool($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - MCPServer.importTools.count
+        let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
+        let loadedCount: Int = tools.count - MCPServer.importTools.count - MCPServer.taskTools.count
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]
@@ -1453,8 +1457,8 @@ struct SplitMix: RandomNumberGenerator {
     func description(_ name: String) -> String { MCPServer.tool(named: name)?.description ?? "" }
 
     @Test func noNewToolAndTheInstructionsOnlyNameThem() {
-        // 31 + 12 + 4 + 4, as before herdr's agents had ids.
-        #expect(MCPServer.tools.count == 51)
+        // 31 + 12 + 4 + 4, and add_task: as many as without herdr's agents' ids.
+        #expect(MCPServer.tools.count == 51 + MCPServer.taskTools.count)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.
         #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))

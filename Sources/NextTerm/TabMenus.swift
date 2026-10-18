@@ -78,6 +78,10 @@ extension TerminalWindowController {
         menu.addCommand("Copy", "copy:", enabled: selected) { view.copy(view) }
         menu.addCommand("Paste", "paste:", enabled: pasteable) { view.paste(view) }
         menu.addCommand("Select All", "selectAll:") { view.selectAll(nil) }
+        if tab.ghost.isShowing {
+            menu.addItem(.separator())
+            menu.addCommand("Forget This Suggestion", "forgetSuggestion:") { tab.ghost.forget() }
+        }
         menu.addItem(.separator())
         menu.addCommand("Clear", "clearBuffer:") { [weak self] in self?.clear(tab) }
         menu.addCommand("Find…", "performFindPanelAction:#1") { [weak self] in self?.showFind(in: tab) }

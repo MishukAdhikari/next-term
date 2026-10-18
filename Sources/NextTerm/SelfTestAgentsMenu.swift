@@ -19,12 +19,23 @@ extension SelfTest {
         SkillsInstaller.updates = [:]
 
         let bar = NSApp.mainMenu?.items ?? []
-        check(bar.dropFirst().map(\.title) == ["File", "Edit", "View", "Agents", "Git", "Notifications", "Window"], "agents menu: it sits between View and Git",
+        let around = MenuBar.neighbours(of: "Agents")
+        check(bar.dropFirst().map(\.title) == MenuBar.titles, "agents menu: it sits between \(around.before ?? "") and \(around.after ?? "")",
               bar.map(\.title).joined(separator: ", "))
         guard let agents = bar.first(where: { $0.title == "Agents" })?.submenu else { return check(false, "agents menu: the menu bar has it") }
         let listed = agents.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        check(listed == ["Skills…", "—", "Resume Agent Session…", "Send to Agent", "Suggest a Command…"],
-              "agents menu: Skills…, then the agents' commands", listed.joined(separator: ", "))
+        let expected: [String] = ["Skills…", "—", "Go to Next Agent Needing You", "—", "Resume Agent Session…", "Send to Agent",
+                                  "Suggest a Command…"]
+        check(listed == expected, "agents menu: Skills…, Go to Next Agent Needing You, then the agents' commands",
+              listed.joined(separator: ", "))
+        // Go to Next Agent Needing You: ⇧⌘U, the app's (it works from any window, the Welcome window too), under Agents.
+        let next = agents.items.first { $0.action == #selector(AppDelegate.goToNextAgentNeedingYou(_:)) }
+        let nextCommand = shortcuts.commands.first { $0.id == "goToNextAgentNeedingYou:" }
+        let nextKey = KeyChord(key: "u", command: true, shift: true)
+        let nextKeyed = next.flatMap(KeyboardShortcuts.chord(of:)) == nextKey && next?.target === AppDelegate.shared
+        check(nextKeyed && nextCommand?.path == "Agents" && nextCommand?.defaultChord == nextKey,
+              "agents menu: Go to Next Agent Needing You is ⇧⌘U, the app's, and Settings lists it under Agents",
+              "\(next.flatMap(KeyboardShortcuts.chord(of:))?.display ?? "no key") in \(nextCommand?.path ?? "nowhere")")
         func titles(_ name: String) -> [String] { bar.first { $0.title == name }?.submenu?.items.map(\.title) ?? [] }
         let left = titles("File").filter { ["Resume Agent Session…", "Suggest a Command…"].contains($0) } + titles("Edit").filter { $0 == "Send to Agent" }
         check(left.isEmpty, "agents menu: the commands are no longer in File or Edit", left.joined(separator: ", "))

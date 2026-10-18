@@ -41,11 +41,7 @@ enum MCPWriteControl {
 
     static func call(_ tool: String, _ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
                      connection: String? = nil, reply: @escaping Reply) {
-        let preferred = caller.flatMap(MCPControl.controller(of:))?.project
-        let projects = MCPProjects(open: AppDelegate.shared.controllers.compactMap { $0.project }, preferred: preferred)
-        let asker = Self.asker(connection: connection, requester: requester, caller: caller)
-        let context = Context(caller: caller, approval: approval, reason: arguments["reason"] as? String, asker: asker,
-                              who: requester ?? SkillsMCP.describe(caller), projects: projects, isRemote: requester != nil)
+        let context = Self.context(arguments, caller: caller, approval: approval, requester: requester, connection: connection)
         switch tool {
         case "propose_edit": proposeEdit(arguments, context, reply: reply)
         case "write_file": writeFile(arguments, context, creating: false, reply: reply)
@@ -60,6 +56,17 @@ enum MCPWriteControl {
         case "settings_set": setSettings(arguments, context, reply: reply)
         default: reply(MCPControl.fail("Unknown tool \(tool)"))
         }
+    }
+
+    /// What a tool that asks knows about its call: the caller, how it is approved, the agent's reason, who asks and the
+    /// open projects with the caller's window's first. For this file's tools and add_task (TasksMCP).
+    static func context(_ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
+                        connection: String?) -> Context {
+        let preferred = caller.flatMap(MCPControl.controller(of:))?.project
+        let projects = MCPProjects(open: AppDelegate.shared.controllers.compactMap { $0.project }, preferred: preferred)
+        let asker = Self.asker(connection: connection, requester: requester, caller: caller)
+        return Context(caller: caller, approval: approval, reason: arguments["reason"] as? String, asker: asker,
+                       who: requester ?? SkillsMCP.describe(caller), projects: projects, isRemote: requester != nil)
     }
 
     /// Who Decline and Stop Asking stops (here and in SkillsMCP): a remote connection by its grant id

@@ -23,7 +23,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
   their encoding, line endings and permissions. When an agent changes a file you have open, the editor
-  follows; if you have unsaved edits it asks first.
+  follows; if you have unsaved edits it asks first. Markdown files open in Live Preview, styled where you type,
+  with the syntax showing only on the lines you are on: a click ticks a box, ⌘-click follows a link, Return
+  continues a list, Edit › Markdown formats in the markers the file already uses, Go to Heading jumps through it
+  with a word count, and the file's bytes never change unless you type (⇧⌘V shows its source).
 - **Jupyter notebooks, read-only.** A `.ipynb` opens as cells: Markdown laid out, code coloured in the
   kernel's language, and the outputs saved in the file (text, tables as text, images and errors). Nothing
   runs (there is no kernel); Open as JSON shows the file itself.
@@ -34,6 +37,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
   for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
   never presses Enter for you.
+- **Tasks for tomorrow's agent.** Tasks › Add Task… (⌃⌘T) turns a prompt into a task, filled from what you
+  selected: the first line is what to do, list lines its steps, the rest notes, planned for tomorrow unless you
+  pick another day. Each task is one Markdown file in the project's `todo/` folder (the main checkout's, in a
+  worktree), with `- [ ]` boxes and where you were (branch, tab, agent and the command that resumes its session),
+  so an agent there tomorrow reads it with its own tools. Agents add tasks too, with the MCP tool `add_task`,
+  which asks you on the Mac first and shows the exact file. Stored keys show as •••, Undo takes a task back, and
+  Settings › Tasks chooses another folder. See [the todo file format](docs/todo-files.md).
 - **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode in a Next
   Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
   your next prompt ("⧉ 10 lines selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt (`@file:10-20`
@@ -50,7 +60,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   git status and diffs (secrets files refused, secret-looking values masked), and uses the editor (the
   selection, open files, opening a file at a line). Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
-  closed). The tools are marked honestly, so agents ask you before they type into a tab. Local only: a
+  closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
+  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
+  reading a tab also gives the line being typed and the cursor, and any suggestion a zsh plugin draws, which is
+  left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local only: a
   private socket, no network port. Each of herdr's agents has an id of its own in `list_tabs`, which the tab
   tools take as they take a tab's: an agent reads another's pane, prompts it, presses its keys or answers its
   question through herdr, even when another pane has herdr's keyboard, and only that agent counts as driven.
@@ -66,6 +79,17 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   sidebar's Agent Sessions group shows the newest five, marks the running ones and continues an agent's
   latest session. Only titles and dates are read (never whole transcripts), secrets are scrubbed from
   titles, and nothing is written.
+- **Suggestions while typing.** At a zsh prompt, the rest of the newest command of yours that starts with what
+  you typed shows dimmed after the cursor: → (or End, ⌃E, ⌃F) takes it, ⌥→ one word, Esc hides it, and Return
+  runs only what you typed. It is drawn over the terminal, never into it, so copy, Find, the scrollback and an
+  agent reading the tab never take it for typed text, and before it shows it is checked: a `cd` to a folder that
+  is gone, a missing file or program, or a command that never ran well is not suggested. It comes from Next
+  Term's own record of the commands you ran in its zsh tabs, on this Mac: never an agent's, never a line with a
+  secret, and nothing while View › Private Mode is on; until that record has your commands, zsh's own history
+  in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it, when that
+  is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and asks once
+  which you want, without touching your `.zshrc`. Settings › Terminal › While typing turns it off, says how many
+  commands are kept and clears them.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
@@ -79,8 +103,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   title: a row each under the tab in the tab list, with how long it has waited and, with Show Folders, the
   question it asks; past six agents the idle ones fold into one row. Click a row and herdr shows that agent's
   pane; ⌥-click peeks. Window › Go to Agent… (⌃⌘A) lists every agent in every window, herdr's and your agent
-  tabs alike, what needs you first, oldest first; Go to Next Agent Needing You (⌃⌘N) and the Dock menu go
-  straight there. Each agent gets its own notice, one however many tabs show its session, with the question read
+  tabs alike, what needs you first, oldest first. Each agent gets its own notice, one however many tabs show its session, with the question read
   from its own pane once herdr has read it blocked twice in a row, its choices as buttons and Reply on a finished
   one, each checked against the screen first; a notice goes away once the agent no longer needs you. An agent of a
   connected herdr server with no herdr tab gets herdr's own words and no buttons: a click opens a herdr tab there,
@@ -107,13 +130,18 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   menu or Settings › Terminal. ⌘J folds the terminal away so the editor gets the room, and brings it back
   at its size.
 - **Projects.** ⌘O brings up the Welcome window with the keyboard in its search: type a few letters, and
-  Return goes to the window of an open project, opens a closed one, or connects to a saved server. Open
-  projects come first, each marked with a filled dot and counted (a closed one has a ring), then the ones
-  you used last, including those an agent, a worktree window or a restore opened. ⌘1–⌘9 jump to the first
-  nine projects, and ⌘Return opens one in a new window. The list keeps your last 50 projects; Open Recent
-  shows 10. ⌘O again there (or Open…) opens any folder as a project. Its window keeps the project in the
-  sidebar, and new tabs open in it by default. Next Term opens to the Welcome window, reopens your last
-  projects, or opens a new terminal, as you choose. Open Recent and Close Project too.
+  Return goes to the window of an open project, opens a closed one, or goes to a saved server's window,
+  connecting when none is open. Open projects come first, each marked with a filled dot and counted (a
+  closed one has a ring), then the ones you used last, including those an agent, a worktree window or a
+  restore opened. Every open window has a row: a project's other windows under it, and New Terminal's and
+  a server's windows too, each with its agents' marks as the tab bar shows them, a lost connection's
+  server mark among them. ⌘1–⌘9 jump to the first nine rows, and ⌘Return opens a project, or connects to a
+  server, in a new window. The list keeps your last 50 projects; Open Recent shows 10. ⌘O again there (or
+  Open…) opens any folder as a project. Its window keeps the project in the sidebar, and new tabs open in
+  it by default. Window titles start with the project ("shop ▸ fix-login — claude"; "~/Downloads — vim"
+  with no project), so the Window menu and Mission Control tell windows apart. Next Term resumes where you
+  left off by default (the first launch shows the Welcome window), or opens to the Welcome window or a new
+  terminal, as you choose. Open Recent and Close Project too.
 - **Project colours.** Each project's window has a colour of its own, a soft glow along its top row,
   strongest behind the window's buttons and gone 320 points in, so two windows side by side are told
   apart at a glance. It is picked the first time a project opens (the colour the open windows use least)
@@ -146,6 +174,18 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Branches in one popup.** Click the branch (⌥⌘B): search branches and actions, check out, branch,
   update, commit, push, rebase and merge. It asks before changing files under a working agent, keeps
   uncommitted changes in a named stash, and logs every git command exactly as typed (Git › Git Commands).
+- **Worktrees.** Open in New Worktree… on a branch, tag or commit in Branches (or when a switch would change
+  the files under a working agent) checks it out in a folder of its own, beside the repository or in its
+  `.claude/worktrees`, and opens it in its own window, so the checkout an agent works in keeps its branch
+  and its changes. What git ignores there (`.env`, `node_modules/`, `vendor/`) the new folder can **copy**
+  (APFS clones: independent, taking no space until either side changes), **link** (a link for each
+  ignored entry, to the main checkout's: shared, so an install or an edit in either is in both, and
+  nothing is copied; a bare repository has none, so Link is off there) or **leave out**, as you choose;
+  the choice is remembered per repository. Linked, a workspace package still leads to the worktree's own
+  source, and Composer's autoloader is cloned, so the worktree runs its branch's code. Linked entries
+  have a link mark in the sidebar, and removing the worktree deletes only the links. Logs,
+  Laravel's cached config, virtualenvs and Swift builds stay out either way; `.worktreeinclude` brings
+  one back. Remove Worktree… never forces: the branch stays, and a worktree with changes stays too.
 - **Git Log.** The commit history as a graph in an editor tab (⌥⌘L): lanes per line of history, branch
   and tag badges, filters by branch, author, date, paths and message or hash, and each commit's changed
   files, with a double-click for a file's diff in that commit. It follows the repository as agents commit.
@@ -178,7 +218,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   a preview of every replacement; a file an agent changed since the search is never overwritten.
 - **Dock badge and notifications** for agents that finished, in another app or in a tab you are not
   looking at, and for commands that finished while you were in another app. Settings > Notifications
-  chooses which ones notify, after how long, and with or without a sound.
+  chooses which ones notify, after how long, and with or without a sound. Agents › Go to Next Agent
+  Needing You (⇧⌘U) goes to the one that has waited longest, in any window: a decision first, then a
+  failure, then a finished agent; press it again for the next. The Dock menu lists the windows waiting.
 - **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
   command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code or an editor built on it (Cursor, Devin Desktop, Trae,
@@ -198,7 +240,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   update, or after a quit, your windows, tabs, splits and scrollback come back, Claude Code, Codex and Qwen
   Code resume their conversations as you started them, and other agents' resume commands wait on the
   line for Return.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 27 MB to download, 59 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 28 MB to download, 61 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -247,7 +289,11 @@ How it knows, most reliable first:
    suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before. A
    command Next Term or an agent runs by itself (MCP's `new_tab` and `send_to_tab`, a resume) stays out of
    zsh's history, so ↑ and autosuggestions never offer it; a line Next Term only puts on your prompt is yours
-   once you press Return.
+   once you press Return. A third hook reports the line as you edit it (what is typed, where the cursor is, and
+   whether a plugin such as zsh-autosuggestions draws a suggestion), once no key is waiting: suggestions while
+   typing and an agent's `read_tab` read it from there. Next Term's own suggestion is drawn over the terminal and
+   never written into it; one is put on your line only through that hook, while the line is still the one it
+   showed on.
 2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
    Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
    with choices means it is waiting on you, anything else means idle. These hints are checked against
@@ -261,6 +307,23 @@ How it knows, most reliable first:
 Interactive programs (`vim`, `ssh`, `less`, REPLs) are never reported as "done". Closing a tab or quitting
 asks first if a program is running or a job is suspended (Ctrl-Z) or in the background, and names it.
 
+## Many projects and agents
+
+One window per project, and a few keys to move between them:
+
+1. In Settings › General, leave At launch on Resume where I left off (the default), and set Projects to
+   Open in New Window (or File › Open Projects In › New Window), so opening a project never asks.
+2. Keep one window per repository for your own work. For an agent's task that would edit the same files,
+   choose Open in New Worktree… on a branch (⌥⌘B): the task gets its own branch and window ("shop ▸
+   fix-login"). Rename the agent's tab after its task (⌥⌘R). Plain shells go in tabs (⌘T).
+3. Press ⇧⌘U until nothing needs you. The Dock badge counts what you have not looked at yet; a question
+   you looked at but did not answer keeps its amber mark in ⌘O.
+4. ⌘O then ↩ goes back to the window you used last; ⌘O and a few letters goes anywhere, and shows every
+   window's agents. ⌘` moves between windows.
+5. View › Terminal Tabs › Left keeps tab names and marks readable; View › Project Color gives each
+   repository its colour.
+6. When a worktree's branch is merged, close its window with Close and Remove Worktree.
+
 ## Keyboard
 
 | Action | Keys |
@@ -270,29 +333,35 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | New remote tab (on one of your servers) | ⌥⌘T |
 | Switch to or open a project (the Welcome window: ↩ go there, ⌘↩ new window, ⌘1–⌘9 the first nine; ⌘O again there for any folder) / Close project | ⌘O / File menu |
 | Go to File (`name` or `name:line`) | ⌘P |
+| Go to the next agent needing you, in any window (again for the one after) | ⇧⌘U |
 | Resume an agent session (↩ resume or go to its tab, ⌘↩ fork) | ⌥⌘O |
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down (in the editor, ⌘D duplicates the line) | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
 | Go to an agent, herdr's or a tab's (in any window; type its name, or 1–9) | ⌃⌘A |
-| Go to the next agent that needs you | ⌃⌘N |
 | Peek at an agent (in Go to Agent, or on its row) | ⌥ |
 | Maximize the pane (and back) | ⌘⇧↩ |
 | Select tab 1–8 / last tab | ⌘1…⌘8 / ⌘9 |
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |
 | Rename tab | ⌥⌘R, or double-click the tab |
-| Project sidebar | ⌘B |
+| Project sidebar (in a Markdown file, ⌘B is Bold) | ⌘B |
 | Fold the terminal away (and back) | ⌘J |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
-| Clear | ⌘K |
+| Clear (in a Markdown file, ⌘K makes a link) | ⌘K |
+| Take the suggestion while typing / one word of it / hide it | → (or End, ⌃E, ⌃F) / ⌥→ / Esc |
+| Forget the suggestion showing (never suggested again) | ⇧⌘⌫ |
 | Font size | ⌘+ / ⌘- / ⌘0 |
 | Option as Meta (for Emacs-style keys) | File menu, off by default |
 | Save / Save All | ⌘S / ⌥⌘S |
 | Close the file being edited | ⌘W (with the editor focused) |
 | Comment line / Go to line | ⌘/ / ⌘L |
+| Markdown Live Preview or its source (the Markdown file in front) | ⇧⌘V |
+| Bold / Italic / Link / Strikethrough (in a Markdown file) | ⌘B / ⌘I / ⌘K / ⇧⌘X |
+| Heading 1–6 / Body Text (in a Markdown file) | ⌥⌘1…⌥⌘6 / ⌥⌘0 |
+| Toggle Task / Go to Heading (in a Markdown file) | ⇧⌘L / ⇧⌘O |
 | Soft wrap | ⌥⌘W |
 | Show a file's changes | ⌥⌘G |
 | Git Diff (the changed files and their diffs) | ⌃⌘G |
@@ -300,6 +369,7 @@ asks first if a program is running or a job is suspended (Ctrl-Z) or in the back
 | Git Log (the commit graph) | ⌥⌘L |
 | Fetch / Update Project / Commit… / Push… / New Branch… | ⌘R / ⌥⌘U / ⇧⌘C / ⌥⌘P / ⇧⌘B |
 | Send to Agent | ⌥⌘K |
+| Add a task (to the project's todo folder) | ⌃⌘T |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
 | Keyboard Shortcuts (change any menu shortcut) | ⌘, |
@@ -339,6 +409,14 @@ Next Term's menu.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
+- **Suggestions while typing** come from Next Term's record of the commands you ran in its zsh tabs, kept on
+  this Mac only, in `~/Library/Application Support/Next Term/History.noindex` (a folder only you can open, which
+  Spotlight leaves out): each line, when it last ran, how often, its exit, its folder and repository, and the
+  commands that followed it. A command Next Term or an agent ran is never recorded, nor a line that holds a
+  secret (one of your stored keys, a token or a password), starts with a space, or spans lines, nor anything
+  while suggestions are off or View › Private Mode is on (which lasts until you turn it off or quit). zsh's
+  history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings › Terminal ›
+  While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
 - **Secrets** (Settings › Secrets, Window › Secrets) keeps API and MCP keys in a vault on your Mac, each
   value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one,
   by the login keychain, which Settings calls less protected); the names and what each key is for are not
@@ -401,7 +479,7 @@ Sources/NextTerm/       the macOS app: windows, tabs, sidebar, editor, projects,
 Resources/Highlighting/ the shipped grammars (scripts/update-highlighting.py) and the Next Dark theme
 Tests/                  unit tests (swift-testing)
 scripts/                build, test, signing and icon scripts
-docs/                   release signing (signing.md)
+docs/                   release signing (signing.md) and the todo file format (todo-files.md)
 ```
 
 `NextTermCore` has no AppKit dependency, so another front end can reuse it. An iPad or iPhone app
