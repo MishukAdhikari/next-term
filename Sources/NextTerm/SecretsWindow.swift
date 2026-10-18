@@ -16,6 +16,18 @@ final class SecretsWindowController: NSWindowController, NSWindowDelegate {
         SecretsStore.shared.reloadIfChanged()
     }
 
+    /// In front without taking the keyboard, for an agent's request: a key the user meant for a terminal never reaches
+    /// a sheet on it. A minimised window comes out of the Dock first. The user's own ways in, the menu and a reminder,
+    /// use `show()`, which makes it key.
+    static func bringForward() {
+        if shared == nil { shared = SecretsWindowController() }
+        if let window = shared?.window {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.orderFront(nil)
+        }
+        SecretsStore.shared.reloadIfChanged()
+    }
+
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 620), styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)

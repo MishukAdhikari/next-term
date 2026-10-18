@@ -4,8 +4,9 @@ import NextTermCore
 #if DEBUG
 /// import_secrets, on the self-test's temporary vault and files under its own folder only, called in-process as a local
 /// agent's call. The file's sheet opens with the banner, a key the vault has starts unticked, two rows go in under
-/// the stand-in presence check, and the answer is names and counts. Refusals open nothing. No password manager's CLI
-/// runs: a source's sheet is cancelled. Every value is made up at run time.
+/// the stand-in presence check, and the answer is names and counts. Refusals open nothing. The sheets come forward
+/// without the keyboard. No password manager's CLI runs: a source's sheet is cancelled. Every value is made up at run
+/// time.
 extension SelfTest {
     static func secretImportToolChecks(base: URL) async {
         let store = SecretsStore.shared
@@ -29,6 +30,7 @@ extension SelfTest {
         await secretImportToolFileCheck(view, env: env)
         await secretImportToolSourceCheck(view)
         await secretImportToolLimitChecks(view, env: env)
+        await secretImportKeyboardChecks(view, env: env)
     }
 
     /// Refused before anything opens: path and source both, a remote connection, a protected folder.

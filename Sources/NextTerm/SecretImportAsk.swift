@@ -175,8 +175,9 @@ extension SecretImportAsk {
     }
 
     /// The Secrets window in front, with no sheet open on it; nil, and the request ended, when Secrets can't be opened on
-    /// this Mac or shows another sheet. It never activates Next Term: when another app is in front, the Dock icon
-    /// bounces, as request_secret's window does.
+    /// this Mac or shows another sheet. As request_secret's window does, it comes forward without taking the keyboard,
+    /// so the sheet begun on it waits for the user's click; it never activates Next Term, and when another app is in
+    /// front, the Dock icon bounces.
     private func secretsView() -> SecretsView? {
         let store = SecretsStore.shared
         store.reloadIfChanged()
@@ -189,7 +190,7 @@ extension SecretImportAsk {
             end(.busy)
             return nil
         }
-        SecretsWindowController.show()
+        SecretsWindowController.bringForward()
         if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         guard let view = SecretsWindowController.shared?.secretsView else {
             end(.refused(SecretsMCP.cantOpenNote))
@@ -237,7 +238,15 @@ extension SecretImportAsk {
         managerSheet = sheet
         view.managerSheet = sheet
         Self.addBanner(self, to: sheet.window)
+        Self.noReturnKey(action: sheet.openButton, cancel: sheet.cancelButton)
         sheet.begin(on: window)
+    }
+
+    /// A sheet an agent asked for has no Return default, as request_secret's window has none: a Return the user meant
+    /// for a terminal never presses its action, even once the sheet has the keyboard. Cancel, or Close, keeps Escape.
+    static func noReturnKey(action: NSButton, cancel: NSButton) {
+        action.keyEquivalent = ""
+        cancel.keyEquivalent = "\u{1b}"
     }
 
     private func waitFor(_ tab: TerminalTab) {
@@ -259,5 +268,6 @@ extension SecretImportAsk {
     func showing(_ sheet: SecretFileImportSheet) {
         fileSheet = sheet
         Self.addBanner(self, to: sheet.window)
+        Self.noReturnKey(action: sheet.importButton, cancel: sheet.cancelButton)
     }
 }
