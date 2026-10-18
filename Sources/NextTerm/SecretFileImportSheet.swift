@@ -113,9 +113,14 @@ final class SecretFileImportSheet: NSWindowController, NSWindowDelegate, NSTextF
         return unticked
     }
 
-    func begin(on parent: NSWindow) {
+    /// `keepingKeyboard`: an agent asked for it, so the window the user types in keeps the keyboard.
+    func begin(on parent: NSWindow, keepingKeyboard: Bool = false) {
         guard let window else { return }
-        parent.beginSheet(window, completionHandler: nil)
+        if keepingKeyboard {
+            SecretsWindowController.beginWithoutKeyboard(window, on: parent)
+        } else {
+            parent.beginSheet(window, completionHandler: nil)
+        }
     }
 }
 

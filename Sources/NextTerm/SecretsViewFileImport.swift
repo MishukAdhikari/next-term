@@ -148,7 +148,8 @@ extension SecretsView {
             // An agent ran nxtrm secret import: as for its import_secrets, Import… answers only a click.
             SecretImportAsk.noReturnKey(action: sheet.importButton, cancel: sheet.cancelButton)
         }
-        sheet.begin(on: window)
+        let agentAsked: Bool = asked != nil || client?.origin.agent != nil
+        sheet.begin(on: window, keepingKeyboard: agentAsked)
         if let report = sheet.report { client?.opened(report) }
     }
 }

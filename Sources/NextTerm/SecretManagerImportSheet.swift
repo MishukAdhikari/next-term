@@ -51,9 +51,14 @@ final class SecretManagerImportSheet: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func begin(on parent: NSWindow) {
+    /// `keepingKeyboard`: an agent asked for it, so the window the user types in keeps the keyboard.
+    func begin(on parent: NSWindow, keepingKeyboard: Bool = false) {
         guard let window else { return }
-        parent.beginSheet(window, completionHandler: nil)
+        if keepingKeyboard {
+            SecretsWindowController.beginWithoutKeyboard(window, on: parent)
+        } else {
+            parent.beginSheet(window, completionHandler: nil)
+        }
     }
 
     // MARK: the preset tabs

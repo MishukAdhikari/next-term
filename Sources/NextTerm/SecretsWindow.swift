@@ -33,6 +33,28 @@ final class SecretsWindowController: NSWindowController, NSWindowDelegate {
         SecretsStore.shared.reloadIfChanged()
     }
 
+    /// Begins `sheet` on the Secrets window for an agent's request without taking the keyboard. AppKit makes a sheet
+    /// key as it begins while Next Term is active, even on a window that isn't key, so the window that had the keyboard
+    /// gets it back at once, and once more after AppKit's own turn. A user already in Secrets, or with no window of Next
+    /// Term's key, is left as AppKit leaves it: the sheet is theirs to click.
+    static func beginWithoutKeyboard(_ sheet: NSWindow, on parent: NSWindow) {
+        let before: NSWindow? = NSApp.keyWindow
+        parent.beginSheet(sheet, completionHandler: nil)
+        guard let before, before !== parent, before !== sheet, before.sheetParent !== parent else { return }
+        let giveBack = { [weak before, weak sheet, weak parent] () -> Void in
+            // Only a window of Next Term's still on screen gets it, and only while Next Term is the active app: the
+            // keyboard is never taken from another app.
+            guard NSApp.isActive, let before, before.isVisible, let sheet, sheet.isVisible else { return }
+            let key: NSWindow? = NSApp.keyWindow
+            guard key === sheet || (parent != nil && key === parent) else { return }
+            before.makeKey()
+        }
+        giveBack()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { giveBack() }
+        }
+    }
+
     /// The window that had the keyboard when an agent's request brought Secrets out of the Dock, until the restore
     /// ends.
     private weak var keyBeforeRestore: NSWindow?

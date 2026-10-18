@@ -176,8 +176,8 @@ extension SecretImportAsk {
 
     /// The Secrets window in front, with no sheet open on it; nil, and the request ended, when Secrets can't be opened on
     /// this Mac or shows another sheet. As request_secret's window does, it comes forward without taking the keyboard,
-    /// so the sheet begun on it waits for the user's click; it never activates Next Term, and when another app is in
-    /// front, the Dock icon bounces.
+    /// and the sheet begun on it hands the keyboard back, so it waits for the user's click; it never activates Next
+    /// Term, and when another app is in front, the Dock icon bounces.
     private func secretsView() -> SecretsView? {
         let store = SecretsStore.shared
         store.reloadIfChanged()
@@ -239,7 +239,7 @@ extension SecretImportAsk {
         view.managerSheet = sheet
         Self.addBanner(self, to: sheet.window)
         Self.noReturnKey(action: sheet.openButton, cancel: sheet.cancelButton)
-        sheet.begin(on: window)
+        sheet.begin(on: window, keepingKeyboard: true)
     }
 
     /// A sheet an agent asked for has no Return default, as request_secret's window has none: a Return the user meant
