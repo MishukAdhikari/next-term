@@ -200,6 +200,11 @@ final class NextTermView: LocalProcessTerminalView {
     /// clipboard (from OSC 52, a web page or a file name) could otherwise end bracketed paste early and
     /// run the rest as typed input.
     override func paste(_ sender: Any) {
+        // An image alone (a screenshot) in a tab on a server: copied there first (RemoteDrop), its path pasted.
+        if acceptsInput, let onImagePaste, let image = Self.pastedImage(NSPasteboard.general) {
+            onKeyboard?()
+            return onImagePaste(image)
+        }
         guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         onKeyboard?()
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
@@ -294,10 +299,29 @@ final class NextTermView: LocalProcessTerminalView {
         droppedPaths(sender).isEmpty ? [] : .copy
     }
 
+    /// A drop on a tab on a server: its files are copied there first (RemoteDrop), and their paths there pasted.
+    var onRemoteDrop: (([URL]) -> Void)?
+    /// ⌘V of an image alone (PNG data) in a tab on a server.
+    var onImagePaste: ((Data) -> Void)?
+
+    /// The pasteboard's image as PNG when it holds one and no text or file (a screenshot copied to the clipboard).
+    static func pastedImage(_ pasteboard: NSPasteboard) -> Data? {
+        guard pasteboard.string(forType: .string) == nil,
+              pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])?.isEmpty ?? true else { return nil }
+        if let png = pasteboard.data(forType: .png) { return png }
+        guard let tiff = pasteboard.data(forType: .tiff), let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let paths = droppedPaths(sender)
         guard !paths.isEmpty else { return false }
         onKeyboard?() // a drop is the user's input, as a key or a paste is
+        if let onRemoteDrop {
+            onRemoteDrop(paths.map { URL(fileURLWithPath: $0) })
+            window?.makeFirstResponder(self)
+            return true
+        }
         typeIn(paths.map(ShellQuote.quote).joined(separator: " ") + " ")
         window?.makeFirstResponder(self)
         return true
@@ -638,6 +662,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onWrite = { [weak self] data in self?.history.input(data) }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
+        // On a server, a drop or a pasted image is copied there first: this Mac's paths mean nothing to it.
+        if remote != nil {
+            view.onRemoteDrop = { [weak self] urls in
+                guard let self else { return }
+                RemoteDrop.drop(urls, into: self)
+            }
+            view.onImagePaste = { [weak self] png in
+                guard let self else { return }
+                RemoteDrop.pasteImage(png, into: self)
+            }
+        }
         // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
         view.passesOtherButtons = { [weak self] in !(self?.remote?.keep == .tmux && self?.isKept == true) }
 
