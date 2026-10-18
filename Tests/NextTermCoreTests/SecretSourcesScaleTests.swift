@@ -71,10 +71,8 @@ import Testing
         #expect(report?.unreadable == .tooMany)
     }
 
-    /// A browser's CSV and a Bitwarden export of 5,000 sites each: every row named and linked in seconds, so a step
-    /// that grows with the square of the rows shows here.
-    @Test func aLargeBrowserCSVAndExportAreReadInSeconds() {
-        let count = 5_000
+    /// A browser's CSV and a Bitwarden export of `count` sites.
+    private static func exports(_ count: Int) -> (csv: [UInt8], json: [UInt8]) {
         var lines: [String] = ["name,url,username,password,note"]
         var items: [String] = []
         for number in 0..<count {
@@ -83,17 +81,30 @@ import Testing
             let login = #"{"uris": [{"uri": "https://\#(site)/"}], "password": "\#(Self.value(number))"}"#
             items.append(#"{"type": 1, "name": "Site \#(number)", "login": \#(login)}"#)
         }
-        var csv: [UInt8] = Array((lines.joined(separator: "\n") + "\n").utf8)
+        let csv: [UInt8] = Array((lines.joined(separator: "\n") + "\n").utf8)
         let export = #"{"encrypted": false, "folders": [], "items": ["# + items.joined(separator: ",") + "]}"
-        var json: [UInt8] = Array(export.utf8)
+        return (csv, Array(export.utf8))
+    }
+
+    /// A browser's CSV and a Bitwarden export of 5,000 sites each: every row named and linked in seconds, so a step
+    /// that grows with the square of the rows shows here, then reported as more than the sheet lists. At the most it
+    /// lists, every row is there with its link.
+    @Test func aLargeBrowserCSVAndExportAreReadInSeconds() {
+        var (csv, json) = Self.exports(5_000)
         var browser: SourceReport?
         var bitwarden: SourceReport?
         let clock = ContinuousClock()
         let csvTime: Duration = clock.measure { browser = SecretSources.read(&csv, name: "Chrome Passwords.csv") }
         let jsonTime: Duration = clock.measure { bitwarden = SecretSources.read(&json, name: "bitwarden.json") }
         #expect(csvTime < .seconds(15) && jsonTime < .seconds(15), "\(csvTime), \(jsonTime)")
-        #expect(browser?.exportedBy == "Chrome" && browser?.rows.count == count)
-        #expect(bitwarden?.format == .bitwarden && bitwarden?.rows.count == count)
-        #expect(browser?.rows.last?.link?.url.host == "site4999.example.com")
+        #expect(browser?.exportedBy == "Chrome" && browser?.unreadable == .tooManyToList)
+        #expect(bitwarden?.format == .bitwarden && bitwarden?.unreadable == .tooManyToList)
+        let count: Int = SecretSources.maxListed
+        var (listedCSV, listedJSON) = Self.exports(count)
+        let listed: SourceReport = SecretSources.read(&listedCSV, name: "Chrome Passwords.csv")
+        let listedExport: SourceReport = SecretSources.read(&listedJSON, name: "bitwarden.json")
+        #expect(listed.exportedBy == "Chrome" && listed.rows.count == count)
+        #expect(listedExport.format == .bitwarden && listedExport.rows.count == count)
+        #expect(listed.rows.last?.link?.url.host == "site\(count - 1).example.com")
     }
 }

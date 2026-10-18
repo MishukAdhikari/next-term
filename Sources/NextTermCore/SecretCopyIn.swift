@@ -47,6 +47,15 @@ public enum SecretCopyIn {
         return planned
     }
 
+    /// The names more than one of `ticked` has, the names of the preview's ticked rows: each such row is marked, as
+    /// `plan` refuses them. One pass, however many rows the preview lists.
+    public static func repeatedNames(_ ticked: [String]) -> Set<String> {
+        var seen = Set<String>()
+        var repeated = Set<String>()
+        for name in ticked where !seen.insert(name).inserted { repeated.insert(name) }
+        return repeated
+    }
+
     /// A page from the file is the import's; one suggested from the value or the name is a suggestion.
     static func linkFrom(_ hint: SecretSources.LinkHint?) -> SecretVault.LinkFrom? {
         switch hint {
@@ -165,21 +174,28 @@ extension SecretCopyIn {
         public let replaced: [String]
         /// Keys copied in that are gone already.
         public let gone: [String]
+        /// Keys copied in that entries an MCP-config import rewrote start with: a later move used each instead of
+        /// storing a second copy, so they stay.
+        public let inUse: [String]
 
-        public init(deletes: [String], changed: [String], replaced: [String], gone: [String]) {
+        public init(deletes: [String], changed: [String], replaced: [String], gone: [String], inUse: [String] = []) {
             self.deletes = deletes
             self.changed = changed
             self.replaced = replaced
             self.gone = gone
+            self.inUse = inUse
         }
     }
 
     /// Each key the record added, found by its entry id: deleted while its value is still the one copied in and it
-    /// is an import's.
-    public static func undoPlan(_ record: Record, index: SecretVault.Index?) -> UndoPlan {
+    /// is an import's, unless `usedElsewhere` names it. That is every key the recent MCP-config moves' entries name,
+    /// as a move's own Undo keeps a key other entries still use: a move may use a key copied in that holds its value.
+    public static func undoPlan(_ record: Record, index: SecretVault.Index?,
+                                usedElsewhere: Set<String> = []) -> UndoPlan {
         var deletes: [String] = []
         var changed: [String] = []
         var gone: [String] = []
+        var inUse: [String] = []
         for added in record.added {
             let entry: SecretVault.Entry? = index?.entries.first { (entry: SecretVault.Entry) -> Bool in
                 entry.id == added.id
@@ -191,19 +207,24 @@ extension SecretCopyIn {
             // A key no import added (a record written by another process can name any key's id and date, which
             // vault.json shows unlocked) stays, as one changed since does.
             if entry.lastSet == added.valueSet, entry.origin == .import {
-                deletes.append(entry.name)
+                if usedElsewhere.contains(entry.name) {
+                    inUse.append(entry.name)
+                } else {
+                    deletes.append(entry.name)
+                }
             } else {
                 changed.append(entry.name)
             }
         }
         let replaced: [String] = record.replaced.filter { (name: String) -> Bool in index?.entry(named: name) != nil }
-        return UndoPlan(deletes: deletes, changed: changed, replaced: replaced, gone: gone)
+        return UndoPlan(deletes: deletes, changed: changed, replaced: replaced, gone: gone, inUse: inUse)
     }
 
-    /// The Undo on an unlocked vault: its plan from the vault's own index, then each key it names deleted. The file to
-    /// write is nil when nothing was deleted.
-    public static func undo(_ record: Record, in vault: SecretVault) throws -> (file: Data?, plan: UndoPlan) {
-        let plan: UndoPlan = undoPlan(record, index: vault.index)
+    /// The Undo on an unlocked vault: its plan from the vault's own index and `usedElsewhere`, as the confirm read
+    /// them, then each key it names deleted. The file to write is nil when nothing was deleted.
+    public static func undo(_ record: Record, in vault: SecretVault,
+                            usedElsewhere: Set<String> = []) throws -> (file: Data?, plan: UndoPlan) {
+        let plan: UndoPlan = undoPlan(record, index: vault.index, usedElsewhere: usedElsewhere)
         guard !plan.deletes.isEmpty else { return (nil, plan) }
         let file: Data = try vault.batch {
             for name in plan.deletes { _ = try vault.delete(name) }
@@ -274,7 +295,7 @@ extension SecretCopyIn {
 extension SecretCopyIn.UndoPlan {
     /// What Undo did, for the line under the list: what it deleted, then each key it left and why.
     public var text: String {
-        if deletes.isEmpty, changed.isEmpty, replaced.isEmpty {
+        if deletes.isEmpty, changed.isEmpty, replaced.isEmpty, inUse.isEmpty {
             guard !gone.isEmpty else { return "Nothing to delete." }
             return "Nothing to delete: \(SecretRun.keysText(gone)) \(gone.count == 1 ? "is" : "are") gone already."
         }
@@ -287,7 +308,8 @@ extension SecretCopyIn.UndoPlan {
         return lines.joined(separator: " ")
     }
 
-    /// Why the keys Undo leaves stay: changed since, or replacing a key whose old value is gone. Nil when none stay.
+    /// Why the keys Undo leaves stay: changed since, replacing a key whose old value is gone, or started with by
+    /// entries an MCP-config import rewrote. Nil when none stay.
     public var keptText: String? {
         var lines: [String] = []
         if !changed.isEmpty {
@@ -299,6 +321,11 @@ extension SecretCopyIn.UndoPlan {
             let had: String = one ? "it replaced a key you had, whose old value is gone"
                 : "they replaced keys you had, whose old values are gone"
             lines.append("\(SecretRun.keysText(replaced)) \(one ? "stays" : "stay"): \(had).")
+        }
+        if !inUse.isEmpty {
+            let one: Bool = inUse.count == 1
+            let stay: String = "\(SecretRun.keysText(inUse)) \(one ? "stays" : "stay") in Secrets"
+            lines.append(stay + ": entries an MCP-config import rewrote start with \(one ? "it" : "them").")
         }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
     }

@@ -97,8 +97,10 @@ extension SecretsView {
             case .copy(let report):
                 self.openFileImport(path: path, report: report, inGit: read.inGit, client: client)
             case .move(let source, let rest):
+                // A sheet opened while the file was read: nothing opens behind it, and the importer hears so.
+                guard !self.hasOpenSheet else { return self.sayBusy(client: client) }
                 // The MCP-config import asks its own way: the importer is told that, and goes.
-                client?.end(self.hasOpenSheet ? .busy : .moved)
+                client?.end(.moved)
                 self.openMoveImport(only: source) { [weak self] in
                     guard !rest.rows.isEmpty else { return }
                     // After the move sheet has gone: the keys outside its servers, to copy in. The sheet checks
@@ -114,15 +116,12 @@ extension SecretsView {
     }
 
     /// The copy sheet for `report`. When it closes, the list says what it did and may open Rotate… for a key. `client`
-    /// is `nxtrm secret import`'s importer, told when the sheet opens and how it ends; `busy` when another is open.
-    /// `asked` is an agent's import_secrets request: the sheet shows its banner and answers it.
+    /// is `nxtrm secret import`'s importer, told when the sheet opens and how it ends; `busy` when any sheet is open
+    /// (a sheet begun then would wait unseen behind it). `asked` is an agent's import_secrets request: the sheet shows
+    /// its banner and answers it.
     func openFileImport(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool,
                         client: SecretImportClient? = nil, asked: SecretImportAsk? = nil) {
-        guard fileImportSheet == nil, let window else {
-            client?.end(.busy)
-            asked?.end(.busy)
-            return
-        }
+        guard !hasOpenSheet, let window else { return sayBusy(client: client, asked: asked) }
         let sheet = SecretFileImportSheet(path: path, report: report, outsideServers: outsideServers, inGit: inGit,
                                           client: client) { [weak self] (ending: SecretFileImportSheet.Ending) in
             guard let self else { return }
@@ -141,6 +140,25 @@ extension SecretsView {
         }
         sheet.begin(on: window)
         if let report = sheet.report { client?.opened(report) }
+    }
+}
+
+extension SecretsView {
+    /// For a file the user picked: a sheet opened while it was read.
+    static let pickBusyLine = "Finish what\u{2019}s open here, then choose the file again."
+
+    /// Nothing opens while a sheet is open: the line under the list says who asked, and the importer or the agent's
+    /// request hears `busy`.
+    func sayBusy(client: SecretImportClient?, asked: SecretImportAsk? = nil) {
+        if client != nil {
+            say(SecretPipeImport.busyLine)
+        } else if asked != nil {
+            say(SecretImportAsk.busyLine)
+        } else {
+            say(Self.pickBusyLine)
+        }
+        client?.end(.busy)
+        asked?.end(.busy)
     }
 }
 
@@ -171,7 +189,10 @@ extension SecretsView {
             row.record.id == id
         }
         guard let record = found?.record, alert == nil else { return }
-        let plan: SecretCopyIn.UndoPlan = SecretCopyIn.undoPlan(record, index: SecretsStore.shared.index)
+        // Keys a later MCP-config move's entries start with stay, and the confirm says so.
+        let inUse: Set<String> = SecretsStore.shared.namesMovesUse()
+        let plan: SecretCopyIn.UndoPlan = SecretCopyIn.undoPlan(record, index: SecretsStore.shared.index,
+                                                                usedElsewhere: inUse)
         let count: Int = plan.deletes.count
         let alert = NSAlert()
         let keys: String = "\(count) \(count == 1 ? "key" : "keys")"
@@ -184,15 +205,16 @@ extension SecretsView {
         alert.addButton(withTitle: "Cancel")
         confirm(alert) { [weak self] in
             guard count > 0 else { return SecretsStore.shared.removeCopyIn(record) }
-            self?.undoCopy(record)
+            self?.undoCopy(record, inUse: inUse)
         }
     }
 
-    /// One Touch ID, then the keys deleted; the line under the list says what went and what stayed.
-    func undoCopy(_ record: SecretCopyIn.Record) {
+    /// One Touch ID, then the keys deleted; the line under the list says what went and what stayed. `inUse` names the
+    /// keys the confirm said stay, as other entries start with them.
+    func undoCopy(_ record: SecretCopyIn.Record, inUse: Set<String> = []) {
         Task { @MainActor in
             do {
-                let plan = try await SecretsStore.shared.performCopyInUndo(record)
+                let plan = try await SecretsStore.shared.performCopyInUndo(record, inUse: inUse)
                 self.say(plan.text)
             } catch SecretsStore.Failure.cancelled {
                 self.say("Not approved.")

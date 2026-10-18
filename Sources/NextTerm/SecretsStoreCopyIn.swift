@@ -37,14 +37,18 @@ extension SecretsStore {
     }
 
     /// One Touch ID, then the keys the copy-in added that still hold the value it copied in deleted in one unlock; the
-    /// others stay. The record goes once its Undo ran.
-    func performCopyInUndo(_ record: SecretCopyIn.Record) async throws -> SecretCopyIn.UndoPlan {
-        let plan: SecretCopyIn.UndoPlan = SecretCopyIn.undoPlan(record, index: index)
+    /// others stay, and so does any key the recent MCP-config moves' entries name, read again here and joined to
+    /// `inUse`, the names the confirm kept: deletion never takes a key the confirm said stays. The record goes once its
+    /// Undo ran.
+    func performCopyInUndo(_ record: SecretCopyIn.Record,
+                           inUse confirmed: Set<String> = []) async throws -> SecretCopyIn.UndoPlan {
+        let inUse: Set<String> = confirmed.union(namesMovesUse())
+        let plan: SecretCopyIn.UndoPlan = SecretCopyIn.undoPlan(record, index: index, usedElsewhere: inUse)
         let box = CopyInBox()
         let reason: String = SecretReason.removeCopied(max(plan.deletes.count, 1))
         try await run(makes: false, names: plan.deletes, reason: reason) {
             (vault: SecretVault, _: SymmetricKey?) -> Data? in
-            let undone = try SecretCopyIn.undo(record, in: vault)
+            let undone = try SecretCopyIn.undo(record, in: vault, usedElsewhere: inUse)
             box.plan = undone.plan
             return undone.file
         } line: { () -> SecretAudit.Line in
@@ -54,6 +58,12 @@ extension SecretsStore {
         }
         removeCopyIn(record)
         return box.plan ?? plan
+    }
+
+    /// The keys the entries of the recent MCP-config moves (the last 30 days' backups) name: a move may have used a
+    /// key a copy-in stored, so a copy-in's Undo keeps them, as a move's own Undo keeps a key other entries use.
+    func namesMovesUse() -> Set<String> {
+        Set(recentBackups().flatMap { (backup: SecretImport.EntryBackup) -> [String] in backup.names })
     }
 
     // MARK: records

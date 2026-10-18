@@ -1368,10 +1368,11 @@ public enum SecretImport {
         }
     }
 
-    /// The keys an earlier move stored whose marks show they hold `value` (no value is read), in the vault's order:
-    /// what a group of that value may use instead of a second copy. Only a move's keys (origin `import`): one added in
-    /// Settings or by an agent is the user's own. Never a write-only one: an Undo of the move that used it couldn't put
-    /// it back. The value's mark is worked out once.
+    /// The keys an earlier import stored whose marks show they hold `value` (no value is read), in the vault's order:
+    /// what a group of that value may use instead of a second copy. Only an import's keys (origin `import`), a move's or
+    /// a copy from a file's, whose Undo keeps a key a move's entries name: one added in Settings or by an agent is the
+    /// user's own. Never a write-only one: an Undo of the move that used it couldn't put it back. The value's mark is
+    /// worked out once.
     public static func reusable(holding value: SecretBytes, in index: SecretVault.Index?, mask: SecretMask) -> [String] {
         guard let index, let mark = mask.mark(of: value) else { return [] }
         let held = index.entries.filter { $0.origin == .import && !$0.writeOnly && $0.marks.contains(mark) }

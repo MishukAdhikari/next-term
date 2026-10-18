@@ -316,11 +316,12 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         refreshMove()
     }
 
-    static let reuseNote = "Already in Secrets with this value, from an earlier move: the move uses that key and stores no "
-        + "second copy."
+    static let reuseNote = "Already in Secrets with this value, from an earlier import: the move uses that key and stores "
+        + "no second copy."
 
-    /// Whether a row's name is a key an earlier move stored that holds its value already, and that the move may use
-    /// (`SecretImport.reusable`: not one added in Settings or by an agent, not a write-only one).
+    /// Whether a row's name is a key an earlier import stored (a move, or a copy from a file) that holds its value
+    /// already, and that the move may use (`SecretImport.reusable`: not one added in Settings or by an agent, not a
+    /// write-only one).
     func reusesStored(_ row: GroupRow) -> Bool {
         let reusable = SecretImport.reusable(holding: row.group.value, in: SecretsStore.shared.index, mask: .current)
         return reusable.contains(row.name)

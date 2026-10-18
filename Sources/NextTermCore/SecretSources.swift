@@ -261,6 +261,8 @@ extension SecretSources {
         case notText
         case notJSON
         case tooMany
+        /// More keys than the copy sheet lists (`maxListed`): it builds a row for each on the main thread.
+        case tooManyToList
         /// A Bitwarden export sealed by the account's key or a password.
         case encryptedExport
         /// Text or an archive that isn't the app's export it was read as.
@@ -286,6 +288,8 @@ extension SecretSources {
             case .notText: return "It isn\u{2019}t text Next Term can read."
             case .notJSON: return "It isn\u{2019}t JSON Next Term can read."
             case .tooMany: return "It holds more values than Next Term reads."
+            case .tooManyToList:
+                return "It holds more than 1,000 keys, more than Next Term lists. Import from a smaller file."
             case .encryptedExport:
                 let again = "Export again as .json (unencrypted), or use Import from Bitwarden\u{2026}"
                 return "This export is encrypted. " + again
@@ -308,6 +312,7 @@ extension SecretSources {
             case .notText: return "not text"
             case .notJSON: return "not valid JSON"
             case .tooMany: return "too many values"
+            case .tooManyToList: return "too many keys to list"
             case .encryptedExport: return "an encrypted Bitwarden export"
             case .notAnExport(let app): return "not a \(app) export"
             case .archive: return "an archive Next Term can\u{2019}t read"
@@ -327,6 +332,9 @@ extension SecretSources {
     /// The most an archive (1Password's `.1pux`) may hold: its `export.data` is read from it in memory.
     public static let maxArchiveBytes = ZipReader.maxEntryBytes
     static let maxValues = 50_000
+    /// The most keys a report lists: the copy sheet builds a row for each on the main thread, so a file of more,
+    /// picked, piped in or named by an agent, is reported as too many, as the MCP-config import reports one.
+    public static let maxListed = 1_000
 
     /// The last 4 characters of a value of 12 characters or more, counted as the preview shows them (a character of
     /// several bytes is one); nil for a shorter value, which shows as dots only.
@@ -543,7 +551,7 @@ extension SecretSources {
 
     /// The rules run over each value, trimmed (a blank or a line break at either end is a copy's, not the key's), then
     /// the links, then the file's own rules: a name set again, the same name in two sections, and a name already in the
-    /// vault.
+    /// vault. More rows than `maxListed` are too many to list: the report has none.
     static func report(_ found: [Found], format: Format, purpose: String, stored: Set<String>, now: Date,
                        exportedBy: String? = nil, agent: String? = nil, fileNote: Note? = nil) -> SourceReport {
         var rows: [SourceRow] = []
@@ -584,6 +592,11 @@ extension SecretSources {
         rows = settingAgain(rows)
         rows = sectioned(rows)
         rows = replacing(rows, stored: stored)
+        // Counted once one key's rows are merged. The rows are dropped here, off the main thread, which wipes them.
+        guard rows.count <= maxListed else {
+            return SourceReport(format: format, unreadable: .tooManyToList, purpose: purpose, exportedBy: exportedBy,
+                                agent: agent, fileNote: fileNote)
+        }
         return SourceReport(format: format, rows: rows, notKeys: notKeys, purpose: purpose, exportedBy: exportedBy,
                             agent: agent, fileNote: fileNote)
     }

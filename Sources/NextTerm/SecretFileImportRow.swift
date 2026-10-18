@@ -145,30 +145,31 @@ extension SecretFileImportSheet {
         refresh()
     }
 
-    /// Why a ticked row's name can't be saved: the name rule, or another ticked row with it. A stored key's name is
-    /// no problem: the row replaces that key.
-    func nameProblem(_ row: FileImportRow) -> String? {
-        let name: String = row.name
+    /// Why a ticked row's name can't be saved: the name rule, or another ticked row with it (`repeated`, the names
+    /// more than one ticked row has). A stored key's name is no problem: the row replaces that key.
+    func nameProblem(_ name: String, repeated: Set<String>) -> String? {
         guard StoredSecretName.isValid(name) else { return StoredSecretName.rule }
-        let twin: Bool = rows.contains { (other: FileImportRow) -> Bool in
-            other !== row && other.isTicked && other.name == name
-        }
-        return twin ? Self.sameNameNote : nil
+        return repeated.contains(name) ? Self.sameNameNote : nil
     }
 
-    /// Each row's note, the line above the rows, and whether Import… can go.
+    /// Each row's note, the line above the rows, and whether Import… can go. Each row's name is read once, and the
+    /// names ticked rows share are counted in one pass, so a refresh grows with the rows, not with their square.
     func refresh() {
         guard let report else { return }
+        let names: [String] = rows.map { (row: FileImportRow) -> String in row.name }
+        var tickedNames: [String] = []
+        for (row, name) in zip(rows, names) where row.isTicked { tickedNames.append(name) }
+        let repeated: Set<String> = SecretCopyIn.repeatedNames(tickedNames)
         var ok = true
         var ticked = 0
-        for row in rows {
+        for (row, name) in zip(rows, names) {
             let source: SourceRow = report.rows[row.index]
-            let problem: String? = row.isTicked ? nameProblem(row) : nil
+            let problem: String? = row.isTicked ? nameProblem(name, repeated: repeated) : nil
             if row.isTicked {
                 ticked += 1
                 if problem != nil { ok = false }
             }
-            let note: (text: String, warns: Bool) = noteText(source, name: row.name, problem: problem,
+            let note: (text: String, warns: Bool) = noteText(source, name: name, problem: problem,
                                                              fileNote: report.fileNote)
             row.noteLabel.stringValue = note.text
             row.noteLabel.textColor = note.warns ? .systemOrange : .secondaryLabelColor
