@@ -103,7 +103,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   title: a row each under the tab in the tab list, with how long it has waited and, with Show Folders, the
   question it asks; past six agents the idle ones fold into one row. Click a row and herdr shows that agent's
   pane; ⌥-click peeks. Window › Go to Agent… (⌃⌘A) lists every agent in every window, herdr's and your agent
-  tabs alike, what needs you first, oldest first. Each agent gets its own notice, one however many tabs show its session, with the question read
+  tabs alike, what needs you first, oldest first. Agents › Go to Next Agent Needing You (⇧⌘U) counts each of
+  herdr's agents as it counts a tab, so it goes straight to that agent's pane, and the Dock menu lists its
+  window. Each agent gets its own notice, one however many tabs show its session, with the question read
   from its own pane once herdr has read it blocked twice in a row, its choices as buttons and Reply on a finished
   one, each checked against the screen first; a notice goes away once the agent no longer needs you. An agent of a
   connected herdr server with no herdr tab gets herdr's own words and no buttons: a click opens a herdr tab there,
@@ -219,8 +221,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Dock badge and notifications** for agents that finished, in another app or in a tab you are not
   looking at, and for commands that finished while you were in another app. Settings > Notifications
   chooses which ones notify, after how long, and with or without a sound. Agents › Go to Next Agent
-  Needing You (⇧⌘U) goes to the one that has waited longest, in any window: a decision first, then a
-  failure, then a finished agent; press it again for the next. The Dock menu lists the windows waiting.
+  Needing You (⇧⌘U) goes to the one that has waited longest, in any window, herdr's agents one by one: a
+  decision first, then a failure, then a finished agent; press it again for the next. The Dock menu lists the
+  windows waiting.
 - **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
   command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code or an editor built on it (Cursor, Devin Desktop, Trae,

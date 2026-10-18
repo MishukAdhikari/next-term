@@ -2,10 +2,11 @@ import AppKit
 import NextTermCore
 
 /// Getting to an agent: Window › Go to Agent… (⌃⌘A), an agent's row in the tab list, and its notice. herdr's agents
-/// and Next Term's own agent tabs are one queue (AgentQueue), so the user never has to know which kind waits. Choosing
-/// one of herdr's agents brings the tab that shows herdr forward and asks herdr to show that agent's pane (`agent
-/// focus`, through HerdrRunner); the user chose it, so nothing asks. Built from what the last checks left: nothing runs
-/// to make it.
+/// and Next Term's own agent tabs are one queue (AgentQueue), so the user never has to know which kind waits; herdr's
+/// agents are in the index of every window too (indexAgents), where Agents › Go to Next Agent Needing You (⇧⌘U) and the
+/// Dock menu find them. Choosing one of herdr's agents brings the tab that shows herdr forward and asks herdr to show
+/// that agent's pane (`agent focus`, through HerdrRunner); the user chose it, so nothing asks. Built from what the last
+/// checks left: nothing runs to make it.
 enum HerdrAgentMenu {
     /// Some window has an agent to go to (asked as the menu bar validates, so it builds no queue).
     static var hasAgents: Bool {
@@ -41,7 +42,7 @@ enum HerdrAgentMenu {
     private static func overviewItems(_ overview: HerdrOverview) -> [AgentQueue.Item] {
         let group = AgentQueue.noHerdrTab(overview.host.name)
         return overview.tracker.rows.map { row -> AgentQueue.Item in
-            AgentQueue.Item(target: .host(id: overview.host.id, pane: row.pane), key: "herdr \(overview.place)\u{0}\(row.pane)",
+            AgentQueue.Item(target: .host(id: overview.host.id, pane: row.pane), key: herdrKey(overview.place, row.pane),
                             name: row.name, group: group, state: row.state, words: row.words, needsSince: row.needsSince,
                             workSince: row.workSince, tooltip: row.tooltip(now: TerminalTab.now) + "\nOpens a herdr tab on \(overview.host.name)")
         }
@@ -63,7 +64,7 @@ enum HerdrAgentMenu {
             for row in machine.tracker.rows {
                 let question = machine.tracker.question(row.pane)
                 items.append(AgentQueue.Item(target: .machine(tab: tab.id.uuidString, machine: machine.id, pane: row.pane),
-                                             key: "\(tab.herdrPlace) @\(machine.id)\u{0}\(row.pane)", name: row.name, group: group,
+                                             key: machineKey(tab.herdrPlace, machine.id, row.pane), name: row.name, group: group,
                                              state: row.state, words: row.words, needsSince: row.needsSince, workSince: row.workSince,
                                              question: question?.text, choices: question?.choices ?? [],
                                              tooltip: row.tooltip(now: TerminalTab.now)))
@@ -98,11 +99,63 @@ enum HerdrAgentMenu {
         return tab.herdrRows.map { row -> AgentQueue.Item in
             let question = tracker.question(row.pane)
             let name = row.disambiguation.map { "\(row.name) (\($0))" } ?? row.name
-            return AgentQueue.Item(target: .herdr(tab: tab.id.uuidString, pane: row.pane), key: "herdr \(tab.herdrPlace)\u{0}\(row.pane)",
+            return AgentQueue.Item(target: .herdr(tab: tab.id.uuidString, pane: row.pane), key: herdrKey(tab.herdrPlace, row.pane),
                                    name: name, group: group, state: row.state, words: row.words, needsSince: row.needsSince,
                                    workSince: row.workSince, onScreen: tracker.isOnScreen(row.pane), question: question?.text,
                                    choices: question?.choices ?? [], tooltip: row.tooltip(now: TerminalTab.now))
         }
+    }
+
+    /// One of herdr's agents, once however many tabs show its session: its place (host and herdr session) and pane. A
+    /// connected host's check with no herdr tab keys them as a herdr tab of the default session there does.
+    private static func herdrKey(_ place: String, _ pane: String) -> String { "herdr \(place)\u{0}\(pane)" }
+
+    /// One of the agents on a machine saved in a herdr here: a pane id is the machine's own, so the machine is in the key.
+    private static func machineKey(_ place: String, _ machine: String, _ pane: String) -> String { "\(place) @\(machine)\u{0}\(pane)" }
+
+    /// herdr's agents that `controller`'s window leads to, for the index of every window (AppDelegate.windowIndex), where
+    /// Go to Next Agent Needing You and the Dock menu find them: each herdr tab's agents, those on the machines saved in a
+    /// herdr run in a tab of it, and a connected host's with no herdr tab while this is the window a herdr tab there opens
+    /// in (holdingWindow). Keyed and aimed as their items in the queue are; only their states are read, so the window's
+    /// refresh builds no menu text.
+    static func indexAgents(of controller: TerminalWindowController) -> [WindowIndex.Agent] {
+        var agents: [WindowIndex.Agent] = []
+        for tab in controller.tabs where !tab.exited && tab.followsHerdr {
+            let tracker = tab.herdrTracker
+            let place = tab.herdrPlace
+            for row in tab.herdrRows {
+                // In herdr's view while herdr says its tab is the one shown.
+                let herdrTab = tracker.agents.first { $0.paneID == row.pane }?.tabID
+                let inView = herdrTab != nil && herdrTab == tracker.focusedTab
+                agents.append(WindowIndex.Agent(key: herdrKey(place, row.pane), target: .herdr(tab: tab.id.uuidString, pane: row.pane),
+                                                tab: tab.id, state: row.state, inView: inView))
+            }
+        }
+        for watch in LocalHerdrWatch.shared.allMachines {
+            guard let tab = watch.tab, !tab.exited, controller.tabs.contains(where: { $0 === tab }) else { continue }
+            for machine in watch.machines where machine.reachable {
+                for row in machine.tracker.rows {
+                    agents.append(WindowIndex.Agent(key: machineKey(tab.herdrPlace, machine.id, row.pane),
+                                                    target: .machine(tab: tab.id.uuidString, machine: machine.id, pane: row.pane),
+                                                    tab: tab.id, state: row.state))
+                }
+            }
+        }
+        for overview in RemotePoller.shared.overviews {
+            let host = overview.host.id
+            guard holdingWindow(of: host) === controller,
+                  let tab = controller.tabs.first(where: { !$0.exited && $0.remote?.host.id == host }) else { continue }
+            for row in overview.tracker.rows {
+                agents.append(WindowIndex.Agent(key: herdrKey(overview.place, row.pane), target: .host(id: host, pane: row.pane),
+                                                tab: tab.id, state: row.state))
+            }
+        }
+        return agents
+    }
+
+    /// The window that holds a host's tabs, where a herdr tab there opens: the first with a tab on it.
+    private static func holdingWindow(of host: String) -> TerminalWindowController? {
+        AppDelegate.shared.controllers.first { $0.tabs.contains { $0.remote?.host.id == host } }
     }
 
     /// A tab whose program is an agent (not herdr, whose agents are their own items), under This Mac or its host.
@@ -157,7 +210,7 @@ enum HerdrAgentMenu {
     /// connected (only on the user's own choice).
     static func openHerdrTab(on host: RemoteHost, focusing pane: String?) {
         let app = AppDelegate.shared!
-        let holding = app.controllers.first { $0.tabs.contains { $0.remote?.host.id == host.id } }
+        let holding = holdingWindow(of: host.id)
         let front = NSApp.keyWindow?.windowController as? TerminalWindowController
         let tab: TerminalTab
         if let controller = holding ?? front ?? app.controllers.first {

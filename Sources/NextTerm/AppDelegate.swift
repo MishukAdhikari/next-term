@@ -1349,8 +1349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        // The windows with a terminal that needs you, first: the one Go to Next Agent Needing You goes to at the top, each
-        // with its most urgent mark, as its tab bar shows it.
+        // The windows with a terminal or one of herdr's agents that needs you, first: the one Go to Next Agent Needing You
+        // goes to at the top, each with its most urgent mark, as its tab bar or tab list shows it.
         refreshWindowIndex()
         for window in windowIndex.windowsWaiting {
             guard let waiting = windowIndex.firstWaiting(in: window.id) else { continue }
@@ -1558,9 +1558,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: every window's agents
 
-    /// Every terminal window and what its terminals show (WindowIndex): for Agents › Go to Next Agent Needing You, the
-    /// Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own status, so
-    /// nothing is polled for it, and leaves it as it closes.
+    /// Every terminal window and what its terminals and herdr's agents show (WindowIndex): for Agents › Go to Next Agent
+    /// Needing You, the Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own
+    /// status and what herdr's last checks left, so nothing is polled for it, and leaves it as it closes.
     private(set) var windowIndex = WindowIndex()
 
     /// A window refreshed: its entry as it is now. A change reaches the Welcome window while it shows.
@@ -1577,12 +1577,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
     }
 
-    /// Agents › Go to Next Agent Needing You: the terminal that has waited longest for you (a decision, then a failure,
-    /// then a finished agent or command), its window brought forward and its tab or pane selected; pressed again there,
-    /// the next one, round to the first. With none, a notice says so and nothing beeps.
+    /// Agents › Go to Next Agent Needing You: the terminal or herdr agent that has waited longest for you (a decision, then
+    /// a failure, then a finished agent or command), its window brought forward and its tab or pane selected, herdr's view
+    /// moved to the agent's pane; pressed again there, the next one, round to the first. With none, a notice says so and
+    /// nothing beeps.
     @objc func goToNextAgentNeedingYou(_ sender: Any?) {
         refreshWindowIndex()
-        let key = NSApp.keyWindow?.windowController as? TerminalWindowController
+        // A panel of the window's own has the keyboard (Peek, ⌘P, a sheet): that window is still the one in front.
+        let keyWindow: NSWindow? = NSApp.keyWindow?.windowController == nil ? NSApp.mainWindow : NSApp.keyWindow
+        let key = keyWindow?.windowController as? TerminalWindowController
         // The tab in front counts as gone to only while it shows; folded, what it holds is news like any other tab's.
         let front: TerminalTab? = key?.activeTab.flatMap { (tab: TerminalTab) -> TerminalTab? in
             key?.isOnScreen(tab) == true ? tab : nil
@@ -1605,13 +1608,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controller?.window?.makeKeyAndOrderFront(nil)
     }
 
-    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does.
+    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does. One
+    /// of herdr's agents is gone to as choosing it in Go to Agent does: herdr's view moves to its pane, a server's with no
+    /// herdr tab gets one, and one on a machine saved in herdr is peeked at.
     private func go(to waiting: WindowIndex.Waiting) {
         guard let controller = controllers.first(where: { $0.indexID == waiting.window && !$0.hasClosed }),
               let tab = controller.tabs.first(where: { $0.id == waiting.tab }) else { return }
         NSApp.activate(ignoringOtherApps: true)
+        // The herdr tab that opens for a server's agent comes forward, not the tab it was reached from.
+        if let agent = waiting.agent, case .host = agent { return HerdrAgentMenu.go(to: agent) }
         controller.window?.makeKeyAndOrderFront(nil)
         controller.show(tab)
+        if let agent = waiting.agent { HerdrAgentMenu.go(to: agent) }
     }
 
     // MARK: dock badge and notifications

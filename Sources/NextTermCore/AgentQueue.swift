@@ -2,7 +2,9 @@ import Foundation
 
 /// Every agent the user may need to get to, in one queue: each of herdr's agents and each Next Term tab whose program is
 /// an agent, so the user never has to know which kind is waiting. Window › Go to Agent… is made from it; the tab list is
-/// not (its rows keep their place). Built from what the last checks left: nothing runs to make it.
+/// not (its rows keep their place). Agents › Go to Next Agent Needing You and the Dock menu go through the index of every
+/// window (WindowIndex), which holds herdr's agents by the same keys and targets. Built from what the last checks left:
+/// nothing runs to make it.
 ///
 /// Needs You comes first: what waits on a decision (a blocked herdr agent, a tab whose agent asks), then what finished
 /// and is not seen (herdr's done, what Next Term keeps unread, a tab's done mark), oldest first within each, as herdr's

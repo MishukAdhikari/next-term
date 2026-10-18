@@ -161,7 +161,8 @@ extension SelfTest {
         check(tab.status.question == "codex: Allow rm -rf build?", "herdr agents: the tab's question is the agent's own, named", tab.status.question ?? "none")
         check(tab.herdrTracker.needsYou.contains("w2:p1"), "herdr agents: the agent needing a decision counts toward the badge", "\(tab.herdrTracker.needsYou)")
 
-        // The queue: Needs You first, a digit each, the time it has waited.
+        // The queue: Needs You first, a digit each, the time it has waited. ⇧⌘U and the Dock menu find the same agent in the
+        // index of every window, as one of its own.
         let menu = HerdrAgentMenu.menu()
         let titles = agentItems(menu).map(\.title)
         check(titles.first?.hasPrefix("codex — Needs your decision") == true && titles.count == 2 && agentItems(menu).first?.keyEquivalent == "1",
@@ -170,6 +171,17 @@ extension SelfTest {
         let waited = HerdrAgentMenu.queue().needsYou.first
         check(waited?.menuTitle(now: (waited?.needsSince ?? 0) + 70).hasSuffix("waiting 1 min") == true,
               "herdr agents: an item says how long its agent has waited", waited?.menuTitle(now: (waited?.needsSince ?? 0) + 70) ?? "none")
+        app.refreshWindowIndex()
+        let first = app.windowIndex.waiting.first
+        let indexed = app.windowIndex.window(c.indexID)
+        check(first?.agent == .herdr(tab: tab.id.uuidString, pane: "w2:p1") && first?.window == c.indexID && (indexed?.marks.attention ?? 0) >= 1,
+              "herdr agents: the index of every window has codex waiting first, as an agent of its own", "\(first as Any)")
+        let dock = app.applicationDockMenu(NSApp)?.items ?? []
+        check(dock.first?.tag == c.indexID && dock.first?.title == indexed?.title, "herdr agents: the Dock menu lists codex's window first",
+              dock.map(\.title).joined(separator: "; "))
+        clearCalls()
+        app.goToNextAgentNeedingYou(nil)
+        check(await wait(10) { read().contains("agent focus w2:p1|") }, "herdr agents: ⇧⌘U goes to the agent that has waited longest", read())
         c.show(other)
 
         // Answering from the notice: the second choice, through a read before the keys and one before Return.

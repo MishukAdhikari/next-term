@@ -211,7 +211,7 @@ public struct HerdrAgents: Equatable, Sendable {
 
     // MARK: seen, unread and quiet
 
-    /// The user chose the agent (its row, Go to Agent, its notice): Next Term's unread flag clears.
+    /// The user chose the agent (its row, Go to Agent, its notice, ⇧⌘U, the Dock menu): Next Term's unread flag clears.
     /// herdr's own done clears when herdr shows it.
     public mutating func seen(_ pane: String) {
         guard var kept = followed[pane], kept.unread else { return }

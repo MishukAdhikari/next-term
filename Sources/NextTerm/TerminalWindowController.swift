@@ -1013,17 +1013,19 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// What the index of every window holds for this one (AppDelegate.windowIndex): its name and title, and its
-    /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status.
+    /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status, with herdr's
+    /// agents one by one, as the tab list shows them (HerdrAgentMenu.indexAgents).
     var indexEntry: WindowIndex.Window {
         let terminals: [WindowIndex.Tab] = tabs.map { (tab: TerminalTab) -> WindowIndex.Tab in
             let title: String = AgentTitle.withoutSpinnerFrame(tab.title)
             // A lost connection cleared the tab's status: what an agent asked there may still wait on the host.
             let lost: Bool = tab.remoteLink == .disconnected
-            return WindowIndex.Tab(id: tab.id, title: title, state: tab.status.state, disconnected: lost)
+            return WindowIndex.Tab(id: tab.id, title: title, state: tab.status.state, disconnected: lost, showsAgents: tab.followsHerdr)
         }
         let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
         return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,
-                                  lastKey: lastKey, tabs: terminals, destination: destination)
+                                  lastKey: lastKey, tabs: terminals, destination: destination,
+                                  agents: HerdrAgentMenu.indexAgents(of: self))
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
