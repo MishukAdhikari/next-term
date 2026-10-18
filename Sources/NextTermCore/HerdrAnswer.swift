@@ -3,8 +3,9 @@ import Foundation
 /// Answering a blocked herdr agent's question, the one way for every place that does it (MCP's answer_agent, Peek's
 /// buttons, Go to Agent's Answer submenu, a notice's buttons): from what the agent's pane shows when read again just
 /// before, the keys that move to the choice; then, from a second read after them, whether Return goes, the agent took
-/// the answer already, or nothing more is typed. The question is checked by its id, so an answer meant for one question
-/// never lands on the next. Pure: the caller reads the pane and sends the keys (through herdr's `agent send-keys`).
+/// the answer already, or nothing more is typed. The question is checked by its id before any key, so an answer meant
+/// for one question never lands on the next; after the moves, by its words on screen (`next`). Pure: the caller reads
+/// the pane and sends the keys (through herdr's `agent send-keys`).
 public enum HerdrAnswer {
     /// What a read of the agent's pane found: its question's id and words, and the choices drawn under it.
     public struct Asked: Equatable, Sendable {
@@ -59,15 +60,17 @@ public enum HerdrAnswer {
         public var label: String
         public var moves: [String]
         public var style: AgentMenu.Style
-        /// The question it answers.
+        /// The question it answers, and its words.
         public var questionID: String
+        public var question: String
 
-        public init(index: Int, label: String, moves: [String], style: AgentMenu.Style, questionID: String) {
+        public init(index: Int, label: String, moves: [String], style: AgentMenu.Style, questionID: String, question: String) {
             self.index = index
             self.label = label
             self.moves = moves
             self.style = style
             self.questionID = questionID
+            self.question = question
         }
     }
 
@@ -84,7 +87,7 @@ public enum HerdrAnswer {
         }
         guard let keys = menu.keys(toPick: index) else { return .failure(.noCursor(choice: menu.choices[index])) }
         return .success(Plan(index: index, label: menu.choices[index], moves: Array(keys.dropLast()), style: menu.style,
-                             questionID: asked.id))
+                             questionID: asked.id, question: asked.text))
     }
 
     /// What comes after the moves.
@@ -96,16 +99,22 @@ public enum HerdrAnswer {
         case refused(Refusal)
     }
 
-    /// From what the pane shows after the moves (`now`): still the same question, and in a list the cursor on the
-    /// choice, so Return goes; a y/n prompt whose question went away (or gave way to the next) took its letter; anything
-    /// else types nothing more. With no moves (the cursor was on the choice), Return goes at once.
-    public static func next(_ plan: Plan, now: Asked?) -> Step {
+    /// From what the pane shows after the moves (`shown`: the question read from it and the choices under it, nil when it
+    /// asks nothing, or herdr no longer says the agent is blocked): still the same question, and in a list the cursor on
+    /// the choice, so Return goes; a y/n prompt whose question went away (or gave way to the next) took its letter;
+    /// anything else types nothing more. With no moves (the cursor was on the choice), Return goes at once.
+    ///
+    /// The same question is the one in the same words. The moves alone answer no list, and a y/n prompt that took its
+    /// letter shows another question or none, so the words tell. Not its id: the keys bring a change herdr has not
+    /// counted yet, so a question read now would be filed under the count of the one being answered, and once herdr's
+    /// count catches up the same question is read again under a new id.
+    public static func next(_ plan: Plan, shown: (text: String, menu: AgentMenu?)?) -> Step {
         if plan.moves.isEmpty { return .pressReturn }
-        let same = now?.id == plan.questionID
+        let same = shown?.text == plan.question
         if plan.style == .yesNo, !same { return .answered }
-        guard let now else { return .refused(.wentAway) }
+        guard let shown else { return .refused(.wentAway) }
         guard same else { return .refused(.changedMeanwhile) }
-        if plan.style == .list, now.menu?.highlighted != plan.index { return .refused(.cursorElsewhere(choice: plan.label)) }
+        if plan.style == .list, shown.menu?.highlighted != plan.index { return .refused(.cursorElsewhere(choice: plan.label)) }
         return .pressReturn
     }
 }

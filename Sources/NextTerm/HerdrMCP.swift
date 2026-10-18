@@ -389,11 +389,12 @@ enum HerdrMCP {
             guard !plan.moves.isEmpty else { return finish() }
             // Still the same question, and in a list the cursor on the choice. herdr's send-keys only hands the keys to
             // the pane, so the pane is read a moment after, and a list's cursor up to 10 times more, as answering in a
-            // tab waits for its screen.
+            // tab waits for its screen. What it shows is not the tracker's: herdr has not counted the change the keys
+            // bring yet (HerdrAnswer.next).
             func confirm(_ tries: Int) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    Self.asked(ref) { again in
-                        switch HerdrAnswer.next(plan, now: again) {
+                    Self.shown(ref) { shown in
+                        switch HerdrAnswer.next(plan, shown: shown) {
                         case .pressReturn: finish()
                         case .answered: done(.answered(label: plan.label, index: plan.index))
                         case .refused(.cursorElsewhere) where tries < 10: confirm(tries + 1)
@@ -406,6 +407,15 @@ enum HerdrMCP {
                 if let problem = problem(result, pane: pane) { return done(.failed(problem)) }
                 confirm(0)
             }
+        }
+    }
+
+    /// The question the agent's pane shows now and the choices under it, read again; nil when it shows none, or herdr
+    /// no longer says the agent is blocked. The tracker is not told.
+    private static func shown(_ ref: HerdrAgentRef, _ body: @escaping ((text: String, menu: AgentMenu?)?) -> Void) {
+        ref.run(.read(pane: ref.pane, source: .visible, lines: nil)) { result in
+            guard case .text(let text) = result, ref.agent?.status == .blocked else { return body(nil) }
+            body(HerdrAgents.question(onScreen: text))
         }
     }
 

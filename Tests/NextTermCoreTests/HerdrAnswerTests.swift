@@ -12,27 +12,44 @@ import Testing
         HerdrAnswer.Asked(id: id, text: text ?? menu?.question ?? "?", menu: menu)
     }
 
+    /// What a read after the moves shows: the menu's question and the menu.
+    func shown(_ menu: AgentMenu, text: String? = nil) -> (text: String, menu: AgentMenu?) { (text ?? menu.question, menu) }
+
     @Test func aListIsAnsweredWithArrowsThenAReadThenReturn() throws {
         let plan = try HerdrAnswer.plan(asked(list), expected: "q_1", choice: 3, answer: nil).get()
         #expect(plan.moves == ["down", "down"] && plan.index == 2 && plan.label == "No" && plan.style == .list)
+        #expect(plan.question == list.question && plan.questionID == "q_1")
         // The cursor reached it, on the same question: Return.
         let there = AgentMenu(question: list.question, style: .list, choices: list.choices, highlighted: 2)
-        #expect(HerdrAnswer.next(plan, now: asked(there)) == .pressReturn)
+        #expect(HerdrAnswer.next(plan, shown: shown(there)) == .pressReturn)
         // It did not, or the question changed or went away meanwhile: nothing more.
-        #expect(HerdrAnswer.next(plan, now: asked(list)) == .refused(.cursorElsewhere(choice: "No")))
-        #expect(HerdrAnswer.next(plan, now: asked(there, id: "q_2")) == .refused(.changedMeanwhile))
-        #expect(HerdrAnswer.next(plan, now: nil) == .refused(.wentAway))
+        #expect(HerdrAnswer.next(plan, shown: shown(list)) == .refused(.cursorElsewhere(choice: "No")))
+        let other = AgentMenu(question: "Do you want to run npm test?", style: .list, choices: list.choices, highlighted: 2)
+        #expect(HerdrAnswer.next(plan, shown: shown(other)) == .refused(.changedMeanwhile))
+        #expect(HerdrAnswer.next(plan, shown: nil) == .refused(.wentAway))
         // The cursor on the choice already: Return at once, with no read between.
         let first = try HerdrAnswer.plan(asked(list), expected: "q_1", choice: nil, answer: "yes").get()
-        #expect(first.moves.isEmpty && HerdrAnswer.next(first, now: nil) == .pressReturn)
+        #expect(first.moves.isEmpty && HerdrAnswer.next(first, shown: nil) == .pressReturn)
+    }
+
+    /// The keys bring a change herdr counts only at its next check, so a question read after them is filed under the
+    /// count of the one being answered, and read again under a new id once herdr's count catches up. The moves alone
+    /// answer no list: the same words after them are the same question, whatever its id is by then.
+    @Test func afterTheMovesTheSameWordsAreTheSameQuestion() throws {
+        let plan = try HerdrAnswer.plan(asked(list, id: "q_1"), expected: "q_1", choice: 2, answer: nil).get()
+        let there = AgentMenu(question: list.question, style: .list, choices: list.choices, highlighted: 1)
+        #expect(HerdrAnswer.next(plan, shown: shown(there)) == .pressReturn)
+        // Before any key, an id that is not the one the caller saw still types nothing.
+        #expect(HerdrAnswer.plan(asked(list, id: "q_2"), expected: "q_1", choice: 2, answer: nil)
+            == .failure(.changed(question: list.question, id: "q_2")))
     }
 
     @Test func aYesOrNoIsItsLetterAndOneThatTookItIsAnswered() throws {
         let plan = try HerdrAnswer.plan(asked(yesNo), expected: "q_1", choice: 2, answer: nil).get()
         #expect(plan.moves == ["n"] && plan.label == "No")
-        #expect(HerdrAnswer.next(plan, now: asked(yesNo)) == .pressReturn)
-        #expect(HerdrAnswer.next(plan, now: nil) == .answered)
-        #expect(HerdrAnswer.next(plan, now: asked(list, id: "q_9")) == .answered)
+        #expect(HerdrAnswer.next(plan, shown: shown(yesNo)) == .pressReturn)
+        #expect(HerdrAnswer.next(plan, shown: nil) == .answered)
+        #expect(HerdrAnswer.next(plan, shown: shown(list)) == .answered)
         #expect(try HerdrAnswer.plan(asked(yesNo), expected: "q_1", choice: nil, answer: "y").get().moves == ["y"])
     }
 
