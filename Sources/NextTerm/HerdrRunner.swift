@@ -55,8 +55,9 @@ enum HerdrRunner {
     /// the text as one argument; an attempt whose verb this herdr lacks gives way to the next.
     private static func runHere(_ command: HerdrCommand, client: LocalHerdrClient, machine: String?, input: String?,
                                 timeout: TimeInterval, completion: @escaping (HerdrResult, String?) -> Void) {
-        // A machine has its own herdr session: the client's is not passed with it, which herdr would refuse.
-        let session = machine == nil ? client.session : nil
+        // A machine has its own herdr session, and herdr's list of machines is no session's: the client's session is not
+        // passed with either, which herdr would refuse.
+        let session = machine == nil && command != .machines ? client.session : nil
         guard let attempts = command.argv(executable: client.executable, session: session, machine: machine, text: input) else {
             let refusal = command.refusal(session: session, machine: machine) ?? "That herdr command cannot be built."
             return completion(.error(code: "", message: refusal), nil)

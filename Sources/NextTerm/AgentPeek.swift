@@ -45,8 +45,9 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
     private let popover = NSPopover()
     private let content = PeekView()
     private let header = NSTextField(labelWithString: "")
-    private let scroll = NSScrollView()
-    private let text = NSTextView()
+    /// AppKit's own scrolling text view: the text view sized to its clip view, growing down with its text.
+    private let scroll = NSTextView.scrollableTextView()
+    private var text: NSTextView { scroll.documentView as? NSTextView ?? NSTextView() }
     private let question = NSTextField(wrappingLabelWithString: "")
     private let choices = NSStackView()
     private let field = NSTextField()
@@ -135,11 +136,7 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         text.textColor = Theme.text
         text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         text.textContainerInset = NSSize(width: 6, height: 6)
-        text.isVerticallyResizable = true
-        text.autoresizingMask = [.width]
-        text.textContainer?.widthTracksTextView = true
         text.setAccessibilityLabel("The agent's recent text")
-        scroll.documentView = text
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = true
