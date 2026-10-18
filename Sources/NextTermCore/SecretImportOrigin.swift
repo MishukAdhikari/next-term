@@ -1,8 +1,8 @@
 import Foundation
 
 // What the import sheet says about where `nxtrm secret import`'s keys came from, and how to end the password manager's
-// session after (R22). It goes by the process tree and by the line the tab's shell said it ran, never by the tab alone
-// and never by what was piped.
+// session after. It goes by the process tree and by the line the tab's shell said it ran, never by the tab alone and
+// never by what was piped.
 
 extension SecretImportPipe {
     public static let agentWarning = "An agent ran this command. It may have seen these keys."
@@ -48,7 +48,7 @@ extension SecretImportPreset {
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// R22's done line, on how to end the password manager's session, for keys piped in as `format`:
+    /// The done line on how to end the password manager's session, for keys piped in as `format`:
     /// - 1Password: its authorization lasts until the tab closes, so the line needs a tab, and a known command that
     ///   ran `op`;
     /// - Bitwarden: locked again when the line, as the shell said it ran, ends with `bw lock`; still unlocked when it

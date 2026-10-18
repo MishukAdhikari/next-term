@@ -4,8 +4,8 @@ import NextTermCore
 /// The copy sheet for keys piped into `nxtrm secret import`: there is no file, so nothing goes to the Trash and no line
 /// says a file still holds them. The header names a preset only when its tab ran its line as typed, else the tab by its
 /// place; under it, a warning when an agent ran the command or no tab did. The done view says how to end the password
-/// manager's session, going by the line the tab's shell said it ran (R22): Bitwarden is locked again when that line
-/// ends with bw lock, and 1Password's authorization lasts until its tab closes, which Close Tab does with the tab's own
+/// manager's session, going by the line the tab's shell said it ran: Bitwarden is locked again when that line ends
+/// with bw lock, and 1Password's authorization lasts until its tab closes, which Close Tab does with the tab's own
 /// close rules (never an agent's tab).
 extension SecretFileImportSheet {
     static let closeTabTitle = "Close Tab"

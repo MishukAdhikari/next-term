@@ -151,7 +151,7 @@ import Testing
         let inHours = F.jwt(expires: Self.now.addingTimeInterval(5 * 3600))
         let nextYear = F.jwt(expires: Self.now.addingTimeInterval(365 * 86_400))
         #expect(SecretSources.jwtExpiry(hourAgo) == Self.now.addingTimeInterval(-3600))
-        // Past its expiry, a token reads as one that expires within hours, as R15 and AE8 say.
+        // Past its expiry, a token reads as one that expires within hours, and starts unticked.
         #expect(Self.note("SERVICE_API_KEY", hourAgo) == .shortLived)
         #expect(!Self.ticked("SERVICE_API_KEY", hourAgo))
         #expect(Self.note("SERVICE_API_KEY", inHours) == .shortLived)

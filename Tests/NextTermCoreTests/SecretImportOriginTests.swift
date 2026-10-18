@@ -3,7 +3,7 @@ import Testing
 @testable import NextTermCore
 
 /// Where `nxtrm secret import`'s keys came from, as the sheet says it: who may have seen them, whether the tab ran a
-/// preset's line as typed, and how to end the password manager's session after (R22). Commands here are made up.
+/// preset's line as typed, and how to end the password manager's session after. Commands here are made up.
 @Suite struct SecretImportOriginTests {
     typealias P = SecretImportPipe
     typealias Preset = SecretImportPreset

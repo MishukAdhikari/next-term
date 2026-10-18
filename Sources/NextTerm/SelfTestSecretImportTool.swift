@@ -3,7 +3,7 @@ import NextTermCore
 
 #if DEBUG
 /// import_secrets, on the self-test's temporary vault and files under its own folder only, called in-process as a local
-/// agent's call. AE9: the file's sheet opens with the banner, a key the vault has starts unticked, two rows go in under
+/// agent's call. The file's sheet opens with the banner, a key the vault has starts unticked, two rows go in under
 /// the stand-in presence check, and the answer is names and counts. Refusals open nothing. No password manager's CLI
 /// runs: a source's sheet is cancelled. Every value is made up at run time.
 extension SelfTest {
@@ -51,8 +51,8 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    /// AE9, on the run's own names: the vault has the Stripe key, so its row starts unticked; the user imports the
-    /// other two and the answer names them, with counts and nothing more.
+    /// An agent's import of a `.env.local`, on the run's own names: the vault has the Stripe key, so its row starts
+    /// unticked; the user imports the other two and the answer names them, with counts and nothing more.
     static func secretImportToolFileCheck(_ view: SecretsView, env: URL) async {
         let store = SecretsStore.shared
         let stripe: String = secretsValue("sk_" + "test_")

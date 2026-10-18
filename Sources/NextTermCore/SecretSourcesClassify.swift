@@ -153,8 +153,8 @@ extension SecretSources {
     }
 
     /// The note a key starts unticked with, first match first: a token past its expiry, safe to expose, short-lived,
-    /// sent to browsers. A token past its expiry reads as short-lived, as R15 says: `vercel env pull`'s OIDC token is
-    /// one 12 hours on (AE8).
+    /// sent to browsers. A token past its expiry reads as short-lived too, so a file pulled a while ago gets the same
+    /// note: `vercel env pull`'s OIDC token is one 12 hours on.
     static func untickingNote(name: String, value: String, now: Date) -> Note? {
         let expiry: Date? = jwtExpiry(value)
         if let expiry, expiry <= now { return .shortLived }

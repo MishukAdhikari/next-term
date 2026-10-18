@@ -7,8 +7,8 @@ import Foundation
 // report goes. A row's value, its place in the file and its last characters are for the preview on the Mac only: what
 // an agent learns is `answer(for:)`, names and counts.
 
-/// One key found in a file: what the preview lists, with its tick, note and link. The preview edits its name and tick
-/// (R16); it never ticks a row with a refusal.
+/// One key found in a file: what the preview lists, with its tick, note and link. The preview edits its name and tick;
+/// it never ticks a row with a refusal.
 public struct SourceRow: Sendable, GroupableValue {
     /// The name it would be stored under: a valid key name, editable in the preview.
     public var name: String
@@ -329,7 +329,7 @@ extension SecretSources {
     static let maxValues = 50_000
 
     /// The last 4 characters of a value of 12 characters or more, counted as the preview shows them (a character of
-    /// several bytes is one); nil for a shorter value, which shows as dots only (R25).
+    /// several bytes is one); nil for a shorter value, which shows as dots only.
     static func lastFour(of text: String) -> String? {
         guard text.utf8.count >= 12, text.count >= 12 else { return nil }
         return String(text.suffix(4))
@@ -589,7 +589,7 @@ extension SecretSources {
     }
 
     /// Each row's link: the source's own (`sources`, by row) when it passes the link rules and holds no value in the
-    /// file, any row's, in a form masking knows (R3); else the page the value's head or the name suggests. A row in
+    /// file, any row's, in a form masking knows; else the page the value's head or the name suggests. A row in
     /// `unlinked` (a whole credential file) gets none. The vault's values aren't known here: saving checks against them.
     static func linked(_ rows: [SourceRow], sources: [String?], unlinked: Set<Int>) -> [SourceRow] {
         let hasSource: Bool = sources.contains { (text: String?) -> Bool in text != nil }

@@ -132,7 +132,7 @@ import Testing
         #expect(Self.check(data + env, home) == .success(env))
     }
 
-    /// AE9's banner: who asks, from where, and the agent's reason in its own words.
+    /// The banner on an agent's import: who asks, from where, and the agent's reason in its own words.
     @Test func theBannerNamesTheAskerTheSourceAndTheReason() {
         let asker: String = SecretSources.askerText(agent: "Claude Code", tab: "tab 2", project: "/Users/someone/Code/shop-web")
         #expect(asker == "Claude Code in shop-web")
