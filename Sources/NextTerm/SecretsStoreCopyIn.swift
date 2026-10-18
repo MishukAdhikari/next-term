@@ -39,7 +39,8 @@ extension SecretsStore {
     /// One Touch ID, then the keys the copy-in added that still hold the value it copied in deleted in one unlock; the
     /// others stay, and so does any key the recent MCP-config moves' entries name, read again here and joined to
     /// `inUse`, the names the confirm kept: deletion never takes a key the confirm said stays. The record goes once its
-    /// Undo ran.
+    /// Undo ran, unless it kept a key only for those entries: then the record stays for that key alone
+    /// (`keepCopyIn`), so its Undo can delete it once that move is undone.
     func performCopyInUndo(_ record: SecretCopyIn.Record,
                            inUse confirmed: Set<String> = []) async throws -> SecretCopyIn.UndoPlan {
         let inUse: Set<String> = confirmed.union(namesMovesUse())
@@ -50,14 +51,24 @@ extension SecretsStore {
             (vault: SecretVault, _: SymmetricKey?) -> Data? in
             let undone = try SecretCopyIn.undo(record, in: vault, usedElsewhere: inUse)
             box.plan = undone.plan
+            box.record = undone.left
             return undone.file
         } line: { () -> SecretAudit.Line in
             let deleted: [String] = box.plan?.deletes ?? []
             let outcome: String = "deleted \(deleted.count) \(deleted.count == 1 ? "key" : "keys") an import copied in"
             return SecretAudit.Line(event: .undo, names: deleted, outcome: outcome)
         }
-        removeCopyIn(record)
+        keepCopyIn(box.record, of: record)
         return box.plan ?? plan
+    }
+
+    /// After a copy-in's Undo: `left`, the record for the keys it kept only for a move's entries, written over the
+    /// record under its id; with none, the record goes. A record that can't be written is left as it was, and the
+    /// next Undo plans from it again: the keys deleted now are gone already then.
+    func keepCopyIn(_ left: SecretCopyIn.Record?, of record: SecretCopyIn.Record) {
+        guard let left, left.id == record.id else { return removeCopyIn(record) }
+        try? saveCopyIn(left)
+        NotificationCenter.default.post(name: Self.changed, object: self)
     }
 
     /// The keys the entries of the recent MCP-config moves (the last 30 days' backups) name: a move may have used a

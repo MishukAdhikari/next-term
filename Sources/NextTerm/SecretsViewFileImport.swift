@@ -207,16 +207,25 @@ extension SecretsView {
         let plan: SecretCopyIn.UndoPlan = SecretCopyIn.undoPlan(record, index: SecretsStore.shared.index,
                                                                 usedElsewhere: inUse)
         let count: Int = plan.deletes.count
+        // Nothing to delete while a move's entries start with a key it added: the record stays, so this Undo can delete
+        // that key once the move is undone.
+        let waits: Bool = count == 0 && !plan.inUse.isEmpty
         let alert = NSAlert()
         let keys: String = "\(count) \(count == 1 ? "key" : "keys")"
-        alert.messageText = count == 0 ? "Nothing to delete" : "Delete \(keys) this import copied in?"
+        let none: String = waits ? "Nothing to delete yet" : "Nothing to delete"
+        alert.messageText = count == 0 ? none : "Delete \(keys) this import copied in?"
         var lines: [String] = plan.deletes.map { (name: String) -> String in "\u{2022} " + name }
         if let kept = plan.keptText { lines.append("\n" + kept) }
         lines.append("\nThe file they came from isn\u{2019}t changed.")
         alert.informativeText = lines.joined(separator: "\n")
-        alert.addButton(withTitle: count == 0 ? "Remove from List" : "Delete Keys").hasDestructiveAction = count > 0
-        alert.addButton(withTitle: "Cancel")
+        if waits {
+            alert.addButton(withTitle: "OK")
+        } else {
+            alert.addButton(withTitle: count == 0 ? "Remove from List" : "Delete Keys").hasDestructiveAction = count > 0
+            alert.addButton(withTitle: "Cancel")
+        }
         confirm(alert) { [weak self] in
+            guard !waits else { return }
             guard count > 0 else { return SecretsStore.shared.removeCopyIn(record) }
             self?.undoCopy(record, inUse: inUse)
         }

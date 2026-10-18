@@ -221,15 +221,38 @@ extension SecretCopyIn {
     }
 
     /// The Undo on an unlocked vault: its plan from the vault's own index and `usedElsewhere`, as the confirm read
-    /// them, then each key it names deleted. The file to write is nil when nothing was deleted.
+    /// them, then each key it names deleted. The file to write is nil when nothing was deleted; `left` is the record
+    /// to keep in its place, nil when the record goes.
     public static func undo(_ record: Record, in vault: SecretVault,
-                            usedElsewhere: Set<String> = []) throws -> (file: Data?, plan: UndoPlan) {
+                            usedElsewhere: Set<String> = []) throws -> (file: Data?, plan: UndoPlan, left: Record?) {
         let plan: UndoPlan = undoPlan(record, index: vault.index, usedElsewhere: usedElsewhere)
-        guard !plan.deletes.isEmpty else { return (nil, plan) }
-        let file: Data = try vault.batch {
-            for name in plan.deletes { _ = try vault.delete(name) }
+        var file: Data?
+        if !plan.deletes.isEmpty {
+            file = try vault.batch {
+                for name in plan.deletes { _ = try vault.delete(name) }
+            }
         }
-        return (file, plan)
+        return (file, plan, left(record, after: plan, index: vault.index))
+    }
+
+    /// What stays of `record` once its Undo ran: the keys it added that the Undo kept only because entries an
+    /// MCP-config import rewrote start with them, named as they are now, under the same id and file, so Undo can
+    /// delete them once that import is undone. Nil when the Undo kept none so: the record goes. Keys that changed
+    /// since, or that it replaced, stay for good and leave the record.
+    public static func left(_ record: Record, after plan: UndoPlan, index: SecretVault.Index?) -> Record? {
+        guard !plan.inUse.isEmpty, let index else { return nil }
+        let inUse: Set<String> = Set(plan.inUse)
+        var kept: [Record.Added] = []
+        for added in record.added {
+            let entry: SecretVault.Entry? = index.entries.first { (entry: SecretVault.Entry) -> Bool in
+                entry.id == added.id
+            }
+            guard let entry, inUse.contains(entry.name) else { continue }
+            kept.append(Record.Added(name: entry.name, id: added.id, valueSet: added.valueSet))
+        }
+        guard !kept.isEmpty else { return nil }
+        return Record(id: record.id, date: record.date, source: record.source, format: record.format, added: kept,
+                      replaced: [])
     }
 }
 
@@ -325,7 +348,9 @@ extension SecretCopyIn.UndoPlan {
         if !inUse.isEmpty {
             let one: Bool = inUse.count == 1
             let stay: String = "\(SecretRun.keysText(inUse)) \(one ? "stays" : "stay") in Secrets"
-            lines.append(stay + ": entries an MCP-config import rewrote start with \(one ? "it" : "them").")
+            let them: String = one ? "it" : "them"
+            lines.append(stay + ": entries an MCP-config import rewrote start with \(them). Once that import is undone, "
+                + "Undo here deletes \(them).")
         }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
     }
