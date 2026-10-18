@@ -11,9 +11,10 @@ extension SecretImportPipe {
 
     /// Who ran the importer, as the process tree and the tabs tell it.
     public enum Runner: Equatable, Sendable {
-        /// The user, in a tab of Next Term's with no agent above the importer.
+        /// The user, in a tab of Next Term's with no agent above the importer, and none driving that tab.
         case user
-        /// An agent runs above the importer.
+        /// An agent runs above the importer, or drives the tab it runs in: it opened that tab, or typed or pressed keys
+        /// there, and the user hasn't typed in it since.
         case agent
         /// No tab of Next Term's is above it: a process that left its tab, as `( … &)`, nohup or setsid make it, or one
         /// run in another terminal app.
@@ -30,16 +31,19 @@ extension SecretImportPipe {
         public var mayStartMove: Bool { self == .user }
     }
 
-    /// The importer's runner: an agent above it, else the user when it runs in a tab of Next Term's, else untraced.
-    public static func runner(agent: String?, inTab: Bool) -> Runner {
+    /// The importer's runner: an agent above it; else untraced when no tab of Next Term's is above it; else an agent
+    /// when one drives that tab (`driven`), as a line it typed there runs with no agent above it; else the user.
+    public static func runner(agent: String?, inTab: Bool, driven: Bool = false) -> Runner {
         if agent != nil { return .agent }
-        return inTab ? .user : .untraced
+        guard inTab else { return .untraced }
+        return driven ? .agent : .user
     }
 
-    /// The warning under the sheet's header: an agent above the importer, or no tab of Next Term's above it (a process
-    /// that left its tab, as `( … &)` does, or one run outside Next Term); nil in a tab with no agent above it.
-    public static func originWarning(agent: String?, inTab: Bool) -> String? {
-        switch runner(agent: agent, inTab: inTab) {
+    /// The warning under the sheet's header: an agent above the importer or driving its tab, or no tab of Next Term's
+    /// above it (a process that left its tab, as `( … &)` does, or one run outside Next Term); nil in a tab of the
+    /// user's own with no agent above the importer.
+    public static func originWarning(agent: String?, inTab: Bool, driven: Bool = false) -> String? {
+        switch runner(agent: agent, inTab: inTab, driven: driven) {
         case .agent: return agentWarning
         case .untraced: return untracedWarning
         case .user: return nil

@@ -164,7 +164,8 @@ extension SecretsView {
             }
         }
         fileImportSheet = sheet
-        // nxtrm secret import run by an agent, or by a process no tab of Next Term's is above, is handled as an agent's.
+        // nxtrm secret import run by an agent, typed by one into a tab it drives, or run by a process no tab of Next
+        // Term's is above, is handled as an agent's.
         let runner: SecretImportPipe.Runner? = client?.origin.runner
         let agentRan: Bool = runner.map { (who: SecretImportPipe.Runner) -> Bool in !who.isUser } ?? false
         if let asked {

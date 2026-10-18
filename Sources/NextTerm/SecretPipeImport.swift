@@ -4,8 +4,8 @@ import NextTermCore
 /// `nxtrm secret import`'s preview, on the main thread: the Secrets window comes forward with the copy sheet for the
 /// piped keys, or for the file given (as Import From › A File… reads one), and the importer hears how far it got and
 /// how it ended, in counts. The sheet's header says where the pipe came from: the tab above the importer and, when an
-/// agent runs above it or no tab is, that an agent may have seen the keys. Busy and refused are decided first, before
-/// Secrets comes forward and before the keys are sent.
+/// agent runs above it, drives that tab or no tab is above it, that an agent may have seen the keys. Busy and refused
+/// are decided first, before Secrets comes forward and before the keys are sent.
 @MainActor
 enum SecretPipeImport {
     /// The name piped keys are read under: their purpose is "From standard input" unless a manager's JSON names its app.
@@ -20,6 +20,9 @@ enum SecretPipeImport {
         var agent: String?
         /// The tab the importer runs in.
         var tabID: UUID?
+        /// An agent drives that tab: it opened the tab, or typed or pressed keys there, and the user hasn't typed in it
+        /// since. A line it typed there runs with no agent above it, and is still the agent's.
+        var driven = false
         /// The preset whose line that tab got (Import From › 1Password…), when it is one of theirs.
         var tabPreset: SecretImportPreset?
         /// The line the tab's shell said it is running; nil when its shell doesn't say (only zsh's integration does).
@@ -29,12 +32,14 @@ enum SecretPipeImport {
         /// "tab 2 of rag-api".
         var place: String?
 
-        /// The warning under the sheet's header: an agent ran it, or no tab did.
-        var warning: String? { SecretImportPipe.originWarning(agent: agent, inTab: tabID != nil) }
+        /// The warning under the sheet's header: an agent ran it, or typed it into a tab it drives, or no tab did.
+        var warning: String? { SecretImportPipe.originWarning(agent: agent, inTab: tabID != nil, driven: driven) }
 
-        /// Who ran it: the user in a tab of their own, an agent, or a process no tab of Next Term's is above, which is
-        /// handled as an agent's.
-        var runner: SecretImportPipe.Runner { SecretImportPipe.runner(agent: agent, inTab: tabID != nil) }
+        /// Who ran it: the user in a tab of their own, an agent (above it, or driving its tab), or a process no tab of
+        /// Next Term's is above, which is handled as an agent's.
+        var runner: SecretImportPipe.Runner {
+            SecretImportPipe.runner(agent: agent, inTab: tabID != nil, driven: driven)
+        }
     }
 
     static func origin(pid: pid_t, agent: String?, piped: Bool) -> Origin {
@@ -42,6 +47,7 @@ enum SecretPipeImport {
         let tabs: [TerminalTab] = AppDelegate.shared.controllers.flatMap(\.tabs)
         guard let tab = ClaudeIDEServer.tab(for: pid, among: tabs) else { return origin }
         origin.tabID = tab.id
+        origin.driven = MCPControl.isDriven(tab)
         let said: String = tab.status.integrated && tab.status.running ? tab.status.command : ""
         origin.command = said.isEmpty ? nil : said
         origin.tabPreset = SecretManagerImportSheet.preset(ofTab: tab.id)
@@ -71,9 +77,10 @@ enum SecretPipeImport {
 
     /// The file given, read as Import From › A File… reads a picked one. Run by the user in a tab of their own, Secrets
     /// comes forward while it is read, and an agent's MCP config opens the MCP-config import for it. Any other run, an
-    /// agent's or one no tab is above, has the file read first with nothing in front: an MCP config is refused before
-    /// anything opens or comes forward, since moving its keys rewrites it and only the user starts that, from Secrets ›
-    /// Import From › MCP Configs…. The sheet then opens for the file as read, never for a second read of it.
+    /// agent's (above it, or typed into a tab it drives) or one no tab is above, has the file read first with nothing
+    /// in front: an MCP config is refused before anything opens or comes forward, since moving its keys rewrites it and
+    /// only the user starts that, from Secrets › Import From › MCP Configs…. The sheet then opens for the file as read,
+    /// never for a second read of it.
     static func openFile(_ path: String, format: SecretSources.Format?, origin: Origin, channel: SecretPipeSocket.Channel) {
         let client = SecretImportClient(origin: origin, channel: channel)
         let url = URL(fileURLWithPath: path)
@@ -94,10 +101,11 @@ enum SecretPipeImport {
 
     /// The Secrets window in front, with no sheet open on it. Busy or refused is decided first, so a run that can't open
     /// a sheet never takes the keyboard from the tab the user types in (a password at bw's prompt, say). Run by an
-    /// agent, or by a process Next Term can't trace to a tab of its own (one that left its tab, or ran in another
-    /// terminal app), it comes forward as for an agent's import_secrets: without the keyboard and without activating
-    /// Next Term (the Dock icon bounces when another app is in front), so a key the user meant for a terminal never
-    /// reaches the sheet. Run by the user in a tab of their own, the window takes the keyboard.
+    /// agent (above it, or in a tab it drives), or by a process Next Term can't trace to a tab of its own (one that
+    /// left its tab, or ran in another terminal app), it comes forward as for an agent's import_secrets: without the
+    /// keyboard and without activating Next Term (the Dock icon bounces when another app is in front), so a key the
+    /// user meant for a terminal never reaches the sheet. Run by the user in a tab of their own, the window takes the
+    /// keyboard.
     private static func secretsView(for client: SecretImportClient) -> SecretsView? {
         if let status = blockedStatus() {
             client.end(status)

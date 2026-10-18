@@ -2,12 +2,14 @@ import AppKit
 import NextTermCore
 
 #if DEBUG
-/// `nxtrm secret import` of an MCP config, run by an agent or by a process no tab of Next Term's is above: moving keys
-/// out of the file rewrites it, so only the user starts that, and the run is refused before anything opens or comes
-/// forward. On the self-test's own socket, vault and files; the config, its server and its key are made up at run time.
+/// `nxtrm secret import` of an MCP config, run by an agent, typed by one into a tab it drives, or run by a process no
+/// tab of Next Term's is above: moving keys out of the file rewrites it, so only the user starts that, and the run is
+/// refused before anything opens or comes forward. On the self-test's own socket, vault and files; the config, its
+/// server and its key are made up at run time.
 extension SelfTest {
     /// A link named claude to /bin/zsh stands in for the agent, as in the origin checks; a run that leaves its tab, as
-    /// `( … & )` makes it, is the untraced one. Each run is checked in a tab of its own.
+    /// `( … & )` makes it, is the untraced one; the command alone, typed and left driven, is the one an agent typed into
+    /// a tab. Each run is checked in a tab of its own.
     static func secretPipeAgentMoveCheck(_ c: TerminalWindowController, _ view: SecretsView, folder: URL) async {
         let savedSetup = SecretsView.importSetup
         var setup = SecretImportSheet.Setup()
@@ -36,10 +38,15 @@ extension SelfTest {
         let away: String = "( ( sleep 1; \(given) ) & )"
         await secretPipeMoveRefusedCheck(c, view, folder: folder, run: away, config: config, written: written,
                                          who: "nxtrm secret import run from no tab Next Term knows")
+        // Typed into a plain tab as send_to_tab types it, and left driven: no agent runs above the importer, but the
+        // tab is an agent's until the user types in it.
+        await secretPipeMoveRefusedCheck(c, view, folder: folder, run: given, config: config, written: written,
+                                         who: "nxtrm secret import typed into a tab an agent drives")
     }
 
-    /// `run`, typed into a new tab, prints the refusal; no sheet opens on Secrets, Secrets stays behind a cover window
-    /// of the self-test's own, the cover keeps the keyboard, and the config is as `written`.
+    /// `run`, typed into a new tab as send_to_tab types it (the tab is left driven), prints the refusal; no sheet opens
+    /// on Secrets, Secrets stays behind a cover window of the self-test's own, the cover keeps the keyboard, and the
+    /// config is as `written`.
     static func secretPipeMoveRefusedCheck(_ c: TerminalWindowController, _ view: SecretsView, folder: URL, run: String,
                                            config: URL, written: String, who: String) async {
         let tab: TerminalTab = await secretPipeTab(c, folder)
@@ -55,7 +62,7 @@ extension SelfTest {
         let behind: Bool = secretPipeBehind(view.window, cover: cover)
         let kept: Bool = (try? String(contentsOf: config, encoding: .utf8)) == written
         let detail: String = "refusal said \(said), no sheet \(noSheet), Secrets behind the cover \(behind), cover key "
-            + "\(NSApp.keyWindow === cover), file unchanged \(kept)"
+            + "\(NSApp.keyWindow === cover), file unchanged \(kept), tab driven \(MCPControl.isDriven(tab))"
         check(said && noSheet && behind && kept,
               "secret pipe: \(who) of an MCP config is refused with the line, nothing opens, the keyboard stays where "
                 + "it was, and the file is unchanged", said ? detail : detail + ": " + secretPipeScreen(tab))

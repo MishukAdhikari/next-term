@@ -41,6 +41,24 @@ import Testing
         #expect(P.originWarning(agent: nil, inTab: false) == P.untracedWarning)
     }
 
+    /// A run in a tab an agent drives (one it opened, or typed or pressed keys in, and the user hasn't typed in since)
+    /// is the agent's, though no agent runs above the importer: it gets the agent's warning, the sheet without the
+    /// keyboard, and no move. A tab the user has typed in since is theirs again; with no tab, there is none to drive.
+    @Test func aRunInATabAnAgentDrivesIsTheAgents() {
+        #expect(P.runner(agent: nil, inTab: true, driven: true) == .agent)
+        #expect(P.runner(agent: "Claude Code", inTab: true, driven: true) == .agent)
+        #expect(P.runner(agent: nil, inTab: true, driven: false) == .user)
+        #expect(P.runner(agent: "Codex", inTab: true, driven: false) == .agent)
+        #expect(P.runner(agent: nil, inTab: false, driven: true) == .untraced)
+        #expect(P.runner(agent: nil, inTab: true) == P.runner(agent: nil, inTab: true, driven: false))
+        let driven: P.Runner = P.runner(agent: nil, inTab: true, driven: true)
+        #expect(!driven.isUser && !driven.mayStartMove)
+        #expect(P.originWarning(agent: nil, inTab: true, driven: true) == P.agentWarning)
+        #expect(P.originWarning(agent: nil, inTab: true, driven: false) == nil)
+        #expect(P.originWarning(agent: nil, inTab: false, driven: true) == P.untracedWarning)
+        #expect(P.originWarning(agent: nil, inTab: true) == nil)
+    }
+
     /// An MCP config given to an agent's run, or to one no tab ran, is refused before anything opens: moving its keys
     /// rewrites the file, which only the user starts. The user's own run opens the MCP-config import for it, and any
     /// other file is a copy for every run. Files, the server and its key are made up, under a temporary home.
@@ -69,6 +87,9 @@ import Testing
             let names: [String] = report.rows.map(\.name) + report.notKeys.map(\.name)
             #expect(report.unreadable == nil && names == ["MADE_UP_TOKEN"], "\(runner)")
         }
+        // Typed into the user's tab by an agent that drives it: refused, as the agent's own run is.
+        let typed: P.Runner = P.runner(agent: nil, inTab: true, driven: true)
+        #expect(P.opens(SecretSources.readPicked(mcp, home: home.path), runner: typed) == nil)
     }
 
     @Test func aPresetIsNamedOnlyForItsLineAsTyped() {

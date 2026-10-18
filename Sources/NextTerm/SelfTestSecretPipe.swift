@@ -106,6 +106,8 @@ extension SelfTest {
         check(view.actionLabel.stringValue == SecretManagerImportSheet.typedLine,
               "secret pipe: the list says the line is in the tab once it is typed", view.actionLabel.stringValue)
         await secretPresetRefusalChecks(tab, preset)
+        // Next Term typed the line at the user's word, and agents were refused there: the Return is the user's.
+        check(!MCPControl.isDriven(tab), "secret pipe: \(preset.app)'s tab is the user's, not driven by an agent")
         if preset == .bws { await secretPresetAfterPipeChecks(view, tab, list: list) }
     }
 
@@ -138,7 +140,7 @@ extension SelfTest {
         defer { closeSecretsTabs([tab], "secret pipe") }
         _ = await wait(10) { tab.status.integrated }
         let nxtrm: String = SecretManagerImportSheet.nxtrmWords.map(secretPipeQuoted).joined(separator: " ")
-        MCPControl.type("cat \(secretPipeQuoted(list.path)) | \(nxtrm) secret import --from bws -", into: tab, submit: true)
+        secretPipeTypeAsUser("cat \(secretPipeQuoted(list.path)) | \(nxtrm) secret import --from bws -", into: tab)
         let opened: Bool = await wait(15) { view.fileImportSheet?.isPiped == true }
         let sheet: SecretFileImportSheet? = view.fileImportSheet
         let header: String = sheet?.headerLabel.stringValue ?? ""
@@ -154,7 +156,7 @@ extension SelfTest {
               "secret pipe: the tab says only how many keys were found and that none were imported", screen)
         check(view.fileImportSheet == nil && SecretsStore.shared.index?.entry(named: "PIPE_OPENAI_API_KEY") == nil,
               "secret pipe: Cancel closes the sheet and stores nothing")
-        MCPControl.type("\(nxtrm) secret import; echo \"exit=$?\"", into: tab, submit: true)
+        secretPipeTypeAsUser("\(nxtrm) secret import; echo \"exit=$?\"", into: tab)
         _ = await wait(10) { secretPipeScreen(tab).contains("exit=2") }
         let usage: String = secretPipeScreen(tab)
         check(usage.contains(SecretImportPipe.usage) && usage.contains("exit=2") && view.fileImportSheet == nil,
@@ -163,6 +165,14 @@ extension SelfTest {
 
     static func secretPipeQuoted(_ word: String) -> String {
         SecretRun.typedLine([word], shell: "zsh") ?? word
+    }
+
+    /// Types `line` into `tab` and runs it as the user would: typed as send_to_tab types it, which leaves the tab driven
+    /// by an agent, then marked as the user's own at once, before the importer connects. A run in a tab an agent drives
+    /// is the agent's, so every check that stands in for the user's own run types its line through this.
+    static func secretPipeTypeAsUser(_ line: String, into tab: TerminalTab) {
+        MCPControl.type(line, into: tab, submit: true)
+        MCPControl.typedByUser(tab)
     }
 
     /// Next Term's own importer that sends its keys before `ready`: refused, and no sheet opens. With `mode` "1" they

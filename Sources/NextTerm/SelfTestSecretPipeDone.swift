@@ -42,7 +42,7 @@ extension SelfTest {
         tab.view.send(txt: "\u{15}")
         await pause(0.3)
         let line: String = "cat \(secretPipeQuoted(list.path)) | \(secretPipeNxtrm) secret import --from bws -"
-        MCPControl.type(line, into: tab, submit: true)
+        secretPipeTypeAsUser(line, into: tab)
         let opened: Bool = await wait(15) { view.fileImportSheet?.isPiped == true }
         let sheet: SecretFileImportSheet? = view.fileImportSheet
         let header: String = sheet?.headerLabel.stringValue ?? ""
@@ -79,7 +79,7 @@ extension SelfTest {
     static func secretPipeImported(_ c: TerminalWindowController, _ view: SecretsView, folder: URL,
                                    line: String, what: String) async -> (SecretFileImportSheet, TerminalTab)? {
         let tab: TerminalTab = await secretPipeTab(c, folder)
-        MCPControl.type(line, into: tab, submit: true)
+        secretPipeTypeAsUser(line, into: tab)
         let opened: Bool = await wait(15) { view.fileImportSheet?.isPiped == true }
         guard opened, let sheet = view.fileImportSheet, sheet.importButton.isEnabled else {
             closeSecretsTabs([tab], "secret pipe")

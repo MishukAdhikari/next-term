@@ -65,7 +65,7 @@ extension SelfTest {
         let tab: TerminalTab = await secretPipeTab(c, folder)
         defer { closeSecretsTabs([tab], "secret pipe") }
         let given: String = "\(secretPipeNxtrm) secret import \(secretPipeQuoted(env.path))"
-        MCPControl.type(given, into: tab, submit: true)
+        secretPipeTypeAsUser(given, into: tab)
         let opened: Bool = await wait(15) { view.fileImportSheet != nil }
         let header: String = view.fileImportSheet?.headerLabel.stringValue ?? ""
         check(opened && view.fileImportSheet?.isPiped == false && header.contains("Given by nxtrm secret import in"),
@@ -82,7 +82,7 @@ extension SelfTest {
         try? text.write(to: config, atomically: true, encoding: .utf8)
         tab.view.send(txt: "clear\r")
         await pause(0.5)
-        MCPControl.type("\(secretPipeNxtrm) secret import \(secretPipeQuoted(config.path))", into: tab, submit: true)
+        secretPipeTypeAsUser("\(secretPipeNxtrm) secret import \(secretPipeQuoted(config.path))", into: tab)
         let moved: Bool = await wait(15) { view.importSheet != nil }
         let said: Bool = await wait(10) { secretPipeShows(tab, SecretImportPipe.text(.moved).line) }
         check(moved && said && view.fileImportSheet == nil,
@@ -119,7 +119,7 @@ extension SelfTest {
         guard let sheet = view.managerSheet else {
             return check(false, "secret pipe: bws's sheet opens, for the busy check")
         }
-        MCPControl.type(given, into: tab, submit: true)
+        secretPipeTypeAsUser(given, into: tab)
         let busy: String = SecretImportPipe.text(.busy).line
         let said: Bool = await wait(10) { secretPipeShows(tab, busy) && !tab.status.running }
         check(said && view.fileImportSheet == nil && view.actionLabel.stringValue == SecretPipeImport.busyLine,
