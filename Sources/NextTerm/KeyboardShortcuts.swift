@@ -658,7 +658,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 700), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 730), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
