@@ -598,13 +598,13 @@ extension SkillReview {
     // from each part, in time that grew with the square of its length.
     /// OpenCode's command as typed: `opencode`, 2.x's `opencode2`, or its npm package run by npx or bunx (`opencode-ai`,
     /// `@opencode/cli`, a version or not), then `plugin` (or `plug`).
-    static let opencodePlugin = #"(?:opencode(?:2|-ai(?:@[\w.-]+)?)?|@opencode/cli(?:@[\w.-]+)?)\s+plug(?:in)?\s+"#
+    static let opencodePlugin: String = #"(?:opencode(?:2|-ai(?:@[\w.-]+)?)?|@opencode/cli(?:@[\w.-]+)?)\s+plug(?:in)?\s+"#
     /// A slash command has no word boundary before it. OpenCode's is `opencode plugin <module>` (or `plug`), or
     /// `opencode plugin add`: a module is told from prose by a scope, a version, a hyphen or a slash in its name, or a
     /// flag after it, each read within one word. A one-word module is told by where the command stands: a whole code
     /// span, or a line of its own (after a `$` prompt or not), and never the subcommands that list or remove. Both
     /// start at a backtick or a line break, so the engine can skip ahead to them.
-    static let pluginInstall = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add|"#
+    static let pluginInstall: String = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add|"#
         + opencodePlugin + #"(?:add|(?:@|[a-z0-9_.]+[@/-])[\w./@-]*|[\w.]+\s+--?(?:g|global|force)))|/plugin\s+install)\b"#
         + #"|(?:`|\n[ \t]*(?:\$[ \t]+)?)"# + opencodePlugin
         + #"(?!(?:list|ls|remove|rm|uninstall|help)\b)[\w.@][\w.@/-]*[ \t]*(?:`|\r?\n|$)"#

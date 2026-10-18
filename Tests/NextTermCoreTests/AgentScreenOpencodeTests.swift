@@ -236,9 +236,11 @@ enum OpencodeScreens {
 
     @Test func onlyTheBottomOfTheScreenCounts() {
         // A permission prompt answered long ago, 30 rows up in the transcript, under today's idle footer.
-        let old = OpencodeScreens.shellPermission + Array(repeating: "     output", count: 30) + OpencodeScreens.footer("   ~/code/shop")
+        let output: [String] = Array(repeating: "     output", count: 30)
+        let footer: [String] = OpencodeScreens.footer("   ~/code/shop")
+        let old: [String] = OpencodeScreens.shellPermission + output + footer
         #expect(read(old) == .ready)
-        let form = OpencodeScreens.question + Array(repeating: "     output", count: 30) + OpencodeScreens.footer("   ~/code/shop")
+        let form: [String] = OpencodeScreens.question + output + footer
         #expect(read(form) == .ready)
         // The header alone, or the buttons alone, is not the prompt.
         #expect(read(OpencodeScreens.transcript + ["  ┃  △ Permission required", "  ┃    # Shell command"]) == .idle)
@@ -290,9 +292,15 @@ extension OpencodeScreens {
     /// The shell prompt (1.19) with `command` as its body rows, and `gap` blank rows between them and the buttons: two
     /// (the box's padding and the buttons' own), or fewer when the command fills the box and runs on under them.
     static func shell(_ command: [String], gap: Int = 2) -> [String] {
-        transcript + ["  ┃", "  ┃  △ Permission required", "  ┃    # Shell command", "  ┃"]
-            + command.map { "  ┃  " + $0 } + Array(repeating: "  ┃", count: gap)
-            + ["  ┃   Allow once   Allow always   Reject                  ctrl+f fullscreen  ⇆ select  enter confirm", "  ┃"]
+        let header: [String] = ["  ┃", "  ┃  △ Permission required", "  ┃    # Shell command", "  ┃"]
+        let body: [String] = command.map { (row: String) -> String in "  ┃  " + row }
+        let padding: [String] = Array(repeating: "  ┃", count: gap)
+        let buttons: [String] = ["  ┃   Allow once   Allow always   Reject                  ctrl+f fullscreen  ⇆ select  enter confirm", "  ┃"]
+        var screen: [String] = transcript + header
+        screen += body
+        screen += padding
+        screen += buttons
+        return screen
     }
 
     /// OpenCode 2.x with "Always allow" selected: the body says what it saves in place of the command (permission.tsx,
@@ -621,7 +629,11 @@ extension OpencodeScreens {
     /// row of `buttons` at the bottom, more than `AgentScreen.scannedLines` rows apart.
     static func fullscreen(_ top: [String], buttons: String, height: Int = 60) -> [String] {
         let filler: [String] = Array(repeating: "  ┃", count: height - top.count - 3)
-        return ["  ┃"] + top + filler + [buttons, "  ┃"]
+        var screen: [String] = ["  ┃"]
+        screen += top
+        screen += filler
+        screen += [buttons, "  ┃"]
+        return screen
     }
 
     static let fullscreenEdit = fullscreen(
