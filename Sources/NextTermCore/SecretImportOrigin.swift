@@ -9,11 +9,48 @@ extension SecretImportPipe {
     public static let untracedWarning = "Next Term couldn\u{2019}t tell which tab ran this command. If you didn\u{2019}t "
         + "run it, an agent may have, and may have seen these keys."
 
+    /// Who ran the importer, as the process tree and the tabs tell it.
+    public enum Runner: Equatable, Sendable {
+        /// The user, in a tab of Next Term's with no agent above the importer.
+        case user
+        /// An agent runs above the importer.
+        case agent
+        /// No tab of Next Term's is above it: a process that left its tab, as `( … &)`, nohup or setsid make it, or one
+        /// run in another terminal app.
+        case untraced
+
+        /// Handled as the user: Secrets comes forward with the keyboard, and the sheet's action answers Return. An
+        /// agent's run, and one Next Term can't trace to a tab of its own, get the sheet without the keyboard, its
+        /// action answering only a click, as for an agent's import_secrets.
+        public var isUser: Bool { self == .user }
+
+        /// May open the MCP-config import for a file it names. Moving keys out of an MCP config rewrites that file, so
+        /// only the user starts it: an agent's run, or an untraced one, is refused as import_secrets refuses such a
+        /// file.
+        public var mayStartMove: Bool { self == .user }
+    }
+
+    /// The importer's runner: an agent above it, else the user when it runs in a tab of Next Term's, else untraced.
+    public static func runner(agent: String?, inTab: Bool) -> Runner {
+        if agent != nil { return .agent }
+        return inTab ? .user : .untraced
+    }
+
     /// The warning under the sheet's header: an agent above the importer, or no tab of Next Term's above it (a process
     /// that left its tab, as `( … &)` does, or one run outside Next Term); nil in a tab with no agent above it.
     public static func originWarning(agent: String?, inTab: Bool) -> String? {
-        if agent != nil { return agentWarning }
-        return inTab ? nil : untracedWarning
+        switch runner(agent: agent, inTab: inTab) {
+        case .agent: return agentWarning
+        case .untraced: return untracedWarning
+        case .user: return nil
+        }
+    }
+
+    /// What a FILE given to the importer opens: what `picked` says, or nil (`moveRefused`, with nothing opened) when it
+    /// is one of the MCP-config import's files and `runner` may not start a move.
+    public static func opens(_ picked: SecretSources.Picked, runner: Runner) -> SecretSources.Picked? {
+        if case .move = picked, !runner.mayStartMove { return nil }
+        return picked
     }
 }
 

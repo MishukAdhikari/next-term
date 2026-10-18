@@ -31,6 +31,10 @@ enum SecretPipeImport {
 
         /// The warning under the sheet's header: an agent ran it, or no tab did.
         var warning: String? { SecretImportPipe.originWarning(agent: agent, inTab: tabID != nil) }
+
+        /// Who ran it: the user in a tab of their own, an agent, or a process no tab of Next Term's is above, which is
+        /// handled as an agent's.
+        var runner: SecretImportPipe.Runner { SecretImportPipe.runner(agent: agent, inTab: tabID != nil) }
     }
 
     static func origin(pid: pid_t, agent: String?, piped: Bool) -> Origin {
@@ -65,25 +69,41 @@ enum SecretPipeImport {
         view.openFileImport(path: "", report: report, inGit: false, client: client, asked: asked)
     }
 
-    /// The file given, read as Import From › A File… reads a picked one: an agent's MCP config opens the MCP-config
-    /// import for it.
+    /// The file given, read as Import From › A File… reads a picked one. Run by the user in a tab of their own, Secrets
+    /// comes forward while it is read, and an agent's MCP config opens the MCP-config import for it. Any other run, an
+    /// agent's or one no tab is above, has the file read first with nothing in front: an MCP config is refused before
+    /// anything opens or comes forward, since moving its keys rewrites it and only the user starts that, from Secrets ›
+    /// Import From › MCP Configs…. The sheet then opens for the file as read, never for a second read of it.
     static func openFile(_ path: String, format: SecretSources.Format?, origin: Origin, channel: SecretPipeSocket.Channel) {
         let client = SecretImportClient(origin: origin, channel: channel)
-        guard let view = secretsView(for: client) else { return }
-        view.readPicked(URL(fileURLWithPath: path), format: format, client: client)
+        let url = URL(fileURLWithPath: path)
+        let runner: SecretImportPipe.Runner = origin.runner
+        guard !runner.mayStartMove else {
+            guard let view = secretsView(for: client) else { return }
+            return view.readPicked(url, format: format, client: client)
+        }
+        Task { @MainActor in
+            let read: SecretsView.PickedRead = await SecretsView.read(url, format: format)
+            guard let picked = SecretImportPipe.opens(read.picked, runner: runner) else {
+                return client.end(.moveRefused)
+            }
+            guard let view = secretsView(for: client) else { return }
+            view.openPicked(picked, path: read.path, inGit: read.inGit, client: client)
+        }
     }
 
     /// The Secrets window in front, with no sheet open on it. Busy or refused is decided first, so a run that can't open
     /// a sheet never takes the keyboard from the tab the user types in (a password at bw's prompt, say). Run by an
-    /// agent, it comes forward as for an agent's import_secrets: without the keyboard and without activating Next Term
-    /// (the Dock icon bounces when another app is in front), so a key the user meant for a terminal never reaches the
-    /// sheet. Run by the user, the window takes the keyboard.
+    /// agent, or by a process Next Term can't trace to a tab of its own (one that left its tab, or ran in another
+    /// terminal app), it comes forward as for an agent's import_secrets: without the keyboard and without activating
+    /// Next Term (the Dock icon bounces when another app is in front), so a key the user meant for a terminal never
+    /// reaches the sheet. Run by the user in a tab of their own, the window takes the keyboard.
     private static func secretsView(for client: SecretImportClient) -> SecretsView? {
         if let status = blockedStatus() {
             client.end(status)
             return nil
         }
-        if client.origin.agent != nil {
+        if !client.origin.runner.isUser {
             SecretsWindowController.bringForward()
             if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         } else {

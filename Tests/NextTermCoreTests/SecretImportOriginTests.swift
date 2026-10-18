@@ -27,6 +27,50 @@ import Testing
         #expect(P.untracedWarning.hasPrefix("Next Term couldn\u{2019}t tell which tab ran this command."))
     }
 
+    /// Who ran the importer goes by the agent above it and the tab it runs in. Only the user, in a tab of Next Term's,
+    /// is handled as the user: a run no tab is above (`( … &)`, nohup, another terminal app) is handled as an agent's.
+    @Test func whoRanTheImporterGoesByTheAgentAboveAndTheTab() {
+        #expect(P.runner(agent: "Claude Code", inTab: true) == .agent)
+        #expect(P.runner(agent: "Codex", inTab: false) == .agent)
+        #expect(P.runner(agent: nil, inTab: false) == .untraced)
+        #expect(P.runner(agent: nil, inTab: true) == .user)
+        #expect(P.Runner.user.isUser && !P.Runner.agent.isUser && !P.Runner.untraced.isUser)
+        #expect(P.Runner.user.mayStartMove)
+        #expect(!P.Runner.agent.mayStartMove && !P.Runner.untraced.mayStartMove)
+        // The warning follows the same rule.
+        #expect(P.originWarning(agent: nil, inTab: false) == P.untracedWarning)
+    }
+
+    /// An MCP config given to an agent's run, or to one no tab ran, is refused before anything opens: moving its keys
+    /// rewrites the file, which only the user starts. The user's own run opens the MCP-config import for it, and any
+    /// other file is a copy for every run. Files, the server and its key are made up, under a temporary home.
+    @Test func onlyTheUsersOwnRunMovesKeysOutOfAnMCPConfig() {
+        let home = SecretImportFixtures.Home()
+        defer { home.remove() }
+        let value: String = "made-up-value-" + UUID().uuidString.lowercased()
+        let server: String = #"{"command": "made-up-server", "env": {"MADE_UP_TOKEN": "\#(value)"}}"#
+        let mcp: String = home.write("made-up-project/.mcp.json", #"{"mcpServers": {"made-up": \#(server)}}"#)
+        let env: String = home.write("made-up-project/.env", "MADE_UP_TOKEN=\(value)\n")
+        for runner in [P.Runner.agent, .untraced, .user] {
+            let config: SecretSources.Picked? = P.opens(SecretSources.readPicked(mcp, home: home.path), runner: runner)
+            switch config {
+            case .move(let source, _)?:
+                #expect(runner == .user && source.path == mcp, "\(runner)")
+            case .copy?:
+                Issue.record("an MCP config is never a copy: \(runner)")
+            case nil:
+                #expect(runner != .user, "\(runner)")
+            }
+            let file: SecretSources.Picked? = P.opens(SecretSources.readPicked(env, home: home.path), runner: runner)
+            guard case .copy(let report)? = file else {
+                Issue.record("a .env is a copy for every run: \(runner)")
+                continue
+            }
+            let names: [String] = report.rows.map(\.name) + report.notKeys.map(\.name)
+            #expect(report.unreadable == nil && names == ["MADE_UP_TOKEN"], "\(runner)")
+        }
+    }
+
     @Test func aPresetIsNamedOnlyForItsLineAsTyped() {
         for preset in Preset.allCases {
             let typed: String = Self.line(preset)

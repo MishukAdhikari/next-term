@@ -12,6 +12,8 @@ extension SecretImportPipe {
         case unreadable
         /// The file is an agent's MCP config: the MCP-config import opened for it.
         case moved
+        /// The file is an agent's MCP config, and an agent ran the importer or no tab did: nothing opened.
+        case moveRefused
         case imported(Int)
         case nothing
         case refused
@@ -42,6 +44,8 @@ extension SecretImportPipe {
             return ("Next Term: it couldn\u{2019}t read keys from this. The Import window says why.", 0)
         case .moved:
             return ("Next Term: this is an agent\u{2019}s MCP config. Choose its keys in the Import window, which moves them out of it.", 0)
+        case .moveRefused:
+            return (moveRefusedLine, 1)
         case .imported(let count):
             guard count > 0 else { return ("Nothing imported.", 1) }
             return ("Imported \(count) \(count == 1 ? "key" : "keys").", 0)
@@ -71,6 +75,15 @@ extension SecretImportPipe {
         }
     }
 
+    /// An MCP config given by an agent's run, or by one no tab ran: moving its keys rewrites the file, so only the user
+    /// starts that, from the Secrets menu.
+    static let moveRefusedLine: String = {
+        let titles: [String] = [SecretsMenuModel.menuTitle, SecretsMenuModel.importTitle, SecretsMenuModel.importMCPTitle]
+        let menu: String = titles.joined(separator: " \u{203A} ")
+        return "nxtrm: this is an agent\u{2019}s MCP config, and moving its keys out rewrites it, so nothing opened. "
+            + "Choose " + menu + " in Next Term to move them."
+    }()
+
     /// The ending a last reply gives; a reply that can't end the import is a refusal.
     public static func ending(for reply: Reply) -> Ending {
         switch reply.status {
@@ -78,6 +91,7 @@ extension SecretImportPipe {
         case .nothing: return .nothing
         case .busy: return .busy
         case .moved: return .moved
+        case .moveRefused: return .moveRefused
         case .refused, .ready, .found, .unreadable: return .refused
         }
     }

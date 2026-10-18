@@ -57,9 +57,9 @@ extension SecretFileImportSheet {
                                               inTab: origin.tabID != nil)
     }
 
-    /// Close Tab, for the tab 1Password's authorization lasts in; never an agent's tab.
+    /// Close Tab, for the tab 1Password's authorization lasts in; only the user's own, never an agent's tab.
     func addCloseTab() {
-        guard pipedDoneLine == SecretImportPreset.onePasswordLine, client?.origin.agent == nil else { return }
+        guard pipedDoneLine == SecretImportPreset.onePasswordLine, client?.origin.runner.isUser == true else { return }
         let button = NSButton(title: Self.closeTabTitle, target: self, action: #selector(closeImportTab))
         button.bezelStyle = .rounded
         button.setAccessibilityLabel("Close the tab the import ran in")

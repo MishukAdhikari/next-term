@@ -72,6 +72,9 @@ extension SecretImportPipe {
             case unreadable
             /// The file is an agent's MCP config: the MCP-config import opened for it.
             case moved
+            /// The file is an agent's MCP config, given by an agent's run or an untraced one: nothing opened, since
+            /// only the user starts a move.
+            case moveRefused
             /// The preview closed: this many keys were copied in.
             case imported
             /// The preview closed with none copied in.

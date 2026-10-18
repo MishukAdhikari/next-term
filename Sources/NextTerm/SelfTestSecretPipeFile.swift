@@ -9,16 +9,13 @@ extension SelfTest {
     /// Run by an agent (a link named claude to /bin/zsh runs the pipe: a copy of zsh is a platform binary off the system
     /// volume, which launch constraints kill as it starts), the sheet warns the agent may have seen the keys, and comes
     /// forward without the keyboard: a window of the self-test's own keeps it, and Import… has no Return default.
-    /// Run from no tab (the pipe leaves its tab, as `( … &)` does), it says Next Term couldn't tell which tab.
+    /// Run from no tab (the pipe leaves its tab, as `( … &)` does), it says Next Term couldn't tell which tab, and is
+    /// handled as an agent's run: Import… has no Return default there either.
     static func secretPipeOriginChecks(_ c: TerminalWindowController, _ view: SecretsView, folder: URL, list: URL) async {
-        let bin: URL = folder.appendingPathComponent("agent-bin", isDirectory: true)
-        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let agent: URL = bin.appendingPathComponent("claude")
-        try? FileManager.default.removeItem(at: agent)
         let tab: TerminalTab = await secretPipeTab(c, folder)
         defer { closeSecretsTabs([tab], "secret pipe") }
         let pipe: String = "cat \(secretPipeQuoted(list.path)) | \(secretPipeNxtrm) secret import --from bws -"
-        if (try? FileManager.default.createSymbolicLink(atPath: agent.path, withDestinationPath: "/bin/zsh")) != nil {
+        if let agent = secretPipeAgentLink(folder) {
             // `; true` keeps the stand-in agent above the importer: zsh would run a line's last command in its place.
             let run: String = "\(secretPipeQuoted(agent.path)) -fc \(secretPipeQuoted(pipe + "; true"))"
             let cover: NSWindow = await secretsMenuCover()
@@ -45,6 +42,8 @@ extension SelfTest {
         let warning: String? = secretPipeWarning(view.fileImportSheet)
         check(opened && warning == SecretImportPipe.untracedWarning && !header.contains(" in tab "),
               "secret pipe: run from no tab Next Term knows, the sheet says it couldn't tell which tab", header)
+        let unkeyed: Bool = view.fileImportSheet?.importButton.keyEquivalent.isEmpty == true
+        check(opened && unkeyed, "secret pipe: run from no tab Next Term knows, Import… has no Return default")
         view.fileImportSheet?.closeSheet()
         _ = await wait(10) { view.fileImportSheet == nil && secretPipeScreen(tab).contains("Nothing imported.") }
     }

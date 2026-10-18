@@ -145,6 +145,8 @@ import Testing
         #expect(P.ending(for: P.Reply(status: .nothing)) == .nothing)
         #expect(P.ending(for: P.Reply(status: .busy)) == .busy)
         #expect(P.ending(for: P.Reply(status: .moved)) == .moved)
+        #expect(P.ending(for: P.Reply(status: .moveRefused)) == .moveRefused)
+        #expect(P.Reply(status: .moveRefused).isLast)
         #expect(P.ending(for: P.Reply(status: .refused)) == .refused)
         #expect(P.ending(for: P.Reply(status: .ready)) == .refused)
     }

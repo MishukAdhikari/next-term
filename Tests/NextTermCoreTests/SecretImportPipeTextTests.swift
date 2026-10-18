@@ -19,11 +19,26 @@ import Testing
         #expect(P.text(.tooLarge).line.contains("the input is over 5 MB"))
         let off: String = "Next Term is not running, or \u{201C}Let agents control Next Term\u{201D} is off in its Settings."
         #expect(P.text(.noSocket).line.contains(off))
-        for ending in [P.Ending.refused, .busy, .closed, .noSocket, .peerCheck, .tooLarge, .empty, .nothing] {
+        let failures: [P.Ending] = [.refused, .moveRefused, .busy, .closed, .noSocket, .peerCheck, .tooLarge, .empty,
+                                    .nothing]
+        for ending in failures {
             #expect(P.text(ending).exit == 1, "\(ending)")
         }
         #expect(P.text(.usage("made-up reason")).exit == 2)
         #expect(P.text(.moved).exit == 0)
+    }
+
+    /// An MCP config given to an agent's run, or to one no tab ran, is refused with nothing opened: the line sends the
+    /// user to the Secrets menu's own MCP-config import, by the titles the menu shows.
+    @Test func aRefusedMoveSaysWhereTheUserStartsIt() {
+        let line: String = P.text(.moveRefused).line
+        let path: String = [SecretsMenuModel.menuTitle, SecretsMenuModel.importTitle, SecretsMenuModel.importMCPTitle]
+            .joined(separator: " \u{203A} ")
+        #expect(line.hasPrefix("nxtrm: this is an agent\u{2019}s MCP config"))
+        #expect(line.contains("nothing opened"))
+        #expect(line.contains(path))
+        #expect(path == "Secrets \u{203A} Import From \u{203A} MCP Configs\u{2026}")
+        #expect(!line.contains("\n") && !line.contains("'") && !line.contains("..."))
     }
 
     /// Every ending, with the counts a made-up `bws` list gives, prints none of its values or names.
@@ -33,8 +48,8 @@ import Testing
         let report: SourceReport = SecretSources.read(&bytes, name: "standard input", format: .bws)
         let found: Int = report.rows.count
         #expect(found > 0)
-        let endings: [P.Ending] = [.found(found), .unreadable, .moved, .imported(found), .imported(1), .nothing,
-                                   .refused, .busy, .closed, .noSocket, .peerCheck, .tooLarge, .empty, .help]
+        let endings: [P.Ending] = [.found(found), .unreadable, .moved, .moveRefused, .imported(found), .imported(1),
+                                   .nothing, .refused, .busy, .closed, .noSocket, .peerCheck, .tooLarge, .empty, .help]
         let secrets: [String] = [F.openAI, F.pinecone, ExportFixtures.noteToken, "made-up-db-pass-2026"]
         let names: [String] = ["OPENAI_API_KEY", "PINECONE_API_KEY", "DB_PASSWORD", "made-up-project"]
         for ending in endings {

@@ -15,7 +15,8 @@ import NextTermCore
 ///   is refused: bytes waiting after the header, or coming within `earlyWait` of it, are. A body glued to its header
 ///   in one write can reach the socket's line reader, which never wipes what it read, before this sees anything: the
 ///   importer that does so gets `refused` too (it reads `ready` as one), but only the route could keep those bytes out.
-/// - **A file** is read by the app, as Import From › A File… reads one.
+/// - **A file** is read by the app, as Import From › A File… reads one. An agent's MCP config, named by an agent's run
+///   or by one no tab of Next Term's is above, is refused before anything opens (`SecretPipeImport.openFile`).
 /// - **The answers** are counts only: `found` once the preview is open, then `imported` or `nothing` once it closes.
 ///   An importer that leaves meanwhile leaves the preview open.
 enum SecretPipeSocket {

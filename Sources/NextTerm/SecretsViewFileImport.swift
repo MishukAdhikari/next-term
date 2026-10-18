@@ -75,46 +75,67 @@ extension SecretsView {
         }
     }
 
-    /// The picked file read off the main thread (a file near the limits takes seconds), then its sheet. `format` and
-    /// `client` are `nxtrm secret import`'s: the format it named, and the importer waiting to hear how it ends.
-    func readPicked(_ url: URL, format: SecretSources.Format? = nil, client: SecretImportClient? = nil) {
-        let setup: SecretImportSheet.Setup = Self.importSetup()
+    /// A file read for an import: what it is for, its path with links followed, and whether a git work tree holds it.
+    struct PickedRead: Sendable {
+        let picked: SecretSources.Picked
+        let path: String
+        let inGit: Bool
+    }
+
+    /// The file at `url` read off the main thread (a file near the limits takes seconds), against the vault's names and
+    /// the open projects as they are now. `format` is `nxtrm secret import`'s.
+    static func read(_ url: URL, format: SecretSources.Format? = nil) async -> PickedRead {
+        let setup: SecretImportSheet.Setup = importSetup()
         let home: String = setup.home
         let projects: [String] = setup.projects
         let stored: Set<String> = Set(SecretsStore.shared.index?.names ?? [])
         // As picked for the move import's check (a project's linked .mcp.json is still its own), then links followed.
         let chosen: String = url.path
         let path: String = canonicalPath(chosen)
+        return await Task.detached { () -> PickedRead in
+            let picked = SecretSources.readPicked(chosen, home: home, projects: projects, stored: stored, format: format)
+            return PickedRead(picked: picked, path: path, inGit: SecretImport.isInGitWorkTree(path))
+        }.value
+    }
+
+    /// The picked file read off the main thread, the line under the list saying so meanwhile, then its sheet. `format`
+    /// and `client` are `nxtrm secret import`'s, run by the user in a tab of their own: the format it named, and the
+    /// importer waiting to hear how it ends. Any other run of it has its file read before Secrets comes forward, and
+    /// opens its sheet with `openPicked`.
+    func readPicked(_ url: URL, format: SecretSources.Format? = nil, client: SecretImportClient? = nil) {
         say("Reading \(url.lastPathComponent)\u{2026}")
         Task { @MainActor in
-            let read = await Task.detached { () -> (picked: SecretSources.Picked, inGit: Bool) in
-                let picked = SecretSources.readPicked(chosen, home: home, projects: projects, stored: stored,
-                                                      format: format)
-                return (picked, SecretImport.isInGitWorkTree(path))
-            }.value
+            let read: PickedRead = await Self.read(url, format: format)
             self.say("")
-            switch read.picked {
-            case .copy(let report):
-                self.openFileImport(path: path, report: report, inGit: read.inGit, client: client)
-            case .move(let source, let rest):
-                // A sheet opened while the file was read: nothing opens behind it, and the importer hears so.
-                guard !self.hasOpenSheet else { return self.sayBusy(client: client) }
-                // The MCP-config import asks its own way: the importer is told that, and goes.
-                client?.end(.moved)
-                self.openMoveImport(only: source) { [weak self] in
-                    // Keys outside its servers that couldn't be listed, such as more than the sheet lists: the line
-                    // under the list says so, instead of nothing.
-                    if let unreadable = rest.unreadable {
-                        self?.say(Self.outsideServersUnlistedLine + " " + unreadable.sentence)
-                        return
-                    }
-                    guard !rest.rows.isEmpty else { return }
-                    // After the move sheet has gone: the keys outside its servers, to copy in. The sheet checks
-                    // them against the keys the move just stored.
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated {
-                            self?.openFileImport(path: path, report: rest, outsideServers: true, inGit: read.inGit)
-                        }
+            self.openPicked(read.picked, path: read.path, inGit: read.inGit, client: client)
+        }
+    }
+
+    /// The sheet for a file as read: the copy sheet, or the MCP-config import for a file it rewrites, which only the
+    /// user starts (the user's pick, or nxtrm secret import run in a tab of their own).
+    func openPicked(_ picked: SecretSources.Picked, path: String, inGit: Bool, client: SecretImportClient? = nil) {
+        switch picked {
+        case .copy(let report):
+            openFileImport(path: path, report: report, inGit: inGit, client: client)
+        case .move(let source, let rest):
+            if let client, !client.origin.runner.mayStartMove { return client.end(.moveRefused) }
+            // A sheet opened while the file was read: nothing opens behind it, and the importer hears so.
+            guard !hasOpenSheet else { return sayBusy(client: client) }
+            // The MCP-config import asks its own way: the importer is told that, and goes.
+            client?.end(.moved)
+            openMoveImport(only: source) { [weak self] in
+                // Keys outside its servers that couldn't be listed, such as more than the sheet lists: the line under
+                // the list says so, instead of nothing.
+                if let unreadable = rest.unreadable {
+                    self?.say(Self.outsideServersUnlistedLine + " " + unreadable.sentence)
+                    return
+                }
+                guard !rest.rows.isEmpty else { return }
+                // After the move sheet has gone: the keys outside its servers, to copy in. The sheet checks them
+                // against the keys the move just stored.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.openFileImport(path: path, report: rest, outsideServers: true, inGit: inGit)
                     }
                 }
             }
@@ -125,7 +146,8 @@ extension SecretsView {
     /// is `nxtrm secret import`'s importer, told when the sheet opens and how it ends; `busy` when any sheet is open
     /// (a sheet begun then would wait unseen behind it). `asked` is an agent's import_secrets request: the sheet shows
     /// its banner and answers it. A sheet an agent asked for, by that request or by running nxtrm secret import, has no
-    /// Return default.
+    /// Return default and leaves the keyboard where it was; so does one for nxtrm secret import run where Next Term
+    /// can't tell which tab ran it.
     func openFileImport(path: String, report: SourceReport, outsideServers: Bool = false, inGit: Bool,
                         client: SecretImportClient? = nil, asked: SecretImportAsk? = nil) {
         guard !hasOpenSheet, let window else { return sayBusy(client: client, asked: asked) }
@@ -141,15 +163,17 @@ extension SecretsView {
             }
         }
         fileImportSheet = sheet
+        // nxtrm secret import run by an agent, or by a process no tab of Next Term's is above, is handled as an agent's.
+        let runner: SecretImportPipe.Runner? = client?.origin.runner
+        let agentRan: Bool = runner.map { (who: SecretImportPipe.Runner) -> Bool in !who.isUser } ?? false
         if let asked {
             sheet.asked = asked
             asked.showing(sheet)
-        } else if client?.origin.agent != nil {
-            // An agent ran nxtrm secret import: as for its import_secrets, Import… answers only a click.
+        } else if agentRan {
+            // As for an agent's import_secrets, Import… answers only a click.
             SecretImportAsk.noReturnKey(action: sheet.importButton, cancel: sheet.cancelButton)
         }
-        let agentAsked: Bool = asked != nil || client?.origin.agent != nil
-        sheet.begin(on: window, keepingKeyboard: agentAsked)
+        sheet.begin(on: window, keepingKeyboard: asked != nil || agentRan)
         if let report = sheet.report { client?.opened(report) }
     }
 }
