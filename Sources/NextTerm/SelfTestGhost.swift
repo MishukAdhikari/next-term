@@ -200,12 +200,14 @@ extension SelfTest {
               "suggestions: the screen, read_tab and the terminal's accessibility value never hold the suggestion")
 
         // Each of these hides it until the next report.
-        let hiders: [(String, () -> Void)] = [
-            ("a resize", { window.setContentSize(NSSize(width: window.frame.width - 40, height: window.frame.height)) }),
-            ("the alternate screen", { tab.view.feed(text: "\u{1b}[?1049h") }),
-            ("marked text", { tab.view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0)) }),
-            ("a selection", { tab.view.selectAll(nil) }),
-        ]
+        let resize: () -> Void = { window.setContentSize(NSSize(width: window.frame.width - 40, height: window.frame.height)) }
+        let alternate: () -> Void = { tab.view.feed(text: "\u{1b}[?1049h") }
+        let marked: () -> Void = {
+            tab.view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        let select: () -> Void = { tab.view.selectAll(nil) }
+        let hiders: [(String, () -> Void)] = [("a resize", resize), ("the alternate screen", alternate), ("marked text", marked),
+                                               ("a selection", select)]
         for (what, hide) in hiders {
             await ghostClear(tab)
             typeKeys(window, "git ch")
