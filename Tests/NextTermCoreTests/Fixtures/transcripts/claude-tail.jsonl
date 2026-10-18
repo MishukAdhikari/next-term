@@ -1,0 +1,10 @@
+ext":"cut here by the tail"}]},"type":"assistant","uuid":"a0"}
+{"type":"user","message":{"role":"user","content":"Fix the login test"},"uuid":"u1","sessionId":"6f1c2a"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll look at the test first."},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"login.test.ts"}}]},"uuid":"a1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"..."}]},"uuid":"u2"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{}},{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"npm test"}}]},"uuid":"a2"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"ok"}]},"uuid":"u3"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"The test passes now."}]},"uuid":"a3"}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"<system-reminder>left out</system-reminder>"},"uuid":"u4"}
+{"type":"user","message":{"role":"user","content":"Now run the linter"},"uuid":"u5"}
+{"type":"ai-title","aiTitle":"Fix the login test"}

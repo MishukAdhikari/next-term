@@ -7,9 +7,10 @@ import NextTermCore
 /// while Peek is open and never after; for an agent tab, from the tab's own buffer, so nothing runs. Both are masked as
 /// read_tab masks. A blocked agent's question shows with a button per choice (1-9 when the text area has the keyboard),
 /// answered the way answer_agent answers, which reads the pane again first; the field sends one line (Return), kept as
-/// a draft per agent until it is sent. ⌘Return opens the agent as its row's click does, ⌘E shows why herdr gives its
-/// state (`agent explain`), ⌘1 the screen again, Esc closes. What the user does here is the user's own: it never asks,
-/// and the agent is no longer an MCP agent's to drive.
+/// a draft per agent until it is sent. ⌘2 shows its conversation instead, from its own transcript (AgentTranscript),
+/// and ⌘1 the screen again, the choice kept for the app's run; ⌘E shows why herdr gives its state (`agent explain`);
+/// ⌘Return opens the agent as its row's click does; Esc closes. What the user does here is the user's own: it never
+/// asks, and the agent is no longer an MCP agent's to drive.
 final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
     /// One of herdr's agents (its pane in the tab's herdr, on one of that herdr's machines when `machine` is set), or the
     /// tab's own agent.
@@ -18,11 +19,16 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         case tab
     }
 
-    /// What the text area shows: the agent's screen, or herdr's reasons for its state.
+    /// What the text area shows: the agent's screen, its conversation (from its own transcript), or herdr's reasons for
+    /// its state.
     private enum Lens: Equatable {
         case screen
+        case conversation
         case explain
     }
+
+    /// The screen or the conversation, as the user last chose (⌘1, ⌘2), for the app's run.
+    private static var chosen = Lens.screen
 
     /// The Peek open now: one at a time.
     private(set) static var current: AgentPeek?
@@ -48,7 +54,9 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
     private let hints = NSTextField(labelWithString: "")
     private var timer: Timer?
     private var reading = false
-    private var lens = Lens.screen
+    private var lens = AgentPeek.chosen
+    /// The transcript's size at the last read, so an unchanged one is not read again.
+    private var transcriptSize: Int?
     /// The question the buttons answer, by its id; nil while it asks none.
     private var shownQuestion: String?
 
@@ -212,6 +220,7 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
             showQuestion(asked?.text, id: id, choices: asked?.choices ?? [])
             field.placeholderString = agent.status == .working
                 ? "\(agent.name) is working: it gets this the way it gets typed input" : "A line to send \(agent.name)"
+            if lens == .conversation { return readConversation() }
             guard lens == .screen, !reading else { return }
             reading = true
             ref.run(.read(pane: pane, source: .recentUnwrapped, lines: Self.lines)) { [weak self] result in
@@ -230,9 +239,113 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
             let menu = asked.flatMap { MCPControl.fieldMenu(tab, question: $0) }
             showQuestion(asked.map { MCPControl.field($0) }, id: MCPControl.questionID(tab), choices: menu?.choices ?? [])
             field.placeholderString = "A line to send \(name.isEmpty ? "it" : name)"
+            if lens == .conversation { return readConversation() }
             if lens == .screen { show(text: MCPControl.fieldTail(tab, Self.lines).joined(separator: "\n")) }
         }
         updateHints()
+    }
+
+    // MARK: the conversation
+
+    /// ⌘2: the agent's last turns from its own transcript, read once now and then once per check while the size
+    /// changed; anything that keeps it from being read shows the screen, with the reason in the note line.
+    func showConversation() {
+        guard lens != .conversation else { return }
+        lens = .conversation
+        Self.chosen = .conversation
+        transcriptSize = nil
+        refresh()
+    }
+
+    private func readConversation() {
+        updateHints()
+        guard let tab, !reading else { return }
+        switch locateTranscript() {
+        case .failure(let unread):
+            fallBack(unread)
+        case .success(let found):
+            let (locator, name) = found
+            reading = true
+            if let remote = tab.remote, let path = tab.controlPath {
+                let script = AgentTranscript.script(locator, knownSize: transcriptSize)
+                RemoteConnection.run(remote.host, path: path, script: script, timeout: 20) { [weak self] output in
+                    guard let self else { return }
+                    self.reading = false
+                    guard self.lens == .conversation else { return }
+                    switch AgentTranscript.answer(output.output) {
+                    case .failure(let unread): self.fallBack(unread)
+                    case .success(let read): self.take(read.tail, size: read.size, kind: locator.kind, name: name)
+                    }
+                }
+                return
+            }
+            let known = transcriptSize
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let found = AgentTranscript.only(AgentTranscript.candidates(locator, home: NSHomeDirectory(),
+                                                                            environment: ProcessInfo.processInfo.environment))
+                let read = (try? found.get()).flatMap(AgentTranscript.readTail)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.reading = false
+                    guard self.lens == .conversation else { return }
+                    if case .failure(let unread) = found { return self.fallBack(unread) }
+                    guard let read else { return self.fallBack(.none) }
+                    self.take(read.size == known ? nil : read.tail, size: read.size, kind: locator.kind, name: name)
+                }
+            }
+        }
+    }
+
+    /// Where its transcript is, and the agent's name for the turns: herdr's session for one of its agents; the session
+    /// Next Term's readers tie to an agent tab on this Mac.
+    private func locateTranscript() -> Result<(AgentTranscript.Locator, String), AgentTranscript.Unread> {
+        guard let tab else { return .failure(.none) }
+        switch subject {
+        case .herdr(let machine, _):
+            guard let agent = ref?.agent else { return .failure(.none) }
+            if machine != nil {
+                return .failure(.unreachable("An agent on one of herdr's machines is reached only through herdr, which gives no conversation."))
+            }
+            let home: String? = tab.remote == nil ? NSHomeDirectory() : nil
+            return AgentTranscript.locate(agent: agent.kind, session: agent.session, home: home).map { ($0, agent.name) }
+        case .tab:
+            guard tab.remote == nil else {
+                return .failure(.unreachable("Next Term reads the conversation of an agent tab on this Mac only."))
+            }
+            guard let kind = AgentKind(program: tab.status.program) else { return .failure(.notRead(agent: tab.status.program)) }
+            let pid = tcgetpgrp(tab.view.process.childfd)
+            let id = pid > 0 ? AgentSessions.sessionID(of: kind, pid: pid) : nil
+            let session = id ?? kind.resumedID(in: tab.status.command)
+            return AgentTranscript.locate(agent: kind, sessionID: session).map { ($0, kind.name) }
+        }
+    }
+
+    /// A read's tail as turns (nil: the size did not change, so what shows stays).
+    private func take(_ tail: Data?, size: Int, kind: AgentTranscript.Kind, name: String) {
+        transcriptSize = size
+        guard let tail else { return }
+        guard let turns = AgentTranscript.turns(tail: tail, kind: kind) else { return fallBack(.unparsed) }
+        note.stringValue = ""
+        show(text: AgentTranscript.text(turns, agent: name))
+    }
+
+    /// No conversation: the screen, and why in the note line.
+    private func fallBack(_ unread: AgentTranscript.Unread) {
+        note.stringValue = unread.reason
+        transcriptSize = nil
+        switch subject {
+        case .herdr(_, let pane):
+            guard let ref, !reading else { return }
+            reading = true
+            ref.run(.read(pane: pane, source: .recentUnwrapped, lines: Self.lines)) { [weak self] result in
+                guard let self else { return }
+                self.reading = false
+                if case .text(let screen) = result, self.lens == .conversation { self.show(text: HerdrMCP.screen(screen, lines: Self.lines)) }
+            }
+        case .tab:
+            guard let tab else { return }
+            show(text: MCPControl.fieldTail(tab, Self.lines).joined(separator: "\n"))
+        }
     }
 
     private func show(text shown: String) {
@@ -260,7 +373,9 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
 
     private func updateHints() {
         var keys = ["⌘↩ Open", "esc Close"]
-        if case .herdr = subject { keys.insert(lens == .screen ? "⌘E Why This State?" : "⌘1 Screen", at: 1) }
+        keys.insert(lens == .conversation ? "⌘1 Screen" : "⌘2 Conversation", at: 1)
+        if case .herdr = subject, lens != .explain { keys.insert("⌘E Why This State?", at: 2) }
+        if lens == .explain { keys.insert("⌘1 Screen", at: 1) }
         if shownQuestion != nil { keys.insert("1-9 Answer", at: 0) }
         hints.stringValue = keys.joined(separator: "   ")
     }
@@ -395,13 +510,17 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
     func showScreen() {
         guard lens != .screen else { return }
         lens = .screen
+        Self.chosen = .screen
+        note.stringValue = ""
         refresh()
     }
 
-    /// Esc: back to the screen from herdr's reasons, else closed.
+    /// Esc: back to the screen or the conversation from herdr's reasons, else closed.
     func escape() {
-        if lens != .screen { return showScreen() }
-        close()
+        guard lens == .explain else { return close() }
+        lens = AgentPeek.chosen
+        transcriptSize = nil
+        refresh()
     }
 
     // MARK: the field
@@ -450,6 +569,7 @@ final class PeekView: NSView {
         case "\r": peek?.open()
         case "e": peek?.explain()
         case "1": peek?.showScreen()
+        case "2": peek?.showConversation()
         default: return super.performKeyEquivalent(with: event)
         }
         return true
