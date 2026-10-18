@@ -52,6 +52,13 @@ enum SelfTest {
         return support?.appendingPathComponent("Next Term", isDirectory: true)
     }
 
+    /// Where the record of your commands is kept (CommandHistoryStore): `supportFolder`, the relaunch harness's own in its
+    /// runs; for the plain self-test a temporary folder of its own, so it never reads or writes yours.
+    nonisolated static var historyFolder: URL? {
+        guard mode == .plain else { return supportFolder }
+        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nextterm-history-\(getpid())", isDirectory: true)
+    }
+
     /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
     /// saves or restores sessions.
     nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }
@@ -86,6 +93,8 @@ enum SelfTest {
         // domain only, so never in your defaults.
         UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
         #endif
+        // Suggestions while typing only in their own part (ghostText): elsewhere → and End move the cursor, as before.
+        GhostPreferences.testIsOn = false
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
@@ -649,7 +658,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, ghostText, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -675,6 +684,7 @@ enum SelfTest {
         case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
         case "terminalPosition": return await terminalPositionChecks(c, proj: proj) // a position chosen again, folds, shares
         case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
+        case "ghostText": return await ghostTextChecks(c) // what read_tab says is typed, and suggestions while typing
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
         case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
@@ -1039,6 +1049,7 @@ enum SelfTest {
         await restoreMCPChecks(proj: proj)
         await endStrayQuestions(after: "the MCP restore checks")
         await completionChecks(c)
+        await ghostTextChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
     }

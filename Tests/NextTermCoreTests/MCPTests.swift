@@ -52,6 +52,10 @@ import Testing
         }
         #expect(hints("list_tabs")["readOnlyHint"] as? Bool == true)
         #expect(hints("read_tab")["readOnlyHint"] as? Bool == true)
+        // read_tab and wait_for_tab say what is typed at a zsh prompt, and that a plugin's ghost is not.
+        func described(_ name: String) -> String { tools.first { $0["name"] as? String == name }?["description"] as? String ?? "" }
+        #expect(described("read_tab").contains("input: the line being typed") && described("read_tab").contains("left out of screen"))
+        #expect(described("wait_for_tab").contains("with input at a zsh prompt as read_tab gives it"))
         // Typing into a terminal can run anything: clients must be able to ask first.
         #expect(hints("send_to_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("new_tab")["destructiveHint"] as? Bool == true)

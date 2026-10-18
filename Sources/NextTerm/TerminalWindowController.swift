@@ -318,9 +318,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
         window.delegate = self
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
-        window.onTerminalKey = { [weak self] event, view in self?.completions.handle(event, in: view) ?? false }
+        // Tab completion's list first, then a suggestion's keys.
+        window.onTerminalKey = { [weak self] event, view in
+            guard let self else { return false }
+            if self.completions.handle(event, in: view) {
+                self.ghosts.tabListTook(in: view)
+                return true
+            }
+            return self.ghosts.handle(event, in: view)
+        }
         window.onFirstResponderChange = { [weak self] responder in
             self?.completions.responderChanged()
+            self?.ghosts.responderChanged(to: responder)
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
             // Typing into a folded terminal (behind the rail, or under its bar above or below the editor): it opens.
             if self.terminalCollapsed { self.expandTerminal() }
@@ -1302,6 +1311,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return !(KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused)
         }
         if item.action == #selector(revealInSidebar(_:)) { return editorArea.activePath != nil }
+        if item.action == #selector(forgetSuggestion(_:)) { return activeTab?.ghost.isShowing == true }
         if item.action == #selector(toggleEnvValues(_:)) {
             item.state = editorArea.activeEditor?.hidesEnvValues == true ? .on : .off
             return editorArea.activeEditor?.isEnvFile == true
@@ -1803,6 +1813,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// Tab completion at this window's keyboard.
     private(set) lazy var completions = CompletionController(owner: self)
+    /// Suggestions while typing: their keys at this window's keyboard.
+    private(set) lazy var ghosts = GhostController(owner: self)
 
     private(set) lazy var fileFinder: GoToFileController = {
         let finder = GoToFileController()
@@ -2513,6 +2525,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // Not selectNextTab:/selectPreviousTab:: NSWindow implements those (system tabs) and would swallow them.
     @objc func showNextTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: 1) : cycleTab(by: 1) }
     @objc func showPreviousTab(_ sender: Any?) { isEditorFocused ? editorArea.cycle(by: -1) : cycleTab(by: -1) }
+
+    /// Edit › Forget This Suggestion (⇧⌘⌫): the suggestion showing in the terminal with the keyboard leaves the record.
+    @objc func forgetSuggestion(_ sender: Any?) {
+        if activeTab?.ghost.forget() != true { NSSound.beep() }
+    }
 
     @objc func clearBuffer(_ sender: Any?) {
         if KeyboardShortcuts.shared.preset.clearsOnlyInTerminal && isEditorFocused { return }

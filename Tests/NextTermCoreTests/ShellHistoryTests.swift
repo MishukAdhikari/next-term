@@ -151,6 +151,23 @@ import Testing
         #expect(parse("wrong;hist;1") == nil)
     }
 
+    /// The `cmd` mark's third field says who put the line there: the history hook kept it out (k), or it resumes a job (j).
+    @Test func theCommandMarkSaysWhoPutTheLineThere() {
+        let typed = Data("npm test".utf8).base64EncodedString()
+        #expect(parse("\(n);cmd;\(typed);\(typed);k") == .commandStarted("npm test", expanded: nil, flags: .keptOut))
+        #expect(parse("\(n);cmd;\(typed);\(typed);j") == .commandStarted("npm test", expanded: nil, flags: .jobResume))
+        #expect(parse("\(n);cmd;\(typed);\(typed);kj") == .commandStarted("npm test", expanded: nil, flags: [.keptOut, .jobResume]))
+        // Two fields (an older integration), an empty one, or a letter this version doesn't know: no flag.
+        #expect(parse("\(n);cmd;\(typed);\(typed)") == .commandStarted("npm test", expanded: nil))
+        #expect(parse("\(n);cmd;\(typed);\(typed);") == .commandStarted("npm test", expanded: nil, flags: []))
+        #expect(parse("\(n);cmd;\(typed);\(typed);kz") == .commandStarted("npm test", expanded: nil, flags: []))
+        // The integration's preexec says so: k from the line the history hook kept, j where a job's text replaced it.
+        let env = ShellIntegration.zshenvScript
+        #expect(env.contains("[[ -n ${__nextterm_hran-} ]] && __nextterm_hran= flags=k"))
+        #expect(env.contains("[[ -n $REPLY ]] && line=$REPLY expanded=$REPLY flags+=j"))
+        #expect(env.contains(#"cmd;%s;%s;%s\007' "$__nextterm_nonce" "$(__nextterm_b64 "$line")" "$(__nextterm_b64 "$expanded")" "$flags""#))
+    }
+
     /// The hook's literals are ShellHistory's (scripts/zsh-integration-test.py reads the hook from its source too).
     @Test func theHookSaysWhatTheConstantsSay() {
         let script = ZshHistoryScript.script
