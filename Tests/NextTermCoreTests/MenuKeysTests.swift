@@ -99,4 +99,73 @@ struct MenuKeysTests {
         // Another command given ⌘R takes it from Fetch, as from any command for everywhere.
         #expect(bindings.owners(of: Self.commandR, defaults: keys, except: "goToLine:") == ["gitFetch:"])
     }
+
+    // MARK: Markdown
+
+    /// ⇧⌘V switches the Markdown file in front between Live Preview and its source in every set, as it opens VS Code's
+    /// preview, and a VS Code binding of that preview lands on it.
+    @Test func markdownLivePreviewIsShiftCommandVInEverySet() {
+        let shiftV = KeyChord(key: "v", command: true, shift: true)
+        for preset in KeymapPreset.allCases {
+            #expect(Self.defaults(under: preset)["toggleMarkdownPreview:"] == .some(shiftV), "\(preset.name)")
+        }
+        #expect(ImportVSCode.commandMap["markdown.showPreview"] == "toggleMarkdownPreview:")
+        #expect(ImportShortcuts.titles["toggleMarkdownPreview:"] == "Markdown Live Preview")
+    }
+
+    static let commandB = KeyChord(key: "b", command: true)
+
+    /// ⌘B is Bold only while a Markdown file's editor has the keyboard, and Hide Project Sidebar everywhere else. Every
+    /// Markdown command keeps to its place so; no other editor command shares a key with a command for everywhere.
+    @Test func boldSharesCommandBWithTheSidebarOnlyInAMarkdownEditor() {
+        let bindings = KeyBindings()
+        let keys = Self.defaults(under: .nextTerm)
+        #expect(keys["toggleMarkdownBold:"] == .some(Self.commandB) && keys["toggleProjectSidebar:"] == .some(Self.commandB))
+        #expect(KeyBindings.canShareKey("toggleMarkdownBold:", "toggleProjectSidebar:"))
+        #expect(KeyBindings.canShareKey("toggleProjectSidebar:", "toggleMarkdownBold:"))
+        #expect(KeyBindings.canShareKey("toggleMarkdownItalic:", "toggleProjectSidebar:"))
+        #expect(!KeyBindings.canShareKey("toggleMarkdownItalic:", "duplicateLine:"))
+        #expect(!KeyBindings.canShareKey("duplicateLine:", "toggleProjectSidebar:"))
+        #expect(bindings.sharers(of: Self.commandB, defaults: keys, except: "toggleMarkdownBold:") == ["toggleProjectSidebar:"])
+        let titles = ["toggleMarkdownBold:": "Bold", "toggleProjectSidebar:": "Hide Project Sidebar"]
+        let note = KeyBindings.sharingNote(Self.commandB, ["toggleMarkdownBold:", "toggleProjectSidebar:"], title: { titles[$0] ?? $0 })
+        #expect(note == "⌘B is Bold while a Markdown file’s editor has the keyboard, Hide Project Sidebar everywhere else")
+    }
+
+    /// ⌘K is Link in a Markdown file's editor and Clear Buffer everywhere else; under JetBrains' set ⌘K is Commit…, a
+    /// command for everywhere, so Link has no key there.
+    @Test func linkSharesCommandKWithClearBuffer() {
+        let bindings = KeyBindings()
+        let keys = Self.defaults(under: .nextTerm)
+        let commandK = KeyChord(key: "k", command: true)
+        #expect(keys["insertMarkdownLink:"] == .some(commandK))
+        #expect(bindings.owners(of: commandK, defaults: keys, except: "insertMarkdownLink:").isEmpty)
+        let titles = ["insertMarkdownLink:": "Link", "clearBuffer:": "Clear Buffer"]
+        let note = KeyBindings.sharingNote(commandK, ["insertMarkdownLink:", "clearBuffer:"], title: { titles[$0] ?? $0 })
+        #expect(note == "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer everywhere else")
+        #expect(Self.defaults(under: .jetBrains)["insertMarkdownLink:"] == .some(nil))
+    }
+
+    @Test func theMarkdownKeys() {
+        let keys = Self.defaults(under: .nextTerm)
+        func shown(_ id: String) -> String { (keys[id] ?? nil)?.display ?? "none" }
+        #expect(shown("toggleMarkdownItalic:") == "⌘I" && shown("toggleMarkdownStrikethrough:") == "⇧⌘X")
+        #expect(shown("toggleMarkdownTask:") == "⇧⌘L" && shown("markdownBodyText:") == "⌥⌘0")
+        #expect((1...6).map { shown("markdownHeading:#\($0)") } == (1...6).map { "⌥⌘\($0)" })
+        #expect(shown("toggleMarkdownCode:") == "none" && shown("insertMarkdownCodeBlock:") == "none")
+        // Edit › Markdown's are the editor's; the switch and Go to Heading are the window's.
+        #expect(KeyBindings.markdownCommands.isSubset(of: KeyBindings.editorCommands) && KeyBindings.markdownCommands.count == 17)
+        for id in MenuKeys.defaults.keys where id.lowercased().contains("markdown") {
+            #expect(KeyBindings.editorCommands.contains(id) == (id != "toggleMarkdownPreview:"), "\(id)")
+        }
+        #expect(KeyBindings.scope(of: "goToHeading:") == .everywhere)
+    }
+
+    /// Go to Heading is ⇧⌘O, VS Code's Go to Symbol; under JetBrains' keys, where ⇧⌘O is Go to File, it is ⌘F12.
+    @Test func goToHeadingIsShiftCommandOOrCommandF12() {
+        func shown(_ preset: KeymapPreset) -> String { (Self.defaults(under: preset)["goToHeading:"] ?? nil)?.display ?? "none" }
+        #expect(shown(.nextTerm) == "⇧⌘O" && shown(.vsCode) == "⇧⌘O")
+        #expect(shown(.jetBrains) == KeyChord(key: "\u{F70F}", command: true).display)
+        #expect((Self.defaults(under: .jetBrains)["goToFile:"] ?? nil)?.display == "⇧⌘O")
+    }
 }

@@ -182,23 +182,23 @@ import Testing
     @Test func aKeyForTheEditorAndOneForTheWindow() throws {
         // Zed obeys the editor's binding in the editor and the window's everywhere else: Next Term shares the key
         // the same way, so both come in ticked and the row says which has it where.
-        let window = #"{ "bindings": { "cmd-shift-l": "pane::SplitRight" } }"#
-        let workspace = #"{ "context": "Workspace", "bindings": { "cmd-shift-l": "pane::SplitRight" } }"#
-        let editor = #"{ "context": "Editor", "bindings": { "cmd-shift-l": "editor::DuplicateLineDown" } }"#
+        let window = #"{ "bindings": { "cmd-shift-u": "pane::SplitRight" } }"#
+        let workspace = #"{ "context": "Workspace", "bindings": { "cmd-shift-u": "pane::SplitRight" } }"#
+        let editor = #"{ "context": "Editor", "bindings": { "cmd-shift-u": "editor::DuplicateLineDown" } }"#
         for keymap in ["[\(window), \(editor)]", "[\(workspace), \(editor)]", "[\(editor), \(workspace)]"] {
             let result = try shortcuts(keymap)
             #expect(result.shortcuts.count == 2 && result.shortcuts.allSatisfy(\.ticked), "\(keymap)")
             let settled = ImportPlan(preset: .nextTerm, shortcuts: result.shortcuts).settlingShortcuts(current: ImportShortcutsTests.current())
             #expect(settled.shortcuts.count == 2 && settled.shortcuts.allSatisfy(\.ticked), "\(keymap)")
-            #expect(settled.shortcuts.first?.note == "⇧⌘L is Duplicate Line while the editor has the keyboard, Split Right everywhere else")
+            #expect(settled.shortcuts.first?.note == "⇧⌘U is Duplicate Line while the editor has the keyboard, Split Right everywhere else")
         }
         // A binding with no context matches as low as the editor's, so the one further down wins in the editor:
         // here Split Right, everywhere, as in Zed.
         let after = try shortcuts("[\(editor), \(window)]")
         #expect(after.shortcuts.map(\.command) == ["splitRight:"])
-        #expect(reasons(after.skipped)["cmd-shift-l → editor::DuplicateLineDown"] == "replaced further down by pane::SplitRight")
+        #expect(reasons(after.skipped)["cmd-shift-u → editor::DuplicateLineDown"] == "replaced further down by pane::SplitRight")
         // A terminal-only binding shares with the editor's command when Zed obeys each in its part.
-        let terminal = try shortcuts(#"[{ "bindings": { "cmd-shift-l": "editor::DuplicateLineDown" } }, { "context": "Terminal", "bindings": { "cmd-shift-l": "pane::SplitRight" } }]"#)
+        let terminal = try shortcuts(#"[{ "bindings": { "cmd-shift-u": "editor::DuplicateLineDown" } }, { "context": "Terminal", "bindings": { "cmd-shift-u": "pane::SplitRight" } }]"#)
         #expect(terminal.shortcuts.count == 2 && terminal.shortcuts.allSatisfy(\.ticked))
 
         // Two commands that can't share a key: the one Zed obeys in more places keeps it.

@@ -1266,6 +1266,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(goToHeading(_:)) { return editorArea.activeEditor?.markdown != nil }
         if item.action == #selector(gitRollback(_:)) { return gitFolder != nil && window?.attachedSheet == nil && !rollbackTargets.isEmpty }
         if item.action == #selector(showChanges(_:)) {
             return editorArea.activePath != nil || sidebar.selection.contains { !$0.isFolder } || sidebar.selectedDeleted.contains { !$0.isDirectory }
@@ -1304,6 +1305,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(toggleEnvValues(_:)) {
             item.state = editorArea.activeEditor?.hidesEnvValues == true ? .on : .off
             return editorArea.activeEditor?.isEnvFile == true
+        }
+        if item.action == #selector(toggleMarkdownPreview(_:)) {
+            let editor = editorArea.activeEditor
+            item.title = editor?.markdownTooLarge == true ? "Markdown Live Preview (file too large)" : "Markdown Live Preview"
+            item.state = editor?.showsLivePreview == true ? .on : .off
+            return editor?.preview != nil
         }
         if item.action == #selector(toggleTerminalCollapsed(_:)) {
             item.title = terminalCollapsed ? "Expand Terminal" : "Collapse Terminal"
@@ -1803,6 +1810,29 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         return finder
     }()
 
+    private(set) lazy var headingFinder: GoToHeadingController = {
+        let finder = GoToHeadingController()
+        finder.onJump = { [weak self] line in
+            guard let editor = self?.editorArea.activeEditor else { return }
+            self?.window?.makeFirstResponder(editor.textView)
+            editor.textView.go(toLine: line + 1)
+        }
+        return finder
+    }()
+
+    /// Edit › Go to Heading… in a Markdown file (one Live Preview reads: up to 2 MB): its headings to jump to, and its
+    /// counts, or the selection's. The lines come as the styler has read them, so nothing is read again.
+    @objc func goToHeading(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, let styler = editor.markdown, let window else { return NSSound.beep() }
+        let text = editor.document.storage.string as NSString, index = editor.document.lines
+        let lines = styler.allLines()
+        let selection = editor.textView.selectedRange()
+        let chosen = selection.length > 0 ? selection : nil
+        let stats = MarkdownOutline.stats(lines, in: text, index, selection: chosen)
+        let headings = MarkdownOutline.headings(lines, in: text, index)
+        headingFinder.show(headings: headings, stats: stats, ofSelection: chosen != nil, over: window)
+    }
+
     /// ⌘P: any file in the project, by a few letters of its name or path. Selected text (in the editor or
     /// the terminal) starts the search, as it does for Find; `app/User.php:42` in a log opens at line 42.
     @objc func goToFile(_ sender: Any?) {
@@ -2265,6 +2295,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     @objc func toggleEnvValues(_ sender: Any?) {
         guard let editor = editorArea.activeEditor, editor.isEnvFile else { return NSSound.beep() }
         editor.toggleEnvValues()
+    }
+
+    /// View › Markdown Live Preview, for the Markdown file in front: Live Preview or Source, remembered for that file
+    /// (Settings › Editor sets what the others open in).
+    @objc func toggleMarkdownPreview(_ sender: Any?) {
+        guard let editor = editorArea.activeEditor, editor.preview != nil else { return NSSound.beep() }
+        editor.toggleMarkdownPreview()
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, openTabIn directory: String) {

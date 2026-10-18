@@ -59,24 +59,41 @@ final class CodeTextView: NSTextView {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         needsDisplay = true // the current-line band moves
         enclosingScrollView?.verticalRulerView?.needsDisplay = true
+        if !holdsReveal { onSelectionMoved?(stillSelecting) }
     }
 
+    /// The selection moved (`stillSelecting` while a drag selects), or the keyboard came or went: a Markdown file's
+    /// Live Preview shows the syntax of the lines it is on (MarkdownPreview).
+    var onSelectionMoved: ((_ stillSelecting: Bool) -> Void)?
+    /// A click is being tracked: what shows waits for the mouse to come up, so no text moves under the pointer.
+    private var holdsReveal = false
+
     override func becomeFirstResponder() -> Bool {
-        defer { needsDisplay = true }
+        defer {
+            needsDisplay = true
+            onSelectionMoved?(false)
+        }
         return super.becomeFirstResponder()
     }
 
     override func resignFirstResponder() -> Bool {
         defer { needsDisplay = true }
         let resigned = super.resignFirstResponder()
-        if resigned { caretPlacedByUser = false }
+        if resigned {
+            caretPlacedByUser = false
+            onSelectionMoved?(false)
+        }
         return resigned
     }
 
     /// A click or a key in the text since it got the keyboard: a .env file's caret line then shows its
-    /// value (CodeEditorView.hiddenEnvValues).
+    /// value (CodeEditorView.hiddenEnvValues), and a Markdown file's its syntax.
     var caretPlacedByUser = false {
-        didSet { if caretPlacedByUser != oldValue { needsDisplay = true } }
+        didSet {
+            guard caretPlacedByUser != oldValue else { return }
+            needsDisplay = true
+            if !holdsReveal { onSelectionMoved?(false) }
+        }
     }
 
     private var keyObserver: NSObjectProtocol?
@@ -94,8 +111,13 @@ final class CodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // A Markdown task's box ticks without moving the caret; ⌘-click opens a link (MarkdownCommands.swift).
+        if handleMarkdownClick(event) { return }
+        holdsReveal = true
         caretPlacedByUser = true
-        super.mouseDown(with: event)
+        super.mouseDown(with: event) // tracks the click (or drag) until the mouse is up
+        holdsReveal = false
+        onSelectionMoved?(false)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -108,8 +130,9 @@ final class CodeTextView: NSTextView {
     // MARK: typing
 
     /// Return keeps the indent; after an opening bracket it indents one more, and between a pair of
-    /// brackets it puts the closing one on its own line.
+    /// brackets it puts the closing one on its own line. In a Markdown list or quote it makes the next item.
     override func insertNewline(_ sender: Any?) {
+        if markdownNewline() { return }
         let text = string as NSString
         let caret = selectedRange()
         let lineRange = text.lineRange(for: NSRange(location: caret.location, length: 0))
@@ -134,8 +157,10 @@ final class CodeTextView: NSTextView {
         insertText("\n" + indent, replacementRange: caret)
     }
 
-    /// Tab indents the selected lines when the selection spans lines; otherwise it inserts an indent.
+    /// Tab indents the selected lines when the selection spans lines; otherwise it inserts an indent. On a Markdown
+    /// list item it nests the item.
     override func insertTab(_ sender: Any?) {
+        if markdownNest(1) { return }
         let range = selectedRange()
         if range.length > 0, (string as NSString).substring(with: range).contains("\n") {
             shiftLines(by: 1)
@@ -150,7 +175,10 @@ final class CodeTextView: NSTextView {
         insertText(String(repeating: " ", count: width - column % width), replacementRange: range)
     }
 
-    override func insertBacktab(_ sender: Any?) { shiftLines(by: -1) }
+    override func insertBacktab(_ sender: Any?) {
+        if markdownNest(-1) { return }
+        shiftLines(by: -1)
+    }
 
     @objc func indentSelection(_ sender: Any?) { shiftLines(by: 1) }
     @objc func outdentSelection(_ sender: Any?) { shiftLines(by: -1) }
@@ -238,6 +266,7 @@ final class CodeTextView: NSTextView {
         let lineEdits = [#selector(duplicateLine(_:)), #selector(deleteLine(_:)), #selector(moveLineUp(_:)), #selector(moveLineDown(_:))]
         if let action = item.action, lineEdits.contains(action) { return isEditable && !isBehindKeyWindow }
         if item.action == #selector(copyPathWithLine(_:)) { return document != nil && !isBehindKeyWindow }
+        if let action = item.action, Self.markdownActions.contains(action) { return markdownStyler != nil && isEditable && !isBehindKeyWindow }
         // With nothing selected, ⌘C and ⌘X take the caret's line.
         if item.action == #selector(NSText.copy(_:)), copiesWholeLine { return true }
         if item.action == #selector(NSText.cut(_:)), copiesWholeLine { return isEditable }
@@ -275,14 +304,14 @@ final class CodeTextView: NSTextView {
     }
 
     /// The text's lines, as the document keeps them (or counted afresh if they are not in step).
-    private var lineIndex: LineIndex {
+    var lineIndex: LineIndex {
         if let lines = document?.lines, lines.length == (string as NSString).length { return lines }
         return LineIndex(string)
     }
 
-    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives. ⌘Z puts back the
-    /// caret or the selection from before it, and ⇧⌘Z the one after.
-    func apply(_ edit: LineEdits.Edit, named name: String) {
+    /// One edit, undone in one step (named in Edit › Undo), then the selection it gives, scrolled to unless `scrolls`
+    /// is false (a ticked box). ⌘Z puts back the caret or the selection from before it, and ⇧⌘Z the one after.
+    func apply(_ edit: LineEdits.Edit, named name: String, scrolls: Bool = true) {
         guard isEditable else { return } // as shouldChangeText would say, before anything goes into the undo step
         breakUndoCoalescing() // typing just before is undone on its own
         let before = selectedRanges
@@ -294,7 +323,7 @@ final class CodeTextView: NSTextView {
         restoresSelection(before, edit.selection, afterEdit: true)
         undoManager?.setActionName(name)
         setSelectedRange(edit.selection)
-        scrollRangeToVisible(edit.selection)
+        if scrolls { scrollRangeToVisible(edit.selection) }
     }
 
     /// The text's own undo and redo select the text that changed. Registered just before the change, this runs
@@ -365,13 +394,15 @@ final class CodeTextView: NSTextView {
         if let edit = LineEdits.delete(selectedRange(), in: string as NSString, lineIndex) { apply(edit, named: "Cut") }
     }
 
-    /// A whole line copied that way, pasted with nothing selected, goes in above the caret's line, whole.
+    /// A whole line copied that way, pasted with nothing selected, goes in above the caret's line, whole. In a
+    /// Markdown file, a web address pasted over text makes it a link.
     override func paste(_ sender: Any?) {
         let board = NSPasteboard.general
         if copiesWholeLine, isEditable, let text = board.string(forType: .string), text.hasSuffix("\n"),
            board.string(forType: Self.wholeLineType) == text {
             return apply(LineEdits.pasteLines(text, at: selectedRange().location, lineIndex), named: "Paste")
         }
+        if pasteMarkdownLink() { return }
         super.paste(sender)
     }
 
@@ -405,6 +436,8 @@ final class CodeTextView: NSTextView {
 /// Line numbers down the left, the current line's brighter.
 final class LineNumberRuler: NSRulerView {
     private weak var codeView: CodeTextView?
+    /// The rows' heights and baselines (the empty last line's row has no glyph to say where its baseline is).
+    private let spacing: LineSpacing
     /// Lines that differ from the last commit, drawn as a bar beside the numbers.
     var marks = LineChanges.Marks() {
         didSet { if marks != oldValue { needsDisplay = true } }
@@ -431,8 +464,9 @@ final class LineNumberRuler: NSRulerView {
     static let modified = NSColor(hex: 0x375FAD)
     static let deleted = NSColor(hex: 0xC75450)
 
-    init(textView: CodeTextView) {
+    init(textView: CodeTextView, spacing: LineSpacing) {
         codeView = textView
+        self.spacing = spacing
         super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
         clientView = textView
         ruleThickness = 44
@@ -491,26 +525,28 @@ final class LineNumberRuler: NSRulerView {
               let container = view.textContainer, let scroll = view.enclosingScrollView else { return }
         let index = document.lines
         let text = view.string as NSString
-        let visible = scroll.contentView.bounds
-        let glyphs = layoutManager.glyphRange(forBoundingRect: visible.offsetBy(dx: 0, dy: -view.textContainerOrigin.y), in: container)
+        let visible = scroll.contentView.bounds.offsetBy(dx: 0, dy: -view.textContainerOrigin.y)
+        // The rows on screen laid out now if an edit, a restyle or Live Preview's syntax changed them since: until then a row
+        // has only an estimated place and height. Only the rows on screen, which the text view lays out to draw anyway.
+        layoutManager.ensureLayout(forBoundingRect: visible, in: container)
+        let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
         let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
         let caretLine = index.line(at: min(view.selectedRange().location, text.length))
         let font = numberFont
         let dim: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0x4B5059)]
         let bright: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(hex: 0xA1A3AB)]
-        let offset = convert(NSPoint.zero, from: view).y
+        let offset = convert(NSPoint.zero, from: view).y + view.textContainerOrigin.y
 
         let marks = self.marks
         let blame = showsBlame ? blameSource?() : nil
         let blameStyle = blame.map { _ in BlameStyle(font: numberFont, width: blameWidth) }
         var tipRects: [NSRect] = []
-        func draw(_ line: Int, fragment: NSRect) {
+        func draw(_ line: Int, row: NumberRow) {
+            let fragment = row.rect
             let label = "\(line + 1)" as NSString
             let attributes = line == caretLine ? bright : dim
             let size = label.size(withAttributes: attributes)
-            // Baseline-aligned with the code: same line fragment, vertically centred.
-            let top = fragment.minY + view.textContainerOrigin.y + offset
-            let y = top + (fragment.height - size.height) / 2
+            let top = fragment.minY + offset
             guard top + fragment.height > bounds.minY, top < bounds.maxY else { return }
             if let blame, let blameStyle, blame.line(line) != nil {
                 // The whole line, all of its rows when it wraps.
@@ -521,7 +557,8 @@ final class LineNumberRuler: NSRulerView {
                 drawBlame(blame, line: line, in: rect, rowHeight: fragment.height, style: blameStyle)
                 if blame.isBlockStart(line) || tipRects.isEmpty { tipRects.append(rect) } else { tipRects[tipRects.count - 1] = tipRects[tipRects.count - 1].union(rect) }
             }
-            label.draw(at: NSPoint(x: ruleThickness - size.width - 12, y: y), withAttributes: attributes)
+            // On the text's baseline, in the row the text starts on: a heading's number sits on the heading.
+            label.draw(at: NSPoint(x: ruleThickness - size.width - 12, y: numberTop(baseline: row.baseline + offset, font: font)), withAttributes: attributes)
             // The change bar, between the numbers and the code (a wrapped line's rows all get it).
             if let mark = marks.lines[line] {
                 (mark == .added ? Self.added : Self.modified).setFill()
@@ -545,44 +582,87 @@ final class LineNumberRuler: NSRulerView {
         while line < index.count {
             let start = index.starts[line]
             if start > characters.location + characters.length { break }
+            let row = numberRow(ofLine: line, index, text, layoutManager)
             if start >= text.length {
                 // The empty last line after a final newline.
-                if layoutManager.extraLineFragmentTextContainer != nil { draw(line, fragment: layoutManager.extraLineFragmentRect) }
+                if let row { draw(line, row: row) }
                 break
             }
-            if line == index.count - 1, marks.deletedBefore.contains(index.count) {
+            if line == index.count - 1, marks.deletedBefore.contains(index.count), let row {
                 // Lines removed from the very end: the wedge goes under the last line.
-                let glyph = layoutManager.glyphIndexForCharacter(at: start)
-                let last = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
-                drawDeletion(at: last.maxY + view.textContainerOrigin.y + offset)
+                drawDeletion(at: row.rect.maxY + offset)
             }
-            let glyph = layoutManager.glyphIndexForCharacter(at: start)
-            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
-            draw(line, fragment: fragment)
+            if let row { draw(line, row: row) }
             line += 1
         }
         if blame != nil { setBlameToolTips(tipRects) }
+    }
+
+    /// The row (line fragment) a line's number goes on, and the baseline of the line's text in it.
+    private typealias NumberRow = (rect: NSRect, baseline: CGFloat)
+
+    /// A line's number row in the text container's coordinates, from the layout as it is (drawing lays out the rows on screen
+    /// first): the row of the line's first shown glyph. Not the row of its first glyph: Live Preview's hidden syntax at the
+    /// start of a line (a heading's #s, a leading ** or [) is null glyphs, which TextKit puts at the end of the row above, so
+    /// that row's number and this one's would overlap (and a heading's row is taller than it). The line break counts as shown,
+    /// so only a last line with every character hidden has no row of its own (nil). Reads past the line's first glyph only
+    /// while it is hidden, so a line with nothing hidden at its start (every line in Source) costs what it did.
+    private func numberRow(ofLine line: Int, _ index: LineIndex, _ text: NSString, _ layoutManager: NSLayoutManager) -> NumberRow? {
+        let range = index.range(ofLine: line)
+        guard range.location < text.length else {
+            // The empty last line after a final newline: no glyph, and laid out at the base line height.
+            guard layoutManager.extraLineFragmentTextContainer != nil else { return nil }
+            let rect = layoutManager.extraLineFragmentRect
+            return (rect, rect.minY + spacing.baselineOffset)
+        }
+        let end = min(NSMaxRange(range), text.length)
+        var glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+        while layoutManager.propertyForGlyph(at: glyph).contains(.null) {
+            let next = glyph + 1
+            guard layoutManager.isValidGlyphIndex(next), layoutManager.characterIndexForGlyph(at: next) < end else { return nil }
+            glyph = next
+        }
+        let rect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+        return (rect, rect.minY + layoutManager.location(forGlyphAt: glyph).y)
+    }
+
+    /// A number's top for its line's baseline: its own baseline on the text's.
+    private func numberTop(baseline: CGFloat, font: NSFont) -> CGFloat { baseline - font.ascender }
+
+    /// For the self-test: where a line's number is drawn, top to bottom, and its baseline, in the text view's coordinates (the
+    /// line laid out first, as drawing lays out the rows on screen). Nil when it has no row of its own.
+    func numberPlace(ofLine line: Int) -> (minY: CGFloat, maxY: CGFloat, baseline: CGFloat)? {
+        guard let view = codeView, let document = view.document, let layoutManager = view.layoutManager, line < document.lines.count else { return nil }
+        let index = document.lines
+        layoutManager.ensureLayout(forCharacterRange: index.range(ofLine: line))
+        guard let row = numberRow(ofLine: line, index, view.string as NSString, layoutManager) else { return nil }
+        let font = numberFont
+        let baseline = row.baseline + view.textContainerOrigin.y
+        let top = numberTop(baseline: baseline, font: font)
+        return (top, top + ("\(line + 1)" as NSString).size(withAttributes: [.font: font]).height, baseline)
     }
 }
 
 /// Line height for code: every line the same height (the font's natural height times the user's
 /// factor), with the text centred in it rather than sitting on the bottom as a paragraph style would
-/// put it. The gutter and the current-line band follow the same line fragments.
-final class LineSpacing: NSObject, NSLayoutManagerDelegate {
+/// put it. The gutter and the current-line band follow the same line fragments (the gutter's numbers
+/// on the text's baseline). (A Markdown file's headings have their own: MarkdownSpacing.)
+class LineSpacing: NSObject, NSLayoutManagerDelegate {
     var factor: CGFloat = 1.35
     var font: NSFont = Theme.monoFont(size: 13)
 
     private var natural: CGFloat { ceil(font.ascender - font.descender + font.leading) }
     var lineHeight: CGFloat { max(natural, round(natural * factor)) }
+    /// Where the text's baseline sits in a line of `lineHeight`, from its top: centred.
+    var baselineOffset: CGFloat { ceil(font.ascender) + floor((lineHeight - natural) / 2) }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
                        lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
                        in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
         let height = lineHeight
-        let extra = height - natural
         lineFragmentRect.pointee.size.height = height
         lineFragmentUsedRect.pointee.size.height = height
-        baselineOffset.pointee = ceil(font.ascender) + floor(extra / 2)
+        baselineOffset.pointee = self.baselineOffset
         return true
     }
 }
@@ -593,12 +673,17 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     let scrollView = NSScrollView()
     let textView: CodeTextView
     private let ruler: LineNumberRuler
-    let spacing = LineSpacing()
+    let spacing: LineSpacing
     /// A .env file's values, drawn hidden (EditorEnvValues.swift).
     let envValues = EnvValueMask()
+    /// A Markdown file's styles and its Live Preview (up to MarkdownSyntax.previewMaxLength): nil for every other file.
+    private(set) var markdown: MarkdownStyler?
+    private(set) var preview: MarkdownPreview?
 
     init(document: EditorDocument) {
         self.document = document
+        let styled = MarkdownSyntax.isMarkdown(fileName: document.name) && document.storage.length <= MarkdownSyntax.previewMaxLength
+        spacing = styled ? MarkdownSpacing() : LineSpacing()
         let layoutManager = CodeLayoutManager()
         layoutManager.allowsNonContiguousLayout = true
         layoutManager.delegate = spacing
@@ -620,7 +705,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets()
         scrollView.documentView = textView
-        ruler = LineNumberRuler(textView: textView)
+        ruler = LineNumberRuler(textView: textView, spacing: spacing)
         super.init(frame: .zero)
 
         textView.minSize = NSSize(width: 0, height: 0)
@@ -651,6 +736,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.delegate = self
         textView.setAccessibilityLabel(document.name)
+        if styled { startMarkdown(layoutManager) }
         applyFont()
         document.onTextReplaced = { [weak self] in
             self?.restyleReplacedLines()
@@ -659,8 +745,13 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         document.onLinesEdited = { [weak self] old, newLast in
             self?.shiftBlame(old, newLast)
             self?.envValues.textEdited()
+            self?.markdown?.textEdited(old, newLast: newLast)
         }
-        layoutManager.hiddenRanges = { [weak self] in self?.hiddenEnvValues() ?? [] }
+        // Styling moves rows too (a Markdown heading's taller line, wrap indents, a new font), and so does an agent's write:
+        // the gutter is drawn again from the rows as they are then.
+        NotificationCenter.default.addObserver(self, selector: #selector(storageEdited), name: NSTextStorage.didProcessEditingNotification,
+                                               object: document.storage)
+        layoutManager.drawOver = { [weak self] range in self?.drawOver(in: range) ?? [] }
         ruler.blameSource = { [weak self] in self?.editedBlame }
         ruler.onBlameClick = { [weak self] sha, root in
             (self?.window?.windowController as? TerminalWindowController)?.showCommit(sha: sha, root: root)
@@ -720,6 +811,8 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     func applyFont() {
         let font = EditorDocument.font
         spacing.font = font
+        markdown?.fonts = MarkdownFonts(base: font)
+        markdownStyles = [:]
         spacing.factor = AppDelegate.shared?.editorLineHeight ?? 1.35
         textView.font = font
         textView.typingAttributes = EditorDocument.attributes
@@ -740,6 +833,8 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
         document.storage.addAttributes([.font: font, .paragraphStyle: style], range: NSRange(location: 0, length: document.storage.length))
         if document.lines.count > 0 { applyWrapIndents(0...(document.lines.count - 1)) }
         document.storage.endEditing()
+        markdown?.restyleAll(storageIsBase: true)
+        styleVisibleMarkdown()
         textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: document.storage.length), actualCharacterRange: nil)
         ruler.updateThickness()
         ruler.needsDisplay = true
@@ -755,6 +850,7 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     /// A wrapped line continues under its own indentation plus two columns, so a long line still reads
     /// as one statement at its level instead of spilling back to the margin.
     private func applyWrapIndents(_ lineRange: ClosedRange<Int>) {
+        guard markdown == nil else { return } // a Markdown file's lines hang as MarkdownStyler says
         let text = document.storage.string as NSString
         let index = document.lines
         let tabColumns = 4
@@ -779,10 +875,15 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     }
 
     private func restyleReplacedLines() {
+        markdown?.run()
         guard let lines = document.takePendingIndentLines() else { return }
         document.storage.beginEditing()
         applyWrapIndents(lines)
         document.storage.endEditing()
+    }
+
+    @objc private func storageEdited(_ notification: Notification) {
+        ruler.needsDisplay = true
     }
 
     // MARK: NSTextViewDelegate
@@ -802,8 +903,10 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
             applyWrapIndents(lines)
             document.storage.endEditing()
         }
-        // Colour the edited line now, before it is drawn; longer runs continue on later turns.
+        // Colour and style the edited line now, before it is drawn; longer runs continue on later turns. A line an input
+        // method is composing in keeps its look until the text is committed.
         document.highlighter?.run()
+        if !textView.hasMarkedText() { markdown?.run() }
         ruler.updateThickness()
         ruler.needsDisplay = true
         scheduleChangeMarks()
@@ -1044,8 +1147,93 @@ final class CodeEditorView: NSView, NSTextViewDelegate {
     /// For the self-test: the blame column's text on a line ("" when it shows none), and the note.
     func blameColumnText(line: Int) -> String? { ruler.showsBlame ? editedBlame.map { BlameText.column($0, line: line) } : nil }
     func blameNoteText(line: Int) -> String? { blameNote(forLine: line) }
+    /// For the self-test: where the gutter draws a line's number, top to bottom, and its baseline, in the text view's coordinates.
+    func gutterNumber(line: Int) -> (minY: CGFloat, maxY: CGFloat, baseline: CGFloat)? { ruler.numberPlace(ofLine: line) }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {
         textView.isEditable
+    }
+
+    /// Live Preview: a caret put inside hidden syntax goes to its end.
+    func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRanges oldSelectedCharRanges: [NSValue],
+                  toCharacterRanges newSelectedCharRanges: [NSValue]) -> [NSValue] {
+        preview?.snapped(newSelectedCharRanges) ?? newSelectedCharRanges
+    }
+
+    // MARK: Markdown
+
+    /// A Markdown file's styler and Live Preview, set up before the first font is applied (which styles it).
+    private func startMarkdown(_ layoutManager: CodeLayoutManager) {
+        // The grammar colours links; without the highlighting bundle, the styler does.
+        let colorsLinks = SyntaxEngine.shared == nil || document.grammar == nil
+        let lines: () -> LineIndex = { [weak document] in document?.lines ?? LineIndex() }
+        let styler = MarkdownStyler(storage: document.storage, layoutManager: layoutManager, font: EditorDocument.font, colorsLinks: colorsLinks,
+                                    index: lines) { [weak self] hang, heading in
+            self?.markdownParagraphStyle(hang: hang, heading: heading) ?? .default
+        }
+        let preview = MarkdownPreview(styler: styler, textView: textView, layoutManager: layoutManager, enabled: showsMarkdownPreview,
+                                      index: lines)
+        markdown = styler
+        self.preview = preview
+        (spacing as? MarkdownSpacing)?.hiddenCharacters = { [weak preview] range in preview?.hiddenCharacters(in: range) ?? [] }
+        layoutManager.tintedLines = { [weak preview] range in preview?.tintedLines(in: range) ?? [] }
+        layoutManager.tintedRuns = { [weak styler] range in styler?.codeSpans(in: range) ?? [] }
+        styler.onLinesChanged = { [weak preview] lines in preview?.linesChanged(lines) }
+        textView.onSelectionMoved = { [weak preview] stillSelecting in preview?.selectionChanged(stillSelecting: stillSelecting) }
+        // Scrolled to lines the slices have not reached yet (a link opened deep in, a file just opened), those come first.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(markdownScrolled), name: NSView.boundsDidChangeNotification,
+                                               object: scrollView.contentView)
+    }
+
+    /// On the next turn of the run loop, never inside the layout or the edit that moved the view.
+    @objc private func markdownScrolled(_ notification: Notification) {
+        guard markdown?.pendingLines ?? 0 > 0, !visibleStyleQueued else { return }
+        visibleStyleQueued = true
+        DispatchQueue.main.async { [weak self] in
+            self?.visibleStyleQueued = false
+            self?.styleVisibleMarkdown()
+        }
+    }
+
+    /// The lines on screen styled before the rest, while the slices have not reached them (MarkdownStyler.styleFirst).
+    private func styleVisibleMarkdown() {
+        guard let markdown, markdown.pendingLines > 0, let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
+        let index = document.lines
+        // At the top the slices are there first anyway.
+        guard scrollView.contentView.bounds.minY > 0, index.count > 0, index.length == document.storage.length else { return }
+        let visible = scrollView.contentView.bounds.offsetBy(dx: 0, dy: -textView.textContainerOrigin.y)
+        let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let first = index.line(at: characters.location)
+        let last = index.line(at: max(characters.location, NSMaxRange(characters) - 1))
+        markdown.styleFirst(first...max(first, last))
+    }
+
+    /// What the layout manager draws over the characters in a range: a .env file's hidden values, or Live Preview's marks.
+    func drawOver(in range: NSRange) -> [CodeLayoutManager.DrawOver] {
+        if isEnvFile { return hiddenEnvValues().map { .init(range: $0, drawing: .bullet) } }
+        return preview?.drawings(in: range) ?? []
+    }
+
+    private var markdownStyles: [Int: NSParagraphStyle] = [:]
+    private var visibleStyleQueued = false
+
+    /// A Markdown line's paragraph style: wrapped rows start at its text's column (an item's text, past a quote's bar),
+    /// and a heading's line is as tall as its font, at the user's line height.
+    private func markdownParagraphStyle(hang: Int, heading: Int) -> NSParagraphStyle {
+        let columns = min(hang, 40) // never so deep that a wrapped row has no room
+        let key = heading << 8 | columns
+        if let style = markdownStyles[key] { return style }
+        let made = (baseStyle.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        made.headIndent = CGFloat(columns) * spaceWidth
+        if heading > 0, let font = markdown?.fonts.font(heading: heading) {
+            let natural = ceil(font.ascender - font.descender + font.leading)
+            let height = max(natural, round(natural * spacing.factor))
+            made.minimumLineHeight = height
+            made.maximumLineHeight = height
+        }
+        markdownStyles[key] = made
+        return made
     }
 }

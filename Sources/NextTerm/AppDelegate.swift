@@ -341,6 +341,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Markdown files open in Live Preview (on unless turned off in Settings › Editor). A file's own choice from View ›
+    /// Markdown Live Preview wins (markdownViewChoices); changing this, every open file without one follows.
+    var markdownLivePreview: Bool {
+        get { UserDefaults.standard.object(forKey: "markdownLivePreview") as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "markdownLivePreview")
+            controllers.forEach { $0.editorArea.applyMarkdownPreviewSetting() }
+        }
+    }
+
+    /// Each Markdown file's own choice of Live Preview or Source, the newest 500.
+    var markdownViewChoices: MarkdownViewChoices {
+        get { MarkdownViewChoices.decode(UserDefaults.standard.data(forKey: MarkdownViewChoices.defaultsKey)) }
+        set { UserDefaults.standard.set(newValue.encoded(), forKey: MarkdownViewChoices.defaultsKey) }
+    }
+
     /// Who last changed each line, in a column beside the line numbers (off unless turned on).
     var blameAnnotations: Bool {
         get { UserDefaults.standard.bool(forKey: "blameAnnotations") }
@@ -1815,6 +1831,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
         item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
+        // ⇧⌘O, VS Code's Go to Symbol (headings, in a Markdown file); ⌘F12 under JetBrains' keys, whose ⇧⌘O is Go to File.
+        item(edit, "Go to Heading…", #selector(TerminalWindowController.goToHeading(_:)), "o", [.command, .shift])
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
         item(edit, "Outdent", #selector(CodeTextView.outdentSelection(_:)), "[")
@@ -1828,6 +1846,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(line, "Move Line Down", #selector(CodeTextView.moveLineDown(_:)), down, [.command, .control])
         line.addItem(.separator())
         item(line, "Copy Path with Line", #selector(CodeTextView.copyPathWithLine(_:)), "")
+        // A Markdown file's, in the markers it already uses; their keys work while its editor has the keyboard, so ⌘B hides
+        // the sidebar everywhere else. ⌥⌘0 to ⌥⌘6 for the headings, as ⌘1 to ⌘9 select tabs.
+        let markdown = NSMenu(title: "Markdown")
+        edit.addItem(withTitle: "Markdown", action: nil, keyEquivalent: "").submenu = markdown
+        item(markdown, "Bold", #selector(CodeTextView.toggleMarkdownBold(_:)), "b")
+        item(markdown, "Italic", #selector(CodeTextView.toggleMarkdownItalic(_:)), "i")
+        item(markdown, "Strikethrough", #selector(CodeTextView.toggleMarkdownStrikethrough(_:)), "x", [.command, .shift])
+        item(markdown, "Code", #selector(CodeTextView.toggleMarkdownCode(_:)), "")
+        item(markdown, "Link", #selector(CodeTextView.insertMarkdownLink(_:)), "k")
+        markdown.addItem(.separator())
+        let headings = NSMenu(title: "Heading")
+        markdown.addItem(withTitle: "Heading", action: nil, keyEquivalent: "").submenu = headings
+        item(headings, "Body Text", #selector(CodeTextView.markdownBodyText(_:)), "0", [.command, .option])
+        for level in 1...6 {
+            item(headings, "Heading \(level)", #selector(CodeTextView.markdownHeading(_:)), "\(level)", [.command, .option]).tag = level
+        }
+        item(markdown, "Bulleted List", #selector(CodeTextView.toggleMarkdownBullets(_:)), "")
+        item(markdown, "Numbered List", #selector(CodeTextView.toggleMarkdownNumbers(_:)), "")
+        item(markdown, "Toggle Task", #selector(CodeTextView.toggleMarkdownTask(_:)), "l", [.command, .shift])
+        item(markdown, "Quote", #selector(CodeTextView.toggleMarkdownQuote(_:)), "")
+        item(markdown, "Code Block", #selector(CodeTextView.insertMarkdownCodeBlock(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
 
@@ -1853,6 +1892,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
+        item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]

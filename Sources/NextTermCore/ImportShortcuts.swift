@@ -80,6 +80,7 @@ public enum ImportShortcuts {
             "gitUpdate:": "Update Project",
             "gitFetch:": "Fetch",
             "showBranches:": "Branches…",
+            "toggleMarkdownPreview:": "Markdown Live Preview",
         ]
         for position in ["bottom", "right", "left", "top"] {
             titles["setTerminalPosition:" + position] = "Terminal Position › " + position.capitalized

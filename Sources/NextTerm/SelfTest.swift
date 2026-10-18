@@ -80,6 +80,12 @@ enum SelfTest {
     private static var failures = 0
 
     static func run() {
+        #if DEBUG
+        // An exception nothing catches ends the run with a crash report, rather than AppKit logging it and the run going on
+        // half done or stalling where it was (the script then says the run did not finish). In this process's registration
+        // domain only, so never in your defaults.
+        UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
+        #endif
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
@@ -643,7 +649,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -656,6 +662,7 @@ enum SelfTest {
             await arrivalChecks(c, proj: proj)
             return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
+        case "markdown": return await markdownChecks(c, proj: proj) // Live Preview: bytes kept, hiding, commands, Go to Heading
         case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
         case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
         case "notifications":
@@ -843,6 +850,7 @@ enum SelfTest {
         await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
+        await markdownChecks(c, proj: proj)
         await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
@@ -4281,11 +4289,12 @@ enum SelfTest {
             delegate.editorLineHeight = savedHeight
         }
 
-        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
-        let wide = proj.appendingPathComponent("wide.md")
+        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off. (Plain text: a Markdown
+        // paragraph's wrapped rows start at the margin, as prose's do.)
+        let wide = proj.appendingPathComponent("wide.txt")
         try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)
         c.openFile(wide)
-        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.md", let layout = wideEditor.textView.layoutManager,
+        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.txt", let layout = wideEditor.textView.layoutManager,
            let container = wideEditor.textView.textContainer {
             func rows() -> Int {
                 layout.ensureLayout(for: container)
@@ -4335,7 +4344,7 @@ enum SelfTest {
             area.applyWrap()
             area.closeActive()
         } else {
-            check(false, "a markdown file opens")
+            check(false, "a file with a long line opens")
         }
         try? FileManager.default.removeItem(at: wide)
 

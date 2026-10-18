@@ -6,10 +6,10 @@ import Foundation
 public enum MenuKeys {
     /// Every menu command that has a key before the user's changes. Commands without one are left out.
     public static let defaults: [String: KeyChord] = {
-        let cmd = { (key: String) in KeyChord(key: key, command: true) }
-        let shiftCmd = { (key: String) in KeyChord(key: key, command: true, shift: true) }
-        let optCmd = { (key: String) in KeyChord(key: key, command: true, option: true) }
-        let ctrlCmd = { (key: String) in KeyChord(key: key, command: true, control: true) }
+        let cmd: (String) -> KeyChord = { KeyChord(key: $0, command: true) }
+        let shiftCmd: (String) -> KeyChord = { KeyChord(key: $0, command: true, shift: true) }
+        let optCmd: (String) -> KeyChord = { KeyChord(key: $0, command: true, option: true) }
+        let ctrlCmd: (String) -> KeyChord = { KeyChord(key: $0, command: true, control: true) }
         let up = "\u{F700}", down = "\u{F701}", left = "\u{F702}", right = "\u{F703}"
         var keys: [String: KeyChord] = [
             // Next Term
@@ -25,13 +25,17 @@ public enum MenuKeys {
             "performFindPanelAction:#3": shiftCmd("g"), "performFindPanelAction:#7": cmd("e"), "findInFiles:": shiftCmd("f"),
             "replaceInFiles:": shiftCmd("r"), "goToLine:": cmd("l"), "toggleComment:": cmd("/"), "indentSelection:": cmd("]"),
             "outdentSelection:": cmd("["), "duplicateLine:": cmd("d"), "deleteLine:": shiftCmd("k"), "moveLineUp:": ctrlCmd(up),
-            "moveLineDown:": ctrlCmd(down), "clearBuffer:": cmd("k"),
+            "moveLineDown:": ctrlCmd(down), "clearBuffer:": cmd("k"), "goToHeading:": shiftCmd("o"),
             // View
             "toggleProjectSidebar:": cmd("b"), "toggleEditorFocus:": KeyChord(key: "`", control: true), "toggleTerminalCollapsed:": cmd("j"),
             "showChanges:": optCmd("g"), "toggleSoftWrap:": optCmd("w"), "toggleUnifiedDiffs:": ctrlCmd("u"),
             "toggleBlameAnnotations:": KeyChord(key: "a", command: true, shift: true, control: true),
             "toggleCurrentLineBlame:": KeyChord(key: "l", command: true, shift: true, control: true),
             "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"), "resetFontSize:": cmd("0"), "toggleFullScreen:": ctrlCmd("f"),
+            "toggleMarkdownPreview:": shiftCmd("v"),
+            // Markdown (Edit › Markdown), while a Markdown file's editor has the keyboard
+            "toggleMarkdownBold:": cmd("b"), "toggleMarkdownItalic:": cmd("i"), "insertMarkdownLink:": cmd("k"),
+            "toggleMarkdownStrikethrough:": shiftCmd("x"), "toggleMarkdownTask:": shiftCmd("l"), "markdownBodyText:": optCmd("0"),
             // Agents
             "goToNextAgentNeedingYou:": shiftCmd("u"),
             "resumeSession:": optCmd("o"), "sendToAgent:": optCmd("k"), "suggestCommand:": ctrlCmd("k"),
@@ -48,6 +52,7 @@ public enum MenuKeys {
             "toggleZoomPane:": shiftCmd("\r"),
         ]
         for n in 1...9 { keys["selectTabByNumber:#\(n)"] = cmd("\(n)") }
+        for level in 1...6 { keys["markdownHeading:#\(level)"] = optCmd("\(level)") }
         return keys
     }()
 
