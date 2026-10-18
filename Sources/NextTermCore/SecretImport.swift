@@ -88,7 +88,7 @@ public enum SecretImport {
 
     /// The files the import reads: the agents' own settings, Claude Code's `~/.claude.json`, VS
     /// Code's user `mcp.json`, and in each open project its `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
-    /// `.gemini/settings.json`, `.codex/config.toml`, and opencode's `opencode.json` and `opencode.jsonc` (read and
+    /// `.gemini/settings.json`, `.codex/config.toml`, and OpenCode's `opencode.json` and `opencode.jsonc` (read and
     /// rewritten as its own settings are). A file is listed once, by its real path.
     public static func sources(home: String = NSHomeDirectory(), projects: [String]) -> [Source] {
         func path(_ relative: String) -> String { (home as NSString).appendingPathComponent(relative) }
@@ -439,7 +439,7 @@ public enum SecretImport {
         return xs * 2 >= all
     }
 
-    /// True in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in neither, so it doesn't
+    /// True in every client: Claude Code fills in `${X}` and OpenCode `{env:X}`, but Codex fills in neither, so it doesn't
     /// say this file's agent would have.
     static let referenceReason = "the value has a reference such as ${…} in it, which some agents fill in when they start "
         + "the server; Secrets would keep it as written"
