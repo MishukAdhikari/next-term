@@ -17,6 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// with no herdr tab), its agent's pane, and whether it was about a decision (else a finish), so each is withdrawn
     /// once its agent no longer needs the user that way.
     private var herdrDelivered: [String: (owner: String, pane: String, decision: Bool)] = [:]
+    /// The categories registered for notices' buttons, by id, the order they came in (the oldest give way), and their
+    /// buttons, which the self-test reads.
+    var noticeCategories: [String: UNNotificationCategory] = [:]
+    var noticeCategoryOrder: [String] = []
+    var noticeActions: [String: [NoticeActions.Action]] = [:]
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
@@ -1558,6 +1563,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A window's notifications stack together in Notification Center.
         content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString]
+        // An agent's decision whose choices read off its screen carries them as buttons; a finish, Reply.
+        if notice.kind == .agent, notice.stillRunning, tab.remote == nil || tab.remoteConnected {
+            if let question = notice.question, let menu = MCPControl.fieldMenu(tab, question: question),
+               let id = MCPControl.questionID(tab) {
+                content.categoryIdentifier = noticeCategory(tab.id.uuidString, choices: menu.choices) ?? ""
+                content.userInfo["question_id"] = id
+            } else if notice.question == nil, notice.state == .done {
+                content.categoryIdentifier = noticeCategory(nil, choices: [])  ?? ""
+            }
+        }
         deliver(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
     }
 
@@ -1602,6 +1617,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if audible { lastSoundAt = Date() }
         content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString, "herdr_pane": agent.paneID]
+        // A decision whose choices were read from its pane carries them as buttons; a finish, Reply. None while the tab is
+        // not connected: nothing could answer.
+        if tab.remote == nil || tab.remoteConnected {
+            if question != nil, let asked = tab.herdrTracker.question(agent.paneID) {
+                content.categoryIdentifier = noticeCategory(id, choices: asked.choices) ?? ""
+                content.userInfo["question_id"] = HerdrMCP.questionID(asked, pane: agent.paneID, in: tab)
+            } else if question == nil {
+                content.categoryIdentifier = noticeCategory(nil, choices: []) ?? ""
+            }
+        }
         herdrDelivered[id] = (tab.id.uuidString, agent.paneID, question != nil)
         deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
@@ -1609,6 +1634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Withdraws one herdr agent's notice from Notification Center (and the self-test's sink).
     func withdrawHerdrNotice(_ id: String) {
         guard herdrDelivered.removeValue(forKey: id) != nil else { return }
+        forgetNoticeCategory(id)
         lastHerdrNotified[id] = nil
         testNotifications.removeAll { $0.identifier == id }
         notificationCenter?.removeDeliveredNotifications(withIdentifiers: [id])
@@ -1752,6 +1778,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let pane = response.notification.request.content.userInfo["herdr_pane"] as? String
         // An agent of a host with no herdr tab: a herdr tab opens there, on its pane.
         let host = response.notification.request.content.userInfo["herdr_host"] as? String
+        let action = response.actionIdentifier
+        if NoticeActions.choice(action) != nil || action == NoticeActions.reply {
+            // A button on the notice: answered here, Next Term staying where it is.
+            let request = response.notification.request
+            let text = (response as? UNTextInputNotificationResponse)?.userText
+            var info: [String: String] = [:]
+            for (key, value) in request.content.userInfo {
+                if let key = key as? String, let value = value as? String { info[key] = value }
+            }
+            return DispatchQueue.main.async { [self] in
+                respond(to: request.identifier, title: request.content.title, info: info, action: action, text: text)
+                completionHandler()
+            }
+        }
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
             if let host, let pane {
@@ -2019,5 +2059,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                           _ modifiers: NSEvent.ModifierFlags = .command) {
         let item = self.item(menu, title, #selector(NSTextView.performFindPanelAction(_:)), key, modifiers)
         item.tag = Int(action.rawValue)
+    }
+}
+
+// MARK: answering from a notice
+
+extension AppDelegate {
+    /// The category for a notice's buttons: its own (`agent.<notice id>`) for a decision whose choices fit, the shared
+    /// one with Reply for a finish (`notice` nil); registered with every other one still delivered, 64 at most, the
+    /// oldest first out. nil: no buttons (no choices, or more than fit).
+    func noticeCategory(_ notice: String?, choices: [String]) -> String? {
+        let category: String
+        let actions: [UNNotificationAction]
+        if let notice {
+            guard let planned = NoticeActions.plan(choices: choices) else { return nil }
+            category = NoticeActions.category(for: notice)
+            actions = planned.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: []) }
+            noticeActions[category] = planned
+        } else {
+            category = NoticeActions.finishCategory
+            actions = [UNTextInputNotificationAction(identifier: NoticeActions.reply, title: "Reply", options: [],
+                                                     textInputButtonTitle: "Send", textInputPlaceholder: "A line for the agent")]
+            noticeActions[category] = [NoticeActions.Action(id: NoticeActions.reply, title: "Reply")]
+        }
+        noticeCategories[category] = UNNotificationCategory(identifier: category, actions: actions, intentIdentifiers: [], options: [])
+        noticeCategoryOrder = NoticeActions.kept(noticeCategoryOrder, adding: category)
+        registerNoticeCategories()
+        return category
+    }
+
+    /// A notice is gone: its own category goes with it.
+    func forgetNoticeCategory(_ notice: String) {
+        let category = NoticeActions.category(for: notice)
+        guard noticeCategories.removeValue(forKey: category) != nil else { return }
+        noticeActions[category] = nil
+        noticeCategoryOrder.removeAll { $0 == category }
+        registerNoticeCategories()
+    }
+
+    private func registerNoticeCategories() {
+        let kept = Set(noticeCategoryOrder)
+        for category in noticeCategories.keys where !kept.contains(category) {
+            noticeCategories[category] = nil
+            noticeActions[category] = nil
+        }
+        notificationCenter?.setNotificationCategories(Set(noticeCategories.values))
+    }
+
+    /// A notice's button was clicked (or the self-test's sink stands in for one): a choice answers the question the
+    /// notice showed, the way answer_agent does, reading the screen again first; Reply sends its line as a prompt. Both
+    /// are the user's own act and mark the agent seen. What could not be done replaces the notice, saying why: a question
+    /// that changed types nothing.
+    func respond(to notice: String, title: String, info: [String: String], action: String, text: String?) {
+        guard let tabID = info["tab"], let tab = HerdrAgentMenu.tab(tabID) else { return }
+        let name = title.components(separatedBy: " needs your decision").first?.components(separatedBy: " is waiting").first ?? title
+        func replace(_ said: String) {
+            let content = UNMutableNotificationContent()
+            content.title = name
+            content.body = said
+            content.userInfo = info
+            deliver(UNNotificationRequest(identifier: notice, content: content, trigger: nil))
+        }
+        if let pane = info["herdr_pane"] {
+            let id = HerdrTarget(tabID: tab.id.uuidString, pane: pane).id
+            if let choice = NoticeActions.choice(action) {
+                let expected = info["question_id"] ?? ""
+                HerdrMCP.answer(tab, pane: pane, expected: expected, choice: choice, answer: nil, typing: { HerdrMCP.userActed(on: id) }) { said in
+                    switch said {
+                    case .answered: tab.herdrSeen(pane)
+                    case .refused(.changed(let question, _)): replace("The question changed: \(question). Nothing was typed.")
+                    case .refused(let refusal): replace(refusal.sentence)
+                    case .failed(let problem): replace(problem)
+                    }
+                }
+                return
+            }
+            let line = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { return }
+            if let refusal = HerdrCommand.textRefusal(line) { return replace(refusal) }
+            HerdrMCP.userActed(on: id)
+            HerdrRunner.run(.prompt(pane: pane), for: tab, input: line) { result in
+                if let problem = HerdrMCP.problem(result, pane: pane) { return replace("The reply was not sent: " + problem) }
+                tab.herdrSeen(pane)
+            }
+            return
+        }
+        // An agent tab: answer_agent's own path, or a line typed and entered as send_to_tab types it.
+        if let choice = NoticeActions.choice(action) {
+            let arguments: [String: Any] = ["tab_id": tab.id.uuidString.lowercased(), "question_id": info["question_id"] ?? "", "choice": choice]
+            MCPControl.call("answer_agent", arguments, caller: nil) { result in
+                MCPControl.typedByUser(tab)
+                if result.isError { replace(result.text) }
+            }
+            return
+        }
+        let line = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return }
+        guard MCPControl.canType(tab) else { return replace("The reply was not sent: that tab cannot take input now.") }
+        MCPControl.type(line, into: tab, submit: true)
+        MCPControl.typedByUser(tab)
     }
 }
