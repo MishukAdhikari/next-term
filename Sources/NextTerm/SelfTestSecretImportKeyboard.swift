@@ -5,14 +5,15 @@ import NextTermCore
 /// An agent's import_secrets never takes the keyboard. With a window of the self-test's own in front and key, the
 /// sheet for a file and the sheet for a password manager each come forward on the Secrets window while the cover keeps
 /// the keyboard. A Return then, as the keyboard sends it, presses nothing on the sheet, and the sheet's action has no
-/// Return default for when the user clicks onto it. The file and its value are made up at run time; no password
-/// manager's CLI runs, and each sheet is cancelled.
+/// Return default for when the user clicks onto it. A Secrets window minimised to the Dock comes out without it too.
+/// The file and its value are made up at run time; no password manager's CLI runs, and each sheet is cancelled.
 extension SelfTest {
     static func secretImportKeyboardChecks(_ view: SecretsView, env: URL) async {
         let line: String = "KEYBOARD_ASKED_API_KEY=\(secretsValue("sk-" + "proj-"))\n"
         try? line.write(to: env, atomically: true, encoding: .utf8)
         await secretImportKeyboardFileCheck(view, env: env)
         await secretImportKeyboardSourceCheck(view)
+        await secretImportKeyboardMinimisedCheck(view, env: env)
     }
 
     /// Return, as the keyboard sends it, to the window that has the keyboard.
@@ -88,6 +89,41 @@ extension SelfTest {
         check(inFront && !becameKey && coverKept && !pressed && unkeyed,
               "import_secrets: a password manager's sheet comes forward without the keyboard, and Return presses nothing "
                 + "on it", said)
+        sheet.cancelButton.performClick(nil)
+        _ = await call.value
+    }
+}
+
+extension SelfTest {
+    /// Secrets minimised to the Dock: the request brings it out, and once it is out, AppKit's own turn included, the
+    /// cover still has the keyboard and the sheet doesn't.
+    static func secretImportKeyboardMinimisedCheck(_ view: SecretsView, env: URL) async {
+        let requests = SecretRequests.shared
+        requests.resetForSelfTest()
+        guard let window = view.window else {
+            return check(false, "import_secrets: the Secrets window is there, for the minimised check")
+        }
+        window.miniaturize(nil)
+        guard await wait(5, { window.isMiniaturized }) else {
+            return check(false, "import_secrets: the Secrets window minimises, for the minimised check")
+        }
+        let cover: NSWindow = await secretsMenuCover()
+        defer {
+            cover.close()
+            requests.resetForSelfTest()
+        }
+        let call = secretsStart("import_secrets", ["path": env.path, "reason": "the minimised check"])
+        guard await wait(15, { view.fileImportSheet?.asked != nil }), let sheet = view.fileImportSheet else {
+            return check(false, "import_secrets: a file's sheet opens on a minimised Secrets window")
+        }
+        let restored: Bool = await wait(5) { !window.isMiniaturized && window.isVisible }
+        await pause(1)
+        let becameKey: Bool = sheet.window?.isKeyWindow == true || window.isKeyWindow
+        let inFront: Bool = secretsMenuInFront(window, over: cover)
+        let said: String = "out of the Dock \(restored), in front \(inFront), sheet or window key \(becameKey), "
+            + "cover key \(NSApp.keyWindow === cover)"
+        check(restored && inFront && !becameKey,
+              "import_secrets: a minimised Secrets window comes out of the Dock without the keyboard", said)
         sheet.cancelButton.performClick(nil)
         _ = await call.value
     }

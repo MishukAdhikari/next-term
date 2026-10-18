@@ -7,7 +7,8 @@ import NextTermCore
 /// the self-test's own socket, vault and files; values are made up at run time.
 extension SelfTest {
     /// Run by an agent (a link named claude to /bin/zsh runs the pipe: a copy of zsh is a platform binary off the system
-    /// volume, which launch constraints kill as it starts), the sheet warns the agent may have seen the keys.
+    /// volume, which launch constraints kill as it starts), the sheet warns the agent may have seen the keys, and comes
+    /// forward without the keyboard: a window of the self-test's own keeps it, and Import… has no Return default.
     /// Run from no tab (the pipe leaves its tab, as `( … &)` does), it says Next Term couldn't tell which tab.
     static func secretPipeOriginChecks(_ c: TerminalWindowController, _ view: SecretsView, folder: URL, list: URL) async {
         let bin: URL = folder.appendingPathComponent("agent-bin", isDirectory: true)
@@ -20,12 +21,15 @@ extension SelfTest {
         if (try? FileManager.default.createSymbolicLink(atPath: agent.path, withDestinationPath: "/bin/zsh")) != nil {
             // `; true` keeps the stand-in agent above the importer: zsh would run a line's last command in its place.
             let run: String = "\(secretPipeQuoted(agent.path)) -fc \(secretPipeQuoted(pipe + "; true"))"
+            let cover: NSWindow = await secretsMenuCover()
             MCPControl.type(run, into: tab, submit: true)
             let opened: Bool = await wait(15) { view.fileImportSheet?.isPiped == true }
             let warning: String? = secretPipeWarning(view.fileImportSheet)
             let detail: String = opened ? (warning ?? "no warning") : "no sheet: " + secretPipeScreen(tab)
             check(opened && warning == SecretImportPipe.agentWarning,
                   "secret pipe: run by an agent, the sheet warns it may have seen the keys", detail)
+            await secretPipeAgentKeyboardCheck(view, cover: cover)
+            cover.close()
             view.fileImportSheet?.closeSheet()
             _ = await wait(10) { secretPipeScreen(tab).contains("Nothing imported.") && !tab.status.running }
         } else {
@@ -90,6 +94,19 @@ extension SelfTest {
 }
 
 extension SelfTest {
+    /// The agent's sheet came forward over `cover`, which kept the keyboard, and Import… answers only a click.
+    static func secretPipeAgentKeyboardCheck(_ view: SecretsView, cover: NSWindow) async {
+        guard let sheet = view.fileImportSheet else { return }
+        let becameKey: Bool = await wait(1) { sheet.window?.isKeyWindow == true }
+        let inFront: Bool = secretsMenuInFront(view.window, over: cover)
+        let unkeyed: Bool = sheet.importButton.keyEquivalent.isEmpty && sheet.cancelButton.keyEquivalent == "\u{1b}"
+        let said: String = "in front \(inFront), sheet key \(becameKey), cover key \(NSApp.keyWindow === cover), "
+            + "no Return default \(unkeyed)"
+        check(inFront && !becameKey && unkeyed,
+              "secret pipe: run by an agent, the sheet comes forward without the keyboard and Import… has no Return "
+                + "default", said)
+    }
+
     /// With a password manager's sheet open on Secrets, `given` prints the busy line, opens no sheet, and Secrets says
     /// why under its list.
     static func secretPipeBusyCheck(_ view: SecretsView, _ tab: TerminalTab, given: String) async {

@@ -74,14 +74,22 @@ enum SecretPipeImport {
     }
 
     /// The Secrets window in front, with no sheet open on it. Busy or refused is decided first, so a run that can't open
-    /// a sheet never takes the keyboard from the tab the user types in (a password at bw's prompt, say).
+    /// a sheet never takes the keyboard from the tab the user types in (a password at bw's prompt, say). Run by an
+    /// agent, it comes forward as for an agent's import_secrets: without the keyboard and without activating Next Term
+    /// (the Dock icon bounces when another app is in front), so a key the user meant for a terminal never reaches the
+    /// sheet. Run by the user, the window takes the keyboard.
     private static func secretsView(for client: SecretImportClient) -> SecretsView? {
         if let status = blockedStatus() {
             client.end(status)
             return nil
         }
-        SecretsWindowController.show()
-        NSApp.activate(ignoringOtherApps: true)
+        if client.origin.agent != nil {
+            SecretsWindowController.bringForward()
+            if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+        } else {
+            SecretsWindowController.show()
+            NSApp.activate(ignoringOtherApps: true)
+        }
         guard let view = SecretsWindowController.shared?.secretsView else {
             client.end(.refused)
             return nil
