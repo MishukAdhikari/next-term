@@ -213,6 +213,13 @@ public struct GhostState: Sendable {
         return .hidden
     }
 
+    /// A suggestion placed at the cursor's cell (`placed`, column and row) still stands after output: the cursor is in that
+    /// cell, on the normal screen. Output that moved the caret, or the alternate screen in front, hides it until the next
+    /// report.
+    public static func placementStands(placed: (x: Int, y: Int), cursor: (x: Int, y: Int), alternateScreen: Bool) -> Bool {
+        !alternateScreen && placed == cursor
+    }
+
     /// A new line: what Esc, a deletion and your keys said of the last one is over; keys typed ahead are this one's.
     private mutating func newLine() {
         lineHidden = false

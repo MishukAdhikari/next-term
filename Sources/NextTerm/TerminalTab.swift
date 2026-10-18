@@ -52,11 +52,21 @@ final class NextTermView: LocalProcessTerminalView {
         hintView = hint
     }
 
-    /// Suggestions while typing hide on these (GhostSession): a paste, a scroll, a selection, marked text (an input method).
+    /// Suggestions while typing hide on these (GhostSession): a paste, a scroll, a selection, marked text (an input method),
+    /// and the screen switched.
     var onPaste: (() -> Void)?
     var onScrolled: (() -> Void)?
     var onSelection: (() -> Void)?
     var onMarkedText: (() -> Void)?
+    var onScreenSwitched: (() -> Void)?
+
+    /// The alternate screen on or off (DECSET or DECRST 1049, 1047, 47), or a full reset: SwiftTerm says so as it parses
+    /// them, whatever fed the bytes, the shell's output (`dataReceived`) or text Next Term feeds in itself (`feed`), which
+    /// never reaches `onOutput`.
+    override func bufferActivated(source: Terminal) {
+        super.bufferActivated(source: source)
+        onScreenSwitched?()
+    }
 
     override func scrolled(source: TerminalView, position: Double) {
         super.scrolled(source: source, position: position)
@@ -612,6 +622,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if self?.view.selection?.active == true { self?.ghost.hide() }
         }
         view.onMarkedText = { [weak self] in self?.ghost.hide() }
+        view.onScreenSwitched = { [weak self] in self?.ghost.hide() }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }

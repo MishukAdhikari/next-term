@@ -199,7 +199,8 @@ extension SelfTest {
         check(!tab.screenTail(5).joined().contains("eckout") && !read.text.contains("eckout") && !spoken.contains("eckout"),
               "suggestions: the screen, read_tab and the terminal's accessibility value never hold the suggestion")
 
-        // Each of these hides it until the next report.
+        // Each of these hides it until the next report. The alternate screen comes in as Next Term feeds its own text, which
+        // is no output of the shell's: the screen switch itself hides it.
         let resize: () -> Void = { window.setContentSize(NSSize(width: window.frame.width - 40, height: window.frame.height)) }
         let alternate: () -> Void = { tab.view.feed(text: "\u{1b}[?1049h") }
         let marked: () -> Void = {

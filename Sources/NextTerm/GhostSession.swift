@@ -10,7 +10,8 @@ import SwiftTerm
 /// queue, two at a time at most, given 150 ms) shows if the line is still the one asked for. The overlay is placed only once
 /// the shell's redraw is on screen: on the output after the report, or on the next turn of the main queue, once the cells
 /// left of the cursor end with the line; not within 50 ms, it hides. Output that moves the cursor after that hides it until
-/// the next report, and so do a resize, a scroll back, marked text, a paste, a selection and the window going to the back.
+/// the next report, and so do a resize, a scroll back, marked text, a paste, a selection, the window going to the back, and
+/// the alternate screen or a reset (as SwiftTerm switches screens, whatever fed the bytes).
 ///
 /// Where zsh-autosuggestions draws its own (GhostOwner), none of Next Term's show until the user chooses: a notice in the
 /// tab asks once, at an idle prompt. Next Term's chosen, the hook turns the plugin's off in this shell (an `o` frame, sent
@@ -592,13 +593,15 @@ final class GhostSession {
     // MARK: what happened in the tab
 
     /// Output reached the terminal: a placement waiting for the shell's redraw looks again; a suggestion placed hides when
-    /// the cursor moved since.
+    /// the cursor moved since, or the alternate screen is in front (GhostState.placementStands).
     func output() {
         if placing != nil { return place(late: false) }
         guard let placed, let view = tab?.view else { return }
         let terminal = view.getTerminal()
         let cursor = terminal.getCursorLocation()
-        if cursor.x != placed.x || cursor.y != placed.y || terminal.isCurrentBufferAlternate { hide() }
+        if !GhostState.placementStands(placed: placed, cursor: (cursor.x, cursor.y), alternateScreen: terminal.isCurrentBufferAlternate) {
+            hide()
+        }
     }
 
     /// A key of yours in the tab (or a paste, a drop): suggestions may show on this line.
@@ -616,7 +619,8 @@ final class GhostSession {
     }
 
     /// Hidden until the next report: a resize, a font change, a scroll back, marked text, a paste, a selection, the window
-    /// going to the back, the keyboard going elsewhere, a line ending.
+    /// going to the back, the keyboard going elsewhere, a line ending, the screen switched (the alternate screen on or off,
+    /// a reset: the cells under it are gone).
     func hide() {
         placing = nil
         state.hide()

@@ -124,6 +124,15 @@ import Testing
         #expect(step19 == .none)
     }
 
+    @Test func aPlacedSuggestionStandsOnlyInItsCellOnTheNormalScreen() {
+        #expect(GhostState.placementStands(placed: (12, 3), cursor: (12, 3), alternateScreen: false))
+        // Output that moved the caret, along the row or off it.
+        #expect(!GhostState.placementStands(placed: (12, 3), cursor: (13, 3), alternateScreen: false))
+        #expect(!GhostState.placementStands(placed: (12, 3), cursor: (12, 4), alternateScreen: false))
+        // The alternate screen in front, even with the cursor back in that cell.
+        #expect(!GhostState.placementStands(placed: (12, 3), cursor: (12, 3), alternateScreen: true))
+    }
+
     @Test func keysTypedAheadAreTheNextLines() {
         // Typed while a command ran: zsh reads them after the next line's first report.
         var ahead = GhostState()
