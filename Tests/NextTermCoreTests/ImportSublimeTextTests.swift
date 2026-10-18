@@ -70,9 +70,9 @@ import Testing
         #expect(app.name == "Sublime Text 3" && app.configPath.hasSuffix("/Sublime Text 3"))
         #expect(app.appPath == nil && app.appRemoved, "Build 4200 keeps its data in the newer folder")
         let plan = ImportSublimeText.plan(for: app, home: home, fonts: testFonts)
-        let expected: [ImportedSetting] = [.fontSize(15), .trimTrailingWhitespace(true)]
+        let expected: [ImportedSetting] = [.fontSize(15), .trimTrailingWhitespace(true), .sidebarSingleClick(true)] // its own click
         #expect(plan.settings.map(\.setting) == expected)
-        #expect(plan.settings.last?.ticked == true, "Sublime Text 3 trims every line, as Next Term does")
+        #expect(plan.settings.first { $0.setting == .trimTrailingWhitespace(true) }?.ticked == true, "Sublime Text 3 trims every line, as Next Term does")
     }
 
     // MARK: settings
@@ -116,7 +116,8 @@ import Testing
         try write(settings, to: home + Self.user + "/Preferences.sublime-settings")
         let plan = try importPlan(home)
         let trim = try #require(plan.settings.first)
-        #expect(plan.settings.count == 1 && trim.setting == .trimTrailingWhitespace(true) && !trim.ticked)
+        #expect(plan.settings.count == 2 && trim.setting == .trimTrailingWhitespace(true) && !trim.ticked)
+        #expect(plan.settings.last?.isClickDefault == true, "preview_on_click isn't set: Sublime Text's own click")
         #expect(trim.note == "Sublime Text trims only the lines you changed; Next Term trims every line of the file; the caret's line is trimmed too")
         #expect(reasons(plan)["word_wrap auto"] == "Next Term wraps every file or none, not by its kind")
 
@@ -133,7 +134,7 @@ import Testing
         defer { remove(home) }
         let path = home + Self.user + "/Preferences.sublime-settings"
         try write("// only a comment\n", to: path)
-        #expect(try importPlan(home).settings.isEmpty)
+        #expect(try importPlan(home).settings.map(\.setting) == [.sidebarSingleClick(true)], "nothing set: Sublime Text's own click")
         try write("{ \"font_size\": 13, ", to: path)
         #expect(try reasons(importPlan(home))["Preferences.sublime-settings"] == "couldn't be read as JSON, so no settings came over")
         try write(String(repeating: "[", count: 5_000), to: path)
@@ -158,7 +159,7 @@ import Testing
         try fm.removeItem(atPath: synced + "/Preferences.sublime-settings")
         try write("{ \"font_size\": 16 }", to: synced + "/Preferences.sublime-settings")
         try fm.createSymbolicLink(atPath: home + Self.user, withDestinationPath: synced)
-        #expect(try importPlan(home).settings.map(\.setting) == [.fontSize(16)])
+        #expect(try importPlan(home).settings.map(\.setting) == [.fontSize(16), .sidebarSingleClick(true)])
     }
 
     // MARK: key bindings
@@ -314,6 +315,37 @@ import Testing
         #expect(secrets.isEmpty && !text.contains("•••"))
         let golden = try ImportFixtures.golden("SublimeText", text)
         #expect(text == golden)
+    }
+
+    // MARK: the sidebar's click
+
+    func clickPlan(_ settings: String?) throws -> ImportPlan {
+        let home = canonicalPath(fm.temporaryDirectory.path) + "/nt-click-" + String(UUID().uuidString.prefix(8))
+        defer { try? fm.removeItem(atPath: home) }
+        let data = home + "/Library/Application Support/Sublime Text"
+        try fm.createDirectory(atPath: data + "/Packages/User", withIntermediateDirectories: true)
+        if let settings { try write(settings, to: data + "/Packages/User/Preferences.sublime-settings") }
+        let app = DetectedApp(kind: .sublimeText, name: "Sublime Text", configPath: data, lastUsed: nil)
+        return ImportSublimeText.plan(for: app, home: home, fonts: testFonts)
+    }
+
+    func clickRows(_ plan: ImportPlan) -> [PlannedSetting] {
+        plan.settings.filter { if case .sidebarSingleClick = $0.setting { return true } else { return false } }
+    }
+
+    /// preview_on_click, or Sublime Text's own default (a single click) when it isn't set or there is no Preferences
+    /// file; nothing when the file can't be read or the value isn't one.
+    @Test func theClickIsPreviewOnClickOrSublimeTextsDefault() throws {
+        let fallback = PlannedSetting(.sidebarSingleClick(true), source: "preview_on_click (not set: true)", note: "Sublime Text's default")
+        #expect(clickRows(try clickPlan(#"{"font_size": 13}"#)) == [fallback])
+        #expect(clickRows(try clickPlan(nil)) == [fallback], "no Preferences file: every setting is Sublime Text's default")
+        #expect(clickRows(try clickPlan("// only comments\n")) == [fallback])
+        #expect(try clickPlan(#"{"preview_on_click": false}"#).settings.map(\.setting) == [.sidebarSingleClick(false)])
+        #expect(clickRows(try clickPlan(#"{"preview_on_click": "only_left"}"#))
+                == [PlannedSetting(.sidebarSingleClick(true), source: "preview_on_click only_left")])
+        #expect(clickRows(try clickPlan(#"{"preview_on_click": true}"#)).map(\.source) == ["preview_on_click true"])
+        #expect(clickRows(try clickPlan("{ \"font_size\": ")).isEmpty)
+        #expect(clickRows(try clickPlan(#"{"preview_on_click": "sometimes"}"#)).isEmpty)
     }
 
     /// The owner's rule: this editor is named only in its importer, the import window and the switching guide's

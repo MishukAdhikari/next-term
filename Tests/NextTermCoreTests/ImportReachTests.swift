@@ -34,7 +34,8 @@ import Testing
         #expect(odd.settings.isEmpty)
         #expect(odd.skipped == [SkippedItem("workbench.list.openMode", "value not recognised"),
                                 SkippedItem("diffEditor.renderSideBySide", "value not recognised")])
-        // Unset, nothing: VS Code's defaults say nothing about the user.
+        // Unset, nothing: VS Code's defaults say nothing about the user. An app's whole plan adds its own click, which
+        // a file on its own never implies (ImportClickDefaultTests).
         #expect(try rows("{}").isEmpty)
     }
 

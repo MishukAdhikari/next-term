@@ -75,7 +75,7 @@ import Testing
             let plan = ImportZed.plan(for: app, home: home)
             #expect(plan.preset == preset)
             #expect(plan.skipped.isEmpty)
-            #expect(plan.settings.isEmpty && plan.recentProjects.isEmpty)
+            #expect(plan.settings.map(\.setting) == [.sidebarSingleClick(true)] && plan.recentProjects.isEmpty) // Zed's own click
         }
 
         let cursor = try zedHome(settings: "{\"base_keymap\": \"Cursor\"}")
@@ -166,6 +166,8 @@ import Testing
             PlannedSetting(.terminalPosition("right"), source: "terminal.dock right"),
             PlannedSetting(.terminalCursorBlink(false), source: "terminal.blinking off"),
             PlannedSetting(.sidebarSide("right"), source: "project_panel.dock right"),
+            PlannedSetting(.sidebarSingleClick(true), source: "Zed's project panel",
+                           note: "Zed opens files and folders with a single click; no setting changes that"),
         ])
         #expect(plan.recentProjects.isEmpty)
 
@@ -199,7 +201,7 @@ import Testing
             try write(settings, to: home + "/.config/zed/settings.json")
             try FileManager.default.createDirectory(atPath: home + "/Code", withIntermediateDirectories: true)
             let app = try #require(ImportZed.detect(home: home, applications: []).first)
-            return ImportZed.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts)
+            return ImportZed.plan(for: app, home: home, usKeyboard: usKeyboard, fonts: testFonts).droppingClickDefault
         }
         func settings(_ text: String) throws -> [ImportedSetting] { try plan(text).settings.map(\.setting) }
 
@@ -263,7 +265,7 @@ import Testing
         func plan(_ settings: String) throws -> ImportPlan {
             let (home, app) = try zedHome(settings: settings)
             defer { try? FileManager.default.removeItem(atPath: home) }
-            return ImportZed.plan(for: app, home: home, fonts: testFonts)
+            return ImportZed.plan(for: app, home: home, fonts: testFonts).droppingClickDefault
         }
         // The terminal uses the buffer font while it has none of its own.
         let shared = try plan(#"{"base_keymap": "VSCode", "buffer_font_family": "Fira Code"}"#)
@@ -320,12 +322,12 @@ import Testing
         // Gone since detection.
         var result = try plan(nil)
         #expect(result.preset == .nextTerm)
-        #expect(reasons(result)["settings.json"] == "couldn't be read, so no settings came over")
+        #expect(reasons(result)["settings.json"] == "couldn't be read, so none of its settings came over")
 
         for broken in ["{ \"base_keymap\": \"VSCode\"", "{ base_keymap: VSCode }", "[\"VSCode\"]", "\"VSCode\"", "{} {}"] {
             result = try plan(broken)
             #expect(result.preset == .nextTerm, "\(broken)")
-            #expect(reasons(result)["settings.json"] == "isn't valid JSON, so no settings came over")
+            #expect(reasons(result)["settings.json"] == "isn't valid JSON, so none of its settings came over")
             #expect(!shown(result).contains("VSCode"))
         }
 
@@ -345,7 +347,7 @@ import Testing
         try FileManager.default.removeItem(atPath: settings)
         #expect(mkfifo(settings, 0o600) == 0)
         #expect(ImportZed.detect(home: home, applications: []).isEmpty)
-        #expect(reasons(ImportZed.plan(for: app, home: home))["settings.json"] == "couldn't be read, so no settings came over")
+        #expect(reasons(ImportZed.plan(for: app, home: home))["settings.json"] == "couldn't be read, so none of its settings came over")
 
         // Another app's entry gets nothing from the Zed reader.
         let other = DetectedApp(kind: .iTerm2, name: "iTerm2", configPath: app.configPath, lastUsed: nil)

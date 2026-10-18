@@ -46,6 +46,12 @@ public enum ImportVSCode {
         guard family.contains(app.kind) else { return plan }
         let settings = settingsPlan(user: app.configPath, appName: app.name, usKeyboard: usKeyboard, fonts: fonts, home: home)
         plan.settings = settings.settings
+        // workbench.list.openMode not set: the app's own default (here, not in settingsPlan, which a single file an agent
+        // names goes through too: a partial file says nothing of the app's defaults).
+        if !settings.clickUnknown, let single = app.kind.singleClickDefault {
+            plan.addSingleClickDefault(for: app.kind, source: "\(openModeKey) (not set: \(single ? "singleClick" : "doubleClick"))",
+                                       note: "\(app.name)'s default")
+        }
         let keys = keybindingsPlan(user: app.configPath, usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
         // Keymap extensions can point to the JetBrains set (§2.4 of the research; only their ids are read).
@@ -55,6 +61,7 @@ public enum ImportVSCode {
         let keymap = keymapRows(installed, vimSettings: settings.vimSettings, preset: plan.preset)
         plan.preset = keymap.preset
         plan.skipped = keymap.skipped + settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
+        if let folders = settings.folderClick { plan.noteFolderClick(folders.single, source: folders.source) }
         let profiles = otherProfiles(user: app.configPath)
         if profiles > 0 {
             plan.skipped.append(SkippedItem(counted(profiles, "other profile"), "only the default profile is read; other profiles: choose in a later version"))
@@ -83,8 +90,8 @@ public enum ImportVSCode {
         "editor.fontFamily", "terminal.integrated.fontFamily", "workbench.colorCustomizations", "workbench.colorTheme",
         "files.trimTrailingWhitespace", "files.insertFinalNewline", "files.exclude", "terminal.integrated.cursorStyle",
         "terminal.integrated.cursorBlinking", "terminal.integrated.scrollback", "terminal.integrated.cwd",
-        "workbench.list.openMode", "window.openFoldersInNewWindow", "window.restoreWindows", "diffEditor.renderSideBySide",
-        "git.autofetch", "git.autofetchPeriod", "git.blame.editorDecoration.enabled",
+        "workbench.list.openMode", "workbench.tree.expandMode", "window.openFoldersInNewWindow", "window.restoreWindows",
+        "diffEditor.renderSideBySide", "git.autofetch", "git.autofetchPeriod", "git.blame.editorDecoration.enabled",
     ]
 
     /// Keys Next Term has no setting for (§3.5), reported by name when the user set them.
@@ -147,7 +154,15 @@ public enum ImportVSCode {
         var skipped: [SkippedItem] = []
         /// How many `vim.*` keys there are: a Vim user, even with the extension gone.
         var vimSettings = 0
+        /// The click the app uses can't be told: settings.json is there but couldn't be read, or
+        /// workbench.list.openMode holds a value not recognised. The app's default isn't assumed then.
+        var clickUnknown = false
+        /// workbench.tree.expandMode, as set: true opens a folder with a single click.
+        var folderClick: (single: Bool, source: String)?
     }
+
+    static let openModeKey = "workbench.list.openMode"
+    static let expandModeKey = "workbench.tree.expandMode"
 
     /// The default profile's settings.json (`<User>/settings.json`) as preview rows.
     static func settingsPlan(user: String, appName: String, usKeyboard: Bool, fonts: FontCatalog = .system,
@@ -155,13 +170,13 @@ public enum ImportVSCode {
         let path = (user as NSString).appendingPathComponent("settings.json")
         guard isRegularFile(path) else { return SettingsResult() }
         guard let text = readText(path, limit: 4 << 20) else {
-            return SettingsResult(skipped: [SkippedItem("settings.json", "couldn't be read")])
+            return SettingsResult(skipped: [SkippedItem("settings.json", "couldn't be read")], clickUnknown: true)
         }
         if text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}"))).isEmpty {
             return SettingsResult()
         }
         guard let file = SettingsFile(text) else {
-            return SettingsResult(skipped: [SkippedItem("settings.json", "couldn't be read as JSON; settings were skipped")])
+            return SettingsResult(skipped: [SkippedItem("settings.json", "couldn't be read as JSON; settings were skipped")], clickUnknown: true)
         }
         return settingsPlan(file, appName: appName, usKeyboard: usKeyboard, fonts: fonts, home: home)
     }
@@ -196,6 +211,8 @@ public enum ImportVSCode {
         let window = windowAndGit(file, appName: appName)
         result.settings += window.settings
         result.skipped += window.skipped
+        result.clickUnknown = window.clickUnknown
+        result.folderClick = window.folderClick
         result.skipped += unmappedKeys(file)
         result.vimSettings = Set(file.members.map(\.key).filter { $0.hasPrefix("vim.") }).count
         return result
@@ -286,7 +303,7 @@ public enum ImportVSCode {
 
     // MARK: opening files and projects, diffs and git
 
-    /// How a click opens a file, where projects open, what reopens at launch, how diffs show, and git's
+    /// How a click opens a file (and a folder), where projects open, what reopens at launch, how diffs show, and git's
     /// fetching and blame: each only when the user set it.
     static func windowAndGit(_ file: SettingsFile, appName: String) -> SettingsResult {
         var result = SettingsResult()
@@ -297,7 +314,20 @@ public enum ImportVSCode {
             guard let raw, let row = rows[raw] else { return result.skipped.append(SkippedItem(key, notRecognised)) }
             result.settings.append(PlannedSetting(row.0, source: "\(key) \(raw)", note: row.1))
         }
-        add("workbench.list.openMode", ["singleClick": (.sidebarSingleClick(true), nil), "doubleClick": (.sidebarSingleClick(false), nil)])
+        add(openModeKey, ["singleClick": (.sidebarSingleClick(true), nil), "doubleClick": (.sidebarSingleClick(false), nil)])
+        let clickRow = result.settings.contains { row in
+            if case .sidebarSingleClick = row.setting { return true }
+            return false
+        }
+        result.clickUnknown = file.has(openModeKey) && !clickRow
+        // Folders open with the same click as files here: the folder key is only compared with the file key, at plan level.
+        if file.has(expandModeKey) {
+            switch string(file.value(expandModeKey)) {
+            case "singleClick"?: result.folderClick = (true, "\(expandModeKey) singleClick")
+            case "doubleClick"?: result.folderClick = (false, "\(expandModeKey) doubleClick")
+            default: result.skipped.append(SkippedItem(expandModeKey, notRecognised))
+            }
+        }
         let thisWindow = ImportedSetting.openProjectsIn("thisWindow")
         add("window.openFoldersInNewWindow", [
             "on": (.openProjectsIn("newWindow"), nil), "off": (thisWindow, nil),

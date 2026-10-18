@@ -301,6 +301,7 @@ public enum ImportJetBrains {
         addCleanUp(editor, to: &plan)
         addIgnoredFiles(config: config, to: &plan)
         addGeneral(config: config, to: &plan)
+        addProjectView(config: config, to: &plan)
         addTerminal(config: config, usKeyboard: usKeyboard, fonts: fonts, to: &plan)
         addRedacted(editor, file: "options/editor.xml", to: &plan)
 
@@ -480,6 +481,54 @@ public enum ImportJetBrains {
             }
         }
         addRedacted(general, file: file, to: &plan)
+    }
+
+    /// How a click in the Project view opens a file: "Open Files with Single Click" (`autoscrollToSource`, in
+    /// `options/projectView.xml`) or the preview tab (`OPEN_IN_PREVIEW_TAB_IF_POSSIBLE`, in `options/ui.lnf.xml`), either
+    /// of which opens a file on one click; and "Open Directories with Single Click" (`openDirectoriesWithSingleClick`),
+    /// compared with it, as Next Term opens folders with the same click as files. An IDE writes an option only once it
+    /// differs from its default, so with none of them set the IDE opens on a double-click, and so does Next Term.
+    /// These are the IDE's own files, which hold the most recent choice and which a new project copies: a project's
+    /// `.idea/workspace.xml` is never read.
+    static func addProjectView(config: String, to plan: inout ImportPlan) {
+        let viewFile = "options/projectView.xml", uiFile = "options/ui.lnf.xml"
+        let viewKeys: Set<String> = ["autoscrollToSource", "openDirectoriesWithSingleClick"]
+        let uiKeys: Set<String> = ["OPEN_IN_PREVIEW_TAB_IF_POSSIBLE"]
+        let viewRoot = read(config, viewFile, keep: viewKeys), uiRoot = read(config, uiFile, keep: uiKeys)
+        let view = options(component(viewRoot, "ProjectViewSharedSettings"), keep: viewKeys)
+        let ui = options(component(uiRoot, "UISettings"), keep: uiKeys)
+        // A file that is there but couldn't be read may set the click: then the IDE's default isn't assumed.
+        var unknown = (viewRoot == nil && ImportVSCode.file(viewFile, inside: config) != nil)
+            || (uiRoot == nil && ImportVSCode.file(uiFile, inside: config) != nil)
+        // true, false, nil (not set), or skipped as a value Next Term can't use.
+        func flag(_ values: Options, _ file: String, _ key: String) -> Bool? {
+            guard let raw = values.values[key] else { return nil }
+            switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "true": return true
+            case "false": return false
+            default:
+                plan.skipped.append(SkippedItem("\(file) \(key)", "not a value Next Term can use"))
+                unknown = true
+                return nil
+            }
+        }
+        let toSource = flag(view, viewFile, "autoscrollToSource")
+        let previewTab = flag(ui, uiFile, "OPEN_IN_PREVIEW_TAB_IF_POSSIBLE")
+        if toSource == true {
+            plan.settings.append(PlannedSetting(.sidebarSingleClick(true), source: "\(viewFile) autoscrollToSource true"))
+        } else if previewTab == true {
+            plan.settings.append(PlannedSetting(.sidebarSingleClick(true), source: "\(uiFile) OPEN_IN_PREVIEW_TAB_IF_POSSIBLE true"))
+        } else if toSource == false || previewTab == false {
+            let source = toSource == false ? "\(viewFile) autoscrollToSource false" : "\(uiFile) OPEN_IN_PREVIEW_TAB_IF_POSSIBLE false"
+            plan.settings.append(PlannedSetting(.sidebarSingleClick(false), source: source))
+        } else if !unknown {
+            plan.addSingleClickDefault(for: .jetBrains, source: "\(viewFile) (not set: double click)", note: "JetBrains IDEs' default")
+        }
+        if let folders = flag(view, viewFile, "openDirectoriesWithSingleClick") {
+            plan.noteFolderClick(folders, source: "\(viewFile) openDirectoriesWithSingleClick \(folders)")
+        }
+        addRedacted(view, file: viewFile, to: &plan)
+        addRedacted(ui, file: uiFile, to: &plan)
     }
 
     static func addTerminal(config: String, usKeyboard: Bool, fonts: FontCatalog = .system, to plan: inout ImportPlan) {
@@ -695,7 +744,7 @@ public enum ImportJetBrains {
     static let settingsFiles: Set<String> = [
         "options/editor-font.xml", "options/editor.xml", "options/terminal.xml", "options/terminal-font.xml",
         "options/keymap.xml", "options/mac/keymap.xml", "options/recentProjects.xml", "options/colors.scheme.xml",
-        "options/filetypes.xml", "options/ide.general.xml",
+        "options/filetypes.xml", "options/ide.general.xml", "options/projectView.xml", "options/ui.lnf.xml",
     ]
 
     /// Files beside them that hold credentials, hosts or connection details (§6.3).

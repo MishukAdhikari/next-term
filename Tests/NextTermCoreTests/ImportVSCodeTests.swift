@@ -458,7 +458,7 @@ import Testing
             }
             """, to: user + "/settings.json")
         let plan = self.plan(app(user), home: home)
-        #expect(plan.settings.isEmpty)
+        #expect(plan.droppingClickDefault.settings.isEmpty)
         let shown = String(describing: plan)
         for value in ["ghp_", "hunter2", "aHVudGVyMg", "/bin/zsh", "secret-arg", "robot", "sk-proj", "plain-token-value",
                       "sk-abc", "AKIA", "--login"] {
@@ -553,7 +553,7 @@ import Testing
             }
             """, to: user + "/globalStorage/storage.json")
         let plan = self.plan(app(user), home: home)
-        #expect(plan.settings == [PlannedSetting(.fontSize(13), source: "editor.fontSize 13")])
+        #expect(plan.droppingClickDefault.settings == [PlannedSetting(.fontSize(13), source: "editor.fontSize 13")])
         #expect(plan.skipped == [SkippedItem("2 other profiles", "only the default profile is read; other profiles: choose in a later version")])
         #expect(!String(describing: plan).contains("Work") && !String(describing: plan).contains("sk-abc"))
 
@@ -1023,7 +1023,7 @@ import Testing
         try write(#"{"editor.fontSize": 13}"#, to: user + "/settings.json")
         let broken = self.plan(app(user), home: home)
         #expect(broken.skipped == [SkippedItem("keybindings.json", "couldn't be read as JSON; your shortcuts were skipped")])
-        #expect(broken.settings.count == 1)
+        #expect(broken.droppingClickDefault.settings.count == 1)
     }
 
     // MARK: safety and the public entry points
@@ -1054,7 +1054,7 @@ import Testing
         #expect(plan(jetBrains, home: home) == ImportPlan(preset: .jetBrains))
         // The detected app's keymap decides the preset (an IntelliJ keybindings extension can point elsewhere).
         let cursor = self.plan(app(user, .cursor, name: "Cursor", preset: .jetBrains), home: home)
-        #expect(cursor.preset == .jetBrains && cursor.settings.count == 1)
+        #expect(cursor.preset == .jetBrains && cursor.droppingClickDefault.settings.count == 1)
         #expect(plan(app(user), home: home).preset == .vsCode)
     }
 
@@ -1068,7 +1068,7 @@ import Testing
         let found = try #require(ImportVSCode.detect(home: home, applications: [home + "/Applications"]).first)
         let plan = ImportVSCode.plan(for: found, home: home, usKeyboard: false, applications: [home + "/Applications"])
         #expect(plan.preset == .vsCode)
-        #expect(plan.settings.map(\.setting) == [.fontSize(15), .softWrap(false)])
+        #expect(plan.settings.map(\.setting) == [.fontSize(15), .softWrap(false), .sidebarSingleClick(true)]) // VSCodium's own click
         #expect(plan.recentProjects == [project])
     }
 }

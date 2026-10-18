@@ -1,12 +1,19 @@
 {
   "Android Studio 2025.3.4" : {
-    "changes_if_applied" : 14,
+    "changes_if_applied" : 15,
     "not_brought_over" : [
 
     ],
     "note" : "Nothing changes here: apply_import opens Next Term's import window with these rows, and only the user's Apply changes anything.",
     "plan_id" : "p-(differs with the home folder)",
     "settings" : [
+      {
+        "from" : "options/projectView.xml (not set: double click)",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : "JetBrains IDEs' default",
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
+      },
       {
         "from" : "options/terminal-font.xml FONT_SIZE 12",
         "id" : "set:terminalFontSize",
@@ -31,7 +38,7 @@
     ]
   },
   "GoLand 2025.2" : {
-    "changes_if_applied" : 14,
+    "changes_if_applied" : 15,
     "not_brought_over" : [
 
     ],
@@ -44,6 +51,13 @@
         "note" : null,
         "ticked" : true,
         "title" : "fontSize title"
+      },
+      {
+        "from" : "options/projectView.xml (not set: double click)",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : "JetBrains IDEs' default",
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
       }
     ],
     "shortcut_set" : {
@@ -62,7 +76,7 @@
     ]
   },
   "PhpStorm 2026.1" : {
-    "changes_if_applied" : 17,
+    "changes_if_applied" : 18,
     "not_brought_over" : [
       {
         "item" : "Keymap “Escaped”",
@@ -107,6 +121,13 @@
         "note" : null,
         "ticked" : true,
         "title" : "openProjectsIn title"
+      },
+      {
+        "from" : "options/projectView.xml (not set: double click)",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : "JetBrains IDEs' default",
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
       }
     ],
     "shortcut_set" : {
@@ -125,7 +146,7 @@
     ]
   },
   "RubyMine 2025.1" : {
-    "changes_if_applied" : 14,
+    "changes_if_applied" : 15,
     "not_brought_over" : [
       {
         "item" : "idea.config.path in idea.properties",
@@ -141,6 +162,13 @@
         "note" : null,
         "ticked" : true,
         "title" : "softWrap title"
+      },
+      {
+        "from" : "options/projectView.xml (not set: double click)",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : "JetBrains IDEs' default",
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
       }
     ],
     "shortcut_set" : {
@@ -159,7 +187,7 @@
     ]
   },
   "WebStorm 2024.2" : {
-    "changes_if_applied" : 14,
+    "changes_if_applied" : 15,
     "not_brought_over" : [
 
     ],
@@ -172,6 +200,13 @@
         "note" : null,
         "ticked" : true,
         "title" : "trimTrailingWhitespace title"
+      },
+      {
+        "from" : "options/projectView.xml (not set: double click)",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : "JetBrains IDEs' default",
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
       }
     ],
     "shortcut_set" : {
