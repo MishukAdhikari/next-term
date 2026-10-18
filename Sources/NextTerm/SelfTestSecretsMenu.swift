@@ -203,15 +203,20 @@ extension SelfTest {
         } else {
             check(false, "secrets menu: a vault made with another keyring")
         }
-        // Changed outside Next Term: the same, with the tampered line.
+        // Changed outside Next Term: the same, with the tampered line, once a use has found it. load() reads the index with
+        // no key, so no MAC check: until then the menu stays on, as the list's own check has it.
         if let planted = secretsTampered(original, { $0["purpose"] = "changed by hand" }) {
             try? store.folder.write(SecretFolder.vaultName, data: planted)
             await store.load()
+            let quiet: Bool = !SecretsMenu.isBroken
+            // Refused at unlock, before any value is opened; nothing it returns is kept.
+            _ = try? await store.perform(.reveal(name: "MENU_KEY"))
             let line: String = SecretsView.statusText(store.protection, waitingForKeychain: store.isWaitingForKeychain,
                                                       unlisted: store.isUnlisted, tooLarge: store.isTooLarge)
             let saysWhy: Bool = secretsMenuBrokenOff(add, imports, line: line)
-            check(store.protection == .tampered && saysWhy,
-                  "secrets menu: with a vault changed outside Next Term, Add Key… and Import From are off, and the due row says why",
+            check(quiet && store.protection == .tampered && saysWhy,
+                  "secrets menu: with a vault changed outside Next Term, Add Key… and Import From are off after its first use, "
+                      + "and the due row says why",
                   line)
         } else {
             check(false, "secrets menu: a tampered vault")

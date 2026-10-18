@@ -6,7 +6,8 @@ import NextTermCore
 /// manager's sheet with agent control off; and a password prompt with echo off in a tab, as `bw unlock`'s is. All on
 /// the self-test's own socket, vault and files; values are made up at run time.
 extension SelfTest {
-    /// Run by an agent (a copy of zsh named claude runs the pipe), the sheet warns the agent may have seen the keys.
+    /// Run by an agent (a link named claude to /bin/zsh runs the pipe: a copy of zsh is a platform binary off the system
+    /// volume, which launch constraints kill as it starts), the sheet warns the agent may have seen the keys.
     /// Run from no tab (the pipe leaves its tab, as `( … &)` does), it says Next Term couldn't tell which tab.
     static func secretPipeOriginChecks(_ c: TerminalWindowController, _ view: SecretsView, folder: URL, list: URL) async {
         let bin: URL = folder.appendingPathComponent("agent-bin", isDirectory: true)
@@ -16,18 +17,19 @@ extension SelfTest {
         let tab: TerminalTab = await secretPipeTab(c, folder)
         defer { closeSecretsTabs([tab], "secret pipe") }
         let pipe: String = "cat \(secretPipeQuoted(list.path)) | \(secretPipeNxtrm) secret import --from bws -"
-        if (try? FileManager.default.copyItem(atPath: "/bin/zsh", toPath: agent.path)) != nil {
+        if (try? FileManager.default.createSymbolicLink(atPath: agent.path, withDestinationPath: "/bin/zsh")) != nil {
             // `; true` keeps the stand-in agent above the importer: zsh would run a line's last command in its place.
             let run: String = "\(secretPipeQuoted(agent.path)) -fc \(secretPipeQuoted(pipe + "; true"))"
             MCPControl.type(run, into: tab, submit: true)
             let opened: Bool = await wait(15) { view.fileImportSheet?.isPiped == true }
             let warning: String? = secretPipeWarning(view.fileImportSheet)
+            let detail: String = opened ? (warning ?? "no warning") : "no sheet: " + secretPipeScreen(tab)
             check(opened && warning == SecretImportPipe.agentWarning,
-                  "secret pipe: run by an agent, the sheet warns it may have seen the keys", warning ?? "no warning")
+                  "secret pipe: run by an agent, the sheet warns it may have seen the keys", detail)
             view.fileImportSheet?.closeSheet()
             _ = await wait(10) { secretPipeScreen(tab).contains("Nothing imported.") && !tab.status.running }
         } else {
-            note("secret pipe: no copy of zsh to stand in for an agent, so the agent warning check is skipped")
+            note("secret pipe: no link to zsh to stand in for an agent, so the agent warning check is skipped")
         }
         tab.view.send(txt: "clear\r")
         _ = await wait(5) { !secretPipeScreen(tab).contains("Nothing imported.") }

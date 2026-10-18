@@ -880,8 +880,10 @@ extension SelfTest {
         defer { requests.resetForSelfTest() }
         guard MCPControlServer.shared.isRunning else { return check(false, "secrets: the self-test's MCP socket is up for the wrapper") }
         let value = secretsValue("wrap")
+        // Unticked: these checks need lasting approvals and a card that swaps Allow once for 15 minutes; ASK_KEY covers a key that
+        // asks every time.
         _ = try? await store.perform(.add(name: "WRAP_KEY", purpose: "the wrapper checks", purposeBy: .user, origin: .settings,
-                                          writeOnly: false, value: SecretBytes(utf8: value)))
+                                          writeOnly: false, value: SecretBytes(utf8: value), asksEveryUse: false))
         _ = try? await store.perform(.add(name: "OTHER_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                           value: SecretBytes(utf8: secretsValue("other"))))
         defer {
