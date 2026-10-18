@@ -80,6 +80,12 @@ enum SelfTest {
     private static var failures = 0
 
     static func run() {
+        #if DEBUG
+        // An exception nothing catches ends the run with a crash report, rather than AppKit logging it and the run going on
+        // half done or stalling where it was (the script then says the run did not finish). In this process's registration
+        // domain only, so never in your defaults.
+        UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
+        #endif
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
