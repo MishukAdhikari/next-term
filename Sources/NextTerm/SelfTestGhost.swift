@@ -535,6 +535,19 @@ extension SelfTest {
         check(await shows(), "suggestions: Private Mode off, they come back")
         check(UserDefaults.standard.object(forKey: "ghostTextPrivateMode") == nil, "suggestions: Private Mode is never stored, so a launch starts without it")
 
+        // View › Suggestions While Typing: ticked while on; it turns them off, as Settings does, and on again.
+        let viewItem = NSMenuItem(title: "Suggestions While Typing", action: #selector(AppDelegate.toggleSuggestionsWhileTyping(_:)), keyEquivalent: "")
+        _ = AppDelegate.shared.validateMenuItem(viewItem)
+        let tickedOn = viewItem.state == .on
+        AppDelegate.shared.toggleSuggestionsWhileTyping(nil)
+        _ = AppDelegate.shared.validateMenuItem(viewItem)
+        let shownOff = await shows()
+        check(tickedOn && viewItem.state == .off && !GhostPreferences.isOn && !shownOff,
+              "suggestions: View › Suggestions While Typing is ticked, and turns them off")
+        AppDelegate.shared.toggleSuggestionsWhileTyping(nil)
+        let shownOn = await shows()
+        check(GhostPreferences.isOn && shownOn, "suggestions: and on again from the View menu")
+
         // The count, and Clear History… (only ever the self-test's own record).
         let settings = GhostSettingsView()
         settings.refresh()

@@ -326,6 +326,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
     }
 
+    /// View › Suggestions While Typing: on or off for every tab, as Settings › Terminal › While typing sets it (stored).
+    @objc func toggleSuggestionsWhileTyping(_ sender: Any?) {
+        GhostPreferences.set(!GhostPreferences.isOn)
+    }
+
     /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
     /// turned off or Next Term quits.
     @objc func togglePrivateMode(_ sender: Any?) {
@@ -1479,6 +1484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
         if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
@@ -1904,6 +1910,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
         // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
         item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
+        item(view, "Suggestions While Typing", #selector(toggleSuggestionsWhileTyping(_:)), "", target: self).toolTip =
+            "A command you ran before, dimmed after the cursor at a zsh prompt. Off, none shows and no command is recorded."
         item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
             "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
         let heights = NSMenu(title: "Line Height")
