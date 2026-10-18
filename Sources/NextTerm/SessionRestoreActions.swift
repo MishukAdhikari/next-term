@@ -318,7 +318,7 @@ final class StartWatcher {
     private func mark(_ event: ShellIntegration.Event) {
         guard let tab else { return }
         switch event {
-        case .commandStarted(let line, _):
+        case .commandStarted(let line, _, _):
             if let armed {
                 // The user ran something else: the line is theirs now, and nothing is watched.
                 guard line.trimmingCharacters(in: .whitespaces) == armed else { return uninstall() }

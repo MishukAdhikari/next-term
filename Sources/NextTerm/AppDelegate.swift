@@ -326,6 +326,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
     }
 
+    /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
+    /// turned off or Next Term quits.
+    @objc func togglePrivateMode(_ sender: Any?) {
+        GhostPreferences.setPrivateMode(!GhostPreferences.privateMode)
+    }
+
     @objc func toggleSoftWrap(_ sender: Any?) {
         softWrap.toggle()
         controllers.forEach { $0.editorArea.applyWrap() }
@@ -505,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             openAtLaunch(kind: kind, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
+            GhostPreferences.testIsOn = false // its tabs record nothing, and → moves the cursor
             return SelfTestRestore.run(restore: restore)
         }
         #endif
@@ -1472,6 +1479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
         if item.action == #selector(setAgentSpinner(_:)) { item.state = item.representedObject as? String == AgentSpinner.current.rawValue ? .on : .off }
@@ -1869,6 +1877,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(markdown, "Code Block", #selector(CodeTextView.insertMarkdownCodeBlock(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
+        // While a suggestion shows after the cursor: that command leaves Next Term's record of yours.
+        item(edit, "Forget This Suggestion", #selector(TerminalWindowController.forgetSuggestion(_:)), "\u{8}", [.command, .shift])
 
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
@@ -1894,6 +1904,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
         // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
         item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
+        item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
+            "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]

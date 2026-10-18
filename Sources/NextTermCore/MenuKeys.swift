@@ -26,6 +26,7 @@ public enum MenuKeys {
             "replaceInFiles:": shiftCmd("r"), "goToLine:": cmd("l"), "toggleComment:": cmd("/"), "indentSelection:": cmd("]"),
             "outdentSelection:": cmd("["), "duplicateLine:": cmd("d"), "deleteLine:": shiftCmd("k"), "moveLineUp:": ctrlCmd(up),
             "moveLineDown:": ctrlCmd(down), "clearBuffer:": cmd("k"), "goToHeading:": shiftCmd("o"),
+            "forgetSuggestion:": shiftCmd("\u{8}"),
             // View
             "toggleProjectSidebar:": cmd("b"), "toggleEditorFocus:": KeyChord(key: "`", control: true), "toggleTerminalCollapsed:": cmd("j"),
             "showChanges:": optCmd("g"), "toggleSoftWrap:": optCmd("w"), "toggleUnifiedDiffs:": ctrlCmd("u"),
