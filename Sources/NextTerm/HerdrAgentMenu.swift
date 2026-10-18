@@ -7,8 +7,13 @@ import NextTermCore
 /// focus`, through HerdrRunner); the user chose it, so nothing asks. Built from what the last checks left: nothing runs
 /// to make it.
 enum HerdrAgentMenu {
-    /// Some window has an agent to go to.
-    static var hasAgents: Bool { !queue().isEmpty }
+    /// Some window has an agent to go to (asked as the menu bar validates, so it builds no queue).
+    static var hasAgents: Bool {
+        let tabs = AppDelegate.shared.controllers.flatMap(\.tabs)
+        if tabs.contains(where: { !$0.exited && ($0.followsHerdr ? !$0.herdrRows.isEmpty : tabItem($0) != nil) }) { return true }
+        if !RemotePoller.shared.overviews.isEmpty || !LocalHerdrWatch.shared.allMachines.isEmpty { return true }
+        return RemoteHosts.all.contains { $0.keep == .herdr }
+    }
 
     /// Every agent in every window, as the queue orders them: herdr's agents of each tab that follows herdr, in herdr's
     /// order, and each tab whose program is an agent, in tab order; then those of connected hosts with no herdr tab, and

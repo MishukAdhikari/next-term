@@ -142,6 +142,7 @@ public struct HerdrAgents: Equatable, Sendable {
             let shown = isOnScreen(agent.paneID)
             followed[agent.paneID]?.onScreen = shown
         }
+        rows = makeRows()
         return events
     }
 
@@ -218,6 +219,7 @@ public struct HerdrAgents: Equatable, Sendable {
         kept.unread = false
         if !kept.needsYou { kept.needsSince = nil }
         followed[pane] = kept
+        rows = makeRows()
     }
 
     /// Keep as Unread: the agent stays finished and not seen, in the badge and in Needs You, until the user chooses it or
@@ -227,6 +229,7 @@ public struct HerdrAgents: Equatable, Sendable {
         if !kept.finished { kept.needsSince = now }
         kept.unread = true
         followed[pane] = kept
+        rows = makeRows()
     }
 
     public func isUnread(_ pane: String) -> Bool { followed[pane]?.unread ?? false }
@@ -235,6 +238,7 @@ public struct HerdrAgents: Equatable, Sendable {
     public mutating func mute(_ pane: String, _ on: Bool) {
         guard followed[pane] != nil || !on else { return }
         if on { muted.insert(pane) } else { muted.remove(pane) }
+        rows = makeRows()
     }
 
     public func isMuted(_ pane: String) -> Bool { muted.contains(pane) }
@@ -262,6 +266,7 @@ public struct HerdrAgents: Equatable, Sendable {
         guard let text else {
             kept.question = nil
             followed[pane] = kept
+        rows = makeRows()
             return
         }
         if let asked = kept.question, asked.text == text, asked.seq == seq {
@@ -272,6 +277,7 @@ public struct HerdrAgents: Equatable, Sendable {
             kept.question = Question(text: text, choices: choices, style: style, serial: serials, seq: seq)
         }
         followed[pane] = kept
+        rows = makeRows()
     }
 
     /// The question read from the agent's pane while it is blocked.
@@ -331,7 +337,11 @@ public struct HerdrAgents: Equatable, Sendable {
 
     /// The tab list's rows, one per agent in herdr's order (its states as marks: blocked asks, working works, done and kept
     /// unread are done, idle and unknown show nothing). Two rows with the same name and title say where each works.
-    public var rows: [TabListRows.Agent] {
+    public private(set) var rows: [TabListRows.Agent] = []
+
+    /// The rows from what is kept now: made once per change (a check, a read question, a flag), not each time they are
+    /// drawn.
+    private func makeRows() -> [TabListRows.Agent] {
         var made = agents.map { agent -> TabListRows.Agent in
             let kept = followed[agent.paneID]
             return TabListRows.Agent(pane: agent.paneID, name: agent.name, kind: agent.kind, title: agent.title,
