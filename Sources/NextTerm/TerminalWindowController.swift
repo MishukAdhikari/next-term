@@ -301,6 +301,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         window.onFirstResponderChange = { [weak self] responder in
             self?.completions.responderChanged()
+            self?.ghosts.responderChanged(to: responder)
             guard let self, let view = responder as? NextTermView, let tab = self.tabs.first(where: { $0.view === view }) else { return }
             // Typing into a folded terminal (behind the rail, or under its bar above or below the editor): it opens.
             if self.terminalCollapsed { self.expandTerminal() }

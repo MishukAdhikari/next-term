@@ -93,7 +93,7 @@ final class GhostSettingsView: NSStackView {
             again.font = .systemFont(ofSize: 11)
             again.bezelStyle = .rounded
             again.identifier = NSUserInterfaceItemIdentifier(item.plugin.id)
-            again.setAccessibilityLabel("Ask again about \(item.plugin.name)")
+            again.setAccessibilityLabel("Ask again about \(item.plugin.label)")
             let row = NSStackView(views: [label, again])
             row.spacing = 8
             choices.addArrangedSubview(row)
@@ -116,7 +116,8 @@ final class GhostSettingsView: NSStackView {
 
     static func note(on: Bool) -> String {
         guard on else {
-            return "Off: nothing shows after the cursor, and no command is recorded. What is kept stays until you clear it."
+            return "Off: Next Term shows no suggestion (a zsh plugin’s own show as before), and no command is recorded. What is"
+                + " kept stays until you clear it."
         }
         return "Next Term suggests a command you ran before, dimmed after the cursor: → or End takes it, ⌥→ one word, Esc hides it,"
             + " and Return runs only what you typed. It keeps the commands you run in its zsh tabs, on this Mac only: never agents’"
@@ -134,8 +135,10 @@ final class GhostSettingsView: NSStackView {
 
     static func choiceText(_ plugin: GhostOwner.Plugin, _ choice: PluginChoice, byDismissal: Bool) -> String {
         switch choice {
-        case .nextTerm: return "\(plugin.name): Next Term’s show instead"
-        case .plugin: return byDismissal ? "\(plugin.name) keeps them (the question was closed twice)" : "\(plugin.name) keeps them"
+        case .nextTerm: return "\(plugin.label): Next Term’s show instead"
+        case .plugin:
+            let keeps = "\(plugin.label) keeps its own"
+            return byDismissal ? keeps + " (the question was closed twice)" : keeps
         }
     }
 

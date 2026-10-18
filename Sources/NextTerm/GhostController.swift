@@ -23,6 +23,12 @@ final class GhostController {
         tab(of: view)?.ghost.hide()
     }
 
+    /// Another pane, the editor or a field took the keyboard: a suggestion in any other terminal hides (it shows only while
+    /// its terminal has the keyboard), and Forget This Suggestion goes off with it.
+    func responderChanged(to responder: NSResponder?) {
+        owner?.tabs.filter { $0.view !== responder }.forEach { $0.ghost.hide() }
+    }
+
     private func tab(of view: NextTermView) -> TerminalTab? {
         owner?.tabs.first { $0.view === view }
     }

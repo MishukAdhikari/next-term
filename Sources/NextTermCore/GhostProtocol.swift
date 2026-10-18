@@ -12,8 +12,8 @@ import Foundation
 ///                                                              zle-line-pre-redraw: the line changed, and no key is pending
 ///     gfb ; generation ; line                                  the shell's own history, asked (empty: nothing)
 ///
-/// The generation goes up at every change of BUFFER, CURSOR or POSTDISPLAY, reported or not, and at each new line, whose
-/// number goes up too. The cursor is zsh's CURSOR, in characters. Flags: `l`, BUFFER was over `maxLineBytes` and is sent
+/// The generation goes up at every change of BUFFER, CURSOR, POSTDISPLAY or KEYMAP, reported or not, and at each new line,
+/// whose number goes up too. The cursor is zsh's CURSOR, in characters. Flags: `l`, BUFFER was over `maxLineBytes` and is sent
 /// empty; `L`, the same for POSTDISPLAY; `r`, a region is active; `i`, an incremental search is.
 ///
 /// The keymap is zsh's KEYMAP, with `main` named as the keymap it is (`emacs` or `viins`; `main` when that couldn't be
@@ -30,8 +30,8 @@ import Foundation
 /// and while the key only moves the cursor in that keymap (or does nothing): otherwise the key's own bytes go back to
 /// zsh, which does what that key does. `o t` turns zsh-autosuggestions' suggestions off in that shell, and its rebinding
 /// at each prompt; `o g` gives back what `t` turned off. Either way the hook then sends its `ghost` mark and the line.
-/// `f` asks zsh's in-memory history for the newest line longer than the prefix that starts with it; nothing where it holds
-/// over `maxFallbackHistory` lines. The line doesn't change, so no `buf` follows.
+/// `f` asks zsh's in-memory history for the newest line longer than the prefix that starts with it; nothing where it may
+/// hold over `maxFallbackHistory` lines (HISTSIZE and HISTCMD both over it). The line doesn't change, so no `buf` follows.
 public enum GhostProtocol {
     /// ESC [ 6975 ~: as safe as Tab completion's and history's keys (CompletionProtocol.prefix, ShellHistory.prefix), and
     /// neither of them: unbound in stock keymaps, and not the start of any reply a terminal sends.
@@ -46,7 +46,8 @@ public enum GhostProtocol {
     public static let markKinds: Set<Substring> = ["ghost", "buf", "gfb"]
     /// The longest payload the hook reads after its key.
     public static let maxPayload = 65_536
-    /// zsh's in-memory history is asked only up to this many lines: a search costs about 2 ms there.
+    /// zsh's in-memory history is asked only where it can't hold more lines than this (HISTSIZE or HISTCMD, read at no cost;
+    /// counting the history costs as much as searching it): a search costs about 2 ms there.
     public static let maxFallbackHistory = 20_000
 
     // MARK: app to shell

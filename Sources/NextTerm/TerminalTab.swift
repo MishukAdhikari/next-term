@@ -616,7 +616,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
-        view.onWrite = { [weak self] data in self?.history.input(data) }
+        view.onWrite = { [weak self] data in
+            self?.history.input(data)
+            self?.ghost.written(data)
+        }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
         // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.

@@ -237,8 +237,12 @@ import Testing
         }
         let bytes = try Data(contentsOf: URL(fileURLWithPath: folder.logPath))
         #expect(!String(decoding: bytes, as: UTF8.self).contains("forget-me") && String(decoding: bytes, as: UTF8.self).contains("ls"))
+        // A compaction stopped before its rename left its copy: Clear takes it too.
+        let leftover = folder.url.appendingPathComponent("." + CommandHistoryFolder.logName + ".nextterm-" + UUID().uuidString)
+        try Data("echo leftover\n".utf8).write(to: leftover)
         try folder.clear()
         #expect(!FileManager.default.fileExists(atPath: folder.logPath))
+        #expect(!FileManager.default.fileExists(atPath: leftover.path))
         // Clearing a folder that isn't there makes none.
         let none = CommandHistoryFolder(support: base.appendingPathComponent("none"))
         try none.clear()

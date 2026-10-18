@@ -86,9 +86,10 @@ final class GhostTextView: NSView {
 }
 
 
-/// A small notice in a tab, at the top of its terminal as an agent's tab's hint is (NextTermView.awaitsChoice): a line
-/// that says what it is about, its buttons, and a close button. None of them takes the keyboard, so typing goes on in the
-/// terminal. Suggestions while typing use it to ask once where a plugin draws its own, and for their first-use hint.
+/// A small notice in a tab, at the top or the bottom of its terminal, away from the cursor's row so it never covers the
+/// line being typed: a line that says what it is about, its buttons, and a close button. None of them takes the keyboard,
+/// so typing goes on in the terminal. Suggestions while typing use it to ask once where a plugin draws its own, and for
+/// their first-use hint.
 final class GhostNotice: NSView {
     let text: String
     private var actions: [() -> Void] = []
@@ -147,11 +148,18 @@ final class GhostNotice: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// Pinned to the top of `view`, centred, never wider than it; said once to VoiceOver, quietly.
-    func show(in view: NSView) {
+    /// Pinned to the edge of `view` away from the cursor's row (the bottom when the prompt is in the top half: a new tab,
+    /// after a clear), centred, never wider than it; said once to VoiceOver, quietly. Neither notice outlives its line, so
+    /// the cursor never moves to the other half under it.
+    func show(in view: NextTermView) {
         view.addSubview(self)
+        let terminal = view.getTerminal()
+        let cursorInTopHalf = terminal.getCursorLocation().y < terminal.rows / 2
+        let edge = cursorInTopHalf
+            ? bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6)
+            : topAnchor.constraint(equalTo: view.topAnchor, constant: 6)
         NSLayoutConstraint.activate([
-            topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
+            edge,
             centerXAnchor.constraint(equalTo: view.centerXAnchor),
             widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -16),
         ])

@@ -573,14 +573,15 @@ extension SelfTest {
     }
 
     /// The cold start: with nothing in the record, the shell's own history in memory fills in after a pause; Forget keeps
-    /// it from showing again; and none of it is ever recorded. Only with the self-test's own record, emptied first.
+    /// it from showing again; none of it is ever recorded; and a line forgotten from the record, which zsh's history holds
+    /// too, isn't brought back by it. Only with the self-test's own record, emptied first.
     static func ghostFallbackChecks(_ c: TerminalWindowController, dir: URL) async {
         guard CommandHistoryStore.shared.folderURL?.path.hasPrefix(NSTemporaryDirectory()) == true else {
             return note("suggestions from the shell's own history: not checked, the record isn't the self-test's own")
         }
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in CommandHistoryStore.shared.clear { done.resume() } }
         let history = dir.appendingPathComponent("fallback-history").path
-        let rc = plainZshrc + "HISTFILE=\(ShellQuote.quote(history))\nprint -s 'kubectl get pods'\n"
+        let rc = plainZshrc + "HISTFILE=\(ShellQuote.quote(history))\nprint -s 'kubectl get pods'\nprint -s 'kubectl top nodes'\n"
         guard let tab = await ghostTab(c, in: dir, zshrc: rc, name: "fallback"), let window = c.window else { return }
         defer { c.remove(tab) }
         typeKeys(window, "kubectl g")
@@ -595,6 +596,21 @@ extension SelfTest {
             CommandHistoryStore.shared.count { (count: Int) in done.resume(returning: count) }
         }
         check(count == 0, "suggestions: nothing from the shell's history is recorded", "\(count)")
+
+        // A line the record has and zsh's history holds too: forgotten from the record, the shell never brings it back.
+        await ghostSeed("kubectl top nodes", folder: dir.path)
+        await ghostClear(tab)
+        typeKeys(window, "kubectl t")
+        if await ghostShows(tab), tab.ghost.overlay.text == "op nodes" {
+            NSApp.sendAction(#selector(TerminalWindowController.forgetSuggestion(_:)), to: nil, from: nil)
+            let back = await ghostShows(tab, within: 1.5)
+            check(!back, "suggestions: a line forgotten from the record isn't brought back by zsh's history")
+            await ghostClear(tab)
+            typeKeys(window, "kubectl t")
+            check(!(await ghostShows(tab, within: 1.5)), "suggestions: nor on a later line")
+        } else {
+            check(false, "suggestions: a line the record and zsh's history share: it showed first", tab.ghost.overlay.text)
+        }
     }
 
     /// The next command on an empty line: `true` then `echo next`, twice, typed through the window; after `true` again the

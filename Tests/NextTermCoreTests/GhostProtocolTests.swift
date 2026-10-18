@@ -103,10 +103,13 @@ import Testing
     /// The hook reports and binds; it never changes the history, starts a process or evaluates the line.
     @Test func theHookOnlyReports() {
         let script = ZshGhostScript.script
-        for word in ["setopt", "unsetopt", "HISTFILE", "SAVEHIST", "HISTSIZE", "fc ", "print -s", "command "] {
+        for word in ["setopt", "unsetopt", "HISTFILE", "SAVEHIST", "fc ", "print -s", "command "] {
             #expect(!script.contains(word), "the hook says \(word)")
         }
         let code = script.split(separator: "\n").filter { !$0.drop(while: { $0 == " " }).hasPrefix("#") }.joined(separator: "\n")
+        // HISTSIZE only read, as the fallback's bound.
+        let reads = code.components(separatedBy: "(( HISTSIZE <= ").count
+        #expect(code.components(separatedBy: "HISTSIZE").count == reads, "the hook sets HISTSIZE")
         #expect(!code.contains("`") && code.range(of: #"\$\([^(]"#, options: .regularExpression) == nil, "the hook substitutes a command")
         #expect(script.range(of: #"\beval\b"#, options: .regularExpression) == nil, "the hook evaluates text")
         #expect(script.contains("(( PENDING || ${KEYS_QUEUED_COUNT:-0} )) && return 0"))
@@ -123,6 +126,15 @@ import Testing
         let long = String(repeating: "\u{1}", count: 20_000)
         #expect(GhostProtocol.acceptFrame(gen: 1, seen: long, new: long, key: []) == nil)
         #expect(GhostProtocol.acceptFrame(gen: 1, seen: "a", new: String(repeating: "b", count: GhostProtocol.maxPayload - 3), key: []) != nil)
+    }
+
+    /// No accept frame reads as a line ending to what watches the writes (InputScan), whatever its lines and key hold: the
+    /// suggestion hides on a written Return, and its own frame never hides it.
+    @Test func anAcceptFrameNeverEndsTheLine() throws {
+        let frame = try #require(GhostProtocol.acceptFrame(gen: 7, seen: "a\rb", new: "a\rb\u{3}\u{4}\u{1a}", key: [0x0D, 0x0A]))
+        var inPaste = false
+        #expect(!InputScan.scan(frame, inPaste: &inPaste).disarms && !inPaste)
+        #expect(InputScan.scan(frame + [0x0D], inPaste: &inPaste).disarms)
     }
 
     @Test func aFallbackFrameCarriesTheGenerationAndThePrefix() {

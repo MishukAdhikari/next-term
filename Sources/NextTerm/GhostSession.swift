@@ -35,10 +35,10 @@ final class GhostSession {
     private var checks = 0
     /// The newest candidates waiting for a check, while two are out.
     private var waiting: (gen: Int, candidates: [CommandHistory.Entry], folder: String, fromShell: Bool)?
-    /// When to ask the shell's own history (the cold start), and the command showing that came from it: Forget keeps
-    /// only its hash.
+    /// When to ask the shell's own history (the cold start).
     private var fallback = GhostFallback()
-    private var shownFromShell: String?
+    /// A bracketed paste runs on in what is written to the shell: its Return is text, not a key.
+    private var inPaste = false
     /// The command that usually follows yours just ended, checked, waiting for the empty line after `afterLine`.
     private var nextCommand: (afterLine: Int, command: String)?
     /// When the last report was read: the perf budget's start.
@@ -81,6 +81,8 @@ final class GhostSession {
 
     private(set) lazy var overlay: GhostTextView = {
         let overlay = GhostTextView(frame: .zero)
+        // SwiftTerm draws its rows from the top of the (unflipped) view: a height change within a row's keeps it on its row.
+        overlay.autoresizingMask = [.minYMargin]
         tab?.view.addSubview(overlay, positioned: .below, relativeTo: nil)
         return overlay
     }()
@@ -174,7 +176,6 @@ final class GhostSession {
         // None of the record's passed: the shell's own history may have one.
         if chosen == nil, !late, !fromShell, state.asked == gen { return askShellSoon(gen) }
         guard !late, let chosen, state.answer(gen: gen, command: chosen.line) else { return }
-        shownFromShell = fromShell ? chosen.line : nil
         announcer.suggested(chosen.line, at: TerminalTab.now)
         placeAfterRedraw()
     }
@@ -199,12 +200,13 @@ final class GhostSession {
     }
 
     /// The shell's answer: a line it holds that starts with what is typed, checked as the record's are (and never one you
-    /// forgot) before it shows. Nothing of it is recorded.
+    /// forgot) before it shows; one the record has is checked with how its runs went there (never one that never
+    /// succeeded, or last exited 127). Nothing of it is recorded.
     private func shellAnswered(_ gen: Int, _ answer: String?) {
         guard let line = fallback.answer(gen: gen, line: answer), state.asked == gen, let folder = tab?.directory else { return }
-        CommandHistoryStore.shared.isForgotten(line) { [weak self] forgotten in
+        CommandHistoryStore.shared.facts(about: line) { [weak self] forgotten, known in
             guard let self, !forgotten, self.state.asked == gen else { return }
-            self.check(gen, [CommandHistory.Entry(line: line, lastRun: 0)], folder: folder, fromShell: true)
+            self.check(gen, [known ?? CommandHistory.Entry(line: line, lastRun: 0)], folder: folder, fromShell: true)
         }
     }
 
@@ -212,9 +214,14 @@ final class GhostSession {
 
     /// The overlay goes where the shell's redraw put the cursor, once it is on screen.
     private func placeAfterRedraw() {
-        placing = TerminalTab.now
+        let started = TerminalTab.now
+        placing = started
         DispatchQueue.main.async { [weak self] in self?.place(late: false) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.redrawWait) { [weak self] in self?.place(late: true) }
+        // This placement's wait only: a newer one has its own.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.redrawWait) { [weak self] in
+            guard let self, self.placing == started else { return }
+            self.place(late: true)
+        }
     }
 
     /// Places the suggestion when the cells left of the cursor end with the line's last 16 characters; past the wait, it
@@ -389,17 +396,15 @@ final class GhostSession {
 
     // MARK: forgetting one
 
-    /// Edit › Forget This Suggestion, or the terminal's menu: the command showing leaves the record, and its log at once
-    /// (one from the shell's own history is never suggested again: only its hash is kept); the next match, if one passes
-    /// the checks, shows instead. False: none shows.
+    /// Edit › Forget This Suggestion, or the terminal's menu: the command showing leaves the record, and its log at once,
+    /// and its hash is kept, so the shell's own history, which holds it too, never suggests it again; the next match, if
+    /// one passes the checks, shows instead. False: none shows.
     @discardableResult
     func forget() -> Bool {
         guard isShowing, let shown = state.shown, let report = state.report else { return false }
-        if shown.command == shownFromShell {
-            CommandHistoryStore.shared.forgetFallback(shown.command)
-        } else {
-            CommandHistoryStore.shared.forget(shown.command)
-        }
+        // In this order on the record's queue, before the ask that follows.
+        CommandHistoryStore.shared.forget(shown.command)
+        CommandHistoryStore.shared.forgetFallback(shown.command)
         hide()
         follow(state.report(report, gates: gates()))
         return true
@@ -550,19 +555,24 @@ final class GhostSession {
     }
 
     /// A command ended in this tab: the next empty line is an idle prompt. When it was yours (`yours`, recorded), the
-    /// record is asked what usually follows it, and that is checked as any suggestion is, for the empty line.
+    /// record is asked what usually follows it, and that is checked as any suggestion is, for the empty line: within
+    /// `checkDeadline`, and only while no later command has ended.
     func commandEnded(yours line: String?) {
-        endedAt = TerminalTab.now
+        let ended = TerminalTab.now
+        endedAt = ended
         nextCommand = nil
         guard let line, let folder = tab?.directory else { return }
         let after = state.report?.line ?? 0
         CommandHistoryStore.shared.next(after: line) { [weak self] next in
             guard let next else { return }
             let home = NSHomeDirectory()
+            let started = TerminalTab.now
             DispatchQueue.global(qos: .userInitiated).async {
                 let passed = GhostValidation.first([next], cwd: folder, home: home, probe: .disk) != nil
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, passed, self.endedAt != nil else { return }
+                    let late = TerminalTab.now - started > Self.checkDeadline
+                    // Only the last command's end, checked in time.
+                    guard let self, passed, !late, self.endedAt == ended else { return }
                     self.nextCommand = (after, next.line)
                     self.offerNext()
                 }
@@ -575,7 +585,6 @@ final class GhostSession {
         guard let next = nextCommand, let report = state.report, report.line != next.afterLine else { return }
         nextCommand = nil
         guard report.buffer == "", state.offerNext(next.command, gates: gates()) else { return }
-        shownFromShell = nil
         announcer.suggested(next.command, at: TerminalTab.now)
         placeAfterRedraw()
     }
@@ -598,8 +607,16 @@ final class GhostSession {
         state.userKey()
     }
 
+    /// Bytes on their way to the shell: one that ends the line (Return, ^C, ^D, ^Z, as Readiness reads them) hides the
+    /// suggestion at once, so no key after it can send a frame that only the next program would read. An accept frame's
+    /// payload is escaped, so it never ends one.
+    func written(_ data: ArraySlice<UInt8>) {
+        guard InputScan.scan(data, inPaste: &inPaste).disarms else { return }
+        hide()
+    }
+
     /// Hidden until the next report: a resize, a font change, a scroll back, marked text, a paste, a selection, the window
-    /// going to the back.
+    /// going to the back, the keyboard going elsewhere, a line ending.
     func hide() {
         placing = nil
         state.hide()
@@ -618,6 +635,7 @@ final class GhostSession {
     /// you went on without it.
     func lineEnded() {
         placing = nil
+        inPaste = false
         nextCommand = nil
         state.lineEnded()
         hideOverlay()
@@ -628,6 +646,7 @@ final class GhostSession {
     /// The shell was replaced (`exec zsh`): the new one says what it is, and started with nothing taken over.
     func shellReplaced() {
         placing = nil
+        inPaste = false
         state = GhostState()
         hook = nil
         tookOver = false

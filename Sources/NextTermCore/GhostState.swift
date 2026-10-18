@@ -63,7 +63,7 @@ public enum GhostKeys {
 ///
 /// - A suggestion shows only on the first line of a command (context `start`) in emacs or vi insert mode, with the cursor at
 ///   the end, no region or incremental search, no plugin's ghost (POSTDISPLAY), a non-blank character typed, a key of
-///   yours pressed on this line, and every gate open.
+///   yours pressed on this line (or typed ahead of it, while a command ran), and every gate open.
 /// - A character typed that the suggestion goes on with trims it at once (`trimmed`), with no new ask. Any other change
 ///   hides it, and asks for the new line.
 /// - A deletion at the end hides it until the line grows again. Esc hides it for the rest of the line.
@@ -96,6 +96,9 @@ public struct GhostState: Sendable {
     public private(set) var userKeyed = false
     /// The generation asked for, while its answer is due.
     public private(set) var asked: Int?
+    /// A key of yours after the line ended, or before the first report: typed ahead, it is the next line's.
+    private var keyedAhead = false
+    private var ended = false
 
     public init() {}
 
@@ -189,15 +192,17 @@ public struct GhostState: Sendable {
         asked = nil
     }
 
-    /// A key of yours was pressed in the tab: suggestions may show on this line.
+    /// A key of yours was pressed in the tab: suggestions may show on this line, or, typed ahead (while a command runs,
+    /// before the first prompt), on the next.
     public mutating func userKey() {
-        userKeyed = true
+        if report == nil || ended { keyedAhead = true } else { userKeyed = true }
     }
 
     /// The line ended (Return, or a command started): nothing shows until the next.
     public mutating func lineEnded() {
         shown = nil
         asked = nil
+        ended = true
     }
 
     /// Hidden by something the line doesn't say (a resize, a scroll, output that moved the caret): until the next report.
@@ -208,11 +213,13 @@ public struct GhostState: Sendable {
         return .hidden
     }
 
-    /// A new line: what Esc, a deletion and your keys said of the last one is over.
+    /// A new line: what Esc, a deletion and your keys said of the last one is over; keys typed ahead are this one's.
     private mutating func newLine() {
         lineHidden = false
         deletedSinceInsert = false
-        userKeyed = false
+        userKeyed = keyedAhead
+        keyedAhead = false
+        ended = false
         shown = nil
     }
 }

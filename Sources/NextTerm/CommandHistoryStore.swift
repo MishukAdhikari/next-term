@@ -21,18 +21,24 @@ final class CommandHistoryStore: @unchecked Sendable {
     // On `queue`:
     private var history = CommandHistory()
     private var loaded = false
-    /// Lines of the shell's own history you forgot, by their hash: never suggested again.
+    /// Lines you forgot, by their hash: never suggested again, from the shell's own history either.
     private var forgotten: Set<String> = []
     /// Lines forgotten since the last compaction: one merged back from the log stays forgotten.
     private var forgottenSince: Set<String> = []
     /// Each folder's repository (its common git folder; "" for none), as asked.
     private var repositories: [String: String] = [:]
+    /// Clears so far: a compaction that began before one never brings back what it cleared.
+    private var clears = 0
+    /// Changes to the record (a run, a Forget): a compaction with none since its copy swaps in what it wrote.
+    private var changes = 0
 
     // On `files`:
     /// The folder and repository ids the log names already.
     private var named: Set<String> = []
     /// The log may be written: it was read whole, or there was none, and it is this version's.
     private var writable = false
+    /// The log is another version's: Clear leaves it as it is.
+    private var otherVersion = false
     private var compactedSize = 0
     private var compacting = false
 
@@ -70,12 +76,14 @@ final class CommandHistoryStore: @unchecked Sendable {
         }
     }
 
-    /// Whether `line` of the shell's own history was forgotten, to `reply` on the main queue.
-    func isForgotten(_ line: String, reply: @escaping (Bool) -> Void) {
+    /// What the record knows of `line`, from the shell's own history: whether you forgot it, and its entry if it has one
+    /// (how its runs went), to `reply` on the main queue.
+    func facts(about line: String, reply: @escaping (_ forgotten: Bool, _ known: CommandHistory.Entry?) -> Void) {
         queue.async {
             self.loadIfNeeded()
             let gone = self.forgotten.contains(CommandHistoryFile.hash(of: line))
-            DispatchQueue.main.async { reply(gone) }
+            let known = self.history.entry(for: line)
+            DispatchQueue.main.async { reply(gone, known) }
         }
     }
 
@@ -90,6 +98,7 @@ final class CommandHistoryStore: @unchecked Sendable {
             let repo = self.repository(of: folder)
             let time = Self.milliseconds(date)
             guard let made = self.history.record(line, folder: folder, repo: repo, at: time) else { return }
+            self.changes += 1
             if let exit { self.history.ended(made.line, exit: exit) }
             self.forgottenSince.remove(made.line)
             var changed = [made.line]
@@ -123,12 +132,13 @@ final class CommandHistoryStore: @unchecked Sendable {
             self.loadIfNeeded()
             guard self.history.entry(for: line) != nil else { return }
             self.history.forget(line)
+            self.changes += 1
             self.forgottenSince.insert(line)
             self.compactSoon()
         }
     }
 
-    /// A line of the shell's own history you forgot: never suggested again. Only its hash is kept.
+    /// A line you forgot, as the shell's own history may hold it: never suggested from there again. Only its hash is kept.
     func forgetFallback(_ line: String) {
         queue.async {
             self.loadIfNeeded()
@@ -146,8 +156,11 @@ final class CommandHistoryStore: @unchecked Sendable {
             self.history.clear()
             self.forgotten = []
             self.forgottenSince = []
+            self.clears += 1
             self.files.async {
-                if let folder = self.folder, self.writable {
+                // Whatever an earlier failure did to `writable` (one append on a full disk): the log goes, unless it is
+                // another version's. The folder refuses this where it isn't private.
+                if let folder = self.folder, !self.otherVersion {
                     do { try folder.clear() } catch { self.failed(error, while: "clearing") }
                 }
                 self.named = []
@@ -170,6 +183,7 @@ final class CommandHistoryStore: @unchecked Sendable {
             let read = try folder.read()
             let contents = CommandHistoryFile.decode(read?.data ?? Data())
             if contents.otherVersion {
+                files.async { self.otherVersion = true }
                 return failed(nil, while: "reading", note: "Next Term’s history file is another version’s, so Next Term doesn’t use it.")
             }
             history = contents.history
@@ -210,7 +224,7 @@ final class CommandHistoryStore: @unchecked Sendable {
     /// Compacts the log from a copy of the record (on `queue`): the copy is merged with what the log holds now, written, and
     /// what another copy of Next Term added is merged back into the record.
     private func compactSoon() {
-        let snapshot = history, forgottenNow = forgotten, dropping = forgottenSince
+        let snapshot = history, forgottenNow = forgotten, dropping = forgottenSince, era = clears, since = changes
         files.async {
             guard self.writable, !self.compacting, let folder = self.folder else { return }
             self.compacting = true
@@ -229,7 +243,7 @@ final class CommandHistoryStore: @unchecked Sendable {
                 guard let data, let written else { return }
                 self.named = named
                 self.compactedSize = data.count
-                self.queue.async { self.compacted(written, dropping: dropping) }
+                self.queue.async { self.compacted(written, dropping: dropping, era: era, since: since) }
             } catch {
                 self.failed(error, while: "compacting")
             }
@@ -237,10 +251,18 @@ final class CommandHistoryStore: @unchecked Sendable {
     }
 
     /// After a compaction (on `queue`): what another copy of Next Term ran is merged into the record, and the lines it
-    /// dropped are no longer waiting for one.
-    private func compacted(_ written: (history: CommandHistory, forgotten: Set<String>, news: Bool), dropping: Set<String>) {
+    /// dropped are no longer waiting for one. With nothing changed here since its copy (`since`), what it wrote is the
+    /// record already, so it is swapped in, not merged again on this queue. One that began before a Clear (`era`) changes
+    /// nothing.
+    private func compacted(_ written: (history: CommandHistory, forgotten: Set<String>, news: Bool), dropping: Set<String>,
+                           era: Int, since: Int) {
+        guard era == clears else { return }
         forgotten.formUnion(written.forgotten)
-        if written.news { history = CommandHistoryFile.merge(history, written.history, dropping: forgottenSince) }
+        if written.news, changes == since {
+            history = written.history
+        } else if written.news {
+            history = CommandHistoryFile.merge(history, written.history, dropping: forgottenSince)
+        }
         forgottenSince.subtract(dropping)
     }
 

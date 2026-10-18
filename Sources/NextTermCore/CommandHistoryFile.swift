@@ -413,12 +413,17 @@ public final class CommandHistoryFolder: @unchecked Sendable {
         }
     }
 
-    /// Removes the log, under the exclusive lock. Nothing happens when there is no folder.
+    /// Removes the log, under the exclusive lock, and any copy of it a compaction left when it was stopped before its
+    /// rename (SafeWrite's `.commands.log.nextterm-…`): with the lock held, none is being written. Nothing happens when
+    /// there is no folder.
     public func clear() throws {
         var info = stat()
         guard lstat(url.path, &info) == 0 else { return }
         try withLock(LOCK_EX) {
             guard unlink(logPath) == 0 || errno == ENOENT else { throw Failure.system(errno) }
+            let leftover = "." + Self.logName + ".nextterm-"
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+            for name in names where name.hasPrefix(leftover) { unlink(url.appendingPathComponent(name).path) }
         }
     }
 

@@ -36,10 +36,11 @@ zmodload -F zsh/files b:zf_rm 2>/dev/null
 builtin autoload -Uz add-zle-hook-widget
 
 typeset -g __nextterm_gkey=$'@NG_PREFIX@'
-# The line's number and the generation: each new line, and each change of BUFFER, CURSOR or POSTDISPLAY on it, is a new one.
+# The line's number and the generation: each new line, and each change of BUFFER, CURSOR, POSTDISPLAY or KEYMAP on it, is a
+# new one.
 typeset -gi __nextterm_gline=0 __nextterm_ggen=0
 # What the last redraw saw, and whether that was reported.
-typeset -g __nextterm_gbuf= __nextterm_gcur= __nextterm_gpost= __nextterm_gsent=
+typeset -g __nextterm_gbuf= __nextterm_gcur= __nextterm_gpost= __nextterm_gkm= __nextterm_gsent=
 typeset -g __nextterm_gk= __nextterm_gid=
 typeset -ga __nextterm_gf
 # The keymap `main` is, read at each new line: emacs or viins (`bindkey -v`), or main when it can't be read.
@@ -125,12 +126,14 @@ __nextterm_greport() {
   __nextterm_gsent=1
 }
 
-# zle-line-pre-redraw: a change of the line is a new generation, reported once no key is pending, so keys that came in one
-# write give one report, for the line after the last of them. A redraw that changed nothing says nothing.
+# zle-line-pre-redraw: a change of the line or its keymap (Esc into vicmd on an empty line changes nothing else) is a new
+# generation, reported once no key is pending, so keys that came in one write give one report, for the line after the last
+# of them. A redraw that changed nothing says nothing.
 __nextterm_gredraw() {
   emulate -L zsh
-  if [[ $BUFFER != "$__nextterm_gbuf" || $CURSOR != "$__nextterm_gcur" || $POSTDISPLAY != "$__nextterm_gpost" ]]; then
-    __nextterm_gbuf=$BUFFER __nextterm_gcur=$CURSOR __nextterm_gpost=$POSTDISPLAY __nextterm_gsent=
+  if [[ $BUFFER != "$__nextterm_gbuf" || $CURSOR != "$__nextterm_gcur" || $POSTDISPLAY != "$__nextterm_gpost" ||
+        ${KEYMAP-} != "$__nextterm_gkm" ]]; then
+    __nextterm_gbuf=$BUFFER __nextterm_gcur=$CURSOR __nextterm_gpost=$POSTDISPLAY __nextterm_gkm=${KEYMAP-} __nextterm_gsent=
     (( __nextterm_ggen = (__nextterm_ggen + 1) % 1000000000 ))
   fi
   [[ -z $__nextterm_gsent ]] || return 0
@@ -200,7 +203,7 @@ __nextterm_ginit() {
   __nextterm_gmainmap
   [[ -n $__nextterm_gtake ]] && __nextterm_gstarttake
   __nextterm_ghook
-  __nextterm_gbuf=$BUFFER __nextterm_gcur=$CURSOR __nextterm_gpost=$POSTDISPLAY
+  __nextterm_gbuf=$BUFFER __nextterm_gcur=$CURSOR __nextterm_gpost=$POSTDISPLAY __nextterm_gkm=${KEYMAP-}
   __nextterm_greport
   return 0
 }
@@ -253,13 +256,14 @@ __nextterm_gaccept() {
 # The shell's own history (f), which Next Term asks at a pause while its own record has nothing for the line: the newest
 # line longer than the prefix that starts with it, as zsh-autosuggestions' history strategy reads it ($history, newest
 # first, the prefix quoted so it matches only as it is), answered as a `gfb` mark with Next Term's generation. Nothing where
-# the history holds over @NG_MAX_HISTORY@ lines, or for a line over @NG_MAX_LINE@ bytes. The line doesn't change, so zle
-# draws nothing, and nothing is written anywhere.
+# the history may hold over @NG_MAX_HISTORY@ lines (HISTSIZE and HISTCMD both over it; counting $history costs as much as the
+# search), or for a line over @NG_MAX_LINE@ bytes. The line doesn't change, so zle draws nothing, and nothing is written
+# anywhere.
 __nextterm_gfallback() {
   emulate -L zsh +o multibyte
   local gen=${__nextterm_gf[1]-} prefix=${__nextterm_gf[2]-} hit=
   [[ $gen == <-> && -n $prefix ]] || return 0
-  (( ${#history} <= @NG_MAX_HISTORY@ )) && hit=${history[(r)${(b)prefix}?*]}
+  (( HISTSIZE <= @NG_MAX_HISTORY@ || HISTCMD <= @NG_MAX_HISTORY@ )) && hit=${history[(r)${(b)prefix}?*]}
   (( ${#hit} > @NG_MAX_LINE@ )) && hit=
   __nextterm_gencall "$hit"
   __nextterm_gmark gfb $gen "$reply[1]"

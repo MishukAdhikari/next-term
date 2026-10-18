@@ -124,6 +124,32 @@ import Testing
         #expect(step19 == .none)
     }
 
+    @Test func keysTypedAheadAreTheNextLines() {
+        // Typed while a command ran: zsh reads them after the next line's first report.
+        var ahead = GhostState()
+        _ = ahead.report(report("", gen: 1), gates: GhostGates())
+        ahead.userKey()
+        ahead.lineEnded()
+        ahead.userKey()
+        _ = ahead.report(report("", line: 2, gen: 2), gates: GhostGates())
+        let typed = ahead.report(report("git ch", line: 2, gen: 3), gates: GhostGates())
+        #expect(typed == .ask(gen: 3, prefix: "git ch"))
+        // The Return that ended the line is not the next line's key.
+        var returned = GhostState()
+        _ = returned.report(report("", gen: 1), gates: GhostGates())
+        returned.userKey()
+        returned.lineEnded()
+        _ = returned.report(report("", line: 2, gen: 2), gates: GhostGates())
+        let unkeyed = returned.report(report("git ch", line: 2, gen: 3), gates: GhostGates())
+        #expect(unkeyed == .none)
+        // Before the first prompt (a slow config): the first line's.
+        var early = GhostState()
+        early.userKey()
+        _ = early.report(report("", gen: 1), gates: GhostGates())
+        let first = early.report(report("git ch", gen: 2), gates: GhostGates())
+        #expect(first == .ask(gen: 2, prefix: "git ch"))
+    }
+
     // MARK: keys
 
     @Test func theKeysSendWhatSwiftTermSends() {
