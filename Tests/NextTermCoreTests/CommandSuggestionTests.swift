@@ -21,6 +21,16 @@ import Testing
         #expect(CommandSuggestion.adapters.map(\.id) == ["claude"] && CommandSuggestion.leftOut.map(\.name).contains("Codex"))
     }
 
+    /// OpenCode is never asked, and its reason says only what is true: Next Term hasn't confirmed that it can run
+    /// with no tools and no MCP servers. It claims no flag was tried and none failed.
+    @Test func openCodeIsLeftOutUntilItsNoToolsRunIsConfirmed() throws {
+        #expect(!CommandSuggestion.adapters.contains { $0.program == "opencode" })
+        #expect(CommandSuggestion.adapter("opencode") == nil)
+        let why = try #require(CommandSuggestion.leftOut.first { $0.name == "OpenCode" }?.why)
+        #expect(why == "Next Term hasn’t confirmed that OpenCode can run with no tools and no MCP servers", "\(why)")
+        #expect(!why.contains("couldn't be checked") && !why.contains("flags"), "\(why)")
+    }
+
     @Test func thePromptSaysWhatItMustAndHidesSecrets() {
         let request = CommandSuggestion.Request(sentence: "find large files here", directory: "/Users/me/app", shell: "zsh",
                                                 lastCommand: "mysql -uroot -pS3cretPass db", lastExit: 1)
