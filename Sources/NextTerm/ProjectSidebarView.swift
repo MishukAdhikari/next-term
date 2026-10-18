@@ -36,7 +36,7 @@ enum SessionAction: Equatable { case resume, fork, continueLatest(AgentKind), sh
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
 /// ⌘↓ opens, and the right-click menu's other commands have theirs (by default: Settings can change them). It notes
-/// how each click began, for "Open files with a single click".
+/// how each click began, for "Open files and folders with a single click".
 final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
@@ -45,6 +45,8 @@ final class SidebarOutlineView: NSOutlineView {
     var onCommand: ((String) -> Void)?
     /// The row the last click went down on (a click released over another row dragged across rows).
     private(set) var mouseDownRow = -1
+    /// Clicks gone down on the tree so far: the second click of a double-click is the one after its first.
+    private(set) var presses = 0
     /// A rename was going on when the last click went down: that click only ends it.
     private(set) var mouseDownWhileRenaming = false
     /// The event that ended the last rename. The window can end one, taking the keyboard back, before
@@ -57,6 +59,7 @@ final class SidebarOutlineView: NSOutlineView {
 
     override func mouseDown(with event: NSEvent) {
         mouseDownRow = row(at: convert(event.locationInWindow, from: nil))
+        presses &+= 1
         let responder = window?.firstResponder as? NSView
         let renaming = responder is NSTextView && responder?.isDescendant(of: self) == true
         let endedRename = renameEndedBy.map { $0.type == .leftMouseDown && $0.timestamp == event.timestamp } ?? false
@@ -1133,69 +1136,107 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             || item is ServiceItem
     }
 
-    /// A click, sent on mouse-up (the first click of a double-click too). With "Open files with a single
-    /// click" on, a plain click on one file the editor can show cheaply opens it in the preview tab and
-    /// leaves the keyboard in the tree. Every other click only selects, as it does with the setting off.
+    /// A click, sent on mouse-up (the first click of a double-click too). With "Open files and folders with a single
+    /// click" on, a plain click on one file the editor can show cheaply opens it in the preview tab, and one on a
+    /// folder (a deleted one too) opens or closes it, at once, as its arrow does; the keyboard stays in the tree.
+    /// Every other click only selects, as every click does with the setting off (SidebarClick.outcome).
     @objc private func clicked() {
+        let event = NSApp.currentEvent
+        let isMouseUp = event?.type == .leftMouseUp
+        let clickCount = isMouseUp ? event?.clickCount ?? 0 : 0
+        // The second click of a double-click leaves its first click's toggle for the double action to see.
+        if clickCount < 2 { clickToggled = nil }
         // "More…" is a link: one click shows the whole list, whatever the setting.
         if outline.clickedRow >= 0, outline.item(atRow: outline.clickedRow) is MoreSessionsItem {
             return delegate?.sidebar(self, session: nil, perform: .showAll) ?? ()
         }
-        guard AppDelegate.shared.sidebarSingleClickOpens, let event = NSApp.currentEvent else { return }
+        guard AppDelegate.shared.sidebarSingleClickOpens, let event else { return }
         let row = outline.clickedRow
         let item = row >= 0 ? outline.item(atRow: row) : nil
-        let isMouseUp = event.type == .leftMouseUp
         let flags = event.modifierFlags
-        let click = SidebarClick.Click(isMouseUp: isMouseUp, clickCount: isMouseUp ? event.clickCount : 0,
+        let click = SidebarClick.Click(isMouseUp: isMouseUp, clickCount: clickCount,
                                        command: flags.contains(.command), shift: flags.contains(.shift),
                                        option: flags.contains(.option), control: flags.contains(.control),
                                        row: row, mouseDownRow: outline.mouseDownRow, selection: outline.selectedRowIndexes,
                                        dragBegan: outline.dragBegan, wasRenaming: outline.mouseDownWhileRenaming, kind: kind(of: item))
-        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode else { return }
+        guard SidebarClick.outcome(of: click) != .selectOnly else { return }
+        if let entry = item as? DeletedEntry {
+            clickToggled = (entry, outline.presses)
+            return toggle(entry)
+        }
+        guard let node = item as? FileNode else { return }
         if needsKind(node) {
-            // A file by its name's guess, a link into a protected place: the click looks first, off the main thread, and
-            // previews only a file. macOS has its answer by then, so the single-click check after asks nothing again.
+            // A link into a protected place, its kind its name's guess: the click looks first, off the main thread, then
+            // opens or closes a folder and previews a file. macOS has its answer by then, so the single-click check
+            // after asks nothing again. Noted now, as the double-click can come before the answer.
+            clickToggled = (node, outline.presses)
             return settleKind(of: node) { [weak self] in
-                guard let self, !node.isDirectory, SidebarClick.opensOnSingleClick(node.url.path) else { return }
+                guard let self else { return }
+                if node.isDirectory { return self.toggle(node) }
+                guard SidebarClick.opensOnSingleClick(node.url.path) else { return }
                 self.delegate?.sidebar(self, previewFile: node.url)
             }
+        }
+        if node.isDirectory {
+            clickToggled = (node, outline.presses)
+            return toggle(node)
         }
         guard SidebarClick.opensOnSingleClick(node.url.path) else { return }
         delegate?.sidebar(self, previewFile: node.url)
     }
 
+    /// The folder (or deleted folder) the last click opened or closed, and the press it was (`outline.presses`):
+    /// the double-click it began must not undo it.
+    private var clickToggled: (item: AnyObject, press: Int)?
+
+    /// Whether this double-click's first click already opened or closed `item`. Forgets that click either way.
+    private func takeClickToggle(of item: AnyObject) -> Bool {
+        defer { clickToggled = nil }
+        guard let toggled = clickToggled, toggled.item === item else { return false }
+        return outline.presses == toggled.press + 1
+    }
+
+    /// Opens or closes a folder, a deleted folder or a group, through the same path as its arrow (`shouldExpandItem`
+    /// reads a folder not read yet in the background, then opens it) and with the same animation.
+    func toggle(_ item: Any) {
+        if outline.isItemExpanded(item) { outline.animator().collapseItem(item) } else { outline.animator().expandItem(item) }
+    }
+
     private func kind(of item: Any?) -> SidebarClick.Row {
         if let node = item as? FileNode { return node === root ? .root : node.isDirectory ? .folder : .file }
-        if item is DeletedEntry { return .deleted }
+        if let entry = item as? DeletedEntry { return entry.isDirectory ? .deletedFolder : .deleted }
         if item is DatabaseItem || item is DatabasesGroup { return .database }
         if ServicesGroup.holds(item) { return .service }
         return .other
     }
 
+    /// A double-click. On a folder (a deleted one too) it opens or closes it, unless its first click already did
+    /// (single clicks on): a second toggle would undo the first, and nothing would seem to happen.
     @objc private func doubleClicked() {
-        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry { return openDeleted(entry) }
-        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem { return openDatabase(item.database) }
-        if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
-            return outline.isItemExpanded(databasesGroup) ? outline.collapseItem(databasesGroup) : outline.expandItem(databasesGroup)
+        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {
+            return openDeleted(entry, clickToggled: takeClickToggle(of: entry))
         }
+        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem { return openDatabase(item.database) }
+        if outline.item(atRow: outline.clickedRow) is DatabasesGroup { return toggle(databasesGroup) }
         if doubleClickedService(outline.item(atRow: outline.clickedRow)) { return }
         if let item = outline.item(atRow: outline.clickedRow) as? SessionItem {
             return delegate?.sidebar(self, session: item.session, perform: .resume) ?? ()
         }
         if outline.item(atRow: outline.clickedRow) is MoreSessionsItem { return } // its click showed the list
-        if outline.item(atRow: outline.clickedRow) is SessionsGroup {
-            return outline.isItemExpanded(sessionsGroup) ? outline.collapseItem(sessionsGroup) : outline.expandItem(sessionsGroup)
-        }
+        if outline.item(atRow: outline.clickedRow) is SessionsGroup { return toggle(sessionsGroup) }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
+        let toggled = takeClickToggle(of: node) // now: the click's own press, not one made while the kind is looked at
         // A link whose kind is its name's guess: the double-click looks first, then opens a file or a folder.
-        if needsKind(node) { return settleKind(of: node) { [weak self] in self?.openOrToggle(node) } }
-        openOrToggle(node)
+        if needsKind(node) { return settleKind(of: node) { [weak self] in self?.openOrToggle(node, clickToggled: toggled) } }
+        openOrToggle(node, clickToggled: toggled)
     }
 
-    /// A double-click's: a folder opens or closes, a file opens in the editor.
-    private func openOrToggle(_ node: FileNode) {
+    /// A double-click's: a file opens in the editor as an ordinary tab (keeping its preview), with the keyboard. A
+    /// folder opens or closes, unless the double-click's first click did that already (`clickToggled`, single clicks
+    /// on): it stays as that click left it.
+    private func openOrToggle(_ node: FileNode, clickToggled: Bool) {
         if node.isDirectory {
-            outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
+            if !clickToggled { toggle(node) }
         } else {
             delegate?.sidebar(self, openFile: node.url)
         }
@@ -1222,10 +1263,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if items.contains(where: { $0 is MoreSessionsItem }) { delegate?.sidebar(self, session: nil, perform: .showAll) }
     }
 
-    /// A deleted file opens as what was removed; a deleted folder opens and closes.
-    func openDeleted(_ entry: DeletedEntry) {
+    /// A deleted file opens as what was removed; a deleted folder opens and closes, unless a double-click's first click
+    /// did that already (`clickToggled`).
+    func openDeleted(_ entry: DeletedEntry, clickToggled: Bool = false) {
         if entry.isDirectory {
-            outline.isItemExpanded(entry) ? outline.collapseItem(entry) : outline.expandItem(entry)
+            if !clickToggled { toggle(entry) }
         } else {
             delegate?.sidebar(self, showChanges: entry.url)
         }
