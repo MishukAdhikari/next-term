@@ -32,8 +32,8 @@ public struct HerdrAgents: Equatable, Sendable {
         public var text: String
         public var choices: [String]
         public var style: AgentMenu.Style?
-        /// New for each question, even in the same words (as TabStatus.questionSerial): an answer meant for one never
-        /// lands on the next.
+        /// New for each question, even in the same words and in a tracker that took another's place (as
+        /// TabStatus.questionSerial): an answer meant for one never lands on the next.
         public var serial: Int
         /// herdr's state count when it was read.
         public var seq: Int?
@@ -84,7 +84,6 @@ public struct HerdrAgents: Equatable, Sendable {
     /// Blocked agents whose question is still to be read, with herdr's state count when they asked: the tab reads one at
     /// a time (`nextRead`), and a read's answer (`setQuestion`) or the agent moving on takes it off.
     private var reads: [String: Int?] = [:]
-    private var serials = 0
     /// Agents the last update looked at: one step each, so a long list costs a step per agent (the self-test's budget).
     public private(set) var steps = 0
 
@@ -266,15 +265,14 @@ public struct HerdrAgents: Equatable, Sendable {
         guard let text else {
             kept.question = nil
             followed[pane] = kept
-        rows = makeRows()
+            rows = makeRows()
             return
         }
         if let asked = kept.question, asked.text == text, asked.seq == seq {
             kept.question?.choices = choices
             kept.question?.style = style
         } else {
-            serials += 1
-            kept.question = Question(text: text, choices: choices, style: style, serial: serials, seq: seq)
+            kept.question = Question(text: text, choices: choices, style: style, serial: Self.nextSerial(), seq: seq)
         }
         followed[pane] = kept
         rows = makeRows()
@@ -282,6 +280,18 @@ public struct HerdrAgents: Equatable, Sendable {
 
     /// The question read from the agent's pane while it is blocked.
     public func question(_ pane: String) -> Question? { followed[pane]?.question }
+
+    /// Shared by every tracker: one that takes another's place (a reconnect, a new herdr client) never gives a question
+    /// a serial an earlier one had, so an id handed out before never matches a question asked after.
+    private static let serialLock = NSLock()
+    nonisolated(unsafe) private static var lastSerial = 0
+
+    private static func nextSerial() -> Int {
+        serialLock.lock()
+        defer { serialLock.unlock() }
+        lastSerial += 1
+        return lastSerial
+    }
 
     /// The agent's question is still to be read.
     public func awaitsRead(_ pane: String) -> Bool { reads[pane] != nil }

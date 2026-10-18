@@ -503,7 +503,7 @@ import Testing
     @Test func aHerdrTabOpensItsSessionOnlyIfHerdrListsIt() {
         let named = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "t1", herdrSession: "review")
         #expect(named.contains("unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session 'review'"))
-        #expect(named.contains("nt_sl=$(\"$H\" session list --json 2>&1 </dev/null)"))
+        #expect(named.contains("nt_sl=$(nt_hd 5 \"$H\" session list --json 2>&1 </dev/null)"))
         #expect(named.contains(#"grep -Eq '"name"[[:space:]]*:[[:space:]]*"review"'"#))
         // herdr's default, as before: nothing about sessions, and herdr itself last.
         let plain = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "t1")
@@ -520,8 +520,10 @@ import Testing
                                             herdrSessions: [HerdrPollSession(name: nil), HerdrPollSession(name: "review", wantsFocus: true)])
         #expect(script.components(separatedBy: "printf '\\n%s\\n' '\(RemoteShell.herdrMarker)'").count == 3)
         #expect(script.contains("printf 'session\\t%s\\n' 'review'"))
-        #expect(script.contains("nt_out=$( ( unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session 'review' agent list ) 2>&1 </dev/null)"))
-        #expect(script.contains("nt_out=$(\"$H\" agent list 2>&1 </dev/null)"))
+        // Each herdr call ends after herdrCallLimit seconds: a session whose server hangs leaves the others theirs.
+        let limit = RemoteShell.herdrCallLimit
+        #expect(script.contains("nt_out=$( ( unset HERDR_SOCKET_PATH HERDR_SESSION; nt_hd \(limit) \"$H\" --session 'review' agent list ) 2>&1 </dev/null)"))
+        #expect(script.contains("nt_out=$(nt_hd \(limit) \"$H\" agent list 2>&1 </dev/null)"))
         // Only the session on screen asks which tab has the focus, and only when no agent has it.
         #expect(script.components(separatedBy: "tab list").count == 2)
         #expect(script.contains(#"! printf '%s' "$nt_out" | grep -Eq '"focused"[[:space:]]*:[[:space:]]*true'"#))
@@ -577,7 +579,7 @@ import Testing
         // The script lists the agents of the running sessions besides the default, 8 at most, names as herdr allows them.
         #expect(RemoteShell.sessionsScript.contains("session list --json") && RemoteShell.sessionsScript.contains("head -n 8"))
         #expect(RemoteShell.sessionsScript.contains(#"[A-Za-z0-9_-]\{1,64\}"#))
-        #expect(RemoteShell.sessionsScript.contains("exec \"$H\" --session \"$nt_n\" agent list"))
+        #expect(RemoteShell.sessionsScript.contains("nt_hd \(RemoteShell.herdrCallLimit) \"$H\" --session \"$nt_n\" agent list"))
     }
 
     @Test func aCheckAsksFourSessionsAtMostAndTheRestTakeTurns() {

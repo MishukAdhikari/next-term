@@ -288,40 +288,47 @@ extension TerminalWindowController: TabListViewDelegate {
     }
 
     /// A herdr agent's row: its tab comes forward and herdr's view moves to the agent's pane (HerdrAgentMenu.show).
-    func tabList(_ list: TabListView, didSelectAgent pane: String, of index: Int) {
-        guard let tab = herdrTab(showing: pane, in: index) else { return }
+    func tabList(_ list: TabListView, didSelectAgent pane: String, rowKey: String, of index: Int) {
+        guard let tab = herdrTab(row: rowKey, in: index) else { return }
         HerdrAgentMenu.show(tab: tab, pane: pane)
     }
 
     /// A herdr agent's row's menu.
-    func tabList(_ list: TabListView, menuForAgent pane: String, of index: Int) -> NSMenu? {
-        herdrTab(showing: pane, in: index).map { HerdrAgentMenu.rowMenu(tab: $0, pane: pane) }
+    func tabList(_ list: TabListView, menuForAgent pane: String, rowKey: String, of index: Int) -> NSMenu? {
+        herdrTab(row: rowKey, in: index).map { HerdrAgentMenu.rowMenu(tab: $0, pane: pane) }
     }
 
-    /// The folded row of a tab's idle herdr agents: open, or closed (`open` nil: the other way).
-    func tabList(_ list: TabListView, foldIdleAgentsOf index: Int, open: Bool?) {
-        guard let tab = groups[safe: index]?.panes.first(where: { !$0.herdrRows.isEmpty }) else { return }
+    /// The folded row of a pane's idle herdr agents: open, or closed (`open` nil: the other way).
+    func tabList(_ list: TabListView, foldIdleAgentsOf index: Int, rowKey: String, open: Bool?) {
+        guard let tab = herdrTab(row: rowKey, in: index) else { return }
         let next = open ?? !tab.herdrIdleOpen
         guard next != tab.herdrIdleOpen else { return }
         tab.herdrIdleOpen = next
         refresh()
     }
 
-    /// Peek at an agent's row, or at a tab row whose tab runs an agent; anything else beeps.
-    func tabList(_ list: TabListView, peekAt pane: String?, of index: Int, row: NSView) {
+    /// Peek at an agent's row (a beep when its herdr no longer lists it), or at a tab row whose tab runs an agent; any
+    /// other tab's row is not taken, so it selects and drags.
+    func tabList(_ list: TabListView, peekAt pane: String?, rowKey: String, of index: Int, row: NSView) -> Bool {
         if let pane {
-            guard let tab = herdrTab(showing: pane, in: index) else { return NSSound.beep() }
-            return AgentPeek.show(tab, pane: pane, relativeTo: row.bounds, of: row)
+            if let tab = herdrTab(row: rowKey, in: index), tab.herdrRows.contains(where: { $0.pane == pane }) {
+                AgentPeek.show(tab, pane: pane, relativeTo: row.bounds, of: row)
+            } else {
+                NSSound.beep()
+            }
+            return true
         }
         guard let tab = groups[safe: index]?.focused, tab.status.running, tab.status.kind == .agent, !tab.followsHerdr else {
-            return NSSound.beep()
+            return false
         }
         AgentPeek.show(tab, pane: nil, relativeTo: row.bounds, of: row)
+        return true
     }
 
-    /// The pane of tab `index` whose herdr lists `pane`.
-    private func herdrTab(showing pane: String, in index: Int) -> TerminalTab? {
-        groups[safe: index]?.panes.first { tab in tab.herdrRows.contains { $0.pane == pane } }
+    /// The pane of tab `index` whose herdr row `key` is (`pane <its id>/herdr/…`, TabListRows): herdr's pane ids are each
+    /// server's own, so two herdr servers in one split tab share ids such as w1:p1, and the row's key says which.
+    private func herdrTab(row key: String, in index: Int) -> TerminalTab? {
+        groups[safe: index]?.panes.first { key.hasPrefix("pane \($0.id.uuidString)/herdr/") }
     }
 
     func tabList(_ list: TabListView, didClose index: Int) { tabBar(tabBar, didClose: index) }

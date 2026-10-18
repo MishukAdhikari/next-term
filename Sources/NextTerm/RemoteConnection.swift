@@ -575,14 +575,22 @@ final class RemotePoller {
             let overview = herdrTabs.isEmpty && (RemoteHosts.find(host.id)?.keep ?? host.keep) == .herdr
             if overview { sessions = [HerdrPollSession(name: nil, overview: true)] } else { endOverview(path) }
             let script = RemoteShell.pollScript(tabs: specs, herdrSessions: sessions)
+            let asked = Set(sessions.map { $0.name ?? "" })
             RemoteConnection.run(host, path: path, script: script, timeout: 10) { [weak self] result in
                 self?.inFlight.remove(path)
                 guard let poll = RemotePoll.parse(result.output) else { return }
                 if overview, let report = poll.herdrSessions[""] { self?.overview(path, host: host).apply(report) }
                 for tab in hostTabs {
                     if let report = poll.tabs[tab.remoteKey] { tab.applyRemote(report) }
-                    // A session whose turn this check was not keeps what it had.
-                    if let asked = Self.herdrSession(tab), let report = poll.herdrSessions[asked.session ?? ""] { tab.applyHerdr(report) }
+                    guard let shown = Self.herdrSession(tab) else { continue }
+                    let key = shown.session ?? ""
+                    // A session asked with no section for it (the check was cut short before it) did not answer, and
+                    // HerdrWatch counts that; one whose turn this check was not keeps what it had.
+                    if let report = poll.herdrSessions[key] {
+                        tab.applyHerdr(report)
+                    } else if asked.contains(key) {
+                        tab.applyHerdr(HerdrReport(listing: .cut, session: shown.session))
+                    }
                 }
             }
         }

@@ -435,14 +435,15 @@ public enum RemoteShell {
 
     /// A herdr tab's named session is opened only when `herdr session list --json` lists it: else (removed since the tab
     /// was saved, or a herdr without named sessions) the tab is a plain shell that says why, as for a missing herdr, and
-    /// K.plain holds the reason for the status check. A name outside herdr's rules is never listed.
+    /// K.plain holds the reason for the status check. A name outside herdr's rules is never listed, and a herdr that
+    /// gives no list within 5 seconds lists none.
     static func herdrSessionCheck(_ name: String) -> String {
         let stops = "so this tab is a plain shell: what runs in it stops if the connection drops."
         let listed = HerdrTarget.isSession(name)
             ? "printf '%s' \"$nt_sl\" | tr -d '\\n\\r' | grep -Eq \(quote("\"name\"[[:space:]]*:[[:space:]]*\"\(name)\""))" : "false"
         let shown = String(name.unicodeScalars.filter { !ShellQuote.isControl($0) }.map(Character.init).prefix(64))
         return [
-            "nt_sl=$(\"$H\" session list --json 2>&1 </dev/null); nt_slx=$?",
+            "nt_sl=$(nt_hd 5 \"$H\" session list --json 2>&1 </dev/null); nt_slx=$?",
             "if [ \"$nt_slx\" -ne 0 ] || ! \(listed); then",
             "  printf 'herdr on this host lists no session %s\\n' \(quote(shown)) > \"$K.plain\" 2>/dev/null",
             "  printf '%s\\r\\n' \(quote("Next Term: herdr on this host lists no session “\(shown)” (it may have been removed, or this herdr has no named sessions), " + stops))",
@@ -574,7 +575,7 @@ public enum RemoteShell {
         \(findHerdr)
         \(herdrSection)
         if [ -n "$H" ]; then
-          nt_sl=$("$H" session list --json 2>/dev/null </dev/null)
+          nt_sl=$(nt_hd \(herdrCallLimit) "$H" session list --json 2>/dev/null </dev/null)
           printf 'herdr-sessions\t'; printf '%s' "$nt_sl" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\037\\177' | head -c 200000; echo
           nt_names=$(printf '%s' "$nt_sl" | tr '{}\\n' '\\n\\n ' | grep -E '"running"[[:space:]]*:[[:space:]]*true' | grep -vE '"default"[[:space:]]*:[[:space:]]*true' | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\\([A-Za-z0-9_-]\\{1,64\\}\\)".*/\\1/p' | head -n \(herdrSessionsListed))
           for nt_n in $nt_names; do

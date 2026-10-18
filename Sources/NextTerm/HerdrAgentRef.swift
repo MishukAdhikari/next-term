@@ -36,6 +36,15 @@ struct HerdrAgentRef {
         HerdrRunner.run(command, for: tab, machine: machine, input: input, timeout: timeout, completion: completion)
     }
 
+    /// The user acted on it (a notice's button, its Reply): Next Term's unread flag clears and its notice goes, in
+    /// every tab of the session for the tab's own agents.
+    func seen() {
+        guard let machine else { return tab.herdrSeen(pane) }
+        LocalHerdrWatch.shared.machines(of: tab)?.machine(machine)?.tracker.seen(pane)
+        AppDelegate.shared.withdrawHerdrNotice(id)
+        tab.delegate?.tabDidChange(tab)
+    }
+
     /// What a read of its pane found (answer_agent's, or the watch's own): its question, or none.
     func questionRead(seq: Int?, text: String?, menu: AgentMenu?) {
         guard let machine else { return tab.herdrQuestionRead(pane, seq: seq, text: text, menu: menu) }

@@ -411,6 +411,10 @@ public struct HerdrWatch: Equatable, Sendable {
 
     public init() {}
 
+    /// A check or two in a row failed, and herdr is not taken as not answering yet: its agents are as last known (none
+    /// while it has not listed them since the watch began).
+    public var isRetrying: Bool { (1..<Self.failuresBeforeNote).contains(failures) }
+
     /// Takes one check's report. `showsHerdr`: the tab shows herdr (it did not fall back to a plain shell). Returns the
     /// agents to show when herdr listed them.
     public mutating func observe(_ report: HerdrReport, showsHerdr: Bool) -> [HerdrAgent]? {

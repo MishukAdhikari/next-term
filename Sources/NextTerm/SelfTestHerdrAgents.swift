@@ -126,7 +126,10 @@ extension SelfTest {
 
         // Clicking codex's row moves herdr's view to its pane; Go to Agent… is ⌃⌘A.
         clearCalls()
-        if let index = c.groups.firstIndex(where: { $0.contains(tab) }) { c.tabList(c.tabList, didSelectAgent: "w2:p1", of: index) }
+        let codexRow = "pane \(tab.id.uuidString)/herdr/w2:p1"
+        if let index = c.groups.firstIndex(where: { $0.contains(tab) }) {
+            c.tabList(c.tabList, didSelectAgent: "w2:p1", rowKey: codexRow, of: index)
+        }
         check(await wait(10) { read().contains("agent focus w2:p1|") }, "herdr agents: clicking a row runs herdr's agent focus on it", read())
         let windowMenu = NSApp.mainMenu?.items.first { $0.title == "Window" }?.submenu
         let item = windowMenu?.items.first { $0.action == #selector(TerminalWindowController.goToAgent(_:)) }
@@ -225,7 +228,7 @@ extension SelfTest {
               "herdr MCP: read_tab on an agent's id reads its pane", screen.text)
         clearCalls()
         let prompted = await herdrTool("send_to_tab", ["tab_id": id, "text": "run the tests"])
-        check(!prompted.isError && read().contains("agent prompt w2:p1 -- run the tests|"),
+        check(!prompted.isError && read().contains("agent prompt w2:p1 run the tests|"),
               "herdr MCP: send_to_tab prompts the agent through herdr, its text on the script's stdin", read())
         check(HerdrMCP.isDriven(id) && !HerdrMCP.isDriven(HerdrTarget(tabID: tab.id.uuidString, pane: "w1:p1").id),
               "herdr MCP: typing into an agent drives that agent, not its herdr neighbours")
@@ -285,11 +288,11 @@ extension SelfTest {
             app.respond(to: finishNotice.identifier, title: finishNotice.content.title, info: ["tab": tab.id.uuidString, "herdr_pane": "w1:p1"],
                         action: NoticeActions.reply, text: "run the linter")
         }
-        check(await wait(10) { read().contains("agent prompt w1:p1 -- run the linter|") }, "herdr notices: Reply prompts the agent through herdr", read())
+        check(await wait(10) { read().contains("agent prompt w1:p1 run the linter|") }, "herdr notices: Reply prompts the agent through herdr", read())
         check(await wait(5) { !tab.herdrTracker.isUnread("w1:p1") }, "herdr notices: and marks it seen")
         // Muted: no notice, still in the badge.
         if let index = c.groups.firstIndex(where: { $0.contains(tab) }) {
-            let rowMenu = c.tabList(c.tabList, menuForAgent: "w2:p1", of: index)
+            let rowMenu = c.tabList(c.tabList, menuForAgent: "w2:p1", rowKey: codexRow, of: index)
             if let mute = rowMenu?.items.first(where: { $0.title == "Mute Notices" }) { HerdrAgentMenu.Target.shared.mute(mute) }
         }
         check(tab.herdrTracker.isMuted("w2:p1"), "herdr agents: Mute Notices on a row mutes that agent")
@@ -316,7 +319,7 @@ extension SelfTest {
         write("herdr-agents", standInAgents(codex: "working", claude: "idle", seq: 13))
         _ = await wait(10) { tab.herdrTracker.agents.last?.status == .working }
         peek?.send(line: "use make clean instead")
-        check(await wait(10) { read().contains("agent prompt w2:p1 -- use make clean instead|") } && !read().contains("agent focus"),
+        check(await wait(10) { read().contains("agent prompt w2:p1 use make clean instead|") } && !read().contains("agent focus"),
               "Peek: a line sent goes as herdr's prompt, and herdr's view does not move", read())
         peek?.close()
         // The Conversation: claude's transcript at the path its agent_session names, on the host.

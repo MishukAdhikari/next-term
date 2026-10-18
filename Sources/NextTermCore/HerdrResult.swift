@@ -24,12 +24,19 @@ public enum HerdrResult: Equatable, Sendable {
     public static let outputCap = 2_000_000
     public static let errorCap = 65_536
 
+    /// What herdr says when it has a verb but was asked it wrongly, by verb: its own usage line, or an option it does not
+    /// take. Then the verb is not missing, and nothing older is tried. Only `agent prompt` needs it: its older form types
+    /// the text and presses Return with none of the check for a decision that `agent prompt` makes.
+    public static let usage: [String: [String]] = ["agent prompt": ["agent prompt", "unknown option"]]
+
     /// What herdr said when a verb or one of its options is not in this herdr: then the next verb is tried. Only for a
-    /// command that failed: a pane's text may say "unknown command" too.
-    public static func saysUnsupported(exit: Int32, said: String) -> Bool {
+    /// command that failed: a pane's text may say "unknown command" too. `verb`: the call's own, whose usage words
+    /// (`usage`) say this herdr has it.
+    public static func saysUnsupported(exit: Int32, said: String, verb: String? = nil) -> Bool {
         guard exit != 0 else { return false }
-        if exit == 2 { return true }
         let lower = said.lowercased()
+        if let verb, let own = usage[verb], own.contains(where: { lower.contains($0) }) { return false }
+        if exit == 2 { return true }
         return ["unknown command", "unrecognized subcommand", "unexpected argument"].contains { lower.contains($0) }
     }
 
@@ -68,7 +75,7 @@ public enum HerdrResult: Equatable, Sendable {
         }
         guard ended, let last = exits.last else { return .cut }
         if let bytes, bytes > outputCap { return .cut }
-        return make(exit: last.code, out: out, err: err, firstVerb: exits[0].verb, text: text, mask: mask)
+        return make(exit: last.code, out: out, err: err, firstVerb: exits[0].verb, verb: last.verb, text: text, mask: mask)
     }
 
     /// The verb of the last herdr call a command's script made ("tab focus" when `agent focus` was not in this herdr), or
@@ -83,14 +90,15 @@ public enum HerdrResult: Equatable, Sendable {
     }
 
     /// One herdr call's answer (the last a command made): its exit status, stdout and stderr. `firstVerb` names the
-    /// command when every verb it tried was missing.
-    public static func make(exit: Int32, out: Data, err: Data, firstVerb: String, text: Bool, mask: SecretMask = .current) -> HerdrResult {
+    /// command when every verb it tried was missing; `verb` is the call's own.
+    public static func make(exit: Int32, out: Data, err: Data, firstVerb: String, verb: String? = nil, text: Bool,
+                            mask: SecretMask = .current) -> HerdrResult {
         let output = String(decoding: out.prefix(outputCap), as: UTF8.self)
         let errors = String(decoding: err.prefix(errorCap), as: UTF8.self)
         // A pane's text is never read for herdr's words: it may hold anything.
         if exit == 0, text { return .text(readable(output)) }
         let said = HerdrAgent.plain(errors + " " + output)
-        if saysUnsupported(exit: exit, said: said) { return .unsupported(firstVerb) }
+        if saysUnsupported(exit: exit, said: said, verb: verb) { return .unsupported(firstVerb) }
         if let refusal = refusal(said, mask: mask) { return refusal }
         guard exit == 0 else {
             let words = said.trimmingCharacters(in: .whitespaces)

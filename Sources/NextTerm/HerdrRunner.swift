@@ -32,7 +32,8 @@ enum HerdrRunner {
             return completion(.unreachable("That tab does not show herdr."), nil)
         }
         let session = remote.herdrSession
-        guard let script = command.script(session: session) else {
+        // Each herdr call on the host ends just before the connection gives up on it, so none is left running there.
+        guard let script = command.script(session: session, limit: max(1, Int(timeout) - 1)) else {
             return completion(.error(code: "", message: command.refusal(session: session) ?? "That herdr command cannot be built."), nil)
         }
         let deadline = TerminalTab.now + timeout
@@ -87,7 +88,8 @@ enum HerdrRunner {
                 let ran = LocalHerdr.run(call, environment: environment, timeout: left)
                 if let failure = ran.failure { return (.unreachable(failure), verb) }
                 said = ran.output.count > HerdrResult.outputCap ? .cut
-                    : HerdrResult.make(exit: ran.status, out: ran.output, err: ran.errors, firstVerb: command.verb, text: command.readsText)
+                    : HerdrResult.make(exit: ran.status, out: ran.output, err: ran.errors, firstVerb: command.verb, verb: verb,
+                                       text: command.readsText)
                 if ran.status != 0 { break } // the call after it in this attempt never runs
             }
             if case .unsupported = said { continue }

@@ -264,12 +264,24 @@ import Testing
         // One slow answer (herdr starting, a cut connection) says nothing, and keeps the agents.
         #expect(watch.observe(HerdrReport(listing: .cut), showsHerdr: true) == nil)
         #expect(watch.observe(HerdrReport(listing: .failed("x")), showsHerdr: true) == nil)
-        #expect(watch.note == nil && watch.agents == [agent])
+        #expect(watch.note == nil && watch.agents == [agent] && watch.isRetrying)
         _ = watch.observe(HerdrReport(listing: .failed("herdr printed nothing")), showsHerdr: true)
-        #expect(watch.note == "herdr not answering: herdr printed nothing" && watch.agents == nil)
+        #expect(watch.note == "herdr not answering: herdr printed nothing" && watch.agents == nil && !watch.isRetrying)
         // It answers again: the note goes.
         _ = watch.observe(HerdrReport(listing: .agents([])), showsHerdr: true)
         #expect(watch.note == nil && watch.failures == 0 && watch.agents == [])
+    }
+
+    @Test func aWatchThatHasNotHeardYetRetriesAsOneThatHad() {
+        // A reconnected tab's new watch: a failed first check is a retry, not herdr gone.
+        var watch = HerdrWatch()
+        #expect(!watch.isRetrying)
+        #expect(watch.observe(HerdrReport(listing: .cut), showsHerdr: true) == nil)
+        #expect(watch.agents == nil && watch.isRetrying && watch.note == nil)
+        // A tab that fell back never retries: it is a plain shell.
+        var plain = HerdrWatch()
+        _ = plain.observe(HerdrReport(listing: .missing), showsHerdr: false)
+        #expect(!plain.isRetrying)
     }
 
     @Test func aSessionThatIsNotRunningIsNamed() {

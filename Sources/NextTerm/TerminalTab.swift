@@ -590,8 +590,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
     /// herdr's agents as the tab list shows them, while this tab follows them.
     var herdrRows: [TabListRows.Agent] { followsHerdr ? herdrTracker.rows : [] }
-    /// Where its herdr is, for the Dock badge and Go to Agent, which count an agent once however many tabs show its
-    /// session: the host and the herdr session.
+    /// Where its herdr is, for the Dock badge, Go to Agent and the notices, which take an agent once however many tabs
+    /// show its session (herdrPeers): the host and the herdr session.
     var herdrPlace: String {
         remote.map { "\($0.host.id) \($0.herdrSession ?? "")" } ?? "mac \(localHerdr?.server ?? "")"
     }
@@ -739,9 +739,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             // is for its own reports to say (a .plain file comes back if the tool is still missing).
             fellBack = false
             fellBackReason = nil
+            // herdr's rows wait for its first list on this connection. Its agents are followed on from before the drop:
+            // one still blocked is not news again, and one that finished or moved on meanwhile says so.
             herdrWatch = HerdrWatch()
-            herdrTracker = HerdrAgents()
-            decisionsToPost = []
             status.suppressesNotices = false
             paneInMode = false
             loginPrompt = false
@@ -1701,8 +1701,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let listed = herdrWatch.observe(report, showsHerdr: !fellBack)
         if herdrWatch.note != note { delegate?.tabDidChange(self) }
         guard let agents = listed else {
-            // herdr stopped answering: what its agents do is not known any more, and the tab's own notices are back.
-            if herdrWatch.agents == nil, !herdrTracker.agents.isEmpty {
+            // herdr stopped answering: what its agents do is not known any more, and the tab's own notices are back. A
+            // check or two that fail (after a reconnect too) change nothing yet.
+            if herdrWatch.agents == nil, !herdrWatch.isRetrying, !herdrTracker.agents.isEmpty {
                 herdrTracker = HerdrAgents()
                 decisionsToPost = []
                 status.suppressesNotices = false
@@ -1719,7 +1720,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func followHerdr(_ listed: [HerdrAgent], focusedTab: String?) {
         let rows = herdrTracker.rows
         let agents = Self.masked(listed)
-        let events = herdrTracker.update(agents, focusedTab: focusedTab, tabVisible: isOnScreen, now: Self.now)
+        // herdr's view is its session's, so an agent it shows is on screen while any tab of that session is.
+        let visible = herdrPeers.contains { $0.isOnScreen }
+        let events = herdrTracker.update(agents, focusedTab: focusedTab, tabVisible: visible, now: Self.now)
         let before = (status.state, status.question)
         status.observeAgentHost("herdr", at: Self.now)
         status.suppressesNotices = true // its agents post their own (herdrEvents)
@@ -1787,29 +1790,45 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         AppDelegate.shared.post(herdrAgent: agent, question: question, duration: duration, tab: self, in: controller)
     }
 
+    /// The tabs that show the same herdr session as this one and hear from it now, in tab order, this one included. A
+    /// split or a duplicate of a herdr tab is a second client of its session, and herdr says the same of its agents to
+    /// each: whether an agent is on screen, seen or muted is the session's, and so is its one notice.
+    var herdrPeers: [TerminalTab] {
+        let place = herdrPlace
+        return AppDelegate.shared.controllers.flatMap(\.tabs).filter { tab in
+            tab === self || (tab.followsHerdr && tab.hearsHerdr && tab.herdrPlace == place)
+        }
+    }
+
+    /// herdr's lists reach it now: on this Mac, or over its own connection while that is up.
+    private var hearsHerdr: Bool { !exited && (remote == nil || (remoteConnected && !disconnected)) }
+
     /// The user chose one of its agents (its row, Go to Agent, its notice): Next Term's unread flag clears and its
-    /// notice goes.
+    /// notice goes, in every tab of its session.
     func herdrSeen(_ pane: String) {
-        herdrTracker.seen(pane)
-        AppDelegate.shared.withdrawHerdrNotice(HerdrTarget(tabID: id.uuidString, pane: pane).id)
-        delegate?.tabDidChange(self)
+        for tab in herdrPeers {
+            tab.herdrTracker.seen(pane)
+            AppDelegate.shared.withdrawHerdrNotice(HerdrTarget(tabID: tab.id.uuidString, pane: pane).id)
+            tab.delegate?.tabDidChange(tab)
+        }
     }
 
     /// Keep as Unread (true), or its undoing (seen).
     func keepHerdrUnread(_ pane: String, _ on: Bool) {
-        if on {
-            herdrTracker.markUnread(pane, now: Self.now)
-            delegate?.tabDidChange(self)
-        } else {
-            herdrSeen(pane)
+        guard on else { return herdrSeen(pane) }
+        for tab in herdrPeers {
+            tab.herdrTracker.markUnread(pane, now: Self.now)
+            tab.delegate?.tabDidChange(tab)
         }
     }
 
-    /// Mute Notices (true), or Unmute: a muted agent's notice goes at once.
+    /// Mute Notices (true), or Unmute, in every tab of its session: a muted agent's notice goes at once.
     func muteHerdr(_ pane: String, _ on: Bool) {
-        herdrTracker.mute(pane, on)
-        if on { AppDelegate.shared.withdrawHerdrNotice(HerdrTarget(tabID: id.uuidString, pane: pane).id) }
-        delegate?.tabDidChange(self)
+        for tab in herdrPeers {
+            tab.herdrTracker.mute(pane, on)
+            if on { AppDelegate.shared.withdrawHerdrNotice(HerdrTarget(tabID: tab.id.uuidString, pane: pane).id) }
+            tab.delegate?.tabDidChange(tab)
+        }
     }
 
     /// The window's tick: when the tab began to need the user as it does now.
@@ -1825,9 +1844,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Reads the next blocked agent's question from its own pane (what it shows now), as a local agent's screen is read:
     /// its words and choices then stand for herdr's "needs a decision". A pane that shows none, or a read that fails,
-    /// leaves herdr's words until herdr counts a change.
+    /// leaves herdr's words until herdr counts a change. One read at a time per session: a tab of the same session that
+    /// reads already gives this one its answer.
     private func readHerdrQuestion() {
         guard !herdrReading, !exited, let next = herdrTracker.nextRead else { return }
+        guard !herdrPeers.contains(where: { $0 !== self && $0.herdrReading }) else { return }
         herdrReading = true
         HerdrRunner.readVisible(next.pane, in: self) { [weak self] result in
             guard let self else { return }
@@ -1836,15 +1857,18 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if case .text(let screen) = result { found = HerdrAgents.question(onScreen: screen) }
             self.herdrQuestionRead(next.pane, seq: next.seq, text: found?.text, menu: found?.menu)
             self.readHerdrQuestion()
-            self.postDecisions()
+            for tab in self.herdrPeers { tab.postDecisions() }
         }
     }
 
-    /// What a read of a blocked agent's pane found (here, or answer_agent's own read): its question, or none.
+    /// What a read of a blocked agent's pane found (here, or answer_agent's own read): its question, or none, for every
+    /// tab of the session that followed herdr to the same change.
     func herdrQuestionRead(_ pane: String, seq: Int?, text: String?, menu: AgentMenu?) {
-        herdrTracker.setQuestion(pane: pane, seq: seq, text: text, choices: menu?.choices ?? [], style: menu?.style)
-        status.observe(agentScreen: herdrTracker.activity, at: Self.now)
-        delegate?.tabDidChange(self)
+        for tab in herdrPeers {
+            tab.herdrTracker.setQuestion(pane: pane, seq: seq, text: text, choices: menu?.choices ?? [], style: menu?.style)
+            tab.status.observe(agentScreen: tab.herdrTracker.activity, at: Self.now)
+            tab.delegate?.tabDidChange(tab)
+        }
     }
 
     /// The tab is on screen: in front of its window's visible terminal (TerminalWindowController.isOnScreen).

@@ -64,6 +64,22 @@ import Testing
             == .text("$ foo\nzsh: unknown command: foo\n"))
     }
 
+    @Test func herdrsOwnUsageErrorForAPromptIsNoMissingVerb() {
+        // herdr has `agent prompt` and refused how it was asked: its words, never the older form that types the text and
+        // presses Return with no check for a decision.
+        let refused = HerdrResult.make(exit: 2, out: Data(), err: Data("unknown option: run the tests\n".utf8), firstVerb: "agent prompt",
+                                       verb: "agent prompt", text: false)
+        #expect(refused == .error(code: "", message: "unknown option: run the tests"))
+        #expect(!HerdrResult.saysUnsupported(exit: 2, said: "agent prompt requires text", verb: "agent prompt"))
+        #expect(HerdrResult.parse(printed(exits: [(2, "agent prompt")], err: "usage: herdr agent prompt <target> <text>"), text: false)
+            == .error(code: "", message: "usage: herdr agent prompt <target> <text>"))
+        // A herdr without the verb says so in other words: then its older form is tried.
+        #expect(HerdrResult.saysUnsupported(exit: 2, said: "error: unrecognized subcommand 'prompt'", verb: "agent prompt"))
+        #expect(HerdrResult.saysUnsupported(exit: 2, said: "usage: herdr agent <list|read|send-keys>", verb: "agent prompt"))
+        // Another verb's unknown option is an option this herdr lacks, as before.
+        #expect(HerdrResult.saysUnsupported(exit: 2, said: "unknown option: --lines", verb: "agent read"))
+    }
+
     @Test func aPanesTextKeepsItsLinesAndLosesItsEscapes() {
         let screen = "\u{1b}[1m❯ 1. Yes\u{1b}[0m   \r\n  2. No\n\tdone\u{07}\n"
         let result = HerdrResult.parse(printed(exits: [(0, "agent read")], out: screen), text: true)

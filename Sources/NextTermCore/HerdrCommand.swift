@@ -73,10 +73,19 @@ public enum HerdrCommand: Equatable, Sendable {
     /// Stands for the text (stdin) in `attempts`.
     static let textMark = "$T"
 
-    /// Why text cannot go to one of herdr's agents, or nil: over `maxTextBytes`, or holding a stored key's value, which
-    /// on a host would be herdr's argument while herdr runs, where others there can see it in `ps`.
+    /// herdr takes these words for its own wherever they stand on its command line, before any verb reads them: text
+    /// that is one of them (or starts with one that has `=`) would not reach the agent.
+    static let globalWords = ["--handoff", "--session", "--remote", "--remote-keybindings"]
+    static let globalPrefixes = ["--session=", "--remote=", "--remote-keybindings="]
+
+    /// Why text cannot go to one of herdr's agents, or nil: over `maxTextBytes`, one of herdr's own global options,
+    /// or holding a stored key's value, which on a host would be herdr's argument while herdr runs, where others there
+    /// can see it in `ps`.
     public static func textRefusal(_ text: String, mask: SecretMask = .current) -> String? {
         if text.utf8.count > maxTextBytes { return "The text is longer than 64 KB; send it in parts. Nothing was sent." }
+        if let word = globalWords.first(where: { $0 == text }) ?? globalPrefixes.first(where: { text.hasPrefix($0) }) {
+            return "herdr takes \(word) for one of its own options wherever it stands, so that text would not reach the agent. Nothing was sent."
+        }
         if !mask.isEmpty, mask.mask(text) != text {
             return "The text holds a stored key's value: for a herdr agent it would be herdr's argument on the host while it runs, where others can see it in ps. run_with_secrets runs a command with keys in a tab instead. Nothing was sent."
         }
@@ -147,13 +156,16 @@ public enum HerdrCommand: Equatable, Sendable {
                 [["pane", "read", pane]],
             ]
         case .prompt(let pane):
-            // `--` ends herdr's options: text that starts with "-" is text.
+            // herdr reads the text by its place, so text that starts with "-" is text (a `--` would be the text itself).
+            // Built so, and with textRefusal keeping herdr's own options out, `agent prompt` has no usage error to give;
+            // should it give one, the older form, which types and presses Return with no check for a decision, is not
+            // tried after it (HerdrResult.usage).
             return [
-                [["agent", "prompt", pane, "--", Self.textMark]],
-                [["pane", "send-text", pane, "--", Self.textMark], ["pane", "send-keys", pane, "enter"]],
+                [["agent", "prompt", pane, Self.textMark]],
+                [["pane", "send-text", pane, Self.textMark], ["pane", "send-keys", pane, "enter"]],
             ]
         case .text(let pane):
-            return [[["pane", "send-text", pane, "--", Self.textMark]]]
+            return [[["pane", "send-text", pane, Self.textMark]]]
         case let .keys(pane, names):
             let keys = names.compactMap(HerdrKeys.map)
             return [[["agent", "send-keys", pane] + keys], [["pane", "send-keys", pane] + keys]]
@@ -211,7 +223,9 @@ public enum HerdrCommand: Equatable, Sendable {
     /// variables (else they would name the default session's). It prints HerdrResult's form after
     /// RemoteShell.marker: where herdr is, each call's exit, and the last call's output and errors in base64. nil when
     /// `refusal` says why not. A saved machine is never asked from a host: `--machine` is for herdr on this Mac.
-    public func script(session: String?) -> String? {
+    /// `limit`: the most seconds one herdr call may take there (RemoteShell's nt_hd), just under the connection's own
+    /// time limit, so a herdr that never answers leaves nothing running on the host.
+    public func script(session: String?, limit: Int = 14) -> String? {
         guard refusal(session: session) == nil else { return nil }
         var lines = [
             "C=\(RemoteShell.cacheDir)",
@@ -224,6 +238,7 @@ public enum HerdrCommand: Equatable, Sendable {
             "fi",
             "printf 'where\\t%s\\t%s\\n' \"$(printf '%s' \"$H\" | tr -d '\\000-\\037\\177' | cut -c 1-1024)\" \"$HW\"",
             "S=\(session.map(RemoteShell.quote) ?? "")",
+            "nt_limit=\(max(1, limit))",
             // The text, once, from stdin: never in the script, so never on a command line here.
             takesText ? "T=$(cat)" : "T=",
             Self.callFunctions,
@@ -242,10 +257,12 @@ public enum HerdrCommand: Equatable, Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// nt_h: herdr, for the session asked. nt_call LABEL ARGS…: one call, its output and errors kept in a private folder,
-    /// its exit printed. nt_missing: the last call said this herdr lacks its verb (exit 2, a usage error, or herdr's
-    /// "unknown command"). nt_end: the last call's output (2 MB at most) and errors (64 KB) in base64, and the end marker.
-    /// With no private folder for them (no /tmp, a full disk), it says so and asks herdr nothing.
+    /// nt_h: herdr, for the session asked, for nt_limit seconds at most. nt_call LABEL ARGS…: one call, its output and
+    /// errors kept in a private folder, its exit printed. nt_says WORDS: they are in what the last call said.
+    /// nt_missing: the last call said this herdr lacks its verb (exit 2, a usage error, or herdr's "unknown command"),
+    /// never when its words say this herdr has it (HerdrResult.usage). nt_end: the last call's output (2 MB at most) and
+    /// errors (64 KB) in base64, and the end marker. With no private folder for them (no /tmp, a full disk), it says so
+    /// and asks herdr nothing.
     static let callFunctions = #"""
         nt_d=$(mktemp -d 2>/dev/null) || nt_d=$(mktemp -d -t nt-herdr 2>/dev/null) || nt_d=
         if [ -z "$nt_d" ] || [ ! -d "$nt_d" ]; then
@@ -255,7 +272,7 @@ public enum HerdrCommand: Equatable, Sendable {
         fi
         trap 'rm -rf "$nt_d"' EXIT
         nt_h() {
-          if [ -n "$S" ]; then ( unset HERDR_SOCKET_PATH HERDR_SESSION; exec "$H" --session "$S" "$@" ); else "$H" "$@"; fi
+          if [ -n "$S" ]; then ( unset HERDR_SOCKET_PATH HERDR_SESSION; nt_hd "$nt_limit" "$H" --session "$S" "$@" ); else nt_hd "$nt_limit" "$H" "$@"; fi
         }
         nt_call() {
           nt_v=$1; shift
@@ -263,10 +280,16 @@ public enum HerdrCommand: Equatable, Sendable {
           nt_x=$?
           printf 'exit\t%s\t%s\n' "$nt_x" "$nt_v"
         }
+        nt_says() {
+          cat "$nt_d/err" "$nt_d/out" 2>/dev/null | head -c 65536 | grep -qiE "$1"
+        }
         nt_missing() {
           [ "$nt_x" -ne 0 ] || return 1
+          case $nt_v in
+        \#(ownUsage)
+          esac
           [ "$nt_x" -eq 2 ] && return 0
-          cat "$nt_d/err" "$nt_d/out" 2>/dev/null | head -c 65536 | grep -qiE 'unknown command|unrecognized subcommand|unexpected argument'
+          nt_says 'unknown command|unrecognized subcommand|unexpected argument'
         }
         nt_end() {
           printf 'bytes\t%s\n' "$(wc -c < "$nt_d/out" 2>/dev/null | tr -d ' ')"
@@ -275,6 +298,14 @@ public enum HerdrCommand: Equatable, Sendable {
           printf '%s\n' \#(RemoteShell.quote(RemoteShell.herdrEndMarker))
         }
         """#
+
+    /// nt_missing's cases, one per verb whose words say this herdr has it (HerdrResult.usage).
+    private static var ownUsage: String {
+        HerdrResult.usage.sorted { $0.key < $1.key }.map { verb, words in
+            let said = RemoteShell.quote(words.joined(separator: "|"))
+            return "    \(RemoteShell.quote(verb))) if nt_says \(said); then return 1; fi ;;"
+        }.joined(separator: "\n")
+    }
 
     // MARK: on this Mac
 

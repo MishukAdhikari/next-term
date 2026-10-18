@@ -237,13 +237,16 @@ enum HerdrMCP {
         driven.remove(id)
     }
 
+    /// The lines of its pane wait_for_tab gives, as many as a tab's.
+    private static let waitLines = 40
+
     private static func waitFor(_ ref: HerdrAgentRef, _ arguments: [String: Any], reply: @escaping Reply) {
         let seconds = min(300, max(1, arguments["timeout_seconds"] as? Int ?? 50))
         wait(ref, until: TerminalTab.now + Double(seconds), reply: reply)
     }
 
     /// Done when herdr no longer says it works and what was sent had its 6 seconds to show (or showed); looked at every
-    /// 250 ms in what the status checks left.
+    /// 250 ms in what the status checks left. Its answer has the pane's last lines, read then.
     private static func wait(_ ref: HerdrAgentRef, until deadline: TimeInterval, reply: @escaping Reply) {
         let id = ref.id
         let agent = ref.agent
@@ -257,15 +260,25 @@ enum HerdrMCP {
         if gone || (!busy && !starting) || TerminalTab.now >= deadline {
             var info: [String: Any] = ["id": id, "state": agent?.status.rawValue ?? "gone", "timed_out": !gone && (busy || starting)]
             if let agent { info.merge(questionInfo(agent, ref: ref)) { $1 } }
-            if gone { info["note"] = "herdr no longer lists \(ref.pane) there (or the tab stopped following herdr); list_tabs shows its agents." }
-            return reply(ok(info))
+            guard !gone, let agent else {
+                info["note"] = "herdr no longer lists \(ref.pane) there (or the tab stopped following herdr); list_tabs shows its agents."
+                return reply(ok(info))
+            }
+            // The last lines of its pane, as a tab's wait gives its screen; none when herdr gives none.
+            let answer = info
+            return ref.run(.read(pane: agent.paneID, source: .recent, lines: waitLines), timeout: 10) { result in
+                var shown = answer
+                if case .text(let text) = result { shown["screen"] = screen(text, lines: waitLines) }
+                reply(ok(shown))
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { wait(ref, until: deadline, reply: reply) }
     }
 
     // MARK: typing
 
-    /// Text for an agent that cannot go (HerdrCommand.textRefusal): too long, or holding a stored key's value.
+    /// Text for an agent that cannot go (HerdrCommand.textRefusal): too long, one of herdr's own options, or holding a
+    /// stored key's value.
     static func textRefusal(_ text: String) -> String? { HerdrCommand.textRefusal(text) }
 
     private static func sendToTab(_ ref: HerdrAgentRef, _ agent: HerdrAgent, _ arguments: [String: Any], reply: @escaping Reply) {
@@ -374,16 +387,24 @@ enum HerdrMCP {
                 }
             }
             guard !plan.moves.isEmpty else { return finish() }
-            ref.run(.keys(pane: pane, plan.moves)) { result in
-                if let problem = problem(result, pane: pane) { return done(.failed(problem)) }
-                // Still the same question, and in a list the cursor on the choice.
-                Self.asked(ref) { again in
-                    switch HerdrAnswer.next(plan, now: again) {
-                    case .pressReturn: finish()
-                    case .answered: done(.answered(label: plan.label, index: plan.index))
-                    case .refused(let refusal): done(.refused(refusal))
+            // Still the same question, and in a list the cursor on the choice. herdr's send-keys only hands the keys to
+            // the pane, so the pane is read a moment after, and a list's cursor up to 10 times more, as answering in a
+            // tab waits for its screen.
+            func confirm(_ tries: Int) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    Self.asked(ref) { again in
+                        switch HerdrAnswer.next(plan, now: again) {
+                        case .pressReturn: finish()
+                        case .answered: done(.answered(label: plan.label, index: plan.index))
+                        case .refused(.cursorElsewhere) where tries < 10: confirm(tries + 1)
+                        case .refused(let refusal): done(.refused(refusal))
+                        }
                     }
                 }
+            }
+            ref.run(.keys(pane: pane, plan.moves)) { result in
+                if let problem = problem(result, pane: pane) { return done(.failed(problem)) }
+                confirm(0)
             }
         }
     }

@@ -346,6 +346,27 @@ import Testing
         #expect(titled.listing == .agents([agent]), "\(titled.listing)")
     }
 
+    @Test func aHerdrSessionThatNeverAnswersIsGivenUpOnAndTheNextIsStillAsked() throws {
+        // The server of session "a" takes the connection and never answers; "b"'s answers.
+        try script(home + "/.local/bin/herdr", """
+            case "$*" in
+              --version) echo 'herdr 0.9.5' ;;
+              '--session a agent list') exec sleep 30 ;;
+              '--session b agent list') echo '{"result":{"agents":[]}}' ;;
+            esac
+            """, warm: ["--version"])
+        let sessions = [HerdrPollSession(name: "a"), HerdrPollSession(name: "b")]
+        let start = Date()
+        let poll = try #require(RemotePoll.parse(try run(RemoteShell.pollScript(tabs: [], herdrSessions: sessions))))
+        #expect(Date().timeIntervalSince(start) < Double(RemoteShell.herdrCallLimit) + 3)
+        guard case .failed(let said) = poll.herdrSessions["a"]?.listing else {
+            Issue.record("\(poll.herdrSessions)")
+            return
+        }
+        #expect(said.contains("herdr did not answer within \(RemoteShell.herdrCallLimit) s"), "\(said)")
+        #expect(poll.herdrSessions["b"]?.listing == .agents([]))
+    }
+
     // MARK: the tab
 
     @Test func aTabWithoutHerdrSaysWhereItLookedAndPointsToTheInstallPage() throws {

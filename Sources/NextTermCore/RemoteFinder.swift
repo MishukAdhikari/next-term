@@ -32,14 +32,33 @@ extension RemoteShell {
         "@@NT-ENV-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased() + "@@"
     }
 
+    /// The most seconds one herdr call in a status check may take on the host (nt_hd): four sessions that never answer
+    /// still fit in the check's own 10.
+    static let herdrCallLimit = 2
+
     /// The finder's own functions. nt_ok: `$1` is a file that can run (and with nt_check set, answers it; the first one
     /// that doesn't is nt_bad, and its first line nt_said). nt_on_path NAME LIST: the first copy on a PATH list, a mise or
     /// asdf shim (the first one there) only when nothing else runs. nt_known NAME: the install folders. Each sets NTF to
-    /// what it found. All their variables start with nt_, so a script's own (C, H, K, T, p, s…) are left alone.
+    /// what it found. nt_hd SECONDS COMMAND…: a herdr call, ended after SECONDS by a watchdog as nt_login_env's is (herdr
+    /// waits for ever on a server that takes the connection and never answers, and sshd ends no command when its
+    /// connection goes), saying so on stderr; its exit status. All their variables start with nt_, so a script's own (C,
+    /// H, K, T, p, s…) are left alone.
     static let finderFunctions = #"""
         nt_nl='
         '
         nt_tab=$(printf '\t')
+        nt_hd() {
+          nt_hl=$1; shift
+          "$@" &
+          nt_hp=$!
+          ( sleep "$nt_hl"; kill -9 "$nt_hp" ) >/dev/null 2>&1 &
+          nt_hk=$!
+          wait "$nt_hp"
+          nt_hs=$?
+          kill "$nt_hk" 2>/dev/null
+          [ "$nt_hs" -ne 137 ] || printf 'herdr did not answer within %s s\n' "$nt_hl" >&2
+          return "$nt_hs"
+        }
         nt_ok() {
           [ -f "$1" ] && [ -x "$1" ] || return 1
           [ -n "$nt_check" ] || return 0
@@ -280,12 +299,14 @@ extension RemoteShell {
     }
 
     /// The section, `word` being the session as one sh word (a quoted name, or a variable the caller set from herdr's own
-    /// list of sessions).
+    /// list of sessions). Each herdr call has `herdrCallLimit` seconds: a session whose server hangs says so, and the
+    /// sessions after it are still asked.
     static func herdrSection(word: String?, wantsFocus: Bool) -> String {
         // herdr with its arguments, for the session asked. A subshell inside $( ) starts with a space: "$((" is arithmetic.
         func herdr(_ arguments: String) -> String {
-            guard let word else { return "\"$H\" \(arguments)" }
-            return " ( unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session \(word) \(arguments) )"
+            let call = "nt_hd \(herdrCallLimit) \"$H\""
+            guard let word else { return "\(call) \(arguments)" }
+            return " ( unset HERDR_SOCKET_PATH HERDR_SESSION; \(call) --session \(word) \(arguments) )"
         }
         let clean = "tr '\\n\\r\\t' '   ' | tr -d '\\000-\\006\\010-\\032\\034-\\037\\177'"
         var lines = ["printf '\\n%s\\n' \(quote(herdrMarker))"]

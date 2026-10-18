@@ -80,10 +80,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   question it asks; past six agents the idle ones fold into one row. Click a row and herdr shows that agent's
   pane; ⌥-click peeks. Window › Go to Agent… (⌃⌘A) lists every agent in every window, herdr's and your agent
   tabs alike, what needs you first, oldest first; Go to Next Agent Needing You (⌃⌘N) and the Dock menu go
-  straight there. Each agent gets its own notice, with the question read from its own pane once herdr has read
-  it blocked twice in a row, its choices as buttons and Reply on a finished one, each checked against the screen
-  first; a notice goes away once the agent no longer needs you. Mute Notices and Keep as Unread are on a row's
-  menu, and the Dock badge counts the agents waiting on you once, however many tabs show them. Peek reads an
+  straight there. Each agent gets its own notice, one however many tabs show its session, with the question read
+  from its own pane once herdr has read it blocked twice in a row, its choices as buttons and Reply on a finished
+  one, each checked against the screen first; a notice goes away once the agent no longer needs you. An agent of a
+  connected herdr server with no herdr tab gets herdr's own words and no buttons: a click opens a herdr tab there,
+  on its pane. Mute Notices and Keep as Unread are on a row's menu, and the Dock badge counts the agents waiting on
+  you once, however many tabs show them. Peek reads an
   agent, answers its question or sends it a line (kept as a draft) without moving herdr's view; ⌘E there shows
   why herdr gives its state, and ⌘2 its conversation, from the transcript herdr names (Claude Code and Codex).
   A tab can open one of herdr's named sessions, picked in New Remote Tab; a connected herdr server with no herdr

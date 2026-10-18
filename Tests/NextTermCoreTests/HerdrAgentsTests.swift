@@ -122,6 +122,36 @@ import Testing
         #expect(agents.question("w1:p2") == nil && agents.nextRead == nil)
     }
 
+    @Test func aTrackerKeptAcrossADropTellsNothingAgainAndSaysWhatChangedMeanwhile() {
+        var agents = HerdrAgents()
+        let before = [agent("w1:p1", .blocked, seq: 4, kind: "codex"), agent("w1:p2", .working, seq: 2)]
+        _ = agents.update(before, focusedTab: nil, tabVisible: false, now: 0)
+        #expect(agents.update(before, focusedTab: nil, tabVisible: false, now: 2) == [.needsDecision(pane: "w1:p1")])
+        agents.setQuestion(pane: "w1:p1", seq: 4, text: "Allow rm -rf build?", choices: ["Yes", "No"])
+        let asked = agents.question("w1:p1")
+        // The connection dropped for 20 s, and the tab kept its tracker. codex still asks the same: no news, and its
+        // question keeps its serial (a notice's question_id stays good). claude finished meanwhile: that is news.
+        let after = [agent("w1:p1", .blocked, seq: 4, kind: "codex"), agent("w1:p2", .done, seq: 3)]
+        #expect(agents.update(after, focusedTab: nil, tabVisible: false, now: 22) == [.finished(pane: "w1:p2", duration: 22)])
+        #expect(agents.question("w1:p1") == asked)
+        #expect(agents.update(after, focusedTab: nil, tabVisible: false, now: 24).isEmpty)
+        // An agent herdr no longer lists is gone, and its notice with it.
+        #expect(agents.update([agent("w1:p2", .done, seq: 3)], focusedTab: nil, tabVisible: false, now: 26) == [.gone(pane: "w1:p1")])
+    }
+
+    @Test func aTrackerThatTakesAnothersPlaceNeverRepeatsAQuestionsSerial() {
+        func asked() -> HerdrAgents.Question? {
+            var agents = HerdrAgents()
+            _ = agents.update([agent("w1:p1", .blocked, seq: 4)], focusedTab: nil, tabVisible: false, now: 0)
+            agents.setQuestion(pane: "w1:p1", seq: 4, text: "Do you want to proceed?")
+            return agents.question("w1:p1")
+        }
+        // The same words in the same pane, asked of a new tracker (a tab that reconnected, a new herdr client): another
+        // serial, so an answer meant for the first is refused for the second.
+        let first = asked(), second = asked()
+        #expect(first != nil && second != nil && first?.serial != second?.serial)
+    }
+
     @Test func aBlockedOfOneCheckTellsNothing() {
         var agents = HerdrAgents()
         _ = agents.update([agent("w1:p1", .working, seq: 3, kind: "codex")], focusedTab: nil, tabVisible: false, now: 0)

@@ -77,8 +77,9 @@ import Testing
                 }
                 // herdr itself runs only through nt_h, with the session or without.
                 let runs = script.components(separatedBy: "\n").filter { $0.contains("\"$H\" \"$@\"") || $0.contains("\"$H\" --") }
-                #expect(runs == ["  if [ -n \"$S\" ]; then ( unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session \"$S\" \"$@\" ); else \"$H\" \"$@\"; fi"],
-                        "\(runs)")
+                let call = "  if [ -n \"$S\" ]; then ( unset HERDR_SOCKET_PATH HERDR_SESSION; nt_hd \"$nt_limit\" \"$H\" --session \"$S\" \"$@\" ); "
+                    + "else nt_hd \"$nt_limit\" \"$H\" \"$@\"; fi"
+                #expect(runs == [call], "\(runs)")
             }
             // On this Mac: the same verbs, after the executable and the session.
             for attempt in try #require(command.argv(executable: "/x/herdr", session: sessions.last!, text: "hi")) {
@@ -110,7 +111,7 @@ import Testing
         let keys = try #require(HerdrCommand.keys(pane: "w1:p1", ["down", "enter"]).argv(executable: "h", session: nil, machine: "m1", text: nil))
         #expect(keys == [[["h", "--machine", "m1", "agent", "send-keys", "w1:p1", "down", "enter"]]])
         let prompt = try #require(HerdrCommand.prompt(pane: "w1:p1").argv(executable: "h", session: nil, machine: "m1", text: "go"))
-        #expect(prompt == [[["h", "--machine", "m1", "agent", "prompt", "w1:p1", "--", "go"]]])
+        #expect(prompt == [[["h", "--machine", "m1", "agent", "prompt", "w1:p1", "go"]]])
         let focus = try #require(HerdrCommand.focus(pane: "w1:p1", tab: "w1:t1").argv(executable: "h", session: nil, machine: "m1", text: nil))
         #expect(focus == [[["h", "--machine", "m1", "agent", "focus", "w1:p1"]]])
         let explain = try #require(HerdrCommand.explain(pane: "w1:p1").argv(executable: "h", session: nil, machine: "m1", text: nil))
@@ -162,16 +163,34 @@ import Testing
     @Test func aPromptsTextComesOnStdinAndItsOlderFormPressesEnterAfterIt() throws {
         let script = try #require(HerdrCommand.prompt(pane: "w1:p1").script(session: nil))
         #expect(script.contains("T=$(cat)"))
-        #expect(script.contains("nt_call 'agent prompt' 'agent' 'prompt' 'w1:p1' '--' \"$T\""))
-        #expect(script.contains("if nt_missing; then nt_call 'pane send-text' 'pane' 'send-text' 'w1:p1' '--' \"$T\"; [ \"$nt_x\" -ne 0 ] || nt_call 'pane send-keys' 'pane' 'send-keys' 'w1:p1' 'enter'; fi"))
+        #expect(script.contains("nt_call 'agent prompt' 'agent' 'prompt' 'w1:p1' \"$T\""))
+        #expect(script.contains("if nt_missing; then nt_call 'pane send-text' 'pane' 'send-text' 'w1:p1' \"$T\"; [ \"$nt_x\" -ne 0 ] || nt_call 'pane send-keys' 'pane' 'send-keys' 'w1:p1' 'enter'; fi"))
+        // No `--`: herdr reads the text by its place, and would take a `--` for the text.
+        #expect(!script.contains("'--'"))
         // Text only: no Return. And nothing else reads stdin.
         let text = try #require(HerdrCommand.text(pane: "w1:p1").script(session: nil))
         #expect(text.contains("T=$(cat)") && !text.contains("'enter'"))
         #expect(try #require(HerdrCommand.list.script(session: nil)).contains("\nT=\n"))
         // On this Mac the text is one element, where the script has "$T".
         let argv = try #require(HerdrCommand.prompt(pane: "w1:p1").argv(executable: "/x/herdr", session: nil, text: "-rf; it's $HOME"))
-        #expect(argv[0] == [["/x/herdr", "agent", "prompt", "w1:p1", "--", "-rf; it's $HOME"]])
-        #expect(argv[1][1] == ["/x/herdr", "pane", "send-keys", "w1:p1", "enter"])
+        #expect(argv[0] == [["/x/herdr", "agent", "prompt", "w1:p1", "-rf; it's $HOME"]])
+        #expect(argv[1] == [["/x/herdr", "pane", "send-text", "w1:p1", "-rf; it's $HOME"], ["/x/herdr", "pane", "send-keys", "w1:p1", "enter"]])
+        let typed = try #require(HerdrCommand.text(pane: "w1:p1").argv(executable: "/x/herdr", session: nil, text: "--wait"))
+        #expect(typed == [[["/x/herdr", "pane", "send-text", "w1:p1", "--wait"]]])
+    }
+
+    @Test func textHerdrWouldTakeForItsOwnOptionsIsRefused() {
+        // herdr takes these from anywhere on its command line before the verb reads its text.
+        for text in ["--handoff", "--session", "--session=work", "--remote", "--remote=me@web-1", "--remote-keybindings",
+                     "--remote-keybindings=local"] {
+            #expect(HerdrCommand.textRefusal(text, mask: .empty) != nil, "\(text)")
+        }
+        #expect(HerdrCommand.textRefusal("--session=work", mask: .empty)
+            == "herdr takes --session= for one of its own options wherever it stands, so that text would not reach the agent. Nothing was sent.")
+        // Flag-shaped text herdr keeps as text.
+        for text in ["--wait", "--", "-rf build", "--sessions are fine", "run --remote later", "-h"] {
+            #expect(HerdrCommand.textRefusal(text, mask: .empty) == nil, "\(text)")
+        }
     }
 
     @Test func aReadFallsBackTwiceAndAsksAtMost2000Lines() throws {
@@ -230,13 +249,16 @@ import Testing
             try script(bin + "/herdr", """
                 printf '%s|%s\\n' "$*" "${HERDR_SOCKET_PATH:-}" >> \(RemoteShell.quote(log))
                 [ "$1" = --session ] && shift 2
+                [ "$1 $2 $3" = 'agent read w7:p7' ] && exec sleep 30 # a server that takes the connection and never answers
                 if [ -e \(RemoteShell.quote(base + "/herdr-old")) ]; then
                   case "$1" in agent) echo "error: unrecognized subcommand '$2'" >&2; exit 2 ;; esac
                   case "$*" in *--source*) echo "error: unexpected argument '--source' found" >&2; exit 2 ;; esac
                 fi
                 case "$1 $2" in
                   'agent read'|'pane read') printf 'Allow rm -rf build?\\r\\n> 1. Yes\\n  2. No\\n' ;;
-                  'agent prompt') [ "$3" = w9:p9 ] && { echo '{"error":{"code":"agent_blocked","message":"w9:p9 waits on a decision"}}' >&2; exit 1; } ;;
+                  'agent prompt')
+                    [ "$3" = w9:p9 ] && { echo '{"error":{"code":"agent_blocked","message":"w9:p9 waits on a decision"}}' >&2; exit 1; }
+                    [ "$3" = w8:p8 ] && { echo "unknown option: $4" >&2; exit 2; } ;;
                   'agent focus') echo '{"id":"cli:agent:focus","result":{"type":"agent_info"}}' ;;
                   'session list') echo '{"sessions":[{"name":"default","default":true,"running":true}]}' ;;
                 esac
@@ -280,7 +302,10 @@ import Testing
         #expect(!script.contains("run the tests"))
         let said = HerdrResult.parse(try host.run(script, input: "run the tests; it's -fine"), text: false)
         #expect(said == .json(""))
-        #expect(host.calls() == ["agent prompt w1:p1 -- run the tests; it's -fine|"])
+        #expect(host.calls() == ["agent prompt w1:p1 run the tests; it's -fine|"])
+        // Flag-shaped text is the text.
+        #expect(HerdrResult.parse(try host.run(script, input: "--wait"), text: false) == .json(""))
+        #expect(host.calls() == ["agent prompt w1:p1 --wait|"])
         // herdr refuses a prompt while the agent waits on a decision: its words.
         let blocked = HerdrResult.parse(try host.run(try #require(HerdrCommand.prompt(pane: "w9:p9").script(session: nil)), input: "x"), text: false)
         #expect(blocked == .error(code: "agent_blocked", message: "w9:p9 waits on a decision"))
@@ -288,7 +313,35 @@ import Testing
         // Older herdr: the text, then Enter.
         try host.script(host.base + "/herdr-old", "")
         #expect(HerdrResult.parse(try host.run(script, input: "go"), text: false) == .json(""))
-        #expect(host.calls() == ["agent prompt w1:p1 -- go|", "pane send-text w1:p1 -- go|", "pane send-keys w1:p1 enter|"])
+        #expect(host.calls() == ["agent prompt w1:p1 go|", "pane send-text w1:p1 go|", "pane send-keys w1:p1 enter|"])
+    }
+
+    @Test func aUsageErrorOfHerdrsOwnAgentPromptNeverTypesTheTextAndPressesReturn() throws {
+        let host = try Host()
+        // A herdr that has `agent prompt` and refused how it was asked (exit 2): its words, and nothing typed.
+        let script = try #require(HerdrCommand.prompt(pane: "w8:p8").script(session: nil))
+        let said = HerdrResult.parse(try host.run(script, input: "run the tests"), text: false)
+        #expect(said == .error(code: "", message: "unknown option: run the tests"))
+        #expect(host.calls() == ["agent prompt w8:p8 run the tests|"])
+    }
+
+    @Test func aHerdrThatNeverAnswersIsGivenUpOnWithinTheLimit() throws {
+        let host = try Host()
+        // Run once first: macOS checks a new program the first time it runs, which can take longer than the limit.
+        _ = try host.run(try #require(HerdrCommand.version.script(session: nil)))
+        _ = host.calls()
+        let script = try #require(HerdrCommand.read(pane: "w7:p7", source: .visible, lines: nil).script(session: nil, limit: 1))
+        #expect(script.contains("nt_limit=1"))
+        let start = Date()
+        let said = HerdrResult.parse(try host.run(script), text: true)
+        #expect(Date().timeIntervalSince(start) < 5)
+        // Killed, it says so; and nothing older is tried after it.
+        guard case .error(_, let message) = said else {
+            Issue.record("\(said)")
+            return
+        }
+        #expect(message.contains("herdr did not answer within 1 s"), "\(message)")
+        #expect(host.calls() == ["agent read w7:p7 --source visible|"])
     }
 
     @Test func aReadFallsBackOnTheHostAndKeepsItsLines() throws {
