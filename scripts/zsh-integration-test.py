@@ -670,15 +670,29 @@ after = bindings(hooked)
 check(before and before == after, "`bindkey '^I'` in main and viins is the same with the hook loaded", f"{before} vs {after}")
 hooked.close()
 
-# 6. A plugin that replaces zle-line-init in its own precmd (as zsh-vi-mode does): `arm` comes back.
+# 6. A plugin that replaces zle-line-init in its own precmd (as zsh-vi-mode does): `arm` comes back, and the plugin's own
+# widget still runs, before ours.
+def mine_count(sh):
+    """How often the config's `__mine_*` hook widget has run, printed by the shell at a new prompt."""
+    start = len(sh.buf)
+    sh.send("print -r -- MINE=$__mine_n\r", 0.6)
+    found = re.findall(r"MINE=(\d+)", sh.screen(start))
+    return int(found[-1]) if found else None
+
 replacer = tempfile.mkdtemp()
 open(os.path.join(replacer, ".zshrc"), "w").write(
-    "PS1='$ '\n__mine() { zle -N zle-line-init __mine_init }\n__mine_init() { : }\nprecmd_functions+=(__mine)\n")
+    "PS1='$ '\ntypeset -gi __mine_n=0\n__mine() { zle -N zle-line-init __mine_init }\n__mine_init() { __mine_n+=1 }\n"
+    "precmd_functions+=(__mine)\n")
 sh = Shell("a plugin replaces zle-line-init", replacer)
 sh.send("true\r", 0.6)
 start = len(sh.buf)
 sh.send("true\r", 0.6)
 check(arms(sh, start), "a plugin that replaces zle-line-init in its precmd: `arm` comes back at the next prompt", str(arms(sh, start)))
+first = mine_count(sh)
+sh.send("true\r", 0.6)
+second = mine_count(sh)
+check(first is not None and second is not None and second > first, "and the plugin's own zle-line-init still runs at each line",
+      f"{first} then {second}")
 sh.close()
 
 # 7. zsh's completion system loaded: zsh's own matches, read by the hook and listed by Next Term.
@@ -1833,18 +1847,30 @@ check(not sh.errors(), "[ghost] no errors beside the stand-in plugin")
 sh.close()
 shutil.rmtree(folder, ignore_errors=True)
 
-# A plugin that replaces zle-line-pre-redraw in its own precmd (as some prompts do): ours is back at the next prompt.
-redrawer = tempfile.mkdtemp()
-open(os.path.join(redrawer, ".zshrc"), "w").write(
-    "PS1='$ '\n__mine() { zle -N zle-line-pre-redraw __mine_redraw }\n__mine_redraw() { : }\nprecmd_functions+=(__mine)\n")
-sh = Shell("ghost: a plugin replaces zle-line-pre-redraw", redrawer)
-sh.send("true\r", 0.6)
-start = len(sh.buf)
-sh.send("xy", 0.5)
-b = last_buf(sh, start, lambda x: x[6] == "xy")
-check(b is not None and b[6] == "xy", "[ghost] a plugin that replaces zle-line-pre-redraw in its precmd: reports come back", str(bufs(sh, start)))
-check(not sh.errors(), "[ghost] no errors beside it")
-sh.close()
+# A plugin that replaces zle-line-pre-redraw in its own precmd (as some prompts do): ours is back at the next prompt, and
+# the plugin's own widget still runs, before ours.
+for completion_on in (False, True):
+    label = "Tab completion " + ("on" if completion_on else "off")
+    redrawer = tempfile.mkdtemp()
+    open(os.path.join(redrawer, ".zshrc"), "w").write(
+        "PS1='$ '\ntypeset -gi __mine_n=0\n__mine() { zle -N zle-line-pre-redraw __mine_redraw }\n__mine_redraw() { __mine_n+=1 }\n"
+        "precmd_functions+=(__mine)\n")
+    sh = Shell(f"ghost: a plugin replaces zle-line-pre-redraw, {label}", redrawer, completion_on=completion_on)
+    sh.send("true\r", 0.6)
+    start = len(sh.buf)
+    sh.send("xy", 0.5)
+    b = last_buf(sh, start, lambda x: x[6] == "xy")
+    check(b is not None and b[6] == "xy", f"[ghost {label}] a plugin that replaces zle-line-pre-redraw in its precmd: reports come back",
+          str(bufs(sh, start)))
+    sh.send("\x03", 0.4)
+    first = mine_count(sh)
+    sh.send("true\r", 0.6)
+    second = mine_count(sh)
+    check(first is not None and second is not None and second > first, f"[ghost {label}] and the plugin's own redraw widget still runs",
+          f"{first} then {second}")
+    check(not sh.errors(), f"[ghost {label}] no errors beside it")
+    sh.close()
+    shutil.rmtree(redrawer, ignore_errors=True)
 
 # zsh-autosuggestions itself (the plugin matrix), sync and async: its suggestion reaches the report after its fetch.
 if plugins and os.path.isdir(os.path.join(plugins, "zsh-autosuggestions")):

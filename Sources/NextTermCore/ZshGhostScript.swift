@@ -286,8 +286,8 @@ __nextterm_gkeywidget() {
   return 0
 }
 
-# At each prompt: the private key bound in every keymap, our line hooks back if a plugin replaced them, and
-# zsh-autosuggestions' suggest widget reporting (__nextterm_gsuggest) if the plugin defined it again.
+# At each prompt: the private key bound in every keymap, our line hooks back if a plugin replaced them (its widget kept),
+# and zsh-autosuggestions' suggest widget reporting (__nextterm_gsuggest) if the plugin defined it again.
 __nextterm_gprecmd() {
   emulate -L zsh
   local km hook fn
@@ -296,6 +296,8 @@ __nextterm_gprecmd() {
   for hook fn in line-init __nextterm_ginit line-pre-redraw __nextterm_gredraw; do
     zstyle -g list zle-$hook widgets
     [[ ${widgets[zle-$hook]-} == user:azhw:zle-$hook && -n ${(M)list:#<->:$fn} ]] && continue
+    # A widget that replaced the hook stays, and runs first: ours out of the list, so the re-add keeps it as entry 0.
+    [[ -n ${(M)list:#<->:$fn} ]] && add-zle-hook-widget -d $hook $fn
     add-zle-hook-widget $hook $fn
   done
   [[ ${widgets[autosuggest-suggest]-} == user:_zsh_autosuggest_widget_suggest ]] && zle -N autosuggest-suggest __nextterm_gsuggest
