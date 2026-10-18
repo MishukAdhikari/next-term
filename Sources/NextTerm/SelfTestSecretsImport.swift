@@ -7,7 +7,8 @@ extension SelfTest {
     /// `secretsImportChecks` (its files as they were, the token stored under GITHUB_TOKEN): a move that changes no file
     /// doesn't leave the sheet waiting for Touch ID (K4 problem 2); a file it couldn't check is listed, and the sheet
     /// never says no keys were found (review finding 16, K4 problem 3); closing it cancels its scan, and it plans off the
-    /// main thread (K4 problem 4).
+    /// main thread (K4 problem 4); the key the earlier move stored is used again, not copied (review finding 19); the
+    /// Claude app opened after the scan leaves its file (review finding 17).
     static func secretsImportReportChecks(view: SecretsView, home: URL, token: String, cursorText: String, codexText: String) async {
         let fm = FileManager.default
         let cursor = home.appendingPathComponent(".cursor/mcp.json")
@@ -34,6 +35,10 @@ extension SelfTest {
         guard let refused = view.importSheet else { return check(false, "secrets: Import from MCP Configs… opens its sheet again") }
         _ = await wait(10) { !refused.groupRows.isEmpty }
         let name = refused.groupRows.first?.group.name ?? ""
+        let note = refused.groupRows.first?.nameNote.stringValue ?? ""
+        check(name == "GITHUB_TOKEN" && refused.groupRows.first?.group.reusesStored == true && note == SecretImportSheet.reuseNote,
+              "secrets: the import uses the key an earlier move stored with the same value, and says so", "\(name): \(note)")
+        let storedBefore = SecretsStore.shared.index?.entry(named: name)
         refused.tick(name)
         let rotated = "ghp_" + "Rotated" + secretsValue("")
         let cursorRotated = cursorText.replacingOccurrences(of: token, with: rotated)
@@ -47,9 +52,9 @@ extension SelfTest {
         refused.confirmAlert?.buttons.first?.performClick(nil)
         _ = await wait(15) { !refused.summaryLabel.isHidden }
         let result = refused.groupRows.first?.result.stringValue ?? ""
-        check(name == "GITHUB_TOKEN_2" && refused.summaryLabel.stringValue.hasPrefix("Moved 0 keys from 0 files.")
+        check(refused.summaryLabel.stringValue.hasPrefix("Moved 0 keys from 0 files.")
               && result.contains("GITHUB_TOKEN changed since the scan") && read(cursor) == cursorRotated && read(codex) == codexRotated
-              && presence?.calls == asked && SecretsStore.shared.index?.entry(named: name) == nil,
+              && presence?.calls == asked && storedBefore != nil && SecretsStore.shared.index?.entry(named: name) == storedBefore,
               "secrets: a key rotated in its files after the scan is left in both, with no Touch ID and nothing saved", result)
         check(refused.statusLabel.isHidden && refused.statusLabel.stringValue != SecretImportSheet.touchIDLine,
               "secrets: after a move that changed no file, the sheet doesn't wait for Touch ID", refused.statusLabel.stringValue)
@@ -74,6 +79,11 @@ extension SelfTest {
               "\(status) | \(unchecked.listed)")
         unchecked.closeSheet()
         _ = await wait(5) { view.importSheet == nil }
+
+        // A variable named like a key in Secrets leaves the entry it wraps, named before and after the write (finding #18).
+        await secretsImportDroppedChecks(view: view, home: home)
+        // Whether the Claude app runs is asked again when Move plans (finding #17).
+        await secretsImportOpenAppChecks(view: view, home: home)
     }
 }
 #endif

@@ -11,7 +11,7 @@ extension SelfTest {
         defer { requests.resetForSelfTest() }
         let value = secretsValue("once")
         _ = try? await store.perform(.add(name: "PANEL_KEY", purpose: "the Allow once checks", purposeBy: .agent, origin: .settings,
-                                          writeOnly: true, value: SecretBytes(utf8: value)))
+                                          writeOnly: true, value: SecretBytes(utf8: value), asksEveryUse: false))
 
         // Two run_with_secrets calls with the same command and folder get the same binding (a new tab each): the second
         // takes the first's panel over. One Allow once starts one of them; the other is told it was used already.
@@ -35,6 +35,7 @@ extension SelfTest {
               secretsJSON(toolAnswer))
         await secretsLeftCallerChecks()
         await secretsGrantEndChecks(store)
+        await secretsOtherCopyGrantChecks()
         _ = try? await store.perform(.delete(name: "PANEL_KEY"))
     }
 

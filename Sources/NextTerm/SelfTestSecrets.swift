@@ -36,21 +36,36 @@ extension SelfTest {
         // The tabs and windows run_with_secrets opens come forward at once: the self-test's own keys would hold them back.
         let keysIgnored = UserKeys.ignoredForTest
         UserKeys.ignoredForTest = true
+        // Settings › Secrets' reminder and New keys defaults as on a Mac that never set them: this Mac's own, such as
+        // Never show their values, would change what Add…, the imports and Undo do here.
+        let defaultsName = "nt-selftest-secrets-defaults-\(getpid())"
+        let savedDefaults = SecretReminderRecords.defaults
+        SecretReminderRecords.defaults = UserDefaults(suiteName: defaultsName) ?? savedDefaults
         defer {
             SecretMask.current = savedMask
             UserKeys.ignoredForTest = keysIgnored
             SecretClipboard.shared.pasteboard.releaseGlobally()
+            SecretReminderRecords.defaults = savedDefaults
+            UserDefaults().removePersistentDomain(forName: defaultsName)
+            NotificationCenter.default.post(name: SecretNewKeySettingsView.changed, object: nil)
         }
         await secretsStoreChecks(base)
         await secretsMaskingChecks(c, base: base)
         await secretsPanelChecks(base)
         #if DEBUG
         await secretsAllowOnceChecks()
+        await secretsAskEveryUseChecks()
         #endif
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
+        #if DEBUG
+        await secretsMenuChecks(base: base)
+        #endif
         await secretsImportChecks(base: base)
+        #if DEBUG
+        await secretSourcesChecks(c, base: base)
+        #endif
         await secretsRemoteChecks(proj: proj)
         check(secretsFolderDate(realFolder.url) == realBefore, "secrets: the real Secrets.noindex is untouched (unchanged, or not there)",
               "\(String(describing: realBefore)) → \(String(describing: secretsFolderDate(realFolder.url)))")
@@ -627,8 +642,9 @@ extension SelfTest {
         requests.resetForSelfTest()
         defer { requests.resetForSelfTest() }
         let value = secretsValue("panel")
+        // Unticked "Ask for Touch ID every time it's used", so the panel offers the lasting approvals these check.
         _ = try? await store.perform(.add(name: "PANEL_KEY", purpose: "the panel checks", purposeBy: .agent, origin: .settings,
-                                          writeOnly: true, value: SecretBytes(utf8: value)))
+                                          writeOnly: true, value: SecretBytes(utf8: value), asksEveryUse: false))
 
         // A wrapper's request: Next Term's facts in their own rows, Details, and "until the Mac locks".
         let answers = SecretsAnswers()
@@ -648,8 +664,8 @@ extension SelfTest {
               "secrets: a tab title's control, bidi and zero-width characters are stripped")
         check(SecretApprovalPanel.shownCommand("npm test\r\nnpx -y x\u{202E}\u{200B}", limit: 200) == "npm test\\r\\nnpx -y x\\u{202e}\\u{200b}",
               "secrets: the panel's command shows line breaks, bidi and zero-width characters escaped, never as spaces or taken out")
-        check(shown.contains("(an agent wrote this)") && shown.contains("Write-only"),
-              "secrets: the key's row marks an agent's purpose and the write-only badge")
+        check(shown.contains("(an agent wrote this)") && shown.contains(SecretNewKeyDefaults.neverShownHelp),
+              "secrets: the key's row marks an agent's purpose and that it is never shown")
         check(!window.isKeyWindow && window.collectionBehavior.contains(.canJoinAllSpaces) && window.collectionBehavior.contains(.fullScreenAuxiliary)
               && window.level == .floating && window.styleMask.contains(.nonactivatingPanel)
               && panel.allowButton.keyEquivalent.isEmpty && panel.allowButton.refusesFirstResponder,
@@ -864,8 +880,10 @@ extension SelfTest {
         defer { requests.resetForSelfTest() }
         guard MCPControlServer.shared.isRunning else { return check(false, "secrets: the self-test's MCP socket is up for the wrapper") }
         let value = secretsValue("wrap")
+        // Unticked: these checks need lasting approvals and a card that swaps Allow once for 15 minutes; ASK_KEY covers a key that
+        // asks every time.
         _ = try? await store.perform(.add(name: "WRAP_KEY", purpose: "the wrapper checks", purposeBy: .user, origin: .settings,
-                                          writeOnly: false, value: SecretBytes(utf8: value)))
+                                          writeOnly: false, value: SecretBytes(utf8: value), asksEveryUse: false))
         _ = try? await store.perform(.add(name: "OTHER_KEY", purpose: "", purposeBy: .user, origin: .settings, writeOnly: false,
                                           value: SecretBytes(utf8: secretsValue("other"))))
         defer {
@@ -1099,7 +1117,7 @@ extension SelfTest {
         }
         let value = secretsValue("tool")
         _ = try? await store.perform(.add(name: "TOOL_KEY", purpose: "the tool checks", purposeBy: .user, origin: .settings,
-                                          writeOnly: false, value: SecretBytes(utf8: value)))
+                                          writeOnly: false, value: SecretBytes(utf8: value), asksEveryUse: false))
         await secretsListChecks(value: value)
         await secretsRequestChecks()
         await secretsStoreToolChecks(c, base: base)
@@ -1290,9 +1308,13 @@ extension SelfTest {
               "\(tab?.userTitle ?? "no title"), driven \(isDriven), opened by \(tab?.openedBy?.uuidString ?? "none")")
         let panel = requests.showing?.panel
         let title = panel?.window?.title ?? ""
+        // Under the command, the line that any program running as the user can read the key while it runs (review finding #14).
+        let panelTexts: String = texts(panel?.window?.contentView)
+        let saysReadable: Bool = panelTexts.contains(SecretRun.environmentNote(keys: 1))
         check(title == "A program outside Next Term's tabs asks to run printf with TOOL_KEY"
-              && texts(panel?.window?.contentView).contains("Runs as a shell command") && panel?.durationChoice[.untilLock] == nil,
-              "secrets: the panel shows the command as a shell command, with no until-the-Mac-locks choice", title)
+              && panelTexts.contains("Runs as a shell command") && panel?.durationChoice[.untilLock] == nil && saysReadable,
+              "secrets: the panel shows the command as a shell command, says any program running as you can read the key while "
+                  + "it runs, and has no until-the-Mac-locks choice", title)
         panel?.allowButton.performClick(nil)
         let started = await call.value
         let length = String(value.utf8.count)
@@ -1529,7 +1551,7 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    // MARK: Settings › Secrets and Window › Secrets
+    // MARK: Settings › Secrets and the Secrets window
 
     static func secretsSettingsChecks(base: URL) async {
         let store = SecretsStore.shared
@@ -1537,21 +1559,14 @@ extension SelfTest {
         requests.resetForSelfTest()
         defer { requests.resetForSelfTest() }
 
-        // The last Settings tab, after Skills; Window › Secrets with no key.
+        // The last Settings tab, after Skills. The Secrets menu's own checks (secretsMenuChecks) follow these.
         let tabs = (SettingsWindowController().window?.contentView as? NSTabView)?.tabViewItems.compactMap { $0.identifier as? String } ?? []
         let skills = tabs.firstIndex(of: "skills")
         check(tabs.last == "secrets" && skills.map { $0 < tabs.count - 1 } == true, "secrets: Secrets is the last Settings tab, after Skills",
               tabs.joined(separator: ", "))
-        let windowMenu = NSApp.mainMenu?.items.first { $0.submenu?.title == "Window" }?.submenu
-        let item = windowMenu?.items.first { $0.title == "Secrets" }
-        let afterSkills = windowMenu.map { menu in
-            (menu.items.firstIndex { $0.title == "Skills" } ?? -1) < (menu.items.firstIndex { $0.title == "Secrets" } ?? -1)
-        } ?? false
-        check(item != nil && item?.keyEquivalent == "" && item?.action == #selector(AppDelegate.showSecrets(_:)) && afterSkills,
-              "secrets: Window › Secrets comes after Skills and has no key")
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible else {
-            return check(false, "secrets: Window › Secrets opens its window")
+            return check(false, "secrets: Show Secrets opens the Secrets window")
         }
         defer { window.close() }
         let view = controller.secretsView
@@ -1566,6 +1581,7 @@ extension SelfTest {
             sheet.purposeField.stringValue = "the Settings checks"
             sheet.valueField.stringValue = value
             sheet.writeOnlyBox.state = writeOnly ? .on : .off
+            sheet.asksBox?.state = .off // so Allowed now can list a lasting approval for it
             sheet.refresh()
             sheet.saveButton.performClick(nil)
             _ = await wait(10) { view.entries.contains { $0.name == name } && view.sheet == nil }
@@ -1580,16 +1596,16 @@ extension SelfTest {
               && view.deleteButton.isEnabled && !view.writeOnlyLabel.isHidden && view.writeOnlyLabel.stringValue == SecretsView.writeOnlyLine,
               "secrets: a write-only key has Reveal and Copy off, Edit, Replace and Delete on, and the line under the table")
 
-        // Make Write-Only… asks first; Cancel changes nothing.
+        // Never Show This Key… asks first; Cancel changes nothing.
         view.select("SHOWN_KEY")
         let calls = presence.calls
         view.writeOnlyButton.performClick(nil)
         _ = await wait(5) { view.alert != nil }
-        let asked = view.alert?.messageText == "Make SHOWN_KEY write-only?"
+        let asked = view.alert?.messageText == "Never show SHOWN_KEY again?" && view.writeOnlyButton.title == SecretsView.neverShowTitle
         view.alert?.buttons.last?.performClick(nil)
         _ = await wait(5) { view.alert == nil }
         check(asked && store.index?.entry(named: "SHOWN_KEY")?.writeOnly == false && presence.calls == calls,
-              "secrets: Make Write-Only… asks first, and Cancel changes nothing")
+              "secrets: Never Show This Key… asks first, and Cancel changes nothing")
 
         // Copy, on the self-test's own pasteboard: this Mac only, both markers, cleared after the delay unless changed.
         let clipboard = SecretClipboard.shared
@@ -1625,6 +1641,29 @@ extension SelfTest {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         check(clipboard.pasteboard.string(forType: .string) == "something else" && NSPasteboard.general.changeCount == general,
               "secrets: what was copied since is kept, and the general pasteboard was never touched")
+        // A lock's and the quit's clear, within the window, through what the clipboard hears (review finding #11): the copy
+        // still there goes, something copied over it stays. The lock is Secrets' own lock event. The quit is posted to a
+        // stand-in clipboard's own notification center, on its own pasteboard, so nothing else hears it.
+        clipboard.clearAfter = 60
+        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-lock-0123"))
+        SecretsStore.shared.handleLockEvent(.screenLocked)
+        let clearedAtLock: Bool = await wait(5) { clipboard.pasteboard.string(forType: .string) == nil && clipboard.copiedCount == nil }
+        clipboard.copy(SecretBytes(utf8: "selftest-copied-at-lock-4567"))
+        clipboard.pasteboard.clearContents()
+        clipboard.pasteboard.setString("something else", forType: .string)
+        SecretsStore.shared.handleLockEvent(.systemSleep)
+        _ = await wait(2) { clipboard.copiedCount == nil }
+        let keptAtLock: Bool = clipboard.pasteboard.string(forType: .string) == "something else" && clipboard.copiedCount == nil
+        check(clearedAtLock && keptAtLock, "secrets: the Mac locking or sleeping within the 60 seconds clears a copied key still on the "
+              + "clipboard, and keeps what was copied over it")
+        let center = NotificationCenter()
+        let quitting = SecretClipboard(pasteboard: NSPasteboard(name: NSPasteboard.Name("NextTermSelfTest-\(UUID().uuidString)")), center: center)
+        defer { quitting.pasteboard.releaseGlobally() }
+        quitting.copy(SecretBytes(utf8: "selftest-copied-at-quit-0123"))
+        let copiedBeforeQuit: Bool = quitting.pasteboard.string(forType: .string) != nil && quitting.copiedCount != nil
+        center.post(name: NSApplication.willTerminateNotification, object: NSApp)
+        let clearedAtQuit: Bool = quitting.pasteboard.string(forType: .string) == nil && quitting.copiedCount == nil
+        check(copiedBeforeQuit && clearedAtQuit, "secrets: quitting within the 60 seconds clears a copied key still on the clipboard")
 
         // Reveal shows the value in a field that can't be selected: only Copy puts a value on a pasteboard.
         view.select("SHOWN_KEY")
@@ -1635,6 +1674,10 @@ extension SelfTest {
         view.closeReveal()
         #if DEBUG
         await secretsRevealEndChecks(presence: presence, shownValue: shownValue)
+        // A paste counts for a value field only when it reaches it (review finding #24).
+        await secretsPasteFieldChecks(view: view)
+        // A reload keeps the selected key by its name (review finding #25).
+        await secretsSelectionChecks(view: view)
         #endif
 
         // Allowed now lists a grant, and Revoke ends it.
@@ -1736,7 +1779,7 @@ extension SelfTest {
         SecretsView.importSetup = { setup }
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window else {
-            return check(false, "secrets: Window › Secrets for the import checks")
+            return check(false, "secrets: the Secrets window for the import checks")
         }
         defer { window.close() }
         let view = controller.secretsView
@@ -1782,7 +1825,7 @@ extension SelfTest {
         _ = await wait(5) { sheet.confirmAlert != nil }
         let confirm = sheet.confirmAlert
         check(confirm?.messageText == "Move 1 key into Secrets?" && confirm?.informativeText.contains(".cursor/mcp.json") == true
-              && confirm?.informativeText.contains(SecretImportSheet.startsAfter) == true,
+              && confirm?.informativeText.contains(SecretImportSheet.startsAfter(asksEveryUse: true)) == true,
               "secrets: the confirm names the files and says how the servers start afterwards", confirm?.informativeText ?? "")
         confirm?.buttons.first?.performClick(nil)
         _ = await wait(15) { !sheet.summaryLabel.isHidden }

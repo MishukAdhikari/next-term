@@ -1,0 +1,108 @@
+import Foundation
+import Testing
+@testable import NextTermCore
+
+/// What a large or crafted file costs the import: a `.env` past the editor's size, a file past the values read, the
+/// same name in thousands of sections, and a browser's CSV or an export of thousands of sites, each refused or read in
+/// a few seconds. Every value here is made up.
+@Suite struct SecretSourcesScaleTests {
+    typealias F = SecretSourcesFixtures
+
+    /// A made-up value of 30 characters, different for each number: its tail in base 36 after dashes, which no digit
+    /// of it is.
+    private static func value(_ number: Int) -> String {
+        let tail = String(number, radix: 36)
+        return "Qm4Rt8Vx2Bn6Lp9Zc3Hd7" + String(repeating: "-", count: 9 - tail.count) + tail
+    }
+
+    @Test func theSameNameInThousandsOfSectionsIsNamedInOnePass() {
+        let count = 12_000
+        let rows: [SourceRow] = (0..<count).map { (number: Int) -> SourceRow in
+            SourceRow(name: "OPENAI_API_KEY", text: Self.value(number), kind: "OpenAI key",
+                      place: "s\(number).OPENAI_API_KEY", line: nil, ticked: true, scope: "s\(number)")
+        }
+        var named: [SourceRow] = []
+        let elapsed: Duration = ContinuousClock().measure { named = SecretSources.sectioned(rows) }
+        #expect(elapsed < .seconds(5), "\(elapsed)")
+        #expect(named.count == count)
+        #expect(Set(named.map(\.name)).count == count)
+        #expect(named.first?.name == "OPENAI_API_KEY_S0")
+    }
+
+    @Test func aDotEnvPastTheEditorsSizeIsRefusedUnread() {
+        var data: [UInt8] = Array(String(repeating: "K=\"x\n", count: EnvFile.maxSize / 5 + 1).utf8)
+        var report: SourceReport?
+        let elapsed: Duration = ContinuousClock().measure { report = SecretSources.read(&data, name: ".env") }
+        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(report?.unreadable == .envTooLarge)
+        #expect(report?.unreadable?.reasonClass == "too large")
+        #expect(data.allSatisfy { (byte: UInt8) -> Bool in byte == 0 })
+    }
+
+    @Test func aFilePastTheValuesReadStopsReadingThere() {
+        // 10 bytes a line: past the values read, under the editor's size.
+        let lines = String(repeating: "A=Qm4Rt8X\n", count: SecretSources.maxValues + 2)
+        #expect(lines.utf8.count <= EnvFile.maxSize)
+        #expect(SecretSources.envFound(lines, file: ".env").count == SecretSources.maxValues + 1)
+        #expect(F.report(lines, name: ".env").unreadable == .tooMany)
+        // A quote left open on each line has the reader look 200 lines ahead from each: refused before it reads.
+        let unclosed = String(repeating: "K=\"x\n", count: SecretSources.maxValues + 1)
+        var report: SourceReport?
+        let elapsed: Duration = ContinuousClock().measure { report = F.report(unclosed, name: ".env") }
+        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(report?.unreadable == .tooMany)
+    }
+
+    @Test func aFiveMegabyteJSONFileIsRefusedInSeconds() {
+        var entries: [String] = []
+        var size = 2
+        var number = 0
+        while size < SecretSources.maxBytes - 100 {
+            let entry = #"{"OPENAI_API_KEY":""# + Self.value(number) + #""}"#
+            entries.append(entry)
+            size += entry.utf8.count + 1
+            number += 1
+        }
+        var data: [UInt8] = Array(("[" + entries.joined(separator: ",") + "]").utf8)
+        #expect(data.count <= SecretSources.maxBytes)
+        var report: SourceReport?
+        let elapsed: Duration = ContinuousClock().measure { report = SecretSources.read(&data, name: "keys.json") }
+        #expect(elapsed < .seconds(10), "\(elapsed)")
+        #expect(report?.unreadable == .tooMany)
+    }
+
+    /// A browser's CSV and a Bitwarden export of `count` sites.
+    private static func exports(_ count: Int) -> (csv: [UInt8], json: [UInt8]) {
+        var lines: [String] = ["name,url,username,password,note"]
+        var items: [String] = []
+        for number in 0..<count {
+            let site = "site\(number).example.com"
+            lines.append("\(site),https://\(site)/login,made-up-user,\(Self.value(number)),")
+            let login = #"{"uris": [{"uri": "https://\#(site)/"}], "password": "\#(Self.value(number))"}"#
+            items.append(#"{"type": 1, "name": "Site \#(number)", "login": \#(login)}"#)
+        }
+        let csv: [UInt8] = Array((lines.joined(separator: "\n") + "\n").utf8)
+        let export = #"{"encrypted": false, "folders": [], "items": ["# + items.joined(separator: ",") + "]}"
+        return (csv, Array(export.utf8))
+    }
+
+    /// A browser's CSV and a Bitwarden export of 5,000 sites each: every row named and linked in seconds, so a step
+    /// that grows with the square of the rows shows here. The sheet lists as many as it lists, in the file's order,
+    /// each with its link, and the website passwords past them are counted.
+    @Test func aLargeBrowserCSVAndExportAreReadInSeconds() {
+        let count = 5_000
+        var (csv, json) = Self.exports(count)
+        var browser: SourceReport?
+        var bitwarden: SourceReport?
+        let clock = ContinuousClock()
+        let csvTime: Duration = clock.measure { browser = SecretSources.read(&csv, name: "Chrome Passwords.csv") }
+        let jsonTime: Duration = clock.measure { bitwarden = SecretSources.read(&json, name: "bitwarden.json") }
+        #expect(csvTime < .seconds(15) && jsonTime < .seconds(15), "\(csvTime), \(jsonTime)")
+        let listed: Int = SecretSources.maxListed
+        #expect(browser?.exportedBy == "Chrome" && browser?.unreadable == nil)
+        #expect(browser?.rows.count == listed && browser?.unlisted == count - listed)
+        #expect(bitwarden?.format == .bitwarden && bitwarden?.unreadable == nil)
+        #expect(bitwarden?.rows.count == listed && bitwarden?.unlisted == count - listed)
+        #expect(browser?.rows.last?.link?.url.host == "site\(listed - 1).example.com")
+    }
+}

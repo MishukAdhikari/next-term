@@ -125,13 +125,36 @@ enum SecretReason {
     static func show(_ name: String) -> String { "show \(name)" }
     static func copy(_ name: String) -> String { "copy \(name)" }
     static func delete(_ name: String) -> String { "delete \(name)" }
-    static func makeWriteOnly(_ name: String) -> String { "make \(name) write-only" }
+    /// Never Show This Key…
+    static func makeWriteOnly(_ name: String) -> String { "stop showing \(name)" }
+    /// "Ask for Touch ID every time it's used", ticked (`asks`) or unticked.
+    static func changeAsking(_ name: String, asks: Bool) -> String {
+        asks ? "ask every time \(name) is used" : "stop asking every time \(name) is used"
+    }
+    /// Another change in Edit…, with the box unticked too: "rename A to B and stop asking every time it’s used".
+    static func andStopAsking(_ reason: String) -> String { reason + " and stop asking every time it\u{2019}s used" }
     static func changePurpose(_ name: String) -> String { "change what \(name) is for" }
     static func rename(_ name: String, to newName: String) -> String { "rename \(name) to \(newName)" }
+    static func changeLink(_ name: String) -> String { "change \(name)’s page" }
+    static func changeReminder(_ name: String) -> String { "change when to remind you to rotate \(name)" }
+    /// More than one of what it's for, its page and its reminder.
+    static func changeDetails(_ name: String) -> String { "change \(name)’s details" }
+    /// Opening a key's page after vault.json changed since Next Term last wrote or checked it.
+    static func checkLink(_ name: String) -> String { "check \(name)’s page" }
     static func replace(_ name: String) -> String { "replace \(name)" }
+    /// A key rotation: Rotate…'s Save.
+    static func rotate(_ name: String) -> String { "rotate \(name)" }
     static func replaceWithAgentsKey(_ name: String) -> String { "replace \(name) with the agent’s key" }
     static func moveOut(_ count: Int) -> String { "move \(count) \(count == 1 ? "key" : "keys") out of your MCP configs" }
     static func putBack(_ count: Int) -> String { "put \(count) \(count == 1 ? "key" : "keys") back into your MCP configs" }
+    /// Import From › A File…: "copy 3 keys from .env", the file's name only.
+    static func copyIn(_ count: Int, from source: String) -> String {
+        "copy \(count) \(count == 1 ? "key" : "keys") from \(source)"
+    }
+    /// Undo of a copy-in: the keys it added are deleted.
+    static func removeCopied(_ count: Int) -> String {
+        "delete \(count) \(count == 1 ? "key" : "keys") an import copied in"
+    }
 
     /// "GITHUB_TOKEN", "A and B", or "5 keys" for three or more.
     static func keys(_ names: [String]) -> String {

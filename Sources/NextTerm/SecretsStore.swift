@@ -54,21 +54,83 @@ final class SecretsStore {
         case displaySleep
     }
 
+    /// A key Add… saves, with its facts. A new fact is a member here, with a default, so no match on `Action` changes.
+    struct NewKey {
+        var name: String
+        var purpose: String
+        var purposeBy: SecretVault.PurposeBy
+        var origin: SecretVault.Origin
+        var writeOnly: Bool
+        var value: SecretBytes
+        /// "Where it came from", checked against the stored keys and the value before Touch ID is asked.
+        var link: String?
+        var linkFrom: SecretVault.LinkFrom?
+        var remindDays: Int?
+        /// "Ask for Touch ID every time it's used".
+        var asksEveryUse: Bool = true
+    }
+
+    /// What Edit… changes. Nil leaves a fact as it is; for `link` and `remindDays`, `.some(nil)` clears it.
+    struct KeyEdit {
+        var name: String
+        var newName: String?
+        var purpose: String?
+        var purposeBy: SecretVault.PurposeBy
+        var link: String??
+        var linkFrom: SecretVault.LinkFrom?
+        var remindDays: Int??
+        /// "Ask for Touch ID every time it's used", ticked or unticked.
+        var asksEveryUse: Bool? = nil
+
+        /// How many of what it's for, its page, its reminder and whether it asks every time this changes.
+        var factsChanged: Int {
+            let changes: [Bool] = [purpose != nil, link != nil, remindDays != nil, asksEveryUse != nil]
+            return changes.filter { (changed: Bool) -> Bool in changed }.count
+        }
+    }
+
+    /// What Rotate… saves: the new value, made at the provider, and the page and reminder set in its sheet. For `link`
+    /// and `remindDays`, nil leaves them as they are and `.some(nil)` clears them.
+    struct KeyRotation {
+        var name: String
+        var value: SecretBytes
+        var link: String?? = nil
+        var linkFrom: SecretVault.LinkFrom? = nil
+        var remindDays: Int?? = nil
+    }
+
     enum Action {
-        case add(name: String, purpose: String, purposeBy: SecretVault.PurposeBy, origin: SecretVault.Origin, writeOnly: Bool,
-                 value: SecretBytes)
-        case edit(name: String, newName: String?, purpose: String?, purposeBy: SecretVault.PurposeBy)
+        case add(NewKey)
+        case edit(KeyEdit)
         case replace(name: String, value: SecretBytes, writeOnly: Bool, origin: SecretVault.Origin?)
+        /// A key rotation: the old value stays masked for 30 days.
+        case rotate(KeyRotation)
         case makeWriteOnly(name: String)
         case delete(name: String)
         case reveal(name: String)
         case copy(name: String)
         case use(names: [String])
 
+        static func add(name: String, purpose: String, purposeBy: SecretVault.PurposeBy, origin: SecretVault.Origin,
+                        writeOnly: Bool, value: SecretBytes, link: String? = nil, linkFrom: SecretVault.LinkFrom? = nil,
+                        remindDays: Int? = nil, asksEveryUse: Bool = true) -> Action {
+            .add(NewKey(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value,
+                        link: link, linkFrom: linkFrom, remindDays: remindDays, asksEveryUse: asksEveryUse))
+        }
+
+        static func edit(name: String, newName: String?, purpose: String?, purposeBy: SecretVault.PurposeBy,
+                         link: String?? = nil, linkFrom: SecretVault.LinkFrom? = nil, remindDays: Int?? = nil,
+                         asksEveryUse: Bool? = nil) -> Action {
+            .edit(KeyEdit(name: name, newName: newName, purpose: purpose, purposeBy: purposeBy, link: link, linkFrom: linkFrom,
+                          remindDays: remindDays, asksEveryUse: asksEveryUse))
+        }
+
         var names: [String] {
             switch self {
-            case .add(let name, _, _, _, _, _), .edit(let name, _, _, _), .replace(let name, _, _, _), .makeWriteOnly(let name),
-                 .delete(let name), .reveal(let name), .copy(let name):
+            case .add(let key): return [key.name]
+            case .edit(let change): return [change.name]
+            case .rotate(let change): return [change.name]
+            case .replace(let name, _, _, _), .makeWriteOnly(let name), .delete(let name), .reveal(let name), .copy(let name):
                 return [name]
             case .use(let names):
                 return names
@@ -80,6 +142,7 @@ final class SecretsStore {
             case .add: return .add
             case .edit: return .edit
             case .replace: return .replace
+            case .rotate: return .rotate
             case .makeWriteOnly: return .writeOnly
             case .delete: return .delete
             case .reveal: return .reveal
@@ -91,11 +154,17 @@ final class SecretsStore {
         /// The sheet's reason when the caller gives none.
         var reason: String {
             switch self {
-            case .add(let name, _, _, _, _, _): return SecretReason.save(name)
-            case .edit(let name, let newName, _, _):
-                if let newName, newName != name { return SecretReason.rename(name, to: newName) }
-                return SecretReason.changePurpose(name)
+            case .add(let key): return SecretReason.save(key.name)
+            case .edit(let change):
+                // Unticking "Ask for Touch ID every time it's used" is named even beside other changes.
+                guard change.asksEveryUse == false else { return Self.editReason(change) }
+                var others = change
+                others.asksEveryUse = nil
+                let renames: Bool = others.newName != nil && others.newName != others.name
+                guard renames || others.factsChanged > 0 else { return Self.editReason(change) }
+                return SecretReason.andStopAsking(Self.editReason(others))
             case .replace(let name, _, _, _): return SecretReason.replace(name)
+            case .rotate(let change): return SecretReason.rotate(change.name)
             case .makeWriteOnly(let name): return SecretReason.makeWriteOnly(name)
             case .delete(let name): return SecretReason.delete(name)
             case .reveal(let name): return SecretReason.show(name)
@@ -104,18 +173,54 @@ final class SecretsStore {
             }
         }
 
+        /// Edit…'s reason for what `change` changes.
+        private static func editReason(_ change: KeyEdit) -> String {
+            let name = change.name
+            if let newName = change.newName, newName != name { return SecretReason.rename(name, to: newName) }
+            if change.factsChanged > 1 { return SecretReason.changeDetails(name) }
+            if change.link != nil { return SecretReason.changeLink(name) }
+            if change.remindDays != nil { return SecretReason.changeReminder(name) }
+            if let asks = change.asksEveryUse { return SecretReason.changeAsking(name, asks: asks) }
+            return SecretReason.changePurpose(name)
+        }
+
         var isAdd: Bool {
             if case .add = self { return true }
             return false
+        }
+
+        /// Why a link this sets can't be kept, checked on the Mac before Touch ID is asked: the vault checks it again
+        /// with no stored keys at hand, so the stored keys (`holdsStoredKey`) and the value being added are looked for
+        /// here.
+        var linkRefusal: SecretLink.Refusal? {
+            let text: String?
+            var value: SecretBytes?
+            switch self {
+            case .add(let key):
+                text = key.link
+                value = key.value
+            case .edit(let change):
+                text = change.link ?? nil
+            case .rotate(let change):
+                text = change.link ?? nil
+                value = change.value
+            default:
+                return nil
+            }
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            let mask: (String) -> Bool = { (candidate: String) -> Bool in SecretsStore.holdsStoredKey(candidate) }
+            guard case .failure(let refusal) = SecretLink.check(text, mask: mask, value: value) else { return nil }
+            return refusal
         }
 
         /// The keys whose value or name this changes, so the grants holding them end.
         var changedNames: [String]? {
             switch self {
             case .replace(let name, _, _, _), .delete(let name): return [name]
-            case .edit(let name, let newName, _, _):
-                guard let newName, newName != name else { return nil }
-                return [name]
+            case .rotate(let change): return [change.name]
+            case .edit(let change):
+                guard let newName = change.newName, newName != change.name else { return nil }
+                return [change.name]
             default: return nil
             }
         }
@@ -142,9 +247,12 @@ final class SecretsStore {
         case vault(SecretVault.Failure)
         case folder(SecretFolder.Failure)
         case keyring
+        /// The key has no "Where it came from" link (any more).
+        case noPage(String)
 
         var errorDescription: String? {
             switch self {
+            case .noPage(let name): return "\(name) has no page."
             case .cancelled: return "Not approved."
             case .unavailable: return UserPresence.Failure.unavailable.errorDescription
             case .vault(let failure): return failure.errorDescription
@@ -165,6 +273,8 @@ final class SecretsStore {
     /// The names, what each is for, flags and dates, read with no key.
     private(set) var index: SecretVault.Index?
     private(set) var protection: Protection = .none
+    /// Whether `load()` has run: until then `protection` hasn't said whether the keys open on this Mac.
+    private(set) var hasLoaded = false
     /// For each name, its newest `use` line.
     private(set) var lastUse: [String: SecretAudit.Line] = [:]
     /// True while an action uses the login keychain, which every one does: an unlock reads the record, a first add
@@ -173,7 +283,14 @@ final class SecretsStore {
     /// With `protection` `.tampered`: the vault was refused because this Mac has no record of the vaults Next Term made,
     /// not because its file changed, so Settings says that instead of the tamper text.
     private(set) var isUnlisted = false
+    /// With `protection` `.tampered`: vault.json is larger than Next Term reads (a copy before the write cap wrote it),
+    /// not changed, so Settings says that instead of the tamper text.
+    private(set) var isTooLarge = false
     private var indexDate: Date?
+    /// The bytes of vault.json Next Term last wrote, or last read and MAC-checked in an unlock. A link opens with no
+    /// unlock only from those bytes: lists read the index with no MAC check, and any process of the user's can write
+    /// the file and set its date.
+    private var vouch: SecretLink.Vouch?
     private var observers: [NSObjectProtocol] = []
 
     init(folder: SecretFolder, presence: PresenceCheck, newKeyring: @escaping () throws -> VaultKeyring,
@@ -240,10 +357,13 @@ final class SecretsStore {
         // The code hash a wrapper must have is read now, at launch, from the program that is running, not at the first
         // request, when the file at its path may have been replaced.
         _ = PeerCode.current
+        // The date before the read: a file another copy writes in between is read again at the next check, never
+        // taken as seen.
+        let date = folder.modificationDate(of: SecretFolder.vaultName)
         guard folder.exists, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
               let index = try? SecretVault.index(from: data) else { return }
         self.index = index
-        indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+        indexDate = date
         publishMarks()
     }
 
@@ -262,28 +382,38 @@ final class SecretsStore {
     func load() async {
         let folder = folder
         let keyring = keyring
-        let found = await onQueue { () -> (SecretVault.Index?, Protection, Data) in
+        let found = await onQueue { () -> (SecretVault.Index?, Protection, Data, Bool, Date?) in
             let audit = folder.exists ? folder.readAudit() : Data()
-            guard folder.exists else { return (nil, .none, audit) }
+            guard folder.exists else { return (nil, .none, audit, false, nil) }
+            // The date before the read: a file another copy writes in between is read again at the next check.
+            let date = folder.modificationDate(of: SecretFolder.vaultName)
             let data: Data?
             do {
                 data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
             } catch {
-                return (nil, .tampered, audit)
+                return (nil, .tampered, audit, SecretVault.isTooLarge(error), date)
             }
-            guard let data else { return (nil, .none, audit) }
-            guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit) }
+            guard let data else { return (nil, .none, audit, false, date) }
+            guard let index = try? SecretVault.index(from: data) else { return (nil, .tampered, audit, false, date) }
             let opens = keyring(index).check(publicKey: index.publicKey)
-            return (index, opens ? Self.protection(of: index) : .cantOpen, audit)
+            return (index, opens ? Self.protection(of: index) : .cantOpen, audit, false, date)
         }
         index = found.0
         protection = found.1
         isUnlisted = false
+        isTooLarge = found.3
         lastUse = SecretAudit.lastUse(in: found.2)
-        indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+        indexDate = found.4
+        hasLoaded = true
         publishMarks()
         if !SelfTest.isRequested { startObserving() }
         NotificationCenter.default.post(name: Self.changed, object: self)
+    }
+
+    /// What an action on a vault refused at load or since throws.
+    private var refusal: Failure {
+        if isTooLarge { return .vault(.tooLarge) }
+        return .vault(isUnlisted ? .unlisted : .tampered)
     }
 
     nonisolated static func protection(of index: SecretVault.Index) -> Protection {
@@ -294,7 +424,9 @@ final class SecretsStore {
     }
 
     /// `vault.json` read again when its modification date changed (another copy of Next Term saved it): before each
-    /// operation, and when Next Term becomes active.
+    /// operation, before a grant answers, and when Next Term becomes active. Keys the other copy replaced, renamed or
+    /// deleted are posted in `keysChanged`, as a change here posts them, so the grants holding them end; all of them when
+    /// the file can no longer be read. The check is one `lstat` while the date is the same.
     func reloadIfChanged() {
         let date = folder.modificationDate(of: SecretFolder.vaultName)
         guard date != indexDate else { return }
@@ -304,20 +436,34 @@ final class SecretsStore {
             index = nil
             protection = .none
             isUnlisted = false
+            isTooLarge = false
             NotificationCenter.default.post(name: Self.changed, object: self)
             NotificationCenter.default.post(name: Self.startedOver, object: self)
             return
         }
-        let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
-        if let data, let read = try? SecretVault.index(from: data) {
+        var data: Data?
+        var tooLarge = false
+        do {
+            data = try folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize)
+        } catch {
+            tooLarge = SecretVault.isTooLarge(error)
+        }
+        let earlier = index
+        let read: SecretVault.Index? = data.flatMap { try? SecretVault.index(from: $0) }
+        if let read {
             index = read
             if protection == .none { protection = Self.protection(of: read) }
         } else {
             protection = .tampered
             isUnlisted = false
+            isTooLarge = tooLarge
         }
         publishMarks()
         NotificationCenter.default.post(name: Self.changed, object: self)
+        let changedNames = SecretVault.Index.changedNames(from: earlier, to: read)
+        if !changedNames.isEmpty {
+            NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": changedNames])
+        }
     }
 
     /// The observers of the Mac locking, sleeping and the session resigning, and of Next Term becoming active. Not in
@@ -358,9 +504,10 @@ final class SecretsStore {
     @discardableResult
     func perform(_ action: Action, reason: String? = nil, facts: Facts = Facts()) async throws -> [String: SecretBytes] {
         reloadIfChanged()
-        if protection == .tampered { throw Failure.vault(isUnlisted ? .unlisted : .tampered) }
+        if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !action.isAdd { throw Failure.vault(.noSuchKey(action.names.first ?? "")) }
+        if let refusal = action.linkRefusal { throw Failure.vault(.badLink(refusal)) }
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
         let token: AnyObject
         do {
@@ -374,27 +521,60 @@ final class SecretsStore {
         let keyring = keyring
         let newKeyring = newKeyring
         let record = record
+        #if DEBUG
+        let afterLock = afterLockForSelfTest
+        #endif
         let result = await onQueue { () -> Result<Work, Error> in
-            Result {
+            let result = Result {
                 try Self.work(action, facts: facts, folder: folder, keyring: keyring, newKeyring: newKeyring, record: record,
                               token: token)
             }
+            #if DEBUG
+            afterLock?()
+            #endif
+            return result
         }
         setWaitingForKeychain(false)
         switch result {
         case .success(let work):
-            if let changed = work.index { index = changed }
-            if protection == .none, let index { protection = Self.protection(of: index) }
-            indexDate = folder.modificationDate(of: SecretFolder.vaultName)
+            let earlier = index
+            took(work)
             if action.event == .use, let line = work.line { for name in action.names { lastUse[name] = line } }
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
-            if let names = action.changedNames { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": names]) }
+            postKeysChanged(action.changedNames ?? [], since: earlier)
             return work.values
         case .failure(let error):
             reloadIfChanged() // new marks for a mask.key made again stay, even when the action failed
             throw handle(error, action: action, facts: facts)
         }
+    }
+
+    #if DEBUG
+    /// The self-test's: runs on the store's queue once a perform has let the vault's lock go, before the main actor
+    /// takes its result, where another copy's write may land.
+    var afterLockForSelfTest: (() -> Void)?
+    #endif
+
+    /// The index a change left under the vault's lock, with vault.json's date taken there too: a write by another copy
+    /// after the lock was let go has another date, so the next check reads it.
+    private func took(_ work: Work) {
+        if let changed = work.index {
+            index = changed
+            indexDate = work.date
+        }
+        if let vouched = work.vouch { vouch = vouched }
+        if protection == .none, let index { protection = Self.protection(of: index) }
+    }
+
+    /// `keysChanged` for `names` (what this change replaced, renamed or deleted) and for the keys another copy changed
+    /// since this copy had `earlier` (while Touch ID was asked, before this change took the lock), so the grants
+    /// holding any of them end.
+    private func postKeysChanged(_ names: [String], since earlier: SecretVault.Index?) {
+        var all = names
+        for name in SecretVault.Index.changedNames(from: earlier, to: index) where !all.contains(name) { all.append(name) }
+        guard !all.isEmpty else { return }
+        NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": all])
     }
 
     /// What a failed perform says, and what it leaves: a tampered or unlisted vault is noted, with a `tamper` line, and a
@@ -413,6 +593,7 @@ final class SecretsStore {
         if failure == .vault(.tampered) || failure == .vault(.unlisted) {
             protection = .tampered
             isUnlisted = failure == .vault(.unlisted)
+            isTooLarge = false
             let outcome = isUnlisted ? "refused: no record of this Mac's vaults" : "refused"
             let line = SecretAudit.Line(event: .tamper, names: action.names, who: facts.who, command: facts.command,
                                         folder: facts.folder, outcome: outcome)
@@ -433,8 +614,12 @@ final class SecretsStore {
     /// What a perform did, off the main thread.
     struct Work {
         var index: SecretVault.Index?
+        /// vault.json's modification date, taken under the lock after the change.
+        var date: Date?
         var values: [String: SecretBytes] = [:]
         var line: SecretAudit.Line?
+        /// The bytes the unlock MAC-checked, or the change wrote.
+        var vouch: SecretLink.Vouch?
     }
 
     /// Under the vault's lock: unlock (or make the vault, for the first add), the change, the write; then the audit line.
@@ -448,8 +633,14 @@ final class SecretsStore {
             try apply(action, to: vault, maskKey: maskKey, values: &values, earlier: &earlier)
         }
         work.values = values
+        // A use records the approval Allow keeps, by the vault this unlock checked: a box ticked in another copy
+        // during Touch ID makes it Allow once (`SecretRequests.allowed`).
+        var approval: SecretAudit.Approval? = facts.approval
+        if case .use(let names) = action {
+            approval = SecretApprovalChoices.recorded(facts.approval, names: names, in: work.index)
+        }
         let line = SecretAudit.Line(event: action.event, names: action.names, who: facts.who, command: facts.command,
-                                    folder: facts.folder, approval: facts.approval, outcome: "done",
+                                    folder: facts.folder, approval: approval, outcome: "done",
                                     earlierOrigin: earlier?.rawValue)
         try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
         work.line = line
@@ -540,8 +731,11 @@ final class SecretsStore {
                 }
                 return data
             }
+            work.date = folder.modificationDate(of: SecretFolder.vaultName)
         }
         work.index = vault?.index
+        // Unlocked, its MAC checked, and written when the change made a new file: those are the bytes on disk now.
+        work.vouch = vault.map { (opened: SecretVault) -> SecretLink.Vouch in SecretLink.Vouch(file: opened.file) }
         return work
     }
 
@@ -560,6 +754,52 @@ final class SecretsStore {
         made.discard()
     }
 
+    // MARK: a key's page
+
+    /// Whether a text holds a stored key's value, as masking finds them: a link must not.
+    nonisolated static func holdsStoredKey(_ text: String) -> Bool {
+        SecretMask.current.masked(text).count > 0
+    }
+
+    /// The link a key's row shows and its menu names, checked again as it is shown: nil when it has none. The index
+    /// it reads had no MAC check, so opening it goes through `checkedPage(of:)`.
+    func pageLink(of name: String) -> Result<URL, SecretLink.Refusal>? {
+        guard let link = index?.entry(named: name)?.link else { return nil }
+        let mask: (String) -> Bool = { (candidate: String) -> Bool in Self.holdsStoredKey(candidate) }
+        return SecretLink.check(link, mask: mask, value: nil)
+    }
+
+    /// The page to open for a key, from vault.json's bytes as Next Term last wrote or checked them: read now, and when
+    /// they are still those, its index is read from them. When they aren't (another process wrote the file since, or
+    /// none was checked since launch), an unlock checks them first: one Touch ID, "check NAME's page", whose MAC check
+    /// either vouches for the file or reports it as changed outside Next Term. The link is checked again before it is
+    /// handed back; the caller opens it with `ServiceLinks.open`.
+    func checkedPage(of name: String) async throws -> URL {
+        reloadIfChanged()
+        if protection == .tampered { throw refusal }
+        if protection == .cantOpen { throw Failure.vault(.cantOpen) }
+        var checked: SecretVault.Index? = vouchedIndex()
+        if checked == nil {
+            // The index from the bytes that unlock MAC-checked, as it handed it back: not `self.index`, which a reload
+            // from disk could replace before this reads it.
+            checked = try await run(makes: false, names: [name], reason: SecretReason.checkLink(name),
+                                    change: { (_: SecretVault, _: SymmetricKey?) -> Data? in nil }, line: nil)
+        }
+        guard let link = checked?.entry(named: name)?.link else { throw Failure.noPage(name) }
+        let mask: (String) -> Bool = { (candidate: String) -> Bool in Self.holdsStoredKey(candidate) }
+        switch SecretLink.check(link, mask: mask, value: nil) {
+        case .success(let url): return url
+        case .failure(let refusal): throw Failure.vault(.badLink(refusal))
+        }
+    }
+
+    /// The index of vault.json as it is now, when its bytes are the ones Next Term vouches for; else nil.
+    private func vouchedIndex() -> SecretVault.Index? {
+        guard let vouch, let data = try? folder.read(SecretFolder.vaultName, cap: SecretVault.maxFileSize),
+              vouch.covers(data) else { return nil }
+        return try? SecretVault.index(from: data)
+    }
+
     // MARK: the import
 
     /// A key the import saves.
@@ -567,23 +807,35 @@ final class SecretsStore {
         var name: String
         var purpose: String
         var value: SecretBytes
+        /// "Never show": saved write-only.
+        var writeOnly: Bool = false
     }
 
     /// One Touch ID for an import: saves its keys (origin `import`) and seals each backup's kept values under the vault
-    /// key. Returns the sealed boxes by backup id. Nothing is saved on a failure.
-    func performImport(_ keys: [ImportKey], kept: [String: [SecretBytes]], reason: String) async throws -> [String: Data] {
+    /// key. A key an earlier move stored with the same value is kept as it is (`SecretVault.isReusable`). Returns the
+    /// sealed boxes by backup id, and the names it stored itself. Nothing is saved on a failure.
+    func performImport(_ keys: [ImportKey], kept: [String: [SecretBytes]],
+                       reason: String) async throws -> (boxes: [String: Data], stored: Set<String>) {
         var boxes: [String: Data] = [:]
+        var stored = Set<String>()
         let names = keys.map(\.name)
+        let remindDays: Int? = SecretReminderRecords.newKeyDays // new keys start with Settings › Secrets' reminder
+        let asks: Bool = SecretNewKeyDefaults.asksEveryUse // and its New keys default
         try await run(makes: true, names: names, reason: reason) { vault, maskKey in
             var file: Data?
+            stored = [] // the change may run again, on a vault.json read again
             for key in keys {
-                file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: false, value: key.value,
-                                     maskKey: maskKey)
+                // Stored by an earlier try whose file was left as it was: the same value under that name is used as
+                // it is, not stored twice. Another value, or a key not a move's, is refused, as add refuses it.
+                if try vault.isReusable(key.name, for: key.value) { continue }
+                file = try vault.add(name: key.name, purpose: key.purpose, purposeBy: .user, origin: .import, writeOnly: key.writeOnly,
+                                     value: key.value, remindDays: remindDays, asksEveryUse: asks, maskKey: maskKey)
+                stored.insert(key.name)
             }
             for (id, values) in kept where !values.isEmpty { boxes[id] = try vault.sealBackup(values, id: id) }
             return file
         } line: { SecretAudit.Line(event: .import, names: names, outcome: "moved \(names.count) \(names.count == 1 ? "key" : "keys")") }
-        return boxes
+        return (boxes, stored)
     }
 
     /// One Touch ID for an Undo: the keys' values and each backup's kept values, handed to `put`, which writes the
@@ -616,11 +868,13 @@ final class SecretsStore {
         if !deleted.isEmpty { NotificationCenter.default.post(name: Self.keysChanged, object: self, userInfo: ["names": deleted]) }
     }
 
-    /// A presence check, then `change` on the unlocked vault off the main thread, then `line` in the audit log.
-    private func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
-                     line: @escaping () -> SecretAudit.Line) async throws {
+    /// A presence check, then `change` on the unlocked vault off the main thread, then `line`, when given, in the audit
+    /// log. Returns the index the unlock read and MAC-checked, as `change` left it.
+    @discardableResult
+    func run(makes: Bool, names: [String], reason: String, change: @escaping (SecretVault, SymmetricKey?) throws -> Data?,
+                     line: (() -> SecretAudit.Line)?) async throws -> SecretVault.Index? {
         reloadIfChanged()
-        if protection == .tampered { throw Failure.vault(isUnlisted ? .unlisted : .tampered) }
+        if protection == .tampered { throw refusal }
         if protection == .cantOpen { throw Failure.vault(.cantOpen) }
         if index == nil, !makes { throw Failure.vault(.noSuchKey(names.first ?? "")) }
         let control = index?.keyring == .secureEnclave ? UserPresence.secureEnclaveAccessControl() : nil
@@ -646,12 +900,13 @@ final class SecretsStore {
         setWaitingForKeychain(false)
         switch result {
         case .success(let work):
-            if let changed = work.index { index = changed }
-            if protection == .none, let index { protection = Self.protection(of: index) }
-            indexDate = folder.modificationDate(of: SecretFolder.vaultName)
-            try? folder.appendAudit(SecretAudit.encode(line(), masking: { SecretMask.current.mask($0) }))
+            let earlier = index
+            took(work)
+            if let line { try? folder.appendAudit(SecretAudit.encode(line(), masking: { SecretMask.current.mask($0) })) }
             publishMarks()
             NotificationCenter.default.post(name: Self.changed, object: self)
+            postKeysChanged([], since: earlier)
+            return work.index
         case .failure(let error):
             reloadIfChanged()
             throw handle(error, action: .use(names: names), facts: Facts())
@@ -705,14 +960,21 @@ final class SecretsStore {
     nonisolated private static func apply(_ action: Action, to vault: SecretVault, maskKey: SymmetricKey?,
                                           values: inout [String: SecretBytes], earlier: inout SecretVault.Origin?) throws -> Data? {
         switch action {
-        case .add(let name, let purpose, let purposeBy, let origin, let writeOnly, let value):
-            return try vault.add(name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly, value: value,
-                                 maskKey: maskKey)
-        case .edit(let name, let newName, let purpose, let purposeBy):
-            return try vault.edit(name, newName: newName, purpose: purpose, purposeBy: purposeBy)
+        case .add(let key):
+            return try vault.add(name: key.name, purpose: key.purpose, purposeBy: key.purposeBy, origin: key.origin,
+                                 writeOnly: key.writeOnly, value: key.value, link: key.link, linkFrom: key.linkFrom,
+                                 remindDays: key.remindDays, asksEveryUse: key.asksEveryUse, maskKey: maskKey)
+        case .edit(let change):
+            return try vault.edit(change.name, newName: change.newName, purpose: change.purpose, purposeBy: change.purposeBy,
+                                  link: change.link, linkFrom: change.linkFrom, remindDays: change.remindDays,
+                                  asksEveryUse: change.asksEveryUse)
         case .replace(let name, let value, let writeOnly, let origin):
             earlier = vault.index.entry(named: name)?.origin
             return try vault.replace(name, value: value, writeOnly: writeOnly, origin: origin, maskKey: maskKey)
+        case .rotate(let change):
+            earlier = vault.index.entry(named: change.name)?.origin
+            return try vault.rotate(change.name, value: change.value, origin: .settings, link: change.link,
+                                    linkFrom: change.linkFrom, remindDays: change.remindDays, maskKey: maskKey)
         case .makeWriteOnly(let name):
             return try vault.makeWriteOnly(name)
         case .delete(let name):
@@ -748,8 +1010,10 @@ final class SecretsStore {
         index = nil
         protection = .none
         isUnlisted = false
+        isTooLarge = false
         lastUse = [:]
         indexDate = nil
+        vouch = nil
         publishMarks()
         let line = SecretAudit.Line(event: .startOver, names: [], outcome: kept.map { "kept \($0.lastPathComponent)" })
         try? folder.appendAudit(SecretAudit.encode(line, masking: { SecretMask.current.mask($0) }))
@@ -784,6 +1048,7 @@ final class StandInPresence: PresenceCheck {
     func confirm(reason: String, accessControl: SecAccessControl?) async throws -> AnyObject {
         calls += 1
         #if DEBUG
+        reasons.append(reason)
         if holds, !(await hold()) { throw UserPresence.Failure.cancelled }
         #endif
         guard approves else { throw UserPresence.Failure.cancelled }
@@ -793,6 +1058,8 @@ final class StandInPresence: PresenceCheck {
     func finish(_ token: AnyObject) {}
 
     #if DEBUG
+    /// Each check's reason, in order, as the sheet would show it: key names, never a value.
+    private(set) var reasons: [String] = []
     /// A sheet left up: while set, each check waits for `release(approving:)`. One is up at a time, as with
     /// `UserPresence`: a second check waits its turn until the first ends.
     var holds = false

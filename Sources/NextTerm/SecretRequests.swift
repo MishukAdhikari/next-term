@@ -25,26 +25,8 @@ final class SecretRequests {
     /// How long a pending card, and a tool request with no answer, waits before it is dropped (the self-test shortens it).
     static var dropAfter: Duration = .seconds(30 * 60)
 
-    /// How long an approval lasts, as the panel's "How long" offers it.
-    enum How: Equatable {
-        case once, fifteenMinutes, untilLock
-
-        var approval: SecretAudit.Approval {
-            switch self {
-            case .once: return .once
-            case .fifteenMinutes: return .fifteenMinutes
-            case .untilLock: return .untilLock
-            }
-        }
-
-        var grantKind: SecretGrant.Kind? {
-            switch self {
-            case .once: return nil
-            case .fifteenMinutes: return .fifteenMinutes
-            case .untilLock: return .untilLock
-            }
-        }
-    }
+    /// How long an approval lasts, as the panel's "How long" offers it (`SecretApprovalChoices` picks which).
+    typealias How = SecretApprovalChoice
 
     /// Next Term's facts about who asks, as the panel's Asked by rows show them. None is the asker's own word but the
     /// agent's name, which is shown as "going by its program's name".
@@ -91,6 +73,8 @@ final class SecretRequests {
         case unanswered
         /// "Allow once" starts one command, and an identical request that waited on the same panel used it.
         case usedAlready
+        /// import_secrets' own answer, made by `SecretImportAsk` (names and counts from `SecretSources.answer(for:)`).
+        case answered([String: Any])
     }
 
     /// What a request asks for: to use keys (the panel's Allow), to save the agent's value (store_secret's panel), or
@@ -100,6 +84,8 @@ final class SecretRequests {
         /// The agent's value, held while the panel waits, wiped when the request ends.
         case store(SecretBytes)
         case add(SecretRequestWindow.Content)
+        /// import_secrets: Import from a File's sheet, or a password manager's, with the agent's banner.
+        case importKeys(SecretImportAsk)
     }
 
     /// One request, waiting for its panel or in it.
@@ -161,6 +147,10 @@ final class SecretRequests {
             if case .use = kind { return true }
             return false
         }
+        var importAsk: SecretImportAsk? {
+            if case .importKeys(let ask) = kind { return ask }
+            return nil
+        }
     }
 
     /// One caller waiting on a request: its reply, and whether it has left as of now, though its leaving may not have
@@ -206,6 +196,10 @@ final class SecretRequests {
         observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.startedOver, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { SecretRequests.shared.vaultStartedOver() }
         })
+        // "Ask for Touch ID every time it's used" ticked, here or by another copy of Next Term: its grants end.
+        observers.append(NotificationCenter.default.addObserver(forName: SecretsStore.changed, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { SecretRequests.shared.endGrantsAskingEveryUse() }
+        })
     }
 
     // MARK: asking
@@ -215,8 +209,12 @@ final class SecretRequests {
     /// of now, before its leaving reaches here.
     @discardableResult
     func ask(_ request: Request, left: @escaping () -> Bool = { false }, reply: @escaping (Decision) -> Void) -> Waiting? {
+        // A key another copy of Next Term replaced, renamed or deleted ends the grants holding it (`keysChanged`) before
+        // a grant can answer with its old value.
+        SecretsStore.shared.reloadIfChanged()
         let now = now()
         expire(at: now)
+        endGrantsAskingEveryUse() // a key that asks every time is never answered by a lasting grant
         if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
             limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
             expire(at: now) // a one-use grant is over now, and its values go now
@@ -303,10 +301,53 @@ final class SecretRequests {
     }
 
     /// The request in the panel or the request window now, if any.
-    var showing: Request? { queue.first { $0.panel != nil || $0.requestWindow != nil } }
+    var showing: Request? { queue.first { $0.panel != nil || $0.requestWindow != nil || $0.importAsk?.isOnScreen == true } }
+
+    /// Requests not answered yet, the one showing among them: Secrets › Show Key Request's badge.
+    var waitingCount: Int { queue.filter { !$0.isAnswered }.count }
+
+    /// Secrets › Show Key Request: the showing request's own window in front, as it first came: the panel floating
+    /// without taking the keyboard, `request_secret`'s window and an import's Secrets window ordered front, none made
+    /// key. One the user minimised is restored first, as the Dock restores it. Nothing is answered: the user answers in
+    /// that window.
+    func bringShowingToFront() {
+        guard let request = showing else { return }
+        if let panel = request.panel?.window { return Self.restore(panel).orderFrontRegardless() }
+        if let window = request.requestWindow?.window { return Self.restore(window).orderFront(nil) }
+        guard request.importAsk?.isOnScreen == true, let window = SecretsWindowController.shared?.window else { return }
+        Self.restore(window).orderFront(nil)
+    }
+
+    /// `window`, out of the Dock if it was minimised there: ordering it front alone leaves it there.
+    private static func restore(_ window: NSWindow) -> NSWindow {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        return window
+    }
+
+    /// The agent's import whose sheet is the one open on `window`, while it waits: Secrets › Pause ends it, so Pause's
+    /// confirm may go over that sheet.
+    func importAsk(sheetOn window: NSWindow?) -> SecretImportAsk? {
+        guard let sheet = window?.attachedSheet else { return nil }
+        let request: Request? = queue.first { (request: Request) -> Bool in
+            !request.isAnswered && request.importAsk?.sheetWindow === sheet
+        }
+        return request?.importAsk
+    }
 
     private func showNext() {
-        guard showing == nil, let next = queue.first(where: { !$0.isAnswered }) else { return }
+        // An import waiting for its tab's pipe has had its turn.
+        let next: Request? = queue.first { (request: Request) -> Bool in
+            !request.isAnswered && request.importAsk?.wasOpened != true
+        }
+        guard showing == nil, let next else { return }
+        if let ask = next.importAsk {
+            return ask.open(ended: { [weak self, weak next] (end: SecretImportAsk.End) in
+                guard let self, let next else { return }
+                self.importEnded(next, end)
+            }, leftScreen: { [weak self] in
+                self?.showNext()
+            })
+        }
         if case .add(let content) = next.kind {
             let window = SecretRequestWindow(content, onSave: { [weak self, weak next] form in
                 guard let self, let next else { return }
@@ -355,6 +396,10 @@ final class SecretRequests {
             runsAsShell: !request.isWrapper && request.isUse, folder: request.folder, warnings: request.warnings,
             agentWords: request.agentWords, askedBy: request.askedBy, argv: request.argv, isWrapper: request.isWrapper,
             isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
+        let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: store.index)
+        content.choices = SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote,
+                                                        asksEveryUse: !asking.isEmpty)
+        content.askingEveryUse = request.isRemote ? [] : asking
         if !request.isUse {
             content.offersHowLong = false
             content.allowTitle = "Save"
@@ -367,7 +412,8 @@ final class SecretRequests {
     private func allow(_ request: Request, how: How) {
         guard !request.isAnswered, let panel = request.panel else { return }
         if case .store(let value) = request.kind { return saveStored(request, value: value, panel: panel) }
-        let how: How = request.isRemote ? .once : how
+        // A key's box ticked since the panel showed takes the lasting choices away.
+        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
         panel.setBusy(true)
         let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
         let facts = SecretsStore.Facts(who: Self.who(request), command: request.command, folder: request.folder, approval: how.approval)
@@ -388,6 +434,8 @@ final class SecretRequests {
     private func allowed(_ request: Request, how: How, values: [String: SecretBytes]) {
         // "Allow once" goes to one caller. One that left in the moment before, its leaving not heard here yet, is let go
         // now as its leaving would have been: the use passes to the next caller, or a wrapper's one-use grant is made.
+        // Asked again of the vault this unlock checked: a key ticked to ask every time gets no lasting grant.
+        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
         let now = now()
@@ -430,7 +478,8 @@ final class SecretRequests {
             action = .replace(name: name, value: value, writeOnly: stored.writeOnly, origin: .agent)
         } else {
             let purpose = StoredSecretName.purpose(fromReason: request.agentWords ?? "")
-            action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value)
+            action = .add(name: name, purpose: purpose, purposeBy: .agent, origin: .agent, writeOnly: false, value: value,
+                          remindDays: SecretReminderRecords.newKeyDays, asksEveryUse: SecretNewKeyDefaults.asksEveryUse)
         }
         let reason = stored == nil ? SecretReason.save(name) : SecretReason.replaceWithAgentsKey(name)
         let facts = SecretsStore.Facts(who: Self.who(request))
@@ -448,7 +497,8 @@ final class SecretRequests {
         }
     }
 
-    /// request_secret's Save: the key the user typed. A stored name has its value replaced, and keeps what it's for.
+    /// request_secret's Save: the key the user typed. A stored name has its value replaced, and keeps what it's for and
+    /// its page. A new key's page is the one the user gave in the window, never the agent.
     private func save(_ request: Request, form: SecretRequestWindow.Form) {
         guard !request.isAnswered, let window = request.requestWindow else { return }
         let store = SecretsStore.shared
@@ -458,7 +508,8 @@ final class SecretRequests {
             action = .replace(name: form.name, value: form.value, writeOnly: form.writeOnly, origin: .request)
         } else {
             action = .add(name: form.name, purpose: form.purpose, purposeBy: form.purposeBy, origin: .request, writeOnly: form.writeOnly,
-                          value: form.value)
+                          value: form.value, link: form.link, linkFrom: form.linkFrom, remindDays: SecretReminderRecords.newKeyDays,
+                          asksEveryUse: SecretNewKeyDefaults.asksEveryUse)
         }
         let reason = stored == nil ? SecretReason.save(form.name) : SecretReason.replace(form.name)
         let pasted = window.pastedAt
@@ -483,6 +534,15 @@ final class SecretRequests {
         if stopAsking { limits.stop(request.asker) }
         audit(.decline, request, outcome: stopAsking ? "declined and stopped asking" : "declined")
         finish(request, outcome: .declined, decision: .declined(stopAsking: stopAsking))
+    }
+
+    /// import_secrets' sheet ended: a decline counts and pauses as any other, and Decline and Stop Asking stops the
+    /// asker; any other end answers as it is, with an audit line when nothing was copied in (a copy-in writes its own).
+    private func importEnded(_ request: Request, _ end: SecretImportAsk.End) {
+        guard !request.isAnswered else { return }
+        if case .declined(let stopAsking) = end { return decline(request, stopAsking: stopAsking) }
+        if let line = end.audit { audit(line.event, request, outcome: line.outcome) }
+        finish(request, outcome: .allowed, decision: .answered(end.answer))
     }
 
     /// "Pause Key Requests for 1 Hour…", after its confirm: this and every waiting request are declined, new ones are
@@ -511,6 +571,7 @@ final class SecretRequests {
         request.panel = nil
         request.requestWindow?.finish()
         request.requestWindow = nil
+        request.importAsk?.close()
         request.kind = .use // store_secret's value goes with its SecretBytes, wiped
         queue.removeAll { $0 === request }
         showNext()
@@ -710,13 +771,30 @@ final class SecretRequests {
         end(.tabGotInput(tab.uuidString))
     }
 
-    /// The hook in `MCPControl.sent(to:)`, which runs on the main thread.
+    /// The hook in `MCPControl.sent(to:)`, which runs on the main thread: an agent typed or pressed keys in the tab.
+    /// Its grants end, and the command its input starts there is the agent's while it runs (`SecretAgentCommands`).
     nonisolated static func tabGotInput(_ tab: UUID) {
-        MainActor.assumeIsolated { shared.tabGotInput(tab) }
+        MainActor.assumeIsolated {
+            shared.tabGotInput(tab)
+            SecretAgentCommands.agentTyped(tab)
+        }
     }
 
     func revoke(_ id: String) { end(.revoke(id)) }
     func revokeAll() { end(.revokeAll) }
+
+    /// The "How long" choices `request` gets now: only Allow once while a key it names asks for Touch ID every time.
+    func offered(_ request: Request) -> [How] {
+        let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: SecretsStore.shared.index)
+        return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty)
+    }
+
+    /// Ends the lasting grants that hold a key set to ask for Touch ID every time it's used.
+    func endGrantsAskingEveryUse() {
+        for name in SecretApprovalChoices.askingNames(heldBy: book.grants, in: SecretsStore.shared.index) {
+            end(.askEveryUse(name))
+        }
+    }
 
     func end(_ event: SecretGrantEvent) {
         let ended = book.end(event)
@@ -838,6 +916,7 @@ final class SecretRequests {
             request.panel = nil
             request.requestWindow?.finish()
             request.requestWindow = nil
+            request.importAsk?.close()
             request.kind = .use
         }
         queue.removeAll()

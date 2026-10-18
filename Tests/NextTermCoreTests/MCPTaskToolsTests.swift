@@ -38,10 +38,11 @@ import Testing
         // Its only names are Next Term's: every capitalised word is one of these.
         let capitalised = Set(tool.description.split { !$0.isLetter }.filter { $0.first?.isUppercase == true }.map(String.init))
         #expect(capitalised == ["Adds", "Markdown", "The", "Mac", "Next", "Term", "Each", "Answers"], "\(capitalised.sorted())")
-        // After the import tools, before Secrets' four, which end the list.
+        // After the import tools, before Secrets' five, which end the list.
         let names = MCPServer.tools.map(\.name)
         #expect(names.firstIndex(of: "add_task") == names.firstIndex(of: "undo_import").map { $0 + 1 })
-        #expect(Array(names.suffix(5)) == ["add_task", "list_secrets", "request_secret", "store_secret", "run_with_secrets"])
+        let last: [String] = Array(names.suffix(6))
+        #expect(last == ["add_task", "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets"])
         #expect(names.filter { $0 == "add_task" }.count == 1)
         // The instructions name it among the tools that ask, and still fit.
         #expect(MCPServer.instructions.contains("apply_import, undo_import and add_task ask the user on the Mac first"))

@@ -2,10 +2,12 @@ import Foundation
 
 extension MCPRedaction {
     /// The values `redact` masks for a name on a line before their own: `const apiKey =` with the value on the next
-    /// line, as a formatter writes a long assignment, or a YAML key with its value on the line under it. The patterns
-    /// read across lines, so `redact` masks such a value in the text whole. But read_file's cut and find_in_files'
-    /// snippet look at the value's line alone, and read_file from an offset may start after the name: the line on its
-    /// own showed the value. Such a value is made ••• in its line first, and the line goes on as any other.
+    /// line, as a formatter writes a long assignment, a YAML key with its quoted value on the line under it or its plain
+    /// value on a line indented more (`indentedValue`), or `export` on a line before a bare value's name. The patterns
+    /// read across lines there (a bare value's `=` or `:` stays on its name's line), so `redact` masks such a value in
+    /// the text whole. But read_file's cut and find_in_files' snippet look at the value's line alone, and read_file from
+    /// an offset may start after the name: the line on its own showed the value. Such a value is made ••• in its line
+    /// first, and the line goes on as any other.
     struct CarriedValues {
         /// Per line (an index into the lines given), its values named on a line before it, in UTF-8 offsets in the
         /// line, sorted, apart.
@@ -13,8 +15,10 @@ extension MCPRedaction {
 
         /// The values in `lines[range]` named on a line before their own. The lines are read from the third line before
         /// the range with text in it: no match reaches further back, a name, its operator and `export` each taking a
-        /// line at most, with only spaces and blank lines between. The values are found as `NamedValues` finds them, with
-        /// what `redact` has made ••• by then opaque; a placeholder is left, as `redact` leaves it.
+        /// line at most, with only spaces and blank lines between, and an indented value's key with two lines with text
+        /// at most between it and its value (comments, a diff's other side: `indentedValue`). The values are found as
+        /// `NamedValues` finds them, with what `redact` has made ••• by then opaque; a placeholder is left, as `redact`
+        /// leaves it.
         init(_ lines: [String], in range: Range<Int>, mask secrets: SecretMask) {
             let range = range.clamped(to: 0..<lines.count)
             var first = range.lowerBound
