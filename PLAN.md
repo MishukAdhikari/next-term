@@ -60,9 +60,10 @@ Also next, in no fixed order:
   match-case toggle in the Git Log.
 - **Diffs:** a Changed only filter, stage selected lines, edit the proposed
   side before accepting, Send to Agent from a diff, and Ask agent… per hunk.
-- **Editor:** Replace in the open file from the menu; opening files with a single click (off by default);
-  hiding `.env` values on screen; a prompt-text grammar for `prompts/*.txt`; `{var}` placeholders in YAML
-  and TypeScript strings; LangGraph Studio links in a Chromium browser when Safari is the default.
+- **Editor:** Replace in the open file from the menu; opening files and folders with a single click (on for new
+  installs, existing installs keep theirs; imports follow the source editor); hiding `.env` values on screen; a
+  prompt-text grammar for `prompts/*.txt`; `{var}` placeholders in YAML and TypeScript strings; LangGraph Studio
+  links in a Chromium browser when Safari is the default.
 - **Settings and import:** the keys Settings cannot change yet (⌘↩ Accept, the sidebar's ↩, ⌘⌫ and ⌘↓,
   ↩ in the Git Log); Zed's own `keymap.json` in the import; a hand-off to an agent for what the import
   leaves out.

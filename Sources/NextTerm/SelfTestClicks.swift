@@ -712,9 +712,9 @@ extension SelfTest {
         let tracked = clickFolder()
         let opened = await wait(3) { isOpen() && entry("x.txt") != nil }
         check(tracked && opened && area.panes.count == tabs, "a click on a deleted folder opens it, showing what was in it", "tracked \(tracked), open \(isOpen())")
-        clickFolder()
+        let closing = clickFolder()
         let closed = await wait(3) { !isOpen() }
-        check(closed && entry("x.txt") == nil, "and the next click closes it")
+        check(closing && closed && entry("x.txt") == nil, "and the next click closes it")
         _ = clickFolder()
         _ = clickFolder(count: 2)
         await pause(0.4)
