@@ -14,7 +14,8 @@ extension SecretImportPipe {
         /// The user, in a tab of Next Term's with no agent above the importer, and none driving that tab.
         case user
         /// An agent runs above the importer, or drives the tab it runs in: it opened that tab, or typed or pressed keys
-        /// there, and the user hasn't typed in it since.
+        /// there, and the user hasn't typed in it since, or the line the importer runs in started while it did
+        /// (`AgentCommand`).
         case agent
         /// No tab of Next Term's is above it: a process that left its tab, as `( … &)`, nohup or setsid make it, or one
         /// run in another terminal app.
@@ -32,7 +33,8 @@ extension SecretImportPipe {
     }
 
     /// The importer's runner: an agent above it; else untraced when no tab of Next Term's is above it; else an agent
-    /// when one drives that tab (`driven`), as a line it typed there runs with no agent above it; else the user.
+    /// when one drives that tab or started the line running there (`driven`), as a line it typed there runs with no
+    /// agent above it; else the user.
     public static func runner(agent: String?, inTab: Bool, driven: Bool = false) -> Runner {
         if agent != nil { return .agent }
         guard inTab else { return .untraced }

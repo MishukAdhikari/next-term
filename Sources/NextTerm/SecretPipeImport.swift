@@ -21,7 +21,9 @@ enum SecretPipeImport {
         /// The tab the importer runs in.
         var tabID: UUID?
         /// An agent drives that tab: it opened the tab, or typed or pressed keys there, and the user hasn't typed in it
-        /// since. A line it typed there runs with no agent above it, and is still the agent's.
+        /// since; or the command running there started while an agent drove it, whatever keys the user pressed in it
+        /// since (a Return at its own prompt). A line it typed there runs with no agent above it, and is still the
+        /// agent's.
         var driven = false
         /// The preset whose line that tab got (Import From › 1Password…), when it is one of theirs.
         var tabPreset: SecretImportPreset?
@@ -47,7 +49,7 @@ enum SecretPipeImport {
         let tabs: [TerminalTab] = AppDelegate.shared.controllers.flatMap(\.tabs)
         guard let tab = ClaudeIDEServer.tab(for: pid, among: tabs) else { return origin }
         origin.tabID = tab.id
-        origin.driven = MCPControl.isDriven(tab)
+        origin.driven = MCPControl.isDriven(tab) || SecretAgentCommands.ranByAgent(tab)
         let said: String = tab.status.integrated && tab.status.running ? tab.status.command : ""
         origin.command = said.isEmpty ? nil : said
         origin.tabPreset = SecretManagerImportSheet.preset(ofTab: tab.id)

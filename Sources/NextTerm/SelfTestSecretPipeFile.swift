@@ -2,9 +2,9 @@ import AppKit
 import NextTermCore
 
 #if DEBUG
-/// `nxtrm secret import` run by an agent or from no tab, given a FILE, refused while Secrets is busy; a password
-/// manager's sheet with agent control off; and a password prompt with echo off in a tab, as `bw unlock`'s is. All on
-/// the self-test's own socket, vault and files; values are made up at run time.
+/// `nxtrm secret import` run by an agent, typed into a tab an agent drives, or run from no tab; given a FILE; refused
+/// while Secrets is busy; a password manager's sheet with agent control off; and a password prompt with echo off in a
+/// tab, as `bw unlock`'s is. All on the self-test's own socket, vault and files; values are made up at run time.
 extension SelfTest {
     /// Run by an agent (a link named claude to /bin/zsh runs the pipe: a copy of zsh is a platform binary off the system
     /// volume, which launch constraints kill as it starts), the sheet warns the agent may have seen the keys, and comes
@@ -47,6 +47,29 @@ extension SelfTest {
         cover.close()
         view.fileImportSheet?.closeSheet()
         _ = await wait(10) { view.fileImportSheet == nil && secretPipeScreen(tab).contains("Nothing imported.") }
+    }
+
+    /// A made-up .env given to `nxtrm secret import`, typed into a plain tab as send_to_tab types it and left driven: no
+    /// agent runs above the importer, but the tab is an agent's, so the copy sheet warns an agent ran it, comes forward
+    /// without the keyboard (a window of the self-test's own keeps it), and Import… has no Return default.
+    static func secretPipeDrivenFileCheck(_ c: TerminalWindowController, _ view: SecretsView, folder: URL) async {
+        let env: URL = folder.appendingPathComponent("pipe-driven.env")
+        try? "PIPE_DRIVEN_API_KEY=\(secretsValue("sk-" + "proj-"))\n".write(to: env, atomically: true, encoding: .utf8)
+        let tab: TerminalTab = await secretPipeTab(c, folder)
+        defer { closeSecretsTabs([tab], "secret pipe") }
+        let cover: NSWindow = await secretsMenuCover()
+        MCPControl.type("\(secretPipeNxtrm) secret import \(secretPipeQuoted(env.path))", into: tab, submit: true)
+        let opened: Bool = await wait(15) { view.fileImportSheet != nil }
+        let warning: String? = secretPipeWarning(view.fileImportSheet)
+        let detail: String = (opened ? (warning ?? "no warning") : "no sheet: " + secretPipeScreen(tab))
+            + ", tab driven \(MCPControl.isDriven(tab))"
+        check(opened && warning == SecretImportPipe.agentWarning && MCPControl.isDriven(tab),
+              "secret pipe: a file given to nxtrm secret import typed into a tab an agent drives, with no agent above "
+                + "it, gets the agent warning", detail)
+        await secretPipeAgentKeyboardCheck(view, cover: cover, who: "a file typed into a tab an agent drives")
+        cover.close()
+        view.fileImportSheet?.closeSheet()
+        _ = await wait(10) { view.fileImportSheet == nil && secretPipeShows(tab, "Nothing imported.") }
     }
 
     /// `nxtrm secret import FILE`: a made-up .env opens the copy sheet, its header saying the import gave it, and

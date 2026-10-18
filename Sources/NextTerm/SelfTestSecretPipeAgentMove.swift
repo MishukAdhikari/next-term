@@ -9,7 +9,7 @@ import NextTermCore
 extension SelfTest {
     /// A link named claude to /bin/zsh stands in for the agent, as in the origin checks; a run that leaves its tab, as
     /// `( … & )` makes it, is the untraced one; the command alone, typed and left driven, is the one an agent typed into
-    /// a tab. Each run is checked in a tab of its own.
+    /// a tab, and so is one typed after a prompt the user answers in that tab. Each run is checked in a tab of its own.
     static func secretPipeAgentMoveCheck(_ c: TerminalWindowController, _ view: SecretsView, folder: URL) async {
         let savedSetup = SecretsView.importSetup
         var setup = SecretImportSheet.Setup()
@@ -42,18 +42,33 @@ extension SelfTest {
         // tab is an agent's until the user types in it.
         await secretPipeMoveRefusedCheck(c, view, folder: folder, run: given, config: config, written: written,
                                          who: "nxtrm secret import typed into a tab an agent drives")
+        // The agent's line asks first, and the user answers with a key in the tab, which ends its driven mark: the
+        // line still started while the agent drove the tab, so the importer in it is the agent's. printf's two words
+        // print joined, so the line as typed doesn't show what the prompt shows.
+        let asking: String = "printf '%s-%s ' made-up wait; read -r made_up_answer; " + given
+        await secretPipeMoveRefusedCheck(c, view, folder: folder, run: asking, config: config, written: written,
+                                         who: "nxtrm secret import typed by an agent after a prompt the user answers",
+                                         answerAt: "made-up-wait")
     }
 
     /// `run`, typed into a new tab as send_to_tab types it (the tab is left driven), prints the refusal; no sheet opens
     /// on Secrets, Secrets stays behind a cover window of the self-test's own, the cover keeps the keyboard, and the
-    /// config is as `written`.
+    /// config is as `written`. With `answerAt`, the user answers that prompt once the tab shows it (a key press in the
+    /// tab, then Return), which ends the tab's driven mark, and the refusal still comes.
     static func secretPipeMoveRefusedCheck(_ c: TerminalWindowController, _ view: SecretsView, folder: URL, run: String,
-                                           config: URL, written: String, who: String) async {
+                                           config: URL, written: String, who: String,
+                                           answerAt prompt: String? = nil) async {
         let tab: TerminalTab = await secretPipeTab(c, folder)
         defer { closeSecretsTabs([tab], "secret pipe") }
         let cover: NSWindow = await secretsMenuCover()
         defer { cover.close() }
         MCPControl.type(run, into: tab, submit: true)
+        var asked: Bool = true
+        if let prompt {
+            asked = await wait(10) { tab.status.running && secretPipeShows(tab, prompt) }
+            tab.userInput()
+            tab.view.send(txt: "\r")
+        }
         let refusal: String = SecretImportPipe.text(.moveRefused).line
         let said: Bool = await wait(15) { secretPipeShows(tab, refusal) && !tab.status.running }
         // A sheet or a window coming forward late would show by now.
@@ -62,8 +77,10 @@ extension SelfTest {
         let behind: Bool = secretPipeBehind(view.window, cover: cover)
         let kept: Bool = (try? String(contentsOf: config, encoding: .utf8)) == written
         let detail: String = "refusal said \(said), no sheet \(noSheet), Secrets behind the cover \(behind), cover key "
-            + "\(NSApp.keyWindow === cover), file unchanged \(kept), tab driven \(MCPControl.isDriven(tab))"
-        check(said && noSheet && behind && kept,
+            + "\(NSApp.keyWindow === cover), file unchanged \(kept), tab driven \(MCPControl.isDriven(tab)), prompt "
+            + "shown \(asked)"
+        let answered: Bool = prompt == nil || (asked && !MCPControl.isDriven(tab))
+        check(said && noSheet && behind && kept && answered,
               "secret pipe: \(who) of an MCP config is refused with the line, nothing opens, the keyboard stays where "
                 + "it was, and the file is unchanged", said ? detail : detail + ": " + secretPipeScreen(tab))
     }

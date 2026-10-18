@@ -771,9 +771,13 @@ final class SecretRequests {
         end(.tabGotInput(tab.uuidString))
     }
 
-    /// The hook in `MCPControl.sent(to:)`, which runs on the main thread.
+    /// The hook in `MCPControl.sent(to:)`, which runs on the main thread: an agent typed or pressed keys in the tab.
+    /// Its grants end, and the command its input starts there is the agent's while it runs (`SecretAgentCommands`).
     nonisolated static func tabGotInput(_ tab: UUID) {
-        MainActor.assumeIsolated { shared.tabGotInput(tab) }
+        MainActor.assumeIsolated {
+            shared.tabGotInput(tab)
+            SecretAgentCommands.agentTyped(tab)
+        }
     }
 
     func revoke(_ id: String) { end(.revoke(id)) }

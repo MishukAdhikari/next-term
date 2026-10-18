@@ -29,6 +29,7 @@ extension SelfTest {
         await secretPipeStrangerCheck(view)
         await secretPipeDoneChecks(c, view, folder: folder)
         await secretPipeOriginChecks(c, view, folder: folder, list: list)
+        await secretPipeDrivenFileCheck(c, view, folder: folder)
         await secretPipeFileChecks(c, view, folder: folder)
         await secretPipeAgentMoveCheck(c, view, folder: folder)
         await secretBusyOpenChecks(view, folder: folder)
