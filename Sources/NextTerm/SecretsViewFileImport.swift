@@ -83,7 +83,8 @@ extension SecretsView {
     }
 
     /// The file at `url` read off the main thread (a file near the limits takes seconds), against the vault's names and
-    /// the open projects as they are now. `format` is `nxtrm secret import`'s.
+    /// the open projects as they are now. `format` is `nxtrm secret import`'s. Its links are followed off the main
+    /// thread too: a path on a mount that stopped answering waits there, never in Next Term's windows.
     static func read(_ url: URL, format: SecretSources.Format? = nil) async -> PickedRead {
         let setup: SecretImportSheet.Setup = importSetup()
         let home: String = setup.home
@@ -91,8 +92,8 @@ extension SecretsView {
         let stored: Set<String> = Set(SecretsStore.shared.index?.names ?? [])
         // As picked for the move import's check (a project's linked .mcp.json is still its own), then links followed.
         let chosen: String = url.path
-        let path: String = canonicalPath(chosen)
         return await Task.detached { () -> PickedRead in
+            let path: String = canonicalPath(chosen)
             let picked = SecretSources.readPicked(chosen, home: home, projects: projects, stored: stored, format: format)
             return PickedRead(picked: picked, path: path, inGit: SecretImport.isInGitWorkTree(path))
         }.value

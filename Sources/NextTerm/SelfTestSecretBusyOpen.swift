@@ -38,9 +38,12 @@ extension SelfTest {
               view.window?.attachedSheet?.title ?? "none")
     }
 
-    /// An importer that is told nothing but what the sheet would tell it: no socket behind it.
+    /// An importer that is told nothing but what the sheet would tell it: no socket behind it. It is the user's run in
+    /// a tab of their own (a made-up tab), the only run that reaches busy for an MCP config: an agent's, or one no tab
+    /// is above, is refused before busy is asked.
     static func secretBusyClient() -> SecretImportClient {
-        SecretImportClient(origin: SecretPipeImport.Origin(piped: false), channel: SecretPipeSocket.Channel(fd: -1))
+        let origin = SecretPipeImport.Origin(piped: false, tabID: UUID())
+        return SecretImportClient(origin: origin, channel: SecretPipeSocket.Channel(fd: -1))
     }
 
     /// `nxtrm secret import FILE`'s importer, once its file is read: busy, and the copy sheet doesn't open.
@@ -65,8 +68,8 @@ extension SelfTest {
               "secret busy open: with Add… open, an agent's import_secrets opens nothing and hears busy", said)
     }
 
-    /// An agent's MCP config given to `nxtrm secret import`, read while Add… is open: busy, and the MCP-config import
-    /// doesn't open.
+    /// An agent's MCP config given to `nxtrm secret import` in a tab of the user's own, read while Add… is open: busy,
+    /// and the MCP-config import doesn't open.
     static func secretBusyMoveCheck(_ view: SecretsView, config: URL) async {
         // Read as the list reads it: a move target, so the check below is the move's, not a copy's.
         let setup: SecretImportSheet.Setup = SecretsView.importSetup()

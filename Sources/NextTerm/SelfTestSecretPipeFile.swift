@@ -10,7 +10,7 @@ extension SelfTest {
     /// volume, which launch constraints kill as it starts), the sheet warns the agent may have seen the keys, and comes
     /// forward without the keyboard: a window of the self-test's own keeps it, and Import… has no Return default.
     /// Run from no tab (the pipe leaves its tab, as `( … &)` does), it says Next Term couldn't tell which tab, and is
-    /// handled as an agent's run: Import… has no Return default there either.
+    /// handled as an agent's run: it comes forward without the keyboard, and Import… has no Return default.
     static func secretPipeOriginChecks(_ c: TerminalWindowController, _ view: SecretsView, folder: URL, list: URL) async {
         let tab: TerminalTab = await secretPipeTab(c, folder)
         defer { closeSecretsTabs([tab], "secret pipe") }
@@ -25,7 +25,7 @@ extension SelfTest {
             let detail: String = opened ? (warning ?? "no warning") : "no sheet: " + secretPipeScreen(tab)
             check(opened && warning == SecretImportPipe.agentWarning,
                   "secret pipe: run by an agent, the sheet warns it may have seen the keys", detail)
-            await secretPipeAgentKeyboardCheck(view, cover: cover)
+            await secretPipeAgentKeyboardCheck(view, cover: cover, who: "run by an agent")
             cover.close()
             view.fileImportSheet?.closeSheet()
             _ = await wait(10) { secretPipeScreen(tab).contains("Nothing imported.") && !tab.status.running }
@@ -36,14 +36,15 @@ extension SelfTest {
         _ = await wait(5) { !secretPipeScreen(tab).contains("Nothing imported.") }
         let late: String = "(sleep 1; cat \(secretPipeQuoted(list.path)))"
         let away: String = "( \(late) | \(secretPipeNxtrm) secret import --from bws - & )"
+        let cover: NSWindow = await secretsMenuCover()
         MCPControl.type(away, into: tab, submit: true)
         let opened: Bool = await wait(15) { view.fileImportSheet?.isPiped == true }
         let header: String = view.fileImportSheet?.headerLabel.stringValue ?? ""
         let warning: String? = secretPipeWarning(view.fileImportSheet)
         check(opened && warning == SecretImportPipe.untracedWarning && !header.contains(" in tab "),
               "secret pipe: run from no tab Next Term knows, the sheet says it couldn't tell which tab", header)
-        let unkeyed: Bool = view.fileImportSheet?.importButton.keyEquivalent.isEmpty == true
-        check(opened && unkeyed, "secret pipe: run from no tab Next Term knows, Import… has no Return default")
+        await secretPipeAgentKeyboardCheck(view, cover: cover, who: "run from no tab Next Term knows")
+        cover.close()
         view.fileImportSheet?.closeSheet()
         _ = await wait(10) { view.fileImportSheet == nil && secretPipeScreen(tab).contains("Nothing imported.") }
     }
@@ -93,17 +94,18 @@ extension SelfTest {
 }
 
 extension SelfTest {
-    /// The agent's sheet came forward over `cover`, which kept the keyboard, and Import… answers only a click.
-    static func secretPipeAgentKeyboardCheck(_ view: SecretsView, cover: NSWindow) async {
-        guard let sheet = view.fileImportSheet else { return }
+    /// The sheet of a run handled as an agent's (`who` says which) came forward over `cover`, which kept the keyboard,
+    /// and Import… answers only a click.
+    static func secretPipeAgentKeyboardCheck(_ view: SecretsView, cover: NSWindow, who: String) async {
+        let name: String = "secret pipe: \(who), the sheet comes forward without the keyboard and Import… has no "
+            + "Return default"
+        guard let sheet = view.fileImportSheet else { return check(false, name, "no sheet") }
         let becameKey: Bool = await wait(1) { sheet.window?.isKeyWindow == true }
         let inFront: Bool = secretsMenuInFront(view.window, over: cover)
         let unkeyed: Bool = sheet.importButton.keyEquivalent.isEmpty && sheet.cancelButton.keyEquivalent == "\u{1b}"
         let said: String = "in front \(inFront), sheet key \(becameKey), cover key \(NSApp.keyWindow === cover), "
             + "no Return default \(unkeyed)"
-        check(inFront && !becameKey && unkeyed,
-              "secret pipe: run by an agent, the sheet comes forward without the keyboard and Import… has no Return "
-                + "default", said)
+        check(inFront && !becameKey && unkeyed, name, said)
     }
 
     /// With a password manager's sheet open on Secrets, `given` prints the busy line, opens no sheet, and Secrets says
