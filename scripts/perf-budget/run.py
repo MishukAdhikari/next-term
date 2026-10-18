@@ -20,11 +20,20 @@ The terminal's tabs in a list down its left (Settings › Terminal › Tabs), ag
   S4v  3 agent stand-ins at work, the window in view        M instructions/s     (the comparison's base)
   S4vL S4v with the list                                    M instructions/s     S4v + 5%; rows drawn at most
                                                                                  the top tabs' + 10%
+Suggestions while typing, at 100,000 commands recorded (a deterministic seed in the copy's own home), in one zsh tab:
+  G1   the shell's report read, to the suggestion set: p50  ms                   at most 1
+  G1p  the same, p95                                        ms                   at most 2
+  G1e  a key down to the suggestion drawn, p50 (p95 too)    ms                   (INFO)
+  G1m  the copy's footprint with the record loaded, over    MB                   (INFO: at most 15 wanted)
+       the same copy's before its first suggestion
+The keys (50 rounds of `git ch` then ^U, 80 ms apart) are posted by the shim inside the copy, so G1 needs --front
+(the terminal must have the keyboard in the key window), as S7w does.
+
 With --base <release folder>, S2 and S4v also run on that build (the release before, tabs on top), and this one's
 are held to within 5% of its. --pairs N runs each compared scenario N times, in turn, and compares medians, with the
 spread in the report. The shim counts the top bar's tabs and the list's rows drawn, where the build has them.
 
-S7w, M30, S4v and S4vL need a window in view the whole time (no git refresh runs, and no terminal draws, for a
+S7w, M30, S4v, S4vL and G1 need a window in view the whole time (no git refresh runs, and no terminal draws, for a
 window nobody can see): with --front the copy takes the front (leave the Mac alone meanwhile). Without it, the copy's
 windows open behind yours or on another Space, and each is skipped unless a window stays in view (S4v and S4vL are
 skipped outright); a skipped M30 still reports what it measured. The report says how many windows were in view, and
@@ -32,14 +41,14 @@ M30 how many draws the burst made.
 Usage: run.py <release folder> <shim.dylib> <ru> [--front] [--only S2,S4h,...] [--warn-only] [--relieve-after-burst]
               [--base <release folder>] [--pairs N]
 """
-import argparse, json, os, pwd, shutil, signal, socket, subprocess, sys, tempfile, time
+import argparse, json, math, os, pwd, shutil, signal, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOMAIN = 'me.mishuk.nextterm.perfbudget'
 # The S5n budget: 0.10.2's measurement on an M3 Pro (295-314 M/MB; 0.10.1: 359-472) plus 25%.
 S5N_BUDGET = 390.0
 BUDGETS = {'S2': 25.0, 'S2L': 25.0, 'S4h': 130.0, 'S4hL': 130.0, 'S4v': None, 'S4vL': None, 'S5n': S5N_BUDGET,
-           'S7w': 2.0, 'M30': 300.0}
+           'S7w': 2.0, 'M30': 300.0, 'G1': 1.0, 'G1p': 2.0, 'G1e': None, 'G1m': None}
 # One layout against the other, and this build against the base, in the same run: at most 5% more. Rows of the list
 # may draw at most 10% more than the top bar's tabs for the same work.
 MARGIN = 1.05
@@ -49,17 +58,48 @@ TABS = {'S2': None, 'S2L': 'left', 'S4h': None, 'S4hL': 'left', 'S4v': None, 'S4
 # The scenarios that run in turn with --pairs, in that order, and the ones that also run on the base.
 PAIRED = ('S2', 'S2L', 'S4h', 'S4hL', 'S4v', 'S4vL')
 ON_BASE = ('S2', 'S4v')
-ORDER = ('S2', 'S2L', 'S4h', 'S4hL', 'S4v', 'S4vL', 'S5n', 'S7w', 'M30')
+ORDER = ('S2', 'S2L', 'S4h', 'S4hL', 'S4v', 'S4vL', 'S5n', 'S7w', 'M30', 'G1', 'G1p', 'G1e', 'G1m')
+GHOST = ('G1', 'G1p', 'G1e', 'G1m')
+# G1's record: this many commands, and its typing: rounds of `git ch` then ^U, this far apart.
+GHOST_COMMANDS = 100_000
+GHOST_ROUNDS = 50
+GHOST_GAP_MS = 80
 # The burst: 10 MB at 1 MB a second, a build log scrolling by. The flood: as fast as it goes, for 10 s.
 BURST_RATE = float(os.environ.get('NT_BURST_RATE', '1'))
 BURST_KIND = os.environ.get('NT_BURST_KIND', 'log')
 FLOOD_SECONDS = 10
 UNITS = {'S2': 'M/s', 'S2L': 'M/s', 'S4h': 'M/s', 'S4hL': 'M/s', 'S4v': 'M/s', 'S4vL': 'M/s', 'S5n': 'M/MB',
-         'S7w': '% of a core', 'M30': 'MB'}
+         'S7w': '% of a core', 'M30': 'MB', 'G1': 'ms', 'G1p': 'ms', 'G1e': 'ms', 'G1m': 'MB'}
 
 
 def sh(*args):
     return subprocess.run(args, capture_output=True, text=True).stdout
+
+
+def percentile(values, fraction):
+    """The value at `fraction` of the sorted `values` (nearest rank); None for none."""
+    if not values: return None
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, max(0, math.ceil(fraction * len(ordered)) - 1))]
+
+
+def seed_history(home):
+    """A deterministic record of GHOST_COMMANDS commands in the copy's own home, as Next Term keeps it (History.noindex,
+    0700, its log 0600): ten kinds of command over distinct arguments, one run each a millisecond apart, and
+    `git checkout main` the newest, so `git ch` has one to show among ten thousand that start with it."""
+    folder = os.path.join(home, 'Library/Application Support/Next Term/History.noindex')
+    os.makedirs(folder, mode=0o700)
+    os.chmod(folder, 0o700)
+    kinds = ('git checkout', 'git commit -m', 'npm run', 'make', 'kubectl get', 'docker compose up', 'ls -la', 'grep -rn',
+             'swift build --product', 'ssh deploy@')
+    start = 1_700_000_000_000
+    lines = ['nextterm-history 1']
+    for i in range(GHOST_COMMANDS - 1):
+        lines.append(f'c\t{start + i}\t1\t1\t0\t-\t-\t-\t{kinds[i % len(kinds)]} item-{i:06d}')
+    lines.append(f'c\t{start + GHOST_COMMANDS}\t3\t3\t0\t-\t-\t-\tgit checkout main')
+    descriptor = os.open(os.path.join(folder, 'commands.log'), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w') as log:
+        log.write('\n'.join(lines) + '\n')
 
 
 def strips(m):
@@ -78,6 +118,7 @@ class Copy:
         self.sock = os.path.join(self.home, 'Library/Application Support/Next Term/mcp.sock')
         self.log = os.path.join(check.work, name + '.log')
         self.status_file = os.path.join(check.work, name + '.status')
+        self.type_file = os.path.join(check.work, name + '.type')
         os.makedirs(self.home)
         self.process = None
 
@@ -95,7 +136,8 @@ class Copy:
             if key.startswith(('XDG_', 'CLAUDE', 'CODEX', 'GEMINI', 'QWEN', 'COPILOT', 'NEXTTERM', 'NEXT_TERM')) or key in ('ZDOTDIR', 'TERM_PROGRAM'):
                 del env[key]
         env.update(HOME=self.home, CFFIXED_USER_HOME=self.home, DYLD_INSERT_LIBRARIES=self.check.shim,
-                   NT_SHIM_LOG=self.log, NT_SHIM_STATUS=self.status_file, NT_SHIM_FRONT='1' if self.check.front else '0')
+                   NT_SHIM_LOG=self.log, NT_SHIM_STATUS=self.status_file, NT_SHIM_FRONT='1' if self.check.front else '0',
+                   NT_SHIM_TYPE=self.type_file, NT_SHIM_TYPE_GAP_MS=str(GHOST_GAP_MS))
         if env['HOME'] != self.home or env['CFFIXED_USER_HOME'] != self.home or not self.home.startswith('/tmp/ntpb.'):
             sys.exit('refusing to launch: the home is not the temporary one')
         out = open(os.path.join(self.check.work, self.name + '.out'), 'a')
@@ -207,6 +249,20 @@ class Copy:
         """What the shim logged of giving memory back (--relieve-after-burst): (passes, MB returned)."""
         lines = [l.split() for l in open(self.log).read().splitlines() if l.startswith('relief ')]
         return len(lines), sum(float(l[1]) for l in lines if len(l) > 2)
+
+    def type(self, keys):
+        """Keys for the shim to type into the copy's key window (its next tick reads them): written whole, then moved
+        into place, so it never reads half of them."""
+        with open(self.type_file + '.part', 'w') as f: f.write(keys)
+        os.rename(self.type_file + '.part', self.type_file)
+
+    def ghost_stamps(self):
+        """The shim's stamps since its last `typing` line: (kind, values)."""
+        try: lines = open(self.status_file + '.ghost').read().splitlines()
+        except OSError: return []
+        stamps = [(l.split()[0], [float(x) for x in l.split()[1:]]) for l in lines if len(l.split()) >= 2]
+        starts = [i for i, (kind, _) in enumerate(stamps) if kind == 'typing']
+        return stamps[starts[-1] + 1:] if starts else stamps
 
     def hide(self, hidden):
         self.process.send_signal(signal.SIGUSR1 if hidden else signal.SIGUSR2)
@@ -479,6 +535,49 @@ class Check:
         finally:
             copy.end()
 
+    def g1(self, only):
+        """G1, G1p, G1e and G1m: suggestions while typing at GHOST_COMMANDS commands recorded, in one zsh tab with the
+        keyboard. A first round loads the record (it loads at the first suggestion asked for); the measured rounds
+        follow."""
+        keys = [key for key in GHOST if key in only or 'G1' in only]
+        if not self.front:
+            for key in keys: self.record(key, None, 'SKIP: needs the terminal to have the keyboard (run with --front)')
+            return
+        copy = self.copy('G1')
+        seed_history(copy.home)
+        copy.launch()
+        try:
+            copy.new_tab(self.project, title='suggestions')
+            time.sleep(6)  # the shell at its prompt, its hooks loaded
+            if not copy.status()[1]:
+                for key in keys: self.record(key, None, 'SKIP: no window in view (run with --front)')
+                return
+            before = copy.counters()['footprint'] / 1e6
+            copy.type('git ch\x15')
+            time.sleep(6)  # the record read, the first suggestion shown
+            loaded = copy.counters()['footprint'] / 1e6
+            round_keys = 'git ch\x15'
+            copy.type(round_keys * GHOST_ROUNDS)
+            time.sleep(len(round_keys) * GHOST_ROUNDS * GHOST_GAP_MS / 1000 + 4)
+            stamps = copy.ghost_stamps()
+            share = [(v[1] - v[0]) * 1000 for k, v in stamps if k == 'shown' and len(v) == 2]
+            presses = [v[0] for k, v in stamps if k == 'key']
+            draws = [v[0] for k, v in stamps if k == 'draw']
+            drawn = []
+            for i, pressed in enumerate(presses):
+                following = presses[i + 1] if i + 1 < len(presses) else pressed + 1
+                first = next((d for d in draws if pressed <= d < following), None)
+                if first is not None: drawn.append((first - pressed) * 1000)
+            counted = f'{len(share)} suggestions set, {len(presses)} keys, {len(drawn)} drawn after a key'
+            p50, p95 = percentile(share, 0.5), percentile(share, 0.95)
+            self.record('G1', p50, counted + (f', max {max(share):.2f} ms' if share else ''))
+            self.record('G1p', p95, counted)
+            e50, e95 = percentile(drawn, 0.5), percentile(drawn, 0.95)
+            self.record('G1e', e50, f'p95 {e95:.1f} ms; ' + counted if e95 is not None else counted)
+            self.record('G1m', loaded - before, f'before the first suggestion {before:.0f} MB, with the record {loaded:.0f} MB')
+        finally:
+            copy.end()
+
     def tab_id(self, copy):
         tabs = copy.call('list_tabs')
         for window in tabs.get('windows', []):
@@ -530,7 +629,9 @@ class Check:
         failed = False
         names = {'S2': 'idle, 10 tabs', 'S2L': 'idle, 10 tabs, list', 'S4h': '3 agents, app hidden',
                  'S4hL': '3 agents hidden, list', 'S4v': '3 agents, window in view', 'S4vL': '3 agents in view, list',
-                 'S5n': '10 s flood, no URL', 'S7w': 'git, .next/ writer', 'M30': '30 s after a 10 MB burst'}
+                 'S5n': '10 s flood, no URL', 'S7w': 'git, .next/ writer', 'M30': '30 s after a 10 MB burst',
+                 'G1': 'suggestion set, p50', 'G1p': 'suggestion set, p95', 'G1e': 'key to suggestion drawn',
+                 'G1m': 'the record, 100,000'}
         for key in ORDER:
             if key not in self.results: continue
             value, detail = self.results[key]
@@ -588,6 +689,7 @@ def main():
         check.paired(only)
         if only & {'M30', 'S5n'}: check.memory_and_flood(only)
         if 'S7w' in only: check.s7w()
+        if only & set(GHOST): check.g1(only)
         check.judge()
         failed = check.report()
     finally:

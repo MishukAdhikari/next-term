@@ -61,7 +61,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   selection, open files, opening a file at a line). Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
   closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
-  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. Local only: a
+  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
+  reading a tab also gives the line being typed and the cursor, and any suggestion a zsh plugin draws, which is
+  left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local only: a
   private socket, no network port.
 - **Secrets.** API and MCP keys sealed on your Mac, used by agents by name after you approve with Touch ID or
   your password. **Secrets › Import From** copies keys in from .env, JSON, TOML, YAML and CSV files and
@@ -81,6 +83,17 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   sidebar's Agent Sessions group shows the newest five, marks the running ones and continues an agent's
   latest session. Only titles and dates are read (never whole transcripts), secrets are scrubbed from
   titles, and nothing is written.
+- **Suggestions while typing.** At a zsh prompt, the rest of the newest command of yours that starts with what
+  you typed shows dimmed after the cursor: → (or End, ⌃E, ⌃F) takes it, ⌥→ one word, Esc hides it, and Return
+  runs only what you typed. It is drawn over the terminal, never into it, so copy, Find, the scrollback and an
+  agent reading the tab never take it for typed text, and before it shows it is checked: a `cd` to a folder that
+  is gone, a missing file or program, or a command that never ran well is not suggested. It comes from Next
+  Term's own record of the commands you ran in its zsh tabs, on this Mac: never an agent's, never a line with a
+  secret, and nothing while View › Private Mode is on; until that record has your commands, zsh's own history
+  in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it, when that
+  is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and asks once
+  which you want, without touching your `.zshrc`. Settings › Terminal › While typing turns it off, says how many
+  commands are kept and clears them.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
@@ -209,7 +222,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   update, or after a quit, your windows, tabs, splits and scrollback come back, Claude Code, Codex and Qwen
   Code resume their conversations as you started them, and other agents' resume commands wait on the
   line for Return.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 27 MB to download, 59 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 28 MB to download, 61 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -258,7 +271,11 @@ How it knows, most reliable first:
    suspended jobs. Your `.zprofile`, `.zshrc` and frameworks such as oh-my-zsh load exactly as before. A
    command Next Term or an agent runs by itself (MCP's `new_tab` and `send_to_tab`, a resume) stays out of
    zsh's history, so ↑ and autosuggestions never offer it; a line Next Term only puts on your prompt is yours
-   once you press Return.
+   once you press Return. A third hook reports the line as you edit it (what is typed, where the cursor is, and
+   whether a plugin such as zsh-autosuggestions draws a suggestion), once no key is waiting: suggestions while
+   typing and an agent's `read_tab` read it from there. Next Term's own suggestion is drawn over the terminal and
+   never written into it; one is put on your line only through that hook, while the line is still the one it
+   showed on.
 2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
    Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
    with choices means it is waiting on you, anything else means idle. These hints are checked against
@@ -314,6 +331,8 @@ One window per project, and a few keys to move between them:
 | Replace in the open file | ⌥⌘F |
 | Find in Files / Replace in Files | ⌘⇧F / ⌘⇧R |
 | Clear (in a Markdown file, ⌘K makes a link) | ⌘K |
+| Take the suggestion while typing / one word of it / hide it | → (or End, ⌃E, ⌃F) / ⌥→ / Esc |
+| Forget the suggestion showing (never suggested again) | ⇧⌘⌫ |
 | Font size | ⌘+ / ⌘- / ⌘0 |
 | Option as Meta (for Emacs-style keys) | File menu, off by default |
 | Save / Save All | ⌘S / ⌥⌘S |
@@ -370,6 +389,14 @@ Next Term's menu.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
   be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
+- **Suggestions while typing** come from Next Term's record of the commands you ran in its zsh tabs, kept on
+  this Mac only, in `~/Library/Application Support/Next Term/History.noindex` (a folder only you can open, which
+  Spotlight leaves out): each line, when it last ran, how often, its exit, its folder and repository, and the
+  commands that followed it. A command Next Term or an agent ran is never recorded, nor a line that holds a
+  secret (one of your stored keys, a token or a password), starts with a space, or spans lines, nor anything
+  while suggestions are off or View › Private Mode is on (which lasts until you turn it off or quit). zsh's
+  history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings › Terminal ›
+  While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
 - **Secrets** (the Secrets menu, and Settings › Secrets) keeps API and MCP keys in a vault on your Mac, each
   value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one, by
   the login keychain, which Settings calls less protected); the names, what each key is for, who added it, the

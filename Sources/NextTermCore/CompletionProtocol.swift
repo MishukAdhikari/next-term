@@ -295,7 +295,8 @@ public enum CompletionProtocol {
         return .line(LineReport(id: id, left: false, word: word.value, unquoted: unquoted.value))
     }
 
-    private static func number(_ field: Substring) -> Int? {
+    /// A decimal of 1 to 9 ASCII digits (the ghost hook's marks read theirs so too).
+    static func number(_ field: Substring) -> Int? {
         guard !field.isEmpty, field.count <= 9, field.allSatisfy(\.isASCII), let value = Int(field), value >= 0 else { return nil }
         return value
     }
@@ -358,13 +359,19 @@ public enum CompletionProtocol {
 
     /// The bytes for one private key: the prefix, the kind, the id, the payload's length and the payload.
     public static func frame(_ key: Key, id: Int, fields: [String] = []) -> [UInt8] {
+        frame(prefix: prefix, kind: key.rawValue, id: id, fields: fields)
+    }
+
+    /// A frame behind any hook's private key (the ghost hook's too, GhostProtocol), framed and escaped as Tab
+    /// completion's are.
+    static func frame(prefix: String, kind: UInt8, id: Int, fields: [String]) -> [UInt8] {
         var payload: [UInt8] = []
         for (index, field) in fields.enumerated() {
             if index > 0 { payload.append(UInt8(ascii: ";")) }
             payload += escape(field)
         }
         var out = Array(prefix.utf8)
-        out.append(key.rawValue)
+        out.append(kind)
         out += Array(padded(id % 1_000_000).utf8)
         out += Array(padded(payload.count).utf8)
         return out + payload
