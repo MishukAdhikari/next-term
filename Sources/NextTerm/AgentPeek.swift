@@ -11,9 +11,10 @@ import NextTermCore
 /// state (`agent explain`), ⌘1 the screen again, Esc closes. What the user does here is the user's own: it never asks,
 /// and the agent is no longer an MCP agent's to drive.
 final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
-    /// One of herdr's agents (its pane in the tab), or the tab's own agent.
+    /// One of herdr's agents (its pane in the tab's herdr, on one of that herdr's machines when `machine` is set), or the
+    /// tab's own agent.
     enum Subject: Equatable {
-        case herdr(pane: String)
+        case herdr(machine: String?, pane: String)
         case tab
     }
 
@@ -55,20 +56,26 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         self.tab = tab
         self.subject = subject
         switch subject {
-        case .herdr(let pane): key = HerdrTarget(tabID: tab.id.uuidString, pane: pane).id
+        case let .herdr(machine, pane): key = HerdrTarget(tabID: tab.id.uuidString, machine: machine, pane: pane).id
         case .tab: key = tab.id.uuidString.lowercased()
         }
         super.init()
         build()
     }
 
+    /// The herdr agent it peeks at, if it peeks at one.
+    private var ref: HerdrAgentRef? {
+        guard let tab, case let .herdr(machine, pane) = subject else { return nil }
+        return HerdrAgentRef(tab: tab, machine: machine, pane: pane)
+    }
+
     // MARK: opening
 
     /// Peek at one of herdr's agents of `tab`, or at the tab's own agent (`pane` nil), over `rect` of `view`; with no
     /// view, over the middle of the tab's window's terminal.
-    static func show(_ tab: TerminalTab, pane: String?, relativeTo rect: NSRect? = nil, of view: NSView? = nil) {
+    static func show(_ tab: TerminalTab, machine: String? = nil, pane: String?, relativeTo rect: NSRect? = nil, of view: NSView? = nil) {
         current?.close()
-        let peek = AgentPeek(tab: tab, subject: pane.map { .herdr(pane: $0) } ?? .tab)
+        let peek = AgentPeek(tab: tab, subject: pane.map { .herdr(machine: machine, pane: $0) } ?? .tab)
         let anchor: NSView? = view ?? MCPControl.controller(of: tab)?.activeTab?.view ?? MCPControl.controller(of: tab)?.window?.contentView
         guard let anchor else { return NSSound.beep() }
         let middle = NSRect(x: anchor.bounds.midX - 1, y: anchor.bounds.midY + 60, width: 2, height: 2)
@@ -94,6 +101,9 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         case .tab(let id):
             guard let tab = HerdrAgentMenu.tab(id) else { return NSSound.beep() }
             show(tab, pane: nil)
+        case let .machine(id, machine, pane):
+            guard !pane.isEmpty, let tab = HerdrAgentMenu.tab(id) else { return NSSound.beep() }
+            show(tab, machine: machine, pane: pane)
         case .host, .saved:
             NSSound.beep() // no herdr tab to read it through: choosing it opens one
         }
@@ -188,22 +198,23 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
     func refresh() {
         guard let tab, !tab.exited else { return close() }
         switch subject {
-        case .herdr(let pane):
-            guard tab.followsHerdr, let agent = tab.herdrTracker.agents.first(where: { $0.paneID == pane }) else {
+        case .herdr(_, let pane):
+            guard tab.followsHerdr, let ref, let tracker = ref.tracker, let agent = ref.agent else {
                 Self.drafts[key] = nil
                 return close()
             }
-            let row = tab.herdrTracker.rows.first { $0.pane == pane }
+            let row = tracker.rows.first { $0.pane == pane }
             let time = row?.time(now: TerminalTab.now).map { " · " + $0 } ?? ""
-            header.stringValue = SecretMask.current.mask(HerdrAgents.label(agent) + " · " + (row?.words ?? "") + time)
-            let asked = agent.status == .blocked ? tab.herdrTracker.question(pane) : nil
-            let id = asked.map { HerdrMCP.questionID($0, pane: pane, in: tab) }
+            let place = ref.machineLabel.map { " · on " + $0 } ?? ""
+            header.stringValue = SecretMask.current.mask(HerdrAgents.label(agent) + place + " · " + (row?.words ?? "") + time)
+            let asked = agent.status == .blocked ? tracker.question(pane) : nil
+            let id = asked.map { HerdrMCP.questionID($0, id: ref.id) }
             showQuestion(asked?.text, id: id, choices: asked?.choices ?? [])
             field.placeholderString = agent.status == .working
                 ? "\(agent.name) is working: it gets this the way it gets typed input" : "A line to send \(agent.name)"
             guard lens == .screen, !reading else { return }
             reading = true
-            HerdrRunner.run(.read(pane: pane, source: .recentUnwrapped, lines: Self.lines), for: tab) { [weak self] result in
+            ref.run(.read(pane: pane, source: .recentUnwrapped, lines: Self.lines)) { [weak self] result in
                 guard let self else { return }
                 self.reading = false
                 guard self.lens == .screen else { return }
@@ -264,9 +275,10 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         guard let tab, let asked = shownQuestion, number <= choices.arrangedSubviews.count else { return NSSound.beep() }
         note.stringValue = "Answering…"
         switch subject {
-        case .herdr(let pane):
+        case .herdr:
+            guard let ref else { return }
             let id = key
-            HerdrMCP.answer(tab, pane: pane, expected: asked, choice: number, answer: nil, typing: { HerdrMCP.userActed(on: id) }) { [weak self] said in
+            HerdrMCP.answer(ref, expected: asked, choice: number, answer: nil, typing: { HerdrMCP.userActed(on: id) }) { [weak self] said in
                 switch said {
                 case .answered(let label, _): self?.note.stringValue = "Answered “\(MCPControl.field(label))”."
                 case .refused(let refusal): self?.note.stringValue = refusal.sentence
@@ -291,8 +303,9 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         let line = field.stringValue.trimmingCharacters(in: .newlines)
         guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return NSSound.beep() }
         switch subject {
-        case .herdr(let pane):
-            if tab.herdrTracker.agents.first(where: { $0.paneID == pane })?.status == .blocked {
+        case .herdr(_, let pane):
+            guard let ref else { return }
+            if ref.agent?.status == .blocked {
                 note.stringValue = "It waits on a decision: answer it above."
                 return NSSound.beep()
             }
@@ -302,7 +315,7 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
             }
             HerdrMCP.userActed(on: key)
             note.stringValue = "Sending…"
-            HerdrRunner.run(.prompt(pane: pane), for: tab, input: line) { [weak self] result in
+            ref.run(.prompt(pane: pane), input: line) { [weak self] result in
                 guard let self else { return }
                 if case .error("agent_blocked", _) = result {
                     self.note.stringValue = "It waits on a decision: answer it above."
@@ -329,23 +342,37 @@ final class AgentPeek: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
         note.stringValue = "Sent."
     }
 
-    /// ⌘Return: the agent, as a click on its row: its tab comes forward and herdr shows its pane.
+    /// ⌘Return: the agent, as a click on its row: its tab comes forward and herdr shows its pane. One on a herdr machine
+    /// is focused there (`--machine … agent focus`), and the herdr tab comes forward: herdr shows that machine's
+    /// workspaces once the user picks it in herdr's own sidebar, which nothing outside herdr can do.
     func open() {
         guard let tab else { return }
         close()
         switch subject {
-        case .herdr(let pane): HerdrAgentMenu.show(tab: tab, pane: pane)
-        case .tab: HerdrAgentMenu.go(to: .tab(tab.id.uuidString))
+        case .herdr(nil, let pane):
+            HerdrAgentMenu.show(tab: tab, pane: pane)
+        case .herdr(.some, let pane):
+            guard let ref, let controller = MCPControl.controller(of: tab) else { return }
+            controller.window?.makeKeyAndOrderFront(nil)
+            controller.show(tab)
+            let label = ref.machineLabel ?? "that machine"
+            ref.run(.focus(pane: pane, tab: nil)) { result in
+                let said = HerdrMCP.problem(result, pane: pane, sent: false)
+                tab.view.showNote(said ?? "herdr shows \(label)'s workspaces once you pick it in herdr's sidebar.")
+            }
+        case .tab:
+            HerdrAgentMenu.go(to: .tab(tab.id.uuidString))
         }
     }
 
     /// ⌘E: herdr's own reasons for the agent's state, once, in the text area; ⌘1 or Esc goes back to its screen.
     func explain() {
-        guard let tab, case .herdr(let pane) = subject else { return NSSound.beep() }
+        guard let tab, let ref else { return NSSound.beep() }
+        let pane = ref.pane
         lens = .explain
         updateHints()
         show(text: "Asking herdr why…")
-        HerdrRunner.run(.explain(pane: pane), for: tab) { [weak self] result in
+        ref.run(.explain(pane: pane)) { [weak self] result in
             guard let self, self.lens == .explain else { return }
             switch result {
             case .json(let said), .text(let said):

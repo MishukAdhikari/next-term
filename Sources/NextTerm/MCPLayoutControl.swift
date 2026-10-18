@@ -33,15 +33,15 @@ extension MCPWriteControl {
     /// focus_tab with a herdr agent's id: asked first, since herdr moves its view in every window attached to that
     /// session, not only here; then the tab takes the keyboard and herdr shows the agent's pane (HerdrMCP.focus).
     static func focusAgent(_ target: HerdrTarget, _ context: Context, reply: @escaping Reply) {
-        let found: (tab: TerminalTab, agent: HerdrAgent)
+        let found: (ref: HerdrAgentRef, agent: HerdrAgent)
         switch HerdrMCP.agent(target, caller: context.caller, herdrCaller: [:], typing: false) {
         case .failure(let error): return reply(MCPControl.fail(error.text))
         case .success(let pair): found = pair
         }
-        let tab = found.tab
+        let tab = found.ref.tab
         guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab is gone.")) }
         if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
-        let host = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
+        let host = found.ref.machineLabel.map { "on its machine “\($0)”" } ?? tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
         let ask = Ask(title: "An agent asks to show a herdr agent",
                       details: "“\(found.agent.name)” (\(found.agent.paneID)) in herdr \(host) comes to the front of \(place(controller)): herdr shows that pane in every window attached to its session, and the tab takes the keyboard.")
         approve(ask, context, reply: reply) { approved, window in
@@ -49,13 +49,13 @@ extension MCPWriteControl {
             guard let controller = MCPControl.controller(of: tab) else {
                 return reply(MCPControl.fail("That tab closed meanwhile; nothing changed."))
             }
-            guard let agent = tab.herdrTracker.agents.first(where: { $0.paneID == target.pane }) else {
-                return reply(MCPControl.fail("herdr no longer lists \(target.pane) on that tab; nothing changed."))
+            guard let agent = found.ref.agent else {
+                return reply(MCPControl.fail("herdr no longer lists \(target.pane) there; nothing changed."))
             }
             if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
             tab.view.awaitsChoice = false // the user approved giving it the keyboard
             controller.show(tab)
-            HerdrMCP.focus(tab, agent, approved: approved, reply: reply)
+            HerdrMCP.focus(found.ref, agent, approved: approved, reply: reply)
         }
     }
 

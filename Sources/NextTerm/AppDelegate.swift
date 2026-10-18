@@ -1512,6 +1512,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for overview in RemotePoller.shared.overviews {
             for pane in overview.tracker.needsYou { agents.insert(overview.place + "\u{0}" + pane) }
         }
+        // The machines saved in a herdr here: a pane id is a machine's own, so the machine is part of the key.
+        for watch in LocalHerdrWatch.shared.allMachines {
+            guard let tab = watch.tab else { continue }
+            for machine in watch.machines {
+                for pane in machine.tracker.needsYou { agents.insert("\(tab.herdrPlace) @\(machine.id)\u{0}" + pane) }
+            }
+        }
         let count = controllers.reduce(0) { $0 + $1.unseenTabCount } + agents.count
         guard count != lastBadge else { return }
         lastBadge = count
@@ -1666,6 +1673,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for (id, posted) in herdrDelivered where posted.owner == owner { withdrawHerdrNotice(id) }
     }
 
+    /// A notice for an agent on one of the machines saved in a herdr here (HerdrMachineWatch), as `post(herdrAgent:)`
+    /// posts one: "Build machine (herdr)" in the subtitle, its own id, withdrawn as the agent moves on. A click peeks at
+    /// it: herdr cannot be told which machine its screen shows.
+    func post(machineAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, machine: HerdrMachineWatch.Machine,
+              owner: String, tab: TerminalTab, appActive: Bool? = nil) {
+        guard !machine.tracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        let id = HerdrTarget(tabID: tab.id.uuidString, machine: machine.id, pane: agent.paneID).id
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: false, drivenByAgent: HerdrMCP.isDriven(id)) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = AgentQueue.onMachine(Typography.shortened(machine.label, to: 40))
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = machine.label
+        content.userInfo = ["tab": tab.id.uuidString, "herdr_machine": machine.id, "herdr_pane": agent.paneID]
+        herdrDelivered[id] = (owner, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
     /// A notice for an agent of a connected host with no herdr tab (HerdrOverview), as `post(herdrAgent:)` posts one: the
     /// host in the subtitle, its own id, withdrawn as the agent moves on. A click opens a herdr tab there, on that pane.
     func post(overviewAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, overview: HerdrOverview,
@@ -1778,6 +1819,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let pane = response.notification.request.content.userInfo["herdr_pane"] as? String
         // An agent of a host with no herdr tab: a herdr tab opens there, on its pane.
         let host = response.notification.request.content.userInfo["herdr_host"] as? String
+        // An agent on one of a local herdr's machines: Peek at it.
+        let machine = response.notification.request.content.userInfo["herdr_machine"] as? String
         let action = response.actionIdentifier
         if NoticeActions.choice(action) != nil || action == NoticeActions.reply {
             // A button on the notice: answered here, Next Term staying where it is.
@@ -1796,6 +1839,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NSApp.activate(ignoringOtherApps: true)
             if let host, let pane {
                 HerdrAgentMenu.go(to: .host(id: host, pane: pane))
+                return completionHandler()
+            }
+            if let machine, let pane, let tabID {
+                HerdrAgentMenu.go(to: .machine(tab: tabID, machine: machine, pane: pane))
                 return completionHandler()
             }
             for controller in controllers {

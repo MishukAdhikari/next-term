@@ -23,6 +23,10 @@ public struct AgentQueue: Equatable, Sendable {
             case host(id: String, pane: String)
             /// A saved host kept with herdr that is not connected: choosing it opens a herdr tab there.
             case saved(id: String)
+            /// One of the agents on a machine saved in a herdr on this Mac: the tab that runs that herdr, herdr's id for
+            /// the machine, and herdr's pane id there. Choosing it peeks at it: herdr cannot be told which machine its
+            /// screen shows.
+            case machine(tab: String, machine: String, pane: String)
         }
 
         public var target: Target
@@ -109,6 +113,9 @@ public struct AgentQueue: Equatable, Sendable {
     public static let thisMac = "This Mac"
     /// The heading of the saved herdr hosts that are not connected.
     public static let notConnected = "Not Connected"
+
+    /// The heading of the agents on one of a local herdr's saved machines: "Build machine (herdr)".
+    public static func onMachine(_ label: String) -> String { "\(label) (herdr)" }
 
     /// The heading of a connected host's agents while no tab shows its herdr: "web-2 (no herdr tab)".
     public static func noHerdrTab(_ host: String) -> String { "\(host) (no herdr tab)" }

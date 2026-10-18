@@ -409,8 +409,15 @@ enum MCPControl {
             if remote.keep == .herdr, let note = tab.herdrWatch.note { info["herdr_note"] = note }
         }
         // herdr's agents, each with an id of its own (HerdrMCP), on a server or in a tab on this Mac.
-        if tab.followsHerdr, !tab.herdrTracker.agents.isEmpty {
-            info["herdr_agents"] = tab.herdrTracker.agents.map { HerdrMCP.entry($0, in: tab, caller: herdrCaller) }
+        if tab.followsHerdr {
+            var agents = tab.herdrTracker.agents.map { HerdrMCP.entry($0, in: tab, caller: herdrCaller) }
+            // And those on the machines saved in a herdr here, under the tab that reads them.
+            if let watch = LocalHerdrWatch.shared.machines(of: tab), watch.tab === tab {
+                for machine in watch.machines {
+                    agents += machine.tracker.agents.map { HerdrMCP.entry($0, in: tab, machine: machine) }
+                }
+            }
+            if !agents.isEmpty { info["herdr_agents"] = agents }
         }
         return info
     }

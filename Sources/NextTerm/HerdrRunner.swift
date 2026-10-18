@@ -15,17 +15,19 @@ enum HerdrRunner {
     private static var waiting: [String: [() -> Void]] = [:]
 
     /// Runs `command` for `tab`, with `input` as the text it sends (prompt, text), within `timeout` seconds of now.
-    static func run(_ command: HerdrCommand, for tab: TerminalTab, input: String? = nil, timeout: TimeInterval = 15,
+    /// `machine`: one of the machines saved in the tab's herdr on this Mac, reached through that herdr (`--machine`).
+    static func run(_ command: HerdrCommand, for tab: TerminalTab, machine: String? = nil, input: String? = nil, timeout: TimeInterval = 15,
                     completion: @escaping (HerdrResult) -> Void) {
-        run(command, for: tab, input: input, timeout: timeout) { result, _ in completion(result) }
+        run(command, for: tab, machine: machine, input: input, timeout: timeout) { result, _ in completion(result) }
     }
 
     /// The same, also saying which verb answered ("tab focus" when this herdr had no `agent focus`).
-    static func run(_ command: HerdrCommand, for tab: TerminalTab, input: String? = nil, timeout: TimeInterval = 15,
+    static func run(_ command: HerdrCommand, for tab: TerminalTab, machine: String? = nil, input: String? = nil, timeout: TimeInterval = 15,
                     reporting completion: @escaping (HerdrResult, _ verb: String?) -> Void) {
         if tab.remote == nil, let client = tab.localHerdr {
-            return runHere(command, client: client, input: input, timeout: timeout, completion: completion)
+            return runHere(command, client: client, machine: machine, input: input, timeout: timeout, completion: completion)
         }
+        if machine != nil { return completion(.unreachable("herdr's saved machines are reached only through a herdr on this Mac."), nil) }
         guard let remote = tab.remote, remote.keep == .herdr, !tab.fellBack, let path = tab.controlPath else {
             return completion(.unreachable("That tab does not show herdr."), nil)
         }
@@ -51,10 +53,12 @@ enum HerdrRunner {
 
     /// herdr on this Mac (a local tab's client): its argument lists run one by one off the main thread, no shell between,
     /// the text as one argument; an attempt whose verb this herdr lacks gives way to the next.
-    private static func runHere(_ command: HerdrCommand, client: LocalHerdrClient, input: String?, timeout: TimeInterval,
-                                completion: @escaping (HerdrResult, String?) -> Void) {
-        guard let attempts = command.argv(executable: client.executable, session: client.session, text: input) else {
-            let refusal = command.refusal(session: client.session) ?? "That herdr command cannot be built."
+    private static func runHere(_ command: HerdrCommand, client: LocalHerdrClient, machine: String?, input: String?,
+                                timeout: TimeInterval, completion: @escaping (HerdrResult, String?) -> Void) {
+        // A machine has its own herdr session: the client's is not passed with it, which herdr would refuse.
+        let session = machine == nil ? client.session : nil
+        guard let attempts = command.argv(executable: client.executable, session: session, machine: machine, text: input) else {
+            let refusal = command.refusal(session: session, machine: machine) ?? "That herdr command cannot be built."
             return completion(.error(code: "", message: refusal), nil)
         }
         let environment = client.processEnvironment

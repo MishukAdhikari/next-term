@@ -24,6 +24,7 @@ enum HerdrAgentMenu {
             }
         }
         for overview in RemotePoller.shared.overviews { items += overviewItems(overview) }
+        for watch in LocalHerdrWatch.shared.allMachines { items += machineItems(watch) }
         let connected = Set(tabs.compactMap { tab in tab.remoteConnected ? tab.remote?.host.id : nil })
         let saved = RemoteHosts.all.map { (id: $0.id, name: $0.name, keep: $0.keep) }
         items += AgentQueue.notConnected(saved, connected: connected)
@@ -41,6 +42,31 @@ enum HerdrAgentMenu {
         }
     }
 
+    /// The agents on the machines saved in a herdr here, under "<label> (herdr)"; a machine herdr has not reached for three
+    /// reads is one item that says so, with herdr's last words in its tooltip.
+    private static func machineItems(_ watch: HerdrMachineWatch) -> [AgentQueue.Item] {
+        guard let tab = watch.tab else { return [] }
+        var items: [AgentQueue.Item] = []
+        for machine in watch.machines {
+            let group = AgentQueue.onMachine(machine.label)
+            guard machine.reachable else {
+                items.append(AgentQueue.Item(target: .machine(tab: tab.id.uuidString, machine: machine.id, pane: ""),
+                                             key: "machine \(tab.herdrPlace) @\(machine.id)", name: machine.label, group: group,
+                                             state: .idle, words: "herdr can't reach it", tooltip: machine.problem ?? ""))
+                continue
+            }
+            for row in machine.tracker.rows {
+                let question = machine.tracker.question(row.pane)
+                items.append(AgentQueue.Item(target: .machine(tab: tab.id.uuidString, machine: machine.id, pane: row.pane),
+                                             key: "\(tab.herdrPlace) @\(machine.id)\u{0}\(row.pane)", name: row.name, group: group,
+                                             state: row.state, words: row.words, needsSince: row.needsSince, workSince: row.workSince,
+                                             question: question?.text, choices: question?.choices ?? [],
+                                             tooltip: row.tooltip(now: TerminalTab.now)))
+            }
+        }
+        return items
+    }
+
     /// For the Welcome window's server pane: "herdr: 1 needs you, 3 working" for a connected host's herdr agents, as its
     /// herdr tabs and its check without one see them; nil while nothing here follows herdr there.
     static func summary(host: RemoteHost) -> String? {
@@ -48,7 +74,7 @@ enum HerdrAgentMenu {
             switch item.target {
             case let .herdr(id, _): return tab(id)?.remote?.host.id == host.id
             case let .host(id, _): return id == host.id
-            case .tab, .saved: return false
+            case .tab, .saved, .machine: return false
             }
         }
         let followed = AppDelegate.shared.controllers.flatMap(\.tabs).contains { $0.remote?.host.id == host.id && $0.followsHerdr }
@@ -114,6 +140,10 @@ enum HerdrAgentMenu {
         case .saved(let id):
             guard let host = RemoteHosts.find(id) else { return NSSound.beep() }
             openHerdrTab(on: host, focusing: nil)
+        case let .machine(id, machine, pane):
+            // herdr cannot be told which machine its screen shows: Peek, which moves nothing.
+            guard !pane.isEmpty, let tab = tab(id) else { return NSSound.beep() }
+            AgentPeek.show(tab, machine: machine, pane: pane)
         }
     }
 

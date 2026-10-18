@@ -102,6 +102,8 @@ final class LocalHerdrWatch {
         if tabs.isEmpty {
             timer?.invalidate()
             timer = nil
+            machineWatches.values.forEach { $0.end() }
+            machineWatches = [:]
             return
         }
         if timer == nil {
@@ -122,9 +124,22 @@ final class LocalHerdrWatch {
         }
     }
 
+    /// The machines saved in each herdr server here, by server, read through its first tab (HerdrMachineWatch).
+    private var machineWatches: [String: HerdrMachineWatch] = [:]
+
+    /// The machines of the herdr `tab` runs, while it is followed.
+    func machines(of tab: TerminalTab) -> HerdrMachineWatch? {
+        tab.localHerdr.flatMap { machineWatches[$0.server] }
+    }
+
+    /// Every herdr server's machines, followed now.
+    var allMachines: [HerdrMachineWatch] { Array(machineWatches.values) }
+
     private func check() {
         let followed = tabs.compactMap(\.tab).filter { !$0.exited && $0.localHerdr != nil }
-        for (server, group) in Dictionary(grouping: followed, by: { $0.localHerdr!.server }) where !inFlight.contains(server) {
+        let servers = Dictionary(grouping: followed, by: { $0.localHerdr!.server })
+        followMachines(servers)
+        for (server, group) in servers where !inFlight.contains(server) {
             guard let client = group.first?.localHerdr else { continue }
             inFlight.insert(server)
             let wantsFocus = group.contains(where: \.isOnScreen)
@@ -135,6 +150,22 @@ final class LocalHerdrWatch {
                     for tab in group where tab.localHerdr?.server == server { tab.applyHerdr(report) }
                 }
             }
+        }
+    }
+
+    /// Each herdr server's machines, read through its first tab; a server no tab runs any more stops being read.
+    private func followMachines(_ servers: [String: [TerminalTab]]) {
+        for (server, watch) in machineWatches {
+            let reader = servers[server]?.first
+            guard reader == nil || reader !== watch.tab else { continue }
+            watch.end()
+            machineWatches[server] = nil
+        }
+        for (server, group) in servers {
+            guard let first = group.first else { continue }
+            let watch = machineWatches[server] ?? HerdrMachineWatch(tab: first)
+            machineWatches[server] = watch
+            watch.check()
         }
     }
 
