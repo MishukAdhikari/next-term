@@ -165,16 +165,20 @@ extension SelfTest {
                   "\(String(describing: entry))")
         }
 
-        // Show Folders: a second line under each title, and one line again.
+        // Show Folders: a second line under each title, and one line again. Read on a tab whose folder is known: one
+        // with none yet (a whole run's earlier tabs can have one) has nothing to say there, and shows one line.
         if let folders = tabsMenu.items.first(where: { $0.title == "Show Folders" }) {
+            let known: Int = c.groups.firstIndex { !$0.focused.directory.isEmpty } ?? 0
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
             window.layoutIfNeeded()
-            let detail = list.tabRowView(at: 0)?.shownDetail
-            let tall: Bool = abs((list.tabRowView(at: 0)?.frame.height ?? 0) - TabListLayout.twoLineHeight) < 1
+            let detail = list.tabRowView(at: known)?.shownDetail
+            let tall: Bool = abs((list.tabRowView(at: known)?.frame.height ?? 0) - TabListLayout.twoLineHeight) < 1
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
             window.layoutIfNeeded()
-            check(detail?.isEmpty == false && tall && list.tabRowView(at: 0)?.shownDetail == nil && !app.tabListShowsFolders,
-                  "tab list: Show Folders gives each row its folder on a second line, and turned off one line again", detail ?? "no second line")
+            let folder: String = c.groups[safe: known]?.focused.directory ?? "no tab"
+            check(detail?.isEmpty == false && tall && list.tabRowView(at: known)?.shownDetail == nil && !app.tabListShowsFolders,
+                  "tab list: Show Folders gives each row its folder on a second line, and turned off one line again",
+                  "\(detail ?? "no second line"), tall \(tall), tab \(known) of \(c.groups.count) in “\(folder)”")
         }
 
         // Folded: to its bar above or below the editor, the bar shows the tabs; beside it, the rail.
