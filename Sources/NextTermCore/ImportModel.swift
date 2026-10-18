@@ -195,7 +195,7 @@ public enum ImportedSetting: Equatable, Sendable {
     case trimTrailingWhitespace(Bool)     // on save
     case insertFinalNewline(Bool)         // on save
     case hiddenFiles([String])            // FileHiding patterns, added to the user's own
-    case sidebarSingleClick(Bool)         // a click on a file in the project sidebar opens it, in a preview tab
+    case sidebarSingleClick(Bool)         // a click in the project sidebar opens a file (in a preview tab) or a folder
     case backgroundFetch(String)          // a FetchFrequency: 5, 10, 30, popup or off
     case diffLayout(String)               // sideBySide or unified
     case currentLineBlame(Bool)           // the caret line's last commit, after its text

@@ -2,18 +2,22 @@ import AppKit
 import NextTermCore
 import SQLite3
 
-/// "Open files with a single click" (Settings › Editor). Off, a click in the project tree selects and a
+/// "Open files and folders with a single click" (Settings › Editor). Off, a click in the project tree selects and a
 /// double-click opens a file or opens or closes a folder. On, a click opens the file in a preview tab that the
 /// next click reuses, a click opens or closes a folder (a deleted one too) and the double-click after it leaves it
 /// so, and what a click must never open (the project's own row, images, binaries, big files, deleted files,
 /// Databases rows, modified clicks, drags, the click that ends a rename) still only selects. The clicks are real
 /// mouse events.
 extension SelfTest {
+    /// The setting's name in Settings › Editor and in the sidebar's ⋯ menu: one name, in each place's case.
+    private static let boxTitle = "Open files and folders with a single click"
+    private static let menuTitle = "Open Files and Folders with a Single Click"
+
     static func singleClickChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
         guard let window = c.window, let app = AppDelegate.shared else { return }
         guard await frontmost(window, "every check") else { return }
         let fm = FileManager.default
-        let key = "sidebarSingleClickOpens"
+        let key = SidebarClick.settingKey
         let savedSetting = UserDefaults.standard.object(forKey: key)
         c.show(tab)
         if !c.isSidebarVisible { c.toggleProjectSidebar(nil) }
@@ -83,14 +87,15 @@ extension SelfTest {
             if marked > 1 || dirty || (marked == 1) != (area.previewPane != nil) { broken.append(step) }
         }
 
-        // Off, as it is by default: a click selects, a double-click opens.
+        // Off, as a key never written reads, and as existing installs keep it: a click selects, a double-click opens.
         UserDefaults.standard.removeObject(forKey: key)
-        let box = checkbox(in: EditorSettingsView(frame: .zero), titled: "Open files with a single click")
-        let menuItem = LayoutMenu.sidebar().items.first { $0.title == "Open Files with a Single Click" }
+        let box = checkbox(in: EditorSettingsView(frame: .zero), titled: boxTitle)
+        let menuItem = LayoutMenu.sidebar().items.first { $0.title == menuTitle }
         check(!app.sidebarSingleClickOpens && box?.state == .off && menuItem?.state == .off,
-              "single click: off by default, in Settings › Editor and in the sidebar's ⋯ menu",
+              "single click: off when never set, in Settings › Editor and in the sidebar's ⋯ menu, under the same name",
               "setting \(app.sidebarSingleClickOpens), box \(String(describing: box?.state)), menu \(String(describing: menuItem?.state))")
-        check(box?.toolTip?.hasPrefix("A click opens the file in a preview tab") == true, "the checkbox says what it does", box?.toolTip ?? "no tooltip")
+        check(box?.toolTip?.hasPrefix("A click opens a file in a preview tab and opens or closes a folder") == true, "the checkbox says what it does",
+              box?.toolTip ?? "no tooltip")
         if await frontmost(window, "the clicks with the setting off") {
             // Nothing selected first (showing a.txt above selected it): the click is what must select it.
             window.makeFirstResponder(outline)
@@ -108,9 +113,9 @@ extension SelfTest {
 
         // On, from the ⋯ menu.
         let menu = LayoutMenu.sidebar()
-        if let index = menu.items.firstIndex(where: { $0.title == "Open Files with a Single Click" }) { menu.performActionForItem(at: index) }
-        let boxOn = checkbox(in: EditorSettingsView(frame: .zero), titled: "Open files with a single click")?.state == .on
-        let itemOn = LayoutMenu.sidebar().items.first { $0.title == "Open Files with a Single Click" }?.state == .on
+        if let index = menu.items.firstIndex(where: { $0.title == menuTitle }) { menu.performActionForItem(at: index) }
+        let boxOn = checkbox(in: EditorSettingsView(frame: .zero), titled: boxTitle)?.state == .on
+        let itemOn = LayoutMenu.sidebar().items.first { $0.title == menuTitle }?.state == .on
         check(app.sidebarSingleClickOpens && boxOn && itemOn, "the ⋯ menu item turns single clicks on, and both places show it")
 
         // Each group again: the app can lose the front during a long run.
@@ -750,7 +755,7 @@ extension SelfTest {
         clickRow(c, files[4])
         let hadPreview = area.previewPane != nil
         let settings = EditorSettingsView(frame: .zero) // the checkbox's target: kept until it has been clicked
-        withExtendedLifetime(settings) { checkbox(in: settings, titled: "Open files with a single click")?.performClick(nil) }
+        withExtendedLifetime(settings) { checkbox(in: settings, titled: boxTitle)?.performClick(nil) }
         check(hadPreview && !app.sidebarSingleClickOpens && area.previewPane == nil && area.panes.count == 1 && !area.tabBar.items.contains { $0.preview },
               "turning single clicks off in Settings keeps the preview as an ordinary tab")
         window.makeFirstResponder(outline)

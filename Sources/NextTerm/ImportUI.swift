@@ -1147,7 +1147,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     static func describeWindowSetting(_ setting: ImportedSetting) -> String {
         switch setting {
         case .sidebarSingleClick(let on):
-            return on ? "Open files with a single click, in a preview tab" : "Open files with a double click"
+            return on ? "Open files and folders with a single click, files in a preview tab" : "Open files and folders with a double click"
         case .backgroundFetch(let raw):
             let frequency = FetchFrequency(rawValue: raw) ?? .standard
             return "Fetch in the background: " + lowerFirst(frequency.title)

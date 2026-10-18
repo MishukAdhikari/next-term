@@ -305,13 +305,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// One click on a file in the project sidebar opens it, in a preview tab (off: a double-click does, as
-    /// in Finder). Read at each click, so it applies to every window at once. Turning it off keeps every
-    /// preview as an ordinary tab.
+    /// One click in the project sidebar opens a file, in a preview tab, and opens or closes a folder (off: a click
+    /// selects, and a double-click does those). Read at each click, so it applies to every window at once. Turning it
+    /// off keeps every preview as an ordinary tab. A new install has it on, stored at its first launch
+    /// (`SidebarClick.settleDefault`); an install used before that never chose keeps it off, and a key never written
+    /// reads off.
     var sidebarSingleClickOpens: Bool {
-        get { UserDefaults.standard.bool(forKey: "sidebarSingleClickOpens") }
+        get { UserDefaults.standard.bool(forKey: SidebarClick.settingKey) }
         set {
-            UserDefaults.standard.set(newValue, forKey: "sidebarSingleClickOpens")
+            UserDefaults.standard.set(newValue, forKey: SidebarClick.settingKey)
             if !newValue { controllers.forEach { $0.editorArea.keepPreview() } }
         }
     }
@@ -462,6 +464,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single clicks in the sidebar: on for a new install, kept as it was for one used before. First, before this
+        // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
+        // whose defaults look new at every run: its clicks part sets the setting itself.
+        if !SelfTest.isRequested { SidebarClick.settleDefault(in: .standard) }
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }

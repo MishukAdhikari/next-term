@@ -949,7 +949,7 @@ final class EditorSettingsView: NSView {
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
     private let envValues = NSButton(checkboxWithTitle: "Hide values in .env files", target: nil, action: nil)
     private let markdownPreview = NSButton(checkboxWithTitle: "Show Markdown files in Live Preview", target: nil, action: nil)
-    private let singleClick = NSButton(checkboxWithTitle: "Open files with a single click", target: nil, action: nil)
+    private let singleClick = NSButton(checkboxWithTitle: "Open files and folders with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
     private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, opencode)", target: nil, action: nil)
     private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
@@ -1016,7 +1016,7 @@ final class EditorSettingsView: NSView {
         markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Markdown Live Preview switches one file to its source and back."
         singleClick.target = self
         singleClick.action = #selector(singleClickChanged)
-        singleClick.toolTip = "A click opens the file in a preview tab that the next click reuses. Edit the file or double-click its tab to keep it. Off: a double-click opens, as in Finder."
+        singleClick.toolTip = "A click opens a file in a preview tab and opens or closes a folder; a double-click keeps the file as a tab. Off: a click selects, and a double-click opens."
         dotIcons.target = self
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
