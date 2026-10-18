@@ -654,11 +654,6 @@ enum MCPControl {
         let typed = (earlier ?? "") + tab.view.typeText(text)
         guard submit else {
             unsubmitted[tab.id] = (typed: typed, writes: tab.view.inputWrites)
-            // Text with no Return is the agent's input too: whatever later runs it (a Return the agent presses, or a
-            // shell that ran a typed-ahead line), the tab stays driven until you type in it yourself, its run_with_secrets
-            // grants end, and the command it starts is the agent's.
-            SecretRequests.tabGotInput(tab.id)
-            driven.insert(tab.id)
             return
         }
         sent(to: tab)
@@ -709,6 +704,13 @@ enum MCPControl {
             return reply(fail("The program in that tab takes one line at a time (no bracketed paste); send lines one by one."))
         }
         type(text, into: tab, submit: submit)
+        if !submit {
+            // An agent's text with no Return is its input too (type leaves it unmarked, as Next Term's own line for a
+            // password manager's CLI is the user's): whatever later runs it, the tab stays driven until you type in it
+            // yourself, its run_with_secrets grants end, and the command it starts is the agent's.
+            SecretRequests.tabGotInput(tab.id)
+            driven.insert(tab.id)
+        }
         reply(ok(["id": tab.id.uuidString.lowercased(), "typed": text.count, "submitted": submit]))
     }
 
