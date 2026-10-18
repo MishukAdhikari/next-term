@@ -63,6 +63,50 @@ extension SelfTest {
         chmod(path.path, 0o755)
     }
 
+    /// A herdr of its own binary at `path`, built with cc, that runs the stand-in script at `script` with its arguments:
+    /// for herdr's screen (no arguments) as a child it waits for, so the process in front, whose environment Next Term
+    /// reads, stays this binary; for a command, in its place. False when it could not be built.
+    static func herdrLauncher(at path: URL, running script: URL) async -> Bool {
+        let literal = script.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let source = path.appendingPathExtension("c")
+        let code = """
+            #include <errno.h>
+            #include <sys/wait.h>
+            #include <unistd.h>
+            int main(int argc, char **argv) {
+                char *args[argc + 2];
+                args[0] = "/bin/sh";
+                args[1] = "\(literal)";
+                for (int i = 1; i < argc; i++) args[i + 1] = argv[i];
+                args[argc + 1] = 0;
+                if (argc > 1) { execv(args[0], args); return 127; }
+                pid_t child = fork();
+                if (child < 0) return 127;
+                if (child == 0) { execv(args[0], args); _exit(127); }
+                int status = 0;
+                while (waitpid(child, &status, 0) < 0) { if (errno != EINTR) return 1; }
+                return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+            }
+
+            """
+        try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard (try? code.write(to: source, atomically: true, encoding: .utf8)) != nil else { return false }
+        unlink(path.path)
+        let built = await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/cc")
+                process.arguments = ["-o", path.path, source.path]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                guard (try? process.run()) != nil else { return done.resume(returning: false) }
+                process.waitUntilExit()
+                done.resume(returning: process.terminationStatus == 0)
+            }
+        }
+        return built && FileManager.default.isExecutableFile(atPath: path.path)
+    }
+
     /// herdr's list as the stand-in gives it: claude in w1:p1 (herdr's focus, in w1:t1; a naming plugin's name and title
     /// on it) and codex in w2:p1, in `codex`'s state, with herdr's change count `seq`.
     static func standInAgents(codex: String, claude: String = "working", seq: Int = 4) -> String {
@@ -301,6 +345,9 @@ extension SelfTest {
         }
         check(tab.herdrTracker.isMuted("w2:p1"), "herdr agents: Mute Notices on a row mutes that agent")
         let muted = app.testNotifications.count
+        // herdr says blocked because the agent's prompt is on its screen: the pane shows it by the check that says so,
+        // and that check's read is the one Next Term makes until herdr counts another change.
+        write("herdr-read", "Allow rm -rf build? (y/n)\n")
         write("herdr-agents", standInAgents(codex: "blocked", claude: "idle", seq: 12))
         _ = await wait(10) { tab.herdrTracker.needsYou.contains("w2:p1") }
         await pause(3)
@@ -309,7 +356,6 @@ extension SelfTest {
         tab.muteHerdr("w2:p1", false)
 
         // Peek: the agent's recent text, its question's buttons, a line sent as herdr's prompt; herdr's view does not move.
-        write("herdr-read", "Allow rm -rf build? (y/n)\n")
         _ = await wait(10) { tab.herdrTracker.question("w2:p1") != nil }
         clearCalls()
         AgentPeek.show(tab, pane: "w2:p1")
@@ -397,8 +443,14 @@ extension SelfTest {
     /// machines saved in it through `--machine`; its screen hears when the tab loses the focus; ending it posts no notice
     /// and stops every read.
     static func localHerdrChecks(_ c: TerminalWindowController, base: URL) async {
-        let script = base.appendingPathComponent("local/herdr")
-        herdrStandIn(at: script, base: base)
+        // herdr's client is a binary of its own, as herdr is, that runs the stand-in: macOS gives no other process the
+        // environment of its own binaries (/bin/sh's, running a script), so the socket a script was started with
+        // cannot be read from it, and a real herdr's can.
+        let herdr = base.appendingPathComponent("local/herdr")
+        let standIn = base.appendingPathComponent("local/herdr-stand-in")
+        herdrStandIn(at: standIn, base: base)
+        let launcher = await herdrLauncher(at: herdr, running: standIn)
+        if !launcher { herdrStandIn(at: herdr, base: base) }
         let calls = base.appendingPathComponent("herdr-calls")
         let input = base.appendingPathComponent("herdr-screen-input")
         func write(_ name: String, _ text: String) { try? text.write(to: base.appendingPathComponent(name), atomically: true, encoding: .utf8) }
@@ -407,7 +459,7 @@ extension SelfTest {
         write("herdr-machine-agents", #"{"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","agent_status":"blocked","state_change_seq":2,"tab_id":"w1:t1"}]}}"#)
         write("herdr-read", "Allow rm -rf build? (y/n)\n")
         defer {
-            unlink(script.path)
+            for path in [herdr, standIn, herdr.appendingPathExtension("c")] { unlink(path.path) }
             for name in ["herdr-calls", "herdr-agents", "herdr-machines", "herdr-machine-agents", "herdr-read", "herdr-screen-input"] {
                 unlink(base.appendingPathComponent(name).path)
             }
@@ -416,12 +468,16 @@ extension SelfTest {
         defer { c.remove(tab) }
         _ = await wait(10) { tab.status.integrated }
         let socket = base.appendingPathComponent("standin.sock").path
-        tab.runWhenReady("HERDR_SOCKET_PATH=\(ShellQuote.quote(socket)) \(ShellQuote.quote(script.path))")
+        tab.runWhenReady("HERDR_SOCKET_PATH=\(ShellQuote.quote(socket)) \(ShellQuote.quote(herdr.path))")
         let rows = await wait(8) { tab.localHerdr != nil && tab.herdrRows.count == 2 }
         check(rows && tab.status.hostsAgents, "herdr on this Mac: a local tab running herdr follows its agents, a row each",
               "\(tab.localHerdr as Any) \(tab.herdrRows)")
         let said = { (try? String(contentsOf: calls, encoding: .utf8)) ?? "" }
-        check(said().contains("agent list|\(socket)"), "herdr on this Mac: its herdr is asked with the client's own socket", said())
+        if launcher {
+            check(said().contains("agent list|\(socket)"), "herdr on this Mac: its herdr is asked with the client's own socket", said())
+        } else {
+            note("herdr on this Mac: no C compiler (cc) here for a herdr of its own binary, so the socket check is skipped")
+        }
 
         // Focus reports: another tab chosen tells herdr's screen focus left (CSI O); back, it came (CSI I); once each.
         let other = c.addTab(directory: base.path)
@@ -444,12 +500,16 @@ extension SelfTest {
         check(await wait(10) { AgentPeek.current != nil } && !said().contains("agent focus"), "herdr machines: choosing one peeks at it, moving nothing")
         AgentPeek.current?.close()
 
-        let before = AppDelegate.shared.testNotifications.count
+        // Leaving herdr withdraws its machines' notices, so what is checked is that nothing is posted, not the count.
+        let before = AppDelegate.shared.testNotifications
         tab.view.send(txt: "q")
         let ended = await wait(10) { !tab.status.running && tab.localHerdr == nil }
         await pause(1)
-        check(ended && AppDelegate.shared.testNotifications.count == before && tab.status.unseen == nil,
-              "herdr on this Mac: leaving herdr posts no notice and marks nothing", "\(tab.status.unseen as Any)")
+        let new = AppDelegate.shared.testNotifications.filter { request in !before.contains { $0 === request } }
+        check(ended && new.isEmpty && tab.status.unseen == nil, "herdr on this Mac: leaving herdr posts no notice and marks nothing",
+              "ended \(ended), posted \(new.map(\.content.title)), unseen \(tab.status.unseen as Any)")
+        check(!AppDelegate.shared.testNotifications.contains { $0.content.userInfo["herdr_machine"] as? String == "m1" },
+              "herdr machines: and their notices go with it")
         unlink(calls.path)
         await pause(5)
         check(!said().contains("--machine"), "herdr machines: and nothing more is read on its machines", said())
