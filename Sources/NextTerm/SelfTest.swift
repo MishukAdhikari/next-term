@@ -4953,6 +4953,10 @@ enum SelfTest {
         guard await wait(5, { worker.status.running }) else {
             return check(false, "MCP: send_to_tab runs `sleep 29`", worker.screenTail(6).joined(separator: " | "))
         }
+        // While it runs zsh takes no bracketed paste, so a Return in the text, a lone "\r" too, would run as typed-ahead.
+        let returnInText = await tool("send_to_tab", ["tab_id": workerID, "text": "echo cr-line\r", "submit": false])
+        check(returnInText.isError && returnInText.text.contains("one line at a time"),
+              "MCP: send_to_tab refuses a Return in its text where the program takes no paste", returnInText.text)
         let refused = await tool("close_tab", ["tab_id": workerID])
         check(refused.isError && refused.text.contains("force"), "MCP: close_tab will not stop a running command unless forced", refused.text)
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["ctrl+c"]])
@@ -4966,7 +4970,9 @@ enum SelfTest {
         // `sleep 29`, and text sent with no Return that press_keys' Return then submits. A line typed as the user types it
         // goes in. The worker's zsh reads the self-test's own config, so its history is the test's, never the user's; that
         // history is shared with the test's other tabs, where `sleep 30` is typed by hand, so the agent sleeps 29.
+        MCPControl.typedByUser(worker)
         _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo tied-line", "submit": false])
+        check(MCPControl.isDriven(worker), "MCP: text sent with no Return makes the tab the agent's until you type in it")
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["enter"]])
         _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("tied-line") } }
         worker.view.send(txt: "\u{15}echo typed-by-hand\r")

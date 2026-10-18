@@ -649,6 +649,9 @@ enum MCPControl {
         let typed = (earlier ?? "") + tab.view.typeText(text)
         guard submit else {
             unsubmitted[tab.id] = (typed: typed, writes: tab.view.inputWrites)
+            // Text with no Return is the agent's input too: whatever later runs it (a Return the agent presses, or a
+            // shell that ran a typed-ahead line), the tab stays driven until you type in it yourself.
+            driven.insert(tab.id)
             return
         }
         sent(to: tab)
@@ -693,7 +696,9 @@ enum MCPControl {
         let text = arguments["text"] as? String ?? ""
         let submit = arguments["submit"] as? Bool ?? true
         guard !text.isEmpty || submit else { return reply(fail("Nothing to type.")) }
-        if text.contains("\n") && !tab.view.getTerminal().bracketedPasteMode {
+        // By scalars: "\r\n" is one Character, and a lone "\r" is a Return too.
+        let breaksLine: Bool = text.unicodeScalars.contains { $0 == "\n" || $0 == "\r" }
+        if breaksLine && !tab.view.getTerminal().bracketedPasteMode {
             return reply(fail("The program in that tab takes one line at a time (no bracketed paste); send lines one by one."))
         }
         type(text, into: tab, submit: submit)
