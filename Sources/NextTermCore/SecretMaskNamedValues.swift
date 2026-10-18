@@ -1,11 +1,11 @@
 import Foundation
 
 extension MCPRedaction {
-    /// Where a cut in one whole line would show part of a value `redact` masks for its name (`quotedValue`, `bareValue`).
-    /// Such a value can be any length, and only its name, maybe far before the cut, makes it a secret's: the text around
-    /// a cut (`cutsAMask`) cannot tell. The values are read from the line's bytes in one pass (`NamedValueBytes`), with
-    /// what `redact` has made ••• by then made opaque, so a stored value or a URL's password in the line counts as the
-    /// ••• the patterns see.
+    /// Where a cut in one whole line would show part of a value `redact` masks for its name (`quotedValue`, `bareValue`,
+    /// `indentedValue`, `removedIndentedValue`). Such a value can be any length, and only its name, maybe far before the
+    /// cut, makes it a secret's: the text around a cut (`cutsAMask`) cannot tell. The values are read from the line's
+    /// bytes in one pass (`NamedValueBytes`), with what `redact` has made ••• by then made opaque, so a stored value or a
+    /// URL's password in the line counts as the ••• the patterns see.
     struct NamedValues {
         let line: String
         /// Inside a value, on a quoted value's closing quote, or from a bare value's end through the line's end after its

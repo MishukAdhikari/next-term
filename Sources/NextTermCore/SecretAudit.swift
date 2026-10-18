@@ -18,6 +18,8 @@ public enum SecretAudit {
         case writeOnly = "write-only"
         case delete, reveal, copy
         case `import`
+        /// A key rotation (Rotate…), not the log's own move to `audit.log.1`. A build before it skips the line.
+        case rotate
         case undo, decline, pause, grant
         case grantEnd = "grant-end"
         case refused, tamper

@@ -108,11 +108,16 @@ final class MCPControlServer: @unchecked Sendable {
         // and one the quit answered first gets nothing written: the wrapper reads the closed connection. A wrapper the quit
         // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
         // ends, as every other one does.
-        let route = calls.route(call, read: request, selfAnswering: request?.tool == SecretSocket.tool) {
+        // `nxtrm secret import`'s header answers itself the same way; its keys come after, raw, never through this reader.
+        let selfAnswering = request?.tool == SecretSocket.tool || request?.tool == SecretPipeSocket.tool
+        let route = calls.route(call, read: request, selfAnswering: selfAnswering) {
             SecretSocket.isWrapper(pid: peer)
         }
         switch route {
         case .answerItself:
+            if request?.tool == SecretPipeSocket.tool {
+                return SecretPipeSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+            }
             return SecretSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
         case .nothing: return
         case .drained(let answer): return send(answer, on: fd)
@@ -331,7 +336,7 @@ enum MCPControl {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
                                requester: requester, reply: reply)
             }
-        case "list_secrets", "request_secret", "store_secret", "run_with_secrets":
+        case "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets":
             MainActor.assumeIsolated {
                 SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
                                 reply: reply)

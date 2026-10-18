@@ -465,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -1670,7 +1671,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// would be shown, and shows you nothing.
     var testNotifications: [UNNotificationRequest] = []
 
-    private func deliver(_ request: UNNotificationRequest) {
+    func deliver(_ request: UNNotificationRequest) {
         // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
         var request = request
         let mask = SecretMask.current
@@ -1741,8 +1742,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let tabID = response.notification.request.content.userInfo["tab"] as? String
+        let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let reminder { // a key rotation reminder: Rotate… for its key
+                SecretReminders.open(reminder)
+                return completionHandler()
+            }
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
                     controller.window?.makeKeyAndOrderFront(nil)
@@ -1957,6 +1963,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // Prompts as tasks in the project's todo folder, for tomorrow's agent.
         MainActor.assumeIsolated { TasksMenu.shared.fill(submenu(main, "Tasks")) }
+        // Secrets, after Tasks, whose servers and commands use its keys. Show Secrets keeps Window › Secrets' action, so its key stays.
+        MainActor.assumeIsolated { SecretsMenu.shared.fill(submenu(main, "Secrets")) }
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
@@ -2009,7 +2017,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
-        item(window, "Secrets", #selector(showSecrets(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main

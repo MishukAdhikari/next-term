@@ -14,22 +14,33 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         + "Git history keeps the old key."
     static let commentNote = "Comments inside this server's entry are lost when it is rewritten."
     static let keepsCopies = "Next Term keeps a copy of each changed entry with the keys taken out, so Undo can put them back for 30 days."
-    static let startsAfter = "After this, these servers start only while Next Term is open. Each start asks you to approve with Touch ID, "
-        + "unless you allowed it earlier. If you don't answer within 25 seconds, the server doesn't start. Allow it, then restart the server."
-    static let rotate = "These keys sat in plaintext files. To rotate a key, make a new one on the service's website, then use Replace… here. "
+    /// How the servers start afterwards. The keys moved in ask for Touch ID every time they're used unless Settings ›
+    /// Secrets › New keys says otherwise (`asksEveryUse`), so only then can an earlier approval still hold.
+    static func startsAfter(asksEveryUse: Bool) -> String {
+        let asks: String = asksEveryUse ? "Each start asks you to approve with Touch ID."
+            : "Each start asks you to approve with Touch ID, unless you allowed it earlier."
+        return "After this, these servers start only while Next Term is open. " + asks
+            + " If you don't answer within 25 seconds, the server doesn't start. Allow it, then restart the server."
+    }
+    static let rotate = "These keys sat in plaintext files. To rotate a key, select it in the list and use Rotate…: it opens the key\u{2019}s page, "
+        + "or asks where the key came from when it has none, then takes the new key. "
         + "Do it if this Mac ever ran an untrusted install, or if a file is in git: its history keeps the old key. Time Machine keeps old copies too."
     static let restart = "Restart the servers: /mcp in Claude Code, or restart the agent. The first time an agent starts these servers, "
         + "approve each one. Restart any you missed."
 
-    /// Where it looks, and how (the self-test passes a temporary home and no running apps).
+    /// Where it looks, and how (the self-test passes a temporary home, and no app runs).
     struct Setup {
         var home = NSHomeDirectory()
         var projects: [String] = []
         var agentControl = true
-        var running: Set<String> = []
+        /// Whether the app with this bundle identifier runs now (the Claude app, which saves its MCP file whole): asked
+        /// at the scan, when the move plans and just before each write, never kept from an earlier ask.
+        var isOpen: @Sendable (String) -> Bool = { _ in false }
         var lockWait: TimeInterval = 5
         /// The command moved entries start (`nxtrmCommand()`); nil when no path to it lasts, and the import refuses.
         var nxtrm: [String]?
+        /// The one file to look in, when the user picked it (Import From › A File…); nil looks in every config.
+        var sources: [SecretImport.Source]?
     }
 
     /// One row the user can tick: a group of identical values.
@@ -40,14 +51,20 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let nameField: NSTextField
         let nameNote: NSTextField
         let result: NSTextField
+        /// "Never show": the key is saved write-only. Ticked as Settings › Secrets' New keys default says.
+        let neverShowBox: NSButton
 
-        init(group: SecretImport.Group, box: NSButton, nameField: NSTextField, nameNote: NSTextField, result: NSTextField) {
+        init(group: SecretImport.Group, box: NSButton, nameField: NSTextField, nameNote: NSTextField, result: NSTextField,
+             neverShowBox: NSButton) {
             self.group = group
             self.box = box
             self.nameField = nameField
             self.nameNote = nameNote
             self.result = result
+            self.neverShowBox = neverShowBox
         }
+
+        var neverShow: Bool { neverShowBox.state == .on }
 
         var name: String { SecretRequestWindow.normalized(nameField.stringValue.trimmingCharacters(in: .whitespaces)) }
     }
@@ -158,12 +175,15 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         guard setup.nxtrm != nil else { return refuse(Self.placeRefusal) }
         let count = setup.projects.count
         headerLabel.stringValue = "Looked in your agents' settings and in the \(count) \(count == 1 ? "project" : "projects") open in Next Term."
+        if let picked = setup.sources {
+            headerLabel.stringValue = "Looked in " + picked.map { Self.file($0.path) }.joined(separator: ", ") + "."
+        }
         statusLabel.stringValue = "Looking…"
         let setup = setup
         scanTask?.cancel()
         scanTask = Task.detached {
-            let sources = SecretImport.sources(home: setup.home, projects: setup.projects)
-            let found = SecretImport.scan(sources, inGitWorkTree: Self.isInGitWorkTree, isOpen: { setup.running.contains($0) })
+            let sources = setup.sources ?? SecretImport.sources(home: setup.home, projects: setup.projects)
+            let found = SecretImport.scan(sources, inGitWorkTree: SecretImport.isInGitWorkTree, isOpen: setup.isOpen)
             // Checked again on the main actor, where `closeSheet` cancels: a scan that ended as the sheet closed shows nothing.
             await MainActor.run {
                 guard !Task.isCancelled else { return }
@@ -186,8 +206,14 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         for view in rows.arrangedSubviews { view.removeFromSuperview() }
         groupRows = []
         listed = []
-        let stored = SecretsStore.shared.index?.names ?? []
-        let groups = SecretImport.groups(found.findings, stored: stored)
+        let index = SecretsStore.shared.index
+        let stored = index?.names ?? []
+        let mask = SecretMask.current
+        // A value keys an earlier move stored hold already (a move tried again after its file was left as it was)
+        // keeps those keys, one per group.
+        let groups = SecretImport.groups(found.findings, stored: stored) { value in
+            SecretImport.reusable(holding: value, in: index, mask: mask)
+        }
         for group in groups { addGroupRow(group) }
         for finding in found.findings where !finding.movable {
             let text = "\(Self.place(finding)): \(finding.notMovable ?? "")"
@@ -195,7 +221,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             rows.addArrangedSubview(Self.small(text, color: .secondaryLabelColor))
         }
         for (source, location) in found.wrapped {
-            let text = "\(source.client.name), \(Self.file(source.path)), “\(location.server)”: uses Next Term's Secrets"
+            let server: String = SecretImport.shownServer(location.server)
+            let text = "\(source.client.name), \(Self.file(source.path)), “\(server)”: uses Next Term's Secrets"
             listed.append(text)
             rows.addArrangedSubview(Self.small(text, color: .secondaryLabelColor))
         }
@@ -234,7 +261,11 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let nameNote = Self.small("", color: .systemOrange)
         let kind = SecretApprovalPanel.label("\(group.kind), ending …\(group.findings[0].lastFour)", size: 11)
         kind.textColor = .secondaryLabelColor
-        let line = NSStackView(views: [box, nameField, kind])
+        let neverShowBox = NSButton(checkboxWithTitle: Self.neverShowTitle, target: nil, action: nil)
+        neverShowBox.state = SecretNewKeyDefaults.neverShow ? .on : .off
+        neverShowBox.toolTip = Self.neverShowHelp
+        neverShowBox.setAccessibilityLabel("Never show \(group.name)")
+        let line = NSStackView(views: [box, nameField, neverShowBox, kind])
         line.spacing = 8
         var views: [NSView] = [line, nameNote]
         if let summary = group.summary { views.append(Self.small(summary, color: .labelColor)) }
@@ -249,12 +280,14 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         stack.alignment = .leading
         stack.spacing = 3
         rows.addArrangedSubview(stack)
-        groupRows.append(GroupRow(group: group, box: box, nameField: nameField, nameNote: nameNote, result: result))
+        groupRows.append(GroupRow(group: group, box: box, nameField: nameField, nameNote: nameNote, result: result,
+                                  neverShowBox: neverShowBox))
     }
 
-    /// "Codex, ~/.codex/config.toml, “github”, GITHUB_TOKEN".
+    /// "Codex, ~/.codex/config.toml, “github”, GITHUB_TOKEN", the server's name cut at 60 characters.
     static func place(_ finding: SecretImport.Finding) -> String {
-        "\(finding.source.client.name), \(file(finding.source.path)), “\(finding.location.server)”, \(finding.variable)"
+        let server: String = SecretImport.shownServer(finding.location.server)
+        return "\(finding.source.client.name), \(file(finding.source.path)), “\(server)”, \(finding.variable)"
     }
 
     static func file(_ path: String) -> String { (path as NSString).abbreviatingWithTildeInPath }
@@ -272,16 +305,6 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         return label
     }
 
-    /// In a git work tree: a `.git` in the file's folder or one above it.
-    nonisolated static func isInGitWorkTree(_ path: String) -> Bool {
-        var folder = (path as NSString).deletingLastPathComponent
-        while folder.count > 1 {
-            if FileManager.default.fileExists(atPath: (folder as NSString).appendingPathComponent(".git")) { return true }
-            folder = (folder as NSString).deletingLastPathComponent
-        }
-        return false
-    }
-
     // MARK: ticking
 
     @objc private func ticked() { refreshMove() }
@@ -293,11 +316,23 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         refreshMove()
     }
 
-    /// A ticked row's name is checked as typed: the rule, a stored key, or another ticked row.
+    static let reuseNote = "Already in Secrets with this value, from an earlier import: the move uses that key and stores "
+        + "no second copy."
+
+    /// Whether a row's name is a key an earlier import stored (a move, or a copy from a file) that holds its value
+    /// already, and that the move may use (`SecretImport.reusable`: not one added in Settings or by an agent, not a
+    /// write-only one).
+    func reusesStored(_ row: GroupRow) -> Bool {
+        let reusable = SecretImport.reusable(holding: row.group.value, in: SecretsStore.shared.index, mask: .current)
+        return reusable.contains(row.name)
+    }
+
+    /// A ticked row's name is checked as typed: the rule, a stored key with another value, or another ticked row.
     func nameProblem(_ row: GroupRow) -> String? {
         let name = row.name
         guard StoredSecretName.isValid(name) else { return StoredSecretName.rule }
-        if SecretsStore.shared.index?.entry(named: name) != nil { return "A key named \(name) is stored already." }
+        let isStored = SecretsStore.shared.index?.entry(named: name) != nil
+        if isStored, !reusesStored(row) { return "A key named \(name) is stored already." }
         if groupRows.contains(where: { $0 !== row && $0.box.state == .on && $0.name == name }) { return "Another row has this name." }
         return nil
     }
@@ -307,8 +342,12 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         var any = false
         for row in groupRows {
             let problem = row.box.state == .on ? nameProblem(row) : nil
-            row.nameNote.stringValue = problem ?? ""
-            row.nameNote.isHidden = problem == nil
+            let note = problem ?? (reusesStored(row) ? Self.reuseNote : nil)
+            row.nameNote.stringValue = note ?? ""
+            row.nameNote.textColor = problem == nil ? .secondaryLabelColor : .systemOrange
+            row.nameNote.isHidden = note == nil
+            // A key an earlier move stored is used as it is.
+            row.neverShowBox.isEnabled = !isBusy && !reusesStored(row)
             if row.box.state == .on {
                 any = true
                 if problem != nil { ok = false }
@@ -334,9 +373,18 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         let moves = self.moves
         let files = Array(Set(moves.flatMap { $0.findings.map(\.source.path) })).sorted()
         let count = moves.count
+        // A value not ticked that a wrapped entry drops, since the wrapper would take it out at start: named before the write.
+        let stored: [String] = SecretsStore.shared.index?.names ?? []
+        let dropped = SecretImport.droppedFindings(moves, among: scan?.findings ?? [], stored: stored)
+        let droppedPlaces: [(variable: String, server: String)] = dropped.map { ($0.variable, $0.location.server) }
+        var listed: String = files.map { "• " + Self.file($0) }.joined(separator: "\n")
+        if let warning = SecretImport.droppedWarning(droppedPlaces) { listed += "\n\n" + warning }
         let alert = NSAlert()
         alert.messageText = "Move \(count) \(count == 1 ? "key" : "keys") into Secrets?"
-        alert.informativeText = files.map { "• " + Self.file($0) }.joined(separator: "\n") + "\n\n" + Self.keepsCopies + "\n\n" + Self.startsAfter
+        let startsAfter: String = Self.startsAfter(asksEveryUse: SecretNewKeyDefaults.asksEveryUse)
+        alert.informativeText = listed + "\n\n" + Self.keepsCopies + "\n\n" + startsAfter
+        let neverShown: [String] = groupRows.filter { $0.box.state == .on && $0.neverShow && !reusesStored($0) }.map(\.name)
+        if !neverShown.isEmpty { alert.informativeText += "\n\n" + Self.neverShownNote(neverShown) }
         alert.addButton(withTitle: "Move Keys")
         alert.addButton(withTitle: "Cancel")
         confirmAlert = alert
@@ -354,9 +402,12 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
         guard let nxtrm = setup.nxtrm else { return }
         setBusy(true, Self.readingLine)
         let setup = setup
+        // The vault's names: what nxtrm secret run takes out of a server's environment unless the entry asks for it.
+        let stored: [String] = SecretsStore.shared.index?.names ?? []
         Task { @MainActor in
             let planned = await Task.detached { () -> (edits: [SecretImport.FileEdit], failures: [SecretImport.PlanFailure], onMain: Bool) in
-                let plan = SecretImport.plan(moves, nxtrm: nxtrm)
+                // An app opened since the scan leaves its file now, before any key is stored for it.
+                let plan = SecretImport.plan(moves, nxtrm: nxtrm, stored: stored, isOpen: setup.isOpen)
                 return (plan.edits, plan.failures, pthread_main_np() != 0)
             }.value
             #if DEBUG
@@ -369,23 +420,29 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
                 return self.showResults(edits: [], moved: [])
             }
             let movedNames = Set(edits.flatMap(\.names))
+            let ticked: [GroupRow] = self.groupRows.filter { $0.box.state == .on && $0.neverShow }
+            let neverShown: Set<String> = Set(ticked.map(\.name))
             let keys = moves.filter { movedNames.contains($0.name) }.map { move in
-                SecretsStore.ImportKey(name: move.name, purpose: Self.purpose(move), value: move.findings[0].value)
+                SecretsStore.ImportKey(name: move.name, purpose: Self.purpose(move), value: move.findings[0].value,
+                                       writeOnly: neverShown.contains(move.name))
             }
             var kept: [String: [SecretBytes]] = [:]
             for edit in edits { for backup in edit.backups { kept[backup.id] = backup.keptValues } }
             do {
                 self.statusLabel.stringValue = Self.touchIDLine
-                let boxes = try await SecretsStore.shared.performImport(keys, kept: kept, reason: SecretReason.moveOut(keys.count))
+                let imported = try await SecretsStore.shared.performImport(keys, kept: kept, reason: SecretReason.moveOut(keys.count))
                 for index in edits.indices {
-                    for backup in edits[index].backups { edits[index].seal(backup.id, box: boxes[backup.id]) }
+                    for backup in edits[index].backups { edits[index].seal(backup.id, box: imported.boxes[backup.id]) }
+                    // Which keys this move stored, not used from an earlier one: an Undo of it deletes those alone.
+                    edits[index].setStored(imported.stored)
                 }
                 try SecretsStore.shared.saveBackups(edits.flatMap(\.backups))
                 self.statusLabel.stringValue = Self.writingLine
                 let written = await Task.detached { () -> [String: SecretImport.Applied] in
                     var results: [String: SecretImport.Applied] = [:]
                     for edit in edits {
-                        results[edit.path] = SecretImport.apply(edit, lockWait: setup.lockWait, isOpen: { setup.running.contains($0) })
+                        // Asked again here: the app may have opened during Touch ID.
+                        results[edit.path] = SecretImport.apply(edit, lockWait: setup.lockWait, isOpen: setup.isOpen)
                     }
                     return results
                 }.value
@@ -433,6 +490,8 @@ final class SecretImportSheet: NSWindowController, NSWindowDelegate, NSTextField
             summary += " \(SecretRun.keysText(stayed)) \(stayed.count == 1 ? "is" : "are") in Secrets, but no file was changed for "
                 + (stayed.count == 1 ? "it." : "them.")
         }
+        // What the written entries dropped with their keys, since the wrapper would take it out at start.
+        if let dropped = SecretImport.droppedText(written.flatMap(\.dropped)) { summary += "\n\n" + dropped }
         summaryLabel.stringValue = summary + "\n\n" + Self.rotate + "\n\n" + Self.restart
         summaryLabel.isHidden = false
         moveButton.isEnabled = false

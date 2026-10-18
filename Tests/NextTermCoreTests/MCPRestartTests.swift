@@ -505,11 +505,12 @@ import Testing
     }
 
     /// KTD16: a call that only asks again for the answer to a request already open (propose_edit with proposal_id;
-    /// install_skill, remove_skill, apply_import, undo_import, request_secret, store_secret or run_with_secrets with
-    /// request_id) starts nothing, so the wait lets it through. Every other call that changes something is still new work.
+    /// install_skill, remove_skill, apply_import, undo_import, request_secret, store_secret, run_with_secrets or
+    /// import_secrets with request_id) starts nothing, so the wait lets it through. Every other call that changes
+    /// something is still new work.
     @Test func whileAnUpdateWaitsAFollowUpOnAnOpenRequestStillWorks() {
         let waited: Set<String> = ["a"]
-        let secretTools = ["request_secret", "store_secret", "run_with_secrets"]
+        let secretTools = ["request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         for tool in ["propose_edit", "install_skill", "remove_skill", "apply_import", "undo_import"] + secretTools {
             #expect(MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: true, safeMode: false, waitingFor: waited) == nil, "\(tool)")
             let asked = MCPRestoreGate.refusal(tool: tool, tabID: nil, followUp: false, safeMode: false, waitingFor: waited)

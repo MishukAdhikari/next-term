@@ -8,8 +8,10 @@ import Foundation
 public enum SecretRun {
     public static let usage = "usage: nxtrm secret run NAME[=ENVNAME]... -- command [arguments...]"
 
-    /// `nxtrm secret help`.
-    public static let help = """
+    /// `nxtrm secret help`: `secret run`, then `secret import`.
+    public static let help = runHelp + "\n\n" + SecretImportPipe.help
+
+    static let runHelp = """
         usage: nxtrm secret run NAME[=ENVNAME]... -- command [arguments...]
 
         Runs the command with keys from Next Term's Secrets in its environment, once you approve in Next Term with \
@@ -368,6 +370,13 @@ public enum SecretRun {
         case .valueInCommand: return ("nxtrm: the command holds a stored key’s value. Use the key’s name instead.", 2)
         case .unknown: return ("nxtrm: no key named \(name) in Next Term’s Secrets (Settings › Secrets).", 2)
         }
+    }
+
+    /// The approval panel's line under the command: the keys reach it in its environment, which any program running as
+    /// the user can read while it runs (`ps -E`), an agent's own shell tool too.
+    public static func environmentNote(keys count: Int) -> String {
+        let keys: String = count == 1 ? "this key" : "these keys"
+        return "The command, and any program running as you, can read \(keys) while it runs."
     }
 
     /// "GITHUB_TOKEN", "A and B", or "5 keys" for three or more.
