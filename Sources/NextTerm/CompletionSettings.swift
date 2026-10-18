@@ -5,7 +5,9 @@ import NextTermCore
 /// remembered where a plugin owns Tab, each with Ask Again. Its own row (TerminalSettingsView's `row` is local
 /// to it), with the same 110 pt right-aligned label.
 final class CompletionSettingsView: NSStackView {
-    /// The Suggestions row (Suggest a Command), below Tab completion's.
+    /// The While typing row (suggestions while typing), below Tab completion's.
+    let ghostText = GhostSettingsView()
+    /// The Suggestions row (Suggest a Command), below that.
     let suggestions = CommandSuggestionSettingsView()
     private let mode = NSPopUpButton()
     private let note = NSTextField(wrappingLabelWithString: "")
@@ -46,6 +48,7 @@ final class CompletionSettingsView: NSStackView {
         indented.edgeInsets = NSEdgeInsets(top: 0, left: 120, bottom: 0, right: 0)
         addArrangedSubview(line)
         addArrangedSubview(indented)
+        addArrangedSubview(ghostText)
         addArrangedSubview(suggestions)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: CompletionPreferences.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: RemoteCompletionConsent.changed, object: nil)
@@ -118,8 +121,8 @@ final class CompletionSettingsView: NSStackView {
     }
 }
 
-/// Settings › Terminal's Tab completion and Suggest a command rows, in a scroll view of their own: they sit at the
-/// bottom of the tab, and at the Settings window's smaller sizes they scroll instead of being cut off.
+/// Settings › Terminal's Tab completion, While typing and Suggest a command rows, in a scroll view of their own: they
+/// sit at the bottom of the tab, and at the Settings window's smaller sizes they scroll instead of being cut off.
 final class CompletionSettingsPane: NSView {
     let rows = CompletionSettingsView()
     let scroll = NSScrollView()

@@ -68,6 +68,10 @@ import Testing
         }
         #expect(hints("list_tabs")["readOnlyHint"] as? Bool == true)
         #expect(hints("read_tab")["readOnlyHint"] as? Bool == true)
+        // read_tab and wait_for_tab say what is typed at a zsh prompt, and that a plugin's ghost is not.
+        func described(_ name: String) -> String { tools.first { $0["name"] as? String == name }?["description"] as? String ?? "" }
+        #expect(described("read_tab").contains("input: the line being typed") && described("read_tab").contains("left out of screen"))
+        #expect(described("wait_for_tab").contains("with input at a zsh prompt as read_tab gives it"))
         // Typing into a terminal can run anything: clients must be able to ask first.
         #expect(hints("send_to_tab")["destructiveHint"] as? Bool == true)
         #expect(hints("new_tab")["destructiveHint"] as? Bool == true)
@@ -102,8 +106,8 @@ import Testing
         }
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
-        let loaded = tools.filter { !MCPServer.isImportTool($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - MCPServer.importTools.count
+        let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
+        let loadedCount: Int = tools.count - MCPServer.importTools.count - MCPServer.taskTools.count
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]
@@ -128,12 +132,12 @@ import Testing
         #expect(tool.description.contains("several questions"))
     }
 
-    /// Secrets' four tools: names in, status out.
+    /// Secrets' five tools: names in, status out.
     @Test func secretToolsAreListedAndNoneReturnsAValue() throws {
-        let names = ["list_secrets", "request_secret", "store_secret", "run_with_secrets"]
+        let names = ["list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         #expect(MCPServer.secretTools.map(\.name) == names)
         #expect(MCPServer.controlTools.allSatisfy { !names.contains($0.name) })
-        #expect(Array(MCPServer.tools.suffix(4)).map(\.name) == names)
+        #expect(Array(MCPServer.tools.suffix(5)).map(\.name) == names)
         #expect(MCPServer.tools.allSatisfy { !$0.name.hasPrefix("get_secret") && !$0.name.contains("secret_value") })
         let reply = answer(["jsonrpc": "2.0", "id": "s", "method": "tools/list"])
         let tools = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
@@ -164,12 +168,22 @@ import Testing
         #expect(secrets["minItems"] as? Int == 1 && secrets["maxItems"] as? Int == 20)
         #expect((secrets["items"] as? [String: Any])?["pattern"] as? String == "^[A-Z][A-Z0-9_]{0,63}(=[A-Z][A-Z0-9_]{0,63})?$")
         #expect((properties("run_with_secrets")["command"] as? [String: Any])?["maxLength"] as? Int == 2000)
-        for name in ["request_secret", "store_secret", "run_with_secrets"] {
+        for name in ["request_secret", "store_secret", "run_with_secrets", "import_secrets"] {
             #expect(properties(name)["request_id"] != nil && properties(name)["reason"] != nil, "\(name)")
         }
-        // The instructions say so too.
+        // import_secrets: a path or a password manager, never a value; its schema leaves the "one of them" to the app.
+        let path = try #require(properties("import_secrets")["path"] as? [String: Any])
+        #expect(path["type"] as? String == "string" && path["maxLength"] as? Int == 4096)
+        let source = try #require(properties("import_secrets")["source"] as? [String: Any])
+        #expect(source["enum"] as? [String] == ["1password", "bitwarden", "bws"])
+        #expect(Set(properties("import_secrets").keys) == ["path", "source", "reason", "request_id"])
+        // No secret tool takes a key's page: a link is set by the user's hands alone.
+        for name in names {
+            for word in ["link", "url", "page"] { #expect(properties(name)[word] == nil, "\(name) \(word)") }
+        }
+        // The instructions say so too; import_secrets is left to its description, as they have no room for more.
         #expect(MCPServer.instructions.contains("no tool returns a key's value"))
-        for name in names { #expect(MCPServer.instructions.contains(name), "\(name)") }
+        for name in names.dropLast() { #expect(MCPServer.instructions.contains(name), "\(name)") }
     }
 
     /// `secret_run` is the wrapper's socket request, never a tool: a bridge answers a call by that name itself, as it

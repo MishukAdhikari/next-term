@@ -88,7 +88,8 @@ public enum SecretImport {
 
     /// The files the import reads: the agents' own settings, Claude Code's `~/.claude.json`, VS
     /// Code's user `mcp.json`, and in each open project its `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
-    /// `.gemini/settings.json` and `.codex/config.toml`. A file is listed once, by its real path.
+    /// `.gemini/settings.json`, `.codex/config.toml`, and opencode's `opencode.json` and `opencode.jsonc` (read and
+    /// rewritten as its own settings are). A file is listed once, by its real path.
     public static func sources(home: String = NSHomeDirectory(), projects: [String]) -> [Source] {
         func path(_ relative: String) -> String { (home as NSString).appendingPathComponent(relative) }
         var list: [Source] = []
@@ -125,9 +126,30 @@ public enum SecretImport {
             list.append(Source(path: file(".vscode/mcp.json"), client: .vscode, format: .json, containers: [["servers"]], project: project))
             list.append(Source(path: file(".gemini/settings.json"), client: .gemini, format: .json, containers: [["mcpServers"]], project: project))
             list.append(Source(path: file(".codex/config.toml"), client: .codex, format: .toml, containers: [["mcp_servers"]], project: project))
+            for name in ["opencode.json", "opencode.jsonc"] {
+                list.append(Source(path: file(name), client: .opencode, format: .json, containers: [["mcp"]], project: project))
+            }
         }
         var seen = Set<String>()
         return list.filter { seen.insert(canonicalPath($0.path)).inserted }
+    }
+
+    /// Shared through git: a `.git` (a clone's folder, or a worktree's file) in the file's folder or one above it, on
+    /// the path as given or on the one it resolves to. Reads and writes follow a link, so a config linked into a dotfiles
+    /// repository is changed, and committed, there.
+    public static func isInGitWorkTree(_ path: String) -> Bool {
+        if hasGitAbove(path) { return true }
+        let real = canonicalPath(path)
+        return real != path && hasGitAbove(real)
+    }
+
+    static func hasGitAbove(_ path: String) -> Bool {
+        var folder = (path as NSString).deletingLastPathComponent
+        while folder.count > 1 {
+            if FileManager.default.fileExists(atPath: (folder as NSString).appendingPathComponent(".git")) { return true }
+            folder = (folder as NSString).deletingLastPathComponent
+        }
+        return false
     }
 
     // MARK: findings
@@ -145,6 +167,14 @@ public enum SecretImport {
         /// "mcpServers.github", "projects["/p"].mcpServers.github".
         public var description: String {
             (container + [server]).map { $0.contains("/") || $0.contains(".") ? "[“\($0)”]" : $0 }.joined(separator: ".")
+        }
+
+        /// A part has more characters than the import lists (`maxNameLength`), counted only up to one past it.
+        var isTooLong: Bool {
+            let most: Int = SecretImport.maxNameLength
+            return (container + [server]).contains { (part: String) -> Bool in
+                part.utf8.count > most && part.prefix(most + 1).count > most
+            }
         }
     }
 
@@ -182,7 +212,8 @@ public enum SecretImport {
         public var findings: [Finding] = []
         /// Entries that already run `nxtrm secret run`: "uses Next Term's Secrets".
         public var wrapped: [(source: Source, location: Location)] = []
-        /// Files that are there but could not be read, or read as their format, or list more than the import shows.
+        /// Files that are there but could not be read, or read as their format, or list more keys, or a longer name, than
+        /// the import shows.
         public var unreadable: [(source: Source, reason: String)] = []
         /// The files that were read.
         public var read: [Source] = []
@@ -218,6 +249,17 @@ public enum SecretImport {
     /// project file could list a hundred thousand).
     static let maxListed = 1_000
     static let tooManyReason = "it lists more than 1,000 keys or servers, more than Next Term shows"
+    /// The longest name of a server or project (a part of a `Location`) the import lists: past it, the file is reported.
+    /// The sheet shows the name in each key's row and works out each key's place from it on the main thread, so a crafted
+    /// name of millions of characters would hold the sheet for minutes.
+    static let maxNameLength = 1_000
+    public static let longNameReason = "a server or project in it has a name longer than the 1,000 characters Next Term shows"
+
+    /// A server's name as a row shows it: cut at 60 characters, with "…" after.
+    public static func shownServer(_ server: String) -> String {
+        let long: Bool = server.prefix(61).count > 60
+        return long ? String(server.prefix(60)) + "…" : server
+    }
 
     /// Every finding in `sources`. `inGitWorkTree` and `isOpen` (a bundle identifier's app is running) are the
     /// caller's; values stay in memory. `stop` (by default, the task is cancelled) is asked between files, between a
@@ -255,22 +297,41 @@ public enum SecretImport {
                 scan.unreadable.append((source, tooManyReason))
                 continue
             }
+            // Only a listed entry's name is shown: one with no key in it may be as long as it likes.
+            let tooLong: Bool = entries.contains { ($0.isWrapped || !$0.detected.isEmpty) && $0.location.isTooLong }
+            guard !tooLong else {
+                scan.unreadable.append((source, longNameReason))
+                continue
+            }
             for entry in entries {
                 if entry.isWrapped {
                     scan.wrapped.append((source, entry.location))
                     continue
                 }
+                guard !entry.detected.isEmpty else { continue }
+                // Where the entry is, read once for all its values: a server's name can be millions of characters long.
+                let place: String = source.path + "\u{0}" + entry.location.description + "\u{0}"
+                var entryHash = SHA256()
+                entryHash.update(data: Data(place.utf8))
                 for detected in entry.detected {
                     var reason = detected.notMovable ?? entry.notMovable
                     if reason == nil, appOpen { reason = claudeAppOpenReason }
-                    let id = [source.path, entry.location.description, "\(detected.field)"].joined(separator: "\u{0}")
-                    scan.findings.append(Finding(id: SecretRun.digest(Data(id.utf8)), source: source, location: entry.location,
+                    let id = findingID(entryHash, field: detected.field)
+                    scan.findings.append(Finding(id: id, source: source, location: entry.location,
                                                  field: detected.field, variable: detected.variable, value: detected.value, kind: detected.kind,
                                                  notMovable: reason, shared: shared, loses: entry.hasComments))
                 }
             }
         }
         return scan
+    }
+
+    /// A finding's id: the digest of its file's path, its entry's place and its field, with `entryHash` holding the path
+    /// and the place already (`SecretRun.digest` of the three, joined by NULs).
+    static func findingID(_ entryHash: SHA256, field: Field) -> String {
+        var hash = entryHash
+        hash.update(data: Data("\(field)".utf8))
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Why a file the scan couldn't read is reported: a plain file over 8 MB, or one this account can't open. Nil for one
@@ -339,9 +400,91 @@ public enum SecretImport {
     }
 
     /// A reference, not a key: `${X}`, `$X`, `{env:X}`, `{file:x}`, `${input:x}`, `${user_config.x}`, `op://…`.
+    /// `${` also covers a CI's `${{ secrets.X }}` and VS Code's `${env:X}`. A value sops (`ENC[…]`) or dotenvx
+    /// (`encrypted:…`) encrypted is one too: the program decrypts it at start, so moved, it would get the ciphertext.
     static func isReference(_ value: String) -> Bool {
-        let prefixes = ["${", "$", "{env:", "{file:", "${input:", "${user_config.", "op://"]
+        let prefixes = ["${", "$", "{env:", "{file:", "${input:", "${user_config.", "op://", "ENC[", "encrypted:"]
         return prefixes.contains { value.hasPrefix($0) }
+    }
+
+    /// Starts of placeholders, matched with their `-` and `_` taken out (`change_me`, `REPLACE-ME`).
+    static let placeholderStarts = ["changeme", "replaceme"]
+    static let placeholderRuns = ["xxx", "XXX"]
+    static let placeholderEnds = ["...", "…"]
+
+    /// A placeholder a README or an example file tells the user to replace, beyond what masking already leaves (`xxxx`,
+    /// `<your key>`): `your-api-key-here`, `changeme`, `replace_me`, a key's head with a body of x's (`sk-xxxx`,
+    /// `AKIAXXXXXXXXXXXXXXXX`), and `...` or `…` for its end. A value that looks random (`MCPRedaction.looksRandom`) is
+    /// never one, whatever it holds, and nor is a key in one case with a run of x's in it (`AKIAQ4RTXXX2BN6L…`).
+    static func isPlaceholder(_ value: String) -> Bool {
+        guard !MCPRedaction.looksRandom(value) else { return false }
+        let brackets = CharacterSet(charactersIn: "<>[]{}\"' ")
+        let bare: String = value.trimmingCharacters(in: brackets).lowercased()
+        if bare.hasPrefix("your") { return true }
+        let joined: String = bare.filter { (character: Character) -> Bool in character != "-" && character != "_" }
+        if placeholderStarts.contains(where: { (start: String) -> Bool in joined.hasPrefix(start) }) { return true }
+        if placeholderRuns.contains(where: { (run: String) -> Bool in value.contains(run) }), mostlyX(value) { return true }
+        return placeholderEnds.contains { (end: String) -> Bool in value.hasSuffix(end) }
+    }
+
+    /// Whether x's (either case) are at least half of a value's letters and digits: a placeholder's body, where three in
+    /// a row in a real key's are chance.
+    static func mostlyX(_ value: String) -> Bool {
+        var xs = 0
+        var all = 0
+        for scalar in value.unicodeScalars where scalar.properties.isAlphabetic || ("0"..."9").contains(scalar) {
+            all += 1
+            if scalar == "x" || scalar == "X" { xs += 1 }
+        }
+        return xs * 2 >= all
+    }
+
+    /// True in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in neither, so it doesn't
+    /// say this file's agent would have.
+    static let referenceReason = "the value has a reference such as ${…} in it, which some agents fill in when they start "
+        + "the server; Secrets would keep it as written"
+
+    /// `value` with each reference inside it taken out (`${X}`, `{env:X}`, `{file:x}`, `${input:x}`, `${user_config.x}`),
+    /// or nil when it holds none. The agent fills those in when it starts the server, so the rest is what the file holds.
+    /// A bare `$X` inside a value is not one: passwords have `$` in them. Each byte is read once, so a crafted value of
+    /// many openings and no `}` takes no longer than its length.
+    static func withoutReferences(_ value: String) -> String? {
+        let bytes: [UInt8] = Array(value.utf8)
+        let close = UInt8(ascii: "}")
+        var kept: [UInt8] = []
+        var copied = 0
+        var index = 0
+        while index < bytes.count {
+            guard let opening = referenceOpening(bytes, at: index) else {
+                index += 1
+                continue
+            }
+            let start = index + opening
+            // No `}` after this opening: none after a later one either.
+            guard let end = bytes[start...].firstIndex(of: close) else { break }
+            guard end > start else {
+                index += 1
+                continue
+            }
+            kept.append(contentsOf: bytes[copied..<index])
+            index = end + 1
+            copied = index
+        }
+        guard copied > 0 else { return nil }
+        kept.append(contentsOf: bytes[copied...])
+        return String(decoding: kept, as: UTF8.self)
+    }
+
+    static let referenceOpenings: [[UInt8]] = [Array("${".utf8), Array("{env:".utf8), Array("{file:".utf8)]
+
+    /// The length of a reference's opening at `index` (`${`, `{env:`, `{file:`), or nil.
+    static func referenceOpening(_ bytes: [UInt8], at index: Int) -> Int? {
+        let first = bytes[index]
+        guard first == UInt8(ascii: "$") || first == UInt8(ascii: "{") else { return nil }
+        for opening in referenceOpenings where bytes.count - index >= opening.count {
+            if bytes[index..<(index + opening.count)].elementsEqual(opening) { return opening.count }
+        }
+        return nil
     }
 
     static let kinds = ["Anthropic key", "OpenAI key", "GitHub token", "GitHub token", "Slack token", "AWS access key", "Google API key",
@@ -358,10 +501,13 @@ public enum SecretImport {
     }
 
     /// Whether `value` under `name` is a key the import lists, and what kind. Nil for a reference, an empty or short
-    /// value, or a value that only looks like a setting.
+    /// value, or a value that only looks like a setting, once the references in it are taken out (`withoutReferences`).
     static func detect(name: String, value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        let whole = value.trimmingCharacters(in: .whitespaces)
+        // The agent fills a reference in at start: a value is judged by the rest, which is what the file holds.
+        let trimmed = withoutReferences(whole)?.trimmingCharacters(in: .whitespaces) ?? whole
         guard !trimmed.isEmpty, !isReference(trimmed), MCPRedaction.isValue(trimmed) else { return nil }
+        guard !isPlaceholder(trimmed) else { return nil }
         if let kind = tokenKind(trimmed) { return kind }
         if trimmed.count >= 20, MCPRedaction.looksRandom(trimmed) { return "a key, by its shape" }
         if nameLooksSecret(name), trimmed.count >= 8 { return "a key, by its name" }
@@ -370,6 +516,7 @@ public enum SecretImport {
 
     /// Why a detected env value can't be moved: one Secrets can't keep, or a variable `nxtrm secret run` can't set.
     static func valueRefusal(variable: String, value: String) -> String? {
+        if withoutReferences(value) != nil { return referenceReason }
         // By scalar: "\r\n" is one Character, equal to neither "\r" nor "\n".
         if value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return "the value has line breaks, which Secrets can't keep yet" }
         if value.utf8.count > SecretVault.maxValueBytes { return "the value is over 16 KB" }
@@ -1211,6 +1358,8 @@ public enum SecretImport {
         public var name: String
         public let value: SecretBytes
         public let findings: [Finding]
+        /// `name` is a stored key that holds this value already: the move uses it and stores no second copy.
+        public var reusesStored = false
         public var kind: String { findings.first?.kind ?? "key" }
         /// "Same value in 3 servers" when it is in more than one.
         public var summary: String? {
@@ -1219,33 +1368,41 @@ public enum SecretImport {
         }
     }
 
+    /// The keys an earlier import stored whose marks show they hold `value` (no value is read), in the vault's order:
+    /// what a group of that value may use instead of a second copy. Only an import's keys (origin `import`), a move's or
+    /// a copy from a file's, whose Undo keeps a key a move's entries name: one added in Settings or by an agent is the
+    /// user's own. Never a write-only one: an Undo of the move that used it couldn't put it back. The value's mark is
+    /// worked out once.
+    public static func reusable(holding value: SecretBytes, in index: SecretVault.Index?, mask: SecretMask) -> [String] {
+        guard let index, let mark = mask.mark(of: value) else { return [] }
+        let held = index.entries.filter { $0.origin == .import && !$0.writeOnly && $0.marks.contains(mark) }
+        return held.map(\.name)
+    }
+
     /// The movable findings grouped by identical value, each group named after its first variable (capitals, `_`); a
     /// clash with a stored key or another group adds `_2`, `_3`. A group holds at most one variable of each entry.
-    public static func groups(_ findings: [Finding], stored: [String]) -> [Group] {
-        struct Place: Hashable {
-            let path: String
-            let location: Location
-        }
-        var groups: [(value: SecretBytes, findings: [Finding], places: Set<Place>)] = []
-        // The groups by their value's digest (in memory only): a finding finds its group at once, not by a walk over all.
-        var byValue: [SHA256.Digest: [Int]] = [:]
-        for finding in findings where finding.movable {
-            let place = Place(path: finding.source.path, location: finding.location)
-            let digest = finding.value.withUnsafeBytes { SHA256.hash(data: $0) }
-            // An entry that holds the value under two variables needs a key for each: the wrapper takes a name once.
-            let same = byValue[digest]?.first { groups[$0].value == finding.value && !groups[$0].places.contains(place) }
-            if let index = same {
-                groups[index].findings.append(finding)
-                groups[index].places.insert(place)
-            } else {
-                byValue[digest, default: []].append(groups.count)
-                groups.append((finding.value, [finding], [place]))
-            }
+    /// `holding` names the stored keys that hold a value already (`reusable`): each group of that value takes one of
+    /// them (`reusesStored`), the one named as its variable first, and no two groups take the same one. So an import
+    /// tried again after its file was left as it was uses the keys the first try stored, one per variable, instead of
+    /// second copies under `_2`.
+    public static func groups(_ findings: [Finding], stored: [String],
+                              holding: (SecretBytes) -> [String] = { _ in [] }) -> [Group] {
+        let movable: [Finding] = findings.filter { (finding: Finding) -> Bool in finding.movable }
+        // An entry that holds the value under two variables needs a key for each: the wrapper takes a name once.
+        let groups: [(value: SecretBytes, findings: [Finding])] = byValue(movable).map {
+            (group: (value: SecretBytes, items: [Finding])) -> (value: SecretBytes, findings: [Finding]) in
+            (group.value, group.items)
         }
         var taken = Set(stored)
+        let reusing = storedKeys(for: groups.map { ($0.value, $0.findings[0].variable) }, taken: taken, holding: holding)
         // Where each name's numbers go on from: names are only ever taken, so the ones below are taken still.
         var numbers: [String: Int] = [:]
-        return groups.map { group in
+        return groups.enumerated().map { position, group in
+            if let name = reusing[position] {
+                var reused = Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
+                reused.reusesStored = true
+                return reused
+            }
             let base = StoredSecretName.suggested(from: group.findings[0].variable)
             var name = base
             var number = numbers[base] ?? 2
@@ -1258,6 +1415,28 @@ public enum SecretImport {
             taken.insert(name)
             return Group(id: group.findings[0].id, name: name, value: group.value, findings: group.findings)
         }
+    }
+
+    /// The stored key each group uses, by its position, when one holds its value: first the groups whose variable's
+    /// name is one of those keys take it, then the others take the next one left. Each key goes to one group at most,
+    /// and only a key that is stored (`taken`).
+    static func storedKeys(for groups: [(value: SecretBytes, variable: String)], taken: Set<String>,
+                           holding: (SecretBytes) -> [String]) -> [Int: String] {
+        let candidates: [[String]] = groups.map { group in holding(group.value).filter { taken.contains($0) } }
+        var chosen: [Int: String] = [:]
+        var used = Set<String>()
+        for (position, group) in groups.enumerated() {
+            let own = StoredSecretName.suggested(from: group.variable)
+            guard candidates[position].contains(own), !used.contains(own) else { continue }
+            chosen[position] = own
+            used.insert(own)
+        }
+        for position in groups.indices where chosen[position] == nil {
+            guard let next = candidates[position].first(where: { !used.contains($0) }) else { continue }
+            chosen[position] = next
+            used.insert(next)
+        }
+        return chosen
     }
 
     // MARK: the wrapper's command
@@ -1312,9 +1491,16 @@ public enum SecretImport {
         public let keptCount: Int
         public var keptBox: Data?
         public var keptValues: [SecretBytes] = []
+        /// Of `names`, the keys the move stored itself; the others it used, stored by an earlier move. Nil in a backup
+        /// written before this was recorded, when every move stored all its keys.
+        public var stored: [String]?
+
+        /// The keys the move stored itself: what an Undo of it may delete.
+        public var storedNames: [String] { stored ?? names }
 
         enum CodingKeys: String, CodingKey {
             case id, batch, date, path, client, format, location, names, original, written, keptCount = "kept_count", keptBox = "kept_box"
+            case stored
         }
 
         /// The record's file name in `imports/`.
@@ -1342,6 +1528,11 @@ public enum SecretImport {
         let moves: [Move]
         let nxtrm: [String]
         let plan: MCPRegistrar.Plan
+        /// The names `nxtrm secret run` takes out when it starts a server: the vault's and this import's.
+        let taken: Set<String>
+        /// Each entry's variables taken out with the moved keys, because the wrapper would take them out at start, in
+        /// the file's order of entries. Undo puts them back with the rest of the entry.
+        public let dropped: [(server: String, variables: [String])]
 
         public var path: String { source.path }
         /// The keys it moves.
@@ -1351,6 +1542,121 @@ public enum SecretImport {
         public mutating func seal(_ id: String, box: Data?) {
             guard let index = backups.firstIndex(where: { $0.id == id }) else { return }
             backups[index].keptBox = box
+        }
+
+        /// Records in each backup which of its keys the import stored (`stored`), the others being keys it used.
+        public mutating func setStored(_ stored: Set<String>) {
+            for index in backups.indices { backups[index].stored = backups[index].names.filter(stored.contains) }
+        }
+    }
+
+    /// The sheet's line for the variables the written entries dropped (`FileEdit.dropped`): which left which server, a
+    /// server's name cut at 60 characters. Nil when none did.
+    public static func droppedText(_ dropped: [(server: String, variables: [String])]) -> String? {
+        guard !dropped.isEmpty else { return nil }
+        var places: [String] = []
+        var count = 0
+        for entry in dropped where !entry.variables.isEmpty {
+            let names: [String] = entry.variables
+            let head: String = names.dropLast().joined(separator: ", ")
+            let listed: String = names.count <= 2 ? SecretRun.keysText(names) : head + " and " + names[names.count - 1]
+            let server: String = shownServer(entry.server)
+            places.append("\(listed) from “\(server)”")
+            count += names.count
+        }
+        guard !places.isEmpty else { return nil }
+        let opening = "Also taken out, because nxtrm secret run removes the name of every key in Secrets that a server doesn’t ask for: "
+        let undo: String = count == 1 ? "Undo puts it back." : "Undo puts them back."
+        return opening + places.joined(separator: "; ") + ". " + undo
+    }
+
+    /// Before the plan, for the confirm: the values the scan found (`findings`) that a wrapped entry would drop although no
+    /// move takes them (rows not ticked), in the scan's order. Each is in an entry a move wraps, under a variable that
+    /// entry doesn't ask for, named like a key the wrapper takes out at start: the vault's (`stored`) or a move's. After the
+    /// write, such a value is only in the entry's backup. A file that then fails to plan keeps what it holds.
+    public static func droppedFindings(_ moves: [Move], among findings: [Finding], stored: [String]) -> [Finding] {
+        func entry(_ finding: Finding) -> String { finding.source.path + "\u{0}" + finding.location.description }
+        var asked: [String: Set<String>] = [:]
+        var moved: Set<String> = []
+        for move in moves {
+            for finding in move.findings where finding.movable {
+                asked[entry(finding), default: []].insert(finding.variable)
+                moved.insert(finding.id)
+            }
+        }
+        let movedNames: [String] = moves.filter { $0.findings.contains(where: \.movable) }.map(\.name)
+        let taken: Set<String> = Set(stored).union(movedNames)
+        return findings.filter { finding in
+            guard case .env(let name) = finding.field, !moved.contains(finding.id), let wanted = asked[entry(finding)] else { return false }
+            return taken.contains(name) && !wanted.contains(name)
+        }
+    }
+
+    /// The confirm's paragraph for `droppedFindings` (a variable and its server's name, cut at 60 characters): where each
+    /// is, that its server would never get it, that its value is then only in the backup, and how to keep it. Three are
+    /// named, the rest counted. Nil when there are none.
+    public static func droppedWarning(_ dropped: [(variable: String, server: String)]) -> String? {
+        guard !dropped.isEmpty else { return nil }
+        let places: [String] = dropped.prefix(3).map { item in
+            let server: String = shownServer(item.server)
+            return "\(item.variable) in “\(server)”"
+        }
+        let more: Int = dropped.count - places.count
+        let listed: String
+        if more > 0 {
+            listed = places.joined(separator: ", ") + " and \(more) more"
+        } else if places.count == 1 {
+            listed = places[0]
+        } else {
+            listed = places.dropLast().joined(separator: ", ") + " and " + places[places.count - 1]
+        }
+        let days = Int(keptFor / (24 * 3600))
+        let one: Bool = dropped.count == 1
+        let reach: String = one ? "so the server would never get it, and after this its value is only in the backup"
+            : "so the servers would never get them, and after this their values are only in the backups"
+        let keep: String = one ? "To keep it in Secrets, tick its row too." : "To keep them in Secrets, tick their rows too."
+        return "Not ticked, but taken out too: \(listed). nxtrm secret run removes the name of every key in Secrets that a server "
+            + "doesn’t ask for, \(reach) Next Term keeps for \(days) days. \(keep)"
+    }
+
+    /// What an Undo's "Also delete these keys" deletes: only keys the undone moves stored themselves, and none that
+    /// entries it doesn't put back still name (another import's in the list, or one of its own left wrapped). A key a
+    /// move used because an earlier move had stored it stays, since other entries may use it, even once that earlier
+    /// move's backup is gone.
+    public struct UndoKeys: Equatable, Sendable {
+        /// The keys it may delete, once their entries all went back.
+        public let deletable: Set<String>
+        /// Kept: stored before the undone moves, which used them.
+        public let storedBefore: [String]
+        /// Kept: entries this Undo doesn't put back name them.
+        public let usedElsewhere: [String]
+
+        public init(undoing backups: [EntryBackup], others: [EntryBackup]) {
+            let names = Set(backups.flatMap(\.names))
+            let stored = Set(backups.flatMap(\.storedNames)).intersection(names)
+            let elsewhere = Set(others.flatMap(\.names))
+            deletable = stored.subtracting(elsewhere)
+            storedBefore = names.subtracting(stored).sorted()
+            usedElsewhere = stored.intersection(elsewhere).sorted()
+        }
+
+        /// What Undo says about the keys of `back` (whose entries all went back) it kept although asked to delete them;
+        /// nil when it kept none.
+        public func keptText(_ back: Set<String>) -> String? {
+            let before = storedBefore.filter(back.contains)
+            let elsewhere = usedElsewhere.filter(back.contains)
+            var lines: [String] = []
+            if !before.isEmpty {
+                let one = before.count == 1
+                lines.append("\(SecretRun.keysText(before)) \(one ? "stays" : "stay") in Secrets: \(one ? "it was" : "they were") "
+                    + "there before this import, and other entries may use \(one ? "it" : "them").")
+            }
+            if !elsewhere.isEmpty {
+                let one = elsewhere.count == 1
+                lines.append("\(SecretRun.keysText(elsewhere)) \(one ? "stays" : "stay") in Secrets: entries this Undo doesn’t "
+                    + "put back still use \(one ? "it" : "them").")
+            }
+            return lines.isEmpty ? nil : lines.joined(separator: " ")
         }
     }
 
@@ -1366,9 +1672,12 @@ public enum SecretImport {
     static func keptMarker(_ index: Int) -> String { "\(marker)kept:\(index)⟧" }
 
     /// One `FileEdit` per file the chosen moves touch. `nxtrm` is the wrapper's command: the `nxtrm` path, or the app's
-    /// binary and `--cli`.
-    public static func plan(_ moves: [Move], nxtrm: [String], read: (String) -> Data? = readFile,
-                            now: Date = Date()) -> (edits: [FileEdit], failures: [PlanFailure]) {
+    /// binary and `--cli`. `stored` is the vault's names: with the names this import stores (the moves of the files that
+    /// plan), what the wrapper takes out of a server's environment unless the entry asks for it, so a wrapped entry drops
+    /// a variable of that name too. `isOpen` is asked now, not taken from the scan: a file an app saves whole (the
+    /// Claude app's) is left while that app runs, and its moves store no key.
+    public static func plan(_ moves: [Move], nxtrm: [String], stored: [String] = [], isOpen: (String) -> Bool = { _ in false },
+                            read: (String) -> Data? = readFile, now: Date = Date()) -> (edits: [FileEdit], failures: [PlanFailure]) {
         var byFile: [String: (Source, [Move])] = [:]
         var order: [String] = []
         for move in moves {
@@ -1380,16 +1689,49 @@ public enum SecretImport {
                 byFile[finding.source.path]?.1.append(Move(name: move.name, findings: [finding]))
             }
         }
-        var edits: [FileEdit] = []
-        var failures: [PlanFailure] = []
-        let batch = String(UUID().uuidString.lowercased().prefix(12))
+        // Each file read once: a second pass plans from the same bytes.
+        var left: [PlanFailure] = []
+        var files: [(source: Source, moves: [Move], data: Data)] = []
         for path in order {
             guard let (source, fileMoves) = byFile[path] else { continue }
-            guard let data = read(path) else {
-                failures.append(PlanFailure(path: path, reason: "it can't be read"))
+            if let app = source.readOnceBy, isOpen(app) {
+                left.append(PlanFailure(path: path, reason: claudeAppOpenReason))
                 continue
             }
-            switch planFile(source, moves: fileMoves, nxtrm: nxtrm, data: data, now: now, batch: batch) {
+            guard let data = read(path) else {
+                left.append(PlanFailure(path: path, reason: "it can't be read"))
+                continue
+            }
+            files.append((source, fileMoves, data))
+        }
+        let batch = String(UUID().uuidString.lowercased().prefix(12))
+        let movedNames: [String] = moves.filter { $0.findings.contains(where: \.movable) }.map(\.name)
+        var taken: Set<String> = Set(stored).union(movedNames)
+        var planned = planFiles(files, nxtrm: nxtrm, now: now, batch: batch, taken: taken)
+        // The import stores only the keys of the files that planned (the sheet's `move`): a move whose every file failed
+        // stores nothing, and the wrapper takes out no variable of its name. Planned again without it, until none is
+        // left; the names only ever shrink, so it stops.
+        for _ in moves.indices {
+            let plannedNames: [String] = planned.edits.flatMap(\.names)
+            let kept: Set<String> = taken.intersection(Set(stored).union(plannedNames))
+            if kept == taken { break }
+            taken = kept
+            planned = planFiles(files, nxtrm: nxtrm, now: now, batch: batch, taken: taken)
+        }
+        // The failures in the files' order, as one pass gave them.
+        let place: [String: Int] = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let failures: [PlanFailure] = (left + planned.failures).sorted { (place[$0.path] ?? 0) < (place[$1.path] ?? 0) }
+        return (planned.edits, failures)
+    }
+
+    /// `plan`'s pass over the files it read, in order.
+    static func planFiles(_ files: [(source: Source, moves: [Move], data: Data)], nxtrm: [String], now: Date, batch: String,
+                          taken: Set<String>) -> (edits: [FileEdit], failures: [PlanFailure]) {
+        var edits: [FileEdit] = []
+        var failures: [PlanFailure] = []
+        for file in files {
+            let result = planFile(file.source, moves: file.moves, nxtrm: nxtrm, data: file.data, now: now, batch: batch, taken: taken)
+            switch result {
             case .success(let edit): edits.append(edit)
             case .failure(let failure): failures.append(failure)
             }
@@ -1400,7 +1742,7 @@ public enum SecretImport {
     /// A file's edit from its bytes: every entry it changes planned from one reading of the file, each with its backup.
     /// Planned entry by entry, each read the whole file again, and a file with many keys took minutes.
     static func planFile(_ source: Source, moves: [Move], nxtrm: [String], data: Data, now: Date,
-                         batch: String) -> Result<FileEdit, PlanFailure> {
+                         batch: String, taken: Set<String> = []) -> Result<FileEdit, PlanFailure> {
         guard let text = text(of: data) else { return .failure(PlanFailure(path: source.path, reason: "not UTF-8 text")) }
         // The moves by entry, in the order they come, and the values the scan found there: what Secrets stores.
         var byEntry: [Location: [(name: String, variable: String)]] = [:]
@@ -1416,8 +1758,8 @@ public enum SecretImport {
         }
         let entries = locations.map { EntryMove(location: $0, pairs: byEntry[$0] ?? [], expected: values[$0] ?? [:]) }
         let result = source.format == .toml
-            ? editTOML(text, entries: entries, nxtrm: nxtrm)
-            : editJSON(text, source: source, entries: entries, nxtrm: nxtrm)
+            ? editTOML(text, entries: entries, nxtrm: nxtrm, taken: taken)
+            : editJSON(text, source: source, entries: entries, nxtrm: nxtrm, taken: taken)
         let edited: Edited
         switch result {
         case .failure(let failure): return .failure(PlanFailure(path: source.path, reason: failure.reason))
@@ -1432,7 +1774,13 @@ public enum SecretImport {
         }
         var plan = MCPRegistrar.Plan(.registered, text: edited.text)
         plan.original = data
-        return .success(FileEdit(source: source, servers: locations.map(\.server), backups: backups, moves: moves, nxtrm: nxtrm, plan: plan))
+        var dropped: [(server: String, variables: [String])] = []
+        for (entry, made) in zip(entries, edited.entries) where !made.dropped.isEmpty {
+            dropped.append((entry.location.server, made.dropped))
+        }
+        let servers: [String] = locations.map(\.server)
+        return .success(FileEdit(source: source, servers: servers, backups: backups, moves: moves, nxtrm: nxtrm, plan: plan, taken: taken,
+                                 dropped: dropped))
     }
 
     /// Why an entry's edit can't be made.
@@ -1449,11 +1797,13 @@ public enum SecretImport {
         let expected: [String: SecretBytes]
     }
 
-    /// What one entry's edit made: its backup text, the digest of what Next Term wrote, and the values kept.
+    /// What one entry's edit made: its backup text, the digest of what Next Term wrote, the values kept, and the
+    /// variables it dropped because the wrapper would take them out (sorted).
     struct EditedEntry {
         var original: String
         var written: String
         var kept: [SecretBytes]
+        var dropped: [String] = []
     }
 
     /// What a file's edit made: its new text, and each entry's, in order.
@@ -1550,8 +1900,10 @@ public enum SecretImport {
         return nil
     }
 
-    /// The JSON entries' edits, made on one parse of the file and checked on one parse of the result.
-    static func editJSON(_ text: String, source: Source, entries moves: [EntryMove], nxtrm: [String]) -> Result<Edited, EditFailure> {
+    /// The JSON entries' edits, made on one parse of the file and checked on one parse of the result. `taken`: the names
+    /// the wrapper takes out at start, which leave each entry too unless it asks for them.
+    static func editJSON(_ text: String, source: Source, entries moves: [EntryMove], nxtrm: [String],
+                         taken: Set<String> = []) -> Result<Edited, EditFailure> {
         guard let document = JSONC(text), case .object(let root)? = document.root, let entries = jsonEntries(document, source: source) else {
             return .failure(EditFailure("the entry is not there any more"))
         }
@@ -1578,6 +1930,9 @@ public enum SecretImport {
                 }
                 env[pair.variable] = nil
             }
+            // A stored key's name the entry doesn't ask for: the wrapper takes it out at start, so it leaves the file too.
+            let dropped: [String] = env.keys.filter { taken.contains($0) }.sorted()
+            for name in dropped { env[name] = nil }
             if env.isEmpty {
                 object.removeValue(forKey: envKey)
             } else {
@@ -1595,7 +1950,7 @@ public enum SecretImport {
             let backup = marked(bytes, entry: entry, moved: moved)
             changes.append((entry.range, newEntry))
             planned[move.location] = object
-            made.append(EditedEntry(original: backup.text, written: sha256(newEntry), kept: backup.kept))
+            made.append(EditedEntry(original: backup.text, written: sha256(newEntry), kept: backup.kept, dropped: dropped))
         }
         guard let updated = replacing(text, changes), verifyJSON(updated, before: document, source: source, planned: planned) else {
             return .failure(EditFailure("check failed"))
@@ -1647,8 +2002,10 @@ public enum SecretImport {
         return true
     }
 
-    /// The TOML entries' edits, made on one reading of the file and checked on one reading of the result.
-    static func editTOML(_ text: String, entries moves: [EntryMove], nxtrm: [String]) -> Result<Edited, EditFailure> {
+    /// The TOML entries' edits, made on one reading of the file and checked on one reading of the result. `taken`, as for
+    /// `editJSON`.
+    static func editTOML(_ text: String, entries moves: [EntryMove], nxtrm: [String],
+                         taken: Set<String> = []) -> Result<Edited, EditFailure> {
         guard let outline = TOMLOutline(text) else { return .failure(EditFailure("the entry is not there any more")) }
         let wanted = Set(moves.map(\.location))
         let names = Set(wanted.map(\.server))
@@ -1670,7 +2027,8 @@ public enum SecretImport {
             }
             if let reason = wrapperRefusal(move.pairs, command: entry.command + entry.args) { return .failure(EditFailure(reason)) }
             guard let table = tables[move.location.server],
-                  let own = tomlChanges(table, move: move, command: entry.command + entry.args, nxtrm: nxtrm, reader: reader, newline: newline)
+                  let own = tomlChanges(table, move: move, command: entry.command + entry.args, nxtrm: nxtrm, reader: reader, newline: newline,
+                                        taken: taken)
             else {
                 return .failure(EditFailure("the entry can't be read"))
             }
@@ -1678,15 +2036,15 @@ public enum SecretImport {
             argsWanted[move.location] = own.args
             let moved = Dictionary(move.pairs.map { ($0.variable, $0.name) }, uniquingKeysWith: { first, _ in first })
             let backup = marked(bytes, entry: entry, moved: moved)
-            made.append(EditedEntry(original: backup.text, written: "", kept: backup.kept))
+            made.append(EditedEntry(original: backup.text, written: "", kept: backup.kept, dropped: own.dropped))
         }
         guard let updated = replacing(text, changes), let check = TOMLOutline(updated) else { return .failure(EditFailure("check failed")) }
         let newFound = firstByLocation(tomlEntries(check) ?? [], wanted: wanted)
         let newTables = firstTables(check, named: names)
-        // Each entry now starts the wrapper and holds none of its moved keys.
+        // Each entry now starts the wrapper and holds none of its moved keys, nor what it dropped.
         var spans: [(old: Range<Int>, new: Range<Int>)] = []
-        for move in moves {
-            let moved = Set(move.pairs.map(\.variable))
+        for (move, entryMade) in zip(moves, made) {
+            let moved: Set<String> = Set(move.pairs.map(\.variable)).union(entryMade.dropped)
             guard let old = found[move.location], let table = newTables[move.location.server], let newEntry = newFound[move.location],
                   newEntry.command == [nxtrm[0]], newEntry.args == argsWanted[move.location],
                   !newEntry.detected.contains(where: { if case .env(let name) = $0.field { return moved.contains(name) }; return false }) else {
@@ -1724,11 +2082,13 @@ public enum SecretImport {
         return old[oldCursor...].elementsEqual(new[newCursor...])
     }
 
-    /// One TOML entry's changes, as UTF-8 ranges of the file, and its new args: `command` and `args` replaced (or `args`
-    /// added), the moved keys taken out of `env`, and the start-up wait raised to 30 seconds. Nil when its command can't
-    /// be read.
+    typealias TOMLEntryChanges = (changes: [(range: Range<Int>, with: String)], args: [String], dropped: [String])
+
+    /// One TOML entry's changes, as UTF-8 ranges of the file, its new args, and what it dropped: `command` and `args`
+    /// replaced (or `args` added), the moved keys taken out of `env` with any variable named in `taken` (the wrapper
+    /// would take it out at start), and the start-up wait raised to 30 seconds. Nil when its command can't be read.
     static func tomlChanges(_ table: TOMLTable, move: EntryMove, command old: [String], nxtrm: [String], reader: TOMLReader,
-                            newline: String) -> (changes: [(range: Range<Int>, with: String)], args: [String])? {
+                            newline: String, taken: Set<String> = []) -> TOMLEntryChanges? {
         let outline = reader.outline
         let text = outline.text
         guard let command = table.keys.first(where: { $0.path == ["command"] }), let commandString = outline.string(at: command.value) else {
@@ -1747,16 +2107,23 @@ public enum SecretImport {
             inserted.append("args = " + argsText)
         }
         let moved = Set(move.pairs.map(\.variable))
+        var dropped: Set<String> = []
+        func leaves(_ name: String) -> Bool {
+            if moved.contains(name) { return true }
+            guard taken.contains(name) else { return false }
+            dropped.insert(name)
+            return true
+        }
         if let env = table.keys.first(where: { $0.path == ["env"] }), let (members, end) = reader.members(at: env.value) {
-            let left = members.filter { !moved.contains($0.key) }.map { String(text.unicodeScalars[$0.range]) }
+            let left = members.filter { !leaves($0.key) }.map { String(text.unicodeScalars[$0.range]) }
             if left.isEmpty {
                 changes.append((offsets(env.line, in: text), ""))
             } else {
                 changes.append((offsets(env.value..<end, in: text), "{ " + left.joined(separator: ", ") + " }"))
             }
         }
-        for key in table.envKeys where key.path.count == 1 && moved.contains(key.path[0]) {
-            changes.append((offsets(key.line, in: text), ""))
+        for key in table.envKeys where key.path.count == 1 {
+            if leaves(key.path[0]) { changes.append((offsets(key.line, in: text), "")) }
         }
         // Codex waits 10 seconds by default: the wrapper's 25-second line needs 30.
         let seconds = table.keys.first { $0.path == ["startup_timeout_sec"] }
@@ -1776,7 +2143,7 @@ public enum SecretImport {
             let lines = inserted.map { $0 + newline }.joined()
             changes.append((at..<at, (lineEnds ? "" : newline) + lines))
         }
-        return (changes, args)
+        return (changes, args, dropped.sorted())
     }
 
     /// A bare value (a number) at `index`, and where it ends.
@@ -1805,7 +2172,7 @@ public enum SecretImport {
     public static let lockedNote = "Claude Code is saving its settings. Try again in a moment."
 
     /// Writes one file's edit: read again, planned once more if its bytes changed, under Claude Code's lock for
-    /// `~/.claude.json`, through `MCPRegistrar.write(_:to:)`, and checked after.
+    /// `~/.claude.json`, through `MCPRegistrar.write(_:to:)`, and checked after. `isOpen` is asked just before the write.
     public static func apply(_ edit: FileEdit, lockWait: TimeInterval = 5, isOpen: (String) -> Bool = { _ in false },
                              read: (String) -> Data? = readFile) -> Applied {
         if let app = edit.source.readOnceBy, isOpen(app) { return .skipped(claudeAppOpenReason) }
@@ -1821,7 +2188,9 @@ public enum SecretImport {
         if current != edit.plan.original {
             // Saved by its agent since the plan: once more from what is there now.
             let batch = edit.backups.first?.batch ?? ""
-            guard case .success(let again) = planFile(edit.source, moves: edit.moves, nxtrm: edit.nxtrm, data: current, now: Date(), batch: batch),
+            let replanned = planFile(edit.source, moves: edit.moves, nxtrm: edit.nxtrm, data: current, now: Date(), batch: batch,
+                                     taken: edit.taken)
+            guard case .success(let again) = replanned,
                   again.written(like: edit) else { return .changed }
             used = again
         }
@@ -1931,7 +2300,8 @@ public enum SecretImport {
     }
 
     /// The project files the import reads, by their place in a project.
-    static let projectFiles = [".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json", ".gemini/settings.json", ".codex/config.toml"]
+    static let projectFiles = [".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json", ".gemini/settings.json", ".codex/config.toml",
+                               "opencode.json", "opencode.jsonc"]
 
     /// A file the import reads: an agent's own settings under `home`, or a project's own file by its name. Undo writes
     /// only to one of these, whatever a backup record in `imports/` says.
@@ -1998,5 +2368,52 @@ extension SecretImport.FileEdit {
     func written(like other: SecretImport.FileEdit) -> Bool {
         guard servers == other.servers, backups.count == other.backups.count else { return false }
         return zip(backups, other.backups).allSatisfy { $0.written == $1.written && $0.original == $1.original && $0.names == $1.names }
+    }
+}
+
+// MARK: grouping by value
+
+/// A value an import groups with others of the same bytes: a finding in an MCP config, or a row of a file of keys.
+public protocol GroupableValue {
+    var value: SecretBytes { get }
+    /// Where it is. Two values in one place are never grouped: an entry needs a key for each of its variables.
+    var groupPlace: AnyHashable { get }
+}
+
+extension SecretImport.Finding: GroupableValue {
+    /// The server's entry in its file.
+    public var groupPlace: AnyHashable { AnyHashable(SecretImport.EntryPlace(path: source.path, location: location)) }
+}
+
+extension SecretImport {
+    struct EntryPlace: Hashable {
+        let path: String
+        let location: Location
+    }
+
+    /// `items` grouped by identical value, in the order each value is first seen. A group holds at most one item of each
+    /// place; another of the same value and place starts a group of its own.
+    public static func byValue<Item: GroupableValue>(_ items: [Item]) -> [(value: SecretBytes, items: [Item])] {
+        var groups: [(value: SecretBytes, items: [Item], places: Set<AnyHashable>)] = []
+        // The groups by their value's digest (in memory only): an item finds its group at once, not by a walk over all.
+        var byDigest: [SHA256.Digest: [Int]] = [:]
+        for item in items {
+            let place: AnyHashable = item.groupPlace
+            let digest: SHA256.Digest = item.value.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> SHA256.Digest in
+                SHA256.hash(data: buffer)
+            }
+            let same: Int? = byDigest[digest]?.first { (index: Int) -> Bool in
+                groups[index].value == item.value && !groups[index].places.contains(place)
+            }
+            if let index = same {
+                groups[index].items.append(item)
+                groups[index].places.insert(place)
+            } else {
+                byDigest[digest, default: []].append(groups.count)
+                groups.append((item.value, [item], [place]))
+            }
+        }
+        typealias Group = (value: SecretBytes, items: [Item], places: Set<AnyHashable>)
+        return groups.map { (group: Group) -> (value: SecretBytes, items: [Item]) in (group.value, group.items) }
     }
 }

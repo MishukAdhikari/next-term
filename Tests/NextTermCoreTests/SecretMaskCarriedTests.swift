@@ -28,9 +28,10 @@ private func hexCarried(_ count: Int) -> String {
 }
 
 @Suite struct CarriedValueTests {
-    /// A name, its operator and its value on lines of their own, as a formatter writes a long assignment or YAML puts
-    /// a value under its key: `redact` masks the value in the text whole, and the value's line, read alone, shows •••
-    /// for it too, from an offset at that line as well. A name on the value's own line is that line's to mask.
+    /// A name, its operator and its value on lines of their own, as a formatter writes a long assignment or YAML puts a
+    /// value under its key, indented more, or `export` on a line before a bare value's name: `redact` masks the value in
+    /// the text whole, and the value's line, read alone, shows ••• for it too, from an offset at that line as well. A
+    /// name on the value's own line is that line's to mask.
     @Test func aValueNamedOnALineBeforeItsOwnIsMaskedInIt() {
         let forms: [(text: String, lines: [String])] = [
             ("const apiKey =\n  \"Tr0ub4dor&3!horse-staple\";\nnext();", ["const apiKey =", "  \"•••\";", "next();"]),
@@ -38,7 +39,9 @@ private func hexCarried(_ count: Int) -> String {
             ("{\n  \"password\":\n    \"Tr0ub4dor&3!horse\"\n}", ["{", "  \"password\":", "    \"•••\"", "}"]),
             ("token =>\r\n `Tr0ub4dor&3!horse`,", ["token =>", " `•••`,"]),
             ("password:\n\n    Tr0ub4dor3horse\n  port: 5432", ["password:", "", "    •••", "  port: 5432"]),
-            ("export\n\n  API_KEY\n\n=\n \nTr0ub4dor3horse", ["export", "", "  API_KEY", "", "=", " ", "•••"]),
+            ("database:\n  password:\n    Tr0ub4dor3horse\n", ["database:", "  password:", "    •••"]),
+            ("+password:\n+  Tr0ub4dor3horse", ["+password:", "+  •••"]),
+            ("export\n\n  API_KEY=Tr0ub4dor3horse", ["export", "", "  API_KEY=•••"]),
             ("export\n\u{3000}API_KEY=Tr0ub4dor3horse", ["export", "\u{3000}API_KEY=•••"]), // alone, the line keeps it
         ]
         for form in forms {
@@ -49,15 +52,11 @@ private func hexCarried(_ count: Int) -> String {
             let last = form.lines.lastIndex { $0.contains("•••") } ?? 0
             #expect(carried(form.text, from: last) == Array(form.lines[last...]), "\(form.text.debugDescription)")
         }
-        // In the text whole, a parent key's match takes the nested key's line as its value, so `redact` keeps this
-        // value; its line read alone shows ••• for it, each place a match could start being tried on its own.
-        let nested = "database:\n  password:\n    Tr0ub4dor3horse\n"
-        #expect(MCPRedaction.redact(nested, mask: .empty).text == nested)
-        #expect(carried(nested) == ["database:", "  password:", "    •••"])
     }
 
     /// What `redact` keeps in the text whole stays: a placeholder, a name that is no secret's, a name with other text
-    /// between it and the value, and a value on its name's own line, which that line masks.
+    /// between it and the value, a value on its name's own line, which that line masks, and a bare value on a line after
+    /// its name's: an `=` stays on its name's line, and a `:` reaches only a line indented more than its key's.
     @Test func whatTheWholeTextKeepsStays() {
         for text in [
             "apiKey =\n  \"${API_KEY}\"",
@@ -65,7 +64,11 @@ private func hexCarried(_ count: Int) -> String {
             "apiKey\nfoo\n= \"Tr0ub4dor&3!horse\"",
             "x = 1\napiKey = \"Tr0ub4dor&3!horse\"",
             "password:\n  - Tr0ub4dor3horse",
-            "+password:\n+  Tr0ub4dor3horse",
+            "+password:\n+Tr0ub4dor3horse",
+            "+password:\n-  Tr0ub4dor3horse",
+            "export\n\n  API_KEY\n\n=\n \nTr0ub4dor3horse",
+            "password:\nTr0ub4dor3horse\n  port: 5432",
+            "database:\n  password:\n  Tr0ub4dor3horse\n",
         ] {
             let lines = ProjectSearch.splitLines(text).map(\.0)
             let values = MCPRedaction.CarriedValues(lines, in: 0..<lines.count, mask: .empty)
@@ -172,5 +175,29 @@ extension CarriedValueTests {
             if MCPRedaction.redact(lines[at], maskingRun: { _ in nil }, mask: mask).text.contains(probe) { seen.across += 1 }
         }
         #expect(seen.masked > 1000 && seen.across > 300, "\(seen)")
+    }
+}
+
+extension CarriedValueTests {
+    /// A blank line holds no value: find_in_files gives a match in one as it is, without reading the lines before it,
+    /// even when the file no longer holds it (it would be ••• whole then, had they been read). It read them for each such
+    /// match, back over every blank line before it to the third line with text, so many matches after many blank lines
+    /// took time that grows with their product.
+    @Test func aMatchOnABlankLineIsGivenAsItIs() throws {
+        let f = try ProjectFixture()
+        try f.write("api/src/config.ts", "const apiKey =\n\n  \"Tr0ub4dor&3!horse\";\n")
+        let lines = MCPRedaction.CarriedLines(root: f.a, mask: .empty)
+        let past = lines.masking(SearchMatch(relativePath: "src/config.ts", line: 9, lineText: " \t ", range: NSRange(location: 1, length: 1)))
+        #expect(past.match.lineText == " \t " && past.count == 0)
+        let gone = lines.masking(SearchMatch(relativePath: "src/gone.ts", line: 3, lineText: "  ", range: NSRange(location: 0, length: 1)))
+        #expect(gone.match.lineText == "  " && gone.count == 0)
+
+        // Lines of spaces, each a match, after empty lines and under a name whose value is on a later line.
+        let blank: String = String(repeating: "\n", count: 50) + String(repeating: "  \n", count: 20)
+        try f.write("api/blank.txt", "const apiKey =\n" + blank + "  \"Tr0ub4dor&3!horse\";\n")
+        let arguments: [String: Any] = ["query": "^ +$", "regex": true, "glob": "blank.txt", "project": "api"]
+        let found = json(MCPProjectTools.findInFiles(arguments, in: f.both, git: nil, mask: .empty))
+        let matches = try #require(found["matches"] as? [[String: Any]])
+        #expect(matches.count == 20 && matches.allSatisfy { $0["text"] as? String == "" } && found["redacted"] == nil, "\(found)")
     }
 }

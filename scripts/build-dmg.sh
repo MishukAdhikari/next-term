@@ -3,6 +3,9 @@
 # Needs only the Xcode Command Line Tools.
 #
 #   scripts/build-dmg.sh                 ad-hoc signed (runs here; elsewhere needs Open Anyway, see README)
+#   SIGN_ID=<SHA-1 of the release identity> scripts/build-dmg.sh
+#                                         signed with the self-signed release identity, as CI signs releases
+#                                         (docs/signing.md): not notarized, still Open Anyway once
 #   SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=<notarytool keychain profile> scripts/build-dmg.sh
 #                                         signed, notarized and stapled for distribution
 set -euo pipefail
@@ -84,18 +87,34 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSSupportsAutomaticTermination</key><false/>
   <key>NSSupportsSuddenTermination</key><false/>
   <key>NSHumanReadableCopyright</key><string>© $(date +%Y) Mishuk Adhikari</string>
-  <!-- Shown when a command in a tab touches these folders. -->
-  <key>NSDesktopFolderUsageDescription</key><string>A command you ran in Next Term wants to access your Desktop.</string>
-  <key>NSDocumentsFolderUsageDescription</key><string>A command you ran in Next Term wants to access your Documents.</string>
-  <key>NSDownloadsFolderUsageDescription</key><string>A command you ran in Next Term wants to access your Downloads.</string>
-  <key>NSRemovableVolumesUsageDescription</key><string>A command you ran in Next Term wants to access a removable volume.</string>
-  <key>NSNetworkVolumesUsageDescription</key><string>A command you ran in Next Term wants to access a network volume.</string>
-  <key>NSMicrophoneUsageDescription</key><string>A command you ran in Next Term wants to use the microphone.</string>
-  <key>NSCameraUsageDescription</key><string>A command you ran in Next Term wants to use the camera.</string>
-  <key>NSContactsUsageDescription</key><string>A command you ran in Next Term wants to access your contacts.</string>
-  <key>NSCalendarsUsageDescription</key><string>A command you ran in Next Term wants to access your calendars.</string>
-  <key>NSLocationUsageDescription</key><string>A command you ran in Next Term wants to use your location.</string>
-  <key>NSPhotoLibraryUsageDescription</key><string>A command you ran in Next Term wants to access your photos.</string>
+  <!-- What macOS shows when Next Term, or a program running in one of its tabs, first touches one of these. macOS asks
+       in Next Term's name for both, so each says both: true whoever asked. Next Term itself only goes there when you
+       do (it never scans these places on its own), and every key a tab's program could need is here, so no prompt
+       shows without a reason. -->
+  <key>NSDesktopFolderUsageDescription</key><string>Next Term, or a command running in it, wants to access your Desktop folder.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Next Term, or a command running in it, wants to access your Documents folder.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Next Term, or a command running in it, wants to access your Downloads folder.</string>
+  <key>NSRemovableVolumesUsageDescription</key><string>Next Term, or a command running in it, wants to access files on a removable volume.</string>
+  <key>NSNetworkVolumesUsageDescription</key><string>Next Term, or a command running in it, wants to access files on a network volume.</string>
+  <key>NSFileProviderDomainUsageDescription</key><string>Next Term, or a command running in it, wants to access files in your cloud storage.</string>
+  <key>NSAppDataUsageDescription</key><string>Next Term, or a command running in it, wants to access data from other apps.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Next Term, or a command running in it, wants to use the microphone.</string>
+  <key>NSCameraUsageDescription</key><string>Next Term, or a command running in it, wants to use the camera.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Next Term, or a command running in it, wants to use speech recognition.</string>
+  <key>NSContactsUsageDescription</key><string>Next Term, or a command running in it, wants to access your contacts.</string>
+  <key>NSCalendarsUsageDescription</key><string>Next Term, or a command running in it, wants to access your calendars.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Next Term, or a command running in it, wants to access your calendars.</string>
+  <key>NSCalendarsWriteOnlyAccessUsageDescription</key><string>Next Term, or a command running in it, wants to add events to your calendars.</string>
+  <key>NSRemindersUsageDescription</key><string>Next Term, or a command running in it, wants to access your reminders.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>Next Term, or a command running in it, wants to access your reminders.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>Next Term, or a command running in it, wants to access your photos.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key><string>Next Term, or a command running in it, wants to add to your photos.</string>
+  <key>NSAppleMusicUsageDescription</key><string>Next Term, or a command running in it, wants to access your music and media library.</string>
+  <key>NSLocationUsageDescription</key><string>Next Term, or a command running in it, wants to use your location.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Next Term, or a command running in it, wants to use your location.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Next Term, or a command running in it, wants to connect to devices on your local network.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>Next Term, or a command running in it, wants to use Bluetooth.</string>
+  <key>NSSystemAdministrationUsageDescription</key><string>Next Term, or a command running in it, wants to change system settings.</string>
   <!-- Folders can be dropped on the Dock icon (or opened with "Open With") to open them as projects. -->
   <key>CFBundleDocumentTypes</key>
   <array>
@@ -112,7 +131,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>LSItemContentTypes</key><array><string>public.text</string><string>public.source-code</string><string>public.script</string><string>public.json</string><string>public.yaml</string></array>
     </dict>
   </array>
-  <key>NSAppleEventsUsageDescription</key><string>A command you ran in Next Term wants to control another app.</string>
+  <key>NSAppleEventsUsageDescription</key><string>Next Term, or a command running in it, wants to control another app.</string>
 </dict>
 </plist>
 PLIST
@@ -127,6 +146,17 @@ else
   codesign --force --sign "$SIGN_ID" --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$APP"
 fi
 codesign --verify --strict --verbose=1 "$APP"
+# macOS keys a privacy answer, and the updater the next update, to the designated requirement. A certificate's names
+# the certificate (a Developer ID's, its team), the same for every build it signs; an ad-hoc one names this build's
+# hash. The self-signed release identity has no team (docs/signing.md).
+TEAM=""
+if [[ "$SIGN_ID" != "-" ]]; then
+  TEAM="$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+  [[ "$TEAM" == "not set" ]] && TEAM=""
+  DESIGNATED="$(codesign -d -r- "$APP" 2>/dev/null | sed -nE 's/^(# )?designated => //p')"
+  echo "    designated requirement: $DESIGNATED"
+  [[ "$DESIGNATED" == *"certificate "* ]] || { echo "error: the designated requirement names no certificate" >&2; exit 1; }
+fi
 # It still runs, stripped and signed: the command line tool's --version, in each architecture this Mac can run.
 for ARCH in $(lipo -archs "$BIN"); do
   arch "-$ARCH" /usr/bin/true 2>/dev/null || continue
@@ -142,13 +172,18 @@ cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
-[[ "$SIGN_ID" != "-" ]] && codesign --force --sign "$SIGN_ID" --timestamp "$DMG"
+# Only a team's identity signs the disk image. Gatekeeper checks a signed disk image as it opens, and it can't pass one
+# signed with a self-signed certificate; unsigned, the image opens as before and only the app asks for Open Anyway.
+# The checksum signed with the release key (scripts/sign-release.sh) is what vouches for the image.
+[[ -n "$TEAM" ]] && codesign --force --sign "$SIGN_ID" --timestamp "$DMG"
 hdiutil verify "$DMG" >/dev/null
-# Notarize and staple before the checksum: stapling changes the DMG's bytes.
-if [[ -n "${NOTARY_PROFILE:-}" && "$SIGN_ID" != "-" ]]; then
+# Notarize and staple before the checksum: stapling changes the DMG's bytes. Apple notarizes only a team's signature.
+if [[ -n "${NOTARY_PROFILE:-}" && -n "$TEAM" ]]; then
   echo "==> Notarizing"
   xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$DMG"
+elif [[ -n "${NOTARY_PROFILE:-}" && "$SIGN_ID" != "-" ]]; then
+  echo "    not notarized: the identity has no team"
 fi
 (cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
 

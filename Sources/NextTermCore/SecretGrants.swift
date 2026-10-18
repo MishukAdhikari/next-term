@@ -107,6 +107,9 @@ public enum SecretGrantEvent: Equatable, Sendable {
     /// MCP or a remote connection typed into this tab (its id, as `MCPWriteControl.asker` gives it): the
     /// `run_with_secrets` grants it asked for end.
     case tabGotInput(String)
+    /// A key set to "Ask for Touch ID every time it's used" (`SecretApprovalChoices`): no lasting grant may hold it.
+    /// A one-use grant is one Allow once's single use, kept for its wrapper's restart, so it stays.
+    case askEveryUse(String)
 }
 
 /// "Allow for 15 minutes", "Allow this command until the Mac locks", or one use within 2 minutes, for a wrapper that
@@ -171,6 +174,7 @@ public struct SecretGrant: Identifiable, Sendable {
         case .displaySleep: return false
         case .revoke(let id): return id == self.id
         case .keyChanged(let name): return binding.keys[name] != nil
+        case .askEveryUse(let name): return kind != .oneUse && binding.keys[name] != nil
         case .tabGotInput(let tab): return binding.source == .tool && binding.asker == tab
         }
     }

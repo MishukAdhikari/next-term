@@ -116,12 +116,14 @@ final class KeyboardShortcuts {
     }
 
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
-    /// shown on the editor's command only, since that is what it does there.
+    /// shown on the editor's command only, since that is what it does there; a Markdown command's, only in a
+    /// Markdown file's editor (⌘B: Bold there, Hide Project Sidebar in any other).
     func menuBarOpened() {
-        let inEditor = NSApp.keyWindow?.firstResponder is CodeTextView
+        let editor = NSApp.keyWindow?.firstResponder as? CodeTextView
         for (chord, item) in editorKeys {
             if let other = sharedKeys[chord] {
-                guard inEditor else { continue }
+                let markdownOnly = Self.id(of: item).map { KeyBindings.markdownCommands.contains($0) } ?? false
+                guard let editor, !markdownOnly || editor.markdownStyler != nil else { continue }
                 Self.set(nil, on: other)
             }
             Self.set(chord, on: item)
@@ -633,8 +635,16 @@ final class KeyHintOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (hint?.backdrop ?? Theme.bar).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
+        let backdrop: NSColor = hint?.backdrop ?? Theme.bar
+        let shape = NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4)
+        backdrop.setFill()
+        shape.fill()
+        // Over the top row the bar's colour has the project's glow on it, where the key now is: no plain patch in it.
+        guard backdrop === Theme.bar, let glow = (superview as? ProjectGlowing)?.projectGlow else { return }
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        glow.paint(bounds, in: self)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -648,7 +658,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 700), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 730), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
@@ -685,7 +695,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         skillsTab.label = "Skills"
         skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
-        // Secrets is last: after Skills, and after Remote Access once that tab is in.
+        // Where the todo folder is (Tasks › Task Settings…).
+        let tasksTab = NSTabViewItem(identifier: "tasks")
+        tasksTab.label = "Tasks"
+        tasksTab.view = TaskSettingsView()
+        tabs.addTabViewItem(tasksTab)
+        // Secrets is last: after Skills and Tasks, and after Remote Access once that tab is in.
         let secretsTab = NSTabViewItem(identifier: "secrets")
         secretsTab.label = "Secrets"
         secretsTab.view = SecretsView()
@@ -926,13 +941,14 @@ final class ShortcutRecorder: NSButton {
     }
 }
 
-/// Settings › Editor: line height, soft wrap, hidden .env values and font size, the sidebar, agents and git,
-/// applied as they change.
+/// Settings › Editor: line height, soft wrap, hidden .env values, Markdown's Live Preview and font size, the sidebar,
+/// agents and git, applied as they change.
 final class EditorSettingsView: NSView {
     private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
     private let envValues = NSButton(checkboxWithTitle: "Hide values in .env files", target: nil, action: nil)
+    private let markdownPreview = NSButton(checkboxWithTitle: "Show Markdown files in Live Preview", target: nil, action: nil)
     private let singleClick = NSButton(checkboxWithTitle: "Open files with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
     private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, OpenCode)", target: nil, action: nil)
@@ -995,6 +1011,9 @@ final class EditorSettingsView: NSView {
         envValues.target = self
         envValues.action = #selector(envValuesChanged)
         envValues.toolTip = "For screen sharing: values show as dots, and the file itself does not change. The line you click or type in shows its value."
+        markdownPreview.target = self
+        markdownPreview.action = #selector(markdownPreviewChanged)
+        markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Markdown Live Preview switches one file to its source and back."
         singleClick.target = self
         singleClick.action = #selector(singleClickChanged)
         singleClick.toolTip = "A click opens the file in a preview tab that the next click reuses. Edit the file or double-click its tab to keep it. Off: a double-click opens, as in Finder."
@@ -1029,7 +1048,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt. A Markdown file shows its syntax only on the lines you are on, and its bytes never change unless you type; ⇧⌘V shows one file's source.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -1040,6 +1059,7 @@ final class EditorSettingsView: NSView {
             row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
             row("", [envValues]),
+            row("", [markdownPreview]),
             row("On save:", [saving.trim, saving.newline]),
             row("Sidebar:", [singleClick]),
             row("", [dotIcons]),
@@ -1088,6 +1108,7 @@ final class EditorSettingsView: NSView {
         lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
         wrap.state = app.softWrap ? .on : .off
         envValues.state = app.hidesEnvValues ? .on : .off
+        markdownPreview.state = app.markdownLivePreview ? .on : .off
         singleClick.state = app.sidebarSingleClickOpens ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
@@ -1131,6 +1152,11 @@ final class EditorSettingsView: NSView {
 
     @objc private func envValuesChanged() {
         AppDelegate.shared.hidesEnvValues = envValues.state == .on
+        refresh()
+    }
+
+    @objc private func markdownPreviewChanged() {
+        AppDelegate.shared.markdownLivePreview = markdownPreview.state == .on
         refresh()
     }
 

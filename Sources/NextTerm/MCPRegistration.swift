@@ -111,11 +111,13 @@ enum MCPRegistration {
 /// The user's login shell, for what a Finder-launched app cannot see: the PATH set in .zshrc and
 /// .zprofile, where agents installed with npm, Homebrew or their own installers live.
 enum LoginShell {
-    /// Program name → path, for the agents Next Term registers in. Read once per launch.
+    /// Program name → path, for the agents Next Term registers in. Read once per launch, never in a PATH folder inside a
+    /// protected place (a tool unzipped in ~/Downloads): a look there at launch would set off macOS's prompt for it.
     static let programs: [String: String] = {
         let names = Set(MCPRegistrar.targets().flatMap(\.programs) + ["claude"])
         var found: [String: String] = [:]
-        for directory in path {
+        let protected = ProtectedPlaces.current
+        for directory in path where !protected.holds(directory) {
             for name in names where found[name] == nil {
                 let candidate = (directory as NSString).appendingPathComponent(name)
                 if FileManager.default.isExecutableFile(atPath: candidate) { found[name] = candidate }

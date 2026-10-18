@@ -5,6 +5,7 @@ extension MCPRedaction {
     /// holds its line alone, so its file is read again as the search read it, once for all its matches, and the lines
     /// before the match's line are taken from it, back to the third with text in it. A line the file no longer holds as
     /// the search found it (the file changed since, or is gone) is ••• whole: what the lines before it name is not known.
+    /// A blank line holds no value, and is given as it is without reading them.
     final class CarriedLines {
         private let root: String
         private let mask: SecretMask
@@ -23,6 +24,8 @@ extension MCPRedaction {
         /// `match` with its line's values named on a line before it made •••, its range moved with them, and how many.
         func masking(_ match: SearchMatch) -> (match: SearchMatch, count: Int) {
             guard match.line > 1 else { return (match, 0) } // nothing before it
+            // A blank line holds no value: no walk back over the blank lines before it, for each such match.
+            guard !CarriedValues.isBlank(match.lineText) else { return (match, 0) }
             if path != match.relativePath { read(match.relativePath) }
             guard let found = values(at: match.line - 1, text: match.lineText) else {
                 let whole = NSRange(location: 0, length: (MCPRedaction.mask as NSString).length)

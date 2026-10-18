@@ -113,6 +113,28 @@ public enum StoredSecretName {
         return String(name.prefix(maxLength))
     }
 
+    /// A name made from a path's parts, such as a JSON path or an item's title and a field's label: each part split where
+    /// its words change case (`SecretName.segments`), joined with `_`, then made a name as `suggested` makes one.
+    /// `["openai", "apiKey"]` is OPENAI_API_KEY. A part that spells a provider's name (`OpenAI`, `GitHub`) stays one word.
+    public static func fromParts(_ parts: [String]) -> String {
+        let words: [String] = parts.flatMap { (part: String) -> [String] in
+            let segments: [String] = SecretName.segments(of: part)
+            let whole: String = segments.joined()
+            return segments.count > 1 && providerWords.contains(whole) ? [whole] : segments
+        }
+        return suggested(from: words.joined(separator: "_"))
+    }
+
+    /// The providers' names in the key-page table, in capitals with no marks: OPENAI, GITHUB, LANGSMITH.
+    static let providerWords: Set<String> = {
+        var words = Set<String>()
+        for page in SecretKeyPages.all {
+            words.insert(SecretName.segments(of: page.provider).joined())
+            for case .prefix(let prefix) in page.names { words.insert(SecretKeyPages.spelling(of: prefix)) }
+        }
+        return words
+    }()
+
     /// Environment names a key is never given as: ones that change how a shell, a dynamic linker or an interpreter
     /// runs the command, or what Next Term and git read.
     public static let refusedEnvNames: Set<String> = [
@@ -243,11 +265,24 @@ public final class SecretVault {
     public static let maxEntries = 500
     public static let maxValueBytes = 16 * 1024
     public static let maxPurposeLength = 200
+    /// The read cap: a vault.json past it is refused unread.
     public static let maxFileSize = 8 * 1024 * 1024
+    /// The write cap: a change that makes vault.json larger than this is refused (`full`), so a file Next Term writes
+    /// always reads back. One that doesn't make it larger is saved, past the cap too. The 1 MB between it and the read
+    /// cap is for upkeep, which may use it: new marks after `mask.key` was made again, the second wrap, a new keyring, a
+    /// key made write-only, a key deleted. So a full vault can still be opened, marked, rescued and emptied.
+    public static let maxWriteSize = 7 * 1024 * 1024
     /// The length of `mask.key`.
     public static let maskKeyLength = 32
     /// The length of the recovery key, for a copy of the vault key in the login keychain.
     public static let recoveryKeyLength = 32
+    /// How many days a key's rotation reminder may be set to. The menus offer fewer; a later release may offer others.
+    public static let remindRange = 1...3650
+    /// The most retired marks one key keeps: the forms of a few old values (five each today), with room for forms a
+    /// later release may mark, so a vault it saved still reads here.
+    public static let maxRetiredMarks = 32
+    /// How long a key rotation keeps the old value's marks, while the old key may still work at its provider.
+    public static let retiredDays = 30
 
     static let wrapSalt = Data("NextTerm Secrets wrap 1".utf8)
     static let wrapLabel = "nextterm-wrap/1"
@@ -286,6 +321,17 @@ public final class SecretVault {
         case badValue(String)
         case badPurpose
         case writeOnly(String)
+        /// The change would make vault.json larger, and larger than `maxWriteSize`, so nothing was saved.
+        case full
+        /// A key's link failed the link rules (`SecretLink`), for this reason.
+        case badLink(SecretLink.Refusal)
+        /// A rotation reminder outside `remindRange`.
+        case badReminder
+        /// A key rotation's new value is the one the key has now.
+        case sameValue(String)
+        /// The change would save an index the read refuses (`isWellFormed`), so the file would then read as changed
+        /// outside Next Term; nothing was saved.
+        case unreadable
 
         public var errorDescription: String? {
             switch self {
@@ -307,7 +353,16 @@ public final class SecretVault {
             case .valueTooLong(let name): return "\(name) is longer than 16 KB."
             case .badValue(let name): return "\(name) is empty, or holds a line break or a NUL character, or is not text."
             case .badPurpose: return "What a key is for is one line of at most \(SecretVault.maxPurposeLength) characters."
-            case .writeOnly(let name): return "\(name) is write-only: Next Term never shows it again."
+            case .writeOnly(let name): return "Next Term never shows \(name): it is set to “Never show this key”."
+            case .full:
+                let megabytes = SecretVault.maxWriteSize / (1024 * 1024)
+                return "Secrets is full, so nothing was saved: its file can’t grow past \(megabytes) MB. Delete keys you no longer "
+                    + "use, then try again."
+            case .badLink(let refusal): return refusal.sentence
+            case .badReminder: return "A reminder to rotate a key is from 1 to 3,650 days."
+            case .sameValue: return "That\u{2019}s the key you have now."
+            case .unreadable:
+                return "This change would leave Secrets’ file in a shape Next Term can’t read, so nothing was saved."
             }
         }
     }
@@ -336,7 +391,31 @@ public final class SecretVault {
         }
     }
 
+    /// Where a key's link came from: typed by the user, a suggestion the user took with Use, or an import's URL field
+    /// the user saw in the preview. Read leniently (see `KeyedDecodingContainer.decodeIfPresent` below): a kind a
+    /// later release adds reads as none here.
+    public enum LinkFrom: String, Codable, Sendable, CaseIterable {
+        case user, suggested, imported
+    }
+
+    /// An old value's marks, kept after its key got a new value while the old key may still work, until `until`. They
+    /// hold no value (see `Mark`). The first save after `until` drops them.
+    public struct Retired: Codable, Equatable, Sendable {
+        public let marks: [Mark]
+        public let until: Date
+
+        public init(marks: [Mark], until: Date) {
+            self.marks = marks
+            self.until = until
+        }
+    }
+
     /// One key: its facts in the clear (authenticated by the index's MAC) and its value sealed.
+    ///
+    /// The members after `marks` came after 0.11.6. Each is optional: a vault without them decodes as before, and a nil
+    /// is left out when encoding, so the vault stays format 1 and 0.11.6, which skips members it doesn't know, still
+    /// opens it (and drops them when it next saves). Like `purpose`, they are not in the value's seal: the index's MAC
+    /// covers them, and a new link needs no new seal.
     public struct Entry: Codable, Equatable, Sendable {
         public let id: String
         public internal(set) var name: String
@@ -349,9 +428,29 @@ public final class SecretVault {
         /// AES-GCM's combined form: nonce, ciphertext, tag.
         var box: Data
         public internal(set) var marks: [Mark]
+        /// "Where it came from": the provider's page where the key was made, as `SecretLink.check` gave it when saved.
+        /// Read with no MAC check for lists, so it is checked again before it is shown or opened.
+        public internal(set) var link: String? = nil
+        public internal(set) var linkFrom: LinkFrom? = nil
+        /// When the value was last set: by an add, a new value or an import. A rename or a purpose edit leaves it.
+        public internal(set) var valueSet: Date? = nil
+        /// Remind the user to rotate the key this many days after `lastSet`; nil is never.
+        public internal(set) var remindDays: Int? = nil
+        public internal(set) var retired: Retired? = nil
+        /// True once the user unticked "Ask for Touch ID every time it's used": an approval may then outlast one use
+        /// (Allow for 15 minutes, until the Mac locks). Absent on every key that asks, so a key saved before the box
+        /// reads as asking every time, the safe default.
+        public internal(set) var lastingApprovals: Bool? = nil
+
+        /// "Ask for Touch ID every time it's used": on unless the user unticked it for this key.
+        public var asksEveryUse: Bool { lastingApprovals != true }
 
         /// Added by the user: in Settings, through `request_secret` or the import. Not by an agent's `store_secret`.
         public var addedByUser: Bool { origin != .agent }
+
+        /// When the value was last set, or for a key saved before that was recorded, when the key was made: its age can
+        /// then only seem greater than it is, never less.
+        public var lastSet: Date { valueSet ?? created }
     }
 
     struct Wrapped: Codable, Equatable, Sendable {
@@ -378,6 +477,34 @@ public final class SecretVault {
 
         public func entry(named name: String) -> Entry? { entries.first { $0.name == name } }
         public var names: [String] { entries.map(\.name) }
+
+        /// The row of the key whose id is `id`, for a list that keeps its selection across a reload: a rename or a new
+        /// value keeps the key's id, so it stays selected; a key deleted and added again under its name has another id,
+        /// so nothing does. Nil for no id, or a key this index no longer holds.
+        public func row(of id: String?) -> Int? {
+            guard let id else { return nil }
+            return entries.firstIndex { $0.id == id }
+        }
+
+        /// The keys of `earlier` that this index no longer holds as they were: gone, renamed, deleted and added again
+        /// (another id), or sealed again (a new value, or made write-only). What a key is for, changed alone, keeps its
+        /// seal, so it is not among them. For vault.json written by another copy of Next Term: the grants holding these
+        /// keys end, as they do after the same change here.
+        public func changedNames(since earlier: Index) -> [String] {
+            earlier.entries.compactMap { old in
+                guard let now = entry(named: old.name), now.id == old.id, now.box == old.box else { return old.name }
+                return nil
+            }
+        }
+
+        /// `changedNames(since:)` from the index this copy had (`earlier`) to the one it holds now: after a reload, or
+        /// after its own change under the vault's lock, which may follow another copy's change made while Touch ID was
+        /// asked. Every key of `earlier` when there is no index now (vault.json can't be read); none without `earlier`.
+        public static func changedNames(from earlier: Index?, to now: Index?) -> [String] {
+            guard let earlier else { return [] }
+            guard let now else { return earlier.names }
+            return now.changedNames(since: earlier)
+        }
     }
 
     /// vault.json's outer object.
@@ -388,9 +515,21 @@ public final class SecretVault {
     }
 
     public private(set) var index: Index
+    /// Whether `error` is a read refused for its size: vault.json past the read cap. Settings says the file is too
+    /// large, not that it changed.
+    public static func isTooLarge(_ error: Error) -> Bool {
+        (error as? SecretFolder.Failure) == .tooLarge || (error as? Failure) == .tooLarge
+    }
+
     /// vault.json's bytes as they are now: what was read, or what the last change made.
     public private(set) var file: Data
     private var vaultKey: SymmetricKey?
+    /// `maxWriteSize`; the tests lower it.
+    var writeCap = SecretVault.maxWriteSize
+    /// Inside `batch`: each change is checked and kept, and the file is encoded once, when the batch ends.
+    private var isBatching = false
+    /// How many times a change encoded the file; the tests count them.
+    private(set) var encodedFiles = 0
 
     private init(index: Index, file: Data, vaultKey: SymmetricKey) {
         self.index = index
@@ -478,29 +617,59 @@ public final class SecretVault {
     /// Adds a key. The value is trimmed of white space at both ends; one holding NUL, CR or LF is refused, and so is
     /// one over 16 KB. With `maskKey` (`mask.key`), the entry gets the value's masking marks, made here with the value
     /// at hand (`SecretMask.marks(for:key:)`).
+    ///
+    /// `link` is kept as `SecretLink.check` gives it, and never when it holds the value (`badLink`); the app checks it
+    /// against the stored keys first. `linkFrom` says where it came from (`user` unless given), and goes with it: no
+    /// link, or an empty one, keeps neither. `remindDays` is in `remindRange` (`badReminder`). `asksEveryUse` is
+    /// "Ask for Touch ID every time it's used", on unless the caller says otherwise.
     public func add(name: String, purpose: String, purposeBy: PurposeBy, origin: Origin, writeOnly: Bool,
-                    value: SecretBytes, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
+                    value: SecretBytes, link: String? = nil, linkFrom: LinkFrom? = nil, remindDays: Int? = nil,
+                    asksEveryUse: Bool = true, maskKey: SymmetricKey? = nil, now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         guard StoredSecretName.isValid(name) else { throw Failure.badName }
         guard index.entry(named: name) == nil else { throw Failure.nameTaken(name) }
         guard index.entries.count < Self.maxEntries else { throw Failure.tooManyKeys }
         let purpose = try Self.checkedPurpose(purpose)
         let value = try Self.normalized(value, name: name)
+        let source = try Self.checkedLink(link, from: linkFrom, value: value)
+        let remindDays = try Self.checkedReminder(remindDays)
         let id = UUID().uuidString.lowercased()
         let box = try Self.seal(value, key: key, id: id, name: name, writeOnly: writeOnly, origin: origin)
         let date = Self.whole(now)
         let marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
-        let entry = Entry(id: id, name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly,
+        var entry = Entry(id: id, name: name, purpose: purpose, purposeBy: purposeBy, origin: origin, writeOnly: writeOnly,
                           created: date, changed: date, box: box, marks: marks)
-        index.entries.append(entry)
-        return try written(key)
+        entry.link = source?.link
+        entry.linkFrom = source?.from
+        entry.valueSet = date
+        entry.remindDays = remindDays
+        entry.lastingApprovals = asksEveryUse ? nil : true
+        return try written(key, now: now) { index.entries.append(entry) }
     }
 
-    /// Renames a key, changes what it is for, or both. A new name seals the value again, since the name is in its seal.
+    /// Renames a key, changes what it is for, its link, its reminder, whether it asks every time, or any of them. A new
+    /// name seals the value again, since the name is in its seal; the others need no new seal. For `link` and
+    /// `remindDays`, nil leaves them as they are and `.some(nil)` clears them (so does an empty link); a new link is
+    /// checked as `add` checks one, with `linkFrom` (`user` unless given). The same link saved again with no `linkFrom`,
+    /// as the Edit sheet sends its field each time, keeps where it came from. `asksEveryUse`, nil leaves it. When the
+    /// value was set stays as it is.
     public func edit(_ name: String, newName: String? = nil, purpose: String? = nil, purposeBy: PurposeBy? = nil,
+                     link: String?? = nil, linkFrom: LinkFrom? = nil, remindDays: Int?? = nil, asksEveryUse: Bool? = nil,
                      now: Date = Date()) throws -> Data {
         let key = try unlockedKey()
         var (position, entry) = try find(name)
+        if let asksEveryUse { entry.lastingApprovals = asksEveryUse ? nil : true }
+        if let link {
+            let source = try Self.checkedLink(link, from: linkFrom, value: nil)
+            let same: Bool = linkFrom == nil && source != nil && source?.link == entry.link
+            if !same {
+                entry.link = source?.link
+                entry.linkFrom = source?.from
+            }
+        }
+        if let remindDays {
+            entry.remindDays = try Self.checkedReminder(remindDays)
+        }
         if let newName, newName != name {
             guard StoredSecretName.isValid(newName) else { throw Failure.badName }
             guard index.entry(named: newName) == nil else { throw Failure.nameTaken(newName) }
@@ -513,11 +682,11 @@ public final class SecretVault {
             entry.purposeBy = purposeBy ?? .user
         }
         entry.changed = Self.whole(now)
-        index.entries[position] = entry
-        return try written(key)
+        return try written(key, now: now) { index.entries[position] = entry }
     }
 
-    /// A new value for a key, write-only or not. `origin`, when given, is who replaced it (`agent` for an agent's
+    /// A new value for a key. `writeOnly` makes it never shown; a key never shown already stays so, whatever it says,
+    /// since "Never show this key" can't be undone. `origin`, when given, is who replaced it (`agent` for an agent's
     /// `store_secret`); the key's purpose stays.
     public func replace(_ name: String, value: SecretBytes, writeOnly: Bool, origin: Origin? = nil, maskKey: SymmetricKey? = nil,
                         now: Date = Date()) throws -> Data {
@@ -525,13 +694,48 @@ public final class SecretVault {
         var (position, entry) = try find(name)
         let value = try Self.normalized(value, name: name)
         let origin = origin ?? entry.origin
-        entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: writeOnly, origin: origin)
+        let neverShown: Bool = entry.writeOnly || writeOnly
+        entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: neverShown, origin: origin)
         entry.origin = origin
-        entry.writeOnly = writeOnly
+        entry.writeOnly = neverShown
         entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
         entry.changed = Self.whole(now)
-        index.entries[position] = entry
-        return try written(key)
+        entry.valueSet = entry.changed
+        return try written(key, now: now) { index.entries[position] = entry }
+    }
+
+    /// A key rotation: `replace` for a new value made at the provider, while the old key may still work there for a
+    /// while. The new value must differ from the one the key has now (`sameValue`), compared inside the vault in
+    /// constant time. The old value's marks are kept as `retired` for `retiredDays`, so it stays masked; only the most
+    /// recent old value is kept. The key stays write-only or not, as it was; `origin`, when given, is who rotated it.
+    /// `link` and `remindDays` are saved in the same write, as `edit` takes them (nil leaves them as they are), with
+    /// the link checked against the new value too.
+    public func rotate(_ name: String, value: SecretBytes, origin: Origin? = nil, link: String?? = nil,
+                       linkFrom: LinkFrom? = nil, remindDays: Int?? = nil, maskKey: SymmetricKey? = nil,
+                       now: Date = Date()) throws -> Data {
+        let key = try unlockedKey()
+        var (position, entry) = try find(name)
+        let value = try Self.normalized(value, name: name)
+        let current = try Self.open(entry, key: key)
+        guard !(current == value) else { throw Failure.sameValue(name) }
+        if let link {
+            let source = try Self.checkedLink(link, from: linkFrom, value: value)
+            entry.link = source?.link
+            entry.linkFrom = source?.from
+        }
+        if let remindDays {
+            entry.remindDays = try Self.checkedReminder(remindDays)
+        }
+        let origin = origin ?? entry.origin
+        let date = Self.whole(now)
+        let kept: TimeInterval = TimeInterval(Self.retiredDays) * 86_400
+        entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: entry.writeOnly, origin: origin)
+        entry.origin = origin
+        entry.retired = entry.marks.isEmpty ? nil : Retired(marks: entry.marks, until: date.addingTimeInterval(kept))
+        entry.marks = maskKey.map { SecretMask.marks(for: value, key: $0) } ?? []
+        entry.changed = date
+        entry.valueSet = date
+        return try written(key, now: now) { index.entries[position] = entry }
     }
 
     /// Makes a normal key write-only, one way: its value is sealed again with the flag.
@@ -543,25 +747,43 @@ public final class SecretVault {
         entry.box = try Self.seal(value, key: key, id: entry.id, name: name, writeOnly: true, origin: entry.origin)
         entry.writeOnly = true
         entry.changed = Self.whole(now)
-        index.entries[position] = entry
-        return try written(key)
+        return try written(key, cap: Self.maxFileSize, now: now) { index.entries[position] = entry }
     }
 
     public func delete(_ name: String) throws -> Data {
         let key = try unlockedKey()
         let (position, _) = try find(name)
-        index.entries.remove(at: position)
-        return try written(key)
+        return try written(key, cap: Self.maxFileSize) { _ = index.entries.remove(at: position) }
     }
 
-    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again.
+    /// The changes `body` makes, saved as one file: each is checked as it is made, and the file is encoded and MAC'd
+    /// once, when `body` ends, so a copy-in of hundreds of keys doesn't encode the vault for each. When anything fails,
+    /// the index and the file are left as they were before `body`. A batch inside a batch is part of it. Returns the
+    /// new file's bytes; the changes inside return the file as it was before the batch.
+    public func batch(now: Date = Date(), _ body: () throws -> Void) throws -> Data {
+        let key = try unlockedKey()
+        guard !isBatching else {
+            try body()
+            return file
+        }
+        return try written(key, now: now) {
+            isBatching = true
+            defer { isBatching = false }
+            try body()
+        }
+    }
+
+    /// Gives every entry new marks under `maskKey`: after a missing `mask.key` was made again. Retired marks were made
+    /// under the old key and can't be made again, since the old values are gone, so they go.
     public func remark(maskKey: SymmetricKey) throws -> Data {
         let key = try unlockedKey()
-        for position in index.entries.indices {
-            let value = try Self.open(index.entries[position], key: key)
-            index.entries[position].marks = SecretMask.marks(for: value, key: maskKey)
+        return try written(key, cap: Self.maxFileSize) {
+            for position in index.entries.indices {
+                let value = try Self.open(index.entries[position], key: key)
+                index.entries[position].marks = SecretMask.marks(for: value, key: maskKey)
+                index.entries[position].retired = nil
+            }
         }
-        return try written(key)
     }
 
     // MARK: values
@@ -571,6 +793,24 @@ public final class SecretVault {
         let key = try unlockedKey()
         let (_, entry) = try find(name)
         return try Self.open(entry, key: key)
+    }
+
+    /// Whether the key `name` holds `value`, trimmed as `add` trims it, compared inside the vault in constant time. For
+    /// an import tried again after its file was left as it was: the key the first try stored is used, not stored twice.
+    /// False when there is no such key, or `value` is not one `add` would take.
+    public func holds(_ name: String, value: SecretBytes) throws -> Bool {
+        let key = try unlockedKey()
+        guard let entry = index.entry(named: name), let wanted = try? Self.normalized(value, name: name) else { return false }
+        return try Self.open(entry, key: key) == wanted
+    }
+
+    /// Whether an import may keep the key `name` for `value` instead of storing the value again: a key an earlier
+    /// import stored (origin `import`), a move's or a copy from a file's, whose Undo keeps a key a move's entries name;
+    /// not write-only, and holding `value` (`holds`). A key added in Settings or by an agent is the user's own, and a
+    /// write-only one couldn't be put back by an Undo of the move that used it.
+    public func isReusable(_ name: String, for value: SecretBytes) throws -> Bool {
+        guard let entry = index.entry(named: name), entry.origin == .import, !entry.writeOnly else { return false }
+        return try holds(name, value: value)
     }
 
     /// A key's value, to show or copy: refused for a write-only key.
@@ -625,8 +865,7 @@ public final class SecretVault {
         let sealed = try AES.GCM.seal(Self.bytes(of: key), using: Self.recoveryKey(recovery),
                                       authenticating: Self.wrapData(Self.recoveryLabel))
         guard let combined = sealed.combined else { throw Failure.tampered }
-        index.recovery = Recovery(box: combined)
-        return try written(key)
+        return try written(key, cap: Self.maxFileSize) { index.recovery = Recovery(box: combined) }
     }
 
     /// Wraps the vault key under a new keyring: the rescue with the recovery key, after the old Secure Enclave key
@@ -634,11 +873,13 @@ public final class SecretVault {
     public func rewrap(under keyring: VaultKeyring) throws -> Data {
         let key = try unlockedKey()
         let publicKey = try keyring.publicKey()
-        index.wrapped = try Self.wrap(key, for: publicKey, kind: keyring.kind)
-        index.keyring = keyring.kind
-        index.keyBlob = keyring.keyBlob
-        index.publicKey = publicKey
-        return try written(key)
+        let wrapped = try Self.wrap(key, for: publicKey, kind: keyring.kind)
+        return try written(key, cap: Self.maxFileSize) {
+            index.wrapped = wrapped
+            index.keyring = keyring.kind
+            index.keyBlob = keyring.keyBlob
+            index.publicKey = publicKey
+        }
     }
 
     // MARK: the crypto
@@ -653,9 +894,33 @@ public final class SecretVault {
         return (position, index.entries[position])
     }
 
-    private func written(_ key: SymmetricKey) throws -> Data {
-        file = try Self.encodeFile(index, key: key)
-        return file
+    /// The index changed by `change`, then the new file's bytes, for the caller to write. When anything fails, a file
+    /// that grows past `cap` (`writeCap` unless given) included, the index and the file are left as they were. A file
+    /// past the cap already (written before there was one, or grown by upkeep) still takes a change that doesn't make
+    /// it larger, such as a leaked key replaced in place. Retired marks whose date has passed by `now` go, so the file
+    /// shrinks. The index is checked as the read checks it first (`checkReadable`), so no change saves a file that
+    /// would then read as changed outside Next Term.
+    private func written(_ key: SymmetricKey, cap: Int? = nil, now: Date = Date(),
+                         _ change: () throws -> Void) throws -> Data {
+        let before = index
+        do {
+            try change()
+            if isBatching { return file } // the batch encodes the file once, at its end
+            for position in index.entries.indices {
+                guard let until = index.entries[position].retired?.until, until <= now else { continue }
+                index.entries[position].retired = nil
+            }
+            try Self.checkReadable(index)
+            let new = try Self.encodeFile(index, key: key)
+            encodedFiles += 1
+            let fits: Bool = new.count <= cap ?? writeCap
+            guard fits || new.count <= file.count else { throw Failure.full }
+            file = new
+            return new
+        } catch {
+            index = before
+            throw error
+        }
     }
 
     static func wrap(_ vaultKey: SymmetricKey, for publicKey: Data, kind: VaultKeyringKind) throws -> Wrapped {
@@ -774,6 +1039,11 @@ public final class SecretVault {
         return (file, index)
     }
 
+    /// Refuses an index the read would refuse (`unreadable`): what a write checks before it saves.
+    static func checkReadable(_ index: Index) throws {
+        guard isWellFormed(index) else { throw Failure.unreadable }
+    }
+
     static func isWellFormed(_ index: Index) -> Bool {
         guard index.entries.count <= maxEntries else { return false }
         var names = Set<String>()
@@ -781,7 +1051,28 @@ public final class SecretVault {
         for entry in index.entries {
             guard StoredSecretName.isValid(entry.name), !entry.id.isEmpty, entry.id.utf8.count <= 64,
                   entry.purpose.count <= maxPurposeLength, names.insert(entry.name).inserted,
-                  ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible) else { return false }
+                  ids.insert(entry.id).inserted, entry.marks.allSatisfy(SecretMask.isPlausible),
+                  hasWellFormedFacts(entry) else { return false }
+        }
+        return true
+    }
+
+    /// The structure of the members added after 0.11.6, and only that: a link of at most 2048 bytes with no control
+    /// character, a reminder from 1 to 3650 days, and retired marks that a value's forms could have, at most
+    /// `maxRetiredMarks`. The link rules (`SecretLink`) and the menus' reminder ages aren't checked here: either may change
+    /// in a later release, and a vault it saved must not read here as changed outside Next Term. A stored link that
+    /// fails the rules shows as one that can't be opened, and stays editable.
+    static func hasWellFormedFacts(_ entry: Entry) -> Bool {
+        if let link = entry.link {
+            let hasControl = link.unicodeScalars.contains { (scalar: Unicode.Scalar) -> Bool in
+                scalar.properties.generalCategory == .control
+            }
+            guard link.utf8.count <= SecretLink.maxLength, !hasControl else { return false }
+        }
+        if let days = entry.remindDays, !remindRange.contains(days) { return false }
+        if let retired = entry.retired {
+            let plausible = retired.marks.allSatisfy(SecretMask.isPlausible)
+            guard retired.marks.count <= maxRetiredMarks, plausible else { return false }
         }
         return true
     }
@@ -798,6 +1089,25 @@ public final class SecretVault {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
+
+    /// A link to keep, as `SecretLink.check` gives it with no stored keys to look for (the app looks for them first),
+    /// and where it came from; nil for no link or an empty one. `value` is the key's own, when at hand.
+    static func checkedLink(_ text: String?, from: LinkFrom?,
+                            value: SecretBytes?) throws -> (link: String, from: LinkFrom)? {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let result = SecretLink.check(text, mask: { (_: String) -> Bool in false }, value: value)
+        switch result {
+        case .success(let url): return (url.absoluteString, from ?? .user)
+        case .failure(let refusal): throw Failure.badLink(refusal)
+        }
+    }
+
+    /// A rotation reminder: nil (never), or a number of days in `remindRange`.
+    static func checkedReminder(_ days: Int?) throws -> Int? {
+        guard let days else { return nil }
+        guard remindRange.contains(days) else { throw Failure.badReminder }
+        return days
+    }
 
     /// What a key is for: trimmed, one line, at most 200 characters.
     static func checkedPurpose(_ text: String) throws -> String {
@@ -845,10 +1155,22 @@ public final class SecretVault {
     }
 }
 
+// MARK: reading new members leniently
+
+extension KeyedDecodingContainer {
+    /// `Entry.linkFrom`, read so that a kind this build doesn't know (one a later release adds), or anything not a
+    /// string, reads as none. Synthesized `Decodable` picks this overload over the generic one, so one new kind never
+    /// makes the whole index unreadable, which would report the vault as changed outside Next Term.
+    func decodeIfPresent(_ type: SecretVault.LinkFrom.Type, forKey key: Key) throws -> SecretVault.LinkFrom? {
+        guard let text = try? decodeIfPresent(String.self, forKey: key) else { return nil }
+        return SecretVault.LinkFrom(rawValue: text)
+    }
+}
+
 // MARK: the folder
 
 /// `Application Support/Next Term/Secrets.noindex`: `vault.json` (the index and every sealed value), `mask.key`,
-/// `vault.lock`, `audit.log` and `audit.log.1`, and `imports/`.
+/// `vault.lock`, `audit.log` and `audit.log.1` with `audit.log.lock`, and `imports/`.
 ///
 /// - **Private.** Made 0700 with `PrivateFolder.make(at:)`, and checked with `PrivateFolder.isPrivate` before each
 ///   use: a link, a file or another user's folder at its name is refused, never followed. Its `.noindex` name keeps
@@ -864,6 +1186,8 @@ public final class SecretFolder: @unchecked Sendable {
     public static let vaultName = "vault.json"
     public static let maskKeyName = "mask.key"
     public static let lockName = "vault.lock"
+    /// Held across the audit log's rotate and append, in this copy of Next Term and in others.
+    public static let auditLockName = "audit.log.lock"
     public static let auditName = "audit.log"
     public static let olderAuditName = "audit.log.1"
     public static let importsName = "imports"
@@ -900,6 +1224,8 @@ public final class SecretFolder: @unchecked Sendable {
     let owner: uid_t
     /// Runs just before a write: the tests change the file there.
     var beforeWrite: ((String) -> Void)?
+    /// Runs when an append is about to rotate the audit log: the tests start a second append there.
+    var beforeRotate: (() -> Void)?
 
     /// The folder for the Application Support folder `applicationSupport`.
     public convenience init(applicationSupport: URL, owner: uid_t = geteuid()) {
@@ -991,12 +1317,12 @@ public final class SecretFolder: @unchecked Sendable {
         if name == Self.maskKeyName { exclude(name) }
     }
 
-    /// Runs `body` holding `flock(LOCK_EX)` on `vault.lock`, waiting for another copy of Next Term to let it go. Not
-    /// to be nested: a second lock in the same process waits for the first.
+    /// Runs `body` holding `flock(LOCK_EX)` on `name` (`vault.lock` unless given), waiting for another thread or copy
+    /// of Next Term to let it go. Not to be nested on one name: a second lock in the same process waits for the first.
     @discardableResult
-    public func withLock<T>(_ body: () throws -> T) throws -> T {
+    public func withLock<T>(_ name: String = SecretFolder.lockName, _ body: () throws -> T) throws -> T {
         try checkPrivate()
-        let descriptor = open(path(Self.lockName), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let descriptor = open(path(name), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw errno == ELOOP ? Failure.refused : Failure.system(errno) }
         defer { close(descriptor) }
         var info = stat()
@@ -1029,15 +1355,20 @@ public final class SecretFolder: @unchecked Sendable {
     }
 
     /// Appends one line to `audit.log`, 0600, with `O_APPEND`. At 1 MB the log becomes `audit.log.1` first, replacing
-    /// the older one.
+    /// the older one. The size check, the rotation and the write are one step under `audit.log.lock`, so two appends that
+    /// both find the log full rotate it once: the second sees the new log, and the older megabyte stays.
     public func appendAudit(_ line: Data) throws {
-        try checkPrivate()
+        try withLock(Self.auditLockName) { try appendAuditLocked(line) }
+    }
+
+    private func appendAuditLocked(_ line: Data) throws {
         let target = path(Self.auditName)
         var info = stat()
         var isNew = true
         if lstat(target, &info) == 0 {
             guard isOwnFile(info) else { throw Failure.refused }
             if SecretAudit.needsRotation(size: Int(info.st_size), adding: line.count) {
+                beforeRotate?()
                 guard rename(target, path(Self.olderAuditName)) == 0 else { throw Failure.system(errno) }
             } else {
                 isNew = false

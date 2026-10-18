@@ -141,8 +141,8 @@ public final class MCPCalls: @unchecked Sendable {
     }
 
     /// The route for `call`, whose line read as `request` (nil when none did: the drain cut its reading, or it was not a
-    /// whole request). `selfAnswering`: the request is `nxtrm secret run`'s, which answers itself (SecretSocket), unless the
-    /// quit answered the call first. A call the quit answered gets that answer, except a wrapper whose line the drain cut;
+    /// whole request). `selfAnswering`: the request is `nxtrm secret run`'s or `nxtrm secret import`'s, which answer
+    /// themselves (SecretSocket, SecretPipeSocket), unless the quit answered the call first. A call the quit answered gets that answer, except a wrapper whose line the drain cut;
     /// `isWrapper` looks at the peer's process, only then.
     public func route(_ call: Call, read request: Request?, selfAnswering: Bool, isWrapper: () -> Bool) -> Route {
         if request != nil, selfAnswering { return answersItself(call) ? .answerItself : .nothing }

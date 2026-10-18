@@ -71,11 +71,22 @@ public struct KeyBindings: Equatable, Sendable {
     public mutating func reset(_ id: String) { overrides.removeValue(forKey: id) }
     public mutating func resetAll() { overrides.removeAll() }
 
-    /// Commands that act only while the editor has the keyboard (Edit › Line), and commands that act on the
-    /// terminal wherever the keyboard is (File › Split Right). The editor's command and the terminal's can have the
-    /// same key: the editor's answers it while the editor has the keyboard, the other everywhere else, so ⌘D
+    /// Commands that act only while the editor has the keyboard (Edit › Line, Edit › Markdown), and commands that act
+    /// on the terminal wherever the keyboard is (File › Split Right). The editor's command and the terminal's can have
+    /// the same key: the editor's answers it while the editor has the keyboard, the other everywhere else, so ⌘D
     /// duplicates a line in the editor and splits the terminal elsewhere (`canShareKey`).
-    public static let editorCommands: Set<String> = ["duplicateLine:", "deleteLine:", "moveLineUp:", "moveLineDown:", "copyPathWithLine:"]
+    public static let editorCommands: Set<String> = Set([
+        "duplicateLine:", "deleteLine:", "moveLineUp:", "moveLineDown:", "copyPathWithLine:",
+    ]).union(markdownCommands)
+    /// Edit › Markdown: the editor's commands that act only in a Markdown file's editor. Like Clear Buffer in a terminal,
+    /// each keeps to its place when a command for everywhere has its key too: ⌘B is Bold there and Hide Project Sidebar
+    /// everywhere else (the Mac's key for bold where you type, as the menu says), and a Commit… brought over on ⌘K
+    /// leaves ⌘K to Link there (`canShareKey`).
+    public static let markdownCommands: Set<String> = Set([
+        "toggleMarkdownBold:", "toggleMarkdownItalic:", "toggleMarkdownStrikethrough:", "toggleMarkdownCode:", "insertMarkdownLink:",
+        "markdownBodyText:", "toggleMarkdownBullets:", "toggleMarkdownNumbers:", "toggleMarkdownTask:", "toggleMarkdownQuote:",
+        "insertMarkdownCodeBlock:",
+    ]).union((1...6).map { "markdownHeading:#\($0)" })
     public static let terminalCommands: Set<String> = [
         "newRemoteTab:", "splitRight:", "splitDown:", "renameTab:", "clearBuffer:", "selectPaneLeft:", "selectPaneRight:",
         "selectPaneAbove:", "selectPaneBelow:", "selectNextPane:", "selectPreviousPane:", "toggleZoomPane:", "equalizePanes:",
@@ -185,9 +196,12 @@ public struct KeyBindings: Equatable, Sendable {
     /// and so is Accept's from the sidebar's.
     public static func canShareKey(_ first: String, _ second: String) -> Bool {
         let one = scope(of: first), other = scope(of: second)
-        // Clear Buffer while a terminal has the keyboard, the other command everywhere else.
+        // Clear Buffer while a terminal has the keyboard, the other command everywhere else; a Markdown command likewise
+        // in a Markdown file's editor.
         if terminalKeyboardCommands.contains(first) && other == .everywhere { return true }
         if terminalKeyboardCommands.contains(second) && one == .everywhere { return true }
+        if markdownCommands.contains(first) && other == .everywhere { return true }
+        if markdownCommands.contains(second) && one == .everywhere { return true }
         if case .part(let a) = one, case .part(let b) = other {
             // Accept answers wherever the keyboard is in the window, and the sidebar can be beside the proposed edit.
             if Set([a, b]) == [.diff, .sidebar] { return false }
@@ -228,11 +242,16 @@ public struct KeyBindings: Equatable, Sendable {
         // Clear Buffer beside a command for everywhere: it keeps to a terminal with the keyboard.
         let withEverywhere = ids.contains { scope(of: $0) == .everywhere }
         let inTerminal = ids.filter { withEverywhere && terminalKeyboardCommands.contains($0) }
-        var phrases = inParts.map { "\(title($0)) \(part($0)?.whileActive ?? "")" }
+        // A Markdown command's part is a Markdown file's editor.
+        func place(_ id: String) -> String { markdownCommands.contains(id) ? inMarkdownEditor : part(id)?.whileActive ?? "" }
+        var phrases = inParts.map { "\(title($0)) \(place($0))" }
         phrases += inTerminal.map { "\(title($0)) while a terminal has the keyboard" }
         phrases += ids.filter { part($0) == nil && !inTerminal.contains($0) }.map { "\(title($0)) everywhere else" }
         return "\(chord.display) is " + phrases.joined(separator: ", ")
     }
+
+    /// Where a Markdown command has its key.
+    public static let inMarkdownEditor = "while a Markdown file’s editor has the keyboard"
 
     /// Whether `id`, a command still on its default key `chord`, gives that key up: you gave it yourself to another
     /// command it can't share it with (before it was this command's default, by an import then, or under another set of

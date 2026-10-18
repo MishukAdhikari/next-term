@@ -50,7 +50,7 @@ extension AgentKind {
 
     /// The command line that picks session `id` up again, typed into a shell in `cwd`. Gemini CLI, Cursor
     /// Agent and Command Code look sessions up in the folder they run in, so it must be that one.
-    func resumeCommand(id: String, cwd: String, fork: Bool) -> String {
+    public func resumeCommand(id: String, cwd: String, fork: Bool) -> String {
         let quoted = ShellQuote.quote(id)
         let fork = fork && canFork
         switch self {

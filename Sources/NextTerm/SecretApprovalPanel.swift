@@ -40,10 +40,15 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         /// store_secret has no "How long", and saves instead of allowing.
         var offersHowLong = true
         var allowTitle = "Allow"
+        /// "How long"'s choices, in order (`SecretApprovalChoices.offered`).
+        var choices: [SecretRequests.How] = [.once, .fifteenMinutes]
+        /// The keys set to ask for Touch ID every time they're used, which leave only Allow once: said under it.
+        var askingEveryUse: [String] = []
     }
 
     static let fifteenMinutesNote = "Only this agent, these keys, this exact command and folder. Anything different asks again."
     static let wrapperRestartNote = "Covers starting it again. A server already running keeps going."
+
     static let cardText = "This MCP server stopped waiting. Allow it, then restart it in your agent (in Claude Code: /mcp, then Reconnect)."
     static let stoppedDuringApprovalText = "This MCP server stopped waiting. Restart it within 2 minutes to use this approval."
 
@@ -195,9 +200,9 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         name.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
         var parts: [NSView] = [name]
         if key.writeOnly {
-            let badge = Self.label("Write-only", size: 10, weight: .medium)
+            let badge = Self.label(SecretNewKeyDefaults.neverShownHelp, size: 10, weight: .medium)
             badge.textColor = .secondaryLabelColor
-            badge.setAccessibilityLabel("Write-only")
+            badge.setAccessibilityLabel(SecretNewKeyDefaults.neverShownHelp)
             parts.append(badge)
         }
         let line = NSStackView(views: parts)
@@ -227,6 +232,10 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             shell.textColor = .secondaryLabelColor
             views.append(shell)
         }
+        // Under the command: any program running as the user can read its environment while it runs.
+        let readable = Self.label(SecretRun.environmentNote(keys: content.keys.count), size: 11)
+        readable.textColor = .secondaryLabelColor
+        views.append(readable)
         return views
     }
 
@@ -321,16 +330,17 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
                 views.append(label)
             }
         }
-        radio("Allow once", .once, note: nil)
-        if !content.isRemote {
+        let asking: String? = content.askingEveryUse.isEmpty ? nil : Self.askingNote(content.askingEveryUse)
+        radio("Allow once", .once, note: asking)
+        if content.choices.contains(.fifteenMinutes) {
             let note = content.isWrapper ? Self.fifteenMinutesNote + " " + Self.wrapperRestartNote : Self.fifteenMinutesNote
             radio("Allow for 15 minutes", .fifteenMinutes, note: note)
-            if content.isWrapper {
-                let agent = content.askedBy.agent ?? "this program"
-                radio("Allow this command until the Mac locks", .untilLock,
-                      note: "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
-                        + "or Next Term quits. Revoke it in Settings › Secrets.")
-            }
+        }
+        if content.choices.contains(.untilLock) {
+            let agent = content.askedBy.agent ?? "this program"
+            radio("Allow this command until the Mac locks", .untilLock,
+                  note: "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
+                    + "or Next Term quits. Revoke it in Settings › Secrets.")
         }
         durationChoice[.once]?.state = .on
         let heading = Self.label("How long", size: 12, weight: .semibold)
@@ -390,7 +400,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         isBusy = busy
         for button in [allowButton, declineButton, stopButton, pauseButton] { button?.isEnabled = !busy }
         for button in durationChoice.values { button.isEnabled = !busy }
-        if !content.isRemote, cardLabel.isHidden == false { durationChoice[.once]?.isEnabled = false }
+        if oncePausesWhenGone, cardLabel.isHidden == false { durationChoice[.once]?.isEnabled = false }
         window?.standardWindowButton(.closeButton)?.isEnabled = !busy
         setStatus(busy ? "Waiting for Touch ID or your password…" : "")
     }
@@ -400,13 +410,27 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         setStatus("Not approved.")
     }
 
-    /// Its wrapper stopped waiting: a pending card, "Allow for 15 minutes" chosen and "Allow once" off.
+    /// Its wrapper stopped waiting: a pending card, "Allow for 15 minutes" chosen and "Allow once" off. With only Allow
+    /// once offered (a key that asks every time), it stays on: its one use waits 2 minutes for the restart.
     func markGone() {
         cardLabel.stringValue = Self.cardText
         cardLabel.isHidden = false
-        if durationChoice[.fifteenMinutes] != nil { select(.fifteenMinutes) }
-        durationChoice[.once]?.isEnabled = false
+        if oncePausesWhenGone {
+            select(.fifteenMinutes)
+            durationChoice[.once]?.isEnabled = false
+        }
         announce(Self.cardText)
+    }
+
+    /// Whether a pending card turns Allow once off: only when Allow for 15 minutes is there to take its place.
+    private var oncePausesWhenGone: Bool { durationChoice[.fifteenMinutes] != nil }
+
+    /// "GITHUB_TOKEN asks for Touch ID every time it’s used, so only Allow once is offered."
+    static func askingNote(_ names: [String]) -> String {
+        let one: Bool = names.count == 1
+        let verb: String = one ? "asks" : "ask"
+        let used: String = one ? "it\u{2019}s used" : "they\u{2019}re used"
+        return "\(SecretRun.keysText(names)) \(verb) for Touch ID every time \(used), so only Allow once is offered."
     }
 
     /// An identical request took the card over: its wrapper waits again.
@@ -490,15 +514,28 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         }
     }
 
-    static func makePauseAlert() -> NSAlert {
+    /// Pause's confirm. From the panel it names "this" request. From Secrets › Pause Key Requests for 1 Hour…
+    /// (`fromMenu`) there may be no request on screen, and it is a sheet on the Secrets window whose default button,
+    /// Return, is Cancel.
+    static func makePauseAlert(fromMenu: Bool = false) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "Pause key requests for an hour?"
-        alert.informativeText = "This declines this and every waiting request, refuses new ones for an hour, and ends every approval you gave. "
-            + "MCP servers that need keys won't start."
-        alert.addButton(withTitle: "Pause for 1 Hour")
-        alert.addButton(withTitle: "Cancel")
+        guard fromMenu else {
+            alert.informativeText = "This declines this and every waiting request, refuses new ones for an hour, and ends every approval you gave. "
+                + "MCP servers that need keys won't start."
+            alert.addButton(withTitle: "Pause for 1 Hour")
+            alert.addButton(withTitle: "Cancel")
+            return alert
+        }
+        alert.informativeText = menuPauseText
+        alert.addButton(withTitle: "Pause for 1 Hour").keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r" // Return cancels
         return alert
     }
+
+    /// The menu's Pause confirm: the panel's, with no "this".
+    static let menuPauseText = "This declines every waiting request, refuses new ones for an hour, and ends every approval "
+        + "you gave. MCP servers that need keys won\u{2019}t start."
 
     /// Closing the panel without choosing is a decline.
     func windowWillClose(_ notification: Notification) {

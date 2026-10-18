@@ -281,3 +281,13 @@ import Testing
         #expect(SecretRun.readAnswer(from: ends.wrapper, within: 2, limit: 32) == .tooLong)
     }
 }
+
+/// The approval panel's line under the command (review finding #14): the keys reach the command in its environment,
+/// which any program running as the user can read while it runs.
+@Suite struct SecretRunEnvironmentNoteTests {
+    @Test func itSaysAnyProgramRunningAsYouCanReadTheKeysWhileTheCommandRuns() {
+        #expect(SecretRun.environmentNote(keys: 1) == "The command, and any program running as you, can read this key while it runs.")
+        #expect(SecretRun.environmentNote(keys: 2) == "The command, and any program running as you, can read these keys while it runs.")
+        #expect(SecretRun.environmentNote(keys: 5).hasSuffix("these keys while it runs."))
+    }
+}

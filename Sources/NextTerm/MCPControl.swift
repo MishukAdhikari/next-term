@@ -108,11 +108,16 @@ final class MCPControlServer: @unchecked Sendable {
         // and one the quit answered first gets nothing written: the wrapper reads the closed connection. A wrapper the quit
         // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
         // ends, as every other one does.
-        let route = calls.route(call, read: request, selfAnswering: request?.tool == SecretSocket.tool) {
+        // `nxtrm secret import`'s header answers itself the same way; its keys come after, raw, never through this reader.
+        let selfAnswering = request?.tool == SecretSocket.tool || request?.tool == SecretPipeSocket.tool
+        let route = calls.route(call, read: request, selfAnswering: selfAnswering) {
             SecretSocket.isWrapper(pid: peer)
         }
         switch route {
         case .answerItself:
+            if request?.tool == SecretPipeSocket.tool {
+                return SecretPipeSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+            }
             return SecretSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
         case .nothing: return
         case .drained(let answer): return send(answer, on: fd)
@@ -192,6 +197,9 @@ enum MCPControl {
         var sawWork = false
     }
     private static var lastSent: [UUID: Sent] = [:]
+    /// Text send_to_tab typed with no Return, as typed, and the tab's write count just after it: a press_keys Return or
+    /// more text that comes next, with nothing written meanwhile, carries on that line (TerminalTab.submitOwnLine).
+    private static var unsubmitted: [UUID: (typed: String, writes: Int)] = [:]
 
     /// Tabs an agent drives over MCP: opened with new_tab, or given input with send_to_tab, press_keys or
     /// answer_agent, until you type in one yourself. That agent waits for their work (wait_for_tab), so while
@@ -210,6 +218,7 @@ enum MCPControl {
     static func forget(_ tab: TerminalTab) {
         driven.remove(tab.id)
         lastSent[tab.id] = nil
+        unsubmitted[tab.id] = nil
     }
 
     private static func isBusy(_ tab: TerminalTab) -> Bool {
@@ -248,9 +257,29 @@ enum MCPControl {
     static var fieldMasks = true
     static func field(_ text: String) -> String { fieldMasks ? SecretMask.current.mask(text) : text }
     /// A tab's last `count` rows, masked over whole lines: a key a wrap split above the window is masked in the part the
-    /// window shows (`TerminalTab.screenTail(_:masked:)`).
+    /// window shows (`TerminalTab.screenTail(_:masked:)`). A plugin's ghost at a zsh prompt (zsh-autosuggestions'), once its
+    /// cells are found where zsh drew it, is left out: it isn't typed (`typedInput`).
     static func fieldTail(_ tab: TerminalTab, _ count: Int = AgentScreen.scannedLines) -> [String] {
-        fieldMasks ? tab.screenTail(count, masked: SecretMask.current) : tab.screenTail(count)
+        let ghost = tab.typedInput(mask: field)?.ghost ?? []
+        return fieldMasks ? tab.screenTail(count, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(count, excludingGhost: ghost)
+    }
+
+    /// Runs `body` once the hook's report of a tab's line is current (nothing was written to the shell after it), or there
+    /// is none to wait for, or 200 ms on: a line an agent just typed is read as the shell has it.
+    static func whenLineReported(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
+        if !tab.awaitsLineReport || TerminalTab.now >= deadline { return body() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { whenLineReported(tab, until: deadline, body) }
+    }
+
+    /// The screen and `input` for read_tab and wait_for_tab: the line being typed at a zsh prompt, and a plugin's ghost,
+    /// which is left out of the screen.
+    private static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
+        let typed = tab.typedInput(mask: field)
+        let ghost = typed?.ghost ?? []
+        let rows = fieldMasks ? tab.screenTail(lines, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(lines, excludingGhost: ghost)
+        var info: [String: Any] = ["screen": rows.joined(separator: "\n")]
+        if let input = typed?.input { info["input"] = input }
+        return info
     }
     /// The menu under the tab's question, for an agent to read: matched on the screen as the question was read from it,
     /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
@@ -286,7 +315,9 @@ enum MCPControl {
         switch tool {
         case "list_tabs": reply(listTabs(project: arguments["project"] as? String, caller: caller))
         case "list_projects": reply(listProjects())
-        case "read_tab": reply(withTab(arguments) { tab in readTab(tab, lines: arguments["lines"] as? Int ?? 80) })
+        case "read_tab":
+            guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
+            readTab(tab, lines: arguments["lines"] as? Int ?? 80, reply: reply)
         case "wait_for_tab":
             guard let tab = findTab(arguments["tab_id"]) else { return reply(fail("No tab with that id; list_tabs shows them.")) }
             let seconds = min(300, max(1, arguments["timeout_seconds"] as? Int ?? 50))
@@ -311,10 +342,14 @@ enum MCPControl {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
                                requester: requester, reply: reply)
             }
-        case "list_secrets", "request_secret", "store_secret", "run_with_secrets":
+        case "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets":
             MainActor.assumeIsolated {
                 SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
                                 reply: reply)
+            }
+        case "add_task":
+            MainActor.assumeIsolated {
+                TasksMCP.addTask(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
         case _ where MCPServer.isImportTool(tool):
             MainActor.assumeIsolated {
@@ -430,12 +465,16 @@ enum MCPControl {
         return ok(["open": open, "recent": recent])
     }
 
-    private static func readTab(_ tab: TerminalTab, lines: Int) -> MCPServer.CallResult {
-        var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
-        info.merge(questionInfo(tab)) { $1 }
-        info.merge(restoredFields(tab)) { $1 }
-        info["screen"] = fieldTail(tab, min(2000, max(1, lines))).joined(separator: "\n")
-        return ok(info)
+    /// At a zsh prompt it waits for the hook's report of a line just written to (200 ms at most), so `input` and the screen
+    /// say what the shell has.
+    private static func readTab(_ tab: TerminalTab, lines: Int, reply: @escaping Reply) {
+        whenLineReported(tab, until: TerminalTab.now + 0.2) {
+            var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab)]
+            info.merge(questionInfo(tab)) { $1 }
+            info.merge(restoredFields(tab)) { $1 }
+            info.merge(screenFields(tab, lines: min(2000, max(1, lines)))) { $1 }
+            reply(ok(info))
+        }
     }
 
     /// Done when the agent stops working (or the command ends). Input sent just before counts: the
@@ -446,11 +485,13 @@ enum MCPControl {
         let saw = sawWork || busy
         let starting = !saw && isStarting(tab)
         if tab.exited || (!busy && !starting) || now >= deadline || controller(of: tab) == nil {
-            var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
-            info.merge(questionInfo(tab)) { $1 }
-            info.merge(restoredFields(tab)) { $1 }
-            info["screen"] = fieldTail(tab, 40).joined(separator: "\n")
-            return reply(ok(info))
+            return whenLineReported(tab, until: TerminalTab.now + 0.2) {
+                var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "state": state(tab), "timed_out": busy || starting]
+                info.merge(questionInfo(tab)) { $1 }
+                info.merge(restoredFields(tab)) { $1 }
+                info.merge(screenFields(tab, lines: 40)) { $1 }
+                reply(ok(info))
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitFor(tab, until: deadline, sawWork: saw, reply: reply) }
     }
@@ -579,7 +620,9 @@ enum MCPControl {
     }
 
     /// The window a new tab in `directory` opens in (new_tab's rule, which run_with_secrets shares): the window of the
-    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true).
+    /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true); in a
+    /// folder that is never a project (the home folder: ProjectRoot.project), the window with no project that has a tab
+    /// there already, else a new one.
     static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
         // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
         let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
@@ -588,7 +631,18 @@ enum MCPControl {
             guard let worktree = owner.project.flatMap({ MCPServer.ownWorktree(of: directory, inside: $0) }) else { return (owner, false) }
             return (app.openFolder(worktree, newWindow: false, forAgent: true), true)
         }
-        return (app.openFolder(ProjectRoot.find(from: directory), newWindow: false, forAgent: true), true)
+        guard let project = ProjectRoot.project(from: directory) else {
+            // A folder that is never a project (the home folder): the window with no project that has a tab there already
+            // (one an earlier call opened) takes the tab, as a project's window does; else a new one.
+            let folder: String = canonicalPath(directory)
+            let plain: TerminalWindowController? = app.controllers.first { (controller: TerminalWindowController) -> Bool in
+                guard !controller.hasClosed, controller.project == nil else { return false }
+                return controller.tabs.contains { (tab: TerminalTab) -> Bool in tab.remote == nil && canonicalPath(tab.directory) == folder }
+            }
+            if let plain { return (plain, false) }
+            return (app.openWindow(directory: directory, forAgent: true), true)
+        }
+        return (app.openFolder(project, newWindow: false, forAgent: true), true)
     }
 
     static func whenReady(_ tab: TerminalTab, until deadline: TimeInterval, _ body: @escaping () -> Void) {
@@ -597,15 +651,21 @@ enum MCPControl {
     }
 
     /// Types text as a paste (literal, never run early), then presses Return after a moment: agents
-    /// take a paste in as a block and only treat a separate Return as "send".
+    /// take a paste in as a block and only treat a separate Return as "send". That Return is Next Term's own, so a zsh
+    /// with the history hook keeps the line out of its history (TerminalTab.submitOwnLine).
     static func type(_ text: String, into tab: TerminalTab, submit: Bool) {
         guard canType(tab) else { return }
-        tab.view.typeText(text)
-        guard submit else { return }
+        // Text an earlier send_to_tab left with no Return, nothing written since, is the start of this line.
+        let earlier = unsubmitted.removeValue(forKey: tab.id).flatMap { $0.writes == tab.view.inputWrites ? $0.typed : nil }
+        let typed = (earlier ?? "") + tab.view.typeText(text)
+        guard submit else {
+            unsubmitted[tab.id] = (typed: typed, writes: tab.view.inputWrites)
+            return
+        }
         sent(to: tab)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard canType(tab) else { return } // the connection may have dropped in between
-            tab.view.send(txt: "\r")
+            tab.submitOwnLine(typed)
         }
     }
 
@@ -644,10 +704,19 @@ enum MCPControl {
         let text = arguments["text"] as? String ?? ""
         let submit = arguments["submit"] as? Bool ?? true
         guard !text.isEmpty || submit else { return reply(fail("Nothing to type.")) }
-        if text.contains("\n") && !tab.view.getTerminal().bracketedPasteMode {
+        // By scalars: "\r\n" is one Character, and a lone "\r" is a Return too.
+        let breaksLine: Bool = text.unicodeScalars.contains { $0 == "\n" || $0 == "\r" }
+        if breaksLine && !tab.view.getTerminal().bracketedPasteMode {
             return reply(fail("The program in that tab takes one line at a time (no bracketed paste); send lines one by one."))
         }
         type(text, into: tab, submit: submit)
+        if !submit {
+            // An agent's text with no Return is its input too (type leaves it unmarked, as Next Term's own line for a
+            // password manager's CLI is the user's): whatever later runs it, the tab stays driven until you type in it
+            // yourself, its run_with_secrets grants end, and the command it starts is the agent's.
+            SecretRequests.tabGotInput(tab.id)
+            driven.insert(tab.id)
+        }
         reply(ok(["id": tab.id.uuidString.lowercased(), "typed": text.count, "submitted": submit]))
     }
 
@@ -672,8 +741,21 @@ enum MCPControl {
             guard canType(tab) else {
                 return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
             }
+            let next = { DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) } }
+            // A Return right after send_to_tab's text, with nothing written since, submits that line: the next key waits
+            // for it, which can wait a moment for the shell's new line (TerminalTab.submitOwnLine).
+            let pending = unsubmitted.removeValue(forKey: tab.id)
+            if sequences[index] == "\r", let pending, pending.writes == tab.view.inputWrites {
+                return tab.submitOwnLine(pending.typed) {
+                    // The Return waited for the shell's new line: a tab that ended meanwhile never got it.
+                    guard canType(tab) else {
+                        return reply(fail("Stopped after \(index) of \(sequences.count) keys: the tab \(tab.disconnected ? "lost its connection" : "can no longer take input")."))
+                    }
+                    next()
+                }
+            }
             tab.view.send(txt: sequences[index])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(index + 1) }
+            next()
         }
         sent(to: tab)
         press(0)

@@ -11,6 +11,11 @@ import NextTermCore
 /// error and an exit code. It never ignores SIGPIPE (an ignored signal stays ignored after exec), never shuts its socket
 /// for writing before the answer (the app would read that as leaving), and before `execve` it closes the socket and
 /// every descriptor above 2, clears the signal mask, resets SIGPIPE, SIGINT and SIGTERM, and turns core dumps off.
+///
+/// The keys reach the command only in its environment. For as long as it runs, any program running as the user can
+/// read that environment (`ps -E`; macOS hides it only for its own platform binaries), an agent's own shell tool too,
+/// so the approval panel, the README and run_with_secrets' description say so. A later delivery could hand a key on an
+/// inherited pipe or descriptor, or on standard input, to a command that can read it that way.
 enum SecretWrapper {
     /// The self-test's form, `--self-test-secret-wrapper <socket> <wait-seconds> secret run …`: its own socket and
     /// wait, with the peer checks as ever. Its `argv_full` can be set with `NEXTTERM_SELFTEST_ARGV_FULL` (JSON), so the

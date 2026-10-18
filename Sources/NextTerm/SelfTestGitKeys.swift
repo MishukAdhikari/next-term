@@ -93,7 +93,7 @@ extension SelfTest {
     /// it does a real key's (an NSEvent given its characters can match an item's key with ⇧ for the same key without it: ⌘R
     /// then opens Replace in Files, ⇧⌘R). Like a real key, it goes to the window that has the keyboard (a sheet over `window`,
     /// while one is).
-    private static func pressKey(_ window: NSWindow, code: UInt16, _ flags: NSEvent.ModifierFlags) {
+    static func pressKey(_ window: NSWindow, code: UInt16, _ flags: NSEvent.ModifierFlags) {
         let masks: [(NSEvent.ModifierFlags, CGEventFlags)] = [(.command, .maskCommand), (.shift, .maskShift), (.option, .maskAlternate),
                                                               (.control, .maskControl)]
         guard let key = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: code, keyDown: true) else { return }

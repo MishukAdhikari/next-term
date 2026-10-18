@@ -11,9 +11,11 @@ enum CommandLineTool {
         if arguments == ["mcp"] { MCPBridge.run() }
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
-        // `nxtrm secret run …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still opens a file named secret.
+        // `nxtrm secret run …`, `nxtrm secret import …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still
+        // opens a file named secret.
         if arguments.count >= 2, arguments[0] == "secret" {
             if arguments[1] == "run" { SecretWrapper.run(Array(arguments.dropFirst(2))) }
+            if arguments[1] == "import" { SecretPipe.run(Array(arguments.dropFirst(2))) }
             if ["help", "-h", "--help"].contains(arguments[1]) {
                 print(SecretRun.help)
                 exit(0)

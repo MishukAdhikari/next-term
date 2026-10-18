@@ -52,10 +52,51 @@ final class NextTermView: LocalProcessTerminalView {
         hintView = hint
     }
 
+    /// Suggestions while typing hide on these (GhostSession): a paste, a scroll, a selection, marked text (an input method),
+    /// and the screen switched.
+    var onPaste: (() -> Void)?
+    var onScrolled: (() -> Void)?
+    var onSelection: (() -> Void)?
+    var onMarkedText: (() -> Void)?
+    var onScreenSwitched: (() -> Void)?
+
+    /// The alternate screen on or off (DECSET or DECRST 1049, 1047, 47), or a full reset: SwiftTerm says so as it parses
+    /// them, whatever fed the bytes, the shell's output (`dataReceived`) or text Next Term feeds in itself (`feed`), which
+    /// never reaches `onOutput`.
+    override func bufferActivated(source: Terminal) {
+        super.bufferActivated(source: source)
+        onScreenSwitched?()
+    }
+
+    override func scrolled(source: TerminalView, position: Double) {
+        super.scrolled(source: source, position: position)
+        onScrolled?()
+    }
+
+    override func selectionChanged(source: Terminal) {
+        super.selectionChanged(source: source)
+        onSelection?()
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onMarkedText?()
+    }
+
+    /// No inline predictions from macOS beside or in place of the suggestion while typing.
+    @available(macOS 14.0, *)
+    @objc var inlinePredictionType: NSTextInputTraitType {
+        get { .no }
+        set {}
+    }
+
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
+    /// Each write `inputWrites` counts, as it comes, before that gate: a line it ends is one Next Term can no longer name
+    /// for zsh's history (TerminalTab.history).
+    var onWrite: ((ArraySlice<UInt8>) -> Void)?
     /// Writes into the shell other than the terminal's own answers: every key, paste and drop, and all text anything types
     /// into the tab (Insert Path, a suggested command, Send to Agent, MCP, the restore itself). A restored action types
     /// only onto a line nothing else wrote to (`RestoreLayout.LineWatch`), whether or not what wrote said it was the user.
@@ -132,7 +173,10 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
-        if !answering { inputWrites += 1 }
+        if !answering {
+            inputWrites += 1
+            onWrite?(data)
+        }
         if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -164,6 +208,7 @@ final class NextTermView: LocalProcessTerminalView {
     override func paste(_ sender: Any) {
         guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         onKeyboard?()
+        onPaste?()
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
@@ -266,18 +311,22 @@ final class NextTermView: LocalProcessTerminalView {
     }
 
     /// Types text at the prompt as a paste: with bracketed paste on (zsh's default), the line editor
-    /// inserts it literally and never runs it, even if it contained a newline.
-    func typeIn(_ text: String) {
+    /// inserts it literally and never runs it, even if it contained a newline. Returns the text as typed.
+    @discardableResult
+    func typeIn(_ text: String) -> String {
         let clean = String(text.unicodeScalars.filter { !ShellQuote.isControl($0) })
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + clean + "\u{1b}[201~" : clean)
+        return clean
     }
 
     /// Types text as a paste that keeps its line breaks (a prompt for an agent): other control
-    /// characters are dropped, so the text cannot end the paste early or press keys.
-    func typeText(_ text: String) {
+    /// characters are dropped, so the text cannot end the paste early or press keys. Returns the text as typed.
+    @discardableResult
+    func typeText(_ text: String) -> String {
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+        return lines
     }
 
     // MARK: links (⌘-click): web and mail links open; files open safely; other schemes are refused
@@ -357,7 +406,9 @@ final class NextTermView: LocalProcessTerminalView {
 
     /// SwiftTerm 1.20 snaps its cell width to the pixel grid only when the font (or the line spacing) is set, at the
     /// scale of the window then, or of the main screen before there is one: on a screen of another scale it drew and
-    /// hit-tested cells snapped for the old one. Setting the font again snaps them for this screen.
+    /// hit-tested cells snapped for the old one, and a table's box lines drifted from its text a little more each column.
+    /// Setting the font again snaps them for this screen. AppKit calls this also when the view first goes into a window
+    /// of another scale (a tab's font is set before it has one); SelfTestCellSnap checks both.
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         guard let scale = window?.backingScaleFactor else { return }
@@ -541,6 +592,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var execWatcher: DispatchSourceProcess?
     /// Tab completion in this tab.
     private(set) lazy var completion = CompletionSession(tab: self)
+    /// Suggestions while typing in this tab.
+    private(set) lazy var ghost = GhostSession(tab: self)
+    /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
+    /// (ShellHistory, submitOwnLine).
+    private(set) var history = ShellHistory.Readiness()
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil, id: UUID = UUID()) {
@@ -560,11 +616,23 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onOutput = { [weak self] in
             self?.status.output(at: Self.now)
             self?.completion.output()
+            self?.ghost.output()
         }
+        view.onPaste = { [weak self] in self?.ghost.hide() }
+        view.onScrolled = { [weak self] in self?.ghost.scrolled() }
+        view.onSelection = { [weak self] in
+            if self?.view.selection?.active == true { self?.ghost.hide() }
+        }
+        view.onMarkedText = { [weak self] in self?.ghost.hide() }
+        view.onScreenSwitched = { [weak self] in self?.ghost.hide() }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
+        view.onWrite = { [weak self] data in
+            self?.history.input(data)
+            self?.ghost.written(data)
+        }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
         // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
@@ -663,6 +731,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.programTitle = nil
             self.status.shellReplaced()
             self.completion.shellReplaced()
+            self.history.shellReplaced()
+            self.ghost.shellReplaced()
+            self.lastBuffer = nil
+            self.runEnded(exit: nil)
+            self.ownLine = nil
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -679,6 +752,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         execWatcher = nil
         reconnectWork?.cancel()
         reconnectWork = nil
+        runEnded(exit: nil)
         MCPControl.forget(self)
         guard !exited else { return [] }
         // A disconnected remote tab's ssh has exited and was reaped: its pid may be another process's now,
@@ -773,11 +847,83 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.runWhenReady(command, waited: waited + 0.1) }
             return
         }
-        view.typeText(command)
+        let typed = view.typeText(command)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.exited else { return }
-            self.view.send(txt: "\r")
+            self.submitOwnLine(typed)
         }
+    }
+
+    /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
+    /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, run_with_secrets,
+    /// runWhenReady's resumes and clients, a restore's resume). Where the tab's zsh can take history's key now, the key
+    /// names the line first, in the same write, so zsh keeps the line out of its history, ↑ and autosuggestions
+    /// (ShellHistory). Anywhere else (bash, fish, a server, a program in front, a zsh without the hook) a plain Return, as
+    /// before; and zsh keeps out only that line to the byte, so one the user typed on too goes in as theirs.
+    ///
+    /// Typed as a new prompt comes (a new tab's first, or just after a command ended), the line gets its Return once the
+    /// hook has marked it, a moment later at most. zsh's line editor turns bracketed paste on just after that mark: on,
+    /// the mark has come or never will. `then` runs once the Return went, or once the tab can no longer take it.
+    func submitOwnLine(_ typed: String, then: (() -> Void)? = nil) {
+        if history.awaitsMark(at: Self.now), !view.getTerminal().bracketedPasteMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, !self.exited, self.view.acceptsInput else {
+                    then?()
+                    return
+                }
+                self.submitOwnLine(typed, then: then)
+            }
+            return
+        }
+        // zle names the line only while it has the tty to itself: not under a program a widget started (^X^E's editor,
+        // fzf's or atuin's ^R), which would read the name as typed keys.
+        let pid = view.process.shellPid
+        let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd, shellPid: pid, shellName: shellName)
+        let inFront = foreground?.isShell == true
+        // A widget's $(...) (fzf, atuin) runs in the shell's own group: a child there means a program reads the tty.
+        let substituting = ProcessInspector.children(of: pid).contains { getpgid($0) == pid }
+        let bytes = ShellHistory.submit(typed: typed, armed: history.armed && inFront && !substituting)
+        // Never recorded as yours (CommandAuthor), with the history hook's word or without it.
+        ownLine = ShellHistory.heldLine(typed)
+        view.send(data: bytes[...])
+        then?()
+    }
+
+    // MARK: the record of your commands (CommandHistoryStore)
+
+    /// The line Next Term last pressed Return for by itself (submitOwnLine), as zsh holds it, until the next command or prompt.
+    private var ownLine: String?
+    /// Your command running now, recorded when it ends, with its exit: its line, its folder, when it started, and your
+    /// command before it here (what it follows).
+    private var pendingRun: (line: String, folder: String, at: Date, after: String?)?
+    /// Your last command here, until another command (an agent's) came after it.
+    private var lastYours: String?
+
+    /// Commands run here are recorded: a tab on this Mac, suggestions on and Private Mode off, and no agent driving it.
+    private var recordsCommands: Bool { remote == nil && GhostPreferences.records && !MCPControl.isDriven(self) }
+
+    /// A command started (its `cmd` mark): kept to record at its end when it is yours.
+    private func runStarted(_ typed: String, flags: CommandMarkFlags) {
+        let own = ownLine
+        ownLine = nil
+        runEnded(exit: nil)
+        guard recordsCommands, CommandAuthor.decide(flags: flags, ownLine: own, typed: typed) == .you else {
+            lastYours = nil
+            return
+        }
+        pendingRun = (typed, directory, Date(), lastYours)
+    }
+
+    /// The command ended (`exit`), or can no longer say how (nil: the shell was replaced, the tab closed): recorded, unless
+    /// suggestions went off or Private Mode on meanwhile. Its line, when it was yours and recorded.
+    @discardableResult
+    private func runEnded(exit: Int32?) -> String? {
+        guard let run = pendingRun else { return nil }
+        pendingRun = nil
+        guard GhostPreferences.records else { return nil }
+        CommandHistoryStore.shared.record(run.line, folder: run.folder, at: run.at, exit: exit, after: run.after)
+        lastYours = run.line
+        return run.line
     }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
@@ -815,15 +961,35 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     /// `screenTail`, with stored keys masked over whole lines (`SecretMask.mask(window:rows:text:)`): the rows above the
     /// window are masked with it, wrapped by the terminal or not (agent UIs wrap with a newline or cursor moves), so the
-    /// tail of a key whose start is above the window never shows.
-    func screenTail(_ count: Int, masked mask: SecretMask) -> [String] {
+    /// tail of a key whose start is above the window never shows. `excludingGhost`: cells left out of their rows (a
+    /// plugin's ghost, `typedInput`).
+    func screenTail(_ count: Int, masked mask: SecretMask, excludingGhost ghost: [GhostScreen.Span] = []) -> [String] {
         let terminal = view.getTerminal()
         guard let last = lastTextRow() else { return [] }
         let top = terminal.buffer.totalLinesTrimmed
         let first = max(top, last - count + 1)
-        return mask.mask(window: first...last, rows: top...last) { row in
-            terminal.getScrollInvariantLine(row: row)?.translateToString(trimRight: true) ?? ""
-        }
+        return mask.mask(window: first...last, rows: top...last) { row in rowText(row, excluding: ghost) }
+    }
+
+    /// `screenTail` without masks, with `ghost`'s cells left out of their rows.
+    func screenTail(_ count: Int, excludingGhost ghost: [GhostScreen.Span]) -> [String] {
+        guard !ghost.isEmpty else { return screenTail(count) }
+        let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
+        return (first...last).map { rowText($0, excluding: ghost) }
+    }
+
+    /// A scroll-invariant row's text, trimmed at its right, without the cells of `ghost` on it: what is left of them and
+    /// right of them, the right part trimmed, then the whole.
+    private func rowText(_ row: Int, excluding ghost: [GhostScreen.Span]) -> String {
+        guard let line = view.getTerminal().getScrollInvariantLine(row: row) else { return "" }
+        guard let cut = ghost.first(where: { $0.row == row }) else { return line.translateToString(trimRight: true) }
+        let end = min(cut.columns.upperBound, line.count)
+        let left = line.translateToString(trimRight: false, startCol: 0, endCol: min(cut.columns.lowerBound, line.count))
+        let right = end < line.count ? line.translateToString(trimRight: true, startCol: end) : ""
+        let text = left + right
+        return String(text.reversed().drop { $0 == " " || $0 == "\u{0}" }.reversed())
     }
 
     /// `screenTail`, with the scroll-invariant row of its first line.
@@ -834,17 +1000,36 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
     }
 
-    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
-    func lastTextRow() -> Int? {
+    /// The last line that exists, in scroll-invariant rows, found by bisection (SwiftTerm keeps the line count internal).
+    private func lastRow() -> Int? {
         let terminal = view.getTerminal()
-        let top = terminal.buffer.totalLinesTrimmed
-        // The last line that exists, found by bisection (SwiftTerm keeps the line count internal).
-        var low = top, high = top + 1_000_000
+        var low = terminal.buffer.totalLinesTrimmed, high = low + 1_000_000
         guard terminal.getScrollInvariantLine(row: low) != nil else { return nil }
         while low < high {
             let mid = (low + high + 1) / 2
             if terminal.getScrollInvariantLine(row: mid) != nil { low = mid } else { high = mid - 1 }
         }
+        return low
+    }
+
+    /// The cursor's row, in scroll-invariant rows, wherever the view is scrolled: the screen is the buffer's last `rows`
+    /// lines. At the bottom, the line the view shows under the cursor must be that one.
+    func cursorRow() -> Int? {
+        let terminal = view.getTerminal()
+        guard let last = lastRow() else { return nil }
+        let y = terminal.getCursorLocation().y
+        let row = last - terminal.rows + 1 + y
+        if !view.canScroll || view.scrollPosition >= 1 {
+            guard let shown = terminal.getLine(row: y), shown === terminal.getScrollInvariantLine(row: row) else { return nil }
+        }
+        return row
+    }
+
+    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
+    func lastTextRow() -> Int? {
+        let terminal = view.getTerminal()
+        let top = terminal.buffer.totalLinesTrimmed
+        guard let low = lastRow() else { return nil }
         // Skip blank rows at the bottom (at most one screen of them).
         var last = low
         while last > top, low - last < terminal.rows,
@@ -852,6 +1037,73 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             last -= 1
         }
         return last
+    }
+
+    // MARK: what is typed (the ghost hook's reports)
+
+    /// The ghost hook's last report of the line (GhostProtocol), with the tab's write count when it was read and when: it
+    /// says what is typed only while nothing was written to the shell since (GhostScreen.isCurrent).
+    private(set) var lastBuffer: (report: GhostProtocol.BufferReport, writes: Int, at: TimeInterval)?
+
+    /// The line as zsh has it at this tab's prompt, for MCP (read_tab, wait_for_tab): `input`, and the cells of a plugin's
+    /// ghost to leave out of the screen. Only for a tab on this Mac whose shell is alone in front with no command running,
+    /// on the normal screen, from a report nothing was written after; nil otherwise.
+    func typedInput(mask: (String) -> String) -> (input: [String: Any], ghost: [GhostScreen.Span])? {
+        guard let last = lastBuffer, atReportedPrompt,
+              GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites) else { return nil }
+        let ghost = pluginGhost(last.report)
+        let suggestion = ghost.isEmpty ? nil : last.report.postdisplay
+        guard let input = InputReport.make(from: last.report, suggestion: suggestion, mask: mask) else { return nil }
+        return (input, ghost)
+    }
+
+    /// Something was written to the shell at its prompt since the hook last reported the line: a report is on its way, if
+    /// the write changed the line.
+    var awaitsLineReport: Bool {
+        guard let last = lastBuffer else { return false }
+        return atReportedPrompt && !GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
+    }
+
+    /// The hook's last report is the line as it is now, and the shell has the terminal: a frame for its line editor reaches
+    /// nothing else, and nothing typed ahead is waiting.
+    var lineReportIsCurrent: Bool {
+        guard let last = lastBuffer else { return false }
+        return atReportedPrompt && GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
+    }
+
+    /// The hook reports this tab's line, and the shell has the terminal: on this Mac, alone in front with nothing running,
+    /// on the normal screen.
+    private var atReportedPrompt: Bool {
+        guard remote == nil, !exited, lastBuffer != nil, !status.running else { return false }
+        return !view.getTerminal().isCurrentBufferAlternate && shellAlone
+    }
+
+    /// The cells of a plugin's ghost (POSTDISPLAY) as zsh drew them, after the whole line and wrapping, once they are read
+    /// to show it (an async suggestion newer than the report doesn't); none otherwise. Rows past the last there is are cut
+    /// off.
+    private func pluginGhost(_ report: GhostProtocol.BufferReport) -> [GhostScreen.Span] {
+        guard let post = report.postdisplay, !post.isEmpty, let buffer = report.buffer, let ghostCells = GhostScreen.cells(post),
+              report.cursor <= buffer.unicodeScalars.count,
+              let rightCells = GhostScreen.cells(scalars: buffer.unicodeScalars.dropFirst(report.cursor)),
+              let caretRow = cursorRow() else { return [] }
+        let terminal = view.getTerminal()
+        let spans = GhostScreen.span(caretRow: caretRow, caretColumn: terminal.getCursorLocation().x, columns: terminal.cols,
+                                     rightCells: rightCells, ghostCells: ghostCells)
+        var shown: [GhostScreen.Span] = []
+        var read = ""
+        for span in spans {
+            guard let line = terminal.getScrollInvariantLine(row: span.row) else { break }
+            let end = min(span.columns.upperBound, line.count)
+            guard span.columns.lowerBound < end else { break }
+            read += line.translateToString(trimRight: false, startCol: span.columns.lowerBound, endCol: end,
+                                           skipNullCellsFollowingWide: true) { cell in
+                let character = cell.getCharacter()
+                return character == "\u{0}" ? " " : character
+            }
+            shown.append(GhostScreen.Span(row: span.row, columns: span.columns.lowerBound..<end))
+        }
+        let width = shown.reduce(0) { $0 + $1.columns.count }
+        return GhostScreen.matches(cells: read, postdisplay: post, width: width) ? shown : []
     }
 
     // MARK: scrollback on the update and quit paths (SessionScrollback)
@@ -887,6 +1139,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
     func userInput() {
         touchedByUser = true
+        ghost.userKey()
         view.awaitsChoice = false // a paste or a drop into it is the user's choice
         MCPControl.typedByUser(self)
     }
@@ -1227,6 +1480,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if let note = herdrWatch.note { lines.append(note) }
         }
         lines.append(completion.engineLabel)
+        if let label = ghost.label { lines.append(label) }
         return lines.joined(separator: "\n")
     }
 
@@ -1236,9 +1490,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         switch event {
         case .completion(let message):
             return completion.handle(message)
-        case .commandStarted(let line, let expanded):
+        case .history(let version):
+            return history.marked(version: version)
+        case .ghost(let message):
+            if case .buffer(let report) = message { lastBuffer = (report, view.inputWrites, Self.now) }
+            return ghost.handle(message)
+        case .commandStarted(let line, let expanded, let flags):
             onCommandMark?(event)
+            runStarted(line, flags: flags)
+            ghost.lineEnded()
             completion.disarm()
+            history.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
@@ -1249,6 +1511,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             onCommandMark?(event)
+            ghost.commandEnded(yours: runEnded(exit: code))
+            ownLine = nil
+            history.prompted(at: Self.now)
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
@@ -1274,6 +1539,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
         completion.viewChanged()
+        ghost.viewChanged()
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
@@ -1331,6 +1597,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     private func shellEnded(_ waitStatus: Int32?) {
         exited = true
+        runEnded(exit: nil)
         execWatcher?.cancel()
         execWatcher = nil
         guard let waitStatus, waitStatus != 0 else {
@@ -1523,6 +1790,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var environmentPath = ""
     /// The Claude Code link's port as given to the shell (for the self-test).
     private(set) var claudePort: String?
+    /// What the shell was told about zsh-autosuggestions as it started (ShellIntegration.ghostVariable): Next Term's
+    /// suggestions were chosen for it, so its hook turned the plugin's off (GhostSession).
+    private(set) var ghostStart: String?
 
     private func environment(shellName: String) -> [String] {
         // A fresh terminal, not a child of whatever launched Next Term (see TerminalEnvironment).
@@ -1535,7 +1805,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         ProgramNotice.prepare(&env)
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
-        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
+        // Its project, or its own folder where it has none (the home folder: ProjectRoot.project).
+        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.project(from: directory) ?? directory))
         // `nxtrm mcp`, started by an agent in this tab, reaches this copy of Next Term.
         if MCPControlServer.shared.isRunning { env[MCPServer.socketVariable] = MCPControlServer.shared.path }
         // `nxtrm` works in every tab from the first launch, with no install step.
@@ -1551,6 +1822,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
             // Tab completion's hook loads; `q`: with zsh-autocomplete's list as you type off from the first prompt.
             if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = CompletionPreferences.quietsAutocomplete ? "q" : "1" }
+            // zsh-autosuggestions' suggestions off from the first line, where Next Term's were chosen for them.
+            ghostStart = GhostPreferences.startValue
+            if let ghostStart { env[ShellIntegration.ghostVariable] = ghostStart }
         }
         environmentPath = env["PATH"] ?? ""
         claudePort = env["CLAUDE_CODE_SSE_PORT"]

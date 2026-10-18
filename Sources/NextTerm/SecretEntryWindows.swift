@@ -1,6 +1,6 @@
 import AppKit
 
-/// The windows a key's value is typed or pasted in: request_secret's window, Window › Secrets and Settings (Settings ›
+/// The windows a key's value is typed or pasted in: request_secret's window, the Secrets window and Settings (Settings ›
 /// Secrets' add and edit sheet, and the other fields there), with any sheet on them. While the user is in one, a
 /// window an agent opens never becomes the key window (Arrival's raise): a ⌘V or a Return meant for the value would
 /// land in that window's editor or in the user's own prompt, where nothing masks a key not stored yet.

@@ -98,9 +98,15 @@ public final class SecretMask: @unchecked Sendable {
         (minimumLength...maximumLength).contains(mark.length) && mark.tag.count == tagLength
     }
 
-    /// The mask for every entry of an index.
-    public convenience init(key: SymmetricKey, index: SecretVault.Index) {
-        self.init(key: key, marks: index.entries.flatMap(\.marks))
+    /// The mask for every entry of an index: each key's value, and after a key rotation its old value too, until its
+    /// retired marks' date passes `now`, while the old key may still work.
+    public convenience init(key: SymmetricKey, index: SecretVault.Index, now: Date = Date()) {
+        let current: [SecretVault.Mark] = index.entries.flatMap(\.marks)
+        let retired: [SecretVault.Mark] = index.entries.flatMap { (entry: SecretVault.Entry) -> [SecretVault.Mark] in
+            guard let old = entry.retired, old.until > now else { return [] }
+            return old.marks
+        }
+        self.init(key: key, marks: current + retired)
     }
 
     public var isEmpty: Bool { marks.isEmpty }
@@ -199,6 +205,27 @@ public final class SecretMask: @unchecked Sendable {
 
     static func tag<Bytes: DataProtocol>(_ bytes: Bytes, key: SymmetricKey) -> Data {
         Data(HMAC<SHA256>.authenticationCode(for: bytes, using: key).prefix(tagLength))
+    }
+
+    /// Whether `entry` holds `value`, by its marks: no value is read from the vault. The value is trimmed as the vault
+    /// trims it, and its form as stored is looked for among the entry's marks. False for a value under 12 bytes, which
+    /// has no marks, for one the vault would refuse, and with no mask key. For the import, to use a key an earlier try
+    /// stored; the vault checks the value itself before it keeps the key (`SecretVault.holds`).
+    public func isHeld(_ value: SecretBytes, by entry: SecretVault.Entry) -> Bool {
+        guard let mark = mark(of: value) else { return false }
+        return entry.marks.contains(mark)
+    }
+
+    /// The mark `value`'s form as stored has, to look for among entries' marks: worked out once for any number of
+    /// them. Nil as `isHeld` is false for every entry.
+    public func mark(of value: SecretBytes) -> SecretVault.Mark? {
+        guard let tagKey, let trimmed = try? SecretVault.normalized(value, name: ""),
+              trimmed.count >= Self.minimumLength else { return nil }
+        return trimmed.withUnsafeBytes { buffer in
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            let head = Self.headOf(bytes.baseAddress!, multiplier, offset)
+            return SecretVault.Mark(length: buffer.count, head: head, tag: Self.tag(buffer, key: tagKey))
+        }
     }
 
     // MARK: matching

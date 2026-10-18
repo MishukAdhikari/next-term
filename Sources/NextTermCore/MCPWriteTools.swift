@@ -7,7 +7,8 @@ import Glibc
 
 /// Who approves the change one of Next Term's write tools would make (the tools tagged `write` that the
 /// app's MCPWriteControl runs: write_file, create_file, stage, commit, focus_tab, split_pane, close_pane,
-/// zoom_pane, set_layout and settings_set), and the skill requests install_skill and remove_skill.
+/// zoom_pane, set_layout and settings_set, and add_task through its approval), and the skill requests
+/// install_skill and remove_skill.
 ///
 /// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, connection:,
 /// reply:)` in the app, on the main thread; its reply can come from any thread.
@@ -54,8 +55,8 @@ extension MCPServer {
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
                      "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
-                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import",
-                     "request_secret", "store_secret", "run_with_secrets"]
+                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
+                     "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
         for name in write { tags[name] = .write }

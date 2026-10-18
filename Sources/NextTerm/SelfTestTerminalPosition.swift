@@ -60,6 +60,7 @@ extension SelfTest {
         // Folded to its bar, the tab in front is out of sight: what happens in it is news, as behind the rail. Taking
         // the keyboard (⌃Tab, ⌘1–⌘9, ⌘T) unfolds it, as the rail does.
         let unseenFolded = c.activeTab.map { !c.isOnScreen($0) } ?? false
+        let inFront = c.activeTab // the project's tab: the checks after these read the project in the sidebar
         c.cycleTab(by: 1)
         window.layoutIfNeeded()
         check(!c.terminalCollapsed && pane.frame.height > bar + 50, "position: folded to its bar, switching tabs from the keyboard unfolds it",
@@ -77,6 +78,9 @@ extension SelfTest {
         added.status.setVisible(true)
         c.requestClose(added)
         if c.terminalCollapsed { c.toggleTerminalCollapsed(nil) }
+        // ⌃Tab went round to the window's first tab, in /tmp, and a window with no project follows its tab: back to the
+        // tab that was in front, so the sidebar and git are the project's again.
+        if let inFront { c.show(inFront) }
 
         // Each orientation keeps its own share: one beside the editor is no height above or below it. The panes'
         // minimums: 240 points beside, the tab bar and 60 above or below.

@@ -262,17 +262,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own root): Gemini CLI and
-    /// Qwen Code connect only from inside one of these.
+    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own project): Gemini CLI and
+    /// Qwen Code connect only from inside one of these. Never a folder that is never a project (the home folder, /:
+    /// ProjectRoot.isNeverRoot), from which they would connect wherever they start.
     var agentWorkspaces: [String] {
         var roots: [String] = []
         for controller in controllers {
             if let project = controller.project { roots.append(project) }
             if let root = controller.sidebar.root?.path { roots.append(root) }
-            roots += controller.tabs.map { ProjectRoot.find(from: $0.directory) }
+            roots += controller.tabs.compactMap { (tab: TerminalTab) -> String? in ProjectRoot.project(from: tab.directory) }
         }
         var seen = Set<String>()
-        return roots.map(canonicalPath).filter { seen.insert($0).inserted }
+        return roots.map(canonicalPath).filter { !ProjectRoot.isNeverRoot($0) && seen.insert($0).inserted }
     }
 
     /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
@@ -332,6 +333,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
     }
 
+    /// View › Suggestions While Typing: on or off for every tab, as Settings › Terminal › While typing sets it (stored).
+    @objc func toggleSuggestionsWhileTyping(_ sender: Any?) {
+        GhostPreferences.set(!GhostPreferences.isOn)
+    }
+
+    /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
+    /// turned off or Next Term quits.
+    @objc func togglePrivateMode(_ sender: Any?) {
+        GhostPreferences.setPrivateMode(!GhostPreferences.privateMode)
+    }
+
     @objc func toggleSoftWrap(_ sender: Any?) {
         softWrap.toggle()
         controllers.forEach { $0.editorArea.applyWrap() }
@@ -345,6 +357,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue, forKey: "hideEnvValues")
             controllers.forEach { $0.editorArea.applyEnvValuesSetting() }
         }
+    }
+
+    /// Markdown files open in Live Preview (on unless turned off in Settings › Editor). A file's own choice from View ›
+    /// Markdown Live Preview wins (markdownViewChoices); changing this, every open file without one follows.
+    var markdownLivePreview: Bool {
+        get { UserDefaults.standard.object(forKey: "markdownLivePreview") as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "markdownLivePreview")
+            controllers.forEach { $0.editorArea.applyMarkdownPreviewSetting() }
+        }
+    }
+
+    /// Each Markdown file's own choice of Live Preview or Source, the newest 500.
+    var markdownViewChoices: MarkdownViewChoices {
+        get { MarkdownViewChoices.decode(UserDefaults.standard.data(forKey: MarkdownViewChoices.defaultsKey)) }
+        set { UserDefaults.standard.set(newValue.encoded(), forKey: MarkdownViewChoices.defaultsKey) }
     }
 
     /// Who last changed each line, in a column beside the line numbers (off unless turned on).
@@ -444,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -495,13 +524,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             openAtLaunch(kind: kind, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
+            GhostPreferences.testIsOn = false // its tabs record nothing, and → moves the cursor
             return SelfTestRestore.run(restore: restore)
         }
         #endif
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
-            openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
+            var welcomeFirst = LaunchSettings()
+            welcomeFirst.opens = .welcome
+            openAtLaunch(kind: .normal, restore: .notRun, settings: welcomeFirst, mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
@@ -557,7 +589,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
-        case .newTerminal: openWindow(directory: nil)
+        case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
         }
     }
 
@@ -630,7 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
-    /// on the file's project (its git root, or its folder).
+    /// on the file's project (its git root, or its folder), or one with no project when its folder is never one.
     /// `forAgent`: open_in_editor. The file opens without taking the keyboard, and its window comes forward as
     /// AgentArrival says, not as a window the user went to.
     func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool, forAgent: Bool = false) {
@@ -641,10 +673,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let target: TerminalWindowController
         if !newWindow, let window = owner ?? front {
             target = window
-        } else {
-            let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
+        } else if let root = ProjectRoot.project(from: (path as NSString).deletingLastPathComponent) {
             recent.add(root)
             target = openWindow(directory: root, project: root, forAgent: forAgent)
+        } else {
+            // A file in a folder that is never a project (~/notes.txt): a window with no project, in that folder.
+            target = openWindow(directory: (path as NSString).deletingLastPathComponent, forAgent: forAgent)
         }
         closeWelcome(forAgent: forAgent)
         if forAgent {
@@ -970,10 +1004,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidBecomeActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() } // the window in front has its project's glow at full strength again
     }
 
     func applicationDidResignActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() }
     }
 
     // MARK: windows
@@ -1019,6 +1055,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// A terminal window closed.
     private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
+        // Out of the index at once: Go to Next Agent Needing You and the Welcome window never go to a closed window.
+        windowIndex.remove(window: closed.indexID)
+        self.welcome?.windowsChanged()
         // Defer: the window is still mid-close in this call.
         DispatchQueue.main.async { [self] in
             controllers.removeAll { $0 === closed }
@@ -1030,8 +1069,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// New Terminal (File › New Window, ⌘N, the Welcome window's row): a window with no project, its shell where Settings ›
+    /// Terminal › New tabs says, as ⌘T with no window open (the home folder unless a folder is chosen there).
     @objc func newWindow(_ sender: Any?) {
-        openWindow(directory: nil)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// A worktree's own window, with one shell tab in its folder, titled "xCloud ▸ 7027-sso": the window
@@ -1055,17 +1096,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
-    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
-    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
-    func copiesIgnoredFiles(for main: String) -> Bool {
-        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    /// Open in New Worktree's choice for the ignored files (Copy, Link or Leave Out), as it was last left for the
+    /// repository whose main checkout is `main`: before there was a choice, Copy where "Copy ignored files too" was
+    /// ticked; Leave Out for one never seen. Saved when Create is pressed; the choice is the setting.
+    func ignoredFilesChoice(for main: String) -> WorktreeCopy.Choice {
+        let path = canonicalPath(main)
+        let saved = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles")?[path] as? String
+        let before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[path] as? Bool
+        return WorktreeCopy.Choice.remembered(saved, copiedBefore: before)
     }
 
-    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
-        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+    func setIgnoredFilesChoice(_ choice: WorktreeCopy.Choice, for main: String) {
+        let path = canonicalPath(main)
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles") ?? [:]
         choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
-        choices[canonicalPath(main)] = on
-        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+        choices[path] = choice.rawValue
+        UserDefaults.standard.set(choices, forKey: "worktreeIgnoredFiles")
+        // The checkbox's own setting, now the choice holds it.
+        if var before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored"), before.removeValue(forKey: path) != nil {
+            if before.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "worktreeCopiesIgnored")
+            } else {
+                UserDefaults.standard.set(before, forKey: "worktreeCopiesIgnored")
+            }
+        }
     }
 
     // MARK: projects
@@ -1076,6 +1130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
             // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
             if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+            // And every window's "No project open", which otherwise refreshes only when its window becomes key.
+            let showing: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+                controller.sidebar.showsNoProject
+            }
+            guard !showing.isEmpty else { return }
+            let shown: [String] = newValue.existing()
+            for controller in showing { controller.sidebar.noProject.show(recent: shown) }
         }
     }
 
@@ -1107,9 +1168,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
     typealias ProjectTarget = ProjectOpening.Setting
 
+    /// File › Open Projects In, Settings › General's Projects row, the Ask dialog's remembered choice or an import set
+    /// `projectTarget`: the Settings row follows.
+    static let projectTargetChanged = Notification.Name("NextTermProjectTargetChanged")
+
     var projectTarget: ProjectTarget {
         get { ProjectTarget(rawValue: UserDefaults.standard.string(forKey: "openProjectsIn") ?? "") ?? .ask }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn") }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn")
+            NotificationCenter.default.post(name: Self.projectTargetChanged, object: self)
+        }
     }
 
     private var welcome: WelcomeWindowController?
@@ -1130,19 +1198,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
     /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
     @objc func chooseProjectFolder(_ sender: Any?) {
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
+        chooseProjectFolder(from: from, over: overWelcome)
+    }
+
+    /// The same panel for a window that asked itself, not the key one (a notice in it, which can't be key): over `sheet`,
+    /// else over `from`'s window, or on its own with neither; the folder chosen opens as if from `from`.
+    func chooseProjectFolder(from: TerminalWindowController?, over sheet: NSWindow? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
-        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = sheet ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
 
     /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen
@@ -1277,6 +1351,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
+        // The windows with a terminal that needs you, first: the one Go to Next Agent Needing You goes to at the top, each
+        // with its most urgent mark, as its tab bar shows it.
+        refreshWindowIndex()
+        for window in windowIndex.windowsWaiting {
+            guard let waiting = windowIndex.firstWaiting(in: window.id) else { continue }
+            let item = menu.addItem(withTitle: window.title, action: #selector(goToWaitingWindow(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = window.id
+            item.image = StatusGlyph.image(for: waiting.state)
+            item.toolTip = window.marks.spoken(working: false)
+        }
+        if menu.numberOfItems > 0 { menu.addItem(.separator()) }
         menu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "").target = self
         let projects = recentProjects
         if !projects.isEmpty {
@@ -1324,7 +1410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// ⌘T with no window open (every window closed, app still running), where Settings › Terminal › New tabs says.
     @objc func newTab(_ sender: Any?) {
-        openWindow(directory: newTabWindowDirectory)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,
@@ -1404,7 +1490,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return terminalTabs.listSide != nil // a second line for the list's rows: the bar has none
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
+        if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
+        if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
         if item.action == #selector(setAgentSpinner(_:)) { item.state = item.representedObject as? String == AgentSpinner.current.rawValue ? .on : .off }
@@ -1415,6 +1504,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
         }
         return true
+    }
+
+    /// View › Project Color › Show Project Colors (and Settings › General): every window's colour, shown or not. Each
+    /// project keeps its own while they are hidden.
+    @objc func toggleProjectColors(_ sender: Any?) {
+        ProjectColorStore.isShown.toggle()
     }
 
     /// View › Agent Spinner: Spinning, Still or Off, for every window at once.
@@ -1462,6 +1557,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     static func clampedFontSize(_ size: CGFloat) -> CGFloat {
         min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
+    }
+
+    // MARK: every window's agents
+
+    /// Every terminal window and what its terminals show (WindowIndex): for Agents › Go to Next Agent Needing You, the
+    /// Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own status, so
+    /// nothing is polled for it, and leaves it as it closes.
+    private(set) var windowIndex = WindowIndex()
+
+    /// A window refreshed: its entry as it is now. A change reaches the Welcome window while it shows.
+    func indexed(_ controller: TerminalWindowController) {
+        // A window being made is told once it is listed; one closing, never again.
+        guard !controller.hasClosed, controllers.contains(where: { $0 === controller }) else { return }
+        guard windowIndex.update(controller.indexEntry) else { return }
+        welcome?.windowsChanged()
+    }
+
+    /// Every window's entry as it is this moment, not at its last refresh (a window no one can see refreshes once a
+    /// second): before a key or a menu reads the index.
+    func refreshWindowIndex() {
+        for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
+    }
+
+    /// Agents › Go to Next Agent Needing You: the terminal that has waited longest for you (a decision, then a failure,
+    /// then a finished agent or command), its window brought forward and its tab or pane selected; pressed again there,
+    /// the next one, round to the first. With none, a notice says so and nothing beeps.
+    @objc func goToNextAgentNeedingYou(_ sender: Any?) {
+        refreshWindowIndex()
+        let key = NSApp.keyWindow?.windowController as? TerminalWindowController
+        // The tab in front counts as gone to only while it shows; folded, what it holds is news like any other tab's.
+        let front: TerminalTab? = key?.activeTab.flatMap { (tab: TerminalTab) -> TerminalTab? in
+            key?.isOnScreen(tab) == true ? tab : nil
+        }
+        guard let next = windowIndex.next(from: front?.id) else {
+            let shown: NSWindow? = NSApp.keyWindow ?? TerminalWindow.front
+            GitToast.show(WindowIndex.nothingWaiting, in: shown)
+            return
+        }
+        go(to: next)
+    }
+
+    /// The Dock menu's item for a window waiting for you (its `tag`, the window's id): its terminal that needs you most;
+    /// seen since, the window as it is.
+    @objc func goToWaitingWindow(_ sender: NSMenuItem) {
+        refreshWindowIndex()
+        if let waiting = windowIndex.firstWaiting(in: sender.tag) { return go(to: waiting) }
+        let controller = controllers.first { $0.indexID == sender.tag && !$0.hasClosed }
+        NSApp.activate(ignoringOtherApps: true)
+        controller?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does.
+    private func go(to waiting: WindowIndex.Waiting) {
+        guard let controller = controllers.first(where: { $0.indexID == waiting.window && !$0.hasClosed }),
+              let tab = controller.tabs.first(where: { $0.id == waiting.tab }) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.show(tab)
     }
 
     // MARK: dock badge and notifications
@@ -1540,7 +1693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// would be shown, and shows you nothing.
     var testNotifications: [UNNotificationRequest] = []
 
-    private func deliver(_ request: UNNotificationRequest) {
+    func deliver(_ request: UNNotificationRequest) {
         // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
         var request = request
         let mask = SecretMask.current
@@ -1611,8 +1764,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let tabID = response.notification.request.content.userInfo["tab"] as? String
+        let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let reminder { // a key rotation reminder: Rotate… for its key
+                SecretReminders.open(reminder)
+                return completionHandler()
+            }
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
                     controller.window?.makeKeyAndOrderFront(nil)
@@ -1715,6 +1873,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
         item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
+        // ⇧⌘O, VS Code's Go to Symbol (headings, in a Markdown file); ⌘F12 under JetBrains' keys, whose ⇧⌘O is Go to File.
+        item(edit, "Go to Heading…", #selector(TerminalWindowController.goToHeading(_:)), "o", [.command, .shift])
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
         item(edit, "Outdent", #selector(CodeTextView.outdentSelection(_:)), "[")
@@ -1728,8 +1888,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(line, "Move Line Down", #selector(CodeTextView.moveLineDown(_:)), down, [.command, .control])
         line.addItem(.separator())
         item(line, "Copy Path with Line", #selector(CodeTextView.copyPathWithLine(_:)), "")
+        // A Markdown file's, in the markers it already uses; their keys work while its editor has the keyboard, so ⌘B hides
+        // the sidebar everywhere else. ⌥⌘0 to ⌥⌘6 for the headings, as ⌘1 to ⌘9 select tabs.
+        let markdown = NSMenu(title: "Markdown")
+        edit.addItem(withTitle: "Markdown", action: nil, keyEquivalent: "").submenu = markdown
+        item(markdown, "Bold", #selector(CodeTextView.toggleMarkdownBold(_:)), "b")
+        item(markdown, "Italic", #selector(CodeTextView.toggleMarkdownItalic(_:)), "i")
+        item(markdown, "Strikethrough", #selector(CodeTextView.toggleMarkdownStrikethrough(_:)), "x", [.command, .shift])
+        item(markdown, "Code", #selector(CodeTextView.toggleMarkdownCode(_:)), "")
+        item(markdown, "Link", #selector(CodeTextView.insertMarkdownLink(_:)), "k")
+        markdown.addItem(.separator())
+        let headings = NSMenu(title: "Heading")
+        markdown.addItem(withTitle: "Heading", action: nil, keyEquivalent: "").submenu = headings
+        item(headings, "Body Text", #selector(CodeTextView.markdownBodyText(_:)), "0", [.command, .option])
+        for level in 1...6 {
+            item(headings, "Heading \(level)", #selector(CodeTextView.markdownHeading(_:)), "\(level)", [.command, .option]).tag = level
+        }
+        item(markdown, "Bulleted List", #selector(CodeTextView.toggleMarkdownBullets(_:)), "")
+        item(markdown, "Numbered List", #selector(CodeTextView.toggleMarkdownNumbers(_:)), "")
+        item(markdown, "Toggle Task", #selector(CodeTextView.toggleMarkdownTask(_:)), "l", [.command, .shift])
+        item(markdown, "Quote", #selector(CodeTextView.toggleMarkdownQuote(_:)), "")
+        item(markdown, "Code Block", #selector(CodeTextView.insertMarkdownCodeBlock(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
+        // While a suggestion shows after the cursor: that command leaves Next Term's record of yours.
+        item(edit, "Forget This Suggestion", #selector(TerminalWindowController.forgetSuggestion(_:)), "\u{8}", [.command, .shift])
 
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
@@ -1753,6 +1936,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
+        item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
+        item(view, "Suggestions While Typing", #selector(toggleSuggestionsWhileTyping(_:)), "", target: self).toolTip =
+            "A command you ran before, dimmed after the cursor at a zsh prompt. Off, none shows and no command is recorded."
+        item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
+            "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
@@ -1766,6 +1955,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
         }
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
+        // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
+        view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
@@ -1783,10 +1974,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let skills = item(agents, SkillsMenuItem.title, #selector(showSkillsSettings(_:)), "", target: self)
         MainActor.assumeIsolated { SkillsMenuItem.follow(skills) } // with the count of skill updates
         agents.addItem(.separator())
+        // Across every window, the agent waiting longest, then the next. ⇧⌘U, U for Unread, as agent apps have it; free in
+        // every shortcut set (MenuKeys).
+        item(agents, "Go to Next Agent Needing You", #selector(goToNextAgentNeedingYou(_:)), "u", [.command, .shift], target: self)
+        agents.addItem(.separator())
         item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
         item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
              target: CommandSuggestionController.shared)
+
+        // Prompts as tasks in the project's todo folder, for tomorrow's agent.
+        MainActor.assumeIsolated { TasksMenu.shared.fill(submenu(main, "Tasks")) }
+        // Secrets, after Tasks, whose servers and commands use its keys. Show Secrets keeps Window › Secrets' action, so its key stays.
+        MainActor.assumeIsolated { SecretsMenu.shared.fill(submenu(main, "Secrets")) }
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
@@ -1839,7 +2039,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
-        item(window, "Secrets", #selector(showSecrets(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main
