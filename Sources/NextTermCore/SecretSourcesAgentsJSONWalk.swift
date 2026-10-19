@@ -1,18 +1,18 @@
 import Foundation
 
 // The places in agents' JSON configs that hold keys, read with their lines: an env object, an HTTP server's headers,
-// one string member, and opencode's config (https://opencode.ai/docs/config/), whose providers keep a key in
+// one string member, and OpenCode's config (https://opencode.ai/docs/config/), whose providers keep a key in
 // `options.apiKey` and whose MCP servers keep an `environment` and `headers`.
 
 extension SecretSources {
-    /// opencode's config: named `opencode.json` or `opencode.jsonc`, or with opencode's schema.
+    /// OpenCode's config: named `opencode.json` or `opencode.jsonc`, or with OpenCode's schema.
     static func isOpencode(_ root: JSONC.Object, file: String, walk: JSONWalk) -> Bool {
         if file == "opencode.json" || file == "opencode.jsonc" { return true }
         let schema: String? = root.member("$schema")?.value.object(in: walk.text) as? String
         return schema?.contains("opencode.ai") ?? false
     }
 
-    /// opencode's providers' keys, each named as the provider reads it from the environment (`openai` is
+    /// OpenCode's providers' keys, each named as the provider reads it from the environment (`openai` is
     /// OPENAI_API_KEY), and its MCP servers' `environment` and `headers`.
     static func opencodeFound(_ root: JSONC.Object, walk: inout JSONWalk) {
         if let member = root.member("provider"), case .object(let providers) = member.value {

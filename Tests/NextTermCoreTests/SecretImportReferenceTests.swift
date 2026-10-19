@@ -59,7 +59,7 @@ import Testing
         #expect(claude.first { $0.variable == "OTHER_KEY" }?.movable == true)
     }
 
-    /// The reason holds in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in none, so
+    /// The reason holds in every client: Claude Code fills in `${X}` and OpenCode `{env:X}`, but Codex fills in none, so
     /// it says some agents fill a reference in, not that this one would have.
     @Test func theReasonHoldsInAClientThatFillsInNoReference() {
         let reason = SecretImport.referenceReason

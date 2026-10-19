@@ -2,7 +2,7 @@ import Foundation
 
 // Agents' JSON configs the MCP-config import doesn't rewrite, each known by members only it has: Zed's
 // `context_servers` (each server's `env`, the older `command.env`, an extension's `settings`, a remote one's
-// `headers`), Claude Code's settings' `env`, opencode's providers' keys and its servers' `environment` and `headers`,
+// `headers`), Claude Code's settings' `env`, OpenCode's providers' keys and its servers' `environment` and `headers`,
 // and a file of `mcpServers` (Devin Desktop's `mcp_config.json`) with each server's `env` and `headers`. The rest of
 // the file is read as any JSON is, so no key in it goes unseen. Each row says the file still holds the key.
 
@@ -35,7 +35,7 @@ extension SecretSources {
             agent = "Claude Code"
         } else if isOpencode(root, file: lower, walk: walk) {
             opencodeFound(root, walk: &walk)
-            agent = "opencode"
+            agent = "OpenCode"
         } else if let servers = servers(root, "mcpServers") {
             for server in servers {
                 guard case .object(let entry) = server.value else { continue }

@@ -2,7 +2,7 @@
 
 **The missing IDE for the terminal.**
 
-A native macOS terminal and editor for the AI era. Run Claude Code, Codex,
+A native macOS terminal and editor for the AI era. Run Claude Code, Codex, OpenCode,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
 agents are working, which are done, and which are waiting on your decision.
 
@@ -10,13 +10,16 @@ agents are working, which are done, and which are waiting on your decision.
 website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 
 - **Agent status, in step with the agent.** A spinner shows while an agent is working, read from the
-  agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, so it stops
-  the moment they stop; other agents go by output timing. A green check means done and waiting for your
-  next prompt, an amber "!" means it is asking you something. Plain commands show no spinner and end
-  with a check or a red cross. Marks clear when you look at the tab.
+  agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, and from
+  OpenCode's own footer ("esc interrupt") for OpenCode, so it stops the moment they stop; other agents go
+  by output timing. A green check means done and waiting for your next prompt, an amber "!" means it is
+  asking you something. Plain commands show no spinner and end with a check or a red cross. Marks clear
+  when you look at the tab.
 - **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
-  a notification says so with the question; click it to land on that tab. Works however you start the
-  agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
+  a notification says so with the question; click it to land on that tab. OpenCode's "Permission required"
+  prompt and its questions count too, and the notification quotes the request, such as "Permission required:
+  Shell command ($ npm test)". Works however you start the agent: directly, through an alias or a shell
+  function, `npx` or `bunx`, or `cd app && claude`.
 - **Code editor.** Click a file once in the sidebar (Settings › Editor › Open files and folders with a single
   click, on for new installs; off, double-click), pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in
   any output: the file opens above the terminal at that line, coloured by
@@ -35,9 +38,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
   Logs and other text files over 32 MB open there too.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
-  them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
-  for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
-  never presses Enter for you.
+  them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
+  for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
+  the prompt to add your instruction. It never presses Enter for you.
 - **Tasks for tomorrow's agent.** Tasks › Add Task… (⌃⌘T) turns a prompt into a task, filled from what you
   selected: the first line is what to do, list lines its steps, the rest notes, planned for tomorrow unless you
   pick another day. Each task is one Markdown file in the project's `todo/` folder (the main checkout's, in a
@@ -45,21 +48,26 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   so an agent there tomorrow reads it with its own tools. Agents add tasks too, with the MCP tool `add_task`,
   which asks you on the Mac first and shows the exact file. Stored keys show as •••, Undo takes a task back, and
   Settings › Tasks chooses another folder. See [the todo file format](docs/todo-files.md).
-- **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode in a Next
+- **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and OpenCode in a Next
   Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
-  your next prompt ("⧉ 10 lines selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt (`@file:10-20`
-  into Copilot's). When Claude, Gemini, Qwen or Copilot wants to edit a file, its change opens as a diff to
-  Accept (⌘↩) or Reject, as in VS Code; answering in the terminal works too. Nothing to set up: Next Term turns
-  Gemini's and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never
-  shared; Settings turns it off.
+  your next prompt (“⧉ 10 lines selected”), and ⌥⌘K puts `@file#L10-20` into Claude’s prompt (`@file:10-20`
+  into Copilot’s, and the same lines into OpenCode’s, counted from 1 as OpenCode counts them). When Claude,
+  Gemini, Qwen or Copilot wants to edit a file, its change opens as a diff to Accept (⌘↩) or Reject, as in VS
+  Code; answering in the terminal works too. OpenCode’s link shares your selection only: its edits don’t
+  open as diffs, and it links from a local tab, not from tmux or a remote tab. Nothing to set up: Next Term
+  turns Gemini’s and Qwen’s IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are
+  never shared; Settings turns it off.
 - **Orchestrate agents across projects (MCP).** Next Term is an MCP server for any agent: Claude Code and
-  the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor, opencode,
+  the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor, OpenCode,
   Copilot CLI, Amp, Junie and Command Code. One agent can run the others. It sees every project and tab
   with each agent's state (working, done, waiting for a decision and the question), opens projects, starts
   an agent in a new tab, gives it a prompt, waits until it stops, reads its screen, answers its questions
   (only the question it saw, never a newer one), reads the projects' files, searches them and sees their
   git status and diffs (secrets files refused, secret-looking values masked), and uses the editor (the
-  selection, open files, opening a file at a line). Next Term adds itself to the agents it finds, with
+  selection, open files, opening a file at a line). It answers OpenCode too: Allow once, Allow always or
+  Reject, and a question’s option by its number. It presses Return on an OpenCode button only once
+  OpenCode’s screen shows that button selected, so in a theme that doesn’t show it, only Reject can be
+  answered. Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
   closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
   change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
@@ -76,7 +84,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   shown or copied, even to you.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
-  conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot
+  conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot
   CLI kept for it is there, newest first, with its title, branch and model, including the ones started in
   its subfolders. Resume runs it again in a new tab, in the folder it was started in; Fork continues a copy;
   a session open in a tab offers Go to Tab instead; type to search them by title, agent, branch or model.
@@ -221,8 +229,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   at the top right brings it back. It downloads and is checked against its checksum signed with the Next
   Term release key; the update sheet then says what happens to each tab before anything quits. After the
   update, or after a quit, your windows, tabs, splits and scrollback come back, Claude Code, Codex and Qwen
-  Code resume their conversations as you started them, and other agents' resume commands wait on the
-  line for Return.
+  Code resume their conversations as you started them, and other agents’ resume commands wait on the
+  line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
+  matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
+  resumes the session you were in.
 - **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 30 MB to download, 64 MB
   installed. macOS 13 or later.
 
@@ -278,12 +288,15 @@ How it knows, most reliable first:
    never written into it; one is put on your line only through that hook, while the line is still the one it
    showed on.
 2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
-   Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
+   Next Term reads the agent’s own screen, the way you would: “esc to interrupt” means working, a question
    with choices means it is waiting on you, anything else means idle. These hints are checked against
-   Claude Code, Codex, Command Code and Gemini CLI. Other agents (Junie, opencode, Qwen Code and the rest)
-   go by output timing until their screen shows one of them: printing means working, 2.5 s of silence
-   means done. When a command looks plain (a shell function), Next Term also asks the kernel what is
-   really running.
+   Claude Code, Codex, Command Code and Gemini CLI. OpenCode has hints of its own, read only in its tab:
+   “esc interrupt” in its footer means working, its footer’s keys (“ctrl+p commands”) or “Ask anything…”
+   mean idle, and its “Permission required” prompt or a question with numbered options means it is waiting
+   on you; until its working hint first shows, output timing drives the spinner. Other agents (Junie, Qwen
+   Code and the rest) go by output timing until their screen shows one of them: printing means working,
+   2.5 s of silence means done. When a command looks plain (a shell function), Next Term also asks the
+   kernel what is really running.
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 

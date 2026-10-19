@@ -357,12 +357,18 @@ enum SkillsInstaller {
             steps.append(.recordEntry(path: recordsFile, name: name, record: nil))
             installed = true
         }
-        let shared = inventory.rows.first { $0.name == name }?.copies.first { $0.root.kind == .shared }
+        let row = inventory.rows.first { $0.name == name }
+        let shared = row?.copies.first { $0.root.kind == .shared }
         let front = shared?.frontMatter
         let folder = shared.flatMap { $0.broken ? nil : $0.path }
         // Reads the installed copy's plugin and servers, Claude Code's settings and Codex's config: only read.
         let home = SkillsStore.home
-        let leftovers = await Task.detached { SkillInstall.leftovers(frontMatter: front, folder: folder, home: home) }.value
+        var leftovers = await Task.detached { SkillInstall.leftovers(frontMatter: front, folder: folder, home: home) }.value
+        // OpenCode's own copies and links stay (Next Term never changes OpenCode's folders): Settings › Skills' alert and
+        // an agent's remove_skill request both say so.
+        if let row, let sharedRoot = inventory.root(.shared), let left = SkillInstall.opencodeLeft(row, sharedRoot: sharedRoot, removing: true) {
+            leftovers.append(left)
+        }
         return (steps, leftovers, installed)
     }
 

@@ -196,6 +196,79 @@ import Testing
         #expect(AgentCLI.ValuePattern.mode.matches("bypassPermissions") && AgentCLI.ValuePattern.mode.matches("on-request"))
         #expect(!AgentCLI.ValuePattern.mode.matches("plan;id"))
         #expect(AgentCLI.ValuePattern.tools.matches("Bash(git *)") && !AgentCLI.ValuePattern.tools.matches("Bash($(id))"))
+        for number in ["4096", "0", "200"] {
+            #expect(AgentCLI.ValuePattern.number.matches(number), "\(number)")
+        }
+        for bad in ["40a6", "-1", "4096;id", "", "12345678901"] {
+            #expect(!AgentCLI.ValuePattern.number.matches(bad), "\(bad)")
+        }
+        #expect(AgentCLI.ValuePattern.host.matches("0.0.0.0") && AgentCLI.ValuePattern.host.matches("opencode.local"))
+        #expect(!AgentCLI.ValuePattern.host.matches("a b") && !AgentCLI.ValuePattern.host.matches("$(id)"))
+        #expect(AgentCLI.ValuePattern.origin.matches("http://localhost:5173") && AgentCLI.ValuePattern.origin.matches("https://app.example.com"))
+        #expect(!AgentCLI.ValuePattern.origin.matches("http://x;rm") && !AgentCLI.ValuePattern.origin.matches("https://a.b/$(id)"))
+    }
+
+    // MARK: OpenCode
+
+    /// OpenCode's TUI options keep their values on the put-back line, none unclear; `--prompt` stays a one-shot option.
+    @Test func opencodesTUIOptionsAreKeptWithTheirValues() {
+        let opencode = RestoreAgent.opencode
+        let id = "ses_6a3f2b9c1d"
+        let options = opencode.launchOptions(in: ["--port", "4096", "--log-level", "DEBUG", "-s", id])
+        #expect(options == [SessionSnapshot.LaunchOption(["--port", "4096"]), SessionSnapshot.LaunchOption(["--log-level", "DEBUG"])])
+        #expect(opencode.launchOptions(in: ["--mini"]) == [SessionSnapshot.LaunchOption(["--mini"])])
+        var evidence = SessionSnapshot.Evidence(agent: .opencode)
+        evidence.options = options
+        #expect(evidence.putBack(id: id) == PutBack(line: "opencode --port 4096 --log-level DEBUG -s \(id)", namesSession: true, leftOff: []))
+        let all = ["--mini", "--no-replay", "--replay-limit", "200", "--port", "4096", "--hostname", "0.0.0.0", "--mdns", "--mdns-domain",
+                   "opencode.local", "--cors", "http://localhost:5173", "--cors", "https://app.example.com", "--print-logs",
+                   "--log-level", "WARN", "--pure", "./web"]
+        let kept = opencode.launchOptions(in: all)
+        #expect(kept?.allSatisfy { !$0.unclear } == true)
+        #expect(kept?.flatMap(\.words) == Array(all.dropLast()))
+        // `--cors` takes one origin each time it is given, so the project folder after it stays a word.
+        #expect(Self.describe(opencode.cli.read(["--cors", "http://localhost:5173", "./web"])) == "plain:--cors=http://localhost:5173 \"./web\"")
+        #expect(opencode.cli.options["--prompt"]?.kind == .oneShot)
+    }
+
+    @Test func opencodesValuesAreCarriedOnlyWithinTheirPatterns() {
+        let cli = RestoreAgent.opencode.cli
+        let carried: [(String, String)] = [
+            ("--port", "4096"), ("--replay-limit", "200"), ("--hostname", "0.0.0.0"), ("--mdns-domain", "opencode.local"),
+            ("--log-level", "DEBUG"), ("--cors", "http://localhost:5173"),
+        ]
+        for (option, value) in carried {
+            #expect(cli.options[option]?.carries([value]) == true, "\(option) \(value)")
+        }
+        let refused: [(String, String)] = [("--port", "40a6"), ("--hostname", "a b"), ("--cors", "http://x;rm"), ("--log-level", "DEBUG;id")]
+        for (option, value) in refused {
+            #expect(cli.options[option]?.carries([value]) == false, "\(option) \(value)")
+        }
+        for flag in ["--mini", "--no-replay", "--print-logs", "--pure", "--mdns"] {
+            #expect(cli.options[flag]?.kind == .plain && cli.options[flag]?.values == AgentCLI.Values.none, "\(flag)")
+        }
+    }
+
+    /// OpenCode 2's npm package is OpenCode's own install, as OpenCode 1's is.
+    @Test func opencodesInstallsAreKnown() {
+        #expect(RestoreAgent.opencode.cli.pathHints == ["/node_modules/opencode-ai/", "/node_modules/@opencode/cli/"])
+        #expect(RestoreAgent.installed(at: ["/opt/homebrew/lib/node_modules/@opencode/cli/bin/opencode.exe"]) == .opencode)
+        #expect(RestoreAgent.installed(at: ["/usr/local/lib/node_modules/opencode-ai/bin/opencode"]) == .opencode)
+        #expect(RestoreAgent.installed(at: ["/Users/x/Code/opencode/bin/opencode"]) == nil)
+    }
+
+    /// Every name OpenCode runs by is OpenCode for the session list, and the session a package runner's line names is read.
+    @Test func opencodesNamesAndResumedIDs() {
+        for program in ["opencode", "opencode-ai", "opencode2", "opencode.exe"] {
+            #expect(AgentKind(program: program) == .opencode, "\(program)")
+        }
+        let lines = ["npx opencode-ai -s ses_X", "npx opencode-ai@latest --session ses_X", "bunx opencode-ai@1.19.0 --session=ses_X",
+                     "pnpm dlx opencode-ai -s ses_X", "npx @opencode/cli -s ses_X", "opencode2 -s ses_X", "env -u A opencode -s ses_X"]
+        for line in lines {
+            #expect(AgentKind.opencode.resumedID(in: line) == "ses_X", "\(line)")
+        }
+        #expect(AgentKind.opencode.resumedID(in: "npx opencode-ai -c") == nil)
+        #expect(AgentKind.claude.resumedID(in: "npx opencode-ai -s ses_X") == nil)
     }
 
     // MARK: the fixes made as the words moved in
@@ -466,7 +539,7 @@ import Testing
     /// The paste dialect each program gets (AgentPrompt) is the same for every name the table runs its agent by, so a name
     /// the table adds is not pasted to as another program.
     @Test func thePasteDialectIsTheSameForEveryNameOfAnAgent() {
-        let expected: [RestoreAgent: AgentDialect] = [.claude: .atHash, .opencode: .atHash, .copilot: .atColon, .gemini: .atProse,
+        let expected: [RestoreAgent: AgentDialect] = [.claude: .atHash, .opencode: .atRange, .copilot: .atColon, .gemini: .atProse,
                                                       .qwen: .atProse]
         for agent in RestoreAgent.allCases {
             let dialects: [AgentDialect] = agent.cli.programs.map(AgentDialect.forProgram)

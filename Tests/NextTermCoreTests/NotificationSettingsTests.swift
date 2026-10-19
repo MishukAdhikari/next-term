@@ -124,6 +124,24 @@ import Testing
         #expect(outside(s, login) && !inside(s, login))
     }
 
+    @Test func aFinishInTheAgentsOwnWordsShowsWhenEitherWould() {
+        // An agent's own notice ("Session error") that came as its turn ended rides on the finish (TabStatus): it shows
+        // when the finish would, and when the words alone would, so a threshold the turn misses never loses them.
+        var words = agentDone(after: 10)
+        words.message = "Session error"
+        var s = NotificationSettings()
+        s.threshold = .thirtySeconds
+        #expect(outside(s, words) && !inside(s, words) && words.topic == .agentFinished)
+        s.agentFinished = false
+        #expect(outside(s, words) && !inside(s, words))
+        s.programAlerts = false
+        #expect(!outside(s, words))
+        s.agentFinished = true
+        s.threshold = .fiveSeconds
+        #expect(outside(s, words) && inside(s, words))
+        #expect(!s.shouldNotify(words, appActive: false, tabVisible: true))
+    }
+
     @Test func soundIsOnlyASetting() {
         var s = NotificationSettings()
         s.sound = false
@@ -181,7 +199,7 @@ import Testing
         ssh.needsAttention()
         let login = ssh.takeNotice()
         #expect(login?.state == .attention && login?.topic == .otherAlert)
-        ssh.bell()
+        ssh.bell(at: 0)
         #expect(ssh.takeNotice() == nil) // already amber: one notice until it is seen
     }
 }

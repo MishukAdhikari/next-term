@@ -24,6 +24,16 @@ import Testing
         #expect(!CommitMessageAgent.prompt(recentSubjects: []).contains("recent commits"))
     }
 
+    /// OpenCode never writes the message: Next Term hasn't confirmed that it can run with no tools and no MCP
+    /// servers, and the changes must not reach an agent that could act on them. Installed and working in this
+    /// folder, it is still passed over.
+    @Test func openCodeIsNotAsked() {
+        #expect(!CommitMessageAgent.known.contains { $0.program == "opencode" || $0.name == "OpenCode" })
+        #expect(CommitMessageAgent.known.map(\.program) == ["claude", "codex", "gemini", "qwen"])
+        let installed: Set<String> = ["/a/opencode"]
+        #expect(CommitMessageAgent.find(preferring: ["opencode"], in: ["/a"], isExecutable: installed.contains) == nil)
+    }
+
     @Test func theAnswerCleaned() {
         #expect(CommitMessageAgent.message(from: "```\nFix the login\n\nBecause.\n```\n") == "Fix the login\n\nBecause.")
         #expect(CommitMessageAgent.message(from: "\u{1B}[1m\"Fix it\"\u{1B}[0m\n") == "Fix it")

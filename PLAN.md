@@ -28,7 +28,7 @@ Through 0.9.0, by release.
 |---|---|
 | 0.1.0 | Tabs with agent status in step with each agent's screen; decisions as notifications; dock badge; close and quit warnings; zsh integration; terminal security (OSC 52, DECRQCRA, paste, links). Projects and a sidebar with git status and +/− per file and folder; file operations with undo. The editor with syntax highlighting, soft wrap, find; Find/Replace in Files (regex, masks, preview, undo). `nxtrm`, layouts, ⋯ menus, every menu shortcut changeable, self-update from GitHub Releases (checksum-verified) |
 | 0.2.0 | Claude Code IDE link (live selection, @-mentions, proposed edits as diffs to accept or reject); Gemini CLI and Qwen Code IDE link (open files, selection), IDE mode on by default; side-by-side diffs (⌥⌘G) with stage/unstage/revert per hunk; Send to Agent (⌥⌘K) in each agent's syntax; 103 grammars; open-source file icons; line height and a Settings window; tabs that start without the launcher's session markers and secrets |
-| 0.3.0 | `nxtrm mcp`: projects and tabs with agent state, new tabs and agents, prompts, keys, waiting, reading screens, the editor; registered in Claude Code, Codex, Gemini, Qwen, Cursor, opencode, Copilot, Amp, Junie and Command Code. Split panes (⌘D, ⌘⇧D, ⌥⌘arrows, ⌘⇧↩). Go to File (⌘P). The website |
+| 0.3.0 | `nxtrm mcp`: projects and tabs with agent state, new tabs and agents, prompts, keys, waiting, reading screens, the editor; registered in Claude Code, Codex, Gemini, Qwen, Cursor, OpenCode, Copilot, Amp, Junie and Command Code. Split panes (⌘D, ⌘⇧D, ⌥⌘arrows, ⌘⇧↩). Go to File (⌘P). The website |
 | 0.4.0 | Claude Code, Codex and Command Code sessions per project (subfolders included) on the Welcome window and ⌥⌘O, resumed or forked in a tab in their folder, titles scrubbed of secrets; change marks in the gutter; the terminal folds away (⌘J); ⌘P starts from the selection |
 | 0.5.0 | Import from VS Code, Cursor, Devin Desktop, JetBrains IDEs, Zed and iTerm2, previewed and undone in one click; VS Code and JetBrains shortcut sets; the sidebar follows the open file |
 | 0.6.0 | Remote tabs over the system ssh (⌥⌘T), kept in tmux or herdr, with the same status marks and seven MCP tools for hosts; the update window (notes, Remind Me Later, Skip); deleted files keep their rows; each tab shows its shortcut; prompt placeholders, TOML and `.env` keys coloured; RAG platform keys scrubbed from titles and imports |
@@ -38,9 +38,12 @@ Through 0.9.0, by release.
 
 ## Next
 
-1. **More agents' sessions:** Gemini CLI and opencode first, then Copilot CLI and Cursor (formats in
+1. **More agents' sessions:** Gemini CLI first, then Copilot CLI and Cursor (formats in
    claudedocs/research_next-term-agent-sessions); a sessions group in the sidebar, "Continue latest", a
-   running badge for Codex, and "go to tab" for a session already open in Next Term.
+   running badge for Codex, and "go to tab" for a session already open in Next Term. (Done: OpenCode’s,
+   read from its `session` or `session_v2` table wherever `XDG_DATA_HOME` or `OPENCODE_DB` puts its store,
+   and the session a local OpenCode tab showed, matched by its title, put back on its line after an update
+   for Return to resume.)
 2. **A server's files in the editor and sidebar,** next to its remote tabs: SFTP over the shared ssh
    connection, then remote git, search and the IDE link; passwords and new host keys in a native sheet
    (an askpass helper, shared with git). Research: claudedocs/research_next-term-remote-dev.
@@ -50,9 +53,12 @@ Through 0.9.0, by release.
 
 Also next, in no fixed order:
 
-- **Agents:** tab status hints for Junie, opencode, Copilot CLI, Amp and Cursor; Claude Desktop and the
-  ChatGPT desktop app on the local MCP server. (Done for 0.10: the IDE link for Copilot CLI, and opencode's
-  through a peer-process check.)
+- **Agents:** tab status hints for Junie, Copilot CLI, Amp and Cursor; Claude Desktop and the ChatGPT
+  desktop app on the local MCP server. (Done for 0.10: the IDE link for Copilot CLI, and OpenCode’s
+  through a peer-process check. Done since: OpenCode’s status hints, its permission prompt and question
+  form read from its own screen as questions and answered by `answer_agent`, and its IDE link lines
+  counted from 1. Not done for OpenCode: proposed edits as diffs, the IDE link from tmux or a remote tab,
+  and resuming by itself after an update.)
 - **MCP:** tools that propose edits, change settings, commit and control panes, once there is a consent
   model.
 - **Git:** Delete on Remote, Checkout and Update, and Write with Agent in the branch popup; then

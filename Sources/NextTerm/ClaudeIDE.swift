@@ -17,7 +17,7 @@ import Security
 /// Nothing a client sends can write files: this end reports the selection, and shows proposed edits
 /// for the user to accept or reject (the CLI writes the file itself, after an accept).
 ///
-/// opencode speaks this protocol too, but from a Next Term tab it connects without the token. Such a
+/// OpenCode speaks this protocol too, but from a Next Term tab it connects without the token. Such a
 /// connection is kept only when the process holding it is opencode running in one of this app's tabs
 /// (IDEPeer), and then it only receives: the selection and @-mentions, no tools.
 final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `queue`
@@ -30,10 +30,12 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         var claudePid: pid_t?
         var ready = false
         var client = ""
-        /// Came in without the token, and passed the peer check (opencode in a tab).
+        /// Came in without the token, and passed the peer check (OpenCode in a tab).
         var tokenless = false
-        /// opencode, which never sends ide_connected (with or without the token).
+        /// OpenCode, which never sends ide_connected (with or without the token): named so in its handshake, or tokenless.
         var opencode = false
+        /// OpenCode: the last file whose selection it was sent, named again once the editor shows no file it may share.
+        var lastShared: String?
     }
 
     let token: String
@@ -85,11 +87,11 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
             let offered = protocols.map { $0.trimmingCharacters(in: .whitespaces) }
             // Browsers always send Origin (CVE-2025-52882).
             guard header("Origin").isEmpty else { return .init(status: .reject, subprotocol: nil) }
-            // opencode asks for no subprotocol, with the token or without it.
+            // OpenCode asks for no subprotocol, with the token or without it.
             let subprotocol = offered.contains("mcp") ? "mcp" : nil
             // A rejected handshake still reaches .ready: only connections bearing a nonce issued here count.
             let nonce = UUID().uuidString
-            // No token at all, as opencode in a tab connects: kept only if the peer check passes (.ready).
+            // No token at all, as OpenCode in a tab connects: kept only if the peer check passes (.ready).
             if auth.isEmpty {
                 peerNonces.insert(nonce)
                 return .init(status: .accept, subprotocol: subprotocol, additionalHeaders: [("X-Next-Term-Nonce", nonce)])
@@ -266,7 +268,7 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         guard let id = message["id"] else {
             // Notifications get no reply.
             if method == "notifications/initialized", sessions[client]?.ready == false, tokenless || sessions[client]?.opencode == true {
-                // opencode listens once it has said so. From a tab its pid is the one the peer check found;
+                // OpenCode listens once it has said so. From a tab its pid is the one the peer check found;
                 // started elsewhere (with the token) it has none, and follows the window in front.
                 sessions[client]?.ready = true
                 let pid = sessions[client]?.claudePid
@@ -289,7 +291,8 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
             let known = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
             let asked = params["protocolVersion"] as? String ?? ""
             sessions[client]?.client = ((params["clientInfo"] as? [String: Any])?["version"] as? String).map { "claude-code " + $0 } ?? ""
-            sessions[client]?.opencode = (params["clientInfo"] as? [String: Any])?["name"] as? String == "opencode"
+            let name = (params["clientInfo"] as? [String: Any])?["name"] as? String
+            sessions[client]?.opencode = IDELink.isOpencode(clientName: name, tokenless: tokenless)
             reply(connection, id, result: [
                 "protocolVersion": known.contains(asked) ? asked : "2025-06-18",
                 "capabilities": ["tools": ["listChanged": true]],
@@ -373,13 +376,26 @@ final class ClaudeIDEServer: @unchecked Sendable { // mutable state lives on `qu
         queue.sync { sessions.map { ($0.key, $0.value.claudePid, $0.value.ready) } }
     }
 
-    /// `selection_changed` / `at_mentioned` to these clients (nil: all ready clients).
+    /// `selection_changed` / `at_mentioned` to these clients (nil: all ready clients). OpenCode ignores the clearing
+    /// selection (no file, no text) and would keep the old lines: it is told the last file shared with it, with no text.
     func notify(_ method: String, _ params: [String: Any], to clients: Set<ClientID>? = nil) {
         queue.async {
             for (id, session) in self.sessions where session.ready && (clients?.contains(id) ?? true) {
-                self.send(["jsonrpc": "2.0", "method": method, "params": params], on: session.connection)
+                var sent = params
+                if session.opencode, method == "selection_changed" {
+                    guard let selection = IDELink.opencodeSelection(params, lastShared: session.lastShared) else { continue }
+                    self.sessions[id]?.lastShared = selection.lastShared
+                    sent = selection.params
+                }
+                self.send(["jsonrpc": "2.0", "method": method, "params": sent], on: session.connection)
             }
         }
+    }
+
+    /// Whether `client` is OpenCode (named so in its handshake, or in without the token: IDELink.isOpencode). It counts a
+    /// mention's lines from 1 and takes none without lines (IDELink.mention).
+    func isOpencode(_ client: ClientID) -> Bool {
+        queue.sync { sessions[client]?.opencode ?? false }
     }
 
     private func reply(_ connection: NWConnection, _ id: Any, result: [String: Any]? = nil, error: [String: Any]? = nil) {

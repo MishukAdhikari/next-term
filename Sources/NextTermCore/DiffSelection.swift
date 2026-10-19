@@ -202,7 +202,7 @@ public enum DiffSelections {
 }
 
 /// Lines selected in one file's diff, with what is known of the file: what the editor link tells the agents in
-/// the window of them (Claude Code's and opencode's selection_changed, Gemini CLI's and Qwen Code's open files,
+/// the window of them (Claude Code's and OpenCode's selection_changed, Gemini CLI's and Qwen Code's open files,
 /// Copilot CLI's selection) and what Send to Agent types for them. The app speaks each agent's protocol.
 public struct DiffShare: Equatable, Sendable {
     /// What the diff compares the lines with, for what Send to Agent says about them.

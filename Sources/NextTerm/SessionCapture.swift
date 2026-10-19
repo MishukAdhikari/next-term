@@ -83,7 +83,7 @@ enum SessionCapture {
             if status.running && !tab.exited {
                 pane.agent = ProcessInspector.agentEvidence(ptyFileDescriptor: tab.view.process.childfd,
                                                             shellPid: tab.view.process.shellPid, status: status,
-                                                            home: RestorePlanning.agentHome)
+                                                            home: RestorePlanning.agentHome, shownSession: tab.shownSessionID)
             }
         }
         return pane

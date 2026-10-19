@@ -29,6 +29,27 @@ import Testing
         #expect(segs == ["Why? @a.go:3-9 (as staged) "])
     }
 
+    /// OpenCode's own form, the one its @ autocomplete writes: `@path#42-58`, `@path#42`, digits only.
+    @Test func opencodeReferences() {
+        #expect(AgentDialect.forProgram("opencode") == .atRange)
+        #expect(AgentPrompt.reference(ContextItem(path: "src/a.ts", lines: 42...58), dialect: .atRange) == "@src/a.ts#42-58")
+        #expect(AgentPrompt.reference(ContextItem(path: "src/a.ts", lines: 42...42), dialect: .atRange) == "@src/a.ts#42")
+        #expect(AgentPrompt.reference(ContextItem(path: "src/a.ts"), dialect: .atRange) == "@src/a.ts")
+        #expect(AgentPrompt.reference(ContextItem(path: "src", isFolder: true), dialect: .atRange) == "@src/")
+        #expect(AgentPrompt.reference(ContextItem(path: "src/", isFolder: true), dialect: .atRange) == "@src/")
+        // A path with spaces is quoted, its lines in prose, as for Claude Code.
+        #expect(AgentPrompt.reference(ContextItem(path: "my file.ts", lines: 3...4), dialect: .atRange) == "@\"my file.ts\" (lines 3-4)")
+        let segs = AgentPrompt.segments(instruction: "Why?", items: [ContextItem(path: "a.go", lines: 3...9, note: "as staged"),
+                                                                     ContextItem(path: "b.go")], dialect: .atRange)
+        #expect(segs == ["Why? @a.go#3-9 (as staged) @b.go "])
+        // Claude Code's form is unchanged.
+        #expect(AgentPrompt.reference(ContextItem(path: "src/a.ts", lines: 42...58), dialect: .atHash) == "@src/a.ts#L42-58")
+        #expect(AgentDialect.forProgram("claude") == .atHash)
+        // OpenCode expands what it collapses: no instruction is too long to type.
+        #expect(AgentPrompt.fitsInline(String(repeating: "x", count: 801), dialect: .atRange))
+        #expect(AgentPrompt.fitsInline("a\nb\nc\nd", dialect: .atRange))
+    }
+
     @Test func claudeSegmentsMatchTheSpec() {
         let segs = AgentPrompt.segments(instruction: "Refactor this to use async/await",
                                         items: [ContextItem(path: "src/auth/login.ts", lines: 42...58)], dialect: .atHash)
