@@ -48,8 +48,31 @@ import Testing
         #expect(Self.click { $0.selection = IndexSet(integer: 2) } == .selectOnly)
     }
 
-    @Test func foldersDeletedEntriesDatabasesAndTheRootOnlySelect() {
-        for kind in [SidebarClick.Row.folder, .root, .deleted, .database, .other] {
+    @Test func aPlainClickOnAFolderOrADeletedFolderOpensOrClosesIt() {
+        #expect(Self.click { $0.kind = .folder } == .toggle)
+        #expect(Self.click { $0.kind = .deletedFolder } == .toggle)
+    }
+
+    /// The same guards as a file's: anything but one plain click on the folder alone only selects it.
+    @Test func aFolderOnlySelectsOnAModifiedClickADragARenameOrSeveralRows() {
+        func folder(_ change: @escaping (inout SidebarClick.Click) -> Void) -> SidebarClick.Outcome {
+            Self.click { $0.kind = .folder; change(&$0) }
+        }
+        #expect(folder { $0.command = true } == .selectOnly)
+        #expect(folder { $0.shift = true } == .selectOnly)
+        #expect(folder { $0.option = true } == .selectOnly)
+        #expect(folder { $0.control = true } == .selectOnly)
+        #expect(folder { $0.clickCount = 2 } == .selectOnly)
+        #expect(folder { $0.isMouseUp = false } == .selectOnly)
+        #expect(folder { $0.dragBegan = true } == .selectOnly)
+        #expect(folder { $0.wasRenaming = true } == .selectOnly)
+        #expect(folder { $0.mouseDownRow = 2 } == .selectOnly)
+        #expect(folder { $0.row = -1; $0.mouseDownRow = -1; $0.selection = [] } == .selectOnly)
+        #expect(folder { $0.selection = IndexSet([2, 3]) } == .selectOnly)
+    }
+
+    @Test func theRootDeletedFilesDatabasesServicesAndOtherRowsOnlySelect() {
+        for kind in [SidebarClick.Row.root, .deleted, .database, .service, .other] {
             #expect(Self.click { $0.kind = kind } == .selectOnly, "\(kind)")
         }
     }
