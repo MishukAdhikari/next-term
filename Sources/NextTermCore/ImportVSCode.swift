@@ -61,7 +61,12 @@ public enum ImportVSCode {
         let keymap = keymapRows(installed, vimSettings: settings.vimSettings, preset: plan.preset)
         plan.preset = keymap.preset
         plan.skipped = keymap.skipped + settings.skipped + keys.skipped + neverImportedFiles(user: app.configPath)
-        if let folders = settings.folderClick { plan.noteFolderClick(folders.single, source: folders.source) }
+        if let folders = settings.folderClick {
+            plan.noteFolderClick(folders.single, source: folders.source)
+        } else if !settings.clickUnknown {
+            // workbench.tree.expandMode not set: the app opens folders with a single click, whatever its file click.
+            plan.noteFolderClick(true, source: "\(expandModeKey) (not set: singleClick)")
+        }
         let profiles = otherProfiles(user: app.configPath)
         if profiles > 0 {
             plan.skipped.append(SkippedItem(counted(profiles, "other profile"), "only the default profile is read; other profiles: choose in a later version"))

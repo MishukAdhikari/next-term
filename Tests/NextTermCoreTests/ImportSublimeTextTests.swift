@@ -341,6 +341,10 @@ import Testing
         #expect(clickRows(try clickPlan(nil)) == [fallback], "no Preferences file: every setting is Sublime Text's default")
         #expect(clickRows(try clickPlan("// only comments\n")) == [fallback])
         #expect(try clickPlan(#"{"preview_on_click": false}"#).settings.map(\.setting) == [.sidebarSingleClick(false)])
+        // Its sidebar opens folders with a single click whatever preview_on_click says: said when files take a double click.
+        let folders = SkippedItem("Sublime Text's sidebar folders", "Next Term opens folders with the same click as files")
+        #expect(try clickPlan(#"{"preview_on_click": false}"#).skipped.contains(folders))
+        #expect(!(try clickPlan(#"{"preview_on_click": true}"#)).skipped.contains(folders))
         #expect(clickRows(try clickPlan(#"{"preview_on_click": "only_left"}"#))
                 == [PlannedSetting(.sidebarSingleClick(true), source: "preview_on_click only_left")])
         #expect(clickRows(try clickPlan(#"{"preview_on_click": true}"#)).map(\.source) == ["preview_on_click true"])

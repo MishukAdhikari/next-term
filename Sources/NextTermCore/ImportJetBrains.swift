@@ -526,6 +526,9 @@ public enum ImportJetBrains {
         }
         if let folders = flag(view, viewFile, "openDirectoriesWithSingleClick") {
             plan.noteFolderClick(folders, source: "\(viewFile) openDirectoriesWithSingleClick \(folders)")
+        } else if !unknown {
+            // Not set: JetBrains IDEs open a folder with a double click, whatever their file click.
+            plan.noteFolderClick(false, source: "\(viewFile) openDirectoriesWithSingleClick (not set: false)")
         }
         addRedacted(view, file: viewFile, to: &plan)
         addRedacted(ui, file: uiFile, to: &plan)

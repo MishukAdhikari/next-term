@@ -93,6 +93,8 @@ public enum ImportSublimeText {
         let clickKnown = addSettings(data: data, fonts: fonts, trimsChangedOnly: !three, to: &plan)
         // preview_on_click not set (or no Preferences file): Sublime Text's own default.
         if clickKnown { plan.addSingleClickDefault(for: app.kind, source: "preview_on_click (not set: true)", note: "\(app.name)'s default") }
+        // Its sidebar opens a folder with a single click, whatever preview_on_click says.
+        plan.noteFolderClick(true, source: "\(app.name)'s sidebar folders")
         addKeys(data: data, usKeyboard: usKeyboard, to: &plan)
         let recents = recentProjects(data: data, home: home)
         plan.recentProjects = recents.paths

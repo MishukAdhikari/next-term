@@ -175,6 +175,22 @@ extension ImportPlan {
         #expect(clickRows(try jetBrains(["options/projectView.xml": "\u{0}not xml"])).isEmpty)
     }
 
+    /// The folder click is compared with the editor's own folder default too: VS Code's expandMode is a single click,
+    /// JetBrains' openDirectoriesWithSingleClick off, unless set.
+    @Test func aFolderDefaultThatDiffersFromTheFileClickIsReported() throws {
+        let same = "Next Term opens folders with the same click as files"
+        let vsDouble = try vsCode(#"{"workbench.list.openMode": "doubleClick"}"#)
+        #expect(vsDouble.singleClick == false && vsDouble.skipped.contains(SkippedItem("workbench.tree.expandMode (not set: singleClick)", same)))
+        #expect(!(try vsCode("{}")).skipped.contains { $0.item.contains("expandMode") }, "single clicks for both: nothing to say")
+        let jbSingle = try jetBrains(projectView([("autoscrollToSource", "true")]))
+        #expect(jbSingle.singleClick == true
+                && jbSingle.skipped.contains(SkippedItem("options/projectView.xml openDirectoriesWithSingleClick (not set: false)", same)))
+        #expect(!(try jetBrains([:])).skipped.contains { $0.item.contains("openDirectoriesWithSingleClick") }, "double clicks for both")
+        #expect(clickRows(try jetBrains(["options/projectView.xml": "\u{0}not xml"])).isEmpty)
+        #expect(!(try jetBrains(["options/projectView.xml": "\u{0}not xml"])).skipped.contains { $0.item.contains("(not set: false)") },
+                "a file that couldn't be read assumes no folder default either")
+    }
+
     // MARK: terminals and files
 
     @Test func terminalsLeaveTheClickAlone() {
