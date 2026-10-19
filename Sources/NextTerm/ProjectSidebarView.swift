@@ -1213,6 +1213,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// A double-click. On a folder (a deleted one too) it opens or closes it, unless its first click already did
     /// (single clicks on): a second toggle would undo the first, and nothing would seem to happen.
     @objc private func doubleClicked() {
+        // Its first click opened or closed a folder (single clicks on), and the rows moved under the pointer as it did
+        // (a folder closing at the end of a scrolled tree): the second press is on another row, which it must not open.
+        // The double-click is done; the folder keeps the selection.
+        if let toggled = clickToggled, outline.presses == toggled.press + 1,
+           (toggled.item as? FileNode)?.isDirectory == true || (toggled.item as? DeletedEntry)?.isDirectory == true,
+           outline.item(atRow: outline.clickedRow) as AnyObject? !== toggled.item {
+            clickToggled = nil
+            let row = outline.row(forItem: toggled.item)
+            if row >= 0 { outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+            return
+        }
         if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {
             return openDeleted(entry, clickToggled: takeClickToggle(of: entry))
         }

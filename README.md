@@ -17,8 +17,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
   a notification says so with the question; click it to land on that tab. Works however you start the
   agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
-- **Code editor.** Click a file once in the sidebar (on new installs; with that setting off, double-click),
-  pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in any output: the file opens above the terminal at that line, coloured by
+- **Code editor.** Click a file once in the sidebar (Settings › Editor › Open files and folders with a single
+  click, on for new installs; off, double-click), pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in
+  any output: the file opens above the terminal at that line, coloured by
   112 TextMate grammars, the kind VS Code uses: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep

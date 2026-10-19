@@ -438,6 +438,20 @@ extension SelfTest {
               "open after the first \(stayedOpen), closed after the second \(stayedClosed)")
         invariant("folder double-click")
 
+        // A folder closing can move the rows under the pointer (at the end of a scrolled tree), so the double-click's
+        // second press lands on another row: it opens nothing there, and the folder keeps the selection.
+        clickRow(c, sub)
+        _ = await wait(3) { outline.isItemExpanded(subNode) }
+        if let other = files.first {
+            clickRow(c, sub)
+            clickRow(c, other, count: 2)
+            await pause(0.4)
+            check(!outline.isItemExpanded(subNode) && area.panes.isEmpty && isSelection(c, sub),
+                  "a double-click whose second press lands on another row, the rows moved as the folder closed, opens nothing there",
+                  "open \(outline.isItemExpanded(subNode)), \(area.panes.count) tabs, folder selected \(isSelection(c, sub))")
+            invariant("moved double-click")
+        }
+
         // A folder the tree has not read yet opens once it has been read.
         let later = folder.appendingPathComponent("later")
         if let laterNode = sidebarNode(c, later) {
