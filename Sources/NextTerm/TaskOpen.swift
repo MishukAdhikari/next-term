@@ -52,6 +52,16 @@ enum TaskOpen {
         }
     }
 
+    /// A tracker's or an agent's own help page, in the browser, on the user's click. It carries no task, so it isn't a
+    /// task link; it is checked as any web link is, and records only during the self-test.
+    static func openPage(_ url: URL, from window: NSWindow?) {
+        guard url.scheme == "https", SafeWebLink.isAllowed(url) else { return NSSound.beep() }
+        #if DEBUG
+        if recordsOnly { return opened.append(url) }
+        #endif
+        WebLinks.open(url, from: window)
+    }
+
     /// The app is installed: the app that would open its links is the vendor's own. Nothing is launched to ask. A page
     /// needs no app.
     static func installed(_ kind: TaskLink.Kind) -> Bool {

@@ -5,8 +5,8 @@ import NextTermCore
 /// Tasks, end to end: the Tasks menu after Agents with Add Task… on ⌃⌘T; the sheet filled from a terminal selection, the
 /// bytes it writes as TodoFile renders them, its notice's Undo, and a second add within a minute; add_task through
 /// `nxtrm mcp` (Approve, Decline, no answer, a stored key shown as •••, a day it can't read, no project, a worktree
-/// window); Settings › Tasks right before Secrets; Reminders with an in-memory store, never the user's own; and Run a
-/// Shortcut with a fake runner, which starts no command.
+/// window); Settings › Tasks right before Secrets; Reminders with an in-memory store, never the user's own; Run a
+/// Shortcut with a fake runner, which starts no command; and Connect a Tracker, whose lines are typed and never run.
 /// Everything goes to the self-test project's own todo folder, or to a repository of the part's own, and is removed
 /// after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
 extension SelfTest {
@@ -46,6 +46,7 @@ extension SelfTest {
         await destinationSheetChecks(c)
         await sendTasksToChecks(c, other: given)
         await addTaskDestinationChecks(c, proj: proj, folder: folder)
+        await connectTrackerChecks(c)
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
@@ -55,6 +56,8 @@ extension SelfTest {
         note("destinations: skipped in a release build; its checks run in a debug build")
         note("send to: skipped in a release build; its checks run in a debug build")
         note("add_task destinations: skipped in a release build; its checks run in a debug build")
+        // Its page links and PATH record only in a debug build, so a release build never opens a page.
+        note("connect a tracker: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
@@ -70,8 +73,10 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let menu = bar.first(where: { $0.title == "Tasks" })?.submenu else { return check(false, "tasks: the menu bar has Tasks") }
         let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        check(titles == ["Add Task…", "Show Todo Folder", "—", "Send Tasks To", "Task Settings…"],
-              "tasks: Add Task…, Show Todo Folder, Send Tasks To, then Task Settings…", titles.joined(separator: " | "))
+        let expected: [String] = ["Add Task…", "Show Todo Folder", "—", "Send Tasks To", "Connect a Tracker to Your Agents…",
+                                  "Task Settings…"]
+        check(titles == expected, "tasks: Add Task…, Show Todo Folder, Send Tasks To, Connect a Tracker, then Task Settings…",
+              titles.joined(separator: " | "))
         // Send Tasks To ▸ is filled when it opens, so no destination is a command with a key.
         let sendTo = menu.items.first { $0.title == "Send Tasks To" }
         let listed = KeyboardShortcuts.shared.commands.contains { $0.path.hasPrefix("Tasks › Send Tasks To") }

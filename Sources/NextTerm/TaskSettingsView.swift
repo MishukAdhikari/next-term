@@ -59,6 +59,9 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
         let format = NSButton(title: "Format…", target: self, action: #selector(openFormat))
         format.bezelStyle = .inline
         format.toolTip = Self.docsURL.absoluteString
+        let connect = NSButton(title: "Connect a Tracker…", target: self, action: #selector(connectTracker))
+        connect.bezelStyle = .rounded
+        connect.toolTip = "Your agent’s own command to add a tracker’s MCP server, typed into a new tab for you to run."
         let note = NSTextField(wrappingLabelWithString: "Tasks are Markdown files your agents can read: one per task, with - [ ] lines, "
             + "named by the day they were added. Next Term never edits .gitignore: add the folder to it to keep tasks out of git, "
             + "or commit them to share them.")
@@ -73,6 +76,7 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
             row("New tasks:", [includeContext]),
             note,
             format,
+            connect,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -190,6 +194,8 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
             NSSound.beep()
         }
     }
+
+    @objc private func connectTracker() { ConnectTrackerSheet.present(over: window) }
 
     @objc private func openFormat() { NSWorkspace.shared.open(Self.docsURL) }
 }

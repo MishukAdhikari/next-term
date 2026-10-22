@@ -38,7 +38,10 @@ final class AddTaskDestinationViews {
         agent.autoenablesItems = false
         agent.setAccessibilityLabel("Agent tab")
         agent.toolTip = "The agent tab the request is typed into, with no Return. Only a tab that is ready can be chosen."
-        agentRow = NSStackView(views: [NSTextField(labelWithString: "Agent tab:"), agent])
+        let connect = NSButton(title: "Connect a Tracker…", target: TasksMenu.shared, action: #selector(TasksMenu.connectTracker(_:)))
+        connect.bezelStyle = .inline
+        connect.toolTip = "Your agent’s own command to add the tracker’s MCP server, typed into a new tab for you to run."
+        agentRow = NSStackView(views: [NSTextField(labelWithString: "Agent tab:"), agent, connect])
         agentRow.spacing = 8
         agentRow.isHidden = true
 
