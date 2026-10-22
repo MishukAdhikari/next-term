@@ -41,6 +41,9 @@ extension SelfTest {
         taskSettingsChecks()
         #if DEBUG
         await remindersChecks(c)
+        #else
+        // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
+        note("reminders: skipped in a release build; its checks run in a debug build")
         #endif
     }
 

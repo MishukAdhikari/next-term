@@ -90,6 +90,50 @@ import Testing
         #expect(Access.withList(.todoFolder, id: "L2") == nil)
     }
 
+    // MARK: saving the list's id back
+
+    @Test func aProjectsOwnDestinationGetsTheId() {
+        let old = TaskDestination.reminders(listID: nil, listName: "Next Term")
+        var settings = TaskSettings()
+        settings.defaultDestination = old
+        settings.projects["/work/app"] = ProjectTasks(destination: old)
+        let save = Access.savingListID("L2", replacing: old, project: "/work/app", in: settings)
+        // The project's own destination, never the default, even when the two are equal.
+        #expect(save == .project("/work/app", .reminders(listID: "L2", listName: "Next Term")))
+    }
+
+    @Test func withoutItsOwnTheDefaultGetsTheId() {
+        let old = TaskDestination.reminders(listID: "gone", listName: "Next Term")
+        var settings = TaskSettings()
+        settings.defaultDestination = old
+        let new = TaskDestination.reminders(listID: "L2", listName: "Next Term")
+        #expect(Access.savingListID("L2", replacing: old, project: "/work/app", in: settings) == .defaultDestination(new))
+        #expect(Access.savingListID("L2", replacing: old, project: nil, in: settings) == .defaultDestination(new))
+    }
+
+    @Test func aDestinationChangedMeanwhileIsLeft() {
+        let old = TaskDestination.reminders(listID: nil, listName: "Next Term")
+        var settings = TaskSettings()
+        settings.defaultDestination = old
+        // The project now has its own place: the default the task came from is not rewritten behind it.
+        settings.projects["/work/app"] = ProjectTasks(destination: .todoFolder)
+        #expect(Access.savingListID("L2", replacing: old, project: "/work/app", in: settings) == nil)
+        settings.projects = [:]
+        settings.defaultDestination = .reminders(listID: nil, listName: "Work")
+        #expect(Access.savingListID("L2", replacing: old, project: "/work/app", in: settings) == nil)
+        settings.defaultDestination = nil
+        #expect(Access.savingListID("L2", replacing: old, project: nil, in: settings) == nil)
+    }
+
+    @Test func anIdAlreadySavedOrAnotherKindSavesNothing() {
+        let kept = TaskDestination.reminders(listID: "L2", listName: "Next Term")
+        var settings = TaskSettings()
+        settings.defaultDestination = kept
+        #expect(Access.savingListID("L2", replacing: kept, project: nil, in: settings) == nil)
+        settings.defaultDestination = .todoFolder
+        #expect(Access.savingListID("L2", replacing: .todoFolder, project: nil, in: settings) == nil)
+    }
+
     // MARK: the alert
 
     var calendar: Calendar {

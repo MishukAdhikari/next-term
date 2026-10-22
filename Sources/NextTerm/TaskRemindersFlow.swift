@@ -18,9 +18,10 @@ enum TaskReminders {
 
     static let couldntAdd = "Couldn’t add the reminder. Nothing was saved."
     static let deniedNow = "Reminders wasn’t allowed. Nothing was saved."
+    static let couldntRemove = "Couldn’t remove the reminder."
 
     nonisolated(unsafe) private static var real: RemindersStore?
-    private static let queue = DispatchQueue(label: "nextterm.tasks.reminders", qos: .userInitiated)
+    nonisolated private static let queue = DispatchQueue(label: "nextterm.tasks.reminders", qos: .userInitiated)
 
     /// The store, made on first use: never at launch, so nothing reaches EventKit before the user picks Reminders.
     static var store: RemindersStore {
@@ -59,11 +60,15 @@ enum TaskReminders {
                 guard go else { return done(.notNow) }
                 queue.async {
                     store.request(how) { granted in
-                        DispatchQueue.main.async {
-                            MainActor.assumeIsolated {
-                                if granted { return done(nil) }
-                                RemindersSheets.blocked(RemindersAccess.deniedLine, settings: true, in: window)
-                                done(.failed(deniedNow))
+                        queue.async {
+                            // The store starts afresh before the Add that follows reads any list.
+                            if granted { store.refresh() }
+                            DispatchQueue.main.async {
+                                MainActor.assumeIsolated {
+                                    if granted { return done(nil) }
+                                    RemindersSheets.blocked(RemindersAccess.deniedLine, settings: true, in: window)
+                                    done(.failed(deniedNow))
+                                }
                             }
                         }
                     }
@@ -100,7 +105,8 @@ enum TaskReminders {
 }
 
 extension TaskReminders {
-    /// One task to add: the rendered reminder, its destination and the project's key for the record.
+    /// One task to add: the rendered reminder, its destination and the project's key, for the record and for saving
+    /// the list's id back. A project's path, a worktree's too, is turned into its key here.
     struct Task {
         let title: String
         let notes: String
@@ -116,7 +122,7 @@ extension TaskReminders {
             self.notes = notes
             self.due = due
             self.destination = destination
-            self.project = project
+            self.project = project.map(TaskSettings.projectKey)
         }
     }
 
@@ -156,8 +162,9 @@ extension TaskReminders {
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let id else { return done(.failed(couldntAdd)) }
+                    // Kept even when the reminder couldn't be saved: a list just made is then used again, not made twice.
                     if saveID && list == nil { saveListID(target.id, replacing: task.destination, project: task.project) }
+                    guard let id else { return done(.failed(couldntAdd)) }
                     let saved = RemindersAccess.Saved(title: task.title, notes: task.notes, due: task.due)
                     offerUndo(id, saved: saved, in: window)
                     done(.added(id: id, list: target.id))
@@ -218,7 +225,7 @@ extension TaskReminders {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     if case .keep(let line) = decision { return GitToast.show(line, in: window) }
-                    if decision == .remove && !removed { GitToast.show("Couldn’t remove the reminder.", in: window) }
+                    if decision == .remove && !removed { GitToast.show(couldntRemove, in: window) }
                 }
             }
         }
@@ -226,17 +233,21 @@ extension TaskReminders {
 
     /// The list's id, found by name or made, saved into the destination it came from (the project's own, or the
     /// default), so the list is found by id from now on even when renamed. A destination changed meanwhile is left.
+    /// `project` is the project's key.
     static func saveListID(_ id: String, replacing old: TaskDestination, project: String?) {
-        guard let new = RemindersAccess.withList(old, id: id), new != old else { return }
         let defaults = UserDefaults.standard
         var settings = TaskSettings(defaults: defaults)
-        if let project, settings.projects[project]?.destination == old {
-            settings.projects[project]?.destination = new
+        let save = RemindersAccess.savingListID(id, replacing: old, project: project, in: settings)
+        switch save {
+        case .project(let key, let new):
+            settings.projects[key]?.destination = new
             if let json = TaskSettings.json(projects: settings.projects) {
                 defaults.set(json, forKey: TaskSettings.Key.projects)
             }
-        } else if settings.defaultDestination == old, let json = TaskDestination.json(new) {
-            defaults.set(json, forKey: TaskSettings.Key.defaultDestination)
+        case .defaultDestination(let new):
+            if let json = TaskDestination.json(new) { defaults.set(json, forKey: TaskSettings.Key.defaultDestination) }
+        case nil:
+            break
         }
     }
 
@@ -244,5 +255,9 @@ extension TaskReminders {
     /// The self-test's store and macOS version: set, no call reaches EventKit or the user's Reminders.
     nonisolated(unsafe) static var fake: FakeRemindersStore?
     nonisolated(unsafe) static var fakeOS: Int?
+
+    /// Runs `body` on the store's queue once it is idle, so the self-test reads and changes its fake store without
+    /// racing a step still running there.
+    nonisolated static func quiet<T>(_ body: () -> T) -> T { queue.sync(execute: body) }
     #endif
 }

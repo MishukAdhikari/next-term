@@ -3,12 +3,14 @@ import Foundation
 import NextTermCore
 
 /// What Next Term asks of Reminders, and nothing more: the permission, the names and ids of the lists, a new list, one
-/// new reminder, and the reminders it added, by id, for Undo. It never fetches other reminders. Called only on
-/// `TaskReminders`' serial queue.
+/// new reminder, and the reminders it added, by id, for Undo. It never fetches other reminders. Called on
+/// `TaskReminders`' serial queue, except `status`, which reads only the permission and may be called anywhere.
 protocol RemindersStore: AnyObject, Sendable {
     func status() -> RemindersAccess.Status
     /// Asks macOS; `done` gets whether access was given, on any thread.
     func request(_ how: RemindersAccess.Request, done: @escaping @Sendable (Bool) -> Void)
+    /// After access is given: a store made before it can see no lists and no default list until it starts afresh.
+    func refresh()
     func lists() -> [RemindersAccess.List]
     /// The list new reminders go to by the user's choice in Reminders.
     func defaultList() -> RemindersAccess.List?
@@ -24,6 +26,9 @@ final class EventKitRemindersStore: RemindersStore, @unchecked Sendable {
     struct Failed: Error {}
 
     private lazy var store = EKEventStore()
+
+    /// A new store, since the one that asked was made before access was given.
+    func refresh() { store = EKEventStore() }
 
     func status() -> RemindersAccess.Status {
         // By number, so one switch reads on macOS 13 and 14 alike: 3 is "authorized" before 14, "full access" from it.
@@ -107,7 +112,12 @@ final class FakeRemindersStore: RemindersStore, @unchecked Sendable {
     private(set) var asked: [RemindersAccess.Request] = []
     var allLists: [RemindersAccess.List]
     var canMakeLists = true
+    var canAdd = true
+    var canRemove = true
     var items: [String: Item] = [:]
+    /// How often the store started afresh, and how often the lists were read.
+    private(set) var refreshed = 0
+    private(set) var reads = 0
     private var next = 0
 
     init(status: RemindersAccess.Status = .fullAccess, lists: [RemindersAccess.List] = []) {
@@ -123,8 +133,17 @@ final class FakeRemindersStore: RemindersStore, @unchecked Sendable {
         done(grants)
     }
 
-    func lists() -> [RemindersAccess.List] { allLists }
-    func defaultList() -> RemindersAccess.List? { allLists.first }
+    func refresh() { refreshed += 1 }
+
+    func lists() -> [RemindersAccess.List] {
+        reads += 1
+        return allLists
+    }
+
+    func defaultList() -> RemindersAccess.List? {
+        reads += 1
+        return allLists.first
+    }
 
     func makeList(_ title: String) throws -> RemindersAccess.List {
         guard canMakeLists else { throw Failed() }
@@ -135,7 +154,7 @@ final class FakeRemindersStore: RemindersStore, @unchecked Sendable {
     }
 
     func add(title: String, notes: String, due: DateComponents?, alarm: Date?, list: String) throws -> String {
-        guard allLists.contains(where: { $0.id == list }) else { throw Failed() }
+        guard canAdd, allLists.contains(where: { $0.id == list }) else { throw Failed() }
         next += 1
         let id = "fake-reminder-\(next)"
         items[id] = Item(title: title, notes: notes, due: due, alarm: alarm, list: list)
@@ -148,6 +167,9 @@ final class FakeRemindersStore: RemindersStore, @unchecked Sendable {
         return RemindersAccess.Found(title: item.title, notes: notes, due: item.due, completed: item.completed)
     }
 
-    func remove(_ id: String) throws { items[id] = nil }
+    func remove(_ id: String) throws {
+        guard canRemove else { throw Failed() }
+        items[id] = nil
+    }
 }
 #endif

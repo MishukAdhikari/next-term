@@ -5,7 +5,9 @@ import NextTermCore
 /// Reminders with the in-memory store only, so no check reaches EventKit or the user's own reminders: the explanation
 /// before macOS asks, the list found or made and its id saved back, one all-day reminder with its alert, the posted
 /// record, Undo while unchanged and not after an edit, a refusal that saves nothing, Not Now, and the default list
-/// offered when the list can't be made. Called from `tasksChecks`, which puts the Tasks settings back after.
+/// offered when the list can't be made. The fake store is read and changed only through `TaskReminders.quiet`, so no
+/// check races a step still running on the store's queue. Called from `tasksChecks`, which puts the Tasks settings
+/// back after.
 extension SelfTest {
     static func remindersChecks(_ c: TerminalWindowController) async {
         let fake = FakeRemindersStore(status: .notDetermined, lists: [RemindersAccess.List(id: "home", title: "Home")])
@@ -38,11 +40,13 @@ extension SelfTest {
         guard case .added(let id, let list) = first else {
             return check(false, "reminders: Add saves a reminder after the explanation", "\(first)")
         }
-        check(RemindersSheets.shown == [RemindersAccess.explanation] && fake.asked == [.fullAccess],
-              "reminders: Next Term explains first, then macOS is asked once for full access", "\(fake.asked)")
-        let made = fake.allLists.first { $0.id == list }
-        check(made?.title == "Next Term" && fake.allLists.count == 2, "reminders: the list “Next Term” is made on first Add")
-        let item = fake.items[id]
+        let (asked, refreshed) = TaskReminders.quiet { (fake.asked, fake.refreshed) }
+        let (allLists, item) = TaskReminders.quiet { (fake.allLists, fake.items[id]) }
+        check(RemindersSheets.shown == [RemindersAccess.explanation] && asked == [.fullAccess],
+              "reminders: Next Term explains first, then macOS is asked once for full access", "\(asked)")
+        check(refreshed == 1, "reminders: the store starts afresh once access is given, before it reads a list")
+        let made = allLists.first { $0.id == list }
+        check(made?.title == "Next Term" && allLists.count == 2, "reminders: the list “Next Term” is made on first Add")
         let due = DateComponents(year: tomorrow.year, month: tomorrow.month, day: tomorrow.day)
         check(item?.title == task.title && item?.notes == task.notes && item?.due == due,
               "reminders: one all-day reminder with the rendered title, notes and day", "\(String(describing: item))")
@@ -58,6 +62,7 @@ extension SelfTest {
         check(recorded, "reminders: the posted record holds the reminder’s id")
 
         await undoChecks(id: id, task: task, fake: fake, window: window)
+        await failureChecks(task: task, fake: fake, window: window)
         await refusalChecks(task: task, fake: fake, window: window)
     }
 
@@ -71,6 +76,12 @@ extension SelfTest {
     private static func add(_ task: TaskReminders.Task, _ window: NSWindow?) async -> TaskReminders.Outcome {
         await withCheckedContinuation { continuation in
             TaskReminders.add(task, from: window) { continuation.resume(returning: $0) }
+        }
+    }
+
+    private static func lists() async -> [RemindersAccess.List] {
+        await withCheckedContinuation { continuation in
+            TaskReminders.lists { continuation.resume(returning: $0) }
         }
     }
 
@@ -97,45 +108,59 @@ extension SelfTest {
                                    window: NSWindow?) async {
         let saved = RemindersAccess.Saved(title: task.title, notes: task.notes, due: task.due)
         TaskReminders.undo(id, saved: saved, in: window)
-        let removed = await wait(3) { fake.items[id] == nil }
+        let removed = await wait(3) { TaskReminders.quiet { fake.items[id] == nil } }
         check(removed, "reminders: Undo removes the unchanged reminder")
         let forgotten = await !recordHolds(id)
         check(forgotten, "reminders: and the record forgets it")
 
         let second = await add(task, window)
         guard case .added(let next, _) = second else { return check(false, "reminders: a second Add saves", "\(second)") }
-        check(fake.asked.count == 1 && fake.allLists.count == 2, "reminders: no second question and no second list")
-        fake.items[next]?.title = task.title + " (edited)"
+        let once = TaskReminders.quiet { fake.asked.count == 1 && fake.allLists.count == 2 }
+        check(once, "reminders: no second question and no second list")
+        TaskReminders.quiet { fake.items[next]?.title = task.title + " (edited)" }
         TaskReminders.undo(next, saved: saved, in: window)
         let kept = await wait(3) { GitToast.text == RemindersAccess.changedLine }
-        check(kept && fake.items[next] != nil, "reminders: an edited reminder stays after Undo, and the notice says so")
-        fake.items[next]?.title = task.title
-        fake.items[next]?.completed = true
+        let stays = TaskReminders.quiet { fake.items[next] != nil }
+        check(kept && stays, "reminders: an edited reminder stays after Undo, and the notice says so")
+        TaskReminders.quiet {
+            fake.items[next]?.title = task.title
+            fake.items[next]?.completed = true
+        }
         GitToast.dismiss()
         TaskReminders.undo(next, saved: saved, in: window)
         let done = await wait(3) { GitToast.text == RemindersAccess.changedLine }
-        check(done && fake.items[next] != nil, "reminders: a completed reminder stays after Undo")
+        let still = TaskReminders.quiet { fake.items[next] != nil }
+        check(done && still, "reminders: a completed reminder stays after Undo")
     }
 
     /// A refusal or Not Now saves nothing and records nothing; a list that can't be made offers the default one.
     private static func refusalChecks(task: TaskReminders.Task, fake: FakeRemindersStore, window: NSWindow?) async {
-        let before = fake.items.count
-        fake.currentStatus = .denied
+        let (before, readsBefore) = TaskReminders.quiet {
+            fake.currentStatus = .denied
+            return (fake.items.count, fake.reads)
+        }
+        let deniedMakes = await makesList(.reminders(listID: nil, listName: "Made Up List"))
+        let deniedLists = await lists()
+        let unread = TaskReminders.quiet { fake.reads == readsBefore }
+        check(deniedMakes == nil && deniedLists.isEmpty && unread, "reminders: nothing is read while access is denied")
         RemindersSheets.shown = []
         let denied = await add(task, window)
-        check(denied == .failed(RemindersAccess.deniedLine) && fake.items.count == before
+        let deniedCount = TaskReminders.quiet { fake.items.count }
+        check(denied == .failed(RemindersAccess.deniedLine) && deniedCount == before
               && RemindersSheets.shown == [RemindersAccess.deniedLine],
               "reminders: denied saves nothing and shows where to turn it on", "\(denied)")
 
-        fake.currentStatus = .notDetermined
+        TaskReminders.quiet { fake.currentStatus = .notDetermined }
         RemindersSheets.fakeAnswer = false
         let notNow = await add(task, window)
-        check(notNow == .notNow && fake.items.count == before && fake.currentStatus == .notDetermined,
-              "reminders: Not Now changes nothing and macOS isn’t asked")
+        let unchanged = TaskReminders.quiet { fake.items.count == before && fake.currentStatus == .notDetermined }
+        check(notNow == .notNow && unchanged, "reminders: Not Now changes nothing and macOS isn’t asked")
 
         RemindersSheets.fakeAnswer = true
-        fake.currentStatus = .fullAccess
-        fake.canMakeLists = false
+        TaskReminders.quiet {
+            fake.currentStatus = .fullAccess
+            fake.canMakeLists = false
+        }
         RemindersSheets.shown = []
         let other = TaskDestination.reminders(listID: nil, listName: "Made Up List")
         let plain = TaskDraft(title: task.title, steps: [])
@@ -144,10 +169,53 @@ extension SelfTest {
         }
         let fallback = await add(elsewhere, window)
         let offered = RemindersSheets.shown == [RemindersAccess.couldntMake("Made Up List")]
-        var onHome = false
-        if case .added(let id, let list) = fallback { onHome = list == "home" && fake.items[id]?.list == "home" }
-        check(offered && onHome && !fake.allLists.contains { $0.title == "Made Up List" },
+        let (onHome, notMade) = TaskReminders.quiet {
+            var home = false
+            if case .added(let id, let list) = fallback { home = list == "home" && fake.items[id]?.list == "home" }
+            return (home, !fake.allLists.contains { $0.title == "Made Up List" })
+        }
+        check(offered && onHome && notMade,
               "reminders: a list that can’t be made offers the default list, and Add goes there", "\(fallback)")
+    }
+}
+
+extension SelfTest {
+    /// A save that fails after the list was found saves and records nothing; a removal that fails says so and keeps
+    /// the reminder; Undo of a reminder already deleted in Reminders forgets it quietly.
+    private static func failureChecks(task: TaskReminders.Task, fake: FakeRemindersStore, window: NSWindow?) async {
+        let before = TaskReminders.quiet {
+            fake.canAdd = false
+            return fake.items.count
+        }
+        let failed = await add(task, window)
+        let none = TaskReminders.quiet {
+            fake.canAdd = true
+            return fake.items.count == before
+        }
+        check(failed == .failed(TaskReminders.couldntAdd) && none,
+              "reminders: a save that fails after the list was found adds nothing and says so", "\(failed)")
+
+        let added = await add(task, window)
+        guard case .added(let id, _) = added else { return check(false, "reminders: Add saves again", "\(added)") }
+        let saved = RemindersAccess.Saved(title: task.title, notes: task.notes, due: task.due)
+        TaskReminders.quiet { fake.canRemove = false }
+        GitToast.dismiss()
+        TaskReminders.undo(id, saved: saved, in: window)
+        let said = await wait(3) { GitToast.text == TaskReminders.couldntRemove }
+        let kept = TaskReminders.quiet {
+            fake.canRemove = true
+            return fake.items[id] != nil
+        }
+        let recorded = await recordHolds(id)
+        check(said && kept && recorded, "reminders: a removal that fails says so, and the reminder and its line stay")
+
+        TaskReminders.quiet { fake.items[id] = nil }
+        GitToast.dismiss()
+        TaskReminders.undo(id, saved: saved, in: window)
+        // The queue is idle once Undo's step there is done, record line and all.
+        TaskReminders.quiet {}
+        let forgotten = await !recordHolds(id)
+        check(forgotten && GitToast.text == nil, "reminders: Undo of a reminder already deleted forgets it, with no notice")
     }
 }
 #endif

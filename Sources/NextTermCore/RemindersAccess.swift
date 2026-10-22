@@ -76,6 +76,25 @@ public enum RemindersAccess {
         return .reminders(listID: id, listName: listName)
     }
 
+    /// Where a list's id, found by name or made, is saved, with the destination that holds it.
+    public enum ListIDSave: Equatable, Sendable {
+        /// The project's own destination, by the project's key.
+        case project(String, TaskDestination)
+        case defaultDestination(TaskDestination)
+    }
+
+    /// The destination the task came from gets the id, so the list is found by id from now on even when renamed: the
+    /// project's own when it has one, else the default, as a task's destination is chosen. Nil when that destination
+    /// has changed since the task left, or already holds the id. `project` is the project's key.
+    public static func savingListID(_ id: String, replacing old: TaskDestination, project: String?,
+                                    in settings: TaskSettings) -> ListIDSave? {
+        guard let new = withList(old, id: id), new != old else { return nil }
+        if let project, let own = settings.projects[project]?.destination {
+            return own == old ? .project(project, new) : nil
+        }
+        return settings.defaultDestination == old ? .defaultDestination(new) : nil
+    }
+
     public static func couldntMake(_ name: String) -> String { "Couldn’t make the list “\(name)”." }
     public static func addToDefault(_ name: String) -> String { "Add to “\(name)” instead" }
 
