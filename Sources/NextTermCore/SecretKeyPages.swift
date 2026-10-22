@@ -109,6 +109,9 @@ extension KeyPage {
     /// The page that makes the next token, filled with the key's name and today's date so the new token reads apart
     /// from the old one in GitHub's list: `GITHUB_TOKEN 2026-10-13`, the name cut so the whole fits in 40 characters.
     /// Nil for a page with no such form, or a name that isn't a key's name. No value ever goes into it.
+    /// Verified 2026-10-19 against GitHub's docs, "Managing your personal access tokens", section "Pre-filling
+    /// fine-grained personal access token details using URL parameters": `/settings/personal-access-tokens/new` takes
+    /// `name` (40 characters at most) and `expires_in` (days, 1 to 366, or `none`), both optional.
     public func newTokenURL(name: String, date: Date, timeZone: TimeZone = .current) -> URL? {
         guard newToken == .githubFineGrained, StoredSecretName.isValid(name) else { return nil }
         var calendar = Calendar(identifier: .gregorian)
@@ -322,7 +325,15 @@ extension SecretKeyPages {
 
 // Each row opens the provider's own key page where its docs name one. Where the path couldn't be confirmed, it opens the
 // console's root (xAI, Neon, Cloudflare, Sentry, Twilio, Azure) or the nearest page the docs name (Pinecone's project
-// list), until the key-page hand check, each page opened while signed in, lengthens it. Heads are the ones secret
+// list), until the key-page hand check, each page opened while signed in, lengthens it. Checked against the providers'
+// own docs on 2026-10-19, without signing in: each row's page loads, or sends to its own sign-in with the page as the
+// return address. The docs name these key pages for the roots, kept as roots for now because a row's path also decides
+// which links count as that provider's (`page(forLink:)`), and a longer path would stop matching links elsewhere on
+// the same console: xAI `console.x.ai/team/default/api-keys`, Cloudflare `dash.cloudflare.com/profile/api-tokens`,
+// Sentry `sentry.io/settings/account/api/auth-tokens/`, Twilio "Settings › Account settings › API keys & auth
+// tokens", Upstash `console.upstash.com/account/api`; Pinecone's docs name the project list this row opens, and Neon's
+// name only a menu ("Settings › API keys"). Vercel's tokens page moved to `/account/settings/tokens` (the old path
+// forwards there). Heads are the ones secret
 // scanners (gitleaks) and Next Term's own masking know; that check confirms the rest on a key of its own. A page the
 // service catalog knows too is the catalog's page, and a test holds the two to it.
 
@@ -415,7 +426,7 @@ extension SecretKeyPages {
     static let cloudflare = KeyPage("cloudflare", "Cloudflare", "Dashboard", "https://dash.cloudflare.com/",
                                     names: [.prefix("CLOUDFLARE"), .exact("CF_API_TOKEN"), .exact("CF_API_KEY")],
                                     prefixes: [.head("cfut_"), .head("cfat_"), .head("cfk_")])
-    static let vercel = KeyPage("vercel", "Vercel", "Tokens", "https://vercel.com/account/tokens",
+    static let vercel = KeyPage("vercel", "Vercel", "Tokens", "https://vercel.com/account/settings/tokens",
                                 names: [.prefix("VERCEL")], prefixes: [.head("vcp_")])
     static let stripe = KeyPage("stripe", "Stripe", "API Keys", "https://dashboard.stripe.com/apikeys",
                                 names: [.prefix("STRIPE")],
