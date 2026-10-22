@@ -65,7 +65,8 @@ public enum TaskLink {
               let scheme = parts.scheme, let query = parts.percentEncodedQuery else { return nil }
         let path = parts.percentEncodedPath
         guard !SafeWebLink.isUnsafe(path: path) else { return nil }
-        let host = parts.percentEncodedHost ?? ""
+        // An app link keeps the `//` of its own form: `things:///add` has an empty host, `things:/add` has none.
+        guard let host = parts.percentEncodedHost else { return nil }
         let kind: Kind?
         switch scheme {
         case "things": kind = host.isEmpty && path == "/add" ? .things : nil
@@ -84,7 +85,12 @@ public enum TaskLink {
         let segments: [String] = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard path.hasPrefix("/") else { return nil }
         let rest: [String] = Array(segments.dropFirst())
-        guard rest.allSatisfy({ !$0.isEmpty }) else { return nil }
+        // Every part is there, and none hides another step behind an encoded slash or backslash.
+        let whole = rest.allSatisfy { (part: String) -> Bool in
+            let upper = part.uppercased()
+            return !part.isEmpty && !upper.contains("%2F") && !upper.contains("%5C")
+        }
+        guard whole else { return nil }
         switch host {
         case "github.com":
             return rest.count == 4 && rest[2] == "issues" && rest[3] == "new" ? .github : nil

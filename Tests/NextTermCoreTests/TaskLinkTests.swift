@@ -45,6 +45,9 @@ import Testing
         #expect(kind("things:///add?title=a&x-success=other%3A%2F%2F") == nil)
         #expect(kind("things:///add") == nil)
         #expect(kind("things://add?title=a") == nil)
+        // Without the `//` there is no host at all, which is not the empty host the app's own form has.
+        #expect(kind("things:/add?title=a") == nil)
+        #expect(kind("omnifocus:/add?name=a") == nil)
         #expect(kind("todoist://openquickadd?content=a&description=b") == .todoist)
         #expect(kind("todoist://openquickadd?content=a&project_id=1") == nil)
         #expect(kind("todoist://addtask?content=a") == nil)
@@ -70,6 +73,12 @@ import Testing
         #expect(kind("https://github.com/o/../issues/new?title=a") == nil)
         #expect(kind("https://github.com/o/%2E%2E/issues/new?title=a") == nil)
         #expect(kind("https://github.com//r/issues/new?title=a") == nil)
+        // An encoded slash or backslash would hide another path step inside one part.
+        #expect(kind("https://github.com/o%2Fx/r/issues/new?title=a") == nil)
+        #expect(kind("https://github.com/o/r%2fx/issues/new?title=a") == nil)
+        #expect(kind("https://github.com/o%5Cx/r/issues/new?title=a") == nil)
+        #expect(kind("https://gitlab.com/g%2Fh/p/-/work_items/new?issue%5Btitle%5D=a") == nil)
+        #expect(kind("https://dev.azure.com/o%2Fx/p/_workItems/create/Bug?%5BSystem.Title%5D=a") == nil)
         #expect(kind("https://gitlab.com/g/p/-/issues/new?issue%5Btitle%5D=a") == nil)
         #expect(kind("https://gitlab.com/p/-/work_items/new?issue%5Btitle%5D=a") == nil)
         #expect(kind("https://gitlab.com/g/p/-/work_items/new?issue%5Btitle%5D=a&issue%5Bassignee_ids%5D=1") == nil)
