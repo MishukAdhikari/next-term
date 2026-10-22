@@ -39,7 +39,9 @@ extension SelfTest {
         await addTaskSheetChecks(c, folder: folder)
         await addTaskToolChecks(c, proj: proj, folder: folder)
         taskSettingsChecks()
+        #if DEBUG
         await remindersChecks(c)
+        #endif
     }
 
     /// Today's date as the files are named, on this Mac.

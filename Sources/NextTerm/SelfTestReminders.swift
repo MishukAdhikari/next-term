@@ -1,6 +1,7 @@
 import AppKit
 import NextTermCore
 
+#if DEBUG
 /// Reminders with the in-memory store only, so no check reaches EventKit or the user's own reminders: the explanation
 /// before macOS asks, the list found or made and its id saved back, one all-day reminder with its alert, the posted
 /// record, Undo while unchanged and not after an edit, a refusal that saves nothing, Not Now, and the default list
@@ -31,6 +32,8 @@ extension SelfTest {
         guard let task = remindersTask(draft, destination) else {
             return check(false, "reminders: a draft renders as a reminder")
         }
+        let unasked = await makesList(destination)
+        check(unasked == nil && fake.asked.isEmpty, "reminders: nothing is read before access is given")
         let first = await add(task, window)
         guard case .added(let id, let list) = first else {
             return check(false, "reminders: Add saves a reminder after the explanation", "\(first)")
@@ -48,6 +51,9 @@ extension SelfTest {
         let savedBack = TaskSettings(defaults: defaults).defaultDestination
         check(savedBack == .reminders(listID: list, listName: "Next Term"), "reminders: the made list’s id is saved back")
         check(GitToast.text == "Added to Reminders", "reminders: a notice says it was added, with Undo", GitToast.text ?? "")
+        let named = await makesList(destination)
+        let missing = await makesList(.reminders(listID: nil, listName: "Made Up List"))
+        check(named == false && missing == true, "reminders: the sheet can tell a list found from one Add would make")
         let recorded = await recordHolds(id)
         check(recorded, "reminders: the posted record holds the reminder’s id")
 
@@ -65,6 +71,12 @@ extension SelfTest {
     private static func add(_ task: TaskReminders.Task, _ window: NSWindow?) async -> TaskReminders.Outcome {
         await withCheckedContinuation { continuation in
             TaskReminders.add(task, from: window) { continuation.resume(returning: $0) }
+        }
+    }
+
+    private static func makesList(_ destination: TaskDestination) async -> Bool? {
+        await withCheckedContinuation { continuation in
+            TaskReminders.makesList(destination) { continuation.resume(returning: $0) }
         }
     }
 
@@ -138,3 +150,4 @@ extension SelfTest {
               "reminders: a list that can’t be made offers the default list, and Add goes there", "\(fallback)")
     }
 }
+#endif

@@ -48,7 +48,6 @@ enum TaskReminders {
     /// nil once access is given, else what happened instead.
     static func allow(from window: NSWindow?, done: @escaping (Outcome?) -> Void) {
         let store = store
-        let step = RemindersAccess.step(status: store.status(), os: os)
         switch step {
         case .ready:
             done(nil)
@@ -73,10 +72,26 @@ enum TaskReminders {
         }
     }
 
+    /// Where Reminders stands now, for a line or a popup row; never asks.
+    static var step: RemindersAccess.Step { RemindersAccess.step(status: store.status(), os: os) }
+
+    /// Whether Add would make the destination's list, for the sheet's "new list" line: nil unless access is given
+    /// already, so nothing is read and nothing asked before the user's own Add.
+    static func makesList(_ destination: TaskDestination, done: @escaping (Bool?) -> Void) {
+        guard case .reminders(let listID, let listName) = destination, step == .ready else { return done(nil) }
+        let store = store
+        queue.async {
+            let choice = RemindersAccess.chooseList(listID: listID, listName: listName, in: store.lists())
+            let makes: Bool
+            if case .create = choice { makes = true } else { makes = false }
+            DispatchQueue.main.async { done(makes) }
+        }
+    }
+
     /// The user's lists, names and ids only, for a picker; empty unless access is given already. Never asks.
     static func lists(done: @escaping ([RemindersAccess.List]) -> Void) {
+        guard step == .ready else { return done([]) }
         let store = store
-        guard RemindersAccess.step(status: store.status(), os: os) == .ready else { return done([]) }
         queue.async {
             let lists = store.lists()
             DispatchQueue.main.async { done(lists) }
@@ -122,8 +137,8 @@ extension TaskReminders {
         guard case .reminders(let listID, let listName) = task.destination else { return done(.failed(couldntAdd)) }
         let store = store
         queue.async {
-            let step = chosenList(store, listID: listID, listName: listName, taken: list)
-            guard case .found(let target, let saveID) = step else {
+            let chosen = chosenList(store, listID: listID, listName: listName, taken: list)
+            guard case .found(let target, let saveID) = chosen else {
                 let fallback = store.defaultList()
                 return DispatchQueue.main.async {
                     MainActor.assumeIsolated {
