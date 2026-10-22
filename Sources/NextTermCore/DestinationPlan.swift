@@ -174,6 +174,16 @@ extension DestinationPlan {
 }
 
 extension DestinationPlan {
+    /// The day's words inside a line: "tomorrow, Sat 19 Oct". Only Today and Tomorrow lose their capital; a weekday
+    /// keeps it.
+    static func midLine(_ day: String?) -> String? {
+        guard let day else { return nil }
+        for word in ["Today", "Tomorrow"] where day == word || day.hasPrefix(word + ",") {
+            return word.lowercased() + day.dropFirst(word.count)
+        }
+        return day
+    }
+
     /// The line for a destination Add can reach now.
     static func describe(_ destination: TaskDestination, count: Int, facts: DestinationFacts,
                          mask: (String) -> String) -> String {
@@ -186,14 +196,14 @@ extension DestinationPlan {
         case .reminders(_, let listName):
             let head = one ? "Adds to Reminders" : "Adds \(count) tasks to Reminders"
             let list = (facts.makesList == true ? "new list" : "list") + " “\(mask(listName))”"
-            let day = facts.day.map { "due " + $0 } ?? "no due date"
+            let day = midLine(facts.day).map { "due " + $0 } ?? "no due date"
             var line = [head, list, day].joined(separator: ", ")
             if case .explain = facts.reminders { line += " · Reminders asks for permission first" }
             return line
         case .things(let list):
             let into = one ? "Adds to Things" : "Adds \(count) tasks to Things"
             guard facts.day != nil || list != nil else { return into + "’ Inbox" }
-            let day: String? = facts.day.map { "scheduled " + $0 }
+            let day: String? = midLine(facts.day).map { "scheduled " + $0 }
             let place: String? = list.map { "in “\(mask($0))”" }
             return ([into] + [day, place].compactMap { $0 }).joined(separator: ", ")
         case .shortcut(_, let name):

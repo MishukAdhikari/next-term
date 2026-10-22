@@ -93,6 +93,17 @@ enum TaskReminders {
         }
     }
 
+    /// The title of the list `id`, for add_task's answer once a reminder went there; nil when it can't be read.
+    /// Never asks.
+    static func listTitle(_ id: String, done: @escaping (String?) -> Void) {
+        guard step == .ready else { return done(nil) }
+        let store = store
+        queue.async {
+            let title = store.lists().first { $0.id == id }?.title
+            DispatchQueue.main.async { done(title) }
+        }
+    }
+
     /// The user's lists, names and ids only, for a picker; empty unless access is given already. Never asks.
     static func lists(done: @escaping ([RemindersAccess.List]) -> Void) {
         guard step == .ready else { return done([]) }

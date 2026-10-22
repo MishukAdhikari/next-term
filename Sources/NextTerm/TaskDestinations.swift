@@ -108,6 +108,8 @@ extension TaskDestinations {
         let sheet: NSWindow?
         let controller: TerminalWindowController?
         let tab: TerminalTab?
+        /// Told the id of the Reminders list each reminder went to, which is the default list when the user took it.
+        var placed: ((_ listID: String) -> Void)? = nil
 
         var notice: NSWindow? { controller?.window }
     }
@@ -171,7 +173,9 @@ extension TaskDestinations {
         guard let task = tasks.first else { return done(.done) }
         TaskReminders.add(task, from: place.sheet, undoIn: place.notice) { outcome in
             switch outcome {
-            case .added: addReminders(tasks.dropFirst(), at: place, done: done)
+            case .added(_, let list):
+                place.placed?(list)
+                addReminders(tasks.dropFirst(), at: place, done: done)
             case .notNow: done(.cancelled)
             case .failed(let line): done(.failed(line))
             }

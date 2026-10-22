@@ -58,6 +58,19 @@ extension MCPServer {
         return nil
     }
 
+    /// Whether the destination still is the one the user saw. A Reminders list's id saved meanwhile (the sheet's Add found
+    /// or made the list) is no change; a new name, kind or saved id is.
+    public static func taskSameDestination(_ shown: TaskDestination, now: TaskDestination) -> Bool {
+        guard case .reminders(let shownID, let shownName) = shown, case .reminders(let nowID, let nowName) = now else {
+            return shown == now
+        }
+        return shownName == nowName && (shownID == nil || shownID == nowID)
+    }
+
+    /// Every destination but the todo folder sends the task out of Next Term, so it is always shown on the Mac first,
+    /// even for a remote connection whose “Ask on this Mac before changes” is off.
+    public static func taskAlwaysAsks(_ destination: TaskDestination) -> Bool { destination != .todoFolder }
+
     /// What the approval window says: the note when the same task went to the same place a minute ago (`duplicate`
     /// names that place), "To: " and where it goes, then exactly what leaves (the window scrolls a long one).
     public static func taskDetails(_ plan: DestinationPlan, duplicate: String?,

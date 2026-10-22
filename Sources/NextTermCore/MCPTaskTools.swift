@@ -110,9 +110,10 @@ extension MCPServer {
 
     /// add_task's answer once the task was handed over: how it was approved, the destination's kind, the title, steps
     /// and day. Only the todo folder answers a path; a page or Quick Add says it waits for the user; Reminders names its
-    /// list, masked. Never a link or an item's id.
+    /// list, masked: `list` when the reminder went to another (the user took the default list), else the saved one.
+    /// Never a link or an item's id.
     public static func taskAnswer(approved: String, sentTo destination: TaskDestination, draft: TaskDraft,
-                                  file: TaskFileAnswer? = nil,
+                                  file: TaskFileAnswer? = nil, list: String? = nil,
                                   mask: (String) -> String = { SecretMask.current.mask($0) }) -> [String: Any] {
         var answer: [String: Any] = [
             "approved": approved,
@@ -128,7 +129,7 @@ extension MCPServer {
             answer["created_folder"] = file.createdFolder
             if let relative = file.relativePath { answer["relative_path"] = relative }
         case .reminders(_, let listName):
-            answer["list"] = mask(listName)
+            answer["list"] = mask(list ?? listName)
         case .todoist, .omnifocus, .github, .gitlab, .linear, .trello, .azureBoards:
             answer["waiting_for_user"] = true
             answer["note"] = taskWaitsForUser

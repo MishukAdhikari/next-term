@@ -6,7 +6,7 @@ import NextTermCore
 /// project with none set still writes the todo file; Through your agent, an app not installed and Reminders not yet
 /// allowed are refused with no window, and Reminders is never asked; a GitHub project opens one recorded page after
 /// Approve and none after Decline; a destination changed while the window waits sends nothing; the same title twice
-/// within a minute says so. Called from `tasksChecks`, which puts the Tasks settings back after.
+/// within a minute says so; more in SelfTestTaskToolSends. Called from `tasksChecks`, which puts the Tasks settings back after.
 extension SelfTest {
     static func addTaskDestinationChecks(_ c: TerminalWindowController, proj: URL, folder: URL) async {
         let server = MCPControlServer.shared
@@ -40,17 +40,20 @@ extension SelfTest {
         TasksMenu.save(nil, key: key)
         UserDefaults.standard.removeObject(forKey: TaskSettings.Key.defaultDestination)
 
-        // No destination set: today's todo file, answered as the todo folder.
+        // No destination set: today's todo file, answered as the todo folder, and one line in the posted record.
+        let posted = postedToday()
         let plain = await client.asked(["title": "Plain destination check", "project": proj.path], approve: true)
         let plainFile = folder.appendingPathComponent("\(TaskDay(Date(), calendar: .current))-plain-destination-check.md")
         let plainAnswer = taskJSON(plain.text)
         check(!plain.isError && plainAnswer["destination"] as? String == "todo_folder"
                 && FileManager.default.fileExists(atPath: plainFile.path),
               "add_task destinations: with none set the task is the todo file", plain.text)
+        check(await wait(3) { postedToday() == posted + 1 }, "add_task destinations: the todo file is in the posted record")
         try? FileManager.default.removeItem(at: plainFile)
 
         await refusedChecks(client, proj: proj, key: key, folder: folder, fake: fake)
         await pageToolChecks(client, proj: proj, key: key)
+        await addTaskSendChecks(client, proj: proj, key: key)
     }
 
     /// Refused with no window: Through your agent (and passed with todo_folder), an app not installed, Reminders not

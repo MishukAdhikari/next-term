@@ -28,8 +28,8 @@ import Testing
 
     @Test func theLineForEachKind() {
         let lines: [(TaskDestination, String)] = [
-            (.reminders(listID: "x", listName: "Next Term"), "Adds to Reminders, list “Next Term”, due Tomorrow, Sat 19 Oct"),
-            (.things(list: "Work"), "Adds to Things, scheduled Tomorrow, Sat 19 Oct, in “Work”"),
+            (.reminders(listID: "x", listName: "Next Term"), "Adds to Reminders, list “Next Term”, due tomorrow, Sat 19 Oct"),
+            (.things(list: "Work"), "Adds to Things, scheduled tomorrow, Sat 19 Oct, in “Work”"),
             (.shortcut(id: Self.shortcutID, name: "Add to Inbox"), "Runs the shortcut “Add to Inbox” with the task as its input"),
             (.todoist, "Opens Todoist Quick Add, filled in: press Add there, and set the day there"),
             (.omnifocus, "Opens OmniFocus Quick Add, filled in: press Add there, and set the day there"),
@@ -59,9 +59,9 @@ import Testing
         #expect(plan(list, [noDay], facts: Self.facts { $0.day = nil }).line
             == "Adds to Reminders, list “Next Term”, no due date")
         #expect(plan(list, facts: Self.facts { $0.makesList = true }).line
-            == "Adds to Reminders, new list “Next Term”, due Tomorrow, Sat 19 Oct")
+            == "Adds to Reminders, new list “Next Term”, due tomorrow, Sat 19 Oct")
         let asks = plan(list, facts: Self.facts { $0.reminders = .explain(.fullAccess) })
-        #expect(asks.line == "Adds to Reminders, list “Next Term”, due Tomorrow, Sat 19 Oct · Reminders asks for permission first")
+        #expect(asks.line == "Adds to Reminders, list “Next Term”, due tomorrow, Sat 19 Oct · Reminders asks for permission first")
         let denied = plan(list, facts: Self.facts { $0.reminders = .blocked(RemindersAccess.deniedLine, settings: true) })
         #expect(denied.refused && denied.line == RemindersAccess.deniedLine && denied.offersTodoFolder)
         #expect(plan(.things(list: nil), [noDay], facts: Self.facts { $0.day = nil }).line == "Adds to Things’ Inbox")
@@ -198,7 +198,7 @@ import Testing
         let quick = plan(.todoist, six)
         #expect(quick.refused && quick.line == "Todoist opens one Quick Add per task: add at most 5 at once.")
         #expect(plan(.reminders(listID: "x", listName: "Inbox"), six).line
-            == "Adds 6 tasks to Reminders, list “Inbox”, due Tomorrow, Sat 19 Oct")
+            == "Adds 6 tasks to Reminders, list “Inbox”, due tomorrow, Sat 19 Oct")
         #expect(plan(.github(owner: "o", repo: "r"), Array(six.prefix(2))).line
             == "Opens 2 new issues in o/r on github.com, filled in: nothing is created until you press Create")
     }
