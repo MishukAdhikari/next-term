@@ -25,10 +25,10 @@ import Testing
         #expect(plan.existing == .none)
         #expect(plan.steps == [.copy(from: staged, to: ready), .move(from: ready, to: home + "/.agents/skills/skill-creator"),
                                .link(at: home + "/.claude/skills/skill-creator", to: home + "/.agents/skills/skill-creator")])
-        #expect(plan.agents == [.claudeCode, .codex, .commandCode])
+        #expect(plan.agents == [.claudeCode, .codex, .commandCode, .opencode])
 
         let noLink = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .skip, package: nil, sameSource: false)
-        #expect(noLink.steps.count == 2 && noLink.agents == [.codex, .commandCode])
+        #expect(noLink.steps.count == 2 && noLink.agents == [.codex, .commandCode, .opencode])
     }
 
     /// The same name made by hand in two agents: Replace moves both away; nothing is installed beside them.
@@ -60,9 +60,13 @@ import Testing
         try skill(".codex/skills/.system", "skill-creator")
         let project = home + "/code/app"
         try skill("code/app/.claude/skills", "skill-creator")
+        try skill("code/app/.opencode/skills", "skill-creator")
         let plan = SkillInstall.plan(name: "skill-creator", staged: staged, staging: ready, inventory: SkillInventory.scan(home: home), claude: .link, package: nil,
                                      sameSource: false, projects: [project])
-        #expect(plan.existing == .none && plan.untouched.count == 3)
+        #expect(plan.existing == .none && plan.untouched.count == 4)
+        // OpenCode's own folder in a project is named too, with the copy OpenCode prefers there.
+        let opencode = try #require(plan.untouched.first { $0.contains(".opencode/skills/skill-creator") })
+        #expect(opencode.contains("OpenCode the project's"))
         #expect(!plan.steps.contains { if case .trash = $0 { return true }; return false })
     }
 
@@ -168,7 +172,7 @@ import Testing
         let package = try stage([".mcp.json": Self.server, "hooks/hooks.json": Self.hooks])
         #expect(defaultLink(package) == .skip)
         let left = plan(.skip, package)
-        #expect(!makesLink(left) && !left.agents.contains(.claudeCode) && left.agents == [.codex, .commandCode])
+        #expect(!makesLink(left) && !left.agents.contains(.claudeCode) && left.agents == [.codex, .commandCode, .opencode])
         let added = plan(.link, package)
         #expect(makesLink(added) && added.agents.contains(.claudeCode))
     }
@@ -593,12 +597,19 @@ import Testing
 
 /// Who loads a skill from the shared folder, and through Claude Code's link (AE12).
 @Suite struct SkillReadersTests {
-    static let others = "Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp, Junie and goose"
+    static let others = "Gemini CLI, Qwen Code, Cursor, Copilot CLI, Amp, Junie and goose"
 
     @Test func withTheLink() {
         let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: true, pluginOff: false)
         #expect(text == "Agents that load it, if you use them: Codex, Command Code, Claude Code (through its link), \(Self.others). "
-            + "Amp, Cursor, opencode and goose also find it through the Claude Code link.")
+            + "Amp, Cursor and goose also find it through the Claude Code link.")
+    }
+
+    /// OpenCode is a managed agent now: it is named with the others an install reaches, never among the text-only ones.
+    @Test func opencodeIsManaged() {
+        let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode, .opencode], linked: true, pluginOff: false)
+        #expect(text.hasPrefix("Agents that load it, if you use them: Codex, Command Code, OpenCode, Claude Code (through its link), Gemini CLI,"))
+        #expect(!text.contains("opencode") && !SkillReaders.shared.contains("opencode") && !SkillReaders.claude.contains("opencode"))
     }
 
     @Test func withoutTheLink() {
@@ -610,7 +621,7 @@ import Testing
     @Test func withThePluginOff() {
         let text = SkillReaders.loadedBy([.claudeCode, .codex, .commandCode], linked: true, pluginOff: true)
         #expect(text == "Agents that load it, if you use them: Codex, Command Code, \(Self.others). Claude Code loads nothing from it while its plugin is off. "
-            + "Amp, Cursor, opencode and goose also find it through the Claude Code link.")
+            + "Amp, Cursor and goose also find it through the Claude Code link.")
     }
 
     /// ~/.claude/skills linked to the shared folder as a whole: Claude Code reads it there, with no link of

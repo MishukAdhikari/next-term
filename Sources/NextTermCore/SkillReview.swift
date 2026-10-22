@@ -596,8 +596,18 @@ extension SkillReview {
     // in front of the words, or the look-behind for the program's name in front of `mcp`, it tried every
     // position: about a second per MB. And `\b[a-z][a-z0-9_-]*\s+mcp` read a run such as `a-a-a-…` again
     // from each part, in time that grew with the square of its length.
-    /// A slash command has no word boundary before it.
-    static let pluginInstall = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add)|/plugin\s+install)\b"#
+    /// OpenCode's command as typed: `opencode`, 2.x's `opencode2`, or its npm package run by npx or bunx (`opencode-ai`,
+    /// `@opencode/cli`, a version or not), then `plugin` (or `plug`).
+    static let opencodePlugin: String = #"(?:opencode(?:2|-ai(?:@[\w.-]+)?)?|@opencode/cli(?:@[\w.-]+)?)\s+plug(?:in)?\s+"#
+    /// A slash command has no word boundary before it. OpenCode's is `opencode plugin <module>` (or `plug`), or
+    /// `opencode plugin add`: a module is told from prose by a scope, a version, a hyphen or a slash in its name, or a
+    /// flag after it, each read within one word. A one-word module is told by where the command stands: a whole code
+    /// span, or a line of its own (after a `$` prompt or not), and never the subcommands that list or remove. Both
+    /// start at a backtick or a line break, so the engine can skip ahead to them.
+    static let pluginInstall: String = #"(?:(?<!\w)(?:claude\s+plugins?\s+install|gemini\s+extensions?\s+install|codex\s+plugins?\s+add|"#
+        + opencodePlugin + #"(?:add|(?:@|[a-z0-9_.]+[@/-])[\w./@-]*|[\w.]+\s+--?(?:g|global|force)))|/plugin\s+install)\b"#
+        + #"|(?:`|\n[ \t]*(?:\$[ \t]+)?)"# + opencodePlugin
+        + #"(?!(?:list|ls|remove|rm|uninstall|help)\b)[\w.@][\w.@/-]*[ \t]*(?:`|\r?\n|$)"#
     /// `curl … | sh`, `wget -qO- … | sudo bash`: read from the last `curl` or `wget` before the pipe. Read on
     /// past the next one, a line of many took time that grew with the square of its length (40 s for 100 KB).
     static let downloadAndRun = #"(?:curl|wget)(?:(?!curl|wget)[^\n|])*+\|\s*+(?:sudo\s+)?(?:sh|bash|zsh|python3?)\b"#
@@ -650,7 +660,7 @@ extension SkillReview {
     }
 
     /// The servers in a JSON file that run a package with no exact version: every object with a string
-    /// `command` (or a list of words, as opencode writes one) is a server. Nil when the file is not JSON
+    /// `command` (or a list of words, as OpenCode writes one) is a server. Nil when the file is not JSON
     /// that every reader takes the same way (comments, a trailing comma, a key twice): the prose
     /// patterns check it then.
     static func serverJSONFlags(_ data: Data, file: String) -> [Flag]? {

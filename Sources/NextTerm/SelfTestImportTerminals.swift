@@ -56,6 +56,9 @@ extension SelfTest {
         let found = ImportSources.detect()
         check(found.first { $0.kind == .cmux }?.version == "9.9.9", "cmux is detected with its app's version",
               found.map { "\($0.name) \($0.version ?? "none")" }.joined(separator: ", "))
+        // A terminal has no file tree: its import leaves the sidebar's click as it is.
+        let clicking = found.filter { ImportSources.planner($0, true)?.singleClick != nil }.map(\.name)
+        check(!found.isEmpty && clicking.isEmpty, "a terminal's import has no row for the sidebar's click", clicking.joined(separator: ", "))
 
         if let wezTerm = found.first(where: { $0.kind == .wezTerm }) {
             window.showPreview(for: wezTerm)
@@ -75,6 +78,7 @@ extension SelfTest {
             let all = importWindowTexts(window).joined(separator: "\n")
             check(all.contains("map cmd+shift+e → launch --location=vsplit") && all.contains("font_size 13"),
                   "kitty's map and font size come over", all)
+            check(!all.contains("with a single click") && !all.contains("with a double click"), "and its preview says nothing of the sidebar's click", all)
             window.window?.close()
         }
 

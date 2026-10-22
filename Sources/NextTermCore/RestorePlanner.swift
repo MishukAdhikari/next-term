@@ -107,6 +107,8 @@ public enum SessionNaming: String, CaseIterable, Sendable {
     case newest
     /// Only the process named it, with nothing to agree: a guess.
     case unconfirmed
+    /// The one session whose title the agent showed when the tab was saved (OpenCode's): a guess.
+    case shown
 }
 
 /// The session a pane's line or resume names.
@@ -152,7 +154,7 @@ public struct FolderChoice: Equatable, Sendable {
 }
 
 /// Where a guessed session comes from (the plan's agent matrix): Claude Code, Codex and Command Code from their own
-/// readers, Gemini CLI, Cursor Agent and opencode from `AgentSessions.newest`.
+/// readers, Gemini CLI, Cursor Agent and OpenCode from `AgentSessions.newest`.
 public struct SessionLookup {
     /// An agent's own reader: the sessions it recorded in exactly `folder`, files last written before the date skipped.
     public var read: (AgentKind, String, Date) -> [AgentSession]
@@ -610,7 +612,7 @@ public enum RestorePlanner {
             holders.append(holder)
             // An id outside its pattern names nothing: the line is the program alone, and nothing is guessed in its place.
             guard let id = evidence.sessionID, evidence.agent.isSessionID(id) else { continue }
-            let naming: SessionNaming = evidence.isExact ? .exact : .unconfirmed
+            let naming: SessionNaming = evidence.isExact ? .exact : evidence.source == .shownTitle ? .shown : .unconfirmed
             named[index] = NamedSession(agent: evidence.agent, id: id, naming: naming, date: evidence.sessionDate)
             taken[evidence.agent, default: []].insert(id.lowercased())
         }
@@ -637,7 +639,7 @@ public enum RestorePlanner {
 
     /// The newest session `agent` started in `folder` at or after `start`, and before `limit` when there is one, not in
     /// `taken` whatever its case, from that agent's reader (the plan's matrix): Claude Code, Codex and Command Code from
-    /// their own, which also skip a session a live process has open; Gemini CLI, Cursor Agent and opencode from
+    /// their own, which also skip a session a live process has open; Gemini CLI, Cursor Agent and OpenCode from
     /// `AgentSessions.newest`. Nil for every other agent: Qwen Code, Copilot CLI, Amp and Junie have no reader for a
     /// guess, and Kiro CLI and Goose have no store the session list reads (no AgentKind), so `newest` has none to read.
     static func guess(_ agent: RestoreAgent, in folder: String, after start: Date, before limit: Date? = nil, excluding taken: Set<String>,
@@ -937,6 +939,7 @@ public struct RestoreNote: Equatable, Sendable {
         case .exact: break
         case .newest: said.append("This is a guess: the newest session in this folder.")
         case .unconfirmed: said.append("This is a guess: nothing confirmed this session.")
+        case .shown: said.append("This is a guess: the session \(session.agent.name) showed.")
         }
         if let date = session.date { said.append("Last used \(dates(date)).") }
         return said

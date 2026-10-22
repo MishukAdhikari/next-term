@@ -10,7 +10,7 @@ import Darwin
 /// Core plans and writes; the app asks. Only this file touches `MCPRegistrar`'s internal `JSONC`, `TOMLOutline`,
 /// `compact`, `tomlString`, `Plan` and `write(_:to:)`; the sheet sees the public types and functions here.
 ///
-/// - **A finding** is a member of a server's `env` (opencode: `environment`) whose name holds TOKEN, SECRET,
+/// - **A finding** is a member of a server's `env` (OpenCode: `environment`) whose name holds TOKEN, SECRET,
 ///   PASSWORD, PASSWD, KEY, AUTH, CREDENTIAL or PAT as a word part, or whose value has a token's shape or looks
 ///   random. References (`${…}`, `$X`, `{env:…}`, `{file:…}`, `op://…`) are skipped. Keys in headers and in the
 ///   command's arguments are listed, not movable.
@@ -44,7 +44,7 @@ public enum SecretImport {
             case .gemini: return "Gemini CLI"
             case .vscode: return "VS Code"
             case .copilot: return "Copilot CLI"
-            case .opencode: return "opencode"
+            case .opencode: return "OpenCode"
             case .qwen: return "Qwen Code"
             case .amp: return "Amp"
             case .junie: return "Junie"
@@ -88,7 +88,7 @@ public enum SecretImport {
 
     /// The files the import reads: the agents' own settings, Claude Code's `~/.claude.json`, VS
     /// Code's user `mcp.json`, and in each open project its `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
-    /// `.gemini/settings.json`, `.codex/config.toml`, and opencode's `opencode.json` and `opencode.jsonc` (read and
+    /// `.gemini/settings.json`, `.codex/config.toml`, and OpenCode's `opencode.json` and `opencode.jsonc` (read and
     /// rewritten as its own settings are). A file is listed once, by its real path.
     public static func sources(home: String = NSHomeDirectory(), projects: [String]) -> [Source] {
         func path(_ relative: String) -> String { (home as NSString).appendingPathComponent(relative) }
@@ -439,7 +439,7 @@ public enum SecretImport {
         return xs * 2 >= all
     }
 
-    /// True in every client: Claude Code fills in `${X}` and opencode `{env:X}`, but Codex fills in neither, so it doesn't
+    /// True in every client: Claude Code fills in `${X}` and OpenCode `{env:X}`, but Codex fills in neither, so it doesn't
     /// say this file's agent would have.
     static let referenceReason = "the value has a reference such as ${…} in it, which some agents fill in when they start "
         + "the server; Secrets would keep it as written"
@@ -683,7 +683,7 @@ public enum SecretImport {
         let commandValue = object.member("command")?.value
         var args: [(value: String, range: Range<Int>)] = []
         if client == .opencode {
-            // opencode: the command and its arguments are one array.
+            // OpenCode: the command and its arguments are one array.
             guard let words = strings(commandValue), !words.isEmpty else { return shapeRefusal(&entry, object) }
             entry.command = [words[0].value]
             args = Array(words.dropFirst())

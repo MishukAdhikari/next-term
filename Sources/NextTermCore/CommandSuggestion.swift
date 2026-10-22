@@ -34,11 +34,12 @@ public enum CommandSuggestion {
     public static let adapters: [Adapter] = [claude]
 
     /// The agents left out, and why: each must run with no tools and no MCP, and that wasn't true or couldn't be
-    /// checked. (Checked 2026-10-08.)
+    /// checked. (Checked 2026-10-08.) A reason says only what is known: an agent whose no-tools run Next Term hasn't
+    /// tried says so, and claims no flag failed.
     public static let leftOut: [(name: String, why: String)] = [
         ("Codex", "codex exec has no way to turn all of its tools off, only to sandbox them; a read-only sandbox limits them but doesn't remove them (0.154.0)"),
         ("Copilot CLI", "its flags for running with no tools and no MCP couldn't be checked here"),
-        ("opencode", "its flags for running with no tools and no MCP couldn't be checked here"),
+        ("OpenCode", "Next Term hasn’t confirmed that OpenCode can run with no tools and no MCP servers"),
     ]
 
     public static func adapter(_ id: String) -> Adapter? { adapters.first { $0.id == id } }

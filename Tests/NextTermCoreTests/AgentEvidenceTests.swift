@@ -465,6 +465,49 @@ import Testing
         #expect(two?.sessionID == nil && two?.source == .guess)
     }
 
+    /// OpenCode names no session on the line after `opencode -c` or a switch inside it: the tab's title does, and the
+    /// tab kept the id it matched (OpencodeShownSession). Capture takes that id, never the title, and opens no store.
+    @Test func anOpencodeTabNamesTheSessionItsTitleShowed() throws {
+        let (home, project) = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let opencode = try process(["opencode", "-c"], executable: "/opt/homebrew/bin/opencode", directory: project)
+        func read(_ leader: AgentProcess, typed: String, shown: String?) -> Evidence? {
+            AgentEvidence.capture(AgentEvidence.Capture(leader: leader, verified: true, typedLine: typed, home: home, shownSession: shown))
+        }
+        let continued = try #require(read(opencode, typed: "opencode -c", shown: "ses_7f3a9c"))
+        #expect(continued.agent == .opencode && continued.sessionID == "ses_7f3a9c" && continued.source == .shownTitle)
+        #expect(!continued.isExact && continued.sessionFolder == project)
+        // With none kept, nothing is named here, and the restore guesses by time as before.
+        let none = try #require(read(opencode, typed: "opencode -c", shown: nil))
+        #expect(none.sessionID == nil && none.source == .guess)
+        // The session the line and argv name keeps their word while the title shows it, or names none. A switch inside
+        // OpenCode leaves the line on the session it started with: the title's is the one shown, a guess as the title is.
+        let typed = try process(["opencode", "-s", "ses_typed"], executable: "/opt/homebrew/bin/opencode", directory: project)
+        for shown in ["ses_typed", "SES_TYPED", nil] {
+            let named = try #require(read(typed, typed: "opencode -s ses_typed", shown: shown))
+            #expect(named.sessionID == "ses_typed" && named.source == .typedAndArgv, "\(shown ?? "none")")
+        }
+        let switched = try #require(read(typed, typed: "opencode -s ses_typed", shown: "ses_7f3a9c"))
+        #expect(switched.sessionID == "ses_7f3a9c" && switched.source == .shownTitle && !switched.isExact)
+        // An id out of OpenCode's shape is none.
+        let odd = try #require(read(opencode, typed: "opencode -c", shown: "ses_7f; rm -rf ~"))
+        #expect(odd.sessionID == nil && odd.source == .guess)
+        #expect(read(typed, typed: "opencode -s ses_typed", shown: "ses_7f; rm -rf ~")?.sessionID == "ses_typed")
+        // Another agent's tab takes no shown session.
+        let gemini = try process(["gemini"], executable: "/opt/homebrew/bin/gemini")
+        #expect(read(gemini, typed: "gemini", shown: "ses_7f3a9c")?.sessionID == nil)
+
+        // The snapshot keeps the id and how it was found, and nothing of the title.
+        let pane = SessionSnapshot.Pane(id: UUID(), folder: project, agent: continued)
+        let header = SessionSnapshot.Header(launchID: UUID(), generation: 1, clean: false, savedAt: Date())
+        let window = SessionSnapshot.Window(groups: [SessionSnapshot.Group(root: .pane(pane), focused: pane.id)])
+        let data = try SessionSnapshot(header: header, windows: [window]).encoded()
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains("ses_7f3a9c") && text.contains("shownTitle") && !text.contains("OC |"))
+        let back = try SessionSnapshot.decode(data)
+        #expect(back.panes.first?.agent?.source == .shownTitle && back.panes.first?.agent?.sessionID == "ses_7f3a9c")
+    }
+
     // MARK: which agent
 
     /// An agent the classifier knows that the matrix does not is still an agent: its tab gets a note, never its

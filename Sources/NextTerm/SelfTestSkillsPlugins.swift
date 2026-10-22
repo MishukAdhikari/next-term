@@ -207,7 +207,7 @@ extension SelfTest {
         let sheet = SkillsReviewSheet(fetched: first) { _ in }
         let details = sheet.details.stringValue
         check(SkillsInstaller.defaultClaudeLink(candidate, fetched: first) == .skip && sheet.claudeLink.isHidden
-              && details.contains("Goes to ~/.agents/skills/demo-plugin. Agents that load it, if you use them: Codex, Command Code, \(otherReaders).")
+              && details.contains("Goes to ~/.agents/skills/demo-plugin. Agents that load it, if you use them: Codex, Command Code, OpenCode, \(otherReaders).")
               && !details.contains("through the Claude Code link"),
               "skills plugins: a plugin folder that runs something is left out of Claude Code by default, and every agent that loads it is named",
               details)
@@ -255,8 +255,8 @@ extension SelfTest {
         defer { linkedReview.discard() }
         let linkedSheet = SkillsReviewSheet(fetched: linkedReview) { _ in }
         let linkedDetails = linkedSheet.details.stringValue
-        check(linkedDetails.contains("Agents that load it, if you use them: Codex, Command Code, Claude Code (through its link), \(otherReaders). "
-                                     + "Amp, Cursor, opencode and goose also find it through the Claude Code link."),
+        check(linkedDetails.contains("Agents that load it, if you use them: Codex, Command Code, OpenCode, Claude Code (through its link), \(otherReaders). "
+                                     + "Amp, Cursor and goose also find it through the Claude Code link."),
               "skills plugins: an update that keeps the link names Claude Code and the agents that find it through the link", linkedDetails)
         // AE6: the same parts as the installed copy keep the link by default; leaving it out would remove it.
         // The line beside the popup opens with ⚠︎, since the plugin it keeps linked starts programs (R6).
@@ -297,7 +297,7 @@ extension SelfTest {
                   "skills plugins: with its key false, the review offers the link (Claude Code loads nothing from it)")
         }
         let offDetails = SkillsReviewSheet(fetched: third) { _ in }.details.stringValue
-        check(offDetails.contains("Agents that load it, if you use them: Codex, Command Code, \(otherReaders). Claude Code loads nothing from it while its plugin is off."),
+        check(offDetails.contains("Agents that load it, if you use them: Codex, Command Code, OpenCode, \(otherReaders). Claude Code loads nothing from it while its plugin is off."),
               "skills plugins: with its key false, the review leaves Claude Code out of the agents that load it", offDetails)
         await pluginLeftoverChecks(keyOff: true)
         check(fileState(settings) == keyed, "skills plugins: working out what removal leaves keeps the user's key as it is")
@@ -327,9 +327,9 @@ extension SelfTest {
               "changed: " + realChanges(realBefore, realAfter))
     }
 
-    /// The agents besides Codex, Command Code and Claude Code that read ~/.agents/skills, as the review
+    /// The agents besides Codex, Command Code, OpenCode and Claude Code that read ~/.agents/skills, as the review
     /// names them.
-    static let otherReaders = "Gemini CLI, Qwen Code, Cursor, opencode, Copilot CLI, Amp, Junie and goose"
+    static let otherReaders = "Gemini CLI, Qwen Code, Cursor, Copilot CLI, Amp, Junie and goose"
 
     /// What removing the installed, linked demo-plugin says may stay. `keyOff`: the self-test home's
     /// settings hold "demo-plugin@skills-dir": false, so its plugin never started.
@@ -459,7 +459,7 @@ extension SelfTest {
         let before = fileState(settings)
         let realSettings = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
         let realBefore = realState(realSettings)
-        let readers = "Amp, Cursor, opencode and goose also read ~/.claude/skills."
+        let readers = "OpenCode, Amp, Cursor and goose also read ~/.claude/skills."
         check(SkillsSettingsView.introText.hasSuffix(readers) && SkillsSettingsView.introTip.contains("Junie and goose"),
               "skills plugins: Settings › Skills' intro names the agents that read ~/.claude/skills, and its tooltip every reader of the shared one",
               SkillsSettingsView.introText)
