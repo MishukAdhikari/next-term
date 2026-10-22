@@ -61,7 +61,8 @@ public final class AgentReadiness {
         }
     }
 
-    /// Done counts as ready: it is only the mark of work not yet looked at.
+    /// Done counts as ready: it is only the mark of work not yet looked at. Only idle and done are ready; any other
+    /// state, failed among them, leaves the prompt unknown.
     public static func check(_ tab: Tab) -> Verdict {
         if tab.exited { return .notReady(.exited) }
         if tab.herdr { return herdr(tab) }
@@ -69,6 +70,7 @@ public final class AgentReadiness {
         if tab.agent == nil { return .notReady(.notAgent) }
         if tab.state == .working || tab.busy || tab.starting { return .notReady(.working) }
         if tab.question != nil || tab.state == .attention { return .notReady(.asking) }
+        guard tab.state == .idle || tab.state == .done else { return .notReady(.unseenPrompt) }
         if tab.locked { return .notReady(.locked) }
         guard let hasText = tab.lineHasText else { return .notReady(.unseenPrompt) }
         return hasText ? .notReady(.hasText) : .ready
@@ -81,7 +83,8 @@ public final class AgentReadiness {
         guard tab.state == .idle || tab.state == .done else { return .notReady(.unseenPrompt) }
         if tab.locked { return .notReady(.locked) }
         guard let hasText = tab.lineHasText else { return .notReady(.unseenPrompt) }
-        return hasText ? .notReady(.hasText) : .ready
+        if hasText { return .notReady(.hasText) }
+        return tab.agent == nil ? .notReady(.notAgent) : .ready
     }
 
     // MARK: the watch
@@ -90,9 +93,10 @@ public final class AgentReadiness {
         var line = PromptLine()
         var working = false
 
-        /// The agent took the line when it went from working to not working.
+        /// The agent took the line when its work started. Text typed while it works stays in its prompt after, so
+        /// the end of the work clears nothing; Return outside a paste already empties a sent line.
         mutating func observe(working now: Bool) {
-            if working && !now { line.reset() }
+            if !working && now { line.reset() }
             working = now
         }
 
@@ -131,5 +135,11 @@ public final class AgentReadiness {
     /// The tab closed.
     public func forget(_ id: UUID) {
         watches[id] = nil
+    }
+
+    /// Drops the line of every tab not among these, the open ones.
+    public func keep(only ids: Set<UUID>) {
+        guard watches.keys.contains(where: { !ids.contains($0) }) else { return }
+        watches = watches.filter { ids.contains($0.key) }
     }
 }

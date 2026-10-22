@@ -55,10 +55,46 @@ import Testing
         let modified: [UInt8] = [0x1B] + bytes("[1;5C")
         let lone: [UInt8] = [0x1B]
         #expect(!fed(up, f1, modified, lone).hasText)
-        let title: [UInt8] = [0x1B] + bytes("]0;title") + [0x07]
-        #expect(!fed(title).hasText)
         let altB: [UInt8] = [0x1B] + bytes("b")
         #expect(!fed(altB).hasText)
+        let altShiftP: [UInt8] = [0x1B, 0x50]
+        let altBracket: [UInt8] = [0x1B, 0x5D]
+        #expect(!fed(altShiftP, altBracket).hasText)
+    }
+
+    /// Escape interrupts an agent, so Escape and then a capital letter or a bracket is common typing. Keys never
+    /// carry a terminal string (ESC P, ESC ]), so nothing after them may be swallowed as one.
+    @Test func escapeThenATypedKeyStillCounts() {
+        let lone: [UInt8] = [0x1B]
+        let ret: [UInt8] = [0x0D]
+        #expect(fed(lone, bytes("Please fix")).hasText)
+        #expect(fed(lone, bytes("]x"), ret, bytes("hello")).hasText)
+        let altShiftP: [UInt8] = [0x1B, 0x50]
+        #expect(fed(altShiftP, bytes("draft")).hasText)
+        let altBracket: [UInt8] = [0x1B, 0x5D]
+        #expect(fed(altBracket, bytes("draft")).hasText)
+        let escapeInTheSameWrite: [UInt8] = [0x1B] + bytes("Please")
+        #expect(fed(escapeInTheSameWrite).hasText)
+    }
+
+    /// A backslash before Return is a newline in the agent's input: the text stays.
+    @Test func backslashThenReturnKeepsTheLine() {
+        let ret: [UInt8] = [0x0D]
+        #expect(fed(bytes("abc\\"), ret).hasText)
+        #expect(fed(bytes("abc\\\r")).hasText)
+        #expect(!fed(bytes("abc\\"), ret, bytes("d"), ret).hasText)
+        let delete: [UInt8] = [0x7F]
+        #expect(!fed(bytes("a\\"), delete, delete, ret).hasText)
+    }
+
+    /// Shift-Return as agents' terminal setups send it: ESC Return, a kitty key report, or Ctrl-J.
+    @Test func shiftReturnEncodingsKeepTheLine() {
+        let escReturn: [UInt8] = [0x1B, 0x0D]
+        let kitty: [UInt8] = [0x1B] + bytes("[13;2u")
+        let ctrlJ: [UInt8] = [0x0A]
+        #expect(fed(bytes("a"), escReturn).hasText)
+        #expect(fed(bytes("a"), kitty).hasText)
+        #expect(fed(bytes("a"), ctrlJ).hasText)
     }
 
     @Test func aLoneEscapeThenTypingCountsTheTyping() {

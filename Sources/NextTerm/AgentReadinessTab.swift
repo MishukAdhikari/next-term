@@ -15,6 +15,7 @@ extension AgentReadiness {
     /// Whether Next Term may type into the tab now, and if not, why. send_to_tab's busy and starting checks count,
     /// so a tab it would refuse is never offered.
     @MainActor func check(_ tab: TerminalTab) -> Verdict {
+        sweepClosedTabs()
         let status = tab.status
         let agentRunning = Self.runsLocalAgent(tab)
         let working = status.state == .working
@@ -30,6 +31,13 @@ extension AgentReadiness {
         values.starting = MCPControl.isStarting(tab)
         values.locked = MCPInputLine.refusal(tab) != nil
         return Self.check(values)
+    }
+
+    /// A closed tab never writes again, so its line is dropped here, off the typing path.
+    @MainActor private func sweepClosedTabs() {
+        guard watchedCount > 0, let app = AppDelegate.shared else { return }
+        let open: [UUID] = app.controllers.flatMap(\.tabs).map(\.id)
+        keep(only: Set(open))
     }
 
     private static func runsLocalAgent(_ tab: TerminalTab) -> Bool {

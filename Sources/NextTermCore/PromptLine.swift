@@ -4,15 +4,19 @@ import Foundation
 /// typed there). The agent draws its own input box, so the shell's idea of the line says nothing; this counts instead.
 ///
 /// It is deliberately cautious: printable characters and pasted text count up, Backspace counts down, and only Return
-/// outside a paste, Ctrl-C, Ctrl-U or `reset()` (the agent took the line) empties it. Escape sequences such as arrow
-/// keys count for nothing, so a line moved around in still reads as holding its text. A tab whose line is in doubt is
-/// skipped, never typed into.
+/// outside a paste (and not after a backslash, which makes it a newline), Ctrl-C, Ctrl-U or `reset()` (the agent took
+/// the line) empties it. Escape sequences such as arrow keys count for nothing, so a line moved around in still reads
+/// as holding its text. Only keys and typed text come here, never the terminal's own answers, so no terminal string
+/// (ESC P, ESC ]) is ever expected: ESC and one more key is Alt with that key, and a write that ends in ESC was the
+/// Escape key alone, so the next write starts fresh. A tab whose line is in doubt is skipped, never typed into.
 ///
 /// Feeding reads the bytes in place: no allocation, no copy, no decoding.
 public struct PromptLine: Equatable, Sendable {
     /// Characters on the line, as far as the writes show (a multibyte character counts once).
     public private(set) var count = 0
     private var inPaste = false
+    /// The last character typed was a backslash, so a Return now is a newline.
+    private var afterBackslash = false
     private var escape = Escape.none
     /// The number read so far in a control sequence's parameters (200 and 201 mark a bracketed paste).
     private var parameter = 0
@@ -25,10 +29,6 @@ public struct PromptLine: Equatable, Sendable {
         case control
         /// ESC O : one more byte.
         case single
-        /// ESC ] , ESC P and the like: a string until BEL or ESC \ .
-        case string
-        /// ESC inside a string: a backslash ends it.
-        case stringEscape
     }
 
     public init() {}
@@ -40,12 +40,15 @@ public struct PromptLine: Equatable, Sendable {
     public mutating func reset() {
         count = 0
         inPaste = false
+        afterBackslash = false
         escape = .none
         parameter = 0
     }
 
     public mutating func feed(_ bytes: ArraySlice<UInt8>) {
         for byte in bytes { feed(byte) }
+        // A key's sequence comes whole in one write: an ESC or ESC O left open was the key itself.
+        if escape == .started || escape == .single { escape = .none }
     }
 
     private mutating func feed(_ byte: UInt8) {
@@ -58,10 +61,6 @@ public struct PromptLine: Equatable, Sendable {
             control(byte)
         case .single:
             escape = .none
-        case .string:
-            if byte == 0x07 { escape = .none } else if byte == 0x1B { escape = .stringEscape }
-        case .stringEscape:
-            escape = byte == 0x5C ? .none : .string
         }
     }
 
@@ -70,10 +69,14 @@ public struct PromptLine: Equatable, Sendable {
             if byte < 0x80 || byte >= 0xC0 { count += 1 } // pasted, so even Return or Ctrl-U is text
             return
         }
+        let backslashBefore = afterBackslash
+        afterBackslash = false
         switch byte {
         case 0x1B:
             escape = .started
-        case 0x0D, 0x03, 0x15:
+        case 0x0D:
+            if !backslashBefore { count = 0 }
+        case 0x03, 0x15:
             count = 0
         case 0x08, 0x7F:
             count = max(0, count - 1)
@@ -83,6 +86,7 @@ public struct PromptLine: Equatable, Sendable {
             break // a continuation byte: its character was counted at its first byte
         default:
             count += 1
+            afterBackslash = byte == 0x5C
         }
     }
 
@@ -91,7 +95,6 @@ public struct PromptLine: Equatable, Sendable {
         switch byte {
         case 0x5B: escape = .control
         case 0x4F: escape = .single
-        case 0x5D, 0x50, 0x58, 0x5E, 0x5F: escape = .string
         case 0x1B: escape = .started
         default: escape = .none // Alt with a key, or ESC before Return: moves or newlines, never text taken away
         }

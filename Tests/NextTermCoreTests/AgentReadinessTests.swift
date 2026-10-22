@@ -55,7 +55,13 @@ import Testing
         #expect(AgentReadiness.check(herdr) == .notReady(.working))
         herdr.state = .done
         herdr.lineHasText = false
+        #expect(AgentReadiness.check(herdr) == .notReady(.notAgent))
+        herdr.agent = .claude
         #expect(AgentReadiness.check(herdr) == .ready)
+    }
+
+    @Test func aFailedAgentTabIsNotReady() {
+        #expect(AgentReadiness.check(agentTab(.failed)) == .notReady(.unseenPrompt))
     }
 
     @Test func reasonsReadAsShort() {
@@ -77,12 +83,33 @@ import Testing
         #expect(readiness.lineHasText(id, agentRunning: true, working: false) == false)
     }
 
-    @Test func theLineEmptiesWhenTheAgentStopsWorking() {
+    @Test func theLineEmptiesWhenTheAgentStartsWorking() {
         let readiness = AgentReadiness()
         let id = UUID()
         readiness.written(Array("abc".utf8)[...], id: id, agentRunning: true, working: false)
-        #expect(readiness.lineHasText(id, agentRunning: true, working: true) == true)
+        #expect(readiness.lineHasText(id, agentRunning: true, working: true) == false)
         #expect(readiness.lineHasText(id, agentRunning: true, working: false) == false)
+    }
+
+    /// Agents let the user type ahead while they work; the draft stays in the prompt when the work ends.
+    @Test func textTypedWhileTheAgentWorksOutlastsTheWork() {
+        let readiness = AgentReadiness()
+        let id = UUID()
+        readiness.written(Array("fix tests".utf8)[...], id: id, agentRunning: true, working: true)
+        #expect(readiness.lineHasText(id, agentRunning: true, working: false) == true)
+        readiness.written(Array("\r".utf8)[...], id: id, agentRunning: true, working: false)
+        #expect(readiness.lineHasText(id, agentRunning: true, working: false) == false)
+    }
+
+    @Test func closedTabsAreSweptAway() {
+        let readiness = AgentReadiness()
+        let open = UUID()
+        let closed = UUID()
+        readiness.written(Array("a".utf8)[...], id: open, agentRunning: true, working: false)
+        readiness.written(Array("b".utf8)[...], id: closed, agentRunning: true, working: false)
+        readiness.keep(only: [open])
+        #expect(readiness.watchedCount == 1)
+        #expect(readiness.lineHasText(open, agentRunning: true, working: false) == true)
     }
 
     @Test func aTabWithNoAgentIsNeitherWatchedNorKnown() {
