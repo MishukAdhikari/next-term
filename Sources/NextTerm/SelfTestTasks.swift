@@ -5,7 +5,8 @@ import NextTermCore
 /// Tasks, end to end: the Tasks menu after Agents with Add Task… on ⌃⌘T; the sheet filled from a terminal selection, the
 /// bytes it writes as TodoFile renders them, its notice's Undo, and a second add within a minute; add_task through
 /// `nxtrm mcp` (Approve, Decline, no answer, a stored key shown as •••, a day it can't read, no project, a worktree
-/// window); Settings › Tasks right before Secrets; and Reminders with an in-memory store, never the user's own.
+/// window); Settings › Tasks right before Secrets; Reminders with an in-memory store, never the user's own; and Run a
+/// Shortcut with a fake runner, which starts no command.
 /// Everything goes to the self-test project's own todo folder, or to a repository of the part's own, and is removed
 /// after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
 extension SelfTest {
@@ -41,9 +42,12 @@ extension SelfTest {
         taskSettingsChecks()
         #if DEBUG
         await remindersChecks(c)
+        await shortcutChecks()
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
+        // Its fake runner is debug-only, so a release build never runs the user's shortcuts.
+        note("shortcut: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
