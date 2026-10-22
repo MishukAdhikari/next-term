@@ -180,7 +180,9 @@ import Testing
         for key in ["tasks.defaultDestination", "tasks.projects", "tasks.remindersAlarm", "tasks.destinationOffer"] {
             #expect(TaskSettings.Key.all.contains(key), "\(key)")
         }
-        #expect(TaskSettings.Key.all.count == 7)
+        // The one-time notes join them too.
+        #expect(TaskSettings.Key.all.contains("tasks.notesShown"))
+        #expect(TaskSettings.Key.all.count == 8)
     }
 
     @Test func everyWorktreeOfARepositoryHasOneKey() throws {

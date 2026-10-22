@@ -26,8 +26,19 @@ public struct TaskSettings: Equatable, Sendable {
     /// The one-time offer of another destination in the Add Task sheet: still to show, or shown and answered.
     public var destinationOffer = DestinationOffer.pending
 
+    /// The one-time notes already shown, in the order they were; a name this version doesn't know is dropped.
+    public var notesShown: [Note] = []
+
     public enum DestinationOffer: String, Sendable {
         case pending, done
+    }
+
+    /// A note shown, or a step taken, once.
+    public enum Note: String, Sendable, CaseIterable {
+        /// "Things asks once whether to enable Things URLs. Choose Enable.", when Things is first chosen.
+        case thingsEnable = "things-enable"
+        /// The first link sent to Things brought it to the front, so its own question could be seen.
+        case thingsOpened = "things-opened"
     }
 
     /// Where each is kept in the defaults.
@@ -39,8 +50,9 @@ public struct TaskSettings: Equatable, Sendable {
         public static let projects = "tasks.projects"
         public static let remindersAlarm = "tasks.remindersAlarm"
         public static let destinationOffer = "tasks.destinationOffer"
+        public static let notesShown = "tasks.notesShown"
         public static let all = [folder, outsideFolder, includeContext, defaultDestination, projects, remindersAlarm,
-                                 destinationOffer]
+                                 destinationOffer, notesShown]
     }
 
     public init(folder: String = defaultFolder, outsideFolder: String? = nil, includeContext: Bool = true) {
@@ -69,6 +81,15 @@ public struct TaskSettings: Equatable, Sendable {
         remindersAlarm = defaults.object(forKey: Key.remindersAlarm) as? Bool ?? false
         let offer = defaults.string(forKey: Key.destinationOffer).flatMap(DestinationOffer.init(rawValue:))
         destinationOffer = offer ?? .pending
+        let names: [String] = defaults.stringArray(forKey: Key.notesShown) ?? []
+        notesShown = names.compactMap(Note.init(rawValue:))
+    }
+
+    /// Remembers that `note` was shown, once, keeping the names already saved, those this version doesn't know too.
+    public static func markShown(_ note: Note, in defaults: UserDefaults) {
+        let names: [String] = defaults.stringArray(forKey: Key.notesShown) ?? []
+        guard !names.contains(note.rawValue) else { return }
+        defaults.set(names + [note.rawValue], forKey: Key.notesShown)
     }
 
     /// Where a task in the project with this key goes: the project's own destination, else the default, else the
