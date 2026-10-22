@@ -190,7 +190,12 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(agentsWillOpen),
                                                name: NSPopUpButton.willPopUpNotification, object: views.agent)
+        // Send Tasks To ▸ changed where the project's tasks go: a popup still on "(this project’s)" follows it.
+        NotificationCenter.default.addObserver(self, selector: #selector(destinationSaved),
+                                               name: .taskDestinationChanged, object: nil)
     }
+
+    @objc private func destinationSaved() { refresh() }
 
     func textDidChange(_ notification: Notification) { updateState() }
 

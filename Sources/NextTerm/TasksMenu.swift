@@ -2,7 +2,8 @@ import AppKit
 import NextTermCore
 
 /// The Tasks menu, after Agents: Add Task… turns a prompt into a todo file in the project's todo folder (AddTaskSheet),
-/// Show Todo Folder shows where they are, and Task Settings… opens Settings › Tasks. Each item is a command of its own,
+/// Show Todo Folder shows where they are, Send Tasks To ▸ shows and changes where the project's tasks go, and Task
+/// Settings… opens Settings › Tasks. Each item is a command of its own,
 /// so Settings › Keyboard Shortcuts can give one a key. The places marked below are kept for the commands that come
 /// next, so the menu keeps the order its self-test checks.
 @MainActor
@@ -23,12 +24,13 @@ final class TasksMenu: NSObject, NSMenuItemValidation {
         // Here, after Add Task…: Wrap Up… and Post Update….
         add("Show Todo Folder", #selector(showTodoFolder(_:)))
         menu.addItem(.separator())
-        // Here, in a section of their own before Task Settings…: Send Tasks To ▸ and Connect a Tracker to Your Agents….
+        menu.addItem(sendTasksToItem())
+        // Here, after Send Tasks To ▸: Connect a Tracker to Your Agents….
         add("Task Settings…", #selector(showTaskSettings(_:)))
     }
 
     /// The project window in front, with or without a project.
-    private var front: TerminalWindowController? {
+    var front: TerminalWindowController? {
         (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? (NSApp.mainWindow?.windowController as? TerminalWindowController)
     }
 
@@ -72,6 +74,8 @@ final class TasksMenu: NSObject, NSMenuItemValidation {
         switch item.action {
         case #selector(addTask(_:)): return front != nil
         case #selector(showTodoFolder(_:)): return front.flatMap(existingFolder(of:)) != nil
+        // With no window in front the default is set in Settings › Tasks.
+        case #selector(sendTasksTo(_:)): return front != nil
         default: return true
         }
     }

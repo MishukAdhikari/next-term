@@ -44,6 +44,7 @@ extension SelfTest {
         await remindersChecks(c)
         await shortcutChecks()
         await destinationSheetChecks(c)
+        await sendTasksToChecks(c, other: given)
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
@@ -51,6 +52,7 @@ extension SelfTest {
         note("shortcut: skipped in a release build; its checks run in a debug build")
         // Its openers record only in a debug build, so a release build never opens a page or an app.
         note("destinations: skipped in a release build; its checks run in a debug build")
+        note("send to: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
@@ -66,8 +68,13 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let menu = bar.first(where: { $0.title == "Tasks" })?.submenu else { return check(false, "tasks: the menu bar has Tasks") }
         let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        check(titles == ["Add Task…", "Show Todo Folder", "—", "Task Settings…"], "tasks: Add Task…, Show Todo Folder, then Task Settings…",
-              titles.joined(separator: " | "))
+        check(titles == ["Add Task…", "Show Todo Folder", "—", "Send Tasks To", "Task Settings…"],
+              "tasks: Add Task…, Show Todo Folder, Send Tasks To, then Task Settings…", titles.joined(separator: " | "))
+        // Send Tasks To ▸ is filled when it opens, so no destination is a command with a key.
+        let sendTo = menu.items.first { $0.title == "Send Tasks To" }
+        let listed = KeyboardShortcuts.shared.commands.contains { $0.path.hasPrefix("Tasks › Send Tasks To") }
+        check(sendTo?.submenu?.items.isEmpty == true && !listed,
+              "tasks: Send Tasks To is empty until it opens, and Keyboard Shortcuts lists none of its rows")
         let add = menu.items.first { $0.action == #selector(TasksMenu.addTask(_:)) }
         let command = KeyboardShortcuts.shared.commands.first { $0.id == "addTask:" }
         let keyed = add.flatMap(KeyboardShortcuts.chord(of:))?.display == "⌃⌘T" && add?.target === TasksMenu.shared
