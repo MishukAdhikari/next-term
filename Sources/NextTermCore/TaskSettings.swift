@@ -84,7 +84,7 @@ public struct TaskSettings: Equatable, Sendable {
         TodoFolder.projectRoot(project)
     }
 
-    /// The JSON saved for every project's choices.
+    /// The JSON saved for every project's choices; a destination that fails its check is left out.
     public static func json(projects: [String: ProjectTasks]) -> String? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -130,7 +130,10 @@ public struct ProjectTasks: Equatable, Sendable, Codable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encodeIfPresent(destination, forKey: .destination)
+        // A destination that fails its check is left out, so a bad value is never saved.
+        if let destination, destination.problem == nil {
+            try c.encode(destination, forKey: .destination)
+        }
         try c.encodeIfPresent(handoffFolder, forKey: .handoffFolder)
     }
 }

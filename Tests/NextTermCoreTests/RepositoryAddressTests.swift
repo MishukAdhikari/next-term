@@ -40,4 +40,11 @@ import Testing
             #expect(RepositoryAddress.parse(remote) == nil, "\(remote)")
         }
     }
+
+    @Test func aRemoteWithCredentialsInItIsNothing() {
+        for remote in ["https://ghp_EXAMPLE@github.com/o/r.git", "https://user:secret@github.com/o/r",
+                       "https://oauth2:glpat-EXAMPLE@gitlab.com/group/project.git"] {
+            #expect(RepositoryAddress.parse(remote) == nil, "\(remote)")
+        }
+    }
 }

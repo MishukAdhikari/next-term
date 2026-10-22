@@ -64,7 +64,9 @@ public enum TaskDestination: Equatable, Hashable, Sendable {
         case .things(let list?):
             return Self.isOneLine(list) ? nil : "The Things list needs a name of one line."
         case .shortcut(let id, let name):
-            return Self.isOneLine(id) && Self.isOneLine(name) ? nil : "The shortcut needs its identifier and name."
+            // The identifier is passed to the shortcuts command, so only its UUID form is taken, never an option.
+            let isIdentifier = UUID(uuidString: id) != nil
+            return isIdentifier && Self.isOneLine(name) ? nil : "The shortcut needs its identifier and name."
         case .github(let owner, let repo):
             return Self.nameProblem(owner, "GitHub owner") ?? Self.nameProblem(repo, "GitHub repository")
         case .gitlab(let path):
@@ -77,7 +79,7 @@ public enum TaskDestination: Equatable, Hashable, Sendable {
             let letters = team.unicodeScalars.allSatisfy { $0.isASCII && CharacterSet.alphanumerics.contains($0) }
             return letters && (1...10).contains(team.count) ? nil : "A Linear team key is 1 to 10 letters and digits."
         case .azureBoards(let org, let project, let type):
-            guard Self.isOneLine(org), Self.isOneLine(project) else {
+            guard Self.isPathPart(org), Self.isPathPart(project) else {
                 return "Azure Boards needs an organization and a project."
             }
             return Self.azureTypes.contains(type) ? nil : "Azure Boards can’t make a work item of type “\(type)”."
@@ -89,10 +91,21 @@ public enum TaskDestination: Equatable, Hashable, Sendable {
         }
     }
 
-    /// Text with something in it and no line break.
+    /// Text with something in it, no line break and no control or format character, so it can be typed into an
+    /// agent's tab or shown for approval without an escape sequence or a direction override hiding in it.
     static func isOneLine(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
-        return !trimmed.isEmpty && text.rangeOfCharacter(from: .newlines) == nil
+        guard !trimmed.isEmpty, text.rangeOfCharacter(from: .newlines) == nil else { return false }
+        return !text.unicodeScalars.contains { scalar in
+            let category = scalar.properties.generalCategory
+            return category == .control || category == .format
+        }
+    }
+
+    /// One line that stays one part of a page's path: no `/`, `\`, `?`, `#` or `%`, and never `.` or `..` alone.
+    static func isPathPart(_ text: String) -> Bool {
+        guard isOneLine(text), text != ".", text != ".." else { return false }
+        return text.rangeOfCharacter(from: CharacterSet(charactersIn: "/\\?#%")) == nil
     }
 
     /// A GitHub owner or repository, or one part of a GitLab path: letters, digits, `.`, `_` and `-`, up to 100,

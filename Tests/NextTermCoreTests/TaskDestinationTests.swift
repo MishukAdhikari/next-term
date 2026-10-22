@@ -93,6 +93,53 @@ import Testing
         #expect(TaskDestination.azureBoards(org: "", project: "p", type: "Task").problem != nil)
     }
 
+    @Test func controlAndFormatCharactersAreRefusedInEveryTextField() {
+        for bad in ["Lin\u{1b}[201~ear", "a\u{0}b", "a\u{202E}b", "a\u{7f}b", "a\u{200B}b", "a\tb"] {
+            #expect(TaskDestination.throughAgent(tracker: bad).problem != nil, "\(bad.debugDescription)")
+            #expect(TaskDestination.reminders(listID: nil, listName: bad).problem != nil)
+            #expect(TaskDestination.reminders(listID: bad, listName: "Next Term").problem != nil)
+            #expect(TaskDestination.things(list: bad).problem != nil)
+            #expect(TaskDestination.shortcut(id: "8F1C2D3E-0000-4000-8000-000000000001", name: bad).problem != nil)
+            #expect(TaskDestination.azureBoards(org: bad, project: "p", type: "Task").problem != nil)
+            #expect(TaskDestination.azureBoards(org: "o", project: bad, type: "Task").problem != nil)
+            #expect(TaskDestination.json(.throughAgent(tracker: bad)) == nil)
+        }
+        // Letters beyond ASCII are fine.
+        #expect(TaskDestination.things(list: "Ärbeit · 仕事").problem == nil)
+    }
+
+    @Test func aShortcutIsNamedByItsIdentifier() {
+        #expect(TaskDestination.shortcut(id: "8f1c2d3e-0000-4000-8000-000000000001", name: "x").problem == nil)
+        for id in ["--help", "-x", "Add to Notes", "8F1C2D3E-0000-4000-8000", ""] {
+            #expect(TaskDestination.shortcut(id: id, name: "x").problem != nil, "\(id)")
+        }
+    }
+
+    @Test func anAzureOrganizationAndProjectStayOnePartOfThePath() {
+        #expect(TaskDestination.azureBoards(org: "example-org", project: "Web App", type: "Task").problem == nil)
+        for bad in ["a/../b", "a/b", "p?x", "p#y", "p%2Fq", "a\\b", ".", ".."] {
+            #expect(TaskDestination.azureBoards(org: bad, project: "p", type: "Task").problem != nil, "\(bad)")
+            #expect(TaskDestination.azureBoards(org: "o", project: bad, type: "Task").problem != nil, "\(bad)")
+        }
+    }
+
+    @Test func aFieldOfTheWrongTypeIsMissingDetails() {
+        let read = TaskDestination.read(#"{"kind":"github","owner":7,"repo":"r"}"#)
+        #expect(read.destination == nil && read.problem != nil)
+    }
+
+    @Test func aProjectsDestinationThatFailsItsCheckIsNeverSaved() throws {
+        let projects: [String: ProjectTasks] = [
+            "/p": ProjectTasks(destination: .github(owner: "a/b", repo: "r"), handoffFolder: "notes"),
+            "/q": ProjectTasks(destination: .throughAgent(tracker: "Linear")),
+        ]
+        let json: String = try #require(TaskSettings.json(projects: projects))
+        #expect(!json.contains("a/b") && json.contains("notes") && json.contains("Linear"))
+        let read = try JSONDecoder().decode([String: ProjectTasks].self, from: Data(json.utf8))
+        #expect(read["/p"] == ProjectTasks(handoffFolder: "notes"))
+        #expect(read["/q"]?.destination == .throughAgent(tracker: "Linear"))
+    }
+
     @Test func noKeysAtAllMeansTheTodoFolderEverywhere() {
         withDefaults { defaults in
             let settings = TaskSettings(defaults: defaults)
