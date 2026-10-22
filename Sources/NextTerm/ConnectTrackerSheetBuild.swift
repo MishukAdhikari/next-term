@@ -68,14 +68,17 @@ extension ConnectTrackerSheet {
         var open: NSButton?
         var missing: NSTextField?
         var link: NSButton?
+        var noteLabels: [NSTextField] = []
         switch cell {
         case .line(let text, _):
             line.stringValue = text
             line.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
             line.isSelectable = true
             line.setAccessibilityLabel("\(agent.name)\u{2019}s line for \(tracker.name)")
-            let notes: [String] = [TrackerLines.signIn(agent, line: text), tracker.note(for: agent)].compactMap { $0 }
-            for note in notes { parts.append(SecretManagerImportSheet.small(note)) }
+            noteLabels = tracker.notes(for: agent, line: text).map { (note: String) -> NSTextField in
+                SecretManagerImportSheet.small(note)
+            }
+            parts.append(contentsOf: noteLabels)
             let copyButton = button("Copy", #selector(copyLine(_:)), agent)
             let openButton = button(Self.openTitle, #selector(openInNewTab(_:)), agent)
             let notFound = SecretManagerImportSheet.small(Self.notFound)
@@ -103,7 +106,7 @@ extension ConnectTrackerSheet {
             link = howLink
             parts.append(howLink)
         }
-        rowViews[agent] = RowViews(line: line, copy: copy, open: open, notFound: missing, link: link)
+        rowViews[agent] = RowViews(line: line, copy: copy, open: open, notFound: missing, link: link, notes: noteLabels)
         let stack = NSStackView(views: parts)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -129,10 +132,11 @@ extension ConnectTrackerSheet {
 
     /// The trackers with no line yet, each with why and its page.
     private func heldList() -> NSView {
-        var views: [NSView] = [SecretManagerImportSheet.small("Not listed yet:")]
-        for tracker in TrackerLines.held {
-            let why: String = tracker.cell(for: .claude).reason ?? ""
-            let label = SecretManagerImportSheet.small("\(tracker.name): \(why)")
+        var views: [NSView] = [SecretManagerImportSheet.small(Self.notListed)]
+        heldLabels = []
+        for (tracker, text) in zip(TrackerLines.held, TrackerLines.heldSummary) {
+            let label = SecretManagerImportSheet.small(text)
+            heldLabels.append(label)
             let row = NSStackView(views: [label, pageButton(tracker.page, title: tracker.page.host ?? "Its page")])
             row.spacing = 6
             views.append(row)

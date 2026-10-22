@@ -39,13 +39,23 @@ extension SelfTest {
         check(claude?.line.stringValue == expected && missing && claude?.notFound?.stringValue == ConnectTrackerSheet.notFound,
               "connect a tracker: with claude not on PATH its row says so and has no Open button",
               claude?.line.stringValue ?? "no row")
+        let claudeNotes: [String] = claude?.notes.map(\.stringValue) ?? []
+        check(claudeNotes == ["Then, in Claude Code: /mcp"], "connect a tracker: Claude Code's row says signing in is next",
+              claudeNotes.joined(separator: " / "))
+        let held: [String] = sheet.heldLabels.map(\.stringValue)
+        check(held == TrackerLines.heldSummary && held.count == 3,
+              "connect a tracker: Not listed yet names each tracker with why", held.joined(separator: " / "))
         claude?.copy?.performClick(nil)
         check(NSPasteboard.general.string(forType: .string) == expected, "connect a tracker: Copy still copies the line")
         sheet.choose("GitHub")
-        let held: ConnectTrackerSheet.RowViews? = sheet.rowViews[.claude]
-        check(held?.copy == nil && held?.open == nil && held?.link != nil,
-              "connect a tracker: a held pair has no Copy or Open button, only its page", held?.line.stringValue ?? "")
-        held?.link?.performClick(nil)
+        let heldRow: ConnectTrackerSheet.RowViews? = sheet.rowViews[.claude]
+        check(heldRow?.copy == nil && heldRow?.open == nil && heldRow?.link != nil,
+              "connect a tracker: a held pair has no Copy or Open button, only its page", heldRow?.line.stringValue ?? "")
+        let codexNotes: [String] = sheet.rowViews[.codex]?.notes.map(\.stringValue) ?? []
+        let tokenNote: Bool = codexNotes.count == 1 && codexNotes[0].contains("GITHUB_PAT_TOKEN")
+        check(tokenNote, "connect a tracker: GitHub's Codex row says where the token comes from, with no sign-in step",
+              codexNotes.joined(separator: " / "))
+        heldRow?.link?.performClick(nil)
         let page: URL = TrackerLines.catalog.first { $0.name == "GitHub" }!.cell(for: .claude).page
         check(TaskOpen.opened == [page], "connect a tracker: a held pair's page is recorded, and nothing opens",
               TaskOpen.opened.map(\.absoluteString).joined(separator: " "))

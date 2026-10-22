@@ -37,8 +37,7 @@ extension ConnectTrackerSheet {
             return NSSound.beep()
         }
         let home: String = NSHomeDirectory()
-        let front: TerminalWindowController? = SecretManagerImportSheet.homeWindow(home) ?? SecretManagerImportSheet.frontWindow()
-        let controller: TerminalWindowController = front ?? MCPControl.window(for: home).controller
+        let controller: TerminalWindowController = tabWindow(home)
         let tab: TerminalTab = controller.addTab(directory: home, select: true)
         tab.userTitle = "Connect \(tracker.name) to \(agent.name)"
         Self.register(tab)
@@ -59,6 +58,21 @@ extension ConnectTrackerSheet {
             }
             self?.say(said)
         }
+    }
+
+    /// The window the new tab goes in: the home folder's, else the one in front, else any, as long as no other sheet
+    /// covers it (Add Task's, when the sheet was opened from there), so the user can press Return in the tab; a new
+    /// window when every one is covered.
+    private func tabWindow(_ home: String) -> TerminalWindowController {
+        let reachable = { (controller: TerminalWindowController) -> Bool in
+            guard !controller.hasClosed, let window = controller.window else { return false }
+            guard let sheet = window.attachedSheet else { return true }
+            return sheet === self.window
+        }
+        let first: [TerminalWindowController?] = [SecretManagerImportSheet.homeWindow(home), SecretManagerImportSheet.frontWindow()]
+        let ordered: [TerminalWindowController] = first.compactMap { $0 } + AppDelegate.shared.controllers
+        if let open = ordered.first(where: reachable) { return open }
+        return AppDelegate.shared.openWindow(directory: home, forAgent: true)
     }
 
     /// Which listed agents' programs are on the login shell's PATH: a look for the file in each folder, off the main

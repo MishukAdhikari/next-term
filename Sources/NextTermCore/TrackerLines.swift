@@ -51,6 +51,12 @@ public enum TrackerLines {
         /// A sentence under the agent's line, or nil.
         public func note(for agent: AgentKind) -> String? { notes[agent] }
 
+        /// The sentences under the agent's line: its sign-in step, then the tracker's note.
+        public func notes(for agent: AgentKind, line: String) -> [String] {
+            let parts: [String?] = [TrackerLines.signIn(agent, line: line), note(for: agent)]
+            return parts.compactMap { $0 }
+        }
+
         /// At least one agent has a line for it.
         public var hasLine: Bool {
             TrackerLines.agents.contains { (agent: AgentKind) -> Bool in
@@ -90,15 +96,24 @@ public enum TrackerLines {
 
     static func noLine(_ name: String) -> String { "No line from \(name)\u{2019}s own page yet." }
 
-    /// What the agent asks next, once the line has run: signing in is the agent's.
+    /// What the agent asks next, once the line has run: signing in is the agent's. A Codex line that reads a token from
+    /// the environment has no sign-in step, since `codex mcp login` is the OAuth sign-in.
     public static func signIn(_ agent: AgentKind, line: String) -> String? {
         switch agent {
         case .claude: return "Then, in Claude Code: /mcp"
         case .codex:
             let words: [String] = line.split(separator: " ").map(String.init)
-            guard words.count > 3 else { return nil }
+            guard words.count > 3, !words.contains("--bearer-token-env-var") else { return nil }
             return "Then: codex mcp login \(words[3])"
         default: return nil
+        }
+    }
+
+    /// The trackers not listed yet, one row each: its name and why.
+    public static var heldSummary: [String] {
+        held.map { (tracker: Tracker) -> String in
+            let why: String = tracker.cell(for: .claude).reason ?? ""
+            return "\(tracker.name): \(why)"
         }
     }
 

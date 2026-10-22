@@ -3,9 +3,9 @@ import NextTermCore
 
 /// The Tasks menu, after Agents: Add Task… turns a prompt into a todo file in the project's todo folder (AddTaskSheet),
 /// Show Todo Folder shows where they are, Send Tasks To ▸ shows and changes where the project's tasks go, Connect a
-/// Tracker to Your Agents… gives each agent's own line to add a tracker, and Task Settings… opens Settings › Tasks. Each item is a command of its own,
-/// so Settings › Keyboard Shortcuts can give one a key. The places marked below are kept for the commands that come
-/// next, so the menu keeps the order its self-test checks.
+/// Tracker to Your Agents… gives each agent's own line to add a tracker, and Task Settings… opens Settings › Tasks.
+/// Each item is a command of its own, so Settings › Keyboard Shortcuts can give one a key. The places marked below are
+/// kept for the commands that come next, so the menu keeps the order its self-test checks.
 @MainActor
 final class TasksMenu: NSObject, NSMenuItemValidation {
     static let shared = TasksMenu()

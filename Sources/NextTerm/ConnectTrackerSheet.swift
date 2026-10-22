@@ -16,6 +16,7 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
         + "run it; you read it and press Return. Signing in happens in the agent afterwards."
     static let openTitle = "Open in a New Tab"
     static let notFound = "Not found on this Mac"
+    static let notListed = "Not listed yet:"
     static let typedLine = "The line is in a new tab, not run. Read it there, then press Return."
     static let notTyped = "Next Term couldn\u{2019}t type the line in the new tab. Copy it instead."
     static let notAtPrompt = "The new tab\u{2019}s shell didn\u{2019}t reach its prompt, so Next Term didn\u{2019}t type "
@@ -27,10 +28,6 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
     private(set) static var current: ConnectTrackerSheet?
     /// The tabs a line was typed into, by id: refused to agents until they close.
     private(set) static var tabs: Set<UUID> = []
-    /// The rule, added to MCPInputLine's once.
-    private static let rule: Void = {
-        MCPInputLine.rules.append { (tab: TerminalTab) -> String? in ConnectTrackerSheet.inputRefusal(tab) }
-    }()
 
     let trackers: [TrackerLines.Tracker] = TrackerLines.shown
     private(set) var tracker: TrackerLines.Tracker
@@ -42,6 +39,8 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
     let doneButton = NSButton(title: "Done", target: nil, action: nil)
     /// Each row's controls, by agent, as the last build made them.
     var rowViews: [AgentKind: RowViews] = [:]
+    /// The rows under "Not listed yet:", one per tracker with no line.
+    var heldLabels: [NSTextField] = []
 
     struct RowViews {
         let line: NSTextField
@@ -49,6 +48,8 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
         let open: NSButton?
         let notFound: NSTextField?
         let link: NSButton?
+        /// The sentences under the line: its sign-in step and the tracker's note.
+        let notes: [NSTextField]
     }
 
     init() {
@@ -65,16 +66,20 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// The sheet over `parent`, or on its own when there is none; one at a time.
+    /// The sheet over `parent`, on top of any sheet already there (Add Task's), or on its own when there is no parent;
+    /// one at a time. A sheet whose window went away with its parent's is forgotten and a fresh one shown.
     static func present(over parent: NSWindow?) {
         if let current, let window = current.window {
-            return window.makeKeyAndOrderFront(nil)
+            if window.isVisible || window.sheetParent != nil { return window.makeKeyAndOrderFront(nil) }
+            Self.current = nil
         }
         let sheet = ConnectTrackerSheet()
         current = sheet
         guard let window = sheet.window else { return }
-        if let parent, parent.attachedSheet == nil {
-            parent.beginSheet(window, completionHandler: nil)
+        var host: NSWindow? = parent
+        while let above = host?.attachedSheet { host = above }
+        if let host {
+            host.beginSheet(window, completionHandler: nil)
         } else {
             window.center()
             window.makeKeyAndOrderFront(nil)
@@ -88,12 +93,14 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
         tabs.contains(tab.id) ? lock : nil
     }
 
-    /// From now until the tab closes, agents can't act on it. Tabs closed since are let go.
+    /// From now until the tab closes, agents can't act on it. Tabs closed since are let go. The rule goes into
+    /// MCPInputLine's whenever it isn't there, so a list put back from an earlier copy doesn't drop it for good.
     static func register(_ tab: TerminalTab) {
-        _ = rule
         let open: Set<UUID> = Set(AppDelegate.shared.controllers.flatMap(\.tabs).map(\.id))
         tabs = tabs.intersection(open)
         tabs.insert(tab.id)
+        let held: Bool = MCPInputLine.rules.contains { (rule: (TerminalTab) -> String?) -> Bool in rule(tab) == lock }
+        if !held { MCPInputLine.rules.append { (tab: TerminalTab) -> String? in ConnectTrackerSheet.inputRefusal(tab) } }
     }
 
     // MARK: choosing
@@ -114,6 +121,10 @@ final class ConnectTrackerSheet: NSWindowController, NSWindowDelegate {
     }
 
     func say(_ text: String) { status.stringValue = text }
+
+    func windowWillClose(_ notification: Notification) {
+        if Self.current === self { Self.current = nil }
+    }
 
     @objc func done() {
         guard let window else { return }

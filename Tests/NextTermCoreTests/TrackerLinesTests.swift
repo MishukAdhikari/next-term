@@ -99,6 +99,31 @@ import Testing
         #expect(TrackerLines.signIn(.codex, line: codex) == "Then: codex mcp login linear")
     }
 
+    @Test func aTokenLineHasNoSignInStepAndItsRowSaysWhereTheTokenComesFrom() throws {
+        let github = try tracker("GitHub")
+        guard case .line(let line, _) = github.cell(for: .codex) else {
+            Issue.record("GitHub has a Codex line")
+            return
+        }
+        #expect(TrackerLines.signIn(.codex, line: line) == nil)
+        #expect(github.notes(for: .codex, line: line) == [try #require(github.note(for: .codex))])
+        let linear = try tracker("Linear")
+        let codex = "codex mcp add linear --url https://mcp.linear.app/mcp"
+        #expect(linear.notes(for: .codex, line: codex) == ["Then: codex mcp login linear"])
+        let claude = "claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp"
+        #expect(linear.notes(for: .claude, line: claude) == ["Then, in Claude Code: /mcp"])
+    }
+
+    @Test func theTrackersNotListedYetEachSayWhy() {
+        let rows: [String] = TrackerLines.heldSummary
+        #expect(rows.count == TrackerLines.held.count)
+        #expect(Set(rows) == [
+            "Asana: Asana\u{2019}s server needs an OAuth app of your own.",
+            "Azure DevOps: No line from Azure DevOps\u{2019}s own page yet.",
+            "ClickUp: No line from ClickUp\u{2019}s own page yet.",
+        ])
+    }
+
     @Test func theListIsLinearFirstThenAlphabeticalAndOnlyTrackersWithALine() {
         let names: [String] = TrackerLines.shown.map(\.name)
         #expect(names.first == "Linear")

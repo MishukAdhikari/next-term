@@ -3,7 +3,7 @@ import NextTermCore
 
 #if DEBUG
 /// Connect a Tracker's Open in a New Tab, with a made-up `claude` on a made-up PATH: one tab in the home folder titled
-/// for the pair, its line typed and not run, refused to agents until it closes, and a tab after it not refused.
+/// for the pair, its line typed and not run, refused to agents until it closes, and let go once it has.
 extension SelfTest {
     static func connectTrackerTabChecks(_ c: TerminalWindowController, bin: URL, expected: String) async {
         let program = bin.appendingPathComponent("claude")
@@ -47,7 +47,10 @@ extension SelfTest {
         closeSecretsTabs([tab], "connect a tracker")
         closed = true
         let next: TerminalTab = c.addTab(directory: NSHomeDirectory(), select: false)
-        check(ConnectTrackerSheet.inputRefusal(next) == nil, "connect a tracker: once the tab closes, a new tab isn't refused")
+        check(ConnectTrackerSheet.inputRefusal(next) == nil, "connect a tracker: a tab no line was typed into isn't refused")
+        ConnectTrackerSheet.register(next)
+        check(ConnectTrackerSheet.tabs == [next.id] && MCPInputLine.refusal(next) == ConnectTrackerSheet.lock,
+              "connect a tracker: the next tab locked lets the closed one go", "\(ConnectTrackerSheet.tabs.count)")
         closeSecretsTabs([next], "connect a tracker")
     }
 
