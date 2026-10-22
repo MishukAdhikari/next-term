@@ -77,7 +77,8 @@ import Testing
         let none = plan(.throughAgent(tracker: "Linear"), facts: Self.facts { $0.agentTab = nil })
         #expect(none.refused && none.line == DestinationPlan.noReadyTab && !none.offersTodoFolder)
         let busy = plan(.throughAgent(tracker: "Linear"), facts: Self.facts { $0.agentTab?.notReady = .working })
-        #expect(busy.refused && busy.line == "“api” (Claude Code) isn’t ready: working. Nothing was typed.")
+        // Before Add nothing was tried, so the line says only why.
+        #expect(busy.refused && busy.line == "“api” (Claude Code) isn’t ready: working.")
     }
 
     @Test func addSaysWhatItDoes() {
@@ -168,10 +169,22 @@ import Testing
         let three = (1...3).map { TaskDraft(title: "Task \($0)", steps: []) }
         let refused = plan(tracker, three, facts: Self.facts { $0.agentTab?.bracketedPaste = false })
         #expect(refused.refused && refused.line == "“api” takes one line at a time: add these one by one.")
+        #expect(refused.line == DestinationPlan.oneAtATime("api"))
         let together = try #require(plan(tracker, three).typed)
         #expect(together == "Add these 3 tasks to Linear with your Linear tools, exactly as written, then tell me their "
             + "links.\n\n1. Task 1\n\n2. Task 2\n\n3. Task 3")
         #expect(plan(tracker, three).line == "Types a request to post 3 tasks to Linear into “api” (Claude Code), with no Return")
+    }
+
+    @Test func azureBoardsTypeIsMasked() {
+        // Only Azure's own work item types are taken; any other is refused, and the refusal masks it too.
+        let secret = "nt-made-up-key-5678"
+        let mask = { (text: String) in text.replacingOccurrences(of: secret, with: "•••") }
+        let odd = plan(.azureBoards(org: "org", project: "web", type: "Bug \(secret)"), mask: mask)
+        #expect(odd.refused && !odd.line.contains(secret) && odd.line.contains("“Bug •••”"))
+        let bug = { (text: String) in text.replacingOccurrences(of: "Bug", with: "B•g") }
+        let shown = plan(.azureBoards(org: "org", project: "web", type: "Bug"), mask: bug)
+        #expect(shown.line.hasPrefix("Opens a new B•g in org/web on dev.azure.com"))
     }
 
     @Test func severalTasks() {

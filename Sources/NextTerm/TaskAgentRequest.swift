@@ -59,22 +59,27 @@ enum TaskAgentRequest {
         tab.view.getTerminal().bracketedPasteMode
     }
 
-    /// Why the tab can't be typed into at this moment; nil when it can.
-    static func refusal(_ tab: TerminalTab) -> String? {
+    /// Why the tab can't take a request holding `tasks` tasks at this moment; nil when it can. A tab with no bracketed
+    /// paste takes one task at a time, as the plan said, even if the program turned the paste off since.
+    static func refusal(_ tab: TerminalTab, tasks: Int) -> String? {
+        let title = SecretMask.current.mask(tab.title)
         if case .notReady(let reason) = AgentReadiness.shared.check(tab) {
-            return "“\(SecretMask.current.mask(tab.title))” isn’t ready: \(reason.text). Nothing was typed."
+            return "“\(title)” isn’t ready: \(reason.text). Nothing was typed."
         }
         if !MCPControl.canType(tab) || MCPInputLine.refusal(tab) != nil {
-            return "“\(SecretMask.current.mask(tab.title))” can’t be typed into now. Nothing was typed."
+            return "“\(title)” can’t be typed into now. Nothing was typed."
         }
+        if tasks > 1 && !takesLines(tab) { return DestinationPlan.oneAtATime(title) + " Nothing was typed." }
         return nil
     }
 
-    /// Types `request` into `tab` with no Return and brings the tab to the front; nil once typed, else why not.
-    /// `request` is the plan's, already on one line when the tab had no bracketed paste; it is joined again here if the
-    /// program turned bracketed paste off since, so no line break ever reaches the tab outside a paste.
-    static func type(_ request: String, into tab: TerminalTab, in controller: TerminalWindowController) -> String? {
-        if let why = refusal(tab) { return why }
+    /// Types `request`, which holds `tasks` tasks, into `tab` with no Return and brings the tab to the front; nil once
+    /// typed, else why not. `request` is the plan's, already on one line when the tab had no bracketed paste; it is
+    /// joined again here if the program turned bracketed paste off since, so no line break reaches the tab outside a
+    /// paste.
+    static func type(_ request: String, tasks: Int, into tab: TerminalTab,
+                     in controller: TerminalWindowController) -> String? {
+        if let why = refusal(tab, tasks: tasks) { return why }
         let text: String = takesLines(tab) ? request : DestinationPlan.oneLineRequest(request)
         controller.show(tab)
         controller.window?.makeFirstResponder(tab.view)

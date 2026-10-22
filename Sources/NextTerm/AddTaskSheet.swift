@@ -62,7 +62,9 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         let sheet = AddTaskSheet(controller: controller, text: prefill(controller))
         shown = sheet
         sheet.parent = parent
-        parent.beginSheet(sheet.window) { _ in shown = nil }
+        parent.beginSheet(sheet.window) { _ in
+            if shown === sheet { shown = nil }
+        }
         sheet.window.makeFirstResponder(sheet.prompt)
     }
 
@@ -338,13 +340,13 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         views.agentRow.isHidden = chosen.kind != .throughAgent
     }
 
-    /// The window's agent tabs, each ready or greyed with why; the one picked stays picked while it is listed.
+    /// The window's agent tabs, each ready or greyed with why. The one picked stays picked while it is ready; else
+    /// the preferred ready tab is picked, and with none ready nothing is.
     private func fillAgents() {
         guard let controller, chosen.kind == .throughAgent else { return }
         agents = TaskAgentRequest.choices(in: controller)
-        if !agents.contains(where: { $0.tab === pickedTab }) {
-            pickedTab = TaskAgentRequest.preferred(agents, in: controller)?.tab
-        }
+        let stillReady = agents.contains { $0.tab === pickedTab && $0.isReady }
+        if !stillReady { pickedTab = TaskAgentRequest.preferred(agents, in: controller)?.tab }
         views.fill(agents, selected: agents.firstIndex { $0.tab === pickedTab })
     }
 
@@ -463,7 +465,8 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         show(made)
         guard made.plan.canAdd, !made.drafts.isEmpty else { return }
         // The tab is asked again at this moment: it may have started working since the sheet opened.
-        if let tab = pickedAgent?.tab, chosen.kind == .throughAgent, let why = TaskAgentRequest.refusal(tab) {
+        if let tab = pickedAgent?.tab, chosen.kind == .throughAgent,
+           let why = TaskAgentRequest.refusal(tab, tasks: made.drafts.count) {
             return refuse(why)
         }
         TaskDestinations.duplicate(made) { [weak self] title in
@@ -490,7 +493,8 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         show(made)
         let where_ = TaskDestinations.Place(sheet: window, controller: controller, tab: pickedAgent?.tab)
         TaskDestinations.send(made, at: where_) { [weak self] outcome in
-            guard let self else { return }
+            // Only this sheet's own send answers here; a sheet that is gone takes no answer.
+            guard let self, Self.shown === self else { return }
             self.sending = false
             switch outcome {
             case .done: self.close()
@@ -503,17 +507,19 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
     }
 
     @objc private func cancel() {
-        // A shortcut still running is stopped; the line then says nothing more was sent.
-        if sending && chosen.kind == .shortcut { return TaskShortcut.stop() }
-        close()
+        guard sending else { return close() }
+        // A shortcut still running is stopped; the line then says nothing more was sent. Any other send is already
+        // with Reminders or the app and answers in a moment: the sheet waits for it, so a failure is still seen here.
+        if chosen.kind == .shortcut { TaskShortcut.stop() }
     }
 
     private func close() {
+        guard Self.shown === self else { return }
         if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
         keyObserver = nil
         NotificationCenter.default.removeObserver(self)
-        parent?.endSheet(window)
         Self.shown = nil
+        parent?.endSheet(window)
     }
 
     // MARK: for the self-test

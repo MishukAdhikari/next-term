@@ -73,6 +73,11 @@ public struct DestinationPlan: Equatable, Sendable {
 
     /// The most pages or Quick Add windows one Add opens.
     public static let pagesAtOnce = 5
+    /// A tab with no bracketed paste takes one task at a time; `title` is masked already.
+    public static func oneAtATime(_ title: String) -> String {
+        "“\(title)” takes one line at a time: add these one by one."
+    }
+
     public static let noReadyTab = "No agent tab in this window is ready. Start one, or wait for it to finish."
     static let cutNote = " · cut to fit"
 
@@ -103,7 +108,7 @@ extension DestinationPlan {
                             sent: numbered(payloads.map(\.sent)), refused: true, offersTodoFolder: todo, cut: cut,
                             typed: nil)
         }
-        if let problem = destination.problem { return refuse(problem, todo: true) }
+        if let problem = destination.problem { return refuse(mask(problem), todo: true) }
         guard count > 0, payloads.count == count else {
             return refuse("This destination can’t take the task.", todo: true)
         }
@@ -147,11 +152,9 @@ extension DestinationPlan {
             guard let tab = facts.agentTab else { return (noReadyTab, false) }
             let title = mask(tab.title)
             if let reason = tab.notReady {
-                return ("“\(title)” (\(tab.agent.name)) isn’t ready: \(reason.text). Nothing was typed.", false)
+                return ("“\(title)” (\(tab.agent.name)) isn’t ready: \(reason.text).", false)
             }
-            if count > 1 && !tab.bracketedPaste {
-                return ("“\(title)” takes one line at a time: add these one by one.", false)
-            }
+            if count > 1 && !tab.bracketedPaste { return (oneAtATime(title), false) }
         case .todoFolder:
             break
         }
@@ -212,7 +215,8 @@ extension DestinationPlan {
             let each = one ? "" : " for each of \(count) tasks"
             return "Opens Trello’s Add Card\(each) with the title only: choose the board there"
         case .azureBoards(let org, let project, let type):
-            let items = one ? "a new \(type)" : "\(count) new work items of type \(type)"
+            let shownType = mask(type)
+            let items = one ? "a new \(shownType)" : "\(count) new work items of type \(shownType)"
             return "Opens \(items) in \(mask(org))/\(mask(project)) on dev.azure.com, filled in: nothing is created "
                 + "until you press Save"
         case .throughAgent(let tracker):

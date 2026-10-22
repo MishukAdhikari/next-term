@@ -29,10 +29,11 @@ extension SelfTest {
         await cutChecks(c)
         await maskedPageChecks(c)
         await reminderSheetChecks(c)
+        await agentSheetChecks(c)
     }
 
     /// A fresh sheet with `prompt` typed in it.
-    private static func destinationSheet(_ c: TerminalWindowController, _ prompt: String) async -> AddTaskSheet? {
+    static func destinationSheet(_ c: TerminalWindowController, _ prompt: String) async -> AddTaskSheet? {
         AddTaskSheet.current?.pressCancel()
         AddTaskSheet.present(over: c)
         guard await wait(5, { AddTaskSheet.current != nil }), let sheet = AddTaskSheet.current else {
@@ -43,7 +44,7 @@ extension SelfTest {
         return sheet
     }
 
-    private static func postedToday() -> Int { TaskRecordStore.shared.today(project: nil).count }
+    static func postedToday() -> Int { TaskRecordStore.shared.today(project: nil).count }
 
     /// GitHub chosen in the popup: one recorded link, nothing opened, one posted line, and the project unchanged.
     private static func pageChecks(_ c: TerminalWindowController) async {
@@ -116,6 +117,10 @@ extension SelfTest {
         let link = TaskOpen.opened.first?.absoluteString ?? ""
         check(!link.isEmpty && !link.contains(value) && link.contains("%E2%80%A2%E2%80%A2%E2%80%A2"),
               "destinations: and in the link", link)
+        // Nothing of the task is written down: this run's own report holds neither its text nor its link.
+        let report = reportSoFar()
+        check(!link.isEmpty && !report.contains(value) && !report.contains(link),
+              "destinations: the run's report holds neither the task's text nor its link")
         TaskOpen.opened = []
         GitToast.dismiss()
     }

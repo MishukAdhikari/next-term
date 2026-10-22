@@ -245,9 +245,10 @@ extension TaskDestinations {
             return done(.failed(DestinationPlan.noReadyTab))
         }
         // The sheet goes first, so the tab can take the keyboard.
-        if let why = TaskAgentRequest.refusal(tab) { return done(.failed(why)) }
+        let tasks = planned.drafts.count
+        if let why = TaskAgentRequest.refusal(tab, tasks: tasks) { return done(.failed(why)) }
         done(.done)
-        if let why = TaskAgentRequest.type(typed, into: tab, in: controller) {
+        if let why = TaskAgentRequest.type(typed, tasks: tasks, into: tab, in: controller) {
             return GitToast.show(why, in: place.notice)
         }
         for draft in planned.drafts {

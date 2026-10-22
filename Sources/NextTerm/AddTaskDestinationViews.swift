@@ -114,7 +114,16 @@ final class AddTaskDestinationViews {
             agent.lastItem?.isEnabled = choice.isReady
         }
         if choices.isEmpty { agent.addItem(withTitle: "No agent tab") }
-        if let selected { agent.selectItem(withTag: selected) }
+        if let selected {
+            agent.selectItem(withTag: selected)
+            return
+        }
+        // No tab is ready: the popup shows that rather than a greyed tab as if it were picked.
+        guard !choices.isEmpty else { return }
+        agent.insertItem(withTitle: "No Tab Is Ready", at: 0)
+        agent.item(at: 0)?.tag = -1
+        agent.item(at: 0)?.isEnabled = false
+        agent.selectItem(at: 0)
     }
 
     func showSent(_ open: Bool) {
