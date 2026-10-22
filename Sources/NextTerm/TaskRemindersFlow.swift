@@ -126,20 +126,22 @@ extension TaskReminders {
         }
     }
 
-    /// Adds `task` after access is given, then offers Undo over `window`. The Add the user pressed is the confirmation
-    /// Apple asks for before a change.
-    static func add(_ task: Task, from window: NSWindow?, done: @escaping (Outcome) -> Void) {
+    /// Adds `task` after access is given, asking over `window`, then offers Undo in `undoIn` (`window` when nil): the
+    /// Add Task sheet asks over itself and leaves the notice to the project window it closes into. The Add the user
+    /// pressed is the confirmation Apple asks for before a change.
+    static func add(_ task: Task, from window: NSWindow?, undoIn notice: NSWindow? = nil,
+                    done: @escaping (Outcome) -> Void) {
         allow(from: window) { refused in
             if let refused { return done(refused) }
             let alarmOn = TaskSettings(defaults: .standard).remindersAlarm
-            place(task, list: nil, alarmOn: alarmOn, from: window, done: done)
+            place(task, list: nil, alarmOn: alarmOn, from: window, undoIn: notice ?? window, done: done)
         }
     }
 
     /// On the queue: finds or makes the list (`list` when the user took the default instead), saves the reminder and
     /// records it.
     private static func place(_ task: Task, list: RemindersAccess.List?, alarmOn: Bool, from window: NSWindow?,
-                              done: @escaping (Outcome) -> Void) {
+                              undoIn notice: NSWindow?, done: @escaping (Outcome) -> Void) {
         guard case .reminders(let listID, let listName) = task.destination else { return done(.failed(couldntAdd)) }
         let store = store
         queue.async {
@@ -148,7 +150,8 @@ extension TaskReminders {
                 let fallback = store.defaultList()
                 return DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        offerDefault(task, name: listName, fallback: fallback, alarmOn: alarmOn, from: window, done: done)
+                        offerDefault(task, name: listName, fallback: fallback, alarmOn: alarmOn, from: window,
+                                     undoIn: notice, done: done)
                     }
                 }
             }
@@ -166,7 +169,7 @@ extension TaskReminders {
                     if saveID && list == nil { saveListID(target.id, replacing: task.destination, project: task.project) }
                     guard let id else { return done(.failed(couldntAdd)) }
                     let saved = RemindersAccess.Saved(title: task.title, notes: task.notes, due: task.due)
-                    offerUndo(id, saved: saved, in: window)
+                    offerUndo(id, saved: saved, in: notice)
                     done(.added(id: id, list: target.id))
                 }
             }
@@ -195,12 +198,13 @@ extension TaskReminders {
 
     /// The list couldn't be made: says so, and offers the user's default list instead.
     private static func offerDefault(_ task: Task, name: String, fallback: RemindersAccess.List?, alarmOn: Bool,
-                                     from window: NSWindow?, done: @escaping (Outcome) -> Void) {
+                                     from window: NSWindow?, undoIn notice: NSWindow?,
+                                     done: @escaping (Outcome) -> Void) {
         let line = RemindersAccess.couldntMake(name)
         guard let fallback else { return done(.failed(line)) }
         RemindersSheets.offerDefault(line, button: RemindersAccess.addToDefault(fallback.title), in: window) { take in
             guard take else { return done(.failed(line)) }
-            place(task, list: fallback, alarmOn: alarmOn, from: window, done: done)
+            place(task, list: fallback, alarmOn: alarmOn, from: window, undoIn: notice, done: done)
         }
     }
 }

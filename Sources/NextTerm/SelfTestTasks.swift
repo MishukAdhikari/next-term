@@ -43,11 +43,14 @@ extension SelfTest {
         #if DEBUG
         await remindersChecks(c)
         await shortcutChecks()
+        await destinationSheetChecks(c)
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
         // Its fake runner is debug-only, so a release build never runs the user's shortcuts.
         note("shortcut: skipped in a release build; its checks run in a debug build")
+        // Its openers record only in a debug build, so a release build never opens a page or an app.
+        note("destinations: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
