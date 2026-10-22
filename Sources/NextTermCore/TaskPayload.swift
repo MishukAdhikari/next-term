@@ -8,8 +8,11 @@ import Foundation
 ///   task was added. Team pages and the agent request get the steps, the notes and the branch only: a tab's title or a
 ///   resume command means nothing to a teammate and says what is on this Mac.
 /// - A destination that takes less is cut at a line end, and the text then ends with a line saying so, inside the limit.
-/// - Every piece of text goes through `mask` first, so a stored key's value never leaves, even from a draft made
-///   without masking.
+///   When not even the first line fits, that line is cut inside, ending in "…", so the user's text is never all gone.
+/// - Every piece of text loses its control characters (but line breaks and tabs) and direction marks, then goes
+///   through `mask`, so a stored key's value never leaves, even from a draft made without masking, and what is shown
+///   is what is typed or sent.
+/// - A destination whose details can't be used (`TaskDestination.problem`) renders nothing.
 /// The todo folder is not here: its file is `TodoFile.render`.
 public struct TaskPayload: Equatable, Sendable {
     public enum Form: Equatable, Sendable {
@@ -25,15 +28,18 @@ public struct TaskPayload: Equatable, Sendable {
     public let form: Form
     /// The text was cut to fit the destination.
     public let cut: Bool
-    /// What is sent, readable: a link's place and each parameter's name and value as the app or page receives it; a
-    /// reminder's fields; the shortcut's input or the agent request word for word.
-    public let shown: String
+    /// What is sent, readable, for the sheet's "What's sent" and the approval window: a link's place and each
+    /// parameter's name and value as the app or page receives it; a reminder's fields; the shortcut's input or the
+    /// agent request word for word. The sheet's one line under Destination is built where the destination's details
+    /// and the day's words are known, not here.
+    public let sent: String
 
     /// The most bytes a page's link may have: GitHub opened one of about 6,500 and failed at 7,500.
     public static let linkBytes = 6_000
-    /// Things takes up to 10,000 characters of notes, 4,000 of title and 100 checklist items.
+    /// Things takes up to 10,000 characters of notes, 4,000 in any other value (the title, the list, the whole
+    /// checklist) and 100 checklist items.
     public static let thingsNotes = 10_000
-    public static let thingsTitle = 4_000
+    public static let thingsValue = 4_000
     public static let thingsChecklist = 100
     /// Azure Boards: some browsers take at most 2,000 characters in a field.
     public static let azureField = 2_000
@@ -46,6 +52,7 @@ public struct TaskPayload: Equatable, Sendable {
     /// where they are added.
     public static func render(_ draft: TaskDraft, to destination: TaskDestination, project: String?, today: TaskDay,
                               mask: (String) -> String = { SecretMask.current.mask($0) }) -> TaskPayload? {
+        guard destination.problem == nil else { return nil }
         let task = Parts(draft, project: project, mask: mask)
         switch destination {
         case .todoFolder: return nil
@@ -66,7 +73,8 @@ public struct TaskPayload: Equatable, Sendable {
         case .gitlab(let path):
             let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
             let base = "https://gitlab.com/" + segments(parts) + "/-/work_items/new"
-            return page(base, name: "GitLab", title: "issue[title]", body: "issue[description]", task.title, task.team)
+            return page(base, name: "GitLab", title: "issue[title]", body: "issue[description]", task.title,
+                        noQuickActions(task.team))
         case .linear(let team):
             let base = team.map { "https://linear.app/team/" + segments([$0]) + "/new" } ?? "https://linear.new"
             return page(base, name: "Linear", title: "title", body: "description", task.title, task.team, plusSpaces: true)
@@ -79,7 +87,7 @@ public struct TaskPayload: Equatable, Sendable {
             let name = mask(tracker)
             let ask = "Add this task to \(name) with your \(name) tools, exactly as written, then tell me its link."
             let text = join([ask, task.title, task.team])
-            return TaskPayload(form: .agentRequest(text), cut: false, shown: text)
+            return TaskPayload(form: .agentRequest(text), cut: false, sent: text)
         }
     }
 }
@@ -99,15 +107,19 @@ extension TaskPayload {
         let branchLine: String?
         let day: TaskDay?
 
-        init(_ draft: TaskDraft, project: String?, mask: (String) -> String) {
+        init(_ draft: TaskDraft, project: String?, mask rawMask: (String) -> String) {
+            // Cleaned before masking, so a control character inside a key can't split it past the mask.
+            func mask(_ text: String) -> String { rawMask(TaskPayload.clean(text)) }
             title = TaskPayload.oneLine(mask(draft.title))
             stepTexts = draft.steps.map { TaskPayload.oneLine(mask($0.text)) }
             stepLines = zip(draft.steps, stepTexts).map { step, text in
                 String(repeating: "  ", count: max(0, step.depth)) + (step.done ? "- [x] " : "- [ ] ") + text
             }
-            var notes = mask(draft.notes)
-            while notes.hasSuffix("\n") { notes.removeLast() }
-            self.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : notes
+            var noteLines = mask(draft.notes).components(separatedBy: "\n")
+            let blank = { (line: String) -> Bool in line.trimmingCharacters(in: .whitespaces).isEmpty }
+            while let first = noteLines.first, blank(first) { noteLines.removeFirst() }
+            while let last = noteLines.last, blank(last) { noteLines.removeLast() }
+            notes = noteLines.joined(separator: "\n")
             let context = draft.context ?? TaskContext()
             func some(_ text: String?) -> String? {
                 guard let text, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
@@ -147,9 +159,43 @@ extension TaskPayload {
         text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
     }
 
-    /// The line a cut text ends with: `(Cut by Next Term: GitHub takes 6,000 characters.)`.
+    /// The line a text cut to a field's length ends with: `(Cut by Next Term: Things takes 10,000 characters.)`.
     static func cutNote(_ name: String, _ limit: Int) -> String {
         "(Cut by Next Term: \(name) takes \(grouped(limit)) characters.)"
+    }
+
+    /// The line a text cut to fit a link ends with. The limit is the whole link's bytes, not a count the user could
+    /// check against the text, so no number is given.
+    static func linkCutNote(_ name: String) -> String {
+        "(Cut by Next Term to fit \(name)’s link length.)"
+    }
+
+    /// Control characters (but line breaks and tabs) and direction marks and overrides, removed: an agent tab drops
+    /// control characters as it types, and a direction override would show the text in another order than it goes.
+    static func clean(_ text: String) -> String {
+        let unified = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        var kept = String.UnicodeScalarView()
+        for scalar in unified.unicodeScalars where scalar == "\n" || scalar == "\t" || !hidden(scalar) {
+            kept.append(scalar)
+        }
+        return String(kept)
+    }
+
+    static let directionMarks: Set<UInt32> = {
+        let marks: [UInt32] = [0x061C, 0x200E, 0x200F]
+        let embeddings: [UInt32] = Array(0x202A...0x202E)
+        let isolates: [UInt32] = Array(0x2066...0x2069)
+        return Set(marks + embeddings + isolates)
+    }()
+
+    static func hidden(_ scalar: Unicode.Scalar) -> Bool {
+        ShellQuote.isControl(scalar) || directionMarks.contains(scalar.value)
+    }
+
+    /// GitLab runs a description line that starts with `/` as a quick action (`/due` would even set a deadline), so
+    /// such a line gets a backslash first, which GitLab's Markdown shows as the plain `/`.
+    static func noQuickActions(_ text: String) -> String {
+        text.components(separatedBy: "\n").map { $0.hasPrefix("/") ? "\\" + $0 : $0 }.joined(separator: "\n")
     }
 
     /// 6000 as `6,000`, the same on every Mac.
@@ -164,8 +210,8 @@ extension TaskPayload {
         return groups.joined(separator: ",")
     }
 
-    /// `text` whole when it fits; else as many of its first lines as fit with `note` after a blank line; nil when not
-    /// even the note alone fits.
+    /// `text` whole when it fits; else as many of its first lines as fit with `note` after a blank line, or, when not
+    /// one whole line fits, the longest start of the first line ending in "…"; nil when not even the note alone fits.
     static func fit(_ text: String, note: String, fits: (String) -> Bool) -> (text: String, cut: Bool)? {
         if fits(text) { return (text, false) }
         let lines = text.components(separatedBy: "\n")
@@ -179,6 +225,16 @@ extension TaskPayload {
         while low < high {
             let middle = (low + high + 1) / 2
             if fits(kept(middle)) { low = middle } else { high = middle - 1 }
+        }
+        if low == 0, let first = lines.first, !first.isEmpty {
+            let characters = Array(first)
+            func part(_ count: Int) -> String { String(characters[..<count]) + "…\n\n" + note }
+            var shortest = 0, longest = characters.count - 1
+            while shortest < longest {
+                let middle = (shortest + longest + 1) / 2
+                if fits(part(middle)) { shortest = middle } else { longest = middle - 1 }
+            }
+            if shortest > 0 { return (part(shortest), true) }
         }
         return (kept(low), true)
     }
@@ -204,24 +260,35 @@ extension TaskPayload {
         let fields = ["Title: " + task.title, "List: " + list, when].joined(separator: "\n")
         let notes = task.personal
         return TaskPayload(form: .reminder(title: task.title, notes: notes, due: due), cut: false,
-                           shown: join([fields, notes]))
+                           sent: join([fields, notes]))
     }
 
-    /// Things' add link: up to 100 steps as its checklist, the rest at the top of the notes, never dropped; the day as
-    /// `when`, left out for no day; never a deadline.
+    /// Things' add link: the first steps as its checklist, up to 100 and 4,000 characters, the rest at the top of the
+    /// notes, never dropped; the day as `when`, left out for no day; never a deadline. Things' link can't mark a
+    /// checklist item done, so a done step goes in unticked.
     static func things(_ task: Parts, list: String?, today: TaskDay) -> TaskPayload? {
-        let checklist = Array(task.stepTexts.prefix(thingsChecklist))
-        let over = task.stepLines.dropFirst(thingsChecklist).joined(separator: "\n")
+        var checklist: [String] = []
+        var length = 0
+        for text in task.stepTexts.prefix(thingsChecklist) {
+            let separator = checklist.isEmpty ? 0 : 1
+            let longer = length + separator + text.utf16.count
+            if longer > thingsValue { break }
+            checklist.append(text)
+            length = longer
+        }
+        let over = task.stepLines.dropFirst(checklist.count).joined(separator: "\n")
         let notes = join([over, task.notes, task.whereLines.joined(separator: "\n")])
         let note = cutNote("Things", thingsNotes)
         guard let fitted = fit(notes, note: note, fits: { $0.utf16.count <= thingsNotes }) else { return nil }
-        let title = fitTitle(task.title) { $0.utf16.count <= thingsTitle }
+        let title = fitTitle(task.title) { $0.utf16.count <= thingsValue }
+        let listName = list.map { fitTitle($0) { $0.utf16.count <= thingsValue } }
         var items: [Item] = [Item("title", title.text)]
         if !fitted.text.isEmpty { items.append(Item("notes", fitted.text)) }
         if let day = task.day { items.append(Item("when", thingsWhen(day, today: today))) }
-        if let list { items.append(Item("list", list)) }
+        if let listName { items.append(Item("list", listName.text)) }
         if !checklist.isEmpty { items.append(Item("checklist-items", checklist.joined(separator: "\n"))) }
-        return link("things:///add", place: "Things", items, cut: title.cut || fitted.cut)
+        let cut = title.cut || fitted.cut || listName?.cut == true
+        return link("things:///add", place: "Things", items, cut: cut)
     }
 
     /// `today`, `tomorrow`, or the day as `yyyy-mm-dd`.
@@ -237,7 +304,7 @@ extension TaskPayload {
     /// A shortcut's input: the title, the day it is planned for, then the personal text.
     static func shortcut(_ task: Parts) -> TaskPayload {
         let text = join([task.title, task.day.map { "Planned: \($0)" } ?? "", task.personal])
-        return TaskPayload(form: .stdin(text), cut: false, shown: text)
+        return TaskPayload(form: .stdin(text), cut: false, sent: text)
     }
 
     /// Trello's Add Card: the name only, since it documents no parameter for a description.
@@ -248,6 +315,7 @@ extension TaskPayload {
 
     /// A page or Quick Add filled with a title and a body: the body cut at a line end so the whole link stays under
     /// `linkBytes` (and the body under `fieldLimit`), the title cut too when even the cut note doesn't fit beside it.
+    /// The cut note names the field's length only when that length alone made the cut; otherwise the link's.
     static func page(_ base: String, place: String? = nil, name: String, title titleName: String, body bodyName: String,
                      _ title: String, _ body: String, plusSpaces: Bool = false, fieldLimit: Int? = nil) -> TaskPayload? {
         func items(_ title: String, _ body: String) -> [Item] {
@@ -258,7 +326,17 @@ extension TaskPayload {
             if let fieldLimit, body.count > fieldLimit { return false }
             return (base + "?" + query(items(title, body))).utf8.count <= linkBytes
         }
-        let note = cutNote(name, fieldLimit ?? linkBytes)
+        if body.isEmpty {
+            let shorter = fitTitle(title) { fits($0, "") }
+            return link(base, place: place, items(shorter.text, ""), cut: shorter.cut)
+        }
+        var note = linkCutNote(name)
+        if let fieldLimit, body.count > fieldLimit {
+            let fieldNote = cutNote(name, fieldLimit)
+            let byField = fit(body, note: fieldNote) { $0.count <= fieldLimit }
+            let byBoth = fit(body, note: fieldNote) { fits(title, $0) }
+            if let byField, byField.text == byBoth?.text { note = fieldNote }
+        }
         if let fitted = fit(body, note: note, fits: { fits(title, $0) }) {
             return link(base, place: place, items(title, fitted.text), cut: fitted.cut)
         }
@@ -311,7 +389,7 @@ extension TaskPayload {
         guard let url = components.url else { return nil }
         let address = base.replacingOccurrences(of: "https://", with: "")
         let where_ = place ?? address.removingPercentEncoding ?? address
-        let shown = ([where_] + items.map { $0.name + "\n" + $0.value }).joined(separator: "\n\n")
-        return TaskPayload(form: .link(url), cut: cut, shown: shown)
+        let sent = ([where_] + items.map { $0.name + "\n" + $0.value }).joined(separator: "\n\n")
+        return TaskPayload(form: .link(url), cut: cut, sent: sent)
     }
 }

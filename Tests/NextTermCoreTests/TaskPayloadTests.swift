@@ -75,14 +75,14 @@ import Testing
         for payload in [reminder, shortcut, agent] { #expect(!payload.cut) }
     }
 
-    @Test func shownDecodesEachParameter() throws {
+    @Test func sentDecodesEachParameter() throws {
         let github = try render(.github(owner: "example-org", repo: "web.app"))
-        #expect(github.shown == "github.com/example-org/web.app/issues/new\n\ntitle\nFix the login\n\nbody\n" + Self.teamText)
+        #expect(github.sent == "github.com/example-org/web.app/issues/new\n\ntitle\nFix the login\n\nbody\n" + Self.teamText)
         let reminder = try render(.reminders(listID: nil, listName: "Next Term"))
-        #expect(reminder.shown == "Title: Fix the login\nList: Next Term\nDue: 2026-10-19 (all-day)\n\n" + Self.personalText)
+        #expect(reminder.sent == "Title: Fix the login\nList: Next Term\nDue: 2026-10-19 (all-day)\n\n" + Self.personalText)
         let shortcut = try render(.shortcut(id: "8F1C2D3E-0000-4000-8000-000000000001", name: "Inbox"))
         guard case .stdin(let text) = shortcut.form else { throw Unexpected() }
-        #expect(shortcut.shown == text)
+        #expect(shortcut.sent == text)
     }
 
     @Test func aTitleCantAddAParameter() throws {
@@ -143,7 +143,7 @@ import Testing
         let payload = try render(draft, .github(owner: "o", repo: "r"))
         let url = try link(payload)
         #expect(payload.cut && url.utf8.count <= 6_000)
-        #expect(url.hasSuffix("%0A%0A%28Cut%20by%20Next%20Term%3A%20GitHub%20takes%206%2C000%20characters.%29"))
+        #expect(url.hasSuffix("%0A%0A%28Cut%20by%20Next%20Term%20to%20fit%20GitHub%E2%80%99s%20link%20length.%29"))
         draft.notes = String(repeating: "y", count: 1_000)
         let short = try render(draft, .github(owner: "o", repo: "r"))
         let shortLink = try link(short)
@@ -174,17 +174,17 @@ import Testing
                                        .azureBoards(org: "o", project: "p", type: "Task"), .throughAgent(tracker: "Jira")]
         let words = ["Resume", "api", "Claude Code"]
         for destination in personal {
-            let shown = try render(destination).shown
+            let shown = try render(destination).sent
             #expect(words.allSatisfy { shown.contains($0) }, "\(destination)")
         }
         for destination in team {
-            let shown = try render(destination).shown
+            let shown = try render(destination).sent
             #expect(!words.contains { shown.contains($0) }, "\(destination)")
         }
         var off = Self.draft
         off.context = TaskContext(addedBy: "you")
         for destination in personal + team {
-            let shown = try render(off, destination).shown
+            let shown = try render(off, destination).sent
             #expect(!(words + ["web ·", "Branch:"]).contains { shown.contains($0) }, "\(destination)")
         }
     }
@@ -197,9 +197,9 @@ import Testing
         draft.context = TaskContext(branch: "main", tab: "tab \(key)", resume: "claude --resume \(key)")
         for destination in TaskDestinationTests.every where destination != .todoFolder {
             let payload = try render(draft, destination, mask: mask)
-            #expect(!payload.shown.contains(key) && !payload.shown.contains("sk-ant"), "\(destination)")
+            #expect(!payload.sent.contains(key) && !payload.sent.contains("sk-ant"), "\(destination)")
             if case .trello = destination { continue }
-            #expect(payload.shown.contains("•••"), "\(destination)")
+            #expect(payload.sent.contains("•••"), "\(destination)")
         }
         var leaky = Self.draft
         leaky.title = "Use \(key)"
@@ -209,12 +209,16 @@ import Testing
 
     @Test func theHostIsTheTemplates() throws {
         let hostile: [TaskDestination] = [.github(owner: "evil.com#", repo: "r"), .gitlab(path: "evil.com?/x"),
-                                          .linear(team: "a/../../evil.com"), .azureBoards(org: "@evil.com", project: "p#", type: "Task")]
-        let hosts = ["github.com", "gitlab.com", "linear.app", "dev.azure.com"]
-        for (destination, host) in zip(hostile, hosts) {
-            let url = try #require(URL(string: try link(render(destination))))
-            #expect(url.host == host && url.scheme == "https" && url.user == nil && url.fragment == nil, "\(destination)")
+                                          .linear(team: "a/../../evil.com"), .azureBoards(org: "@evil.com", project: "p#", type: "Task"),
+                                          .github(owner: "..", repo: "x")]
+        for destination in hostile {
+            let payload = TaskPayload.render(Self.draft, to: destination, project: "web", today: Self.today, mask: { $0 })
+            #expect(payload == nil, "\(destination)")
         }
+        let parts = TaskPayload.segments(["evil.com#", "a?b", "@x/y"])
+        let url = try #require(URL(string: "https://github.com/" + parts + "/issues/new"))
+        #expect(url.host == "github.com" && url.user == nil && url.fragment == nil && url.query == nil)
+        #expect(url.path == "/evil.com#/a?b/@x/y/issues/new")
     }
 
     @Test func remindersDueDays() throws {
@@ -237,5 +241,88 @@ import Testing
         none.scheduled = .none
         guard case .reminder(_, _, let due) = try render(none, .reminders(listID: nil, listName: "L")).form else { throw Unexpected() }
         #expect(due == nil)
+    }
+
+    func value(_ payload: TaskPayload, _ name: String) throws -> String {
+        let url = try #require(URLComponents(string: try link(payload)))
+        return url.queryItems?.first { $0.name == name }?.value ?? ""
+    }
+
+    func bare(_ notes: String, title: String = "Fix the login") -> TaskDraft {
+        var draft = Self.draft
+        draft.title = title
+        draft.context = nil
+        draft.steps = []
+        draft.notes = notes
+        return draft
+    }
+
+    @Test func gitlabRunsNoQuickActions() throws {
+        let draft = bare("/assign @someone\n/label ~x\n/due tomorrow\nnot /due here")
+        let gitlab = try value(render(draft, .gitlab(path: "g/p")), "issue[description]")
+        #expect(gitlab == "\\/assign @someone\n\\/label ~x\n\\/due tomorrow\nnot /due here")
+        let github = try value(render(draft, .github(owner: "o", repo: "r")), "body")
+        #expect(github.hasPrefix("/assign @someone\n/label"))
+    }
+
+    @Test func aSingleLongLineIsCutInsideNotDropped() throws {
+        let github = try render(bare(String(repeating: "a", count: 9_000)), .github(owner: "o", repo: "r"))
+        let body = try value(github, "body")
+        let githubLink = try link(github)
+        #expect(github.cut && githubLink.utf8.count <= 6_000)
+        #expect(body.hasPrefix(String(repeating: "a", count: 4_000)))
+        #expect(body.hasSuffix("a…\n\n(Cut by Next Term to fit GitHub’s link length.)"))
+        let azure = try render(bare(String(repeating: "b", count: 2_500)), .azureBoards(org: "o", project: "p", type: "Task"))
+        let description = try value(azure, "[System.Description]")
+        #expect(description.count <= 2_000 && description.hasPrefix(String(repeating: "b", count: 1_900)))
+        #expect(description.hasSuffix("b…\n\n(Cut by Next Term: Azure Boards takes 2,000 characters.)"))
+        let things = try render(bare(String(repeating: "n", count: 12_000)), .things(list: nil))
+        let notes = try value(things, "notes")
+        #expect(notes.utf16.count <= 10_000 && notes.hasPrefix(String(repeating: "n", count: 9_900)))
+    }
+
+    @Test func multibyteTextIsCutByTheLinkAndSaysSo() throws {
+        let cjk = (1...30).map { _ in String(repeating: "漢", count: 49) }.joined(separator: "\n")
+        let azure = try render(bare(cjk), .azureBoards(org: "o", project: "p", type: "Task"))
+        let description = try value(azure, "[System.Description]")
+        let azureLink = try link(azure)
+        #expect(azure.cut && azureLink.utf8.count <= 6_000 && description.count < 2_000)
+        #expect(description.hasSuffix("漢\n\n(Cut by Next Term to fit Azure Boards’s link length.)"))
+        let github = try render(bare(cjk), .github(owner: "o", repo: "r"))
+        let githubLink = try link(github)
+        #expect(github.cut && githubLink.utf8.count <= 6_000)
+        #expect(try value(github, "body").hasSuffix("漢\n\n(Cut by Next Term to fit GitHub’s link length.)"))
+    }
+
+    @Test func thingsCapsEveryValue() throws {
+        let long = try render(bare("", title: String(repeating: "t", count: 5_000)), .things(list: String(repeating: "l", count: 4_500)))
+        let title = try value(long, "title"), list = try value(long, "list")
+        #expect(long.cut && title.utf16.count == 4_000 && title.hasSuffix("…"))
+        #expect(list.utf16.count == 4_000 && list.hasSuffix("…"))
+        var draft = bare("")
+        draft.steps = (1...100).map { TaskDraft.Step(text: "\($0)" + String(repeating: "s", count: 1_000)) }
+        let steps = try render(draft, .things(list: nil))
+        let checklist = try value(steps, "checklist-items")
+        #expect(checklist.utf16.count <= 4_000 && checklist.components(separatedBy: "\n").count == 3)
+        #expect(try value(steps, "notes").hasPrefix("- [ ] 4sss"))
+    }
+
+    @Test func hiddenCharactersNeverReachTheTextOrTheView() throws {
+        var draft = bare("one\r\ntwo\u{7}", title: "Fix\u{1b}[31m the\u{202E} login\u{2066}")
+        draft.steps = [.init(text: "a\u{9b}b")]
+        let agent = try render(draft, .throughAgent(tracker: "Linear"))
+        guard case .agentRequest(let text) = agent.form else { throw Unexpected() }
+        #expect(text.hasSuffix("Fix[31m the login\n\n- [ ] ab\n\none\ntwo"))
+        #expect(agent.sent == text)
+        let hidden = text.unicodeScalars.contains { TaskPayload.hidden($0) && $0 != "\n" }
+        #expect(!hidden)
+    }
+
+    @Test func smallEdges() throws {
+        let titleOnly = try render(bare("", title: String(repeating: "t", count: 7_000)), .github(owner: "o", repo: "r"))
+        let url = try link(titleOnly)
+        #expect(titleOnly.cut && url.utf8.count <= 6_000 && !url.contains("body=") && !url.contains("Cut%20by"))
+        let shortcut = try render(bare("\n  \n\nHello\n\n"), .shortcut(id: "8F1C2D3E-0000-4000-8000-000000000001", name: "S"))
+        #expect(shortcut.form == .stdin("Fix the login\n\nPlanned: 2026-10-19\n\nHello"))
     }
 }
