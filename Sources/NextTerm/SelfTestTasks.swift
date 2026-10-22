@@ -45,6 +45,7 @@ extension SelfTest {
         await shortcutChecks()
         await destinationSheetChecks(c)
         await sendTasksToChecks(c, other: given)
+        await addTaskDestinationChecks(c, proj: proj, folder: folder)
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
@@ -53,6 +54,7 @@ extension SelfTest {
         // Its openers record only in a debug build, so a release build never opens a page or an app.
         note("destinations: skipped in a release build; its checks run in a debug build")
         note("send to: skipped in a release build; its checks run in a debug build")
+        note("add_task destinations: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
@@ -200,7 +202,7 @@ extension SelfTest {
             && answer["approved"] as? String == "on this Mac" && answer["steps"] as? Int == 1
         check(!approved.isError && answered && fm.fileExists(atPath: path), "tasks: add_task writes the task once the user approves", approved.text)
         let shownFile = read(path).map { approved.shown.contains($0.trimmingCharacters(in: .newlines)) } ?? false
-        check(approved.shown.contains("An agent asks to add a task") && approved.shown.contains("Creates \(relative)") && shownFile,
+        check(approved.shown.contains("An agent asks to add a task") && approved.shown.contains("To: the todo folder: saves to \(relative)") && shownFile,
               "tasks: the window names the file and shows its exact text", approved.shown)
         check(read(path)?.contains("added_by: \"an agent outside Next Term’s tabs\"\n") == true, "tasks: the file says who asked", read(path) ?? "")
 
@@ -298,7 +300,7 @@ extension SelfTest {
 
 /// add_task through `nxtrm mcp`, as an agent outside the tabs calls it, for the tasks part.
 @MainActor
-private final class TaskClient {
+final class TaskClient {
     /// What a call that asks gave: its answer, and what its window said.
     struct Asked {
         let text: String
@@ -320,11 +322,13 @@ private final class TaskClient {
     }
 
     /// Calls add_task, answers its window as the user would (nil: not at all), and gives what the window said.
-    func asked(_ arguments: [String: Any], approve: Bool?) async -> Asked {
+    /// `meanwhile` runs while the window waits, before it is answered.
+    func asked(_ arguments: [String: Any], approve: Bool?, meanwhile: () -> Void = {}) async -> Asked {
         let pending = Task { await self.call(arguments) }
         _ = await SelfTest.wait(30) { MCPWriteControl.pending?.window != nil }
         let window = MCPWriteControl.pending?.window
         let shown = SelfTest.texts(window?.window?.contentView)
+        meanwhile()
         if approve == true { window?.approveButton.performClick(nil) }
         if approve == false { window?.declineButton.performClick(nil) }
         let result = await pending.value
