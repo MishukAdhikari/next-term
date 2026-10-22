@@ -80,12 +80,17 @@ public enum TodoFolder {
             guard let outside = settings.outsideFolder else { return .noProject }
             return absolute(outside, project: nil, places: places, home: home)
         }
-        let linked = WorktreeWindow.repository(ofLinkedWorktree: project)
-        // A bare repository has no checkout of its own (its mainCheckout is git's folder): tasks stay in the worktree.
-        let main = linked.map(\.mainCheckout).flatMap { FileManager.default.fileExists(atPath: $0 + "/.git") ? $0 : nil }
-        let root = canonicalPath(main ?? project)
+        let root = projectRoot(project)
         if settings.isShared { return absolute(settings.folder, project: root, places: places, home: home) }
         return inside(root, settings.folder)
+    }
+
+    /// The project's root for tasks: a linked worktree's main checkout, canonical, so every worktree of a repository
+    /// shares it. A bare repository has no checkout of its own (its mainCheckout is git's folder): the worktree is it.
+    public static func projectRoot(_ project: String) -> String {
+        let linked = WorktreeWindow.repository(ofLinkedWorktree: project)
+        let main = linked.map(\.mainCheckout).flatMap { FileManager.default.fileExists(atPath: $0 + "/.git") ? $0 : nil }
+        return canonicalPath(main ?? project)
     }
 
     /// An absolute folder, `~` for `home`.
