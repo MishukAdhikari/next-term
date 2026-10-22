@@ -5,8 +5,9 @@ import NextTermCore
 /// Tasks, end to end: the Tasks menu after Agents with Add Task… on ⌃⌘T; the sheet filled from a terminal selection, the
 /// bytes it writes as TodoFile renders them, its notice's Undo, and a second add within a minute; add_task through
 /// `nxtrm mcp` (Approve, Decline, no answer, a stored key shown as •••, a day it can't read, no project, a worktree
-/// window); and Settings › Tasks right before Secrets. Everything goes to the self-test project's own todo folder, or to
-/// a repository of the part's own, and is removed after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
+/// window); Settings › Tasks right before Secrets; and Reminders with an in-memory store, never the user's own.
+/// Everything goes to the self-test project's own todo folder, or to a repository of the part's own, and is removed
+/// after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
 extension SelfTest {
     static func tasksChecks(_ given: TerminalWindowController, proj: URL) async {
         // The part works in a window of the test project's own: the self-test's first window has no project of its own,
@@ -38,6 +39,7 @@ extension SelfTest {
         await addTaskSheetChecks(c, folder: folder)
         await addTaskToolChecks(c, proj: proj, folder: folder)
         taskSettingsChecks()
+        await remindersChecks(c)
     }
 
     /// Today's date as the files are named, on this Mac.
