@@ -3,8 +3,10 @@ import NextTermCore
 
 /// The app's one posted record (TaskRecord), in Next Term's folder in Application Support, or the self-test's own
 /// folder (SelfTest.historyFolder), so a self-test never reads or writes yours. Every call runs on one serial queue and
-/// returns when done: the file is small and read only to its cap. A write that fails never stops the task, which is
-/// sent already; the caller says it wasn't remembered. Nothing here is logged, and nothing that leaves the Mac reads it.
+/// waits for the file, up to 2 MB read and decoded, so call it off the main thread; the daily prune runs after the
+/// call returns. Titles are masked here, whatever the caller passed, and the slug taken from the masked title. A write
+/// that fails never stops the task, which is sent already; the caller says it wasn't remembered. Nothing here is
+/// logged, and nothing that leaves the Mac reads it.
 final class TaskRecordStore: @unchecked Sendable {
     static let shared = TaskRecordStore(file: SelfTest.historyFolder.map { TaskRecordFile(support: $0) })
 
@@ -21,20 +23,26 @@ final class TaskRecordStore: @unchecked Sendable {
     /// duplicate check.
     @discardableResult
     func record(_ entry: TaskRecord.Entry, now: Date = Date()) -> Bool {
-        queue.sync {
+        let masked = entry.masked { SecretMask.current.mask($0) }
+        let recorded: Bool = queue.sync {
             guard let file else { return false }
             do {
-                try file.append(entry)
+                try file.append(masked)
             } catch {
                 return false
             }
-            pruneIfDue(file, now: now)
             return true
         }
+        if recorded, let file {
+            queue.async { [self] in pruneIfDue(file, now: now) }
+        }
+        return recorded
     }
 
     /// The newest post of the same title to the same place within a minute, if any.
-    func recentDuplicate(kind: TaskDestination.Kind, key: String, slug: String, now: Date = Date()) -> TaskRecord.Entry? {
+    func recentDuplicate(kind: TaskDestination.Kind, key: String, title: String,
+                         now: Date = Date()) -> TaskRecord.Entry? {
+        let slug = TaskRecord.slug(title: title) { SecretMask.current.mask($0) }
         let entries = read()
         return TaskRecord.recentDuplicate(entries, kind: kind, key: key, slug: slug, now: now)
     }

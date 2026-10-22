@@ -15,9 +15,9 @@ public enum TaskRecord {
         /// The destination within its kind: a list or shortcut id, `owner/repo`, a GitLab path, a Linear team, an
         /// Azure `org/project`, a tracker's name, or the todo folder's path.
         public var key: String
-        /// The title, masked before it is stored.
+        /// The title, masked before it is stored (`masked(_:)`).
         public var title: String
-        /// `TodoFile.slug` of the title: what two posts are compared by.
+        /// `TodoFile.slug` of the masked title: what two posts are compared by.
         public var slug: String
         /// The project's key, or none for a task added outside a project.
         public var project: String?
@@ -37,6 +37,20 @@ public enum TaskRecord {
             self.itemID = itemID
             self.waited = waited
         }
+
+        /// This entry with its title passed through `mask` and its slug taken from the masked title, so a secret
+        /// typed in a title reaches neither field whatever the caller passed.
+        public func masked(_ mask: (String) -> String) -> Entry {
+            var copy = self
+            copy.title = mask(title)
+            copy.slug = TodoFile.slug(copy.title)
+            return copy
+        }
+    }
+
+    /// The slug a title is recorded and compared by: that of the masked title.
+    public static func slug(title: String, mask: (String) -> String) -> String {
+        TodoFile.slug(mask(title))
     }
 
     /// One entry as its line, ending in a newline. JSON escapes every newline inside, so a line is always one line.

@@ -42,15 +42,21 @@ public final class TaskRecordFile: @unchecked Sendable {
         guard PrivateFolder.isPrivate(folder.path, owner: owner) else { throw Failure.notPrivate }
     }
 
-    /// Appends one entry's line.
+    /// Appends one entry's line. When the file's last line was cut short (a crash or a full disk), a newline goes
+    /// first, so the cut line stays the only one lost.
     public func append(_ entry: TaskRecord.Entry) throws {
-        let line = try TaskRecord.line(entry)
+        var line = try TaskRecord.line(entry)
         try ensure()
-        let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let descriptor = open(path, O_RDWR | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw errno == ELOOP ? Failure.refused : Failure.system(errno) }
         defer { close(descriptor) }
         var info = stat()
         guard fstat(descriptor, &info) == 0, isOwnFile(info) else { throw Failure.refused }
+        if info.st_size > 0 {
+            var last: UInt8 = 0
+            let count = pread(descriptor, &last, 1, info.st_size - 1)
+            if count == 1, last != UInt8(ascii: "\n") { line.insert(UInt8(ascii: "\n"), at: line.startIndex) }
+        }
         try line.withUnsafeBytes { buffer in
             var offset = 0
             while offset < buffer.count, let base = buffer.baseAddress {
@@ -81,12 +87,13 @@ public final class TaskRecordFile: @unchecked Sendable {
     }
 
     /// Rewrites the file with what `change` keeps of its entries, through a temporary file and a rename. A file the
-    /// read didn't take whole keeps only its newest lines. When it changed between the read and the write, it is read
-    /// and changed once more.
-    func rewrite(_ change: ([TaskRecord.Entry]) -> [TaskRecord.Entry]) throws {
+    /// read didn't take whole keeps only its newest lines; one whose newest `cap` bytes hold no whole line is left as
+    /// it is, never emptied. When it changed between the read and the write, it is read and changed once more.
+    func rewrite(cap: Int = TaskRecordFile.readCap, _ change: ([TaskRecord.Entry]) -> [TaskRecord.Entry]) throws {
         try ensure()
         for attempt in 0..<2 {
-            guard let tail = try readTail(cap: Self.readCap) else { return }
+            guard let tail = try readTail(cap: cap) else { return }
+            if tail.data.isEmpty, !tail.whole { return }
             let old = TaskRecord.parse(tail.data)
             let kept = change(old)
             if kept == old, tail.whole { return }

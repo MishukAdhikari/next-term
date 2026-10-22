@@ -11,8 +11,10 @@ import Testing
                          itemID: itemID, waited: false)
     }
 
+    /// Named nt-* so the test script's sweep removes it; each test also removes its own.
     func folder() throws -> URL {
-        let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("taskrecord-" + UUID().uuidString)
+        let name = "nt-taskrecord-" + UUID().uuidString
+        let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }
@@ -67,7 +69,9 @@ import Testing
     }
 
     @Test func aBigRecordIsReadFromItsEndToTheCap() throws {
-        let file = TaskRecordFile(support: try folder())
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = TaskRecordFile(support: base)
         let filler = entry("filler", at: now.addingTimeInterval(-3600))
         let line: Data = try TaskRecord.line(filler)
         let count = (3 << 20) / line.count + 1
@@ -86,6 +90,7 @@ import Testing
 
     @Test func theFileIsPrivateAndALinkIsRefused() throws {
         let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
         let file = TaskRecordFile(support: base)
         try file.append(entry())
         var info = stat()
@@ -101,7 +106,9 @@ import Testing
     }
 
     @Test func removingAnItemDropsItsLineAndPruningRewrites() throws {
-        let file = TaskRecordFile(support: try folder())
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = TaskRecordFile(support: base)
         let day: TimeInterval = 86_400
         try file.append(entry("old", at: now.addingTimeInterval(-40 * day)))
         try file.append(entry("reminder", kind: .reminders, key: "list-1", itemID: "item-9"))
@@ -112,5 +119,89 @@ import Testing
         #expect(try file.read().map(\.slug) == ["kept"])
         var info = stat()
         #expect(lstat(file.path, &info) == 0 && info.st_mode & 0o777 == 0o600)
+    }
+
+    @Test func aLineCutShortDoesNotSwallowTheNextOne() throws {
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = TaskRecordFile(support: base)
+        try file.ensure()
+        try Data(#"{"at":"2027"#.utf8).write(to: URL(fileURLWithPath: file.path))
+        chmod(file.path, 0o600)
+        let next = entry()
+        try file.append(next)
+        #expect(try file.read() == [next])
+    }
+
+    @Test func aLinkOrAnOpenFolderAtTheFoldersNameIsRefused() throws {
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        chmod(elsewhere.path, 0o700)
+        let file = TaskRecordFile(support: base)
+        try FileManager.default.createSymbolicLink(atPath: file.folder.path, withDestinationPath: elsewhere.path)
+        #expect(throws: TaskRecordFile.Failure.notPrivate) { try file.append(entry()) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
+        try FileManager.default.removeItem(atPath: file.folder.path)
+        try FileManager.default.createDirectory(at: file.folder, withIntermediateDirectories: true)
+        chmod(file.folder.path, 0o755)
+        #expect(throws: TaskRecordFile.Failure.notPrivate) { try file.append(entry()) }
+    }
+
+    @Test func aHardLinkAtTheFilesNameIsRefused() throws {
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = TaskRecordFile(support: base)
+        try file.ensure()
+        let target = base.appendingPathComponent("elsewhere.jsonl")
+        try Data().write(to: target)
+        chmod(target.path, 0o600)
+        #expect(link(target.path, file.path) == 0)
+        #expect(throws: TaskRecordFile.Failure.refused) { try file.append(entry()) }
+        #expect(throws: TaskRecordFile.Failure.refused) { try file.read() }
+        #expect(try Data(contentsOf: target).isEmpty)
+    }
+
+    @Test func aRewriteOfABigRecordKeepsItsNewestLines() throws {
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = TaskRecordFile(support: base)
+        let line: Data = try TaskRecord.line(entry("filler", at: now.addingTimeInterval(-3600)))
+        let count = (3 << 20) / line.count + 1
+        var data = Data(capacity: count * line.count)
+        for _ in 0..<count { data.append(line) }
+        try file.ensure()
+        try data.write(to: URL(fileURLWithPath: file.path))
+        chmod(file.path, 0o600)
+        try file.append(entry("newest", kind: .reminders, key: "list-1", itemID: "item-1"))
+        try file.append(entry("last"))
+        try file.remove(itemID: "item-1", kind: .reminders)
+        let read = try file.read()
+        #expect(!read.isEmpty)
+        #expect(read.last?.slug == "last")
+        #expect(!read.contains { $0.slug == "newest" })
+    }
+
+    @Test func oneLineLongerThanTheCapIsNeverWipedByARewrite() throws {
+        let base = try folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = TaskRecordFile(support: base)
+        try file.ensure()
+        let long = Data(repeating: UInt8(ascii: "a"), count: 4096)
+        try long.write(to: URL(fileURLWithPath: file.path))
+        chmod(file.path, 0o600)
+        try file.rewrite(cap: 1024) { _ in [] }
+        #expect(try Data(contentsOf: URL(fileURLWithPath: file.path)) == long)
+    }
+
+    @Test func anEntryIsMaskedAndItsSlugTakenFromTheMaskedTitle() {
+        let raw = TaskRecord.Entry(at: now, kind: .github, key: "acme/api", title: "Rotate key sk-12345",
+                                   slug: "rotate-key-sk-12345", project: nil, waited: false)
+        let masked = raw.masked { $0.replacingOccurrences(of: "sk-12345", with: "••••") }
+        #expect(masked.title == "Rotate key ••••")
+        #expect(masked.slug == TodoFile.slug("Rotate key ••••"))
+        #expect(!masked.slug.contains("12345"))
+        #expect(TaskRecord.slug(title: "Rotate key sk-12345") { _ in "Rotate key ••••" } == masked.slug)
     }
 }
