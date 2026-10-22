@@ -54,8 +54,12 @@ final class TaskDestinationsView: NSView, NSTextFieldDelegate {
     /// The project in front: its key and its folder; nil with no project window.
     private(set) var projectKey: String?
     private var projectPath: String?
-    /// Read when the box opens, never at launch; nil until read, or when the list couldn't be read.
+    /// Read when the box opens, never at launch; nil until read.
     private var shortcuts: [ShortcutList.Shortcut]?
+    /// A read of the shortcuts is under way, so another isn't started.
+    private var readingShortcuts = false
+    /// The last read failed: nothing is known, so no saved shortcut is called gone.
+    private var shortcutsUnreadable = false
     private var reminderLists: [RemindersAccess.List] = []
     /// What Use This Project's Remote said; cleared when the kind changes.
     private var remoteLine: String?
@@ -234,6 +238,7 @@ extension TaskDestinationsView {
     func reload() {
         let settings = TaskSettings(defaults: .standard)
         let front = NSApp.orderedWindows.lazy.compactMap { $0.windowController as? TerminalWindowController }.first
+        let before = projectKey
         if let front, let path = front.project {
             projectPath = path
             projectKey = TaskSettings.projectKey(path)
@@ -246,6 +251,12 @@ extension TaskDestinationsView {
             projectKey = nil
             projectName.stringValue = "No project window open"
             if editing == .project { editing = .defaultDestination }
+        }
+        if projectKey != before, editing == .project {
+            // Another project came to the front: details typed for the last one are dropped, never saved to this one.
+            editing = saved(.project) == nil ? .defaultDestination : .project
+            form = DestinationForm(saved: saved(editing))
+            remoteLine = nil
         }
         rows = DestinationForm.rows(facts: TasksMenu.menuFacts())
         let fallback = settings.defaultDestination ?? .todoFolder
@@ -301,6 +312,19 @@ extension TaskDestinationsView {
     }
 
     @objc private func changedElsewhere() { reload() }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        let center = NotificationCenter.default
+        if let window { center.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: window) }
+        if let newWindow {
+            // Back in Settings after another project window was in front: This project names that one.
+            center.addObserver(self, selector: #selector(windowBecameKey), name: NSWindow.didBecomeKeyNotification,
+                               object: newWindow)
+        }
+    }
+
+    @objc private func windowBecameKey() { reload() }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -452,7 +476,7 @@ extension TaskDestinationsView {
             }
         case .shortcut:
             row("Shortcut:", [shortcutPopup, reloadShortcuts])
-            if shortcuts == nil { loadShortcuts() }
+            if shortcuts == nil, !readingShortcuts { loadShortcuts() }
             if let gone = goneShortcutLine() { line(gone, failed: true) }
         case .things:
             if let missing = rows.first(where: { $0.kind == .things && !$0.enabled })?.tip {
@@ -508,7 +532,7 @@ extension TaskDestinationsView {
     func updateState() {
         save.isEnabled = form.canSave
         revert.isEnabled = form != DestinationForm(saved: form.saved)
-        let needsFields = !DestinationForm.savesAtOnce(form.kind)
+        let needsFields = DestinationForm.hasFields(form.kind)
         let changed = form.destination != form.saved
         let line: String? = remoteLine ?? (needsFields && changed ? form.problem : nil)
         formLine.stringValue = line.map { SecretMask.current.mask($0) } ?? ""
@@ -591,8 +615,11 @@ extension TaskDestinationsView {
         shortcutPopup.removeAllItems()
         shortcutPopup.addItem(withTitle: "Reading your shortcuts…")
         shortcutPopup.isEnabled = false
+        readingShortcuts = true
         TaskShortcut.list { [weak self] found in
             guard let self else { return }
+            self.readingShortcuts = false
+            self.shortcutsUnreadable = found == nil
             self.shortcuts = found ?? []
             self.shortcutPopup.isEnabled = true
             if self.form.kind == .shortcut { self.showForm() }
@@ -605,7 +632,8 @@ extension TaskDestinationsView {
         shortcutPopup.removeAllItems()
         let listed = shortcuts.contains { $0.id == form.shortcutID }
         if !listed {
-            shortcutPopup.addItem(withTitle: shortcuts.isEmpty ? "No shortcuts found" : "Choose a Shortcut")
+            let empty = shortcutsUnreadable ? "Couldn’t read your shortcuts" : "No shortcuts found"
+            shortcutPopup.addItem(withTitle: shortcuts.isEmpty ? empty : "Choose a Shortcut")
         }
         for shortcut in shortcuts {
             let shown: String = SecretMask.current.mask(shortcut.name)
@@ -619,7 +647,7 @@ extension TaskDestinationsView {
 
     /// "“<name>” isn’t in Shortcuts any more", for a saved shortcut the list no longer has.
     private func goneShortcutLine() -> String? {
-        guard let shortcuts, !form.shortcutID.isEmpty,
+        guard let shortcuts, !shortcutsUnreadable, !form.shortcutID.isEmpty,
               !shortcuts.contains(where: { $0.id == form.shortcutID }) else { return nil }
         return "“" + SecretMask.current.mask(form.shortcutName) + "” isn’t in Shortcuts any more."
     }
@@ -633,6 +661,7 @@ extension TaskDestinationsView {
     }
 
     @objc private func reloadShortcutsPressed() {
+        guard !readingShortcuts else { return }
         shortcuts = nil
         showForm()
     }
@@ -642,13 +671,15 @@ extension TaskDestinationsView {
         guard let projectPath, let git = GitRunner.locateGit() else { return NSSound.beep() }
         useRemote.isEnabled = false
         let kind = form.kind
+        let scope = editing
+        let key = projectKey
         DispatchQueue.global(qos: .userInitiated).async {
             let url = DestinationForm.originURL(project: projectPath, git: git)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.useRemote.isEnabled = true
-                // The kind changed while git read the config: nothing is filled.
-                guard self.form.kind == kind else { return }
+                // The kind, the scope or the project changed while git read the config: nothing is filled.
+                guard self.form.kind == kind, self.editing == scope, self.projectKey == key else { return }
                 self.remoteLine = self.form.useRemote(url)
                 self.syncFields()
                 self.updateState()

@@ -101,9 +101,16 @@ public struct DestinationForm: Equatable, Sendable {
     /// Save is on: the fields build a usable destination that isn't the one saved.
     public var canSave: Bool { problem == nil && destination != saved }
 
-    /// The kinds that need nothing typed: choosing one saves it at once.
+    /// The kinds that need nothing typed: choosing one saves it at once. Linear is one of them, since a team is
+    /// optional, yet it still has a field (`hasFields`).
     public static func savesAtOnce(_ kind: TaskDestination.Kind) -> Bool {
         [.todoFolder, .todoist, .omnifocus, .trello, .linear].contains(kind)
+    }
+
+    /// The kinds with something to type or pick in the box, so with Save and Revert: every kind but the ones with
+    /// nothing at all to fill. Linear's team key is saved on Save even though Linear without one saves at once.
+    public static func hasFields(_ kind: TaskDestination.Kind) -> Bool {
+        ![.todoFolder, .todoist, .omnifocus, .trello].contains(kind)
     }
 
     /// What choosing `kind` saves at once: the saved destination when it is that kind already, else the kind with no

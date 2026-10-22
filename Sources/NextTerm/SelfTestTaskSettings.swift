@@ -5,8 +5,9 @@ import NextTermCore
 /// Settings › Tasks' Destinations: the slice-1 rows first, then Default, This project and Connect a Tracker…; Trello as
 /// the default saves at once; GitHub for the project saves nothing until Save; Use the Default clears it and an open
 /// Add Task sheet follows; Reminders with the in-memory store, not asked, allowed and turned off; the shortcut popup
-/// from the fake runner and a saved shortcut that is gone; opening at GitHub's details; and Connect a Tracker…. Every
-/// opener is recorded and nothing opens; `tasksChecks` puts the Tasks settings back after.
+/// from the fake runner, a saved shortcut that is gone and a list that can't be read; Linear's team key on Save, the
+/// Things note and Revert; opening at GitHub's details, and the Settings window opened at Linear's; and Connect a
+/// Tracker…. Every opener is recorded and nothing opens; `tasksChecks` puts the Tasks settings back after.
 extension SelfTest {
     static func taskDestinationSettingsChecks(_ c: TerminalWindowController) async {
         guard let project = c.project else { return check(false, "task settings: the window has a project") }
@@ -58,7 +59,10 @@ extension SelfTest {
         await useDefaultChecks(c, view, key: key)
         await reminderSettingsChecks(view)
         await shortcutSettingsChecks(view)
+        await unreadableShortcutChecks(view)
+        linearThingsAndRevertChecks(view)
         focusAndConnectChecks(view)
+        await settingsWindowFocusCheck()
     }
 
     /// Use the Default clears the project's own destination, and an Add Task sheet open behind reads it again.
@@ -124,6 +128,65 @@ extension SelfTest {
         view.reload()
     }
 
+    /// Shortcuts that can't be read: the popup says so, a saved shortcut isn't called gone, and showing the box again
+    /// while a read is under way starts no second one.
+    private static func unreadableShortcutChecks(_ view: TaskDestinationsView) async {
+        let runner = FakeShortcutRunner(list: nil)
+        TaskShortcut.fake = runner
+        let saved = TaskDestination.shortcut(id: "0F3C9A2E-1B7D-4E55-9C3A-2D8E6F1A4B70", name: "Old Inbox")
+        UserDefaults.standard.set(TaskDestination.json(saved), forKey: TaskSettings.Key.defaultDestination)
+        view.reload()
+        view.pick(.shortcut, in: .defaultDestination)
+        view.reloadShortcuts.performClick(nil)
+        view.showForm()
+        view.showForm()
+        let read = await wait(5) { view.shortcutPopup.itemTitles.contains("Couldn’t read your shortcuts") }
+        check(read, "task settings: shortcuts that can’t be read say so", view.shortcutPopup.itemTitles.joined(separator: " | "))
+        let labels = view.details.allLabels()
+        check(!labels.contains("“Old Inbox” isn’t in Shortcuts any more."),
+              "task settings: an unread list calls no saved shortcut gone", labels.joined(separator: " | "))
+        check(runner.lists == 1, "task settings: showing the box again starts no second read", "\(runner.lists)")
+        UserDefaults.standard.removeObject(forKey: TaskSettings.Key.defaultDestination)
+        view.reload()
+    }
+
+    /// Linear saves at once with no team, then a typed team key saves on Save and a bad one shows its problem; Things
+    /// shows its Enable note until it is first saved; Revert puts back what is saved.
+    private static func linearThingsAndRevertChecks(_ view: TaskDestinationsView) {
+        let defaults = UserDefaults.standard
+        view.pick(.linear, in: .defaultDestination)
+        check(TaskSettings(defaults: defaults).defaultDestination == .linear(team: nil),
+              "task settings: Linear with no team is saved at once")
+        check(view.save.superview?.superview?.isHidden == false, "task settings: Linear shows Save for its team key")
+        view.team.stringValue = "eng team"
+        view.fieldsChanged()
+        check(!view.save.isEnabled && !view.formLine.isHidden, "task settings: a bad team key shows its problem")
+        view.team.stringValue = "ENG"
+        view.fieldsChanged()
+        check(view.save.isEnabled, "task settings: a team key turns Save on")
+        view.saveForm()
+        check(TaskSettings(defaults: defaults).defaultDestination == .linear(team: "ENG"),
+              "task settings: Save keeps Linear’s team key")
+        view.team.stringValue = "WEB"
+        view.fieldsChanged()
+        view.revertForm()
+        check(view.team.stringValue == "ENG" && view.form.destination == .linear(team: "ENG"),
+              "task settings: Revert puts back the saved team key")
+
+        view.pick(.things, in: .defaultDestination)
+        check(view.details.allLabels().contains(DestinationForm.thingsEnableNote),
+              "task settings: Things says once to enable Things URLs")
+        view.thingsList.stringValue = "Work"
+        view.fieldsChanged()
+        view.saveForm()
+        check(TaskSettings(defaults: defaults).notesShown.contains(.thingsEnable),
+              "task settings: saving Things marks its Enable note shown")
+        view.showForm()
+        check(!view.details.allLabels().contains(DestinationForm.thingsEnableNote),
+              "task settings: the Enable note isn’t said again")
+        view.pick(.trello, in: .defaultDestination)
+    }
+
     /// Opening at GitHub's details for the project chooses it with the owner first; Connect a Tracker… opens its sheet.
     private static func focusAndConnectChecks(_ view: TaskDestinationsView) {
         view.focus(kind: .github, scope: .project)
@@ -135,6 +198,27 @@ extension SelfTest {
         check(ConnectTrackerSheet.current != nil, "task settings: Connect a Tracker… beside the tracker opens its sheet")
         ConnectTrackerSheet.current?.done()
         view.revertForm()
+    }
+
+    /// The Settings window opened at Linear's details, from outside it: the Tasks tab, with the team key in focus.
+    private static func settingsWindowFocusCheck() async {
+        TaskSettingsView.focus(kind: .linear, scope: .defaultDestination)
+        let found = await wait(5) { settingsTasksPane() != nil }
+        guard found, let pane = settingsTasksPane(), let window = pane.window else {
+            return check(false, "task settings: Settings opens on its Tasks tab")
+        }
+        let editor = window.firstResponder as? NSTextView
+        let field: NSTextField? = editor?.delegate as? NSTextField
+        let typing = field === pane.destinations.team
+        check(typing, "task settings: opened at Linear’s details, the team key is in focus")
+        window.performClose(nil)
+    }
+
+    /// The Tasks tab of the Settings window, while it is the tab shown.
+    private static func settingsTasksPane() -> TaskSettingsView? {
+        let tabs = NSApp.windows.lazy.compactMap { $0.contentView as? NSTabView }
+        let shown = tabs.compactMap { $0.selectedTabViewItem?.view as? TaskSettingsView }
+        return shown.first { $0.window?.isVisible == true }
     }
 }
 

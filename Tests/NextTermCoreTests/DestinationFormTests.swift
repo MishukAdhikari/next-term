@@ -85,6 +85,21 @@ import Testing
         #expect(DestinationForm.atOnce(.github, saved: nil) == nil)
     }
 
+    @Test func linearSavedAtOnceStillTakesATeamOnSave() {
+        #expect(DestinationForm.hasFields(.linear) && DestinationForm.hasFields(.github))
+        #expect(!DestinationForm.hasFields(.trello) && !DestinationForm.hasFields(.todoFolder))
+        #expect(!DestinationForm.hasFields(.todoist) && !DestinationForm.hasFields(.omnifocus))
+        let atOnce = DestinationForm.atOnce(.linear, saved: .trello)
+        var form = DestinationForm(saved: atOnce)
+        #expect(!form.canSave)
+        form.team = "ENG"
+        #expect(form.canSave && form.destination == .linear(team: "ENG"))
+        form.team = "eng team"
+        #expect(form.problem != nil && !form.canSave)
+        form.revert()
+        #expect(form.team.isEmpty && form.destination == .linear(team: nil))
+    }
+
     @Test func theProjectsRemoteFillsTheRepository() {
         var form = DestinationForm(kind: .github, saved: nil)
         #expect(form.useRemote("git@github.com:o/r.git") == nil)
