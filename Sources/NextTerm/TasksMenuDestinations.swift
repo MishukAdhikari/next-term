@@ -119,7 +119,9 @@ extension TasksMenu {
             }
         case .useDefault:
             Self.save(nil, key: key)
-        case .setUp, .setUpAll:
+        case .setUp(let kind):
+            TaskSettingsView.focus(kind: kind, scope: key == nil ? .defaultDestination : .project)
+        case .setUpAll:
             AppDelegate.shared.showSettings(tab: "tasks")
         case .keep, .label, .separator:
             break

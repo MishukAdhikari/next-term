@@ -62,6 +62,16 @@ enum TaskOpen {
         WebLinks.open(url, from: window)
     }
 
+    /// System Settings at Privacy & Security, on the user's click: only that one fixed address, and recorded instead
+    /// of opened during the self-test.
+    static func openSettings(_ url: URL) {
+        guard url == RemindersAccess.privacySettings else { return NSSound.beep() }
+        #if DEBUG
+        if recordsOnly { return opened.append(url) }
+        #endif
+        NSWorkspace.shared.open(url)
+    }
+
     /// The app is installed: the app that would open its links is the vendor's own. Nothing is launched to ask. A page
     /// needs no app.
     static func installed(_ kind: TaskLink.Kind) -> Bool {

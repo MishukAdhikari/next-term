@@ -400,7 +400,9 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         guard rows.indices.contains(tag) else { return }
         switch rows[tag].action {
         case .use(let destination): choose(destination, followsProject: tag == 0)
-        case .setUp: setUpDestinations()
+        case .setUp(let kind):
+            fillDestinations()
+            TaskSettingsView.focus(kind: kind, scope: project == nil ? .defaultDestination : .project)
         }
     }
 
@@ -448,7 +450,9 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
                 TaskReminders.allow(from: self.window) { [weak self] _ in self?.refresh() }
             case .things: self.adopt(.things(list: nil))
             case .todoFolder: self.adopt(.todoFolder)
-            case .shortcut, .more: AppDelegate.shared.showSettings(tab: "tasks")
+            // The offer sets the default, so the shortcut is chosen there.
+            case .shortcut: TaskSettingsView.focus(kind: .shortcut, scope: .defaultDestination)
+            case .more: AppDelegate.shared.showSettings(tab: "tasks")
             }
             self.fitWindow()
         }

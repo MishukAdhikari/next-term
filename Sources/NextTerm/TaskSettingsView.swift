@@ -3,7 +3,8 @@ import NextTermCore
 
 /// Settings › Tasks: where the todo folder is (a path in each project, or one folder for every project), the folder for
 /// windows with no project, and whether new tasks say where they were added. Each is saved as it changes and read as a
-/// task is added (TaskSettings), by Tasks › Add Task… and add_task alike.
+/// task is added (TaskSettings), by Tasks › Add Task… and add_task alike. Below them, where tasks go
+/// (TaskDestinationsView), and Connect a Tracker….
 final class TaskSettingsView: NSView, NSTextFieldDelegate {
     static let docsURL = URL(string: "https://nxtrm.mishuk.me/docs/tasks/")!
 
@@ -17,6 +18,8 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
     let problem = NSTextField(wrappingLabelWithString: "")
     /// None, the folder chosen, Choose Folder….
     let outside = NSPopUpButton()
+    /// Where tasks go: the default, this project's, and each destination's details.
+    let destinations = TaskDestinationsView(frame: .zero)
     let includeContext = NSButton(checkboxWithTitle: "Add where you are to new tasks (project, branch, tab, agent)", target: nil, action: nil)
 
     override init(frame: NSRect) {
@@ -68,6 +71,10 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
+        let separator = NSBox()
+        separator.boxType = .separator
+        let links = NSStackView(views: [connect, format])
+        links.spacing = 12
         let stack = NSStackView(views: [
             row("Todo folder:", [folder, folderScope]),
             row("", [chooseFolder, reveal]),
@@ -75,18 +82,38 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
             row("Outside a project:", [outside]),
             row("New tasks:", [includeContext]),
             note,
-            format,
-            connect,
+            separator,
+            destinations,
+            links,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        // The Destinations section makes the pane taller than the Settings window: it scrolls.
+        let content = TaskSettingsFlippedView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = content
+        addSubview(scroll)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 24),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            content.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -24),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
+            separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         refresh()
     }
@@ -197,5 +224,21 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
 
     @objc private func connectTracker() { ConnectTrackerSheet.present(over: window) }
 
+    /// Settings › Tasks at `kind`'s details: the Settings window on its Tasks tab, then the kind chosen for `scope`
+    /// with its first field in focus. Nothing changes until Save there, unless the kind has nothing to fill.
+    static func focus(kind: TaskDestination.Kind, scope: TaskDestinationsView.Scope) {
+        AppDelegate.shared.showSettings(tab: "tasks")
+        let tabs = NSApp.windows.lazy.compactMap { $0.contentView as? NSTabView }
+        let views = tabs.compactMap { tabs in
+            tabs.tabViewItems.first { $0.identifier as? String == "tasks" }?.view as? TaskSettingsView
+        }
+        views.first?.destinations.focus(kind: kind, scope: scope)
+    }
+
     @objc private func openFormat() { NSWorkspace.shared.open(Self.docsURL) }
+}
+
+/// The scroll view's content, laid out from the top.
+private final class TaskSettingsFlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

@@ -47,6 +47,7 @@ extension SelfTest {
         await sendTasksToChecks(c, other: given)
         await addTaskDestinationChecks(c, proj: proj, folder: folder)
         await connectTrackerChecks(c)
+        await taskDestinationSettingsChecks(c)
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
@@ -58,6 +59,8 @@ extension SelfTest {
         note("add_task destinations: skipped in a release build; its checks run in a debug build")
         // Its page links and PATH record only in a debug build, so a release build never opens a page.
         note("connect a tracker: skipped in a release build; its checks run in a debug build")
+        // Its openers, Reminders store and shortcut runner are debug-only fakes.
+        note("task settings: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
