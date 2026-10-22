@@ -2,7 +2,9 @@ import Foundation
 import NextTermCore
 
 /// Hands one task to the shortcut the user picked: its rendered, masked text as the shortcut's input, the shortcut named
-/// by its identifier, one run at a time on a serial queue, stopped after a minute or by Cancel. A run that finishes
+/// by its identifier, one run at a time on a serial queue, stopped after a minute or by Cancel. Reading the list has
+/// its own queue, so the sheet's check never waits behind a run. Cancel stops every run not yet ended, including one
+/// still waiting its turn, which then never starts. A run that finishes
 /// writes one line in the posted record, keyed by the shortcut's id; there is no Undo, since Next Term can't know what
 /// the shortcut did. Lines never quote the task, and nothing the command prints is shown or logged. The list of
 /// shortcuts is read only when asked for, never at launch. Every answer comes back on the main thread.
@@ -17,8 +19,10 @@ enum TaskShortcut {
 
     nonisolated(unsafe) private static var real: ShortcutRunner?
     nonisolated private static let queue = DispatchQueue(label: "nextterm.tasks.shortcut", qos: .userInitiated)
-    /// The run in progress, for Cancel.
-    private static var current: ShortcutStop?
+    nonisolated private static let listQueue = DispatchQueue(label: "nextterm.tasks.shortcut-list",
+                                                             qos: .userInitiated)
+    /// The runs not yet ended, running or waiting their turn, for Cancel.
+    private static var pending: [ShortcutStop] = []
 
     /// The runner, made on first use.
     static var runner: ShortcutRunner {
@@ -59,7 +63,7 @@ enum TaskShortcut {
     /// The user's shortcuts, or nil when the list couldn't be read.
     static func list(done: @escaping ([ShortcutList.Shortcut]?) -> Void) {
         let runner = runner
-        queue.async {
+        listQueue.async {
             let found = runner.list().map(ShortcutList.parse)
             DispatchQueue.main.async { done(found) }
         }
@@ -73,28 +77,34 @@ enum TaskShortcut {
     /// Runs the shortcut with the task's text as its input. The Add the user pressed is the confirmation.
     static func send(_ task: Task, done: @escaping (Outcome) -> Void) {
         guard let arguments = ShortcutList.runArguments(id: task.id) else {
-            return done(outcome(ShortcutList.line(.couldntStart, name: task.name)))
+            // Answered on a later turn of the main thread, like every other answer.
+            let line = ShortcutList.line(.couldntStart, name: task.name)
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(outcome(line)) } }
+            return
         }
         let stop = ShortcutStop()
-        current = stop
+        pending.append(stop)
         let runner = runner
         let limit = limit
         queue.async {
-            let result = runner.run(arguments: arguments, input: Data(task.input.utf8), limit: limit, stop: stop)
+            let input = Data(task.input.utf8)
+            let result: ShortcutList.Result = stop.isSet
+                ? .stopped
+                : runner.run(arguments: arguments, input: input, limit: limit, stop: stop)
             let line = ShortcutList.line(result, name: task.name)
             if case .sent = line { record(task) }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if current === stop { current = nil }
+                    pending.removeAll { $0 === stop }
                     done(outcome(line))
                 }
             }
         }
     }
 
-    /// Cancel: stops the run in progress, if any.
+    /// Cancel: stops every run not yet ended.
     static func stop() {
-        current?.set()
+        for run in pending { run.set() }
     }
 
     private static func outcome(_ line: ShortcutList.Line) -> Outcome {

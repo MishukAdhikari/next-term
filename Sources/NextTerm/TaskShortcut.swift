@@ -21,7 +21,7 @@ protocol ShortcutRunner: AnyObject, Sendable {
 /// The real command, started with an argument array and never through a shell. Its standard input and output are
 /// temporary files readable only by this user, not pipes: a pipe's end inherited by a process starting at the same
 /// moment (a new tab's shell) would keep the command waiting for the end of its input. Both files are removed when
-/// the run ends. Its output is read for nothing and dropped; its errors are never read, since they can quote the input.
+/// the run ends. A run's output is never read; its errors are never read either, since they can quote the input.
 final class ProcessShortcutRunner: ShortcutRunner, @unchecked Sendable {
     func list() -> String? {
         var printed: Data?
@@ -31,12 +31,15 @@ final class ProcessShortcutRunner: ShortcutRunner, @unchecked Sendable {
     }
 
     func run(arguments: [String], input: Data, limit: TimeInterval, stop: ShortcutStop) -> ShortcutList.Result {
-        start(arguments, input: input, limit: limit, stop: stop) { _ in }
+        start(arguments, input: input, limit: limit, stop: stop, read: nil)
     }
 
-    /// Runs the command and hands its output to `read` when it exits on its own.
+    /// Runs the command and hands its output to `read`, if given, when it exits on its own. Without a reader the
+    /// output file is never loaded, so a shortcut that prints a large file costs nothing.
     private func start(_ arguments: [String], input: Data?, limit: TimeInterval, stop: ShortcutStop,
-                       read: (Data?) -> Void) -> ShortcutList.Result {
+                       read: ((Data?) -> Void)?) -> ShortcutList.Result {
+        // Cancel pressed while this waited its turn: the command never starts and gets nothing.
+        if stop.isSet { return .stopped }
         let files = FileManager.default
         let temporary = files.temporaryDirectory
         let outputURL = temporary.appendingPathComponent("next-term-shortcut-out-\(UUID().uuidString)")
@@ -81,7 +84,7 @@ final class ProcessShortcutRunner: ShortcutRunner, @unchecked Sendable {
             end(process, exited)
             return cut
         }
-        read(try? Data(contentsOf: outputURL))
+        if let read { read(try? Data(contentsOf: outputURL)) }
         return .finished(process.terminationStatus)
     }
 

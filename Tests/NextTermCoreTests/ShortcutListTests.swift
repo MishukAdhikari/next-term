@@ -65,6 +65,15 @@ import Testing
         #expect(ShortcutList.goneLine == "The shortcut is gone. Choose another in Settings › Tasks.")
     }
 
+    @Test func aLineMasksTheShortcutsName() {
+        let key = "sk-made-up-0000"
+        let mask: (String) -> String = { $0.replacingOccurrences(of: key, with: "•••") }
+        let sent = ShortcutList.line(.finished(0), name: "Inbox \(key)", mask: mask)
+        #expect(sent == .sent("Sent to the shortcut “Inbox •••”."))
+        let failed = ShortcutList.line(.timedOut, name: "Inbox \(key)", mask: mask)
+        #expect(failed == .failed("The shortcut “Inbox •••” didn’t finish. Nothing more was sent."))
+    }
+
     @Test func theTitleIsTheInputsFirstLine() {
         #expect(ShortcutList.title(ofInput: "Fix the login\n\nPlanned: 2026-10-19\n\nSteps") == "Fix the login")
         #expect(ShortcutList.title(ofInput: "Only a title") == "Only a title")

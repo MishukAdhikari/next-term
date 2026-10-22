@@ -54,17 +54,35 @@ extension SelfTest {
         fake.answer(hangs: true)
         let late = await shortcutSend(task)
         check(late == .failed(failedLine), "shortcut: a run past its time limit is stopped with the same line", "\(late)")
-        let stopped: TaskShortcut.Outcome = await withCheckedContinuation { continuation in
-            TaskShortcut.send(task) { continuation.resume(returning: $0) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { MainActor.assumeIsolated { TaskShortcut.stop() } }
-        }
-        check(stopped == .stopped(ShortcutList.stoppedLine), "shortcut: Cancel stops the run", "\(stopped)")
+        let runsBefore = TaskShortcut.quiet { fake.runs.count }
+        let (stopped, waiting) = await shortcutCancelTwo(task)
+        let stoppedLine = TaskShortcut.Outcome.stopped(ShortcutList.stoppedLine)
+        check(stopped == stoppedLine, "shortcut: Cancel stops the run", "\(stopped)")
+        check(waiting == stoppedLine, "shortcut: Cancel also stops a run waiting its turn", "\(waiting)")
+        let runsAfter = TaskShortcut.quiet { fake.runs.count }
+        check(runsAfter == runsBefore + 1, "shortcut: a run stopped while waiting never starts", "\(runsAfter)")
         fake.answer()
         let lines = [failed, late, stopped].map { "\($0)" }
         let title = ShortcutList.title(ofInput: task.input)
         check(!lines.contains { $0.contains(title) }, "shortcut: no line quotes the task")
         let recorded = await shortcutRecords(id)
         check(recorded == before, "shortcut: a run that didn’t finish records nothing", "\(recorded)")
+    }
+
+    /// Two sends, the second waiting behind the first, then Cancel; both answers, in send order.
+    private static func shortcutCancelTwo(_ task: TaskShortcut.Task) async
+        -> (TaskShortcut.Outcome, TaskShortcut.Outcome) {
+        await withCheckedContinuation { continuation in
+            var first: TaskShortcut.Outcome?
+            var second: TaskShortcut.Outcome?
+            let both = {
+                guard let first, let second else { return }
+                continuation.resume(returning: (first, second))
+            }
+            TaskShortcut.send(task) { first = $0; both() }
+            TaskShortcut.send(task) { second = $0; both() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { MainActor.assumeIsolated { TaskShortcut.stop() } }
+        }
     }
 
     private static func shortcutList() async -> [ShortcutList.Shortcut]? {

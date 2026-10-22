@@ -70,7 +70,10 @@ public enum ShortcutList {
         return ["run", id, "--input-path", "-"]
     }
 
-    public static func line(_ result: Result, name: String) -> Line {
+    /// The name is the user's own label, masked like every other name a line shows.
+    public static func line(_ result: Result, name raw: String,
+                            mask: (String) -> String = { SecretMask.current.mask($0) }) -> Line {
+        let name = mask(raw)
         switch result {
         case .finished(0): return .sent("Sent to the shortcut “\(name)”.")
         case .stopped: return .stopped(stoppedLine)
