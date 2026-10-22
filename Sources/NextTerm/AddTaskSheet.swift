@@ -41,6 +41,9 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
     private var projectDestination: TaskDestination = .todoFolder
     /// Where this Add goes.
     private var chosen: TaskDestination = .todoFolder
+    /// The popup is on "(this project’s)": a change saved meanwhile moves this Add with it. Any other row the user
+    /// picked stays, whatever is saved.
+    private var followsProject = true
     private var rows: [DestinationChoices.Row] = []
     private var agents: [TaskAgentRequest.Choice] = []
     private var facts = DestinationFacts()
@@ -360,16 +363,21 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         guard !sending else { return }
         let settings = TaskSettings(defaults: .standard)
         let now = settings.destination(for: project.map(TaskSettings.projectKey))
-        if chosen == projectDestination { chosen = now }
         projectDestination = now
+        guard followsProject, chosen != now else {
+            readFacts()
+            fillDestinations()
+            fillAgents()
+            updateState()
+            return
+        }
         readFacts()
-        fillDestinations()
-        fillAgents()
-        updateState()
+        choose(now, followsProject: true)
     }
 
-    /// This Add goes to `destination`; nothing is saved.
-    private func choose(_ destination: TaskDestination) {
+    /// This Add goes to `destination`; nothing is saved. What was looked up for the last choice is looked up again.
+    private func choose(_ destination: TaskDestination, followsProject: Bool = false) {
+        self.followsProject = followsProject
         chosen = destination
         facts.makesList = nil
         facts.shortcutListed = nil
@@ -391,7 +399,7 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         let tag = views.destination.selectedTag()
         guard rows.indices.contains(tag) else { return }
         switch rows[tag].action {
-        case .use(let destination): choose(destination)
+        case .use(let destination): choose(destination, followsProject: tag == 0)
         case .setUp: setUpDestinations()
         }
     }
@@ -450,7 +458,7 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
     private func adopt(_ destination: TaskDestination) {
         AddTaskOffer.makeDefault(destination)
         projectDestination = TaskSettings(defaults: .standard).destination(for: project.map(TaskSettings.projectKey))
-        choose(destination)
+        choose(destination, followsProject: destination == projectDestination)
     }
 
     @objc private func dismissOffer() {

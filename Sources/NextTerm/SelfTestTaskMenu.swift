@@ -4,8 +4,8 @@ import NextTermCore
 #if DEBUG
 /// Tasks › Send Tasks To ▸: built when it opens, with the project's destination ticked; choosing Things saves it for
 /// the project and leaves the default; Reminders not yet allowed explains first and a no saves nothing; an open sheet
-/// on "(this project’s)" follows a change; and opening it opens nothing. Every opener is recorded, nothing opens, and
-/// `tasksChecks` puts the Tasks settings back after.
+/// on "(this project’s)" follows a change; and opening it opens nothing. The rest are in SelfTestTaskMenuCases. Every
+/// opener is recorded, nothing opens, and `tasksChecks` puts the Tasks settings back after.
 extension SelfTest {
     static func sendTasksToChecks(_ c: TerminalWindowController, other: TerminalWindowController) async {
         guard let project = c.project else { return check(false, "send to: the window has a project") }
@@ -49,7 +49,10 @@ extension SelfTest {
         TasksMenu.shared.choose(.useDefault, key: key, window: c.window)
         check(TaskSettings(defaults: defaults).projects[key] == nil, "send to: Use the Default clears the project’s own")
         await remindersAskChecks(c, key: key)
+        await remindersYesChecks(c, key: key)
         await openSheetChecks(c, key: key)
+        await movedSheetChecks(c, key: key)
+        await sendTasksToMoreChecks(c, key: key)
     }
 
     /// Reminders while macOS hasn't been asked: Next Term's sheet first, and a no there saves nothing.

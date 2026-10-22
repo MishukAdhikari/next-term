@@ -113,6 +113,32 @@ public struct TaskSettings: Equatable, Sendable {
         return String(data: data, encoding: .utf8)
     }
 
+    /// The saved JSON of every project's choices with only this project's destination changed (nil: back on the
+    /// default). Every other project, a value that fails its check and a field this version doesn't know included,
+    /// stays as saved. Nil when the saved choices can't be read, so one change never wipes them, or when
+    /// `destination` fails its check.
+    public static func json(saved: String?, setting destination: TaskDestination?, for key: String) -> String? {
+        var all: [String: Any] = [:]
+        if let saved {
+            guard let read = try? JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any] else {
+                return nil
+            }
+            all = read
+        }
+        var entry: [String: Any] = all[key] as? [String: Any] ?? [:]
+        if let destination {
+            guard let one = TaskDestination.json(destination),
+                  let value = try? JSONSerialization.jsonObject(with: Data(one.utf8)) else { return nil }
+            entry["destination"] = value
+        } else {
+            entry["destination"] = nil
+        }
+        all[key] = entry.isEmpty ? nil : entry
+        let options: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? JSONSerialization.data(withJSONObject: all, options: options) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     /// One folder for every project (`/…` or `~/…`), not a path in each.
     public var isShared: Bool { Self.isAbsolute(folder) }
 

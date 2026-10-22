@@ -70,7 +70,10 @@ final class TasksMenu: NSObject, NSMenuItemValidation {
 
     // MARK: validation
 
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { validate(item, front: front) }
+
+    /// Whether `item` can be chosen with `front` the window in front (nil: none).
+    func validate(_ item: NSMenuItem, front: TerminalWindowController?) -> Bool {
         switch item.action {
         case #selector(addTask(_:)): return front != nil
         case #selector(showTodoFolder(_:)): return front.flatMap(existingFolder(of:)) != nil

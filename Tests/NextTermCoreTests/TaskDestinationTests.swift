@@ -140,6 +140,36 @@ import Testing
         #expect(read["/q"]?.destination == .throughAgent(tracker: "Linear"))
     }
 
+    @Test func savingOneProjectLeavesEveryOtherProjectAsSaved() throws {
+        // Another project's value that fails its check, and a field this version doesn't know, stay as they were.
+        let saved = #"{"/p":{"destination":{"kind":"todoFolder"},"handoffFolder":"notes"},"#
+            + #""/q":{"destination":{"kind":"github","owner":"a/b","repo":"r"},"later":1}}"#
+        let json: String = try #require(TaskSettings.json(saved: saved, setting: .things(list: nil), for: "/p"))
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let q = try #require(object["/q"] as? [String: Any])
+        #expect((q["destination"] as? [String: Any])?["owner"] as? String == "a/b" && q["later"] as? Int == 1)
+        let read = try JSONDecoder().decode([String: ProjectTasks].self, from: Data(json.utf8))
+        #expect(read["/p"] == ProjectTasks(destination: .things(list: nil), handoffFolder: "notes"))
+        #expect(read["/q"]?.problem != nil)
+        // Back on the default: the destination goes, and a project with nothing else saved goes with it.
+        let cleared: String = try #require(TaskSettings.json(saved: json, setting: nil, for: "/p"))
+        let back = try JSONDecoder().decode([String: ProjectTasks].self, from: Data(cleared.utf8))
+        #expect(back["/p"] == ProjectTasks(handoffFolder: "notes"))
+        let gone: String = try #require(TaskSettings.json(saved: #"{"/r":{"destination":{"kind":"trello"}}}"#,
+                                                          setting: nil, for: "/r"))
+        #expect(gone == "{}")
+        // Nothing saved yet: just this project.
+        let first: String = try #require(TaskSettings.json(saved: nil, setting: .todoist, for: "/s"))
+        #expect(first == #"{"/s":{"destination":{"kind":"todoist"}}}"#)
+    }
+
+    @Test func savingOverChoicesThatCantBeReadIsRefused() {
+        #expect(TaskSettings.json(saved: "{not json", setting: .todoist, for: "/p") == nil)
+        #expect(TaskSettings.json(saved: "[1]", setting: .todoist, for: "/p") == nil)
+        // A value that fails its check is never saved.
+        #expect(TaskSettings.json(saved: nil, setting: .github(owner: "a/b", repo: "r"), for: "/p") == nil)
+    }
+
     @Test func noKeysAtAllMeansTheTodoFolderEverywhere() {
         withDefaults { defaults in
             let settings = TaskSettings(defaults: defaults)

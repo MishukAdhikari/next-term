@@ -132,6 +132,9 @@ public enum DestinationChoices {
         case separator
         /// Saves this destination for the scope.
         case use(TaskDestination)
+        /// The default's row, ticked in a project that has none of its own: choosing it changes nothing, so the
+        /// project keeps following the default.
+        case keep
         /// Opens Settings › Tasks at this kind's details; nothing changes until Save there.
         case setUp(TaskDestination.Kind)
         /// Clears the project's own destination, so its tasks go where the default says.
@@ -194,7 +197,9 @@ public enum DestinationChoices {
         let fallback = settings.defaultDestination
         let current = settings.destination(for: key)
         if let problem = savedProblem(key: key, own: own, settings: settings) {
-            rows.append(MenuRow(title: "Saved destination can’t be used: " + problem, action: .label))
+            // The saved value is the user's own, but it is shown masked and on one line like every other name.
+            let shown: String = TerminalText.oneLine(mask(problem))
+            rows.append(MenuRow(title: "Saved destination can’t be used: " + shown, action: .label))
         }
         let fromDefault = key != nil && own == nil
         for kind in order {
@@ -231,7 +236,8 @@ public enum DestinationChoices {
         let tip = why == nil ? nil : unavailableTip(kind)
         if kind == current.kind {
             let title = tickedName(current, mask: mask) + (fromDefault ? " (the default)" : "") + suffix
-            return MenuRow(title: title, action: .use(current), enabled: why == nil, ticked: true, tip: tip)
+            let action: MenuAction = fromDefault ? .keep : .use(current)
+            return MenuRow(title: title, action: action, enabled: why == nil, ticked: true, tip: tip)
         }
         let detailed: TaskDestination? = details.compactMap { $0 }.first { $0.kind == kind }
         guard let destination = detailed ?? plain(kind) else {

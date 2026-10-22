@@ -84,7 +84,7 @@ import Testing
         #expect(rows.first == DestinationChoices.MenuRow(title: "For “next-term”", action: .label))
         let ticked = rows.filter(\.ticked)
         #expect(ticked.map(\.title) == ["Todo Folder (the default)"])
-        #expect(ticked.first?.action == .use(.todoFolder))
+        #expect(ticked.first?.action == .keep)
         #expect(Self.choices(rows).map(\.title) == ["Todo Folder (the default)", "Reminders", "Things", "Run a Shortcut…",
                                                     "Todoist", "OmniFocus",
                                                     "TickTick · held: not checked yet", "GitHub Issues…",
@@ -167,6 +167,37 @@ import Testing
         badDefault.defaultDestinationProblem = "The saved destination can’t be read."
         let none = DestinationChoices.menuRows(scope: .noProject, settings: badDefault, facts: Self.facts())
         #expect(none[1].title == "Saved destination can’t be used: The saved destination can’t be read.")
+    }
+
+    @Test func theTickedDefaultChangesNothing() {
+        // Clicking the default's ticked row in a project keeps the project on the default, never pins it there.
+        let rows = DestinationChoices.menuRows(scope: Self.project, settings: Self.settings(fallback: .things(list: nil)),
+                                               facts: Self.facts())
+        let ticked = rows.filter(\.ticked)
+        #expect(ticked.map(\.title) == ["Things (the default)"] && ticked.first?.action == .keep)
+        #expect(ticked.first?.enabled == true)
+        // The default, ticked, that can't be used now: greyed, with why.
+        let missing = DestinationChoices.menuRows(scope: Self.project, settings: Self.settings(fallback: .things(list: nil)),
+                                                  facts: Self.facts { $0.installed = [] })
+        let row = missing.first(where: \.ticked)
+        #expect(row?.title == "Things (the default) · not installed" && row?.enabled == false && row?.tip != nil)
+        // Its own, ticked, saves the same value again; with no project the default's row does too.
+        let own = DestinationChoices.menuRows(scope: Self.project, settings: Self.settings(own: .todoist), facts: Self.facts())
+        #expect(own.first(where: \.ticked)?.action == .use(.todoist))
+        let none = DestinationChoices.menuRows(scope: .noProject, settings: Self.settings(fallback: .todoist),
+                                               facts: Self.facts())
+        #expect(none.first(where: \.ticked)?.action == .use(.todoist))
+    }
+
+    @Test func theCantBeUsedRowIsMaskedOnOneLine() {
+        let mask = { (text: String) in text.replacingOccurrences(of: "sk-made-up", with: "•••") }
+        var own = ProjectTasks()
+        own.problem = "Azure Boards can’t make a work item of type “sk-made-up\nBug\u{202E}x”"
+        var settings = TaskSettings()
+        settings.projects["/made/up/next-term"] = own
+        let rows = DestinationChoices.menuRows(scope: Self.project, settings: settings, facts: Self.facts(), mask: mask)
+        #expect(rows[1].title == "Saved destination can’t be used: Azure Boards can’t make a work item of type "
+            + "“••• Bug\u{FFFD}x”")
     }
 
     @Test func menuNamesAreMasked() {

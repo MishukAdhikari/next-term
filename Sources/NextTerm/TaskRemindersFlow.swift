@@ -240,12 +240,12 @@ extension TaskReminders {
     /// `project` is the project's key.
     static func saveListID(_ id: String, replacing old: TaskDestination, project: String?) {
         let defaults = UserDefaults.standard
-        var settings = TaskSettings(defaults: defaults)
+        let settings = TaskSettings(defaults: defaults)
         let save = RemindersAccess.savingListID(id, replacing: old, project: project, in: settings)
         switch save {
         case .project(let key, let new):
-            settings.projects[key]?.destination = new
-            if let json = TaskSettings.json(projects: settings.projects) {
+            let saved = defaults.string(forKey: TaskSettings.Key.projects)
+            if let json = TaskSettings.json(saved: saved, setting: new, for: key) {
                 defaults.set(json, forKey: TaskSettings.Key.projects)
             }
         case .defaultDestination(let new):

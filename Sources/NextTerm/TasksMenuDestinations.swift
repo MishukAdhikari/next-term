@@ -121,7 +121,7 @@ extension TasksMenu {
             Self.save(nil, key: key)
         case .setUp, .setUpAll:
             AppDelegate.shared.showSettings(tab: "tasks")
-        case .label, .separator:
+        case .keep, .label, .separator:
             break
         }
     }
@@ -130,12 +130,12 @@ extension TasksMenu {
     /// no project. The one-time offer is answered by this, and an open sheet and Settings read the change.
     static func save(_ destination: TaskDestination?, key: String?) {
         let defaults = UserDefaults.standard
-        var settings = TaskSettings(defaults: defaults)
         if let key {
-            var own = settings.projects[key] ?? ProjectTasks()
-            own.destination = destination
-            settings.projects[key] = own.destination == nil && own.handoffFolder == nil ? nil : own
-            guard let json = TaskSettings.json(projects: settings.projects) else { return NSSound.beep() }
+            // Only this project's entry changes; saved choices that can't be read are never written over.
+            let saved = defaults.string(forKey: TaskSettings.Key.projects)
+            guard let json = TaskSettings.json(saved: saved, setting: destination, for: key) else {
+                return NSSound.beep()
+            }
             defaults.set(json, forKey: TaskSettings.Key.projects)
         } else if let destination {
             guard let json = TaskDestination.json(destination) else { return NSSound.beep() }

@@ -122,6 +122,7 @@ final class FakeShortcutRunner: ShortcutRunner, @unchecked Sendable {
     private var exit: Int32 = 0
     private var hangs = false
     private var made: [Run] = []
+    private var listCalls = 0
 
     init(list: String?) {
         listed = list
@@ -137,7 +138,15 @@ final class FakeShortcutRunner: ShortcutRunner, @unchecked Sendable {
         }
     }
 
-    func list() -> String? { lock.withLock { listed } }
+    /// How often the shortcut list was asked for.
+    var lists: Int { lock.withLock { listCalls } }
+
+    func list() -> String? {
+        lock.withLock {
+            listCalls += 1
+            return listed
+        }
+    }
 
     func run(arguments: [String], input: Data, limit: TimeInterval, stop: ShortcutStop) -> ShortcutList.Result {
         let (hangs, exit): (Bool, Int32) = lock.withLock {
