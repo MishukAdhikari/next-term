@@ -6,7 +6,8 @@ import NextTermCore
 /// bytes it writes as TodoFile renders them, its notice's Undo, and a second add within a minute; add_task through
 /// `nxtrm mcp` (Approve, Decline, no answer, a stored key shown as •••, a day it can't read, no project, a worktree
 /// window); Settings › Tasks right before Secrets; Reminders with an in-memory store, never the user's own; Run a
-/// Shortcut with a fake runner, which starts no command; and Connect a Tracker, whose lines are typed and never run.
+/// Shortcut with a fake runner, which starts no command; Connect a Tracker, whose lines are typed and never run; and
+/// Wrap Up and Post Update with a fake agent and the self-test's own pasteboard.
 /// Everything goes to the self-test project's own todo folder, or to a repository of the part's own, and is removed
 /// after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
 extension SelfTest {
@@ -49,6 +50,7 @@ extension SelfTest {
         await addTaskDestinationChecks(c, proj: proj, folder: folder)
         await connectTrackerChecks(c)
         await taskDestinationSettingsChecks(c)
+        await wrapUpChecks()
         #else
         // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
         note("reminders: skipped in a release build; its checks run in a debug build")
@@ -63,6 +65,9 @@ extension SelfTest {
         note("connect a tracker: skipped in a release build; its checks run in a debug build")
         // Its openers, Reminders store and shortcut runner are debug-only fakes.
         note("task settings: skipped in a release build; its checks run in a debug build")
+        // Its pasteboard and openers are the self-test's own only in a debug build, so a release build never
+        // touches the user's clipboard.
+        note("wrap up: skipped in a release build; its checks run in a debug build")
         #endif
     }
 
@@ -78,10 +83,21 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let menu = bar.first(where: { $0.title == "Tasks" })?.submenu else { return check(false, "tasks: the menu bar has Tasks") }
         let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        let expected: [String] = ["Add Task…", "Show Todo Folder", "—", "Send Tasks To", "Connect a Tracker to Your Agents…",
-                                  "Task Settings…"]
-        check(titles == expected, "tasks: Add Task…, Show Todo Folder, Send Tasks To, Connect a Tracker, then Task Settings…",
+        let expected: [String] = ["Add Task…", "Wrap Up…", "Post Update…", "Show Todo Folder", "—", "Send Tasks To",
+                                  "Connect a Tracker to Your Agents…", "—", "Task Settings…"]
+        check(titles == expected,
+              "tasks: Add Task…, Wrap Up…, Post Update…, Show Todo Folder, Send Tasks To, Connect a Tracker, then Task Settings…",
               titles.joined(separator: " | "))
+        // Wrap Up… is ⌃⌘W and Post Update… has no key; Keyboard Shortcuts lists both under Tasks.
+        let wrap = menu.items.first { $0.action == #selector(TasksMenu.wrapUp(_:)) }
+        let post = menu.items.first { $0.action == #selector(TasksMenu.postUpdate(_:)) }
+        let commands = KeyboardShortcuts.shared.commands
+        let wrapCommand = commands.first { $0.id == "wrapUp:" }, postCommand = commands.first { $0.id == "postUpdate:" }
+        let wrapKeyed = wrap.flatMap(KeyboardShortcuts.chord(of:))?.display == "⌃⌘W"
+        check(wrapKeyed && wrapCommand?.path == "Tasks" && wrapCommand?.defaultChord == MenuKeys.defaults["wrapUp:"],
+              "tasks: Wrap Up… is ⌃⌘W, and Settings › Keyboard Shortcuts lists it under Tasks", wrapCommand?.path ?? "not listed")
+        check(post.flatMap(KeyboardShortcuts.chord(of:)) == nil && postCommand?.path == "Tasks",
+              "tasks: Post Update… has no key, and Settings › Keyboard Shortcuts lists it under Tasks")
         // Send Tasks To ▸ is filled when it opens, so no destination is a command with a key.
         let sendTo = menu.items.first { $0.title == "Send Tasks To" }
         let listed = KeyboardShortcuts.shared.commands.contains { $0.path.hasPrefix("Tasks › Send Tasks To") }

@@ -17,9 +17,9 @@ import Testing
     static let app = [
         "AddTaskDestinationViews", "AddTaskOffer", "AddTaskSheet", "AgentReadinessTab", "ConnectTrackerSheet",
         "ConnectTrackerSheetActions", "ConnectTrackerSheetBuild", "PostUpdate", "PostUpdateSheet", "RemindersSheets",
-        "TaskAgentRequest", "TaskDestinations", "TaskDestinationsView", "TaskOpen", "TaskRecordStore", "TaskReminders",
-        "TaskRemindersFlow", "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow", "TasksMCP", "TasksMenu",
-        "TasksMenuDestinations", "TaskWriter", "WrapUp", "WrapUpSheet",
+        "TaskAgentRequest", "TaskDestinations", "TaskDestinationsView", "TaskHandoffFolderRow", "TaskOpen",
+        "TaskRecordStore", "TaskReminders", "TaskRemindersFlow", "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow",
+        "TasksMCP", "TasksMenu", "TasksMenuDestinations", "TaskWriter", "WrapUp", "WrapUpSheet",
     ]
 
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -84,6 +84,25 @@ import Testing
         // Showing a file in Finder opens nothing of the task's.
         let reveal = "NSWorkspace.shared.activateFileViewerSelecting([url])"
         #expect(SourceScan.hits(file: "TasksMenu.swift", text: reveal).isEmpty)
+    }
+
+    /// Wrap Up runs no git and opens nothing itself; Post Update runs git only to read today's commits, and shows a
+    /// saved update through TaskOpen like every other file.
+    @Test func gitRunsOnlyWherePostUpdateReadsCommitsAndNothingElseOpens() {
+        let git = "let git = GitRunner.locateGit()"
+        #expect(SourceScan.hits(file: "PostUpdate.swift", text: git).isEmpty)
+        #expect(SourceScan.hits(file: "TodayCommits.swift", text: git).isEmpty)
+        #expect(SourceScan.hits(file: "WrapUp.swift", text: git) == ["WrapUp.swift:1: GitRunner"])
+        #expect(SourceScan.hits(file: "WrapUpSheet.swift", text: git) == ["WrapUpSheet.swift:1: GitRunner"])
+        #expect(SourceScan.hits(file: "PostUpdateSheet.swift", text: git) == ["PostUpdateSheet.swift:1: GitRunner"])
+        let open = "NSWorkspace.shared.open(url)"
+        #expect(SourceScan.hits(file: "PostUpdate.swift", text: open) == ["PostUpdate.swift:1: NSWorkspace"])
+        #expect(SourceScan.hits(file: "WrapUp.swift", text: open) == ["WrapUp.swift:1: NSWorkspace"])
+        #expect(SourceScan.hits(file: "PostUpdate.swift", text: "let p = Process()") == ["PostUpdate.swift:1: Process("])
+        // Every slice 3 file is in the list the scan reads.
+        let slice3 = ["Handoff", "HandoffRequest", "WrapUpModel", "UpdateDraft", "TodayCommits"]
+        let slice3App = ["WrapUp", "WrapUpSheet", "PostUpdate", "PostUpdateSheet"]
+        #expect(slice3.allSatisfy(Self.core.contains) && slice3App.allSatisfy(Self.app.contains))
     }
 
     @Test func everyOtherWayToStartACommandIsAllowedOnlyWhereProcessIs() {
@@ -160,6 +179,8 @@ enum SourceScan {
         let pattern: String
         /// The one file the call is allowed in, or nil: none.
         let onlyIn: String?
+        /// Other files it is allowed in too.
+        var alsoIn: [String] = []
     }
 
     static let wordStart = "(?<![A-Za-z0-9_])"
@@ -182,8 +203,13 @@ enum SourceScan {
                  pattern: wordStart + "(?:fatalError|preconditionFailure|assertionFailure)\\([^\\n]*\\\\\\(",
                  onlyIn: nil),
         ]
-        return network + logging + opening + commands
+        return network + logging + opening + commands + [git]
     }()
+
+    /// Running git: only where today's commits are read (read-only, with an argument array) and where a
+    /// destination's repository is read from the project's remote. Wrap Up and the sheets run none.
+    static let git = Rule(name: "GitRunner", pattern: wordStart + "GitRunner" + wordEnd, onlyIn: "PostUpdate.swift",
+                          alsoIn: ["TodayCommits.swift", "TaskDestinationsView.swift", "DestinationForm.swift"])
 
     /// Opening a link or an app: in TaskOpen.swift only.
     static let opening: [Rule] = [
@@ -225,7 +251,7 @@ enum SourceScan {
         let code = stripComments(text).replacingOccurrences(of: allowed, with: "")
         let lineStarts = starts(code)
         var found: [(line: Int, name: String)] = []
-        for rule in rules where rule.onlyIn != file {
+        for rule in rules where rule.onlyIn != file && !rule.alsoIn.contains(file) {
             guard let regex = try? NSRegularExpression(pattern: rule.pattern) else { continue }
             let range = NSRange(code.startIndex..., in: code)
             for match in regex.matches(in: code, range: range) {

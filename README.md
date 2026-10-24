@@ -52,8 +52,11 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   GitLab, Linear, Trello or Azure Boards page, or typed to your agent for its tracker. Next Term makes no request
   for any of this: an app gets the task on this Mac, a page opens in your browser for you to submit, and an
   agent's request is typed for you to send. Tasks › Connect a Tracker to Your Agents… types each agent's own line
-  to add a tracker's MCP server into a new tab, and never runs it. See [the todo file format](docs/todo-files.md)
-  and [where tasks go](docs/task-destinations.md).
+  to add a tracker's MCP server into a new tab, and never runs it. Tasks › Wrap Up… (⌃⌘W) asks your idle agent
+  tabs for a handoff in `docs/handoffs/` and turns their next steps into tomorrow's tasks after you review them;
+  Tasks › Post Update… drafts Done, Next and Blocked from today's handoffs, tasks and commits for you to copy, save
+  or hand to an agent. Next Term sends neither anywhere. See [the todo file format](docs/todo-files.md), [where
+  tasks go](docs/task-destinations.md) and [Wrap Up and Post Update](docs/wrap-up.md).
 - **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and OpenCode in a Next
   Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
   your next prompt (“⧉ 10 lines selected”), and ⌥⌘K puts `@file#L10-20` into Claude’s prompt (`@file:10-20`
@@ -447,7 +450,9 @@ Next Term's menu.
   for an agent's `add_task`, before anything is sent, with stored keys as •••; team pages get the branch only,
   never the tab, agent or resume command. Reminders asks macOS for access only when you first choose it. A
   short record of what went where (masked titles, 30 days) stays in Application Support for the duplicate
-  warning and Undo, and task text is never logged. See [where tasks go](docs/task-destinations.md).
+  warning and Undo, and task text is never logged. Wrap Up and Post Update make no request either: handoffs and
+  updates are files in your project, and today's commits are read only for your own `user.email`. See [where tasks
+  go](docs/task-destinations.md) and [Wrap Up and Post Update](docs/wrap-up.md).
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
   while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That

@@ -9,6 +9,9 @@ Next Term makes no request for any of this. An app gets the task on this Mac, a 
 to submit, and an agent's request is typed into its tab for you to send. Next Term holds no account, token or API
 key for any of them.
 
+To end a day, Tasks › Wrap Up… (⌃⌘W) turns your agents' handoffs into tomorrow's tasks, and Tasks › Post Update…
+drafts an update from today's work: see [Wrap Up and Post Update](wrap-up.md).
+
 ## Choosing where
 
 - **Settings › Tasks**, under Destinations: the default, this project's destination, and each destination's
