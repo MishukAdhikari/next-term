@@ -221,7 +221,7 @@ enum MCPControl {
         unsubmitted[tab.id] = nil
     }
 
-    private static func isBusy(_ tab: TerminalTab) -> Bool {
+    static func isBusy(_ tab: TerminalTab) -> Bool {
         !tab.exited && (tab.status.state == .working || (tab.status.running && tab.status.kind != .agent))
     }
 
@@ -243,7 +243,7 @@ enum MCPControl {
     }
 
     /// Input sent in the last 5 s that has not visibly started anything yet (agents show work within a second or two).
-    private static func isStarting(_ tab: TerminalTab) -> Bool {
+    static func isStarting(_ tab: TerminalTab) -> Bool {
         guard let sent = lastSent[tab.id], !sent.sawWork, TerminalTab.now - sent.at < 5 else { return false }
         return !(isBusy(tab) || tab.status.commandsStarted > sent.commands)
     }

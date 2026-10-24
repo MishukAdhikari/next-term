@@ -5,8 +5,10 @@ import NextTermCore
 /// Tasks, end to end: the Tasks menu after Agents with Add Task… on ⌃⌘T; the sheet filled from a terminal selection, the
 /// bytes it writes as TodoFile renders them, its notice's Undo, and a second add within a minute; add_task through
 /// `nxtrm mcp` (Approve, Decline, no answer, a stored key shown as •••, a day it can't read, no project, a worktree
-/// window); and Settings › Tasks right before Secrets. Everything goes to the self-test project's own todo folder, or to
-/// a repository of the part's own, and is removed after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
+/// window); Settings › Tasks right before Secrets; Reminders with an in-memory store, never the user's own; Run a
+/// Shortcut with a fake runner, which starts no command; and Connect a Tracker, whose lines are typed and never run.
+/// Everything goes to the self-test project's own todo folder, or to a repository of the part's own, and is removed
+/// after. NEXTTERM_SELFTEST_ONLY=tasks runs it alone.
 extension SelfTest {
     static func tasksChecks(_ given: TerminalWindowController, proj: URL) async {
         // The part works in a window of the test project's own: the self-test's first window has no project of its own,
@@ -38,6 +40,30 @@ extension SelfTest {
         await addTaskSheetChecks(c, folder: folder)
         await addTaskToolChecks(c, proj: proj, folder: folder)
         taskSettingsChecks()
+        #if DEBUG
+        await remindersChecks(c)
+        await shortcutChecks()
+        await destinationSheetChecks(c)
+        await destinationChecks(c, folder: folder)
+        await sendTasksToChecks(c, other: given)
+        await addTaskDestinationChecks(c, proj: proj, folder: folder)
+        await connectTrackerChecks(c)
+        await taskDestinationSettingsChecks(c)
+        #else
+        // Its in-memory store is debug-only, so a release build never reaches the user's real Reminders.
+        note("reminders: skipped in a release build; its checks run in a debug build")
+        // Its fake runner is debug-only, so a release build never runs the user's shortcuts.
+        note("shortcut: skipped in a release build; its checks run in a debug build")
+        // Its openers record only in a debug build, so a release build never opens a page or an app.
+        note("destinations: skipped in a release build; its checks run in a debug build")
+        note("every destination: skipped in a release build; its checks run in a debug build")
+        note("send to: skipped in a release build; its checks run in a debug build")
+        note("add_task destinations: skipped in a release build; its checks run in a debug build")
+        // Its page links and PATH record only in a debug build, so a release build never opens a page.
+        note("connect a tracker: skipped in a release build; its checks run in a debug build")
+        // Its openers, Reminders store and shortcut runner are debug-only fakes.
+        note("task settings: skipped in a release build; its checks run in a debug build")
+        #endif
     }
 
     /// Today's date as the files are named, on this Mac.
@@ -52,8 +78,15 @@ extension SelfTest {
               bar.map(\.title).joined(separator: ", "))
         guard let menu = bar.first(where: { $0.title == "Tasks" })?.submenu else { return check(false, "tasks: the menu bar has Tasks") }
         let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        check(titles == ["Add Task…", "Show Todo Folder", "—", "Task Settings…"], "tasks: Add Task…, Show Todo Folder, then Task Settings…",
+        let expected: [String] = ["Add Task…", "Show Todo Folder", "—", "Send Tasks To", "Connect a Tracker to Your Agents…",
+                                  "Task Settings…"]
+        check(titles == expected, "tasks: Add Task…, Show Todo Folder, Send Tasks To, Connect a Tracker, then Task Settings…",
               titles.joined(separator: " | "))
+        // Send Tasks To ▸ is filled when it opens, so no destination is a command with a key.
+        let sendTo = menu.items.first { $0.title == "Send Tasks To" }
+        let listed = KeyboardShortcuts.shared.commands.contains { $0.path.hasPrefix("Tasks › Send Tasks To") }
+        check(sendTo?.submenu?.items.isEmpty == true && !listed,
+              "tasks: Send Tasks To is empty until it opens, and Keyboard Shortcuts lists none of its rows")
         let add = menu.items.first { $0.action == #selector(TasksMenu.addTask(_:)) }
         let command = KeyboardShortcuts.shared.commands.first { $0.id == "addTask:" }
         let keyed = add.flatMap(KeyboardShortcuts.chord(of:))?.display == "⌃⌘T" && add?.target === TasksMenu.shared
@@ -179,7 +212,7 @@ extension SelfTest {
             && answer["approved"] as? String == "on this Mac" && answer["steps"] as? Int == 1
         check(!approved.isError && answered && fm.fileExists(atPath: path), "tasks: add_task writes the task once the user approves", approved.text)
         let shownFile = read(path).map { approved.shown.contains($0.trimmingCharacters(in: .newlines)) } ?? false
-        check(approved.shown.contains("An agent asks to add a task") && approved.shown.contains("Creates \(relative)") && shownFile,
+        check(approved.shown.contains("An agent asks to add a task") && approved.shown.contains("To: the todo folder: saves to \(relative)") && shownFile,
               "tasks: the window names the file and shows its exact text", approved.shown)
         check(read(path)?.contains("added_by: \"an agent outside Next Term’s tabs\"\n") == true, "tasks: the file says who asked", read(path) ?? "")
 
@@ -277,7 +310,7 @@ extension SelfTest {
 
 /// add_task through `nxtrm mcp`, as an agent outside the tabs calls it, for the tasks part.
 @MainActor
-private final class TaskClient {
+final class TaskClient {
     /// What a call that asks gave: its answer, and what its window said.
     struct Asked {
         let text: String
@@ -299,11 +332,13 @@ private final class TaskClient {
     }
 
     /// Calls add_task, answers its window as the user would (nil: not at all), and gives what the window said.
-    func asked(_ arguments: [String: Any], approve: Bool?) async -> Asked {
+    /// `meanwhile` runs while the window waits, before it is answered.
+    func asked(_ arguments: [String: Any], approve: Bool?, meanwhile: () -> Void = {}) async -> Asked {
         let pending = Task { await self.call(arguments) }
         _ = await SelfTest.wait(30) { MCPWriteControl.pending?.window != nil }
         let window = MCPWriteControl.pending?.window
         let shown = SelfTest.texts(window?.window?.contentView)
+        meanwhile()
         if approve == true { window?.approveButton.performClick(nil) }
         if approve == false { window?.declineButton.performClick(nil) }
         let result = await pending.value

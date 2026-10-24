@@ -47,7 +47,13 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   worktree), with `- [ ]` boxes and where you were (branch, tab, agent and the command that resumes its session),
   so an agent there tomorrow reads it with its own tools. Agents add tasks too, with the MCP tool `add_task`,
   which asks you on the Mac first and shows the exact file. Stored keys show as •••, Undo takes a task back, and
-  Settings › Tasks chooses another folder. See [the todo file format](docs/todo-files.md).
+  Settings › Tasks chooses another folder. Tasks go where each project says (Settings › Tasks or Tasks › Send
+  Tasks To): the todo folder, Reminders, Things, a Shortcut, Todoist or OmniFocus Quick Add, a prefilled GitHub,
+  GitLab, Linear, Trello or Azure Boards page, or typed to your agent for its tracker. Next Term makes no request
+  for any of this: an app gets the task on this Mac, a page opens in your browser for you to submit, and an
+  agent's request is typed for you to send. Tasks › Connect a Tracker to Your Agents… types each agent's own line
+  to add a tracker's MCP server into a new tab, and never runs it. See [the todo file format](docs/todo-files.md)
+  and [where tasks go](docs/task-destinations.md).
 - **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and OpenCode in a Next
   Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
   your next prompt (“⧉ 10 lines selected”), and ⌥⌘K puts `@file#L10-20` into Claude’s prompt (`@file:10-20`
@@ -363,7 +369,7 @@ One window per project, and a few keys to move between them:
 | Git Log (the commit graph) | ⌥⌘L |
 | Fetch / Update Project / Commit… / Push… / New Branch… | ⌘R / ⌥⌘U / ⇧⌘C / ⌥⌘P / ⇧⌘B |
 | Send to Agent | ⌥⌘K |
-| Add a task (to the project's todo folder) | ⌃⌘T |
+| Add a task (to the project's destination) | ⌃⌘T |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
 | Keyboard Shortcuts (change any menu shortcut) | ⌘, |
@@ -434,6 +440,14 @@ Next Term's menu.
   session right after. Next Term doesn’t rotate keys through providers’ APIs: you make the new key, and delete
   or deactivate the old one, on the provider’s page.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
+- **Tasks** leave the Mac only where you send them, and Next Term makes no request for them and holds no account
+  or token: an app (Reminders, Things, a Shortcut, Todoist, OmniFocus) gets the task on this Mac, a tracker's
+  page opens in your browser filled in and saves nothing until you submit it there, and a request to your agent
+  is typed into its tab with no Return. What leaves is shown in the Add Task sheet, or in the approval window
+  for an agent's `add_task`, before anything is sent, with stored keys as •••; team pages get the branch only,
+  never the tab, agent or resume command. Reminders asks macOS for access only when you first choose it. A
+  short record of what went where (masked titles, 30 days) stays in Application Support for the duplicate
+  warning and Undo, and task text is never logged. See [where tasks go](docs/task-destinations.md).
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
   while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That

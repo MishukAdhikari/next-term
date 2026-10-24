@@ -632,6 +632,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onWrite = { [weak self] data in
             self?.history.input(data)
             self?.ghost.written(data)
+            self.map { AgentReadiness.shared.written(data, tab: $0) }
         }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
