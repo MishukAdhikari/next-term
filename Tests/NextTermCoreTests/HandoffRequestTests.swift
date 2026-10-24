@@ -14,12 +14,19 @@ import Testing
             + "if needed) with exactly these sections: ## Done, ## Next (one \"- \" line per next step, each a task "
             + "someone can start tomorrow), ## Open questions, ## How to resume. Write only that file; change nothing "
             + "else and don't commit it."
-        let text = HandoffRequest.text(path: Self.path)
+        let text = HandoffRequest.text(path: Self.path) ?? ""
         #expect(text == pinned)
         #expect(Array(text.utf8) == Array(pinned.utf8))
         #expect(HandoffRequest.version == 1)
         #expect(!text.contains("\n") && !text.contains("\r"))
         #expect(!text.contains("/Users/") && !text.contains("~"))
+    }
+
+    @Test func aPathWithALineBreakOrControlCharacterIsNeverTyped() {
+        for path in ["notes\nx/a.md", "notes\rx/a.md", "a\u{1b}[31m/a.md", "a\tb/a.md", "a\u{2028}b/a.md",
+                     "a\u{85}b/a.md", "a\u{0}b/a.md", "a\u{200e}b/a.md"] {
+            #expect(HandoffRequest.text(path: path) == nil, "\(path.debugDescription)")
+        }
     }
 
     @Test func aNameIsTheDayAndTheTabsTitle() {
@@ -56,6 +63,23 @@ import Testing
         for part in ["sk-ant", "abc123", "def456", "•"] { #expect(!name.contains(part), "\(part)") }
         // A title that is only a key is named for the session, not the key.
         #expect(HandoffName.names(day: Self.day, tab: value, mask: { mask.mask($0) })[0] == "2026-10-18-session.md")
+    }
+
+    @Test func aNameIsAsciiLettersDigitsAndDashesOnly() {
+        // A program can set its tab's title, so the title's own words never reach the typed path as anything else.
+        let typed = HandoffName.names(day: Self.day, tab: "~ $(x) ignore-all; `rm` \"q\" <a>|b&c*", mask: { $0 })[0]
+        #expect(typed == "2026-10-18-x-ignore-all-rm-q-ab-c.md")
+        #expect(HandoffName.names(day: Self.day, tab: "Café • naïve", mask: { $0 })[0] == "2026-10-18-cafe-naive.md")
+        #expect(HandoffName.names(day: Self.day, tab: "日本語", mask: { $0 })[0] == "2026-10-18-session.md")
+        #expect(HandoffName.names(day: Self.day, tab: "-- a --", mask: { $0 })[0] == "2026-10-18-a.md")
+        for tab in ["~ $(x) ignore-all", "a\u{1b}]0;x\u{7}b", "line\nbreak", "./..//x", "%2e%2e"] {
+            for name in HandoffName.names(day: Self.day, tab: tab, mask: { $0 }) {
+                let stem = name.dropLast(3)
+                let plain = stem.unicodeScalars.allSatisfy { $0.isASCII && ($0 == "-" || $0.properties.isAlphabetic
+                    || ("0"..."9").contains($0)) }
+                #expect(plain && name.hasSuffix(".md"), "\(name)")
+            }
+        }
     }
 
     @Test func aTitleWithASlashOrDotsStaysOneName() {
@@ -119,6 +143,39 @@ import Testing
         #expect(TaskSettings.handoffFolder("linked", in: project) == nil)
         #expect(TaskSettings.handoffFolder("linked/more", in: project) == nil)
         #expect(TaskSettings.handoffFolder("real/more", in: project) == "real/more")
+    }
+
+    @Test func aLineBreakOrControlCharacterInTheSettingFallsBack() throws {
+        let dir = try project()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let project = dir + "/project"
+        for setting in ["notes\nx", "notes\rx", "a\u{1b}[31m", "a\tb", "a\u{2028}b", "a\u{85}b", "a\u{7f}b",
+                        "a\u{200e}b"] {
+            #expect(TaskSettings.handoffFolder(setting, in: project) == nil, "\(setting.debugDescription)")
+            #expect(settings(project, setting).handoffFolder(for: project) == "docs/handoffs")
+        }
+        // A line end around the whole setting is trimmed, as any space is.
+        #expect(TaskSettings.handoffFolder("notes\n", in: project) == "notes")
+    }
+
+    @Test func aLinkedDocsHandoffsIsNeverUsed() throws {
+        let dir = try project()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let project = dir + "/project"
+        try FileManager.default.createDirectory(atPath: project + "/docs", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: project + "/docs/handoffs",
+                                                   withDestinationPath: dir + "/elsewhere")
+        #expect(TaskSettings().handoffFolder(for: project) == nil)
+        // The project's own setting is still used when it can be.
+        #expect(settings(project, "notes").handoffFolder(for: project) == "notes")
+        #expect(settings(project, "out/../x/../../y").handoffFolder(for: project) == nil)
+        // A linked docs folder is the same.
+        let other = dir + "/other"
+        try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: other + "/docs", withDestinationPath: dir + "/elsewhere")
+        #expect(TaskSettings().handoffFolder(for: other) == nil)
+        // A project folder that is not there has no folder.
+        #expect(TaskSettings().handoffFolder(for: dir + "/gone") == nil)
     }
 
     @Test func aFileWhereTheFolderWouldBeFallsBack() throws {

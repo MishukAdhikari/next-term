@@ -143,19 +143,23 @@ public struct TaskSettings: Equatable, Sendable {
     public static let defaultHandoffFolder = "docs/handoffs"
 
     /// The handoff folder for `project`, relative to it: the project's own setting when it can be used, else
-    /// `docs/handoffs`. A setting that can't is ignored, never followed, so an agent is never asked to write outside
-    /// its working folder.
-    public func handoffFolder(for project: String) -> String {
+    /// `docs/handoffs` when that can. A setting that can't is ignored, never followed, so an agent is never asked to
+    /// write outside its working folder. nil when neither can (a repository whose `docs/handoffs` is a link): no
+    /// handoff is asked for in that project.
+    public func handoffFolder(for project: String) -> String? {
         let own = projects[Self.projectKey(project)]?.handoffFolder
-        return own.flatMap { Self.handoffFolder($0, in: project) } ?? Self.defaultHandoffFolder
+        if let usable = own.flatMap({ Self.handoffFolder($0, in: project) }) { return usable }
+        return Self.handoffFolder(Self.defaultHandoffFolder, in: project)
     }
 
     /// `setting` as a handoff folder in `project`, written plainly (`notes/handoffs`), or nil when it can't be one:
-    /// empty, absolute, leaving the project with `..`, in git's own folder, a file, or passing through a linked
-    /// folder anywhere on its way, even one that points back inside, since the agent writes where the path says.
+    /// empty, absolute, leaving the project with `..`, in git's own folder, a file, passing through a linked folder
+    /// anywhere on its way, even one that points back inside, since the agent writes where the path says, or holding
+    /// a line break or control character, since the path is typed into the agent's tab.
     public static func handoffFolder(_ setting: String, in project: String) -> String? {
         let folder = setting.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !folder.isEmpty, !isAbsolute(folder), TodoFolder.problem(with: folder) == nil else { return nil }
+        guard !folder.isEmpty, !isAbsolute(folder), !HandoffRequest.hasControl(folder) else { return nil }
+        guard TodoFolder.problem(with: folder) == nil else { return nil }
         let root = canonicalPath(project)
         guard FileManager.default.fileExists(atPath: root),
               let path = TodoFolder.lexical(root, folder), path.hasPrefix(root + "/") else { return nil }

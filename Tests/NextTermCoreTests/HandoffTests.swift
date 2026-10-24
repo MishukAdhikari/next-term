@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NextTermCore
@@ -101,6 +102,29 @@ import Testing
         #expect(handoff.lines(in: .howToResume) == ["```", "## Next", "- not a task", "```"])
     }
 
+    @Test func subheadingsUnderNextStayInIt() {
+        let grouped = Handoff.parse("## Next\n### Backend\n- a\n### Frontend\n- b\n## Open questions\n- c\n")
+        #expect(texts(grouped.next) == ["a", "b"])
+        #expect(grouped.other.isEmpty)
+        #expect(texts(grouped.items(in: .openQuestions)) == ["c"])
+        #expect(grouped.lines(in: .next) == ["### Backend", "- a", "### Frontend", "- b"])
+        // A bold line alone under a `#` heading is a group in it too.
+        let bold = Handoff.parse("# Next\n**API**\n- a\n__UI__\n- b\n")
+        #expect(texts(bold.next) == ["a", "b"] && bold.other.isEmpty)
+        // A group label is never an item, even with no list lines.
+        let prose = Handoff.parse("## Next\n### Backend\nWrite the migration.\n")
+        #expect(texts(prose.next) == ["Write the migration."])
+        // An unknown heading as high as the section's, or higher, still ends it.
+        let same = Handoff.parse("### Next\n- a\n## Notes\n- n\n### Also\n- m\n")
+        #expect(texts(same.next) == ["a"])
+        #expect(same.other.map(\.heading) == ["Notes", "Also"])
+        let boldEnds = Handoff.parse("**Next**\n- a\n**Notes**\n- n\n")
+        #expect(texts(boldEnds.next) == ["a"] && boldEnds.other.map(\.heading) == ["Notes"])
+        // A known heading below a section still starts its own.
+        let known = Handoff.parse("## Next\n- a\n### Done\n- d\n")
+        #expect(texts(known.next) == ["a"] && texts(known.items(in: .done)) == ["d"])
+    }
+
     @Test func inlineMarkdownIsKeptAsTyped() {
         let handoff = Handoff.parse("## Next\n- Fix **the** `parser` in [Docs](x.md)\n")
         #expect(texts(handoff.next) == ["Fix **the** `parser` in [Docs](x.md)"])
@@ -121,8 +145,9 @@ import Testing
         let dir = try folder()
         defer { try? FileManager.default.removeItem(atPath: dir) }
         write(Data("## Next\n- rotate sk-ant-EXAMPLEKEY123\n".utf8), dir + "/h.md")
-        let mask: (String) -> String = { $0.replacingOccurrences(of: "sk-ant-EXAMPLEKEY123", with: "•••") }
-        let read = HandoffFile.read(URL(fileURLWithPath: dir + "/h.md"), mask: mask)
+        let key = SymmetricKey(size: .bits256)
+        let marks = SecretMask.marks(for: SecretBytes(utf8: "sk-ant-EXAMPLEKEY123"), key: key)
+        let read = HandoffFile.read(URL(fileURLWithPath: dir + "/h.md"), mask: SecretMask(key: key, marks: marks))
         guard case .text(let handoff) = read else { Issue.record("\(read)"); return }
         #expect(handoff.next.map(\.text) == ["rotate •••"])
         #expect(!handoff.raw.contains("sk-ant"))
@@ -136,18 +161,46 @@ import Testing
         let lines: [String] = (0..<3_100).map { "- é \(filler) \($0)\n" }
         let body = "## Next\n" + lines.joined()
         write(Data(body.utf8), dir + "/big.md")
-        let read = HandoffFile.read(URL(fileURLWithPath: dir + "/big.md"), mask: { $0 })
+        let read = HandoffFile.read(URL(fileURLWithPath: dir + "/big.md"), mask: .empty)
         guard case .text(let handoff) = read else { Issue.record("\(read)"); return }
         #expect(handoff.truncated)
         #expect(handoff.raw.utf8.count <= HandoffFile.limit && handoff.raw.utf8.count > HandoffFile.limit - 4)
         #expect(handoff.next.count > 2_000)
-        let small = HandoffFile.read(URL(fileURLWithPath: dir + "/big.md"), mask: { $0 }, limit: 10)
+        let small = HandoffFile.read(URL(fileURLWithPath: dir + "/big.md"), mask: .empty, limit: 10)
         guard case .text(let cut) = small else { Issue.record("\(small)"); return }
         #expect(cut.truncated && cut.raw == "## Next\n- ")
         // A letter cut in half is left out, not read as "not text".
-        let half = HandoffFile.read(URL(fileURLWithPath: dir + "/big.md"), mask: { $0 }, limit: 11)
+        let half = HandoffFile.read(URL(fileURLWithPath: dir + "/big.md"), mask: .empty, limit: 11)
         guard case .text(let halved) = half else { Issue.record("\(half)"); return }
         #expect(halved.raw == "## Next\n- ")
+    }
+
+    @Test func aStoredKeyAcrossTheCutIsLeftOutWhole() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let value = "sk-ant-Q7vRm2Lp9XwT4nBz8KcJ5hYd3GfS6aEu"
+        let key = SymmetricKey(size: .bits256)
+        let mask = SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
+        // The key starts 10 bytes before the cut, on a Next line, and the file goes on after it.
+        let head = "## Next\n"
+        let lead = "- rotate "
+        let fillerCount = HandoffFile.limit - 10 - head.utf8.count - lead.utf8.count - 1
+        let filler = String(repeating: "x", count: fillerCount) + "\n"
+        let body = head + filler + lead + value + "\n" + String(repeating: "- more\n", count: 100)
+        #expect(body.utf8.count > HandoffFile.limit)
+        write(Data(body.utf8), dir + "/h.md")
+        let read = HandoffFile.read(URL(fileURLWithPath: dir + "/h.md"), mask: mask)
+        guard case .text(let handoff) = read else { Issue.record("\(read)"); return }
+        #expect(handoff.truncated)
+        #expect(handoff.raw.utf8.count <= HandoffFile.limit)
+        for part in ["sk-ant", "Q7vR", String(value.prefix(10))] {
+            #expect(!handoff.raw.contains(part), "\(part)")
+            #expect(!handoff.next.contains { $0.text.contains(part) }, "\(part)")
+        }
+        // Read whole, the same key is masked where it is.
+        let whole = HandoffFile.read(URL(fileURLWithPath: dir + "/h.md"), mask: mask, limit: body.utf8.count)
+        guard case .text(let all) = whole else { Issue.record("\(whole)"); return }
+        #expect(!all.truncated && !all.raw.contains("sk-ant") && all.raw.contains("- rotate •••"))
     }
 
     @Test func notTextNotThereAndLinksAreSaidPlainly() throws {
@@ -159,7 +212,7 @@ import Testing
         try FileManager.default.createSymbolicLink(atPath: dir + "/link.md", withDestinationPath: dir + "/real.md")
         try FileManager.default.createDirectory(atPath: dir + "/folder.md", withIntermediateDirectories: false)
         func read(_ name: String) -> HandoffFile.Read {
-            HandoffFile.read(URL(fileURLWithPath: dir + "/" + name), mask: { $0 })
+            HandoffFile.read(URL(fileURLWithPath: dir + "/" + name), mask: .empty)
         }
         #expect(read("bin.md") == .notText)
         #expect(read("bad.md") == .notText)

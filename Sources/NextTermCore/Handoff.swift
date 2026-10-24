@@ -82,13 +82,18 @@ extension Handoff {
         var found: [Section: [String]] = [:]
         var other: [Other] = []
         var section: Section?
+        var sectionLevel = 0
         var otherIndex: Int?
         var inFence = false
         for line in Self.lines(text) {
             let heading: (name: String, shown: String)? = inFence ? nil : Self.heading(line)
-            if let heading {
+            // An unknown heading deeper than the section's own is a group inside it (`### Backend` under `## Next`).
+            let level = Self.level(line)
+            let inside = heading.map { names[$0.name] == nil } == true && section != nil && level > sectionLevel
+            if let heading, !inside {
                 if let known = names[heading.name] {
                     section = known
+                    sectionLevel = level
                     otherIndex = nil
                     if found[known] == nil { found[known] = [] }
                 } else {
@@ -161,6 +166,14 @@ extension Handoff {
         return (name, shown)
     }
 
+    /// How deep a heading line is: its `#` count, and 7 for a bold or colon heading, below every `#` level.
+    static func level(_ line: String) -> Int {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let hashes = trimmed.prefix { $0 == "#" }.count
+        let atx = (1...6).contains(hashes) && (trimmed.count == hashes || trimmed.dropFirst(hashes).first == " ")
+        return atx ? hashes : 7
+    }
+
     static func isBoldAlone(_ line: String, _ mark: String) -> Bool {
         guard line.count > 2 * mark.count, line.hasPrefix(mark), line.hasSuffix(mark) else { return false }
         let inner = line.dropFirst(mark.count).dropLast(mark.count)
@@ -208,6 +221,10 @@ extension Handoff {
             }
             if inFence { continue }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if listItem(line) == nil, heading(line) != nil {
+                current = nil // A group's heading inside the section is no item.
+                continue
+            }
             if let item = listItem(line) {
                 listed.append(Item(text: item.text, done: item.done))
                 current = listed.count - 1
@@ -248,7 +265,7 @@ extension Handoff {
 }
 
 /// Reading a handoff file: the file itself, never a link to one, at most `limit` bytes of it, decoded as the editor
-/// decodes text and masked before anything holds it. Nothing read is logged.
+/// decodes text and masked before it is cut or anything holds it. Nothing read is logged.
 public enum HandoffFile {
     /// How much of a handoff is read: a file longer than this is not a handoff, and the review must stay quick.
     public static let limit = 256 * 1024
@@ -265,9 +282,9 @@ public enum HandoffFile {
         case unreadable
     }
 
-    /// The handoff at `url`, masked with `mask` and parsed.
-    public static func read(_ url: URL, mask: (String) -> String = { SecretMask.current.mask($0) },
-                            limit: Int = limit) -> Read {
+    /// The handoff at `url`, masked with `mask` and parsed. A file over `limit` bytes is read past the limit by the
+    /// longest stored value, masked, and only then cut: a value the limit falls in is left out whole, never its start.
+    public static func read(_ url: URL, mask: SecretMask = .current, limit: Int = limit) -> Read {
         let path = url.path
         let attributes = try? FileManager.default.attributesOfItem(atPath: path)
         guard let attributes else {
@@ -280,10 +297,22 @@ public enum HandoffFile {
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return .notPlainFile }
-        guard let data = try? handle.read(upToCount: limit + 1) else { return .unreadable }
-        let truncated = data.count > limit
-        guard let text = decode(truncated ? Data(data.prefix(limit)) : data, cut: truncated) else { return .notText }
-        return .text(Handoff.parse(mask(text), truncated: truncated))
+        let asked = mask.bytesToRead(forCutAt: limit)
+        guard let data = try? handle.read(upToCount: asked) else { return .unreadable }
+        let goesOn = data.count >= asked
+        guard let text = decode(data, cut: goesOn) else { return .notText }
+        let shown = masked(text, limit: limit, goesOn: goesOn, mask: mask)
+        return .text(Handoff.parse(shown.text, truncated: shown.cut))
+    }
+
+    /// `text` masked, then cut to `limit` UTF-8 bytes. When the file `goesOn` past what was read, the cut is also the
+    /// longest stored value before the end at least, so one the read cut through (in a file decoded from UTF-16, say,
+    /// whose text is shorter than its bytes) is left out whole too.
+    static func masked(_ text: String, limit: Int, goesOn: Bool, mask: SecretMask) -> (text: String, cut: Bool) {
+        let margin: Int = mask.isEmpty ? 0 : mask.longest + 1
+        let cutAt: Int = goesOn ? min(limit, text.utf8.count - margin) : limit
+        let shown = mask.maskedPrefix(text, maxBytes: max(0, cutAt))
+        return (shown.text, shown.cut || goesOn)
     }
 
     static func isLink(_ path: String) -> Bool {
