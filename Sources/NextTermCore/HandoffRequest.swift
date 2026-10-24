@@ -9,9 +9,11 @@ public enum HandoffRequest {
 
     /// The request for a handoff at `path` (relative to the project). One line with no line break, so a single Return
     /// sends it; nil when `path` holds a line break or a control character, which would send it early or reach the
-    /// agent's screen as a command.
-    public static func text(path: String) -> String? {
-        guard !hasControl(path) else { return nil }
+    /// agent's screen as a command. The path goes through the same mask as everything an agent is given, and a path
+    /// the mask would change is refused outright: a stored key is never typed, and a masked path would name a file
+    /// Wrap Up never looks for.
+    public static func text(path: String, mask: (String) -> String = { SecretMask.current.mask($0) }) -> String? {
+        guard !hasControl(path), mask(path) == path else { return nil }
         let sections = "## Done, ## Next (one \"- \" line per next step, each a task someone can start tomorrow), "
             + "## Open questions, ## How to resume."
         let ask = "Write a short handoff for this session to \(path) (create the folder if needed) "

@@ -86,6 +86,19 @@ import Testing
         let name = HandoffName.names(day: Self.day, tab: "../../etc/passwd", mask: { $0 })[0]
         #expect(!name.contains("/") && name.hasPrefix("2026-10-18-") && name.hasSuffix(".md"))
     }
+    /// A path the key mask would change is never typed: no stored key reaches the agent's prompt, and a masked path
+    /// would name a file Wrap Up never looks for. A path the mask leaves alone is typed as it is.
+    @Test func aPathTheMaskWouldChangeIsNeverTyped() {
+        let value = "made-up-" + "key-" + "0123456789abcdef"
+        let mask: (String) -> String = { (text: String) -> String in
+            text.replacingOccurrences(of: value, with: "•••")
+        }
+        #expect(HandoffRequest.text(path: "docs/\(value)/2026-10-18-api.md", mask: mask) == nil)
+        let plain: String? = HandoffRequest.text(path: "docs/handoffs/2026-10-18-api.md", mask: mask)
+        #expect(plain?.contains("docs/handoffs/2026-10-18-api.md") == true)
+        #expect(plain?.contains("•••") == false)
+    }
+
 }
 
 /// The handoff folder: the project's own setting, relative to it, else `docs/handoffs`. A setting that is absolute,

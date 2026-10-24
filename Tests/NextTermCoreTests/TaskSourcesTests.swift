@@ -170,6 +170,26 @@ import Testing
         let files = [("TaskShortcut.swift", here), ("TaskOpen.swift", folder.appendingPathComponent("TaskOpen.swift"))]
         #expect(SourceScan.missing(files) == ["TaskOpen.swift is missing from the Tasks sources list"])
     }
+    /// Wrap Up's request, the one line in Tasks typed with its Return, starts only from its own sheet: the user ticks
+    /// the tabs and presses Ask. No MCP source names Wrap Up or its request, and the only call that starts the asking
+    /// is the sheet's button, so no tool and no agent can reach it.
+    @Test func wrapUpAsksOnlyFromItsSheetAndNoToolReachesIt() throws {
+        let sources = Self.root.appendingPathComponent("Sources")
+        let files = try FileManager.default.subpathsOfDirectory(atPath: sources.path).filter { $0.hasSuffix(".swift") }
+        var askers: [String] = []
+        var tools: [String] = []
+        for file in files {
+            let name = (file as NSString).lastPathComponent
+            guard !name.hasPrefix("SelfTest") else { continue }
+            let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+            if text.contains("wrapUp.ask(") || text.contains("WrapUp.ask(") { askers.append(name) }
+            let isTool: Bool = name.hasPrefix("MCP") || name.hasSuffix("MCP.swift") || name.contains("MCPImport")
+            if isTool, text.contains("WrapUp") || text.contains("HandoffRequest") { tools.append(name) }
+        }
+        #expect(askers == ["WrapUpSheet.swift"], "\(askers)")
+        #expect(tools.isEmpty, "\(tools)")
+    }
+
 }
 
 /// The matcher: comments out, string literals kept, then each rule by regular expression.

@@ -53,6 +53,7 @@ extension SelfTest {
         let tabs = await fakeAgents(c, project: project, bin: bin, value: value)
         guard tabs.count == 3 else { return check(false, "wrap up: three fake agent tabs start") }
         await wrapUpSheetChecks(c, ready: tabs[0], project: project, value: value)
+        await wrapUpTypedOverChecks(c, ready: tabs[0], project: project)
         await postUpdateChecks(c, ready: tabs[0], project: project, value: value)
         check(TaskOpen.opened.isEmpty, "wrap up: nothing opened outside Next Term",
               TaskOpen.opened.map(\.absoluteString).joined(separator: ", "))
@@ -212,6 +213,34 @@ extension SelfTest {
         }
         check(recorded == recordedBefore + 2, "wrap up: Add writes two lines in the posted record",
               "\(recordedBefore) then \(recorded)")
+    }
+
+    /// A key the user presses in the tab between the request and its Return: the Return is held back, nothing is sent,
+    /// no handoff is written, and the row says why. The prompt is cleared afterwards for the checks after.
+    private static func wrapUpTypedOverChecks(_ c: TerminalWindowController, ready: TerminalTab, project: String) async {
+        let menu = NSApp.mainMenu?.items.first { $0.title == "Tasks" }?.submenu
+        guard let item = menu?.items.first(where: { $0.action == #selector(TasksMenu.wrapUp(_:)) }) else { return }
+        c.window?.makeKeyAndOrderFront(nil)
+        _ = await wait(3) { TasksMenu.shared.front === c }
+        TasksMenu.shared.wrapUp(item)
+        guard await wait(5, { WrapUpSheet.current != nil }), let sheet = WrapUpSheet.current else {
+            return check(false, "wrap up: Wrap Up… opens again for the typed-over check")
+        }
+        defer { WrapUpSheet.current?.pressCancel() }
+        let handoffs: String = project + "/notes/handoffs"
+        let before: Int = (try? FileManager.default.contentsOfDirectory(atPath: handoffs).count) ?? 0
+        let commands: Int = ready.status.commandsStarted
+        sheet.pressPrimary()
+        ready.view.send(txt: "x")
+        let skipped = await wait(3) { () -> Bool in
+            sheet.model?.rows.first?.phaseText?.contains("you typed in it") == true
+        }
+        await pause(1.5)
+        let after: Int = (try? FileManager.default.contentsOfDirectory(atPath: handoffs).count) ?? 0
+        check(skipped && after == before && ready.status.commandsStarted == commands,
+              "wrap up: a key typed before the Return holds it back, and the row says the request wasn’t sent",
+              sheet.model?.rows.compactMap(\.phaseText).joined(separator: ", ") ?? "no sheet")
+        ready.view.send(txt: "\u{15}")
     }
 
     /// The posted record's lines today for `project`, read off the main thread as the store asks.

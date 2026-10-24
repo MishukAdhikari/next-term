@@ -146,7 +146,12 @@ extension WrapUp {
                 continue
             }
             let path = folder + "/" + name
-            guard let request = HandoffRequest.text(path: path), type(request, into: tab) else {
+            let id: UUID = row.id
+            let typedOver: () -> Void = { [weak self] in
+                self?.model.skip(id, because: Self.typedOver)
+                self?.changed?()
+            }
+            guard let request = HandoffRequest.text(path: path), type(request, into: tab, typedOver: typedOver) else {
                 model.skip(row.id, because: "can’t be typed into now")
                 continue
             }
@@ -160,19 +165,24 @@ extension WrapUp {
 
     /// The request, then Return a moment later: agents take a paste as a block and only a separate Return sends it.
     /// That Return is Next Term's own line end, so the tab is not marked driven. false when the tab can't take input.
-    /// As with every typed request, the prompt line is not looked at again before the Return: anything the user types
-    /// into that tab in the quarter second between goes with the request.
-    private func type(_ request: String, into tab: TerminalTab) -> Bool {
+    /// The Return goes only if nothing else reached the tab in between: a key the user pressed there in that quarter
+    /// second means the line is no longer just the request, so it is left unsent and the row says so.
+    private func type(_ request: String, into tab: TerminalTab, typedOver: @escaping () -> Void) -> Bool {
         guard MCPControl.canType(tab), MCPInputLine.refusal(tab) == nil else { return false }
         let typed = tab.view.typeText(request)
+        let writes: Int = tab.view.inputWrites
         SecretRequests.shared.tabGotInput(tab.id)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             // The tab may have closed or dropped its connection in between.
             guard MCPControl.canType(tab) else { return }
+            guard tab.view.inputWrites == writes else { return typedOver() }
             tab.submitOwnLine(typed)
         }
         return true
     }
+
+    /// A row whose tab got the user's own keys between the request and its Return.
+    static let typedOver = "you typed in it before the request was sent, so it wasn’t sent"
 
     /// Every asked row: its tab and its named file. Only that file counts; another file in the folder is never read.
     private func lookAtFiles(now: Date) {
