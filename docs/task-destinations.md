@@ -33,7 +33,7 @@ link that leaves, before you press Add.
 
 | Destination | Kind | What is sent | The day | Limit |
 |---|---|---|---|---|
-| Todo Folder | `todo_folder` | a Markdown file in the project's todo folder | `planned` in the file | none |
+| Todo Folder | `todo_folder` | a Markdown file in the project's todo folder | `scheduled` in the file | none |
 | Reminders | `reminders` | title; notes hold the steps as `- [ ]` lines, the notes, then where it was added | an all-day due date | none |
 | Things | `things` | `title`, `notes`, `checklist-items` (the steps), `when`, `list` when set | `when`: today, tomorrow or the date | notes 10,000 characters, 100 checklist items |
 | Run a Shortcut | `shortcut` | the shortcut's input: the title, then steps, notes and where it was added | a line `Planned: <date>` | none |
@@ -87,11 +87,11 @@ agent posts it with its own sign-in. Without bracketed paste, the task's lines a
 
 ## The posted record
 
-Each task sent anywhere but the todo folder adds one line to `Tasks.noindex/posted.jsonl` in Next Term's folder in
-Application Support, readable only by you: when, the destination's kind and its key (the list or the repository),
-the masked title and the project. Lines older than 30 days are dropped. It is used for three things only: the
-warning when the same task goes to the same place again within a minute, Reminders' Undo, and what was posted
-today. Nothing that leaves the Mac reads it.
+Each task sent anywhere, the todo folder included, adds one line to `Tasks.noindex/posted.jsonl` in Next Term's
+folder in Application Support, readable only by you: when, the destination's kind and its key (the list or the
+repository), the masked title and the project. Lines older than 30 days are dropped. It is used for three things
+only: the warning when the same task goes to the same place again within a minute, Reminders' Undo, and what was
+posted today. Nothing that leaves the Mac reads it.
 
 ## add_task's destination
 
@@ -148,8 +148,8 @@ tracker and agent with no line on either page are not offered: a line is never g
 
 These are not offered yet, each until it is checked by hand on a real account:
 
-- **Jira's new-issue page**: Atlassian documents no Cloud link that fills a new issue. Post to Jira Through Your
-  Agent instead.
-- **TickTick**: its add link is not documented for the Mac app.
+- **Jira's new-issue page**: Atlassian turns off Jira's prefilled create page in Jira 9 and later. Post to Jira
+  Through Your Agent instead.
+- **TickTick**: its link hasn't been checked with its Mac app yet, so it isn't offered.
 - **Self-managed GitLab and GitHub Enterprise**: each needs a host field and its own check. GitLab here is
   gitlab.com, and GitHub is github.com.

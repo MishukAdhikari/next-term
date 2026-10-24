@@ -166,14 +166,14 @@ extension SelfTest {
         TaskOpen.opened = []
     }
 
-    /// One posted line per destination but the todo folder, each with the masked title.
+    /// One posted line per destination, the todo folder included, each with the masked title.
     private static func sweepRecordChecks(tag: String, value: String) async {
         // The store reads its file on its own queue; that read stays off the main thread.
         let read = Task.detached { () -> [TaskRecord.Entry] in TaskRecordStore.shared.today(project: nil) }
         let entries: [TaskRecord.Entry] = await read.value
         let mine = entries.filter { $0.title.contains(tag) }
         let kinds: [TaskDestination.Kind] = mine.map(\.kind)
-        let expected: [TaskDestination.Kind] = sweepDestinations.map(\.kind).filter { $0 != .todoFolder }
+        let expected: [TaskDestination.Kind] = sweepDestinations.map(\.kind)
         let each: Bool = kinds.count == expected.count && Set(kinds) == Set(expected)
         check(each, "destinations: the posted record holds one line per destination",
               kinds.map(\.rawValue).joined(separator: ", "))
