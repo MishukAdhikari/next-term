@@ -157,9 +157,11 @@ import Testing
         let home = try fixture()
         defer { remove(home) }
         let plan = try plan(home)
-        let settings: [ImportedSetting] = [.fontSize(14), .terminalFontSize(12), .launchOpens("welcome"), .currentLineBlame(true)]
+        let settings: [ImportedSetting] = [.fontSize(14), .terminalFontSize(12), .launchOpens("welcome"), .currentLineBlame(true),
+                                           .sidebarSingleClick(true)]
         #expect(plan.settings.map(\.setting) == settings)
-        let sources: [String] = ["buffer_font_size 14", "terminal.font_size 12", "restore_on_startup none", "git.inline_blame.enabled true"]
+        let sources: [String] = ["buffer_font_size 14", "terminal.font_size 12", "restore_on_startup none", "git.inline_blame.enabled true",
+                                 "Zed's project panel"]
         #expect(plan.settings.map(\.source) == sources)
         for key in ["terminal.env", "context_servers", "language_models"] {
             #expect(plan.skipped.contains(SkippedItem(key, "never imported: can hold secrets")), "\(key)")

@@ -397,6 +397,46 @@ import Testing
         #expect(probe.herdrSummary == "herdr 0.9.3")
     }
 
+    /// check_host looks for OpenCode beside Claude Code, Codex and Gemini CLI: on the PATH a command over ssh gets, or
+    /// where its installer puts it (~/.opencode/bin, which only the end of .bashrc puts on PATH, past the guard that
+    /// stops a shell that is not interactive), and OpenCode 2's opencode2 when that is all there is. Run as a host runs it.
+    @Test func theProbeFindsOpencodeWhereItsInstallerPutsIt() throws {
+        #expect(RemoteShell.probeScript.contains(RemoteShell.agentLines))
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-agents-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        func program(_ relative: String, mode: Int = 0o755) throws {
+            let path = home + "/" + relative
+            try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try "#!/bin/sh\nexit 0\n".write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+        }
+        func agents() throws -> [String] {
+            let script = "PATH=\"$HOME/npm/bin:$PATH\"\n" + RemoteShell.agentLines
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", RemoteShell.command(script)]
+            process.environment = ["HOME": home, "PATH": "/usr/bin:/bin"]
+            let out = Pipe()
+            process.standardOutput = out
+            try process.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return try #require(RemoteProbe.parse(RemoteShell.marker + "\n" + String(decoding: data, as: UTF8.self))).agents
+        }
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        #expect(try agents() == [])
+        try program(".opencode/bin/opencode", mode: 0o644)
+        #expect(try agents() == [])
+        try program(".opencode/bin/opencode")
+        #expect(try agents() == ["opencode"])
+        try FileManager.default.removeItem(atPath: home + "/.opencode")
+        try program("npm/bin/opencode2")
+        #expect(try agents() == ["opencode2"])
+        try program(".opencode/bin/opencode")
+        try program("npm/bin/claude")
+        #expect(try agents() == ["claude", "opencode"])
+    }
+
     @Test func changesSplitIntoStatusStatAndDiff() throws {
         let output = """
             \(RemoteShell.marker)

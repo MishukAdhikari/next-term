@@ -110,7 +110,10 @@ public struct NotificationSettings: Equatable, Sendable {
         case .decision:
             return decisions
         case .agentFinished:
-            return agentFinished && longEnough && (!appActive || !drivenByAgent)
+            if agentFinished && longEnough && (!appActive || !drivenByAgent) { return true }
+            // The agent's own words that came as its turn ended ride on the finish (TabStatus): they show when they
+            // would alone.
+            return notice.message != nil && programAlerts && !appActive
         case .commandFinished:
             guard longEnough else { return false }
             switch commands {

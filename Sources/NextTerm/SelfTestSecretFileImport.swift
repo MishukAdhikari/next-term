@@ -103,19 +103,37 @@ extension SelfTest {
         // The value itself, which only wipes when nothing holds it: not the report alone, as the plan held it too.
         check(report == nil && value == nil,
               "secret file import: closing the sheet releases its report and its values, so they are wiped")
-        await secretFileImportUndoCheck(view, names: names)
+        await secretFileImportUndoCheck(view, presence, names: names)
     }
 }
 
 extension SelfTest {
     /// Undo… in Recent imports, after one key changed: it asks first, deletes the two still holding what was copied
     /// in, and leaves the changed one, saying why.
-    static func secretFileImportUndoCheck(_ view: SecretsView, names: [String]) async {
+    static func secretFileImportUndoCheck(_ view: SecretsView, _ presence: StandInPresence, names: [String]) async {
         let store = SecretsStore.shared
         let changed: String = names[2]
+        // The change this check is about needs the stand-in to approve at once, whatever a check before it left set.
+        presence.approves = true
+        presence.holds = false
+        let before: Date? = store.index?.entry(named: changed)?.lastSet
         let replace: SecretsStore.Action = .replace(name: changed, value: SecretBytes(utf8: secretsValue("lsv2_" + "pt_")),
                                                     writeOnly: false, origin: nil)
-        _ = try? await store.perform(replace)
+        var failure: String?
+        do {
+            _ = try await store.perform(replace)
+        } catch {
+            failure = String(describing: error)
+        }
+        // Undo tells a changed key by its date, so the replace must be in the index before Undo… reads it.
+        let replaced: Bool = await wait(5) { () -> Bool in
+            guard let after = store.index?.entry(named: changed)?.lastSet else { return false }
+            return before.map { (old: Date) -> Bool in after > old } ?? true
+        }
+        guard failure == nil, replaced else {
+            let why: String = failure ?? "its date didn\u{2019}t change"
+            return check(false, "secret file import: one key is replaced after the import, for Undo to leave it", why)
+        }
         view.reload()
         guard let undo = view.copyInRows.first?.undo else {
             return check(false, "secret file import: Recent imports lists the copy-in, with Undo…")

@@ -6,6 +6,10 @@ public enum AgentActivity: Equatable, Sendable {
     case working
     /// It is asking for a decision (a permission prompt); the question, if found.
     case asking(String)
+    /// The agent's own footer is on screen without its working hint: it waits for your next prompt, and says so
+    /// itself (OpenCode, `AgentScreen.Opencode`). Once its working hint has shown this run, its screen, not its
+    /// output, says when it works (TabStatus).
+    case ready
     /// None of the above: waiting for your next prompt.
     case idle
 }
@@ -67,6 +71,19 @@ public enum AgentScreen {
         let range = NSRange(location: 0, length: (text as NSString).length)
         if working.contains(where: { $0.firstMatch(in: text, range: range) != nil }) { return .working }
         return .idle
+    }
+
+    /// `activity(screenLines:)` for a tab that shows OpenCode (`opencode`): OpenCode's own shapes first, then every
+    /// agent's. Other agents' tabs never see OpenCode's shapes, and OpenCode's screen is never read as another's
+    /// prompt while its own footer or question is there.
+    ///
+    /// The host passes an OpenCode tab's whole screen (at least `scannedLines`), so a fullscreen prompt's header, at its
+    /// top, is read with its buttons at the bottom; every agent's shapes still read only the last `scannedLines`. `mask`
+    /// masks stored keys over the rows of OpenCode's question too, before they are joined.
+    public static func activity(screenLines lines: [String], opencode: Bool, mask: SecretMask = .current) -> AgentActivity {
+        guard opencode else { return activity(screenLines: lines, mask: mask) }
+        let own = Opencode.activity(lines, mask: mask)
+        return own == .idle ? activity(screenLines: lines, mask: mask) : own
     }
 
     /// A question with fixed words ("Do you want to…?") and its choices, in the last `promptLines`
@@ -149,6 +166,10 @@ public struct AgentMenu: Equatable, Sendable {
         case list
         /// A "(y/n)" prompt: a letter, then Return.
         case yesNo
+        /// A row of buttons: left and right move the selection, round from either end, and Return picks (OpenCode).
+        case row
+        /// Numbered options: the option's digit alone picks it and sends the answer, with no Return (OpenCode's question).
+        case digits
     }
 
     /// The question the choices answer, as `AgentScreen.activity` reads it.
@@ -157,12 +178,24 @@ public struct AgentMenu: Equatable, Sendable {
     public let choices: [String]
     /// The choice the list's cursor is on (0-based), nil when the screen draws none.
     public let highlighted: Int?
+    /// The choice Esc picks by itself, wherever the selection is (OpenCode's Reject and Cancel); nil when none.
+    public let escape: Int?
+    /// Esc first shrinks the prompt from fullscreen (OpenCode 2.x), so the Esc choice takes a second Esc, sent only once
+    /// the prompt shows shrunk.
+    public let shrinksFirst: Bool
+    /// Why no key picks a choice now, said for the caller: OpenCode's box for an answer of your own may take the key
+    /// (`AgentScreen.Opencode.digitsRefusal`). Nil when keys can.
+    public let blocked: String?
 
-    public init(question: String, style: Style, choices: [String], highlighted: Int?) {
+    public init(question: String, style: Style, choices: [String], highlighted: Int?, escape: Int? = nil,
+                shrinksFirst: Bool = false, blocked: String? = nil) {
         self.question = question
         self.style = style
         self.choices = choices
         self.highlighted = highlighted
+        self.escape = escape
+        self.shrinksFirst = shrinksFirst
+        self.blocked = blocked
     }
 
     /// The 0-based choice an answer names: `choice` as numbered on screen (1-based), or `answer`, a
@@ -195,15 +228,42 @@ public struct AgentMenu: Equatable, Sendable {
     /// cursor to it, then Return; for a y/n prompt, the letter and Return. Arrows, not the choice's
     /// digit: some agents pick on the digit alone, and the Return after it would answer whatever comes
     /// next. Nil when the list's cursor is not drawn, so where the arrows would start is unknown.
+    /// Esc alone for the choice Esc picks (twice when the first only shrinks the prompt). In a row of buttons, left or
+    /// right the shorter way round from the selected one, then Return. For numbered options, the digit alone, which
+    /// only options 1 to 9 have. Nil for every choice while `blocked`.
     public func keys(toPick index: Int) -> [String]? {
-        guard choices.indices.contains(index) else { return nil }
+        guard blocked == nil, choices.indices.contains(index) else { return nil }
+        if index == escape { return shrinksFirst ? ["escape", "escape"] : ["escape"] }
         switch style {
         case .yesNo:
             return [index == 0 ? "y" : "n", "enter"]
         case .list:
             guard let highlighted else { return nil }
             return Array(repeating: index > highlighted ? "down" : "up", count: abs(index - highlighted)) + ["enter"]
+        case .row:
+            guard let highlighted else { return nil }
+            let right: Int = (index - highlighted + choices.count) % choices.count
+            let left: Int = (highlighted - index + choices.count) % choices.count
+            let steps: [String] = right <= left ? Array(repeating: "right", count: right) : Array(repeating: "left", count: left)
+            return steps + ["enter"]
+        case .digits:
+            return index < 9 ? [String(index + 1)] : nil
         }
+    }
+
+    /// Why `keys(toPick:)` gives no keys for choice `index`, said for the caller.
+    public func refusal(toPick index: Int) -> String {
+        if let blocked { return blocked }
+        let label = choices.indices.contains(index) ? choices[index] : "that choice"
+        if style == .digits {
+            return "OpenCode picks options 1 to 9 by their digit, and “\(label)” is option \(index + 1); nothing was typed. press_keys can answer: Down to it, then Return."
+        }
+        return "That screen does not show which choice is selected, so the way to “\(label)” is unknown; nothing was typed. press_keys can answer."
+    }
+
+    /// Whether this is the menu of `question`, the question the tab reports: the same words, read from the same screen.
+    public func asks(_ question: String) -> Bool {
+        self.question == question
     }
 
     static func normalized(_ text: String) -> String {
@@ -255,7 +315,8 @@ extension AgentScreen {
         guard let read = menu(screenLines: lines, mask: mask), read.question == question,
               let masked = menu(screenLines: shown, mask: mask), masked.choices.count == read.choices.count,
               masked.style == read.style, masked.highlighted == read.highlighted else { return nil }
-        return AgentMenu(question: question, style: masked.style, choices: masked.choices, highlighted: masked.highlighted)
+        return AgentMenu(question: question, style: masked.style, choices: masked.choices, highlighted: masked.highlighted,
+                         escape: masked.escape, shrinksFirst: masked.shrinksFirst, blocked: masked.blocked)
     }
 
     /// The menu under the question an agent is asking (the one `activity` reports), or nil if the
@@ -342,22 +403,26 @@ extension AgentScreen {
         expression.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
     }
 
-    /// A line without the box an agent may draw around its prompt.
+    /// A line without the box an agent may draw around its prompt ("┃" is OpenCode's).
     private static func inner(_ line: String) -> String {
         // By index, once over the line: Collection's dropLast() counts the whole line at each character it drops.
-        func edge(_ c: Character) -> Bool { c == "│" || c == "|" || c.isWhitespace }
+        func edge(_ c: Character) -> Bool { boxSides.contains(c) || c.isWhitespace }
         var start = line.startIndex, end = line.endIndex
         while start < end, edge(line[start]) { start = line.index(after: start) }
         while end > start, edge(line[line.index(before: end)]) { end = line.index(before: end) }
         return String(line[start..<end])
     }
 
-    /// A blank line, a box's edge, or the hint line under a list: where the choices end.
+    static let boxSides: Set<Character> = ["│", "|", "┃"]
+
+    /// A blank line, a box's edge, or the hint line under a list: where the choices end. OpenCode's hints too
+    /// ("↑↓ select … esc dismiss" under its questions, "⇆ select  enter confirm" beside its buttons).
     private static func isEdge(_ line: String) -> Bool {
         if line.isEmpty { return true }
         if let first = line.first, "╭╰┌└─━═".contains(first) { return true }
         let lower = line.lowercased()
-        return ["enter to select", "esc to cancel", "to navigate", "↑↓", "↑/↓"].contains { lower.contains($0) }
+        let hints = ["enter to select", "esc to cancel", "to navigate", "↑↓", "↑/↓", "esc dismiss", "⇆ select", "enter confirm"]
+        return hints.contains { lower.contains($0) }
     }
 
     private static func splitCursor(_ line: String) -> (cursor: Bool, rest: String) {

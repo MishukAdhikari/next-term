@@ -90,7 +90,11 @@ public enum ImportSublimeText {
         plan.skipped.append(SkippedItem("Sublime Text's own shortcuts", "there is no Sublime Text shortcut set, so Next Term's shortcuts stay"))
         // Sublime Text 3 trims every line; 4 only the lines you changed, unless told otherwise.
         let three = (data as NSString).lastPathComponent == "Sublime Text 3"
-        addSettings(data: data, fonts: fonts, trimsChangedOnly: !three, to: &plan)
+        let clickKnown = addSettings(data: data, fonts: fonts, trimsChangedOnly: !three, to: &plan)
+        // preview_on_click not set (or no Preferences file): Sublime Text's own default.
+        if clickKnown { plan.addSingleClickDefault(for: app.kind, source: "preview_on_click (not set: true)", note: "\(app.name)'s default") }
+        // Its sidebar opens a folder with a single click, whatever preview_on_click says.
+        plan.noteFolderClick(true, source: "\(app.name)'s sidebar folders")
         addKeys(data: data, usKeyboard: usKeyboard, to: &plan)
         let recents = recentProjects(data: data, home: home)
         plan.recentProjects = recents.paths
@@ -154,17 +158,25 @@ public enum ImportSublimeText {
 
     /// Packages/User/Preferences.sublime-settings as preview rows. The last value of a key wins, as in Sublime Text.
     /// `trimsChangedOnly`: the version trims only changed lines unless `trim_only_modified_white_space` is false.
-    static func addSettings(data: String, fonts: FontCatalog, trimsChangedOnly: Bool, to plan: inout ImportPlan) {
+    /// Returns whether the click Sublime Text uses is known: false when the file is there but couldn't be read, or
+    /// preview_on_click holds a value not recognised.
+    @discardableResult
+    static func addSettings(data: String, fonts: FontCatalog, trimsChangedOnly: Bool, to plan: inout ImportPlan) -> Bool {
         let name = "Preferences.sublime-settings"
         let file = own((userFolder(data) as NSString).appendingPathComponent(name), data: data, name: name)
-        if let reason = file.skipped { return plan.skipped.append(reason) }
-        guard let path = file.path else { return }
-        guard let read = document(path, limit: 4 << 20) else {
-            return plan.skipped.append(SkippedItem(name, "couldn't be read as JSON, so no settings came over"))
+        if let reason = file.skipped {
+            plan.skipped.append(reason)
+            return false
         }
-        guard let document = read.document else { return } // only comments: nothing set
+        guard let path = file.path else { return true } // no file: Sublime Text's defaults
+        guard let read = document(path, limit: 4 << 20) else {
+            plan.skipped.append(SkippedItem(name, "couldn't be read as JSON, so no settings came over"))
+            return false
+        }
+        guard let document = read.document else { return true } // only comments: nothing set
         guard case .object(let object)? = document.root else {
-            return plan.skipped.append(SkippedItem(name, "couldn't be read as JSON, so no settings came over"))
+            plan.skipped.append(SkippedItem(name, "couldn't be read as JSON, so no settings came over"))
+            return false
         }
         let settings = Settings(members: object.members, text: read.text)
         addFont(settings, fonts: fonts, to: &plan)
@@ -172,6 +184,7 @@ public enum ImportSublimeText {
         addCleanUp(settings, trimsChangedOnly: trimsChangedOnly, to: &plan)
         addHidden(settings, to: &plan)
         plan.skipped += report(settings)
+        return settings.value("preview_on_click") == nil || plan.singleClick != nil
     }
 
     /// The settings file's members, unconverted until an allowlisted key is asked for.
@@ -221,7 +234,7 @@ public enum ImportSublimeText {
                                             note: "the nearest line height to Sublime Text's padding"))
     }
 
-    /// Wrapping long lines, and opening a file with a single click in the sidebar.
+    /// Wrapping long lines, and opening a file (and a folder) with a single click in the sidebar.
     static func addEditing(_ settings: Settings, to plan: inout ImportPlan) {
         if let raw = settings.value("word_wrap") {
             if let on = ImportVSCode.bool(raw) {

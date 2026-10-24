@@ -14,7 +14,8 @@ final class SkillsPane: NSView {
         scope.selectedSegment = 0
         scope.target = self
         scope.action = #selector(scopeChanged)
-        scope.setToolTip("Your skills in ~/.agents/skills, ~/.claude/skills, ~/.codex/skills and ~/.commandcode/skills. Agents get them in every project.", forSegment: 0)
+        let personalTip = "Your skills in ~/.agents/skills, ~/.claude/skills, ~/.codex/skills, ~/.commandcode/skills and ~/.config/opencode/skills."
+        scope.setToolTip(personalTip + " Agents get them in every project.", forSegment: 0)
         scope.setToolTip("A project's own skills, as each agent loads them there.", forSegment: 1)
         scope.setAccessibilityLabel("Skills scope")
         scope.translatesAutoresizingMaskIntoConstraints = false

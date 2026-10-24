@@ -125,11 +125,14 @@ enum ProcessInspector {
     /// shows the kernel no environment, and what its rc files export never reaches that record. The launch is kept as a
     /// put-back line replays it (U2): the leader's argv gives its options, the integration's typed line and its alias
     /// expansion (held in memory only) give the launcher and the permission options they confirm, and the path the
-    /// kernel ran gives the version, with no process started to ask. Nil when the tab runs no agent.
+    /// kernel ran gives the version, with no process started to ask. `shownSession` is the id of the session OpenCode's
+    /// title names, as the tab kept it (TerminalTab.shownSessionID): capture opens no store for it. Nil when the tab
+    /// runs no agent.
     static func agentEvidence(ptyFileDescriptor fd: Int32, shellPid: pid_t, status: TabStatus,
-                              home: String = NSHomeDirectory()) -> SessionSnapshot.Evidence? {
+                              home: String = NSHomeDirectory(), shownSession: String? = nil) -> SessionSnapshot.Evidence? {
         var capture = AgentEvidence.Capture(status: status, home: home)
         capture.shellRouting = LoginShell.routing
+        capture.shownSession = shownSession
         let leaderID = fd >= 0 && shellPid > 0 ? tcgetpgrp(fd) : -1
         if leaderID > 0, let found = agentProcess(leaderID) {
             let agent = RestoreAgent(process: found)

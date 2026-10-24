@@ -1,7 +1,7 @@
 import Foundation
 
 // A file the MCP-config import rewrites can hold keys outside the servers it moves: Codex's shell `set` and model
-// providers' tokens, opencode's providers' keys. The app sends a chosen move target to that import for its servers and,
+// providers' tokens, OpenCode's providers' keys. The app sends a chosen move target to that import for its servers and,
 // when the rest of the file has keys, offers them as a copy, each noted that the file still holds it. Claude Code's
 // `~/.claude.json` has no rest: past its servers it holds Claude Code's own state.
 

@@ -3,7 +3,7 @@ import Testing
 @testable import NextTermCore
 
 /// A file the MCP-config import moves keys out of can hold keys outside its servers too: Codex's shell `set` and model
-/// providers' tokens, opencode's providers' keys. The app sends the servers to that import and offers these as a copy,
+/// providers' tokens, OpenCode's providers' keys. The app sends the servers to that import and offers these as a copy,
 /// each noted that the file still holds it. Files are made up, under a temporary home.
 @Suite struct SecretSourcesMoveRestTests {
     typealias C = ConfigFixtures
@@ -41,8 +41,8 @@ import Testing
             + #""mcp": {"search": {"type": "local", "command": ["npx"], "environment": {"A_TOKEN": "\#(C.github)"}}}}"#
         let path: String = home.write("rag-api/opencode.json", text)
         let report = try Self.rest(path, home: home, projects: [project])
-        #expect(report.format == .json && report.agent == "opencode" && report.fileNote == .stillInFile)
-        // A provider's key is named as opencode's providers read it from the environment.
+        #expect(report.format == .json && report.agent == "OpenCode" && report.fileNote == .stillInFile)
+        // A provider's key is named as OpenCode's providers read it from the environment.
         #expect(T.names(report) == ["OPENAI_API_KEY"])
         #expect(report.rows.first?.place == "provider.openai.options.apiKey" && report.rows.first?.note == .stillInFile)
     }
