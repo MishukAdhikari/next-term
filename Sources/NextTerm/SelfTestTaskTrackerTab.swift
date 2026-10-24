@@ -22,7 +22,14 @@ extension SelfTest {
             return check(false, "connect a tracker: Open in a New Tab makes one tab titled \(title)", "\(made.count)")
         }
         var closed = false
-        defer { if !closed { closeSecretsTabs([tab], "connect a tracker") } }
+        // The sheet stays open for the next agent by design; it is closed before its tab, so the tab check sees
+        // only what closing the tab leaves.
+        defer {
+            if !closed {
+                ConnectTrackerSheet.current?.done()
+                closeSecretsTabs([tab], "connect a tracker")
+            }
+        }
         _ = await wait(10) { tab.status.integrated }
         _ = await wait(8) { secretPipeScreen(tab).contains("linear-server") }
         await pause(1)
@@ -44,6 +51,8 @@ extension SelfTest {
         }
         check(refused && tab.status.commandsRun == 0, "connect a tracker: agents can't type, press keys, answer or close there",
               results.map(\.text).joined(separator: " / "))
+        sheet.done()
+        _ = await wait(5) { ConnectTrackerSheet.current == nil && c.window?.attachedSheet == nil }
         closeSecretsTabs([tab], "connect a tracker")
         closed = true
         let next: TerminalTab = c.addTab(directory: NSHomeDirectory(), select: false)

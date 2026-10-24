@@ -84,11 +84,11 @@ agent posts it with its own sign-in. Without bracketed paste, the task's lines a
 
 ## The posted record
 
-Each task sent anywhere but the todo folder adds one line to `Tasks.noindex/posted.jsonl` in Next Term's folder in
-Application Support, readable only by you: when, the destination's kind and its key (the list or the repository),
-the masked title and the project. Lines older than 30 days are dropped. It is used for three things only: the
-warning when the same task goes to the same place again within a minute, Reminders' Undo, and what was posted
-today. Nothing that leaves the Mac reads it.
+Each task sent anywhere, the todo folder included, adds one line to `Tasks.noindex/posted.jsonl` in Next Term's
+folder in Application Support, readable only by you: when, the destination's kind and its key (the list or the
+repository), the masked title and the project. Lines older than 30 days are dropped. It is used for three things
+only: the warning when the same task goes to the same place again within a minute, Reminders' Undo, and what was
+posted today. Nothing that leaves the Mac reads it.
 
 ## add_task's destination
 
