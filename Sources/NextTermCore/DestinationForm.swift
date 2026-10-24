@@ -171,8 +171,8 @@ extension DestinationForm {
     public static func note(_ kind: TaskDestination.Kind) -> String? {
         switch kind {
         case .todoFolder: return "Each task is a Markdown file in the project’s todo folder, for your agents to read."
-        case .todoist: return "Todoist’s Quick Add opens with the task’s title, notes and day for you to add."
-        case .omnifocus: return "OmniFocus’s Quick Entry opens with the task’s title, notes and day for you to save."
+        case .todoist: return "Todoist’s Quick Add opens with the title and notes; add it and set the day there."
+        case .omnifocus: return "OmniFocus’s Quick Add opens with the title and notes; save it and set the day there."
         case .things: return "Things gets the title, notes and the day."
         case .trello: return "Trello asks for the board on its own page; Next Term sends the card’s name."
         default: return nil
