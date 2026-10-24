@@ -210,7 +210,7 @@ extension SelfTest {
         let text = sheet.textView.string
         let parts = ["- Wired the cart total into checkout", "- Add a test for an empty cart", "- Add the cart total",
                      "token=•••"]
-        check(parts.allSatisfy(text.contains) && !text.contains(value),
+        check(parts.allSatisfy { text.contains($0) } && !text.contains(value),
               "post update: the draft holds the handoff's Done and Next items and today's commit, the key as •••", text)
         sheet.savePressed()
         let day = TaskDay(Date(), calendar: .current).description
