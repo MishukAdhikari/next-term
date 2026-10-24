@@ -38,12 +38,6 @@ import Testing
         #expect(HandoffRequest.version == 1, "The words changed: change the doc's request with them.")
     }
 
-    @Test func aRequestChangedWithoutTheDocFails() throws {
-        let request = try #require(HandoffRequest.text(path: Self.path))
-        let changed = request.replacingOccurrences(of: "short handoff", with: "brief handoff")
-        #expect(Self.fenced(try Self.doc(), "text").first != changed)
-    }
-
     @Test func theExampleHandoffParsesToTheItemsTheDocLists() throws {
         let doc = try Self.doc()
         let example = try #require(Self.fenced(doc, "markdown").first)

@@ -64,16 +64,39 @@ import Testing
         #expect(TaskSettings.json(saved: nil, handoffFolder: "a", for: "/p") == #"{"/p":{"handoffFolder":"a"}}"#)
     }
 
+    /// A real repository with a linked worktree: the folder saved from either checkout is read in both, since the
+    /// key is the main checkout's path.
     @Test func everyWorktreeOfTheProjectReadsTheSameValue() throws {
+        guard let git = GitRunner.locateGit() else { return }
         let dir = try project()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let project = dir + "/project"
-        let json: String = try #require(TaskSettings.json(saved: nil, handoffFolder: "notes/handoffs",
-                                                          for: TaskSettings.projectKey(project)))
+        let main = dir + "/project", linked = dir + "/project-fix"
+        func sh(_ args: String..., in folder: String = main) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: git)
+            let settings: [String] = ["-c", "user.name=Dev", "-c", "user.email=dev@example.com",
+                                      "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"]
+            process.arguments = ["-C", folder] + settings + args
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+        }
+        sh("init", "-q")
+        sh("commit", "-q", "--allow-empty", "-m", "Start")
+        sh("worktree", "add", "-q", "-b", "fix", linked)
+        try #require(FileManager.default.fileExists(atPath: linked + "/.git"))
+        // The worktree's key is the main checkout, not its own folder.
+        #expect(TaskSettings.projectKey(linked) == TaskSettings.projectKey(main))
+        #expect(TaskSettings.projectKey(linked) != canonicalPath(linked))
         let suite = "nt-handoff-pick-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
+        // Saved from the worktree's window, read from both.
+        let json: String = try #require(TaskSettings.json(saved: nil, handoffFolder: "notes/handoffs",
+                                                          for: TaskSettings.projectKey(linked)))
         defaults.set(json, forKey: TaskSettings.Key.projects)
-        #expect(TaskSettings(defaults: defaults).handoffFolder(for: project) == "notes/handoffs")
+        #expect(TaskSettings(defaults: defaults).handoffFolder(for: main) == "notes/handoffs")
+        #expect(TaskSettings(defaults: defaults).handoffFolder(for: linked) == "notes/handoffs")
     }
 }

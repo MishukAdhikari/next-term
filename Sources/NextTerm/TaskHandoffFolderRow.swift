@@ -33,7 +33,8 @@ final class TaskHandoffFolderRow: NSObject {
 
     /// The row for the project in front now (nil: none), as saved.
     func update(project: String?, key: String?) {
-        if project != self.project { problem.isHidden = true }
+        // The problem line's whole row hides with it, so no empty row sits under the setting.
+        if project != self.project || problem.isHidden { say(nil) }
         self.project = project
         self.key = key
         let enabled = project != nil && key != nil

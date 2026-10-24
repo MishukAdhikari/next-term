@@ -4,15 +4,16 @@ import NextTermCore
 
 #if DEBUG
 /// Wrap Up and Post Update end to end, in a git project of the part's own with one commit today by a made-up
-/// address. Three agent tabs (a script run under the name claude): one ready, one working, one with "abc" typed. The
+/// address and its handoff folder set to notes/handoffs. Three agent tabs (a script run under the name claude): one ready, one working, one with "abc" typed. The
 /// ready one reads the request, writes a fixed handoff to the path named in it, and waits. Wrap Up, opened from the
-/// menu item, asks only that tab, with one Return; its handoff becomes two ticked tasks, one holding a stored key as
-/// •••, and Add writes two todo files. Post Update then drafts the handoff's Done item, its Next items and the commit;
+/// menu item, asks only that tab, with one Return, naming notes/handoffs; its handoff becomes two ticked tasks, one
+/// holding a stored key as •••, and Add writes two todo files and two lines in the posted record. Post Update then drafts the handoff's Done item, its Next items and the commit;
 /// Save writes docs/updates/<day>.md, Copy goes to the self-test's own pasteboard, never the user's, and Send types
 /// into the ready tab with no Return. Nothing opens outside Next Term, and everything is put back. Called from
 /// `tasksChecks`.
 extension SelfTest {
     static func wrapUpChecks() async {
+        wrapUpKeyChecks()
         guard let git = GitRunner.locateGit(), let app = AppDelegate.shared else {
             return note("wrap up: skipped, no git")
         }
@@ -136,6 +137,23 @@ extension SelfTest {
         let cleared = TaskSettings(defaults: .standard).projects[key]?.handoffFolder
         check(cleared == nil && row.shownValue == TaskSettings.defaultHandoffFolder,
               "wrap up: Use Default goes back to docs/handoffs")
+        // Wrap Up below runs with the picked folder; tasksChecks puts the saved settings back after.
+        row.picked(project + "/notes/handoffs")
+    }
+
+    /// Wrap Up's key changed in Settings › Keyboard Shortcuts moves the menu item's key, and Reset brings ⌃⌘W back.
+    /// tasksChecks puts the saved bindings back after.
+    private static func wrapUpKeyChecks() {
+        let shortcuts = KeyboardShortcuts.shared
+        let item: () -> NSMenuItem? = { shortcuts.commands.first { $0.id == "wrapUp:" }?.item }
+        let mine = KeyChord(key: "u", command: true, option: true, control: true)
+        shortcuts.set(mine, for: "wrapUp:")
+        let moved = item().flatMap(KeyboardShortcuts.chord(of:))
+        check(moved == mine, "wrap up: a key set for Wrap Up… in Settings moves the menu item's key",
+              moved?.display ?? "no key")
+        shortcuts.reset("wrapUp:")
+        let back = item().flatMap(KeyboardShortcuts.chord(of:))
+        check(back?.display == "⌃⌘W", "wrap up: Reset gives Wrap Up… ⌃⌘W again", back?.display ?? "no key")
     }
 
     /// Wrap Up from the menu item: one row ticked and two with why, one line typed with its Return, the handoff read
@@ -161,10 +179,12 @@ extension SelfTest {
         check(rows == expected && sheet.primaryTitle == "Ask 1 Agent",
               "wrap up: the ready tab is ticked and the other two say why", rows.joined(separator: " | "))
         sheet.pressPrimary()
-        let file = "docs/handoffs/\(TaskDay(Date(), calendar: .current))-nt-ready.md"
+        let file = "notes/handoffs/\(TaskDay(Date(), calendar: .current))-nt-ready.md"
         let request = HandoffRequest.text(path: file) ?? "none"
-        let typed = await wait(5) { ready.screenTail(12).joined().contains("Write a short handoff for this session to") }
-        check(typed, "wrap up: Ask types the request into the ready tab", ready.screenTail(6).joined())
+        let asked = "Write a short handoff for this session to notes/handoffs/"
+        let typed = await wait(5) { ready.screenTail(12).joined().contains(asked) }
+        check(typed, "wrap up: Ask types the request, naming the picked folder, into the ready tab",
+              ready.screenTail(6).joined())
         let written = await wait(10) { FileManager.default.fileExists(atPath: project + "/" + file) }
         check(written, "wrap up: one Return sent it, and the agent wrote \(file)", request)
         let reviewable = await wait(15) { sheet.model?.canReview == true }
@@ -178,11 +198,27 @@ extension SelfTest {
         check(titles.contains { $0.contains("token=•••") } && !titles.contains { $0.contains(value) },
               "wrap up: the review holds the stored key as •••")
         let todo = project + "/" + TaskSettings.defaultFolder
+        let recordedBefore = await recordedToday(project)
         sheet.pressPrimary()
         let added = await wait(5) { WrapUpSheet.current == nil && todoFiles(todo).count == 2 }
         let bodies: String = todoFiles(todo).compactMap { readText(todo + "/" + $0) }.joined()
         check(added && bodies.contains("token=•••") && !bodies.contains(value),
               "wrap up: Add writes two todo files, the key as •••", todoFiles(todo).joined(separator: ", "))
+        // The record is written off the main thread: give it a moment.
+        var recorded = await recordedToday(project)
+        for _ in 0..<40 where recorded < recordedBefore + 2 {
+            await pause(0.05)
+            recorded = await recordedToday(project)
+        }
+        check(recorded == recordedBefore + 2, "wrap up: Add writes two lines in the posted record",
+              "\(recordedBefore) then \(recorded)")
+    }
+
+    /// The posted record's lines today for `project`, read off the main thread as the store asks.
+    private static func recordedToday(_ project: String) async -> Int {
+        let key = TaskSettings.projectKey(project)
+        let read = Task.detached { () -> Int in TaskRecordStore.shared.today(project: key).count }
+        return await read.value
     }
 
     private static func todoFiles(_ folder: String) -> [String] {
