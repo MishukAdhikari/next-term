@@ -12,14 +12,14 @@ import Testing
         "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "Handoff", "HandoffRequest",
         "MCPTaskDestinations", "MCPTaskTools", "PromptLine", "RemindersAccess", "RepositoryAddress", "ShortcutList",
         "TaskDestination", "TaskDraft", "TaskLink", "TaskPayload", "TaskRecord", "TaskRecordFile", "TaskSettings",
-        "TodoFile", "TodoFolder", "TrackerLines", "TrackerLinesCatalog", "WrapUpModel",
+        "TodayCommits", "TodoFile", "TodoFolder", "TrackerLines", "TrackerLinesCatalog", "UpdateDraft", "WrapUpModel",
     ]
     static let app = [
         "AddTaskDestinationViews", "AddTaskOffer", "AddTaskSheet", "AgentReadinessTab", "ConnectTrackerSheet",
-        "ConnectTrackerSheetActions", "ConnectTrackerSheetBuild", "RemindersSheets", "TaskAgentRequest",
-        "TaskDestinations", "TaskDestinationsView", "TaskOpen", "TaskRecordStore", "TaskReminders", "TaskRemindersFlow",
-        "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow", "TasksMCP", "TasksMenu", "TasksMenuDestinations",
-        "TaskWriter", "WrapUp", "WrapUpSheet",
+        "ConnectTrackerSheetActions", "ConnectTrackerSheetBuild", "PostUpdate", "PostUpdateSheet", "RemindersSheets",
+        "TaskAgentRequest", "TaskDestinations", "TaskDestinationsView", "TaskOpen", "TaskRecordStore", "TaskReminders",
+        "TaskRemindersFlow", "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow", "TasksMCP", "TasksMenu",
+        "TasksMenuDestinations", "TaskWriter", "WrapUp", "WrapUpSheet",
     ]
 
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
