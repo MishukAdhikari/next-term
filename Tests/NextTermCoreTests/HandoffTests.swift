@@ -223,3 +223,32 @@ import Testing
         #expect(handoff.next.map(\.text) == ["a"])
     }
 }
+
+/// The handoff folder is checked again at every read: a folder an agent made into a link after the sheet opened is
+/// never read through.
+@Suite struct HandoffFolderReadTests {
+    @Test func aFolderMadeALinkAfterTheSheetOpenedIsNotReadThrough() throws {
+        let base = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-handoff-dir-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let project = base + "/p"
+        let elsewhere = base + "/elsewhere"
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: elsewhere + "/handoffs", withIntermediateDirectories: true)
+        let text = Data("## Next\n- a\n".utf8)
+        FileManager.default.createFile(atPath: elsewhere + "/handoffs/h.md", contents: text)
+        #expect(HandoffFile.folderIsPlain("docs/handoffs", in: project))
+        try FileManager.default.createSymbolicLink(atPath: project + "/docs", withDestinationPath: elsewhere)
+        #expect(!HandoffFile.folderIsPlain("docs/handoffs", in: project))
+        let linked = HandoffFile.read("docs/handoffs/h.md", folder: "docs/handoffs", in: project, mask: .empty)
+        #expect(linked == .notPlainFile)
+        try FileManager.default.removeItem(atPath: project + "/docs")
+        try FileManager.default.createDirectory(atPath: project + "/docs/handoffs", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: project + "/docs/handoffs/h.md", contents: text)
+        let plain = HandoffFile.read("docs/handoffs/h.md", folder: "docs/handoffs", in: project, mask: .empty)
+        guard case .text(let handoff) = plain else { Issue.record("\(plain)"); return }
+        #expect(handoff.next.map(\.text) == ["a"])
+        // Only a name directly in the folder is read.
+        let other = HandoffFile.read("docs/h.md", folder: "docs/handoffs", in: project, mask: .empty)
+        #expect(other == .notPlainFile)
+    }
+}

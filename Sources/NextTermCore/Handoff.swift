@@ -315,6 +315,22 @@ public enum HandoffFile {
         return (shown.text, shown.cut || goesOn)
     }
 
+    /// Every folder from the project down to `folder` is a plain folder, or not made yet: none is a link. Checked
+    /// again before each read and each Reveal, since an agent can make a folder into a link after the sheet opened.
+    public static func folderIsPlain(_ folder: String, in project: String) -> Bool {
+        TaskSettings.handoffFolder(folder, in: project) == folder
+    }
+
+    /// The handoff at `file`, relative to `project`, read only when it is a name directly in `folder` and that folder
+    /// is still plain; anything else is `notPlainFile`, never read through.
+    public static func read(_ file: String, folder: String, in project: String, mask: SecretMask = .current,
+                            limit: Int = limit) -> Read {
+        let name = (file as NSString).lastPathComponent
+        guard file == folder + "/" + name, folderIsPlain(folder, in: project) else { return .notPlainFile }
+        let url = URL(fileURLWithPath: project, isDirectory: true).appendingPathComponent(file)
+        return read(url, mask: mask, limit: limit)
+    }
+
     static func isLink(_ path: String) -> Bool {
         (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
     }

@@ -32,6 +32,9 @@ final class WrapUpSheet: NSObject, NSTextFieldDelegate {
     private var sending = false
     let destination: TaskDestination
     private var facts = DestinationFacts()
+    /// The review's What's sent text and its stored-key line, filled from the plan Add would use now.
+    private var sentText: NSTextView?
+    private var keyNote: NSTextField?
 
     static func present(over controller: TerminalWindowController) {
         guard let parent = controller.window, shown == nil else { return }
@@ -146,6 +149,8 @@ extension WrapUpSheet {
             view.removeFromSuperview()
         }
         refs = []
+        sentText = nil
+        keyNote = nil
         guard let wrapUp else {
             body.addArrangedSubview(NSTextField(wrappingLabelWithString: problem ?? ""))
             footer.stringValue = ""
@@ -315,7 +320,45 @@ extension WrapUpSheet {
             for task in section.tasks { body.addArrangedSubview(taskRow(task, in: section.id)) }
             body.addArrangedSubview(button("Add Row", #selector(addRow(_:)), section.id))
         }
+        renderSent()
         updateReviewState()
+    }
+
+    /// The stored-key line and What's sent: the exact masked text Add hands over, as the Add Task sheet shows it.
+    private func renderSent() {
+        let note = Self.secondary("A stored key shows as •••, and is sent that way.")
+        body.addArrangedSubview(note)
+        keyNote = note
+        let toggle = NSButton()
+        toggle.setButtonType(.pushOnPushOff)
+        toggle.bezelStyle = .disclosure
+        toggle.title = ""
+        toggle.state = AddTaskDestinationViews.sentOpen ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(toggleSent(_:))
+        toggle.setAccessibilityLabel("What’s sent")
+        let row = NSStackView(views: [toggle, Self.secondary("What’s sent")])
+        row.spacing = 4
+        body.addArrangedSubview(row)
+        sentText = nil
+        guard AddTaskDestinationViews.sentOpen else { return }
+        let scroll = NSTextView.scrollableTextView()
+        let view = scroll.documentView as! NSTextView
+        view.isEditable = false
+        view.isSelectable = true
+        view.isRichText = false
+        view.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        view.setAccessibilityLabel("What’s sent")
+        scroll.borderType = .bezelBorder
+        scroll.heightAnchor.constraint(equalToConstant: 140).isActive = true
+        scroll.widthAnchor.constraint(equalToConstant: 500).isActive = true
+        body.addArrangedSubview(scroll)
+        sentText = view
+    }
+
+    @objc private func toggleSent(_ sender: NSButton) {
+        AddTaskDestinationViews.sentOpen = sender.state == .on
+        render()
     }
 
     /// A task: ticked, its title editable, its day, and where it goes.
@@ -363,33 +406,35 @@ extension WrapUpSheet {
         return scroll
     }
 
-    /// The count on Add, and the line that says where the tasks go, from the plan Add would use now.
+    /// The count on Add, the line that says where the tasks go, What's sent and the stored-key line, from the plan
+    /// Add would use now.
     private func updateReviewState() {
         guard let review else { return }
         primary.title = review.addTitle
+        let all = drafts()
+        keyNote?.isHidden = !all.contains(where: \.masked)
         guard review.canAdd else {
             primary.isEnabled = false
             footer.stringValue = "Tick a task to add it. Nothing is posted until you press Add."
             footer.textColor = .secondaryLabelColor
+            sentText?.string = ""
             return
         }
-        let all = drafts()
-        if opensPages(all.count) {
-            footer.stringValue = sending ? "Sending…" : "Opens \(all.count), \(DestinationPlan.pagesAtOnce) at a time: "
-                + "nothing is created until you press Create there."
-            footer.textColor = .secondaryLabelColor
-            primary.isEnabled = !sending
-            return
-        }
-        let made = plan(all, looking: false)
-        footer.stringValue = sending ? "Sending…" : made.plan.line
-        footer.textColor = made.plan.refused && !sending ? Theme.failed : .secondaryLabelColor
-        primary.isEnabled = made.plan.canAdd && !sending
+        let gate = self.gate(all, looking: false)
+        sentText?.string = gate.sent
+        footer.stringValue = sending ? "Sending…" : gate.line
+        footer.textColor = gate.refused && !sending ? Theme.failed : .secondaryLabelColor
+        primary.isEnabled = gate.canAdd && !sending
     }
 
+    /// The title is held masked; the field shows it masked too, so what is seen is what is sent.
     @objc func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField, let ref = ref(field), let task = ref.task else { return }
         review?.setTitle(ref.section, task, field.stringValue)
+        let section = review?.sections.first { $0.id == ref.section }
+        if let held = section?.tasks.first(where: { $0.id == task })?.title, held != field.stringValue {
+            field.stringValue = held
+        }
         updateReviewState()
     }
 
@@ -421,6 +466,12 @@ extension WrapUpSheet {
     @objc private func reveal(_ sender: NSButton) {
         guard let section = ref(sender)?.section, let wrapUp,
               let file = review?.sections.first(where: { $0.id == section })?.file else { return }
+        // The folder may have been made into a link since it was read: Finder never opens outside the project.
+        guard wrapUp.folderIsPlain else {
+            footer.stringValue = "The handoff folder is a link now, so it isn’t shown."
+            footer.textColor = Theme.failed
+            return
+        }
         TaskOpen.reveal(wrapUp.url(file))
     }
 }
@@ -428,7 +479,19 @@ extension WrapUpSheet {
 extension WrapUpSheet {
     /// The review's ticked tasks, as Add would send them now.
     private func drafts(now: Date = Date()) -> [TaskDraft] {
-        review?.drafts(now: now, calendar: .current, contexts: wrapUp?.contexts ?? [:]) ?? []
+        let contexts: [UUID: TaskContext] = wrapUp?.contexts ?? [:]
+        return review?.drafts(now: now, calendar: .current, contexts: contexts, to: destination.kind) ?? []
+    }
+
+    /// What Add would do with `all` now: the whole plan, and the line, Add's state and What's sent from it. Tasks
+    /// that open in turns follow the first turn's plan, so a refusal shows before Add.
+    private func gate(_ all: [TaskDraft], looking: Bool, now: Date = Date())
+        -> (whole: TaskDestinations.Planned, line: String, canAdd: Bool, refused: Bool, sent: String) {
+        let whole = plan(all, looking: looking, now: now)
+        let turn: [TaskDraft] = Array(all.prefix(DestinationPlan.pagesAtOnce))
+        let first = opensPages(all.count) ? plan(turn, looking: looking, now: now) : whole
+        let gate = WrapUpReview.addGate(destination.kind, count: all.count, whole: whole.plan, firstTurn: first.plan)
+        return (whole, gate.line, gate.canAdd, gate.refused, whole.plan.sent)
     }
 
     /// The agent tab Through your agent types into: the one Send to Agent would use when ready, else the first ready.
@@ -449,14 +512,9 @@ extension WrapUpSheet {
                                      looking: looking)
     }
 
-    /// The destination opens one page or Quick Add per task and these are more than it opens at once: Add asks once,
-    /// then opens them a handful at a time.
+    /// More pages or Quick Add windows than open at once: Add asks once, then opens them a handful at a time.
     private func opensPages(_ count: Int) -> Bool {
-        guard count > DestinationPlan.pagesAtOnce else { return false }
-        switch destination.kind {
-        case .todoist, .omnifocus, .github, .gitlab, .linear, .trello, .azureBoards: return true
-        case .todoFolder, .reminders, .things, .shortcut, .throughAgent: return false
-        }
+        WrapUpReview.opensInTurns(destination.kind, count: count)
     }
 
     /// What only the app knows, read once as the review opens: the apps installed and where Reminders stands.
@@ -477,8 +535,9 @@ extension WrapUpSheet {
         let now = Date()
         let all = drafts(now: now)
         let pages = opensPages(all.count)
-        let whole = plan(all, looking: true, now: now)
-        guard pages || whole.plan.canAdd else { return updateReviewState() }
+        let checked = gate(all, looking: true, now: now)
+        let whole = checked.whole
+        guard checked.canAdd else { return updateReviewState() }
         if let tab = agentChoice?.tab, let why = TaskAgentRequest.refusal(tab, tasks: all.count) {
             footer.stringValue = why
             footer.textColor = Theme.failed

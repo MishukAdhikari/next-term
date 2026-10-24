@@ -48,12 +48,10 @@ final class WrapUp {
         }
     }
 
-    /// The tab works in the project, so a path relative to the project is right in it.
+    /// The tab works in the project's top folder, so the path relative to the project lands where Wrap Up looks.
     private func inside(_ tab: TerminalTab) -> Bool {
         guard tab.remote == nil else { return false }
-        let root = canonicalPath(project)
-        let here = canonicalPath(tab.liveDirectory)
-        return here == root || here.hasPrefix(root + "/")
+        return WrapUpModel.atProjectRoot(tabFolder: tab.liveDirectory, project: project)
     }
 
     /// A file or anything else by that name is in the handoff folder.
@@ -108,11 +106,19 @@ final class WrapUp {
         model.keepWaiting(id, now: Date())
     }
 
-    /// At Review: whatever is still waited for is skipped, and the timer stops.
+    /// At Review: whatever is still waited for is skipped, the timer stops, and every ready handoff is read once more,
+    /// so what the agent rewrote after it was first read is what the review shows.
     func stopWaiting() {
         model.stopWaiting()
         stop()
+        for row in model.rows where row.phase == .ready {
+            guard let file = row.file else { continue }
+            reads[row.id] = HandoffFile.read(file, folder: folder, in: project)
+        }
     }
+
+    /// The handoff folder is still a plain folder in the project, with no link on its way.
+    var folderIsPlain: Bool { HandoffFile.folderIsPlain(folder, in: project) }
 }
 
 extension WrapUp {
@@ -154,6 +160,8 @@ extension WrapUp {
 
     /// The request, then Return a moment later: agents take a paste as a block and only a separate Return sends it.
     /// That Return is Next Term's own line end, so the tab is not marked driven. false when the tab can't take input.
+    /// As with every typed request, the prompt line is not looked at again before the Return: anything the user types
+    /// into that tab in the quarter second between goes with the request.
     private func type(_ request: String, into tab: TerminalTab) -> Bool {
         guard MCPControl.canType(tab), MCPInputLine.refusal(tab) == nil else { return false }
         let typed = tab.view.typeText(request)
@@ -168,6 +176,11 @@ extension WrapUp {
 
     /// Every asked row: its tab and its named file. Only that file counts; another file in the folder is never read.
     private func lookAtFiles(now: Date) {
+        // A folder made into a link since the sheet opened: nothing in it is looked at or read again.
+        guard folderIsPlain else {
+            for row in model.rows where row.isWaiting { model.skip(row.id, because: Self.linkedFolder) }
+            return stop()
+        }
         for row in model.rows where row.isWaiting {
             guard let file = row.file else { continue }
             let url = root.appendingPathComponent(file)
@@ -180,7 +193,7 @@ extension WrapUp {
                                         gone: tab == nil, exited: tab?.exited ?? false, asking: asking, now: now)
             model.look(row.id, look)
             if model.rows.first(where: { $0.id == row.id })?.phase == .ready {
-                reads[row.id] = HandoffFile.read(url)
+                reads[row.id] = HandoffFile.read(file, folder: folder, in: project)
             }
         }
         if !model.isWaiting { stop() }
@@ -188,4 +201,6 @@ extension WrapUp {
 
     /// The handoff at `file`, relative to the project, as a URL.
     func url(_ file: String) -> URL { root.appendingPathComponent(file) }
+
+    static let linkedFolder = "the handoff folder is a link now"
 }

@@ -15,10 +15,17 @@ public struct WrapUpModel: Equatable, Sendable {
         "Each ticked agent is asked to write a handoff to \(folder)/. Nothing is posted until you review it."
     }
 
+    /// The tab works in the project's top folder itself, where the handoff's path relative to the project lands in
+    /// the handoff folder. A subfolder is not enough: the agent would write the path under it instead.
+    public static func atProjectRoot(tabFolder: String, project: String) -> Bool {
+        canonicalPath(tabFolder) == canonicalPath(project)
+    }
+
     /// Why a tab can't be asked.
     public enum Block: Equatable, Sendable {
         case agent(AgentReadiness.Reason)
-        /// The tab works outside the project, so a path relative to the project would be wrong there.
+        /// The tab works somewhere other than the project's top folder, a subfolder included: the agent resolves the
+        /// handoff's path, relative to the project, from its own folder, so the file would land elsewhere.
         case outsideProject
         /// Every name today's handoff could take for this tab is taken.
         case namesUsedUp
@@ -26,7 +33,7 @@ public struct WrapUpModel: Equatable, Sendable {
         public var text: String {
             switch self {
             case .agent(let reason): return reason.text
-            case .outsideProject: return "outside this project"
+            case .outsideProject: return "not in this project’s top folder"
             case .namesUsedUp: return "today’s handoff names are used up"
             }
         }
@@ -204,13 +211,15 @@ extension WrapUpModel {
         }
     }
 
-    /// The file is ready once it is the same size on two looks and the tab is not working; a closed tab works no more.
+    /// The file is ready once it is the same, non-zero size on two looks and the tab is not working; a closed tab works
+    /// no more.
     public mutating func look(_ id: UUID, _ look: Look) {
         guard let index = rows.firstIndex(where: { $0.id == id }), rows[index].isWaiting else { return }
         var row = rows[index]
         let size: Int? = look.exists ? look.size : nil
         let working = look.working && !look.gone && !look.exited
-        let steady = size != nil && size == row.lastSize
+        // An empty file is often made first and written after, so it is never taken as finished.
+        let steady = size != nil && size != 0 && size == row.lastSize
         row.lastSize = size
         if steady && !working {
             row.phase = .ready
@@ -380,13 +389,16 @@ extension WrapUpReview {
     public var canAdd: Bool { addCount > 0 }
     public var addTitle: String { addCount == 1 ? "Add 1 Task" : "Add \(addCount) Tasks" }
 
-    /// The tasks Add hands to the sender, in order: each with its day, its tab's context, and the handoff it came
-    /// from in its notes. Titles were masked as they were made or edited; they are masked once more here.
-    public func drafts(now: Date, calendar: Calendar, contexts: [UUID: TaskContext],
+    /// The tasks Add hands to the sender for a destination of `kind`, in order: each with its day and its tab's
+    /// context, and, for a personal destination only, the handoff it came from in its notes. Titles were masked as
+    /// they were made or edited; they are masked once more here.
+    public func drafts(now: Date, calendar: Calendar, contexts: [UUID: TaskContext], to kind: TaskDestination.Kind,
                        mask: (String) -> String = { SecretMask.current.mask($0) }) -> [TaskDraft] {
         var drafts: [TaskDraft] = []
+        let namesFile = Self.namesHandoff(kind)
         for section in sections {
-            let notes: String = section.file.map { "From " + mask($0) } ?? ""
+            let from: String = section.file.map { "From " + mask($0) } ?? ""
+            let notes: String = namesFile ? from : ""
             for task in section.tasks where task.counts {
                 let title = mask(task.title.trimmingCharacters(in: .whitespacesAndNewlines))
                 let masked = task.masked || title != task.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -396,5 +408,46 @@ extension WrapUpReview {
             }
         }
         return drafts
+    }
+}
+
+extension WrapUpReview {
+    /// A personal destination may name the handoff a task came from. A team page and the agent request get the
+    /// branch only: the file's name holds the tab's title, which says what is on this Mac.
+    public static func namesHandoff(_ kind: TaskDestination.Kind) -> Bool {
+        switch kind {
+        case .todoFolder, .reminders, .things, .shortcut, .todoist, .omnifocus: return true
+        case .github, .gitlab, .linear, .trello, .azureBoards, .throughAgent: return false
+        }
+    }
+
+    /// The destination opens one page or Quick Add per task, and these are more than it opens at once: Add asks
+    /// once, then opens them a handful at a time.
+    public static func opensInTurns(_ kind: TaskDestination.Kind, count: Int) -> Bool {
+        guard count > DestinationPlan.pagesAtOnce else { return false }
+        switch kind {
+        case .todoist, .omnifocus, .github, .gitlab, .linear, .trello, .azureBoards: return true
+        case .todoFolder, .reminders, .things, .shortcut, .throughAgent: return false
+        }
+    }
+
+    /// The footer for tasks that open in turns, with the button the user presses in the app or on the page.
+    public static func turnsLine(_ kind: TaskDestination.Kind, count: Int) -> String {
+        let turn = "\(DestinationPlan.pagesAtOnce) at a time"
+        switch kind {
+        case .todoist, .omnifocus:
+            return "Opens \(count) Quick Add windows, \(turn): nothing is added until you press Add there."
+        default:
+            return "Opens \(count) pages, \(turn): nothing is created until you press Create there."
+        }
+    }
+
+    /// The footer and whether Add is on. Tasks that open in turns follow the first turn's plan, so a refusal that is
+    /// not about the count (no repository set, an app not installed) is said before Add, never after the question.
+    public static func addGate(_ kind: TaskDestination.Kind, count: Int, whole: DestinationPlan,
+                               firstTurn: DestinationPlan) -> (line: String, canAdd: Bool, refused: Bool) {
+        guard opensInTurns(kind, count: count) else { return (whole.line, whole.canAdd, whole.refused) }
+        if firstTurn.refused { return (firstTurn.line, false, true) }
+        return (turnsLine(kind, count: count), true, false)
     }
 }

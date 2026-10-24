@@ -44,7 +44,7 @@ import Testing
         }())
         let model = WrapUpModel([Self.tab(Self.a, "api", .ready, inside: false), Self.tab(Self.b, "srv", remote),
                                  Self.tab(Self.c, "full", .ready, namesLeft: false)])
-        #expect(model.rows.map(\.reason) == ["outside this project", "on a server",
+        #expect(model.rows.map(\.reason) == ["not in this project’s top folder", "on a server",
                                              "today’s handoff names are used up"])
         #expect(model.rows.allSatisfy { !$0.ticked })
         #expect(!model.canAsk)
@@ -192,7 +192,7 @@ import Testing
         #expect(review.addTitle == "Add 3 Tasks")
         let calendar = Calendar(identifier: .gregorian)
         let now = Self.today.start(in: calendar)!.addingTimeInterval(3600)
-        let drafts = review.drafts(now: now, calendar: calendar, contexts: [:])
+        let drafts = review.drafts(now: now, calendar: calendar, contexts: [:], to: .todoFolder)
         #expect(drafts.map(\.title) == ["one", "two", "three"])
         #expect(drafts.allSatisfy { $0.scheduled == .day(TaskDay("2026-10-19")!) })
         #expect(drafts[0].notes == "From docs/handoffs/2026-10-18-api.md")
@@ -243,7 +243,7 @@ import Testing
         var edited = review
         let id = review.sections[0].tasks[0].id
         edited.setTitle(Self.a, id, "rotate \(value) now", mask: { mask.mask($0) })
-        let drafts = edited.drafts(now: Self.start, calendar: .current, contexts: [:])
+        let drafts = edited.drafts(now: Self.start, calendar: .current, contexts: [:], to: .todoFolder)
         let seen = [review.sections[0].raw ?? "", review.sections[0].tasks[0].title,
                     edited.sections[0].tasks[0].title, drafts[0].title, drafts[0].notes]
         #expect(seen.allSatisfy { !$0.contains(value) && !$0.contains("abc123") })
@@ -255,7 +255,103 @@ import Testing
     @Test func eachDraftCarriesItsTabsContext() {
         let review = Self.review("## Next\n- one\n")
         let context = TaskContext(branch: "main", tab: "api", agent: .claude, addedBy: "Wrap Up")
-        let drafts = review.drafts(now: Self.start, calendar: .current, contexts: [Self.a: context])
+        let drafts = review.drafts(now: Self.start, calendar: .current, contexts: [Self.a: context],
+                                   to: .todoFolder)
         #expect(drafts[0].context == context)
+    }
+}
+
+/// What review and Add owe the user before anything leaves: the tab asked works where the path it is given lands,
+/// a team page never learns the tab's title, and a destination that opens pages says its refusal before Add.
+@Suite struct WrapUpSendingTests {
+    @Test func onlyATabInTheProjectsTopFolderCanBeAsked() {
+        #expect(WrapUpModel.atProjectRoot(tabFolder: "/p", project: "/p"))
+        #expect(WrapUpModel.atProjectRoot(tabFolder: "/p/", project: "/p"))
+        // A tab in a subfolder would resolve the project's relative path from its own folder.
+        #expect(!WrapUpModel.atProjectRoot(tabFolder: "/p/api", project: "/p"))
+        #expect(!WrapUpModel.atProjectRoot(tabFolder: "/p2", project: "/p"))
+        #expect(!WrapUpModel.atProjectRoot(tabFolder: "/other", project: "/p"))
+        #expect(!WrapUpModel.atProjectRoot(tabFolder: "/p/../other", project: "/p"))
+    }
+
+    @Test func anEmptyFileIsNeverReady() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var model = WrapUpModel([WrapUpModel.TabFacts(id: WrapUpModelTests.a, title: "api", agent: .claude,
+                                                      verdict: .ready, insideProject: true, namesLeft: true)])
+        model.asked(WrapUpModelTests.a, file: WrapUpModelTests.file, at: now)
+        func look(_ size: Int, _ after: TimeInterval) -> WrapUpModel.Look {
+            WrapUpModel.Look(exists: true, size: size, working: false, gone: false, exited: false, asking: false,
+                             now: now.addingTimeInterval(after))
+        }
+        model.look(WrapUpModelTests.a, look(0, 1))
+        model.look(WrapUpModelTests.a, look(0, 2))
+        #expect(model.rows[0].phase == .writing)
+        model.look(WrapUpModelTests.a, look(30, 3))
+        model.look(WrapUpModelTests.a, look(30, 4))
+        #expect(model.rows[0].phase == .ready)
+    }
+
+    static func review() -> WrapUpReview {
+        let row = WrapUpModelTests.row(.ready)
+        let handoff = Handoff.parse("## Next\n- one\n")
+        return WrapUpReview(rows: [row], reads: [WrapUpModelTests.a: .text(handoff)])
+    }
+
+    @Test func teamPagesAndTheAgentRequestNeverGetTheHandoffsName() {
+        let review = Self.review()
+        let team: [TaskDestination.Kind] = [.github, .gitlab, .linear, .trello, .azureBoards, .throughAgent]
+        let personal: [TaskDestination.Kind] = [.todoFolder, .reminders, .things, .shortcut, .todoist, .omnifocus]
+        for kind in team {
+            let drafts = review.drafts(now: WrapUpModelTests.start, calendar: .current, contexts: [:], to: kind)
+            #expect(drafts[0].notes == "", "\(kind)")
+        }
+        for kind in personal {
+            let drafts = review.drafts(now: WrapUpModelTests.start, calendar: .current, contexts: [:], to: kind)
+            #expect(drafts[0].notes == "From " + WrapUpModelTests.file, "\(kind)")
+        }
+    }
+
+    @Test func pagesOpenInTurnsAndTheFooterSaysWhatToPressThere() {
+        #expect(WrapUpReview.opensInTurns(.github, count: 7))
+        #expect(WrapUpReview.opensInTurns(.todoist, count: 6))
+        #expect(!WrapUpReview.opensInTurns(.github, count: 5))
+        #expect(!WrapUpReview.opensInTurns(.things, count: 9))
+        #expect(!WrapUpReview.opensInTurns(.throughAgent, count: 9))
+        #expect(WrapUpReview.turnsLine(.github, count: 7)
+            == "Opens 7 pages, 5 at a time: nothing is created until you press Create there.")
+        #expect(WrapUpReview.turnsLine(.todoist, count: 7)
+            == "Opens 7 Quick Add windows, 5 at a time: nothing is added until you press Add there.")
+        #expect(WrapUpReview.turnsLine(.omnifocus, count: 6)
+            == "Opens 6 Quick Add windows, 5 at a time: nothing is added until you press Add there.")
+    }
+}
+
+extension WrapUpSendingTests {
+    static func plan(_ count: Int, _ destination: TaskDestination) -> DestinationPlan {
+        let today = TaskDay("2026-10-18")!
+        let rendered: [TaskPayload?] = (0..<count).map { index in
+            let draft = TaskDraft(title: "task \(index)", steps: [])
+            return TaskPayload.render(draft, to: destination, project: "p", today: today, mask: { $0 })
+        }
+        return DestinationPlan.make(rendered: rendered, destination: destination, facts: DestinationFacts(),
+                                    mask: { $0 })
+    }
+
+    @Test func aRefusedPageDestinationSaysWhyBeforeAddEvenPastFiveTasks() {
+        let broken = TaskDestination.github(owner: "o", repo: "")
+        let refused = WrapUpReview.addGate(.github, count: 7, whole: Self.plan(7, broken),
+                                           firstTurn: Self.plan(5, broken))
+        #expect(refused.line == broken.problem)
+        #expect(!refused.canAdd && refused.refused)
+        let fine = TaskDestination.github(owner: "o", repo: "r")
+        let turns = WrapUpReview.addGate(.github, count: 7, whole: Self.plan(7, fine), firstTurn: Self.plan(5, fine))
+        #expect(turns.line == WrapUpReview.turnsLine(.github, count: 7))
+        #expect(turns.canAdd && !turns.refused)
+        let few = WrapUpReview.addGate(.github, count: 3, whole: Self.plan(3, fine), firstTurn: Self.plan(3, fine))
+        #expect(few.line == Self.plan(3, fine).line && few.canAdd)
+        // Not installed is said before Add, whatever the count.
+        let todoist = WrapUpReview.addGate(.todoist, count: 7, whole: Self.plan(7, .todoist),
+                                           firstTurn: Self.plan(5, .todoist))
+        #expect(!todoist.canAdd && todoist.line.contains("isn’t installed"))
     }
 }
