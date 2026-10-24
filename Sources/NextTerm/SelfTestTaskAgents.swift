@@ -1,11 +1,13 @@
 import AppKit
+import CryptoKit
 import NextTermCore
 
 #if DEBUG
 /// Through your agent from the Add Task sheet, with three agent tabs (cat under the name claude, so the tty echoes
 /// what it is given): one done, one working, one with "abc" typed. The rows say which is ready and why the others
 /// aren't; a tab that starts working before Add gets nothing; Add types into the done tab only, with no Return, and
-/// brings it to the front. Called from `destinationSheetChecks`.
+/// brings it to the front. The task holds a stored key, and the typed line holds it as •••. Called from
+/// `destinationSheetChecks`.
 extension SelfTest {
     static func agentSheetChecks(_ c: TerminalWindowController) async {
         let bin = FileManager.default.temporaryDirectory.appendingPathComponent("nt-task-agents-\(UUID().uuidString)")
@@ -49,12 +51,18 @@ extension SelfTest {
     private static func agentRowChecks(_ c: TerminalWindowController, done: TerminalTab, busy: TerminalTab,
                                        typed: TerminalTab) async {
         let task = "Rename the build step"
+        // A stored key in the task: the typed line and What's sent hold it as •••, never its value.
+        let savedMask = SecretMask.current
+        defer { SecretMask.current = savedMask }
+        let value = "nt-agent-key-" + UUID().uuidString.prefix(12)
+        let key = SymmetricKey(size: .bits256)
+        SecretMask.current = SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
         let busyNow = await setWorking(busy, true)
         typed.view.send(txt: "abc")
         let hasText = await wait(3) { AgentReadiness.shared.check(typed) == .notReady(.hasText) }
         check(busyNow && hasText, "destinations: one agent tab works and one has text in its prompt",
               "\(busy.status.state) \(AgentReadiness.shared.check(typed))")
-        guard let sheet = await destinationSheet(c, task) else { return }
+        guard let sheet = await destinationSheet(c, task + " token=" + value) else { return }
         sheet.pickDestination(.throughAgent(tracker: "Linear"))
         let rows = sheet.agentTitles
         let expected = ["“nt-done” (Claude Code)", "“nt-busy” (Claude Code) · working",
@@ -78,11 +86,15 @@ extension SelfTest {
               sheet.placeText)
         check(!sheet.sentText.contains("\n") && sheet.sentText.contains(" / \(task)"),
               "destinations: with no bracketed paste, What's sent is the request on one line", sheet.sentText)
+        check(sheet.sentText.contains("token=•••") && !sheet.sentText.contains(value),
+              "destinations: What's sent for the agent holds the key as •••")
         let before = postedToday()
         sheet.pressAdd()
         let typedIn = await wait(5) { AddTaskSheet.current == nil && screen(done).contains(task) }
         check(typedIn && c.activeTab === done, "destinations: Add types the request into the done tab and brings it to the front",
               screen(done))
+        check(screen(done).contains("token=•••") && !screen(done).contains(value),
+              "destinations: the line typed into the agent tab holds the key as •••, never its value")
         // A Return would have sent the line to the agent and emptied its prompt; the request still sits there.
         check(AgentReadiness.shared.check(done) == .notReady(.hasText), "destinations: no Return goes in with the request")
         check(!screen(busy).contains(task) && !screen(typed).contains(task),

@@ -3,8 +3,10 @@ import Testing
 
 /// The Tasks sources make no network request and log nothing: a task's text leaves the Mac only through an app, a page
 /// the user submits or a line typed for the user to send, and never lands in a log. Each file in the list is read with
-/// its comments stripped (string literals kept), and any call below fails with the file and line. Opening a link or an
-/// app goes through TaskOpen.swift only, and a command starts only in TaskShortcut.swift.
+/// its comments stripped (string literals and regex literals kept), and any call below fails with the file and line.
+/// Opening a link or an app, by any API, goes through TaskOpen.swift only; a command starts, by any API, only in
+/// TaskShortcut.swift; and a failure message with text in it fails too, since it lands in the crash report. The
+/// matcher reads names, not meaning: a call it has no rule for passes, so a new way to reach out gets a rule here.
 @Suite struct TaskSourcesTests {
     static let core = [
         "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "MCPTaskDestinations",
@@ -84,6 +86,62 @@ import Testing
         #expect(SourceScan.hits(file: "TasksMenu.swift", text: reveal).isEmpty)
     }
 
+    @Test func everyOtherWayToStartACommandIsAllowedOnlyWhereProcessIs() {
+        let calls = ["let p = Process.launchedProcess(launchPath: x, arguments: [])",
+                     "posix_spawn(&pid, x, nil, nil, a, e)",
+                     "let s = NSAppleScript(source: x)", "let t = try NSUserAppleScriptTask(url: x)",
+                     "let f = popen(x, \"r\")", "_ = system(x)", "execv(x, a)"]
+        for call in calls {
+            #expect(SourceScan.hits(file: "TaskReminders.swift", text: call).count == 1, "\(call)")
+            #expect(SourceScan.hits(file: "TaskShortcut.swift", text: call).isEmpty, "\(call)")
+        }
+        let named = ["let fileSystem(x)", "case system(Int32)", "throw Failure.system(errno)"]
+        for line in named {
+            #expect(SourceScan.hits(file: "TaskReminders.swift", text: line).isEmpty, "\(line)")
+        }
+    }
+
+    @Test func aLinkOpenedAnyOtherWayFailsOutsideTheGate() {
+        let calls = ["@Environment(\\.openURL) var open", "Link(destination: url) { Text(x) }",
+                     "WebLinks.open(url, from: window)"]
+        for call in calls {
+            #expect(SourceScan.hits(file: "TasksMenu.swift", text: call).count == 1, "\(call)")
+        }
+        #expect(SourceScan.hits(file: "TaskOpen.swift", text: "WebLinks.open(url, from: window)").isEmpty)
+    }
+
+    @Test func taskTextWrittenToTheConsoleOrACrashReportFails() {
+        let calls = ["FileHandle.standardOutput.write(d)", "fputs(title, stderr)", "fwrite(p, 1, n, stdout)",
+                     "fatalError(\"bad \\(title)\")", "preconditionFailure(\"\\(task.title)\")",
+                     "assertionFailure(\"x \\(t)\")"]
+        for call in calls {
+            #expect(SourceScan.hits(file: "TaskPayload.swift", text: call).count == 1, "\(call)")
+        }
+        // A fixed message says nothing of the task.
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: "fatalError(\"not used\")").isEmpty)
+    }
+
+    @Test func aRemoteReadFailsAndAFileReadIsAllowedOnlyWhereTheShortcutRuns() {
+        let calls = ["let c = NSURLConnection(request: r, delegate: nil)", "let d = try Data(contentsOf: remote)",
+                     "let d = NSData(contentsOf: remote)"]
+        for call in calls {
+            #expect(SourceScan.hits(file: "TaskPayload.swift", text: call).count == 1, "\(call)")
+        }
+        #expect(SourceScan.hits(file: "TaskShortcut.swift", text: "read(try? Data(contentsOf: outputURL))").isEmpty)
+        #expect(SourceScan.hits(file: "TaskRecordFile.swift", text: "data.append(contentsOf: buffer)").isEmpty)
+    }
+
+    @Test func aRegexLiteralHoldingTwoSlashesHidesNothingAfterIt() {
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: "let r = /a\\//; print(x)").count == 1)
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: "let r = #/a//b/#; print(x)").count == 1)
+        let scheme = "if x.contains(/https?:\\/\\//) { print(x) }"
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: scheme).count == 1)
+        // Division is not a regex: the comment after it still goes.
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: "let h = w / 2 // print(x)").isEmpty)
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: "let h = (w) / 2 // print(x)").isEmpty)
+        #expect(SourceScan.hits(file: "TaskPayload.swift", text: "let h = w/2 // print(x) /").isEmpty)
+    }
+
     @Test func aListedFileThatIsGoneFailsByName() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nt-sources-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -111,20 +169,45 @@ enum SourceScan {
         let network: [Rule] = [
             word("URLSession"), word("URLRequest"), word("NWConnection"), word("NWListener"), word("NWPathMonitor"),
             Rule(name: "CFStream", pattern: wordStart + "CFStream", onlyIn: nil), word("getStreamsToHost"),
-            word("WKWebView"), literal("Data(contentsOf: URL(string"), literal("String(contentsOf:"),
-            word("import Network"), word("import WebKit"), word("curl"), word("wget"),
+            word("WKWebView"), literal("contentsOf: URL(string"), literal("String(contentsOf:"),
+            literal("NSData(contentsOf:"), word("NSURLConnection"), word("import Network"), word("import WebKit"),
+            word("curl"), word("wget"),
         ]
         let logging: [Rule] = [
             literal("print("), literal("debugPrint("), literal("dump("), literal("NSLog("), literal("os_log("),
             literal("Logger("), word("import os"), word("OSLog"), literal("FileHandle.standardError"),
-            literal("DebugLog."),
+            literal("FileHandle.standardOutput"), literal("fputs("), literal("fwrite("), literal("DebugLog."),
+            // A failure message with text in it lands in the crash report.
+            Rule(name: "failure with text",
+                 pattern: wordStart + "(?:fatalError|preconditionFailure|assertionFailure)\\([^\\n]*\\\\\\(",
+                 onlyIn: nil),
         ]
-        let gated: [Rule] = [
-            Rule(name: "NSWorkspace", pattern: wordStart + "NSWorkspace" + wordEnd, onlyIn: "TaskOpen.swift"),
-            Rule(name: "Process(", pattern: wordStart + "Process\\(", onlyIn: "TaskShortcut.swift"),
-        ]
-        return network + logging + gated
+        return network + logging + opening + commands
     }()
+
+    /// Opening a link or an app: in TaskOpen.swift only.
+    static let opening: [Rule] = [
+        Rule(name: "NSWorkspace", pattern: wordStart + "NSWorkspace" + wordEnd, onlyIn: "TaskOpen.swift"),
+        gated(literal("WebLinks."), in: "TaskOpen.swift"), gated(word("openURL"), in: "TaskOpen.swift"),
+        gated(literal("Link(destination:"), in: "TaskOpen.swift"),
+    ]
+
+    /// Starting a command, or reading a file a command wrote: in TaskShortcut.swift only.
+    static let commands: [Rule] = [
+        Rule(name: "Process(", pattern: wordStart + "Process\\(", onlyIn: "TaskShortcut.swift"),
+        gated(literal("Process.launchedProcess("), in: "TaskShortcut.swift"),
+        gated(word("posix_spawn"), in: "TaskShortcut.swift"), gated(word("NSAppleScript"), in: "TaskShortcut.swift"),
+        gated(word("NSUserAppleScriptTask"), in: "TaskShortcut.swift"),
+        gated(literal("popen("), in: "TaskShortcut.swift"),
+        // The C call only: an enum case named system, or `.system(`, is not it.
+        Rule(name: "system(", pattern: "(?<![A-Za-z0-9_.])(?<!case )system\\(", onlyIn: "TaskShortcut.swift"),
+        gated(literal("execv"), in: "TaskShortcut.swift"),
+        gated(literal("Data(contentsOf:"), in: "TaskShortcut.swift"),
+    ]
+
+    static func gated(_ rule: Rule, in file: String) -> Rule {
+        Rule(name: rule.name, pattern: rule.pattern, onlyIn: file)
+    }
 
     static func word(_ text: String) -> Rule {
         Rule(name: text, pattern: wordStart + NSRegularExpression.escapedPattern(for: text) + wordEnd, onlyIn: nil)
@@ -198,9 +281,15 @@ extension SourceScan {
                 } else if c == "/", at(1) == "*" {
                     state = .block(1)
                     blank(2)
+                } else if c == "/", let length = regexLength(chars, at: i, after: out) {
+                    keep(length)
                 } else if c == "#" || c == "\"" {
                     var hashes = 0
                     while at(hashes) == "#" { hashes += 1 }
+                    if hashes > 0, at(hashes) == "/" {
+                        keep(extendedRegexLength(chars, at: i, hashes: hashes))
+                        continue
+                    }
                     guard at(hashes) == "\"" else { keep(1); continue }
                     let triple = at(hashes + 1) == "\"" && at(hashes + 2) == "\""
                     state = .string(hashes: hashes, triple: triple)
@@ -241,5 +330,39 @@ extension SourceScan {
             }
         }
         return String(out)
+    }
+
+    /// The characters a bare regex literal starting at `start` takes up, or nil when the slash is division: it must
+    /// follow an opening bracket, an operator or the line's start, not begin with a space, and close on its line. A
+    /// regex holding `//` is then kept whole and can't start a comment.
+    static func regexLength(_ chars: [Character], at start: Int, after out: [Character]) -> Int? {
+        let before: Character? = out.last { (c: Character) -> Bool in c != " " && c != "\t" }
+        let opener: Set<Character> = ["(", "[", "{", "=", ",", ":", "!", "&", "|", "?", ";", "\n"]
+        if let before, !opener.contains(before) { return nil }
+        guard start + 1 < chars.count, chars[start + 1] != " " else { return nil }
+        var j = start + 1
+        while j < chars.count, chars[j] != "\n" {
+            if chars[j] == "\\" {
+                j += 2
+                continue
+            }
+            if chars[j] == "/" { return j - start + 1 }
+            j += 1
+        }
+        return nil
+    }
+
+    /// The characters an extended regex literal `#/…/#` starting at `start` takes up, to its closing slash and hashes
+    /// (to the end of the text when it never closes).
+    static func extendedRegexLength(_ chars: [Character], at start: Int, hashes: Int) -> Int {
+        var j = start + hashes + 1
+        while j < chars.count {
+            let closes: Bool = chars[j] == "/" && (1...hashes).allSatisfy { (k: Int) -> Bool in
+                j + k < chars.count && chars[j + k] == "#"
+            }
+            if closes { return j + hashes + 1 - start }
+            j += 1
+        }
+        return chars.count - start
     }
 }

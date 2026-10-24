@@ -12,7 +12,8 @@ key for any of them.
 ## Choosing where
 
 - **Settings › Tasks**, under Destinations: the default, this project's destination, and each destination's
-  details (a Reminders list, a repository, a Linear team key…). Nothing changes until Save.
+  details (a Reminders list, a repository, a Linear team key…). A destination with nothing to fill (the todo folder,
+  Todoist, OmniFocus, Trello, and Linear with no team) saves as soon as it’s chosen; details you type save on Save.
 - **Tasks › Send Tasks To**: the front project's destination, ticked, changed in one click. In a window with no
   project it shows and changes the default. A destination that can't be chosen now stays in the list, greyed, with
   why (not installed, not allowed in Privacy & Security, details missing).

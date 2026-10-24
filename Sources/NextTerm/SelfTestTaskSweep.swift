@@ -11,6 +11,25 @@ import NextTermCore
 extension SelfTest {
     static func destinationChecks(_ c: TerminalWindowController, folder: URL) async {
         let savedMask = SecretMask.current
+        let filesBefore = todoFiles(folder)
+        await sweep(c, folder: folder)
+        // Read after the sweep has returned, so this checks what its own cleanup left behind.
+        let real = !TaskOpen.recordsOnly && TaskOpen.opened.isEmpty && TaskOpen.fakeInstalled == nil
+        let fakesGone = TaskReminders.fake == nil && TaskShortcut.fake == nil && TaskShortcut.fakeLimit == nil
+        let sheetsReal = RemindersSheets.fakeAnswer == nil && RemindersSheets.shown.isEmpty
+        let closed = AddTaskSheet.current == nil && !AddTaskDestinationViews.sentOpen
+        check(real && fakesGone && sheetsReal && closed,
+              "destinations: after the part, the openers, Reminders and the shortcut runner are the real ones again")
+        check(SecretMask.current === savedMask,
+              "destinations: after the part, the stored keys' mask is the one it found")
+        let left = todoFiles(folder).subtracting(filesBefore)
+        check(left.isEmpty, "destinations: after the part, the todo folder holds no file of its own",
+              left.sorted().joined(separator: ", "))
+    }
+
+    /// The fakes on, every destination once, then every fake off and the mask put back, even when a step returns early.
+    private static func sweep(_ c: TerminalWindowController, folder: URL) async {
+        let savedMask = SecretMask.current
         let value = "nt-sweep-key-" + UUID().uuidString.prefix(12)
         let key = SymmetricKey(size: .bits256)
         SecretMask.current = SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
@@ -33,17 +52,12 @@ extension SelfTest {
         let tag = String(UUID().uuidString.prefix(8))
         await sweepChecks(c, folder: folder, value: value, tag: tag, store: store, runner: runner)
         await notInstalledChecks(c)
-        endSweep()
-        let real = !TaskOpen.recordsOnly && TaskOpen.opened.isEmpty && TaskOpen.fakeInstalled == nil
-        let fakesGone = TaskReminders.fake == nil && TaskShortcut.fake == nil && TaskShortcut.fakeLimit == nil
-        check(real && fakesGone && RemindersSheets.fakeAnswer == nil,
-              "destinations: after the part, the openers, Reminders and the shortcut runner are the real ones again")
     }
 
     /// The shortcut the fake runner lists, by a made-up identifier.
     private static let sweepShortcut = "0A1B2C3D-4E5F-4061-8273-94A5B6C7D8E9"
 
-    /// Every fake off, the sheet closed and the notice gone. Safe to call twice.
+    /// Every fake off, the sheet closed and the notice gone.
     private static func endSweep() {
         AddTaskSheet.current?.pressCancel()
         TaskOpen.recordsOnly = false
@@ -111,7 +125,7 @@ extension SelfTest {
         sweepReminderChecks(store, before: remindersBefore, value: value)
         sweepShortcutChecks(runner, value: value)
         sweepLinkChecks(value: value)
-        sweepRecordChecks(tag: tag, value: value)
+        await sweepRecordChecks(tag: tag, value: value)
     }
 
     private static func sweepReminderChecks(_ store: FakeRemindersStore, before: Int, value: String) {
@@ -153,8 +167,10 @@ extension SelfTest {
     }
 
     /// One posted line per destination but the todo folder, each with the masked title.
-    private static func sweepRecordChecks(tag: String, value: String) {
-        let entries: [TaskRecord.Entry] = TaskRecordStore.shared.today(project: nil)
+    private static func sweepRecordChecks(tag: String, value: String) async {
+        // The store reads its file on its own queue; that read stays off the main thread.
+        let read = Task.detached { () -> [TaskRecord.Entry] in TaskRecordStore.shared.today(project: nil) }
+        let entries: [TaskRecord.Entry] = await read.value
         let mine = entries.filter { $0.title.contains(tag) }
         let kinds: [TaskDestination.Kind] = mine.map(\.kind)
         let expected: [TaskDestination.Kind] = sweepDestinations.map(\.kind).filter { $0 != .todoFolder }
