@@ -44,6 +44,7 @@ extension SelfTest {
         await remindersChecks(c)
         await shortcutChecks()
         await destinationSheetChecks(c)
+        await destinationChecks(c, folder: folder)
         await sendTasksToChecks(c, other: given)
         await addTaskDestinationChecks(c, proj: proj, folder: folder)
         await connectTrackerChecks(c)
@@ -55,6 +56,7 @@ extension SelfTest {
         note("shortcut: skipped in a release build; its checks run in a debug build")
         // Its openers record only in a debug build, so a release build never opens a page or an app.
         note("destinations: skipped in a release build; its checks run in a debug build")
+        note("every destination: skipped in a release build; its checks run in a debug build")
         note("send to: skipped in a release build; its checks run in a debug build")
         note("add_task destinations: skipped in a release build; its checks run in a debug build")
         // Its page links and PATH record only in a debug build, so a release build never opens a page.

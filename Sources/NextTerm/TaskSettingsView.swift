@@ -235,7 +235,8 @@ final class TaskSettingsView: NSView, NSTextFieldDelegate {
         views.first?.destinations.focus(kind: kind, scope: scope)
     }
 
-    @objc private func openFormat() { NSWorkspace.shared.open(Self.docsURL) }
+    /// The format page opens through the task links' gate, so it records instead during the self-test.
+    @objc private func openFormat() { TaskOpen.openPage(Self.docsURL, from: window) }
 }
 
 /// The scroll view's content, laid out from the top.

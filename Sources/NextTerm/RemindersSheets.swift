@@ -36,7 +36,7 @@ enum RemindersSheets {
         }
         present(alert, in: window) { response in
             guard settings, response == .alertFirstButtonReturn else { return }
-            NSWorkspace.shared.open(RemindersAccess.privacySettings)
+            TaskOpen.openSettings(RemindersAccess.privacySettings)
         }
     }
 
