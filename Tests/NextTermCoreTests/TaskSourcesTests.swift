@@ -9,10 +9,10 @@ import Testing
 /// matcher reads names, not meaning: a call it has no rule for passes, so a new way to reach out gets a rule here.
 @Suite struct TaskSourcesTests {
     static let core = [
-        "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "MCPTaskDestinations",
-        "MCPTaskTools", "PromptLine", "RemindersAccess", "RepositoryAddress", "ShortcutList", "TaskDestination",
-        "TaskDraft", "TaskLink", "TaskPayload", "TaskRecord", "TaskRecordFile", "TaskSettings", "TodoFile", "TodoFolder",
-        "TrackerLines", "TrackerLinesCatalog",
+        "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "Handoff", "HandoffRequest",
+        "MCPTaskDestinations", "MCPTaskTools", "PromptLine", "RemindersAccess", "RepositoryAddress", "ShortcutList",
+        "TaskDestination", "TaskDraft", "TaskLink", "TaskPayload", "TaskRecord", "TaskRecordFile", "TaskSettings",
+        "TodoFile", "TodoFolder", "TrackerLines", "TrackerLinesCatalog",
     ]
     static let app = [
         "AddTaskDestinationViews", "AddTaskOffer", "AddTaskSheet", "AgentReadinessTab", "ConnectTrackerSheet",

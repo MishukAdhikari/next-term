@@ -139,6 +139,39 @@ public struct TaskSettings: Equatable, Sendable {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Where Wrap Up asks agents to write handoffs when the project names no folder of its own.
+    public static let defaultHandoffFolder = "docs/handoffs"
+
+    /// The handoff folder for `project`, relative to it: the project's own setting when it can be used, else
+    /// `docs/handoffs`. A setting that can't is ignored, never followed, so an agent is never asked to write outside
+    /// its working folder.
+    public func handoffFolder(for project: String) -> String {
+        let own = projects[Self.projectKey(project)]?.handoffFolder
+        return own.flatMap { Self.handoffFolder($0, in: project) } ?? Self.defaultHandoffFolder
+    }
+
+    /// `setting` as a handoff folder in `project`, written plainly (`notes/handoffs`), or nil when it can't be one:
+    /// empty, absolute, leaving the project with `..`, in git's own folder, a file, or passing through a linked
+    /// folder anywhere on its way, even one that points back inside, since the agent writes where the path says.
+    public static func handoffFolder(_ setting: String, in project: String) -> String? {
+        let folder = setting.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !folder.isEmpty, !isAbsolute(folder), TodoFolder.problem(with: folder) == nil else { return nil }
+        let root = canonicalPath(project)
+        guard FileManager.default.fileExists(atPath: root),
+              let path = TodoFolder.lexical(root, folder), path.hasPrefix(root + "/") else { return nil }
+        let relative = String(path.dropFirst(root.count + 1))
+        var walked = root
+        for part in relative.split(separator: "/") {
+            walked += "/" + part
+            let attributes = try? FileManager.default.attributesOfItem(atPath: walked)
+            guard let kind = attributes?[.type] as? FileAttributeType else {
+                break // Not there yet: the agent makes it.
+            }
+            guard kind == .typeDirectory else { return nil }
+        }
+        return relative
+    }
+
     /// One folder for every project (`/…` or `~/…`), not a path in each.
     public var isShared: Bool { Self.isAbsolute(folder) }
 
