@@ -293,8 +293,8 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         place.textColor = Theme.failed
     }
 
-    /// "Tomorrow, Sat 19 Oct" for the line; nil for No Date.
-    private static func dayWords(_ scheduled: TaskDraft.Scheduled, choice: Choice) -> String? {
+    /// "Tomorrow, Sat 19 Oct" for the line; nil for No Date. Wrap Up's review says the day the same way.
+    static func dayWords(_ scheduled: TaskDraft.Scheduled, choice: Choice) -> String? {
         guard case .day = scheduled else { return nil }
         return describe(scheduled, choice: choice)
     }

@@ -72,6 +72,15 @@ enum TaskOpen {
         NSWorkspace.shared.open(url)
     }
 
+    /// Selects a file of the user's project in Finder, on the user's click; nothing of a task opens. Recorded instead
+    /// during the self-test.
+    static func reveal(_ file: URL) {
+        #if DEBUG
+        if recordsOnly { return opened.append(file) }
+        #endif
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
     /// The app is installed: the app that would open its links is the vendor's own. Nothing is launched to ask. A page
     /// needs no app.
     static func installed(_ kind: TaskLink.Kind) -> Bool {

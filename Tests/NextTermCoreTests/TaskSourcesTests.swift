@@ -12,14 +12,14 @@ import Testing
         "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "Handoff", "HandoffRequest",
         "MCPTaskDestinations", "MCPTaskTools", "PromptLine", "RemindersAccess", "RepositoryAddress", "ShortcutList",
         "TaskDestination", "TaskDraft", "TaskLink", "TaskPayload", "TaskRecord", "TaskRecordFile", "TaskSettings",
-        "TodoFile", "TodoFolder", "TrackerLines", "TrackerLinesCatalog",
+        "TodoFile", "TodoFolder", "TrackerLines", "TrackerLinesCatalog", "WrapUpModel",
     ]
     static let app = [
         "AddTaskDestinationViews", "AddTaskOffer", "AddTaskSheet", "AgentReadinessTab", "ConnectTrackerSheet",
         "ConnectTrackerSheetActions", "ConnectTrackerSheetBuild", "RemindersSheets", "TaskAgentRequest",
         "TaskDestinations", "TaskDestinationsView", "TaskOpen", "TaskRecordStore", "TaskReminders", "TaskRemindersFlow",
         "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow", "TasksMCP", "TasksMenu", "TasksMenuDestinations",
-        "TaskWriter",
+        "TaskWriter", "WrapUp", "WrapUpSheet",
     ]
 
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
