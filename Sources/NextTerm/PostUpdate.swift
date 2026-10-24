@@ -121,7 +121,9 @@ extension PostUpdate {
         if UpdateDraft.isTooLong(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return tooLong }
         let title = SecretMask.current.mask(tab.title)
         guard tab.remote == nil else { return "“\(title)” is on a server. Nothing was typed." }
-        guard let request = UpdateDraft.request(text: text, to: place) else { return "Say where to post it." }
+        // Where to post is typed too, so a key pasted there is masked like the draft.
+        let masked = SecretMask.current.mask(place)
+        guard let request = UpdateDraft.request(text: text, to: masked) else { return "Say where to post it." }
         return TaskAgentRequest.type(request, tasks: 1, into: tab, in: controller)
     }
 

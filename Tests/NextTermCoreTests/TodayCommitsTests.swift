@@ -27,7 +27,10 @@ import Testing
         #expect(arguments.contains("--all"))
         #expect(arguments.contains("--no-merges"))
         #expect(arguments.contains("--since=2026-10-18T00:00:00+06:00"))
-        #expect(arguments.contains("--author=dev@example.com"))
+        // The whole address in its angle brackets: olddev@example.com or dev@example.com.au is someone else.
+        #expect(arguments.contains("--author=<dev@example.com>"))
+        #expect(arguments.contains("--fixed-strings"))
+        #expect(arguments.contains("--regexp-ignore-case"))
         #expect(arguments.contains("--format=%s"))
         let count = try #require(arguments.firstIndex(of: "-n"))
         #expect(arguments[count + 1] == "200")
@@ -102,17 +105,22 @@ import Testing
         sh("worktree", "add", "-q", "-b", "fix", linked)
         sh("commit", "-q", "--allow-empty", "-m", "Worktree work", in: linked)
         sh("commit", "-q", "--allow-empty", "-m", "Someone else", in: linked, email: "other@example.com")
+        // Addresses that hold the user's inside them belong to other people.
+        sh("commit", "-q", "--allow-empty", "-m", "Old dev", in: linked, email: "olddev@example.com")
+        sh("commit", "-q", "--allow-empty", "-m", "Other country", in: linked, email: "dev@example.com.au")
+        // The same address in other letter case is still the user.
+        sh("commit", "-q", "--allow-empty", "-m", "Shouted work", in: linked, email: "DEV@Example.com")
         // A stash is made of commits by the user today too ("index on fix: …"): none of them is work done.
         try "draft\n".write(toFile: linked + "/notes.txt", atomically: true, encoding: .utf8)
         sh("add", "notes.txt", in: linked)
         sh("stash", "-q", in: linked)
         let before = GitRunner.runs(in: linked)
         let outcome = TodayCommits.read(project: linked, git: git, now: Date(), calendar: .current, mask: { $0 })
-        #expect(Set(outcome.subjects) == ["Main work", "Worktree work"])
+        #expect(Set(outcome.subjects) == ["Main work", "Worktree work", "Shouted work"])
         #expect(GitRunner.runs(in: linked) == before)
         #expect(GitRunner.runs(in: canonicalPath(main)) > 0)
         let fromMain = TodayCommits.read(project: main, git: git, now: Date(), calendar: .current, mask: { $0 })
-        #expect(Set(fromMain.subjects) == ["Main work", "Worktree work"])
+        #expect(Set(fromMain.subjects) == ["Main work", "Worktree work", "Shouted work"])
         // An empty email in the project's own settings means no commit lines, never every author's.
         sh("config", "user.email", "")
         let none = TodayCommits.read(project: main, git: git, now: Date(), calendar: .current, mask: { $0 })

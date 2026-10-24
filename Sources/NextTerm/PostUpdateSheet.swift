@@ -161,11 +161,9 @@ extension PostUpdateSheet {
             button.bezelStyle = .rounded
         }
         cancelButton.keyEquivalent = "\u{1b}"
-        // Return is a new line in the draft: the default button takes ⌘Return, as Add Task's does.
-        for button in [copyButton, sendButton] {
-            button.keyEquivalent = "\r"
-            button.keyEquivalentModifierMask = .command
-        }
+        // Return is a new line in the draft: the default button takes ⌘Return, as Add Task's does. Only the button of
+        // the step shown holds it (render sets it), so a hidden Copy never takes the key from Send.
+        for button in [copyButton, sendButton] { button.keyEquivalentModifierMask = .command }
         let views: [NSView] = [startOver, backButton, NSView(), cancelButton, saveButton, sendStepButton, copyButton,
                                sendButton]
         let row = NSStackView(views: views)
@@ -181,6 +179,8 @@ extension PostUpdateSheet {
         textView.isEditable = ready && editing
         for button in [startOver, saveButton, sendStepButton, copyButton] { button.isHidden = !editing }
         for button in [backButton, sendButton] { button.isHidden = editing }
+        copyButton.keyEquivalent = editing ? "\r" : ""
+        sendButton.keyEquivalent = editing ? "" : "\r"
         sendBox.isHidden = editing
         startOver.isEnabled = ready
         for button in [saveButton, sendStepButton, copyButton] { button.isEnabled = ready && hasText }
@@ -204,6 +204,9 @@ extension PostUpdateSheet {
             sourceLine.stringValue = "This window has no project: Post Update reads today’s work in a project."
             return render()
         }
+        // Until the sources return the text is read-only, so nothing typed meanwhile is lost to the new draft.
+        draft = nil
+        render()
         PostUpdate.gather(project: project) { [weak self] draft in
             guard let self else { return }
             self.fill(draft)
@@ -365,7 +368,9 @@ extension PostUpdateSheet {
         }
         let leaving = leavingText()
         if let why = TaskAgentRequest.refusal(tab, tasks: 1) { return say(why, leaving.note) }
-        let where_ = place.stringValue
+        let where_ = SecretMask.current.mask(place.stringValue)
+        let placeMasked = where_ != place.stringValue
+        let note: String? = leaving.note ?? (placeMasked ? Self.keyReplaced : nil)
         let notice = controller.window
         close()
         if let why = PostUpdate.send(leaving.text, to: where_, into: tab, in: controller) {
@@ -373,6 +378,6 @@ extension PostUpdateSheet {
         }
         let name = SecretMask.current.mask(tab.title)
         let line = "Typed into “\(name)”. Press Return there to send it."
-        GitToast.show([line, leaving.note].compactMap { $0 }.joined(separator: " "), in: notice)
+        GitToast.show([line, note].compactMap { $0 }.joined(separator: " "), in: notice)
     }
 }

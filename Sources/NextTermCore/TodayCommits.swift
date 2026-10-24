@@ -51,7 +51,11 @@ public enum TodayCommits {
         let time = formatter.string(from: since)
         // An exclude applies to the --all after it.
         let refs: [String] = ["--exclude=refs/stash", "--exclude=refs/notes/*", "--all"]
-        let limits: [String] = ["--no-merges", "--since=" + time, "--author=" + email, "--fixed-strings"]
+        // The whole address in its angle brackets, so olddev@example.com or dev@example.com.au (someone else) never
+        // matches; in any letter case, as mail addresses are written.
+        let author: String = "--author=<" + email + ">"
+        let match: [String] = [author, "--fixed-strings", "--regexp-ignore-case"]
+        let limits: [String] = ["--no-merges", "--since=" + time] + match
         let shape: [String] = ["--format=%s", "-n", String(asked)]
         return ["log"] + refs + limits + shape
     }
