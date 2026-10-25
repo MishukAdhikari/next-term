@@ -105,6 +105,8 @@ enum MCPWriteControl {
     struct Ask {
         let title: String
         let details: String
+        /// The approve button's title: "Allow" for the remote door's own asks (R59).
+        var approveTitle = "Approve"
     }
 
     /// Runs `change` once the change is approved: at once under a grant, after Approve on the Mac
@@ -122,7 +124,7 @@ enum MCPWriteControl {
         let asking = Asking(asker: context.asker)
         pending = asking
         let request = AgentApprovalWindow.Request(title: ask.title, requester: context.who, agentWords: context.reason, details: ask.details,
-                                                  approveTitle: "Approve", stopTitle: "Decline and Stop Asking")
+                                                  approveTitle: ask.approveTitle, stopTitle: "Decline and Stop Asking")
         let window = AgentApprovalWindow(request, approve: { window in
             guard !asking.answered else { return }
             asking.answered = true

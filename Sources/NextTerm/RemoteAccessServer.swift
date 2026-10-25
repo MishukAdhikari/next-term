@@ -623,15 +623,105 @@ final class RemoteAccessServer: @unchecked Sendable { // connections live on `qu
             calls.finish(callID, refused: .invalidParams(text))
             return
         }
-        // U14 adds here, for a control call: one fresh screen read, the tab checks the options ask for, and Allow
-        // on the Mac while "Ask on this Mac before changes" is on. Its window must close with the grant
-        // (RemoteAccessApprovals), and the grant must be read again after Allow.
+        MainActor.assumeIsolated { door(tool, arguments, grant: grant, callID: callID) }
+    }
+
+    /// U14, on the main thread: the tab checks from one fresh screen read, the control rate, and Allow on the Mac for a
+    /// control call that takes no approval policy of its own (R59). The window closes with the grant
+    /// (RemoteAccessApprovals), and after Allow the grant and the tab are read again.
+    @MainActor
+    private func door(_ tool: String, _ arguments: [String: Any], grant: RemoteAccessOAuth.Grant, callID: RemoteAccessCalls.ID) {
+        let calls = self.calls
+        guard case .run(let summary) = checked(tool, arguments, grant: grant, callID: callID) else { return }
+        let control = RemoteAccessPolicy.isControlCall(tool)
+        if control, grant.options[.rateLimit], !calls.takeControlCall(grant: grant.id) {
+            _ = calls.finish(callID, refused: .options(RemoteAccessText.controlRate, by: [.rateLimit]))
+            return
+        }
+        guard control, grant.options[.askOnMac], !Self.asksItself(tool) else {
+            return perform(tool, arguments, grant: grant, callID: callID, summary: summary)
+        }
+        askOnMac(tool, summary: summary, grant: grant, callID: callID) { [weak self] in
+            guard let self, let options = self.state.options(of: grant.id, listed: false) else {
+                _ = calls.finish(callID, refused: .options(RemoteAccessText.turnedOff, by: []))
+                return
+            }
+            var now = grant
+            now.options = options
+            guard case .run(let summary) = self.checked(tool, arguments, grant: now, callID: callID) else { return }
+            self.perform(tool, arguments, grant: now, callID: callID, summary: summary)
+        }
+    }
+
+    /// The tools that ask on the Mac themselves under the approval policy the door passes (R56, R59, R63): the write
+    /// tools, the skill installs and removals, and run_with_secrets, whose panel and Touch ID nothing skips.
+    static func asksItself(_ tool: String) -> Bool {
+        MCPServer.isControlTool(tool) || ["install_skill", "remove_skill", "run_with_secrets"].contains(tool)
+    }
+
+    /// The door's tab checks (RemoteAccessDoorChecks): the summary of a call that may run, or nil when it was refused
+    /// and answered.
+    @MainActor
+    private func checked(_ tool: String, _ arguments: [String: Any], grant: RemoteAccessOAuth.Grant,
+                         callID: RemoteAccessCalls.ID) -> RemoteAccessDoorChecks.Outcome {
+        let outcome = RemoteAccessDoorChecks.check(tool, arguments, options: grant.options)
+        if case .refuse(let refusal) = outcome { _ = calls.finish(callID, refused: .options(refusal.text, by: refusal.by)) }
+        return outcome
+    }
+
+    /// "Ask on this Mac before changes" (R59): the approval window, named for the connection, with the tool, the tab
+    /// and the first lines of what would go. Decline, or no answer, answers "Declined on your Mac."; Allow runs `allowed`.
+    @MainActor
+    private func askOnMac(_ tool: String, summary: RemoteAccessDoorChecks.Summary, grant: RemoteAccessOAuth.Grant,
+                          callID: RemoteAccessCalls.ID, allowed: @escaping () -> Void) {
+        let calls = self.calls
+        var lines: [String] = ["Tool: \(tool)"]
+        if let tab = summary.tab { lines.append("Tab: “\(Self.shown(tab))”") }
+        if let sent = summary.sent, !sent.isEmpty { lines.append("Sends: \(Self.shown(sent))") }
+        if let approved = summary.approved { lines.append("Approves: \(Self.shown(approved))") }
+        let ask = MCPWriteControl.Ask(title: "A remote connection asks to use \(tool)", details: lines.joined(separator: "\n"),
+                                      approveTitle: "Allow")
+        let context = MCPWriteControl.context([:], caller: nil, approval: .askOnMac, requester: RemoteAccessCalls.requester(for: grant),
+                                              connection: grant.id)
+        MCPWriteControl.approve(ask, context, reply: { result in
+            let text = result.text.hasPrefix("Declined on the Mac") ? RemoteAccessText.declined : result.text
+            _ = calls.finish(callID, refused: .options(text, by: []))
+        }, change: { _, window in
+            window?.finish()
+            allowed()
+        })
+    }
+
+    /// Runs the call through `MCPControl.call`, as a caller outside Next Term's tabs, and posts its notice while "Notify
+    /// on this Mac" is on (R40).
+    @MainActor
+    private func perform(_ tool: String, _ arguments: [String: Any], grant: RemoteAccessOAuth.Grant, callID: RemoteAccessCalls.ID,
+                         summary: RemoteAccessDoorChecks.Summary) {
+        let calls = self.calls
+        if grant.options[.notify], RemoteAccessPolicy.isControlCall(tool) { Self.notice(tool, summary: summary, grant: grant) }
         MCPControl.call(tool, arguments, caller: nil, approval: RemoteAccessCalls.approval(for: grant),
                         requester: RemoteAccessCalls.requester(for: grant), connection: grant.id) { result in
             DispatchQueue.global(qos: .userInitiated).async {
                 calls.finish(callID, RemoteAccessPolicy.shape(result, tool: tool))
             }
         }
+    }
+
+    /// R40: the grant, the tool and the tab, then the first line of what goes and of what an answer approves, each cut
+    /// to 80 characters and masked.
+    @MainActor
+    private static func notice(_ tool: String, summary: RemoteAccessDoorChecks.Summary, grant: RemoteAccessOAuth.Grant) {
+        var body: [String] = [tool + (summary.tab.map { " in “\(shown($0))”" } ?? "")]
+        if let sent = summary.sent, !sent.isEmpty { body.append(shown(sent)) }
+        if let approved = summary.approved { body.append("Approves: " + shown(approved)) }
+        RemoteAccess.shared.notify(title: "Remote: \(grant.name)", body: body.joined(separator: "\n"))
+    }
+
+    /// One line, masked (stored keys and token shapes), cut to 80 characters.
+    static func shown(_ text: String) -> String {
+        let line = String(text.split(separator: "\n", omittingEmptySubsequences: false).first ?? "")
+        let masked = SecretMask.current.mask(MCPRedaction.redact(line).text)
+        return masked.count > 80 ? String(masked.prefix(79)) + "…" : masked
     }
 
     /// `wait_for_tab` held to the door's wait: 50 seconds, or what a debug self-test set.
