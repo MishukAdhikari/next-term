@@ -1,0 +1,1 @@
+{"id":"cli:agent:list","result":{"type":"agent_list","agents":[{"terminal_id":"t1","agent":"claude","display_agent":"claude","agent_status":"idle","state_labels":{},"tokens":{},"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","focused":false,"launch_pending":false,"interactive_ready":true,"state_change_seq":7,"cwd":"/home/me/api","revision":26}]}}

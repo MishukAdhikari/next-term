@@ -1,0 +1,1 @@
+{"id":"cli:tab:list","result":{"type":"tab_list","tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"api","focused":false,"pane_count":2,"agent_status":"working"},{"tab_id":"w2:t1","workspace_id":"w2","number":1,"label":"web","focused":true,"pane_count":1,"agent_status":"blocked"}]}}

@@ -11,6 +11,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastBadge = -1
     /// Last notification per tab, to rate-limit noisy programs.
     private var lastNotified: [UUID: (at: Date, key: String)] = [:]
+    /// The same for each of herdr's agents, by its id ("<tab id>/<pane>").
+    private var lastHerdrNotified: [String: (at: Date, key: String)] = [:]
+    /// herdr agents' notices still in Notification Center, by id: who posted each (a tab's id, or "host:<id>" for a host
+    /// with no herdr tab), its agent's pane, and whether it was about a decision (else a finish), so each is withdrawn
+    /// once its agent no longer needs the user that way.
+    private var herdrDelivered: [String: (owner: String, pane: String, decision: Bool)] = [:]
+    /// The categories registered for notices' buttons, by id, the order they came in (the oldest give way), and their
+    /// buttons, which the self-test reads.
+    var noticeCategories: [String: UNNotificationCategory] = [:]
+    var noticeCategoryOrder: [String] = []
+    var noticeActions: [String: [NoticeActions.Action]] = [:]
     /// When Next Term last posted its own notice for each tab (system uptime): a program's notice for the tab soon
     /// after it is dropped (ProgramNotice.repeatWindow). The self-test clears it between its checks.
     var ownNoticeAt: [UUID: TimeInterval] = [:]
@@ -1357,8 +1368,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        // The windows with a terminal that needs you, first: the one Go to Next Agent Needing You goes to at the top, each
-        // with its most urgent mark, as its tab bar shows it.
+        // The windows with a terminal or one of herdr's agents that needs you, first: the one Go to Next Agent Needing You
+        // goes to at the top, each with its most urgent mark, as its tab bar or tab list shows it.
         refreshWindowIndex()
         for window in windowIndex.windowsWaiting {
             guard let waiting = windowIndex.firstWaiting(in: window.id) else { continue }
@@ -1567,9 +1578,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: every window's agents
 
-    /// Every terminal window and what its terminals show (WindowIndex): for Agents › Go to Next Agent Needing You, the
-    /// Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own status, so
-    /// nothing is polled for it, and leaves it as it closes.
+    /// Every terminal window and what its terminals and herdr's agents show (WindowIndex): for Agents › Go to Next Agent
+    /// Needing You, the Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own
+    /// status and what herdr's last checks left, so nothing is polled for it, and leaves it as it closes.
     private(set) var windowIndex = WindowIndex()
 
     /// A window refreshed: its entry as it is now. A change reaches the Welcome window while it shows.
@@ -1586,12 +1597,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
     }
 
-    /// Agents › Go to Next Agent Needing You: the terminal that has waited longest for you (a decision, then a failure,
-    /// then a finished agent or command), its window brought forward and its tab or pane selected; pressed again there,
-    /// the next one, round to the first. With none, a notice says so and nothing beeps.
+    /// Agents › Go to Next Agent Needing You: the terminal or herdr agent that has waited longest for you (a decision, then
+    /// a failure, then a finished agent or command), its window brought forward and its tab or pane selected, herdr's view
+    /// moved to the agent's pane; pressed again there, the next one, round to the first. With none, a notice says so and
+    /// nothing beeps.
     @objc func goToNextAgentNeedingYou(_ sender: Any?) {
         refreshWindowIndex()
-        let key = NSApp.keyWindow?.windowController as? TerminalWindowController
+        // A panel of the window's own has the keyboard (Peek, ⌘P, a sheet): that window is still the one in front.
+        let keyWindow: NSWindow? = NSApp.keyWindow?.windowController == nil ? NSApp.mainWindow : NSApp.keyWindow
+        let key = keyWindow?.windowController as? TerminalWindowController
         // The tab in front counts as gone to only while it shows; folded, what it holds is news like any other tab's.
         let front: TerminalTab? = key?.activeTab.flatMap { (tab: TerminalTab) -> TerminalTab? in
             key?.isOnScreen(tab) == true ? tab : nil
@@ -1614,19 +1628,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controller?.window?.makeKeyAndOrderFront(nil)
     }
 
-    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does.
+    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does. One
+    /// of herdr's agents is gone to as choosing it in Go to Agent does: herdr's view moves to its pane, a server's with no
+    /// herdr tab gets one, and one on a machine saved in herdr is peeked at.
     private func go(to waiting: WindowIndex.Waiting) {
         guard let controller = controllers.first(where: { $0.indexID == waiting.window && !$0.hasClosed }),
               let tab = controller.tabs.first(where: { $0.id == waiting.tab }) else { return }
         NSApp.activate(ignoringOtherApps: true)
+        // The herdr tab that opens for a server's agent comes forward, not the tab it was reached from.
+        if let agent = waiting.agent, case .host = agent { return HerdrAgentMenu.go(to: agent) }
         controller.window?.makeKeyAndOrderFront(nil)
         controller.show(tab)
+        if let agent = waiting.agent { HerdrAgentMenu.go(to: agent) }
     }
 
     // MARK: dock badge and notifications
 
+    /// The tabs that need you, and each of herdr's agents that does (blocked, done and not seen, or kept unread) while
+    /// its tab follows them: once per host, herdr session and pane, however many tabs show that session.
     func updateBadge() {
-        let count = controllers.reduce(0) { $0 + $1.unseenTabCount }
+        var agents = Set<String>()
+        // An agent that one tab of its session shows on screen counts in none.
+        var shown = Set<String>()
+        for tab in controllers.flatMap(\.tabs) where tab.followsHerdr {
+            let tracker = tab.herdrTracker
+            for pane in tracker.needsYou { agents.insert(tab.herdrPlace + "\u{0}" + pane) }
+            guard tracker.tabVisible else { continue }
+            for agent in tracker.agents where tracker.isOnScreen(agent.paneID) {
+                shown.insert(tab.herdrPlace + "\u{0}" + agent.paneID)
+            }
+        }
+        agents.subtract(shown)
+        // Hosts with no herdr tab, counted once with any tab of the same session.
+        for overview in RemotePoller.shared.overviews {
+            for pane in overview.tracker.needsYou { agents.insert(overview.place + "\u{0}" + pane) }
+        }
+        // The machines saved in a herdr here: a pane id is a machine's own, so the machine is part of the key.
+        for watch in LocalHerdrWatch.shared.allMachines {
+            guard let tab = watch.tab else { continue }
+            for machine in watch.machines {
+                for pane in machine.tracker.needsYou { agents.insert("\(tab.herdrPlace) @\(machine.id)\u{0}" + pane) }
+            }
+        }
+        let count = controllers.reduce(0) { $0 + $1.unseenTabCount } + agents.count
         guard count != lastBadge else { return }
         lastBadge = count
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
@@ -1692,7 +1736,191 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A window's notifications stack together in Notification Center.
         content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString]
+        // An agent's decision whose choices read off its screen carries them as buttons; a finish, Reply.
+        if notice.kind == .agent, notice.stillRunning, tab.remote == nil || tab.remoteConnected {
+            if let question = notice.question, let menu = MCPControl.fieldMenu(tab, question: question),
+               let id = MCPControl.questionID(tab) {
+                content.categoryIdentifier = noticeCategory(tab.id.uuidString, choices: menu.choices) ?? ""
+                content.userInfo["question_id"] = id
+            } else if notice.question == nil, notice.state == .done {
+                content.categoryIdentifier = noticeCategory(nil, choices: [])  ?? ""
+            }
+        }
         deliver(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
+    }
+
+    /// A notice for one of herdr's agents (TerminalTab.herdrEvents): "codex needs your decision" with its question, or
+    /// "codex is waiting for you", as Settings › Notifications says. None while that agent is on screen (a tab of its
+    /// session is, and herdr shows the agent's own herdr tab there), and none for an agent whose notices the user muted.
+    /// The subtitle says where: the host and the tab for an agent on a server. One notice per agent however many tabs
+    /// show its session (TerminalTab.herdrPeers): the first of them posts it. Each agent's notice replaces its own earlier
+    /// one, never another agent's, and is withdrawn once the agent no longer needs the user that way; a click brings the
+    /// tab forward and moves herdr's view to the agent's pane.
+    func post(herdrAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, tab: TerminalTab,
+              in controller: TerminalWindowController, appActive: Bool? = nil) {
+        guard !tab.herdrTracker.isMuted(agent.paneID) else { return }
+        let peers = tab.herdrPeers
+        let ids = peers.map { HerdrTarget(tabID: $0.id.uuidString, pane: agent.paneID).id }
+        let id = HerdrTarget(tabID: tab.id.uuidString, pane: agent.paneID).id
+        // Another tab of the session posts it, or has a notice of this kind out for it already (posted while it was
+        // the first, say while this tab reconnected).
+        let decision = question != nil
+        let postedElsewhere = ids.contains { $0 != id && herdrDelivered[$0]?.decision == decision }
+        guard peers.first === tab, !postedElsewhere else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        // A turn only herdr's counts saw end is as long as the shortest that is news.
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        let onScreen = peers.contains { $0.herdrTracker.isOnScreen(agent.paneID) }
+        // An agent an MCP agent drives (through any tab of its session) is quiet while Next Term is in front; its herdr
+        // neighbours are not.
+        let driven = ids.contains(where: HerdrMCP.isDriven)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: onScreen, drivenByAgent: driven) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let title = Typography.shortened(tab.title, to: 80)
+        let place = Typography.shortened(controller.placeName(of: tab), to: 60)
+        // Where it runs: "web-1 — <tab>" on a server, the tab and its project here.
+        let host = tab.remote.map { Typography.shortened($0.host.name, to: 40) }
+        let whereShown = host.map { title.hasPrefix($0 + ":") ? [title] : [$0, title] } ?? [title, place == title ? nil : place].compactMap { $0 }
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = whereShown.joined(separator: " — ")
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = controller.placeName(of: tab)
+        content.userInfo = ["tab": tab.id.uuidString, "herdr_pane": agent.paneID]
+        // A decision whose choices were read from its pane carries them as buttons; a finish, Reply. None while the tab is
+        // not connected: nothing could answer.
+        if tab.remote == nil || tab.remoteConnected {
+            if question != nil, let asked = tab.herdrTracker.question(agent.paneID) {
+                content.categoryIdentifier = noticeCategory(id, choices: asked.choices) ?? ""
+                content.userInfo["question_id"] = HerdrMCP.questionID(asked, pane: agent.paneID, in: tab)
+            } else if question == nil {
+                content.categoryIdentifier = noticeCategory(nil, choices: []) ?? ""
+            }
+        }
+        herdrDelivered[id] = (tab.id.uuidString, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// Withdraws one herdr agent's notice from Notification Center (and the self-test's sink).
+    func withdrawHerdrNotice(_ id: String) {
+        guard herdrDelivered.removeValue(forKey: id) != nil else { return }
+        forgetNoticeCategory(id)
+        lastHerdrNotified[id] = nil
+        testNotifications.removeAll { $0.identifier == id }
+        notificationCenter?.removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    /// Withdraws the notices of `tab`'s agents that no longer need the user as their notice said: a decision's once the
+    /// agent is not blocked, a finish's once it is neither done nor kept unread, and either once herdr no longer lists
+    /// it or the agent is on screen.
+    func withdrawStaleHerdrNotices(of tab: TerminalTab) {
+        withdrawStaleHerdrNotices(owner: tab.id.uuidString, tracker: tab.herdrTracker)
+    }
+
+    /// The same for any owner of notices (a tab, or a host with no herdr tab), from its tracker.
+    func withdrawStaleHerdrNotices(owner: String, tracker: HerdrAgents) {
+        for (id, posted) in herdrDelivered where posted.owner == owner {
+            let agent = tracker.agents.first { $0.paneID == posted.pane }
+            let finished = agent.map { $0.status == .done || tracker.isUnread($0.paneID) } ?? false
+            let still = posted.decision ? agent?.status == .blocked : finished && agent?.status != .blocked
+            if !still || tracker.isOnScreen(posted.pane) { withdrawHerdrNotice(id) }
+        }
+    }
+
+    /// Withdraws every notice of `tab`'s agents: the tab closed, or no longer follows herdr.
+    func withdrawHerdrNotices(of tab: TerminalTab) {
+        withdrawHerdrNotices(owner: tab.id.uuidString)
+    }
+
+    func withdrawHerdrNotices(owner: String) {
+        for (id, posted) in herdrDelivered where posted.owner == owner { withdrawHerdrNotice(id) }
+    }
+
+    /// A notice for an agent on one of the machines saved in a herdr here (HerdrMachineWatch), as `post(herdrAgent:)`
+    /// posts one: "Build machine (herdr)" in the subtitle, its own id, its question's choices as buttons and Reply on a
+    /// finish (answered through that herdr, `--machine`), withdrawn as the agent moves on. A click peeks at it: herdr
+    /// cannot be told which machine its screen shows.
+    func post(machineAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, machine: HerdrMachineWatch.Machine,
+              owner: String, tab: TerminalTab, appActive: Bool? = nil) {
+        guard !machine.tracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        let id = HerdrTarget(tabID: tab.id.uuidString, machine: machine.id, pane: agent.paneID).id
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: false, drivenByAgent: HerdrMCP.isDriven(id)) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = AgentQueue.onMachine(Typography.shortened(machine.label, to: 40))
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = machine.label
+        content.userInfo = ["tab": tab.id.uuidString, "herdr_machine": machine.id, "herdr_pane": agent.paneID]
+        if question != nil, let asked = machine.tracker.question(agent.paneID) {
+            content.categoryIdentifier = noticeCategory(id, choices: asked.choices) ?? ""
+            content.userInfo["question_id"] = HerdrMCP.questionID(asked, id: id)
+        } else if question == nil {
+            content.categoryIdentifier = noticeCategory(nil, choices: []) ?? ""
+        }
+        herdrDelivered[id] = (owner, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// A notice for an agent of a connected host with no herdr tab (HerdrOverview), as `post(herdrAgent:)` posts one: the
+    /// host in the subtitle, its own id, withdrawn as the agent moves on. A click opens a herdr tab there, on that pane.
+    func post(overviewAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, overview: HerdrOverview,
+              appActive: Bool? = nil) {
+        guard !overview.tracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: false) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = Typography.shortened(overview.host.name, to: 40) + " — no herdr tab"
+        let id = overview.noticeID(agent.paneID)
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = overview.host.name
+        content.userInfo = ["herdr_host": overview.host.id, "herdr_pane": agent.paneID]
+        herdrDelivered[id] = (overview.owner, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
     /// While the self-test runs, notifications land here instead of in Notification Center: it checks what
@@ -1770,6 +1998,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let tabID = response.notification.request.content.userInfo["tab"] as? String
+        // One of herdr's agents: herdr's view moves to its pane too (the user clicked, so nothing asks).
+        let pane = response.notification.request.content.userInfo["herdr_pane"] as? String
+        // An agent of a host with no herdr tab: a herdr tab opens there, on its pane.
+        let host = response.notification.request.content.userInfo["herdr_host"] as? String
+        // An agent on one of a local herdr's machines: Peek at it.
+        let machine = response.notification.request.content.userInfo["herdr_machine"] as? String
+        let action = response.actionIdentifier
+        if NoticeActions.choice(action) != nil || action == NoticeActions.reply {
+            // A button on the notice: answered here, Next Term staying where it is.
+            let request = response.notification.request
+            let text = (response as? UNTextInputNotificationResponse)?.userText
+            var info: [String: String] = [:]
+            for (key, value) in request.content.userInfo {
+                if let key = key as? String, let value = value as? String { info[key] = value }
+            }
+            return DispatchQueue.main.async { [self] in
+                respond(to: request.identifier, title: request.content.title, info: info, action: action, text: text)
+                completionHandler()
+            }
+        }
         let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
@@ -1777,10 +2025,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 SecretReminders.open(reminder)
                 return completionHandler()
             }
+            if let host, let pane {
+                HerdrAgentMenu.go(to: .host(id: host, pane: pane))
+                return completionHandler()
+            }
+            if let machine, let pane, let tabID {
+                HerdrAgentMenu.go(to: .machine(tab: tabID, machine: machine, pane: pane))
+                return completionHandler()
+            }
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
-                    controller.window?.makeKeyAndOrderFront(nil)
-                    controller.show(tab)
+                    if let pane {
+                        HerdrAgentMenu.show(tab: tab, pane: pane)
+                    } else {
+                        controller.window?.makeKeyAndOrderFront(nil)
+                        controller.show(tab)
+                    }
                     break
                 }
             }
@@ -2033,6 +2293,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(window, "Select Pane Below", #selector(TerminalWindowController.selectPaneBelow(_:)), arrow(NSDownArrowFunctionKey), [.command, .option])
         item(window, "Select Next Pane", #selector(TerminalWindowController.selectNextPane(_:)), "]", [.command, .option])
         item(window, "Select Previous Pane", #selector(TerminalWindowController.selectPreviousPane(_:)), "[", [.command, .option])
+        // ⌃⌘A: any agent, herdr's or a tab's, from the keyboard (⌃⇧⌘A is Annotate with Git Blame).
+        item(window, "Go to Agent…", #selector(TerminalWindowController.goToAgent(_:)), "a", [.command, .control])
         item(window, "Maximize Pane", #selector(TerminalWindowController.toggleZoomPane(_:)), "\r", [.command, .shift])
         item(window, "Make Panes Equal", #selector(TerminalWindowController.equalizePanes(_:)), "")
         window.addItem(.separator())
@@ -2070,5 +2332,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                           _ modifiers: NSEvent.ModifierFlags = .command) {
         let item = self.item(menu, title, #selector(NSTextView.performFindPanelAction(_:)), key, modifiers)
         item.tag = Int(action.rawValue)
+    }
+}
+
+// MARK: answering from a notice
+
+extension AppDelegate {
+    /// The category for a notice's buttons: its own (`agent.<notice id>`) for a decision whose choices fit, the shared
+    /// one with Reply for a finish (`notice` nil); registered with every other one still delivered, 64 at most, the
+    /// oldest first out. nil: no buttons (no choices, or more than fit).
+    func noticeCategory(_ notice: String?, choices: [String]) -> String? {
+        let category: String
+        let actions: [UNNotificationAction]
+        if let notice {
+            guard let planned = NoticeActions.plan(choices: choices) else { return nil }
+            category = NoticeActions.category(for: notice)
+            actions = planned.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: []) }
+            noticeActions[category] = planned
+        } else {
+            category = NoticeActions.finishCategory
+            actions = [UNTextInputNotificationAction(identifier: NoticeActions.reply, title: "Reply", options: [],
+                                                     textInputButtonTitle: "Send", textInputPlaceholder: "A line for the agent")]
+            noticeActions[category] = [NoticeActions.Action(id: NoticeActions.reply, title: "Reply")]
+        }
+        noticeCategories[category] = UNNotificationCategory(identifier: category, actions: actions, intentIdentifiers: [], options: [])
+        noticeCategoryOrder = NoticeActions.kept(noticeCategoryOrder, adding: category)
+        registerNoticeCategories()
+        return category
+    }
+
+    /// A notice is gone: its own category goes with it.
+    func forgetNoticeCategory(_ notice: String) {
+        let category = NoticeActions.category(for: notice)
+        guard noticeCategories.removeValue(forKey: category) != nil else { return }
+        noticeActions[category] = nil
+        noticeCategoryOrder.removeAll { $0 == category }
+        registerNoticeCategories()
+    }
+
+    private func registerNoticeCategories() {
+        let kept = Set(noticeCategoryOrder)
+        for category in noticeCategories.keys where !kept.contains(category) {
+            noticeCategories[category] = nil
+            noticeActions[category] = nil
+        }
+        notificationCenter?.setNotificationCategories(Set(noticeCategories.values))
+    }
+
+    /// A notice's button was clicked (or the self-test's sink stands in for one): a choice answers the question the
+    /// notice showed, the way answer_agent does, reading the screen again first; Reply sends its line as a prompt. Both
+    /// are the user's own act and mark the agent seen. What could not be done replaces the notice, saying why: a question
+    /// that changed types nothing.
+    func respond(to notice: String, title: String, info: [String: String], action: String, text: String?) {
+        guard let tabID = info["tab"], let tab = HerdrAgentMenu.tab(tabID) else { return }
+        let name = title.components(separatedBy: " needs your decision").first?.components(separatedBy: " is waiting").first ?? title
+        func replace(_ said: String) {
+            let content = UNMutableNotificationContent()
+            content.title = name
+            content.body = said
+            content.userInfo = info
+            deliver(UNNotificationRequest(identifier: notice, content: content, trigger: nil))
+        }
+        if let pane = info["herdr_pane"] {
+            // The tab's own herdr's agent, or one on a machine saved in it.
+            let ref = HerdrAgentRef(tab: tab, machine: info["herdr_machine"], pane: pane)
+            if let choice = NoticeActions.choice(action) {
+                let expected = info["question_id"] ?? ""
+                HerdrMCP.answer(ref, expected: expected, choice: choice, answer: nil, typing: { HerdrMCP.userActed(on: ref.id) }) { said in
+                    switch said {
+                    case .answered: ref.seen()
+                    case .refused(.changed(let question, _)): replace("The question changed: \(question). Nothing was typed.")
+                    case .refused(let refusal): replace(refusal.sentence)
+                    case .failed(let problem): replace(problem)
+                    }
+                }
+                return
+            }
+            let line = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { return }
+            if let refusal = HerdrCommand.textRefusal(line) { return replace(refusal) }
+            HerdrMCP.userActed(on: ref.id)
+            ref.run(.prompt(pane: pane), input: line) { result in
+                if let problem = HerdrMCP.problem(result, pane: pane) { return replace("The reply was not sent: " + problem) }
+                ref.seen()
+            }
+            return
+        }
+        // An agent tab: answer_agent's own path, or a line typed and entered as send_to_tab types it.
+        if let choice = NoticeActions.choice(action) {
+            let arguments: [String: Any] = ["tab_id": tab.id.uuidString.lowercased(), "question_id": info["question_id"] ?? "", "choice": choice]
+            MCPControl.call("answer_agent", arguments, caller: nil) { result in
+                MCPControl.typedByUser(tab)
+                if result.isError { replace(result.text) }
+            }
+            return
+        }
+        let line = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return }
+        guard MCPControl.canType(tab) else { return replace("The reply was not sent: that tab cannot take input now.") }
+        MCPControl.type(line, into: tab, submit: true)
+        MCPControl.typedByUser(tab)
     }
 }

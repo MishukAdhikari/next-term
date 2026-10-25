@@ -227,3 +227,100 @@ import Testing
         #expect(TabListRows.moving(made, tab: 5, to: 0).map(\.key) == made.map(\.key))
     }
 }
+
+/// herdr's agents as rows under the tab or pane that shows herdr: herdr's order, its names and titles, the time in
+/// their states, and the idle ones folded past six.
+@Suite struct TabListHerdrRowsTests {
+    let web1 = RemoteMark(host: "web-1", destination: "deploy@203.0.113.5", link: .connected)
+    let three: [TabListRows.Agent] = [
+        TabListRows.Agent(pane: "w1:p1", name: "api", kind: "claude", title: "Fix the login", directory: "/srv/api/src", status: .working),
+        TabListRows.Agent(pane: "w2:p1", name: "codex", kind: "codex", directory: "/srv/web", status: .blocked, question: "Allow rm -rf build?",
+                          needsSince: 100),
+        TabListRows.Agent(pane: "w2:p2", name: "gemini", status: .done),
+    ]
+
+    func herdrPane(_ key: String, focused: Bool = true, agents: [TabListRows.Agent]? = nil, open: Bool = false) -> TabListRows.Pane {
+        TabListRows.Pane(key: key, title: "web-1: herdr", state: .attention, folder: "/srv", remote: web1, focused: focused,
+                         herdrAgents: agents ?? three, herdrIdleOpen: open)
+    }
+
+    @Test func aHerdrTabIsItsRowThenARowPerAgent() {
+        let made = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("pane x")])], showsFolders: false, home: "/Users/test")
+        #expect(made.map(\.key) == ["t", "pane x/herdr/w1:p1", "pane x/herdr/w2:p1", "pane x/herdr/w2:p2"])
+        #expect(made.dropFirst().map(\.kind) == [.herdrAgent(index: 0, count: 3), .herdrAgent(index: 1, count: 3), .herdrAgent(index: 2, count: 3)])
+        #expect(made.dropFirst().map(\.state) == [.working, .attention, .done])
+        #expect(made.dropFirst().map(\.herdrPane) == ["w1:p1", "w2:p1", "w2:p2"])
+        #expect(made[1].title == "api · Fix the login" && made[2].title == "codex")
+        #expect(made.dropFirst().allSatisfy { $0.isPane && $0.isAgent && !$0.isFolded && $0.detail == nil })
+        // One block: the agents go with their tab.
+        #expect(TabListRows.blocks(of: made.map(\.kind)) == [0..<4])
+        #expect(made[1].tooltip == "api · w1:p1 · Working · Fix the login\n/srv/api/src")
+    }
+
+    @Test func inASplitTabTheAgentsFollowThePaneThatShowsHerdr() {
+        let shell = TabListRows.Pane(key: "pane s", title: "zsh", focused: false)
+        let split = TabListRows.Source(key: "g", panes: [shell, herdrPane("pane h", focused: false)])
+        let made = TabListRows.make(tabs: [split], showsFolders: false, home: "/Users/test")
+        #expect(made.map(\.key) == ["g", "pane s", "pane h", "pane h/herdr/w1:p1", "pane h/herdr/w2:p1", "pane h/herdr/w2:p2"])
+        #expect(made[1].kind == .pane(index: 0, count: 2) && made[2].kind == .pane(index: 1, count: 2))
+    }
+
+    @Test func theSecondLineIsTheQuestionElseWhereTheAgentWorks() {
+        let made = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p")])], showsFolders: true, home: "/Users/test")
+        #expect(made[1].detail == "web-1: /srv/api/src" && !made[1].detailIsQuestion)
+        #expect(made[2].detail == "Allow rm -rf build?" && made[2].detailIsQuestion)
+        #expect(made[3].detail == "web-1")
+        // On this Mac, the home folder is ~.
+        let local = TabListRows.Pane(key: "l", title: "herdr", folder: "/Users/test", focused: true,
+                                     herdrAgents: [TabListRows.Agent(pane: "w1:p1", name: "claude", directory: "/Users/test/app")])
+        let mine = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [local])], showsFolders: true, home: "/Users/test")
+        #expect(mine[1].detail == "~/app")
+        // Rows of two lines are as tall as a tab's; of one, as a pane's.
+        #expect(TabListLayout.rowHeight(for: .herdrAgent(index: 0, count: 1), density: .twoLines) == TabListLayout.twoLineHeight)
+        #expect(TabListLayout.rowHeight(for: .herdrAgent(index: 0, count: 1), density: .oneLine) == TabListLayout.paneHeight)
+        #expect(TabListLayout.rowHeight(for: .herdrFolded(count: 5, open: false), density: .twoLines) == TabListLayout.paneHeight)
+    }
+
+    @Test func noAgentsNoRowsAndVoiceOverSaysWhereEachIs() {
+        let empty = TabListRows.Pane(key: "p", title: "herdr", focused: true)
+        #expect(TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [empty])], showsFolders: true, home: "/").count == 1)
+        let made = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p")])], showsFolders: false, home: "/")
+        #expect(made[2].accessibilityLabel == "codex, herdr agent 2 of 3, Needs your decision")
+        #expect(made[3].accessibilityLabel == "gemini, herdr agent 3 of 3, Done")
+    }
+
+    @Test func aRowSaysHowLongItHasWaitedAndGivesItsTitleWayFirst() {
+        let made = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p")])], showsFolders: false, home: "/",
+                                    now: 100 + 250)
+        #expect(made[2].title == "codex · waiting 4 min" && made[2].shorterTitles == ["codex"])
+        #expect(made[2].accessibilityLabel == "codex, herdr agent 2 of 3, Needs your decision, waiting 4 minutes")
+        #expect(made[2].tooltip.contains("since Next Term saw it"))
+        // Under a minute: nothing.
+        let soon = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p")])], showsFolders: false, home: "/", now: 150)
+        #expect(soon[2].title == "codex" && soon[2].shorterTitles.isEmpty)
+        // A row that reads the same as another says where it works, before its time.
+        var twins = three
+        twins[1].title = "Fix the login"
+        twins[1].disambiguation = "web"
+        let named = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p", agents: twins)])], showsFolders: false,
+                                     home: "/", now: 400)
+        #expect(named[2].title == "codex · Fix the login · web · waiting 5 min")
+        #expect(named[2].shorterTitles == ["codex · waiting 5 min", "codex"])
+    }
+
+    @Test func pastSixAgentsTheIdleOnesFoldIntoOneRowThatOpens() {
+        let statuses: [HerdrAgent.Status] = [.working, .idle, .blocked, .idle, .unknown, .done, .idle, .working, .idle]
+        let nine = statuses.enumerated().map { TabListRows.Agent(pane: "w1:p\($0.offset)", name: "a\($0.offset)", status: $0.element) }
+        let shut = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p", agents: nine)])], showsFolders: false, home: "/")
+        #expect(shut.map(\.key) == ["t", "p/herdr/w1:p0", "p/herdr/w1:p2", "p/herdr/w1:p5", "p/herdr/w1:p7", "p/herdr/idle"])
+        #expect(shut[5].kind == .herdrFolded(count: 5, open: false) && shut[5].isFolded && shut[5].title == "▸ 5 idle")
+        #expect(shut[5].accessibilityLabel == "5 idle herdr agents, collapsed" && shut[5].tooltip.hasPrefix("5 idle herdr agents: a1, a3"))
+        // Its agents keep their place among herdr's.
+        #expect(shut[2].kind == .herdrAgent(index: 2, count: 9))
+        let open = TabListRows.make(tabs: [TabListRows.Source(key: "t", panes: [herdrPane("p", agents: nine, open: true)])],
+                                    showsFolders: false, home: "/")
+        #expect(open.count == 11 && open[5].title == "▾ 5 idle" && open[5].accessibilityLabel == "5 idle herdr agents, expanded")
+        #expect(open.suffix(5).map(\.herdrPane) == ["w1:p1", "w1:p3", "w1:p4", "w1:p6", "w1:p8"])
+        #expect(TabListRows.blocks(of: open.map(\.kind)) == [0..<11])
+    }
+}

@@ -68,6 +68,9 @@ public struct TabStatus {
     /// Program name of `command`, worked out once when it starts.
     public private(set) var program = ""
     public private(set) var kind: CommandKind = .command
+    /// What runs hosts agents and reports their states itself (herdr): it is followed through them, and leaving it is
+    /// no finish.
+    public private(set) var hostsAgents = false
     public private(set) var exitCode: Int32?
     /// done / failed / attention the user has not seen yet.
     public private(set) var unseen: TabState?
@@ -153,6 +156,8 @@ public struct TabStatus {
         }
         integrationReported()
         start(typed, kind: max(CommandClassifier.kind(of: typed), expanded.map(CommandClassifier.kind(of:)) ?? .command), at: now)
+        hostsAgents = CommandClassifier.hostsAgents(typed) || (expanded.map(CommandClassifier.hostsAgents) ?? false)
+        if hostsAgents { screenSynced = true } // its agents' states say when it works, never its output
         expandedCommand = expanded ?? ""
         let typedProgram = CommandClassifier.programName(typed)
         if typedProgram.isEmpty, let expanded { program = CommandClassifier.programName(expanded) }
@@ -219,6 +224,8 @@ public struct TabStatus {
             let started = startedAt
             start(process.commandLine, kind: CommandClassifier.kind(of: process), at: now)
             program = CommandClassifier.programName(of: process)
+            hostsAgents = CommandClassifier.hostsAgents(process)
+            if hostsAgents { screenSynced = true }
             if wasRunning { startedAt = started } // same job, different process in front
         }
         polledName = process.name
@@ -229,9 +236,14 @@ public struct TabStatus {
     /// The tab shows a program that hosts agents and reports their state itself (herdr on a server):
     /// treat it as one agent, so `observe(agentScreen:)` takes the states the host reports.
     public mutating func observeAgentHost(_ name: String, at now: TimeInterval) {
-        if running && kind == .agent && program == name { return }
+        if running && kind == .agent && program == name {
+            hostsAgents = true
+            screenSynced = true
+            return
+        }
         start(name, kind: .agent, at: now)
         program = name
+        hostsAgents = true
         screenSynced = true // the host's report is the truth; its UI redrawing is not work
     }
 
@@ -418,9 +430,13 @@ public struct TabStatus {
         turnWords = nil
     }
 
+    /// The tab's own notices are off: a herdr tab whose agents are followed one by one posts theirs instead, so none
+    /// comes twice. Its marks are as before.
+    public var suppressesNotices = false
+
     public mutating func takeNotice() -> TabNotice? {
         defer { pendingNotice = nil }
-        return pendingNotice
+        return suppressesNotices ? nil : pendingNotice
     }
 
     // MARK: internals
@@ -438,6 +454,7 @@ public struct TabStatus {
         expandedCommand = ""
         program = CommandClassifier.programName(commandLine)
         kind = newKind
+        hostsAgents = false
         startedAt = now
         busy = false
         lastStop = nil
@@ -458,8 +475,8 @@ public struct TabStatus {
         lastStop = nil // the agent exited: that is the news, not its last stop
         question = nil
         exitCode = code
-        // Leaving vim or ssh is not news.
-        if finishedKind == .interactive { return }
+        // Leaving vim or ssh is not news, nor leaving herdr (its agents' news is their own).
+        if finishedKind == .interactive || hostsAgents { return }
         mark(code == nil || code == 0 ? .done : .failed, duration: now - startedAt)
     }
 

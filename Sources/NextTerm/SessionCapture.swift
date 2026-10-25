@@ -76,7 +76,8 @@ enum SessionCapture {
             let keep = remote.keep.shown(fellBack: tab.fellBack)
             pane.remote = RemoteTabRecord(hostID: remote.host.id, destination: remote.host.destination, port: remote.host.port,
                                           directory: keep == .tmux ? remote.directory : tab.directory, session: remote.session,
-                                          keep: keep, project: project, title: tab.userTitle)
+                                          keep: keep, project: project, title: tab.userTitle,
+                                          herdrSession: keep == .herdr ? remote.herdrSession : nil)
         } else {
             pane.folder = tab.liveDirectory
             pane.systemZsh = tab.shellPath == "/bin/zsh"

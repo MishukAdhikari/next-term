@@ -157,6 +157,9 @@ enum MCPWriteControl {
     /// The tab a pane tool acts on, its window, and its panes; refused when the tab's input line is not the
     /// user's own.
     static func paneTarget(_ arguments: [String: Any]) -> Result<(TerminalTab, TerminalWindowController, PaneGroup), MCPToolError> {
+        if let raw = arguments["tab_id"] as? String, HerdrTarget.parse(raw) != nil {
+            return .failure(MCPToolError("That is one of herdr's agents, not one of Next Term's panes: herdr's panes are herdr's to split, close and zoom. Give its tab's id (before the slash) for the tab."))
+        }
         guard let tab = findTab(arguments["tab_id"]), let controller = MCPControl.controller(of: tab), let group = controller.group(of: tab) else {
             return .failure(MCPToolError("No tab with that id; list_tabs shows them."))
         }

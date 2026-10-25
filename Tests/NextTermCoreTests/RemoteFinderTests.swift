@@ -324,7 +324,7 @@ import Testing
         let panes = try String(contentsOf: HerdrListingTests.fixtures.appendingPathComponent("pane-list-0.4.5.json"), encoding: .utf8)
         try herdr(at: home + "/.local/bin/herdr", error: "unknown command: agent", paneList: panes.trimmingCharacters(in: .newlines))
         let old = try #require(RemotePoll.parse(try run(poll))?.herdr)
-        #expect(old.listing == .agents([HerdrAgent(paneID: "w64e95948145ed1-1", name: "claude", status: .done, directory: "/home/me/app")]))
+        #expect(old.listing == .agents([HerdrListingTests.agent045]))
         // Not there at all.
         try FileManager.default.removeItem(atPath: home + "/.local/bin/herdr")
         guard !Self.herdrOnThisMac else { return }
@@ -335,7 +335,7 @@ import Testing
     @Test func theStatusCheckReadsAnAnswerThatWorkedAsHerdrGaveIt() throws {
         let poll = RemoteShell.pollScript(tabs: [], herdr: true)
         let list = #"{"result":{"agents":[{"pane_id":"p1","name":"claude","agent_status":"working","title":"Fix unknown command error"}]}}"#
-        let agent = HerdrAgent(paneID: "p1", name: "claude", status: .working, title: "Fix unknown command error")
+        let agent = HerdrAgent(paneID: "p1", customName: "claude", status: .working, title: "Fix unknown command error")
         // An agent's title that says "unknown command", in an answer that worked: `pane list` is not asked.
         try herdr(at: home + "/.local/bin/herdr", list: list, paneList: #"{"result":{"panes":[]}}"#)
         let listed = try #require(RemotePoll.parse(try run(poll))?.herdr)
@@ -344,6 +344,27 @@ import Testing
         try herdr(at: home + "/.local/bin/herdr", list: "\u{1b}]0;herdr\u{07}" + list)
         let titled = try #require(RemotePoll.parse(try run(poll))?.herdr)
         #expect(titled.listing == .agents([agent]), "\(titled.listing)")
+    }
+
+    @Test func aHerdrSessionThatNeverAnswersIsGivenUpOnAndTheNextIsStillAsked() throws {
+        // The server of session "a" takes the connection and never answers; "b"'s answers.
+        try script(home + "/.local/bin/herdr", """
+            case "$*" in
+              --version) echo 'herdr 0.9.5' ;;
+              '--session a agent list') exec sleep 30 ;;
+              '--session b agent list') echo '{"result":{"agents":[]}}' ;;
+            esac
+            """, warm: ["--version"])
+        let sessions = [HerdrPollSession(name: "a"), HerdrPollSession(name: "b")]
+        let start = Date()
+        let poll = try #require(RemotePoll.parse(try run(RemoteShell.pollScript(tabs: [], herdrSessions: sessions))))
+        #expect(Date().timeIntervalSince(start) < Double(RemoteShell.herdrCallLimit) + 3)
+        guard case .failed(let said) = poll.herdrSessions["a"]?.listing else {
+            Issue.record("\(poll.herdrSessions)")
+            return
+        }
+        #expect(said.contains("herdr did not answer within \(RemoteShell.herdrCallLimit) s"), "\(said)")
+        #expect(poll.herdrSessions["b"]?.listing == .agents([]))
     }
 
     // MARK: the tab
@@ -385,6 +406,49 @@ import Testing
         let output = try run(tab)
         #expect(output.hasSuffix("runs \(home)/.local/bin/herdr\n"), "\(output)")
         #expect(!FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab7.plain"))
+    }
+
+    @Test func aTabOpensANamedHerdrSessionOnlyWhileHerdrListsIt() throws {
+        let list = #"{"sessions":[{"name":"default","default":true,"running":true},{"name":"review","default":false,"running":true}]}"#
+        try script(home + "/.local/bin/herdr", """
+            case "$1 $2" in
+              '--version '*) echo 'herdr 0.9.4' ;;
+              'session list') echo \(RemoteShell.quote(list)) ;;
+            esac
+            """, warm: ["--version"])
+        func opened(_ session: String) throws -> String {
+            let tab = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "tab6", herdrSession: session)
+                .replacingOccurrences(of: "exec \"$H\" --session", with: "printf 'runs %s with %s\\n' \"$H\"")
+                .replacingOccurrences(of: "exec \"${SHELL:-/bin/sh}\" -l", with: "exit 0")
+            return try run(tab)
+        }
+        #expect(try opened("review").hasSuffix("runs \(home)/.local/bin/herdr with review\n"))
+        #expect(!FileManager.default.fileExists(atPath: home + "/.cache/next-term/tabs/tab6.plain"))
+        // A session herdr no longer lists: a plain shell that says so, and the check carries why.
+        let gone = try opened("old")
+        #expect(gone.contains("Next Term: herdr on this host lists no session “old”") && !gone.contains("runs \(home)"))
+        let poll = try #require(RemotePoll.parse(try run(RemoteShell.pollScript(tabs: [(id: "tab6", keep: .off, session: "")]))))
+        #expect(poll.tabs["tab6"]?.plain == true && poll.tabs["tab6"]?.plainReason == "herdr on this host lists no session old")
+    }
+
+    @Test func aHostWithNoHerdrTabIsAskedOnlyForAHerdrATabFoundBefore() throws {
+        let path = home + "/.local/bin/herdr"
+        let list = #"{"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","agent_status":"blocked","state_change_seq":2}]}}"#
+        try herdr(at: path, list: list)
+        let poll = RemoteShell.pollScript(tabs: [(id: "tab9", keep: .tmux, session: "nt-x")], herdrSessions: [HerdrPollSession(name: nil, overview: true)])
+        // No herdr tab ever found it here, and no herdr server runs: nothing is asked, though a copy is installed.
+        let before = try #require(RemotePoll.parse(try run(poll)))
+        #expect(before.herdrSessions.isEmpty)
+        // Once a tab has found it (the cache names it), the check reads its default session.
+        let cache = home + "/.cache/next-term"
+        try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+        try "path\t\(path)\nhow\tlocal-bin\n".write(toFile: cache + "/herdr", atomically: true, encoding: .utf8)
+        let after = try #require(RemotePoll.parse(try run(poll)))
+        guard case .agents(let agents) = after.herdr?.listing else {
+            Issue.record("\(after.herdrSessions)")
+            return
+        }
+        #expect(agents.map(\.paneID) == ["w1:p1"] && agents.first?.status == .blocked)
     }
 
     // MARK: check_host

@@ -295,6 +295,8 @@ public enum CommandClassifier {
     static func kind(name: String, args: [String]) -> CommandKind {
         if name.isEmpty { return .command }
         if agents.contains(name) { return isServer(name, args: args) ? .command : .agent }
+        // herdr's own screen hosts agents (HerdrClient); its other commands run and exit.
+        if name == "herdr" { return HerdrClient.session(args) != nil ? .agent : .command }
         if interpreters.contains(stem(name)),
            let at = args.firstIndex(where: { !$0.hasPrefix("-") }), containsAgentHint(args[at]) {
             let agent = scriptAgentName(args[at]) ?? hintedAgentName(in: args[at]) ?? ""
@@ -316,11 +318,13 @@ public enum CommandClassifier {
         if isAgent(process) {
             return runsServer(executable: process.executablePath, arguments: process.arguments) ? .command : .agent
         }
+        if HerdrClient.match(arguments: process.arguments) != nil { return .agent }
         let (name, args) = parse(process.commandLine)
         return kind(name: name.isEmpty ? baseName(process.name) : name, args: args)
     }
 
     public static func programName(of process: ForegroundProcess) -> String {
+        if HerdrClient.match(arguments: process.arguments) != nil { return "herdr" } // a wrapper script too
         if isAgent(process) {
             let names = ([process.name] + process.arguments.prefix(1)).map(baseName)
             if let known = names.first(where: { agents.contains($0) }) { return knownName(known) }
@@ -343,6 +347,18 @@ public enum CommandClassifier {
             return true
         }
         return false
+    }
+
+    /// The command is herdr's own screen (HerdrClient), which hosts agents: leaving it is no finish.
+    public static func hostsAgents(_ commandLine: String) -> Bool {
+        segments(commandLine).contains { segment in
+            let (name, args) = parse(segment)
+            return name == "herdr" && HerdrClient.session(args) != nil
+        }
+    }
+
+    public static func hostsAgents(_ process: ForegroundProcess) -> Bool {
+        !process.isShell && HerdrClient.match(arguments: process.arguments) != nil
     }
 
     // MARK: helpers
