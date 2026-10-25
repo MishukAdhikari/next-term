@@ -207,6 +207,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     let tabListPlace = TabListPlacement()
     let sidebar = ProjectSidebarView(frame: NSRect(x: 0, y: 0, width: ProjectSidebarView.defaultWidth, height: 600))
     private let splitView = ThemedSplitView()
+    /// The window's split view, [sidebar | work area] or mirrored: the window column's host holds it beside the column.
+    var outerSplitView: ThemedSplitView { splitView }
+    /// The window's content: the window column at its outer edge, beside the split view (TerminalWindowColumn.swift).
+    private(set) lazy var columnHost = WindowColumnHost(content: splitView)
     private let mainPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     /// [ open files ] over [ terminal tabs ], like an IDE. The editor part is hidden while no file is open.
     let workSplit = WorkSplitView()
@@ -215,7 +219,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     let container = NSView()
     /// Unsaved files were dealt with (saved or discarded) for this close.
     private var editorsConfirmed = false
-    private var isFullScreen = false
+    /// In full screen (or about to be): no traffic lights in the way. Set by the window's full-screen notifications, and
+    /// by the self-test, which checks the insets without a real transition.
+    var isFullScreen = false
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
@@ -341,13 +347,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             self.paneFocused(tab)
         }
 
-        // [ Project sidebar | tab bar over terminals ], both reaching up into the title bar.
+        // [ Project sidebar | tab bar over terminals ], both reaching up into the title bar, with the window column at the
+        // outer edge while two or more windows are open.
         splitView.isVertical = true
         splitView.dividerStyle = .thin
         splitView.delegate = self
         splitView.addArrangedSubview(sidebar)
         splitView.addArrangedSubview(mainPane)
-        window.contentView = splitView
+        window.contentView = columnHost
+        installWindowColumn()
         sidebar.delegate = self
 
         tabBar.delegate = self
@@ -395,6 +403,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
         sidebar.header.onTopRowMenu = colorMenu
         terminalRail.onTopRowMenu = colorMenu
+        windowColumn.onTopRowMenu = colorMenu
         NotificationCenter.default.addObserver(self, selector: #selector(projectColorsChanged), name: ProjectColorStore.changed, object: nil)
         for split in [splitView, workSplit] as [HairlineSplitView] { split.onPanesPlaced = { [weak self] in self?.projectGlowMoved() } }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
@@ -1195,7 +1204,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The bars of the top row, each with its slice of the glow.
     private var projectGlows: [ProjectGlow] {
-        [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow]
+        [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow, windowColumn.projectGlow]
     }
 
     private func paintProjectColor() {
@@ -1384,8 +1393,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         applyTerminalTabs()
         updateCollapseButton()
+        // The window column follows the sidebar's side: the far right with it, the order mirrored.
+        columnHost.columnOnRight = sidebarOnRight
+        placeWindowColumn()
         updateInsets()
     }
+
+    /// The sidebar at `width`, wherever it is.
+    func placeSidebar(width: CGFloat) { placeSidebarDivider(width: width) }
 
     private func placeSidebarDivider(width: CGFloat) {
         splitView.layoutSubtreeIfNeeded()
@@ -1419,6 +1434,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         } else {
             splitView.adjustSubviews()
         }
+        // The column stays where it is; only the room it is measured by changed.
+        columnHost.needsLayout = true
         updateInsets()
     }
 
@@ -1431,10 +1448,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The traffic lights sit over whichever pane is top-left; full screen has none. Tab bars along the
     /// top of the window drag it, like a title bar, and have the project's glow; one lower down has neither.
-    private func updateInsets() {
-        let lights: CGFloat = isFullScreen ? 8 : 78
+    /// The window column on the left takes its width off their room in the pane after it.
+    func updateInsets() {
+        let column: CGFloat = windowColumnUnderLights
+        let lights: CGFloat = isFullScreen ? 8 : max(8, 78 - column)
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
-        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? 70 : 8
+        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? max(8, 70 - column) : 8
+        updateWindowColumnInsets()
         let corner = sidebarTopLeft ? 8 : lights
         let editorShown = !editorArea.isHidden
         // Folded to its rail on the left, the terminal has no bar: the editor's, just after the rail, has the corner.
@@ -1706,6 +1726,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             return
         }
         if isSidebarVisible, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
+        // The sidebar's width is what the window column's room is measured beside.
+        if (notification.object as? NSSplitView) === splitView { columnHost.needsLayout = true }
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, insert text: String) {

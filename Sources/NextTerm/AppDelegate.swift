@@ -118,6 +118,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
     @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
 
+    /// A click on a window's badge or row: that window in front, with its tab as it is. Nothing it shows changes.
+    func bringForward(_ id: Int) {
+        guard let controller = controllers.first(where: { $0.indexID == id && !$0.hasClosed }), let window = controller.window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
         moveTerminal(to: position, announce: true)

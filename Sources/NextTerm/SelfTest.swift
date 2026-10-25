@@ -3538,8 +3538,10 @@ enum SelfTest {
     /// the sidebar and the terminal, and saved its width as the editor's share. Real mouse events, as a hand
     /// makes them.
     private static func emptyEditorChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
-        guard let window = c.window, let work = c.editorArea.superview as? NSSplitView, let terminalPane = c.tabBar.superview,
-              let outer = window.contentView as? NSSplitView else { return check(false, "the work area is a split view") }
+        guard let window = c.window, let work = c.editorArea.superview as? NSSplitView, let terminalPane = c.tabBar.superview else {
+            return check(false, "the work area is a split view")
+        }
+        let outer: NSSplitView = c.outerSplitView
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard
