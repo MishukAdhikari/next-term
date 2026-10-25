@@ -41,4 +41,14 @@ import Testing
         #expect(HerdrTabs.focusedTab(#"{"tabs":[{"tab_id":"w1:t1","focused":"true"},{"tab_id":"w1:t2","focused":true}]}"#) == "w1:t2")
         #expect(HerdrTabs.focusedTab("not json") == nil)
     }
+
+    /// herdr 0.9.1's own `session list --json`, as a hand check read it: each session also names its folder and socket,
+    /// which are left out, and a stopped default is listed first all the same. The paths here are made up.
+    @Test func herdr091sSessionListWithItsFoldersReads() {
+        let output = #"{"sessions":[{"default":true,"name":"default","running":false,"session_dir":"/tmp/made-up/herdr","#
+            + #""socket_path":"/tmp/made-up/herdr/herdr.sock"},{"default":false,"name":"review","running":true,"#
+            + #""session_dir":"/tmp/made-up/herdr/sessions/review","socket_path":"/tmp/made-up/herdr/sessions/review/herdr.sock"}]}"#
+        #expect(HerdrSession.parse(output) == [HerdrSession(name: "default", isDefault: true),
+                                               HerdrSession(name: "review", running: true)])
+    }
 }
