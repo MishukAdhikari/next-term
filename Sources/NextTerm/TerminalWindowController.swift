@@ -1272,7 +1272,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(closeProject(_:)) { return project != nil }
         if item.action == #selector(setProjectColor(_:)) { return validateProjectColor(item) }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
-        if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil || editorArea.activeDatabase?.hasDraft == true }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(goToHeading(_:)) { return editorArea.activeEditor?.markdown != nil }

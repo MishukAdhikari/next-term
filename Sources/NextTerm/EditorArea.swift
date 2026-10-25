@@ -206,6 +206,12 @@ final class EditorArea: NSView, TabBarViewDelegate {
         let pane = DatabasePane(url: URL(fileURLWithPath: path))
         pane.onTitleChange = { [weak self] in self?.refresh() }
         pane.onSendToAgent = { [weak self] items in self?.onSendToAgent?(items) }
+        pane.onDraftChange = { [weak self, weak pane] in
+            guard let self else { return }
+            // The first edit keeps a preview, as typing in a file does.
+            if pane?.hasDraft == true, pane === self.previewPane { self.previewPane = nil }
+            self.refresh()
+        }
         add(pane, preview: preview)
         select(activeIndex, focus: focus)
         return .opened
@@ -266,7 +272,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// A new tab. A preview takes the place of the one before it, at the same position in the tab bar;
     /// anything else goes next to the current tab.
     private func add(_ pane: NSView, preview: Bool) {
-        if preview, let old = previewPane, (old as? CodeEditorView)?.document.isDirty != true,
+        if preview, let old = previewPane, (old as? CodeEditorView)?.document.isDirty != true, (old as? DatabasePane)?.hasDraft != true,
            let index = panes.firstIndex(where: { $0 === old }) {
             // Not through remove(): closing the only tab would hide the editor area on the way.
             fill(pane)
@@ -351,6 +357,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Closes a tab without asking (a decided proposal, a diff). A file's diff in a Git Diff tab closes that tab.
     func close(_ pane: NSView) {
         if let editor = pane as? CodeEditorView { return requestClose(editor) }
+        if let database = pane as? DatabasePane { return requestClose(database) }
         if let diff = pane as? DiffPane, let owner = gitDiffs.first(where: { $0.diffPane === diff }) { return remove(owner) }
         remove(pane)
     }
@@ -499,7 +506,28 @@ final class EditorArea: NSView, TabBarViewDelegate {
     }
 
     func closeActive() {
-        if let editor = activeEditor { requestClose(editor) } else if let pane = activePane { remove(pane) }
+        if let editor = activeEditor { requestClose(editor) } else if let database = activeDatabase { requestClose(database) } else if let pane = activePane { remove(pane) }
+    }
+
+    /// Closes a database tab, asking first about an unsaved value: Save (closing once it is written), Don't
+    /// Save, or Cancel.
+    func requestClose(_ database: DatabasePane) {
+        guard database.hasDraft, let window, let column = database.edit.cell?.column else { return remove(database) }
+        let alert = NSAlert()
+        alert.messageText = "Save your change to “\(column)” in “\(database.name)”?"
+        alert.informativeText = "Your change is lost if you don’t save it. Nothing has been written to the file."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save").keyEquivalent = "d"
+        alert.alertStyle = .warning
+        alert.beginSheetModal(for: window) { [weak self, weak database] response in
+            guard let self, let database else { return }
+            switch response {
+            case .alertFirstButtonReturn: database.save { saved in if saved { self.remove(database) } }
+            case .alertThirdButtonReturn: self.remove(database)
+            default: break
+            }
+        }
     }
 
     private func remove(_ pane: NSView) {
@@ -595,6 +623,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     /// Takes a closed tab's view away, and its editor's layout off the document's text.
     private func discard(_ pane: NSView) {
+        // A database tab's allowance to edit, its draft and its undo steps go with it.
+        (pane as? DatabasePane)?.closeEditing()
         pane.removeFromSuperview()
         if let editor = pane as? CodeEditorView {
             editor.document.storage.layoutManagers.forEach { editor.document.storage.removeLayoutManager($0) }
@@ -627,6 +657,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
     }
 
     func saveActive() {
+        if let database = activeDatabase, database.hasDraft { return database.save() }
         guard let document = activeEditor?.document else { return NSSound.beep() }
         save(document)
     }
@@ -727,8 +758,10 @@ final class EditorArea: NSView, TabBarViewDelegate {
                                   accessibilityStatus: "notebook, read-only", icon: FileIcons.icon(for: notebook.url, size: 16), modified: false)
             }
             if let database = pane as? DatabasePane {
-                return TabBarItem(title: database.name, state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, read-only)",
-                                  accessibilityStatus: "database, read-only", icon: FileIcons.icon(for: database.url, size: 16), modified: false)
+                let state = database.isEditingAllowed ? "editing allowed" : "read-only"
+                return TabBarItem(title: database.name, state: .idle, tooltip: RecentProjects.abbreviate(database.path) + " (SQLite, \(state))",
+                                  accessibilityStatus: "database, \(state)" + (database.hasDraft ? ", unsaved change" : ""),
+                                  icon: FileIcons.icon(for: database.url, size: 16), modified: database.hasDraft)
             }
             if let data = pane as? DataPane {
                 return TabBarItem(title: title(data.url), state: .idle, tooltip: RecentProjects.abbreviate(data.path) + " (first rows, read-only)",
@@ -789,7 +822,13 @@ final class EditorArea: NSView, TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, didSelect index: Int) { select(index) }
 
     func tabBar(_ bar: TabBarView, didClose index: Int) {
-        if let editor = panes[safe: index] as? CodeEditorView { requestClose(editor) } else if let pane = panes[safe: index] { remove(pane) }
+        if let editor = panes[safe: index] as? CodeEditorView {
+            requestClose(editor)
+        } else if let database = panes[safe: index] as? DatabasePane {
+            requestClose(database)
+        } else if let pane = panes[safe: index] {
+            remove(pane)
+        }
     }
 
     func tabBar(_ bar: TabBarView, didMove from: Int, to: Int) {

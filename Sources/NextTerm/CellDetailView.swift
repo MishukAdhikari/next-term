@@ -32,11 +32,38 @@ struct DetailRowItem: Equatable {
     }
 }
 
+/// What edits a cell from the detail pane: the SQLite viewer, while editing is allowed in its tab. The data
+/// head view has none, so its detail never shows an edit control.
+protocol CellDetailEditor: AnyObject {
+    func detailBeginEdit()
+    func detailTyped(_ text: String)
+    func detailSetNull()
+    func detailRevert()
+    func detailSave()
+}
+
 /// The whole value of the grid's current cell, beside the grid: the column and what kind of value it is,
 /// the value in a text view (wrapped, selectable, its control characters shown, ⌘F to find in it), and
 /// below a thin divider the selected row as a list of column: value lines. Copy copies the value as
-/// stored. The SQLite viewer and the data head view both show their cells here.
-final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate {
+/// stored. The SQLite viewer and the data head view both show their cells here. With an editor, the
+/// footer also has Edit, then Set NULL, Revert and Save, and says why a cell can't be edited.
+final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate, NSTextViewDelegate {
+    /// What the edit controls show.
+    struct Editing: Equatable {
+        /// Why this cell can't be edited.
+        var reason: String?
+        /// A draft of this cell is open in the text view.
+        var isEditing = false
+        /// The draft's text, as typed.
+        var text: String?
+        var isNull = false
+        var isModified = false
+        var canSetNull = false
+        var isSaving = false
+        /// The last save's sentence, or why the typed text can't be saved.
+        var message: String?
+    }
+
     static let defaultWidth: CGFloat = 340
     static let minimumWidth: CGFloat = 260
 
@@ -50,7 +77,18 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
     let copyButton = NSButton(title: "Copy", target: nil, action: nil)
     let noteLabel = NSTextField(wrappingLabelWithString: "")
     let footer = NSStackView()
+    let editButton = NSButton(title: "Edit", target: nil, action: nil)
+    let nullButton = NSButton(title: "Set NULL", target: nil, action: nil)
+    let revertButton = NSButton(title: "Revert", target: nil, action: nil)
+    let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    /// Why the cell can't be edited, or what the last save said.
+    let editLabel = NSTextField(wrappingLabelWithString: "")
     private var didPlaceDivider = false
+    /// The draft's own undo manager while it is typed, so typing never mixes with saves.
+    private let draftUndo = UndoManager()
+
+    weak var editor: CellDetailEditor?
+    private(set) var editing: Editing?
 
     private(set) var detail: CellDetail?
     private(set) var items: [DetailRowItem] = []
@@ -112,6 +150,7 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
         textView.layoutManager?.showsControlCharacters = true
         textView.layoutManager?.allowsNonContiguousLayout = true
         textView.onEscape = { [weak self] in self?.onEscape?() }
+        textView.delegate = self
         textScroll.documentView = textView
         textScroll.hasVerticalScroller = true
         textScroll.autohidesScrollers = true
@@ -160,10 +199,31 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
         noteLabel.textColor = Theme.textDim
         noteLabel.maximumNumberOfLines = 3
         noteLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        footer.setViews([noteLabel, NSView(), copyButton], in: .leading)
-        footer.spacing = 6
-        footer.alignment = .centerY
-        footer.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 8)
+        editLabel.font = .systemFont(ofSize: 11)
+        editLabel.textColor = Theme.textDim
+        editLabel.maximumNumberOfLines = 4
+        editLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        editLabel.isHidden = true
+        for (button, action, tip) in [(editButton, #selector(editClicked), "Edit this value (↩)"),
+                                      (nullButton, #selector(nullClicked), "Set this cell to NULL"),
+                                      (revertButton, #selector(revertClicked), "Put back the value as the file has it"),
+                                      (saveButton, #selector(saveClicked), "Write this value to the file (⌘S)")] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11)
+            button.target = self
+            button.action = action
+            button.toolTip = tip
+            button.isHidden = true
+        }
+        let buttons = NSStackView(views: [editButton, nullButton, revertButton, saveButton, NSView(), copyButton])
+        buttons.spacing = 6
+        footer.setViews([noteLabel, editLabel, buttons], in: .leading)
+        footer.orientation = .vertical
+        footer.alignment = .leading
+        footer.spacing = 4
+        for view in [noteLabel, editLabel, buttons] { view.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -18).isActive = true }
+        footer.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 8)
         footer.wantsLayer = true
         footer.layer?.backgroundColor = Theme.bar.cgColor
 
@@ -202,8 +262,9 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
     func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool { view === textScroll }
 
     /// Shows a cell's value, and its row (`items`, with `current` the cell's column), or "click a cell".
+    /// While a draft is open its text stays as typed.
     func show(_ detail: CellDetail?, items: [DetailRowItem], current: Int) {
-        let sameValue = detail?.body == self.detail?.body && detail?.isNull == self.detail?.isNull
+        let sameValue = textView.isEditable || detail?.body == self.detail?.body && detail?.isNull == self.detail?.isNull
         self.detail = detail
         guard let detail else {
             titleLabel.stringValue = "No cell"
@@ -266,6 +327,59 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+
+    // MARK: editing
+
+    /// The edit controls: none without an editor (the data head view, or editing not allowed), Edit on a
+    /// cell that can be edited, and the draft's controls while one is open.
+    func showEditing(_ editing: Editing?) {
+        let editing = editor == nil ? nil : editing
+        self.editing = editing
+        let on = editing?.isEditing == true
+        if on != textView.isEditable {
+            textView.isEditable = on
+            textView.allowsUndo = on
+            draftUndo.removeAllActions()
+            if on {
+                setDraftText(editing?.isNull == true ? "" : editing?.text ?? "")
+            } else if let detail {
+                setBody(detail.body, dim: detail.isNull || detail.isBlob)
+            }
+        } else if on, editing?.isNull == true, !textView.string.isEmpty {
+            setDraftText("")
+        }
+        textView.keepsEscape = editing?.isModified == true
+        editButton.isHidden = editing == nil || on
+        editButton.isEnabled = editing?.reason == nil && !(editing?.isSaving ?? false)
+        for button in [nullButton, revertButton, saveButton] { button.isHidden = !on }
+        nullButton.isEnabled = on && editing?.canSetNull == true && editing?.isNull == false && editing?.isSaving == false
+        revertButton.isEnabled = on && editing?.isSaving == false
+        saveButton.isEnabled = on && editing?.isModified == true && editing?.isSaving == false
+        let line = on && editing?.isNull == true && editing?.message == nil ? "Set to NULL when you save. Type to give it a value instead." : editing?.message ?? editing?.reason
+        editLabel.stringValue = line ?? ""
+        editLabel.isHidden = line == nil
+        editLabel.textColor = editing?.reason != nil && editing?.message == nil ? Theme.textDim : Theme.attention
+    }
+
+    private func setDraftText(_ text: String) {
+        let attributes: [NSAttributedString.Key: Any] = [.font: Theme.monoFont(size: 12), .foregroundColor: Theme.terminalForeground]
+        textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: attributes))
+        textView.typingAttributes = attributes
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard textView.isEditable else { return }
+        editor?.detailTyped(textView.string)
+    }
+
+    func undoManager(for view: NSTextView) -> UndoManager? {
+        view.isEditable ? draftUndo : window?.undoManager
+    }
+
+    @objc private func editClicked() { editor?.detailBeginEdit() }
+    @objc private func nullClicked() { editor?.detailSetNull() }
+    @objc private func revertClicked() { editor?.detailRevert() }
+    @objc private func saveClicked() { editor?.detailSave() }
 
     @objc private func rowClicked() {
         let row = rowList.clickedRow

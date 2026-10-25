@@ -4,8 +4,18 @@ import NextTermCore
 /// The rows of the SQLite viewer and of the data head view. NSTableView selects rows; this adds a current
 /// cell, the selected row (its last, under a multiple selection) at `currentColumn`, outlined. A click
 /// sets both; ↑↓ move the row as ever and ←→ the column; ↩ and Space go to the host. ⌘C copies the
-/// selected rows the host's way.
-final class DatabaseGridView: NSTableView {
+/// selected rows the host's way. A cell's label can take one edit in place (the SQLite viewer's short
+/// values): ↩ saves, Esc cancels.
+final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
+    /// How an edit in place ended, or that its text changed.
+    enum InPlaceEnd: Equatable {
+        case typed(String)
+        case save(String)
+        case cancel
+        /// The keyboard went elsewhere with the field open.
+        case left(String)
+    }
+
     var onCopy: (() -> Void)?
     /// ↩ was pressed in the grid.
     var onEnter: (() -> Void)?
@@ -17,6 +27,16 @@ final class DatabaseGridView: NSTableView {
     var onClickCell: ((Int) -> Void)?
     /// The first column the current cell can be in (the head view's line number is not a value).
     var firstValueColumn = 0
+    /// Asked before a click or an arrow moves the current cell to (row, column): false keeps it, and the
+    /// host moves it itself once it may (a draft was saved or put back).
+    var shouldMoveCurrentCell: ((Int, Int) -> Bool)?
+    private var inPlace: (row: Int, column: Int, end: (InPlaceEnd) -> Void)?
+    private var endingInPlace = false
+    /// For the self-test: the field open for an edit in place.
+    var inPlaceField: NSTextField? {
+        guard let inPlace else { return nil }
+        return gridCell(row: inPlace.row, column: inPlace.column)?.label
+    }
     /// The column of the current cell, or -1 before there is one.
     private(set) var currentColumn = -1
     private var outlined: (row: Int, column: Int)?
@@ -61,6 +81,8 @@ final class DatabaseGridView: NSTableView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let column = column(at: point)
+        if let ask = shouldMoveCurrentCell, row(at: point) >= 0, column >= firstValueColumn,
+           row(at: point) != selectedRow || column != currentColumn, !ask(row(at: point), column) { return }
         if column >= firstValueColumn, row(at: point) >= 0, column != currentColumn {
             currentColumn = column
             cellMoved()
@@ -72,11 +94,16 @@ final class DatabaseGridView: NSTableView {
     override func keyDown(with event: NSEvent) {
         let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
         switch event.keyCode {
+        case 125, 126: // ↓ ↑: native, unless a draft keeps the cell
+            let target = min(max(0, selectedRow + (event.keyCode == 125 ? 1 : -1)), max(0, numberOfRows - 1))
+            if let ask = shouldMoveCurrentCell, numberOfRows > 0, target != selectedRow, !ask(target, currentColumn) { return }
+            super.keyDown(with: event)
         case 123 where plain, 124 where plain: // ← →
             guard numberOfColumns > 0, numberOfRows > 0 else { return super.keyDown(with: event) }
             if selectedRow < 0 { selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
             let start = currentColumn < firstValueColumn ? firstValueColumn : currentColumn + (event.keyCode == 123 ? -1 : 1)
             let next = min(max(start, firstValueColumn), numberOfColumns - 1)
+            if let ask = shouldMoveCurrentCell, next != currentColumn, !ask(selectedRow, next) { return }
             if next != currentColumn {
                 currentColumn = next
                 cellMoved()
@@ -125,10 +152,63 @@ final class DatabaseGridView: NSTableView {
         return view(atColumn: column, row: row, makeIfNecessary: false) as? GridCellView
     }
 
+    // MARK: editing in place
+
+    /// The label of the cell at (row, column) becomes a field holding `text`, with the keyboard.
+    func editInPlace(row: Int, column: Int, text: String, end: @escaping (InPlaceEnd) -> Void) {
+        endEditInPlace()
+        scrollRowToVisible(row)
+        scrollColumnToVisible(column)
+        guard let cell = view(atColumn: column, row: row, makeIfNecessary: true) as? GridCellView else { return }
+        inPlace = (row, column, end)
+        cell.beginEditing(text, delegate: self)
+        window?.makeFirstResponder(cell.label)
+        cell.label.currentEditor()?.selectAll(nil)
+    }
+
+    /// Closes the field (the host saved, or put the value back); the grid has the keyboard again.
+    func endEditInPlace() {
+        guard let open = inPlace else { return }
+        endingInPlace = true
+        defer { endingInPlace = false }
+        inPlace = nil
+        let cell = gridCell(row: open.row, column: open.column)
+        let hadKeyboard = cell.map { window?.firstResponder === $0.label.currentEditor() } ?? false
+        cell?.endEditing()
+        if hadKeyboard { window?.makeFirstResponder(self) }
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let open = inPlace, let field = notification.object as? NSTextField else { return }
+        open.end(.typed(field.stringValue))
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard let open = inPlace else { return false }
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)):
+            open.end(.save(control.stringValue))
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            open.end(.cancel)
+            return true
+        default:
+            return false
+        }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard !endingInPlace, let open = inPlace, let field = notification.object as? NSTextField else { return }
+        inPlace = nil
+        gridCell(row: open.row, column: open.column)?.endEditing()
+        open.end(.left(field.stringValue))
+    }
+
     /// A cell for `tableColumn` at `row`, reused when one is free, outlined when it is the current one.
     func cell(for tableColumn: NSTableColumn?, row: Int) -> GridCellView {
         let cell = GridCellView.make(in: self)
         let column = tableColumn.map { tableColumns.firstIndex(of: $0) ?? -1 } ?? -1
+        if cell.isEditingInPlace, inPlace.map({ $0.row != row || $0.column != column }) ?? true { cell.endEditing() }
         cell.isCurrent = currentCell.map { $0.row == row && $0.column == column } ?? false
         if cell.isCurrent { outlined = (row, column) }
         return cell
@@ -181,6 +261,32 @@ final class GridCellView: NSTableCellView {
         label.textColor = color
         label.font = font
         label.toolTip = nil
+    }
+
+    var isEditingInPlace: Bool { label.isEditable }
+
+    /// The label takes one edit: editable, on a field's background, scrolling rather than cut.
+    func beginEditing(_ text: String, delegate: NSTextFieldDelegate) {
+        label.isEditable = true
+        label.isSelectable = true
+        label.drawsBackground = true
+        label.backgroundColor = Theme.bar
+        label.textColor = Theme.text
+        label.font = Self.font
+        label.cell?.isScrollable = true
+        label.cell?.truncatesLastVisibleLine = false
+        label.stringValue = text
+        label.delegate = delegate
+        label.setAccessibilityLabel("Edit value")
+    }
+
+    func endEditing() {
+        label.delegate = nil
+        label.isEditable = false
+        label.isSelectable = false
+        label.drawsBackground = false
+        label.setAccessibilityLabel(nil)
+        Typography.singleLine(label, truncation: .byTruncatingTail)
     }
 
     /// A SQLite value: NULL and a blob dim and italic.

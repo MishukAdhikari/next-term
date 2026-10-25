@@ -1,10 +1,10 @@
 import AppKit
 import NextTermCore
 
-/// A SQLite file in an editor tab, read-only: its tables on the left, a page of 1,000 rows in the middle,
-/// and the current cell's whole value on the right (CellDetailView). Everything is read off the main
-/// thread through SQLiteReader, which never writes. Rows copy as CSV, JSON or Markdown, and go to the
-/// agent the way files do (⌥⌘K).
+/// A SQLite file in an editor tab: its tables on the left, a page of 1,000 rows in the middle, and the
+/// current cell's whole value on the right (CellDetailView). Everything is read off the main thread
+/// through SQLiteReader, which never writes. Rows copy as CSV, JSON or Markdown, and go to the agent the
+/// way files do (⌥⌘K). It stays read-only until "Allow Editing…" (SQLiteViewerEditing.swift).
 final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private(set) var url: URL
     var path: String { url.path }
@@ -12,11 +12,15 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var onTitleChange: (() -> Void)?
     /// Send to Agent was clicked.
     var onSendToAgent: (([ContextItem]) -> Void)?
+    /// A draft was opened, typed, saved or put back: the tab's modified dot, and a preview kept.
+    var onDraftChange: (() -> Void)?
 
     private let header = NSStackView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let summary = NSTextField(labelWithString: "")
     private let copyAs = NSPopUpButton(frame: .zero, pullsDown: true)
+    /// Allow Editing… or Stop Editing.
+    let editingButton = NSButton(title: "Allow Editing…", target: nil, action: nil)
     private let sendButton = NSButton(title: "Send to Agent", target: nil, action: nil)
     private var sendTip: ShortcutToolTip?
     let tableList = NSTableView()
@@ -38,17 +42,21 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private(set) var loadError: String?
     private(set) var isLoading = false
     private(set) var isDeletedOnDisk = false
-    private let queue = DispatchQueue(label: "me.mishuk.nextterm.sqlite-viewer", qos: .userInitiated)
+    /// Reads, and the one write of a Save, in turn.
+    let queue = DispatchQueue(label: "me.mishuk.nextterm.sqlite-viewer", qos: .userInitiated)
+    /// Editing in this tab: allowed or not, the draft, the saves' undo steps (SQLiteViewerEditing.swift).
+    var edit = EditState()
     private var generation = 0
     private var stamps: [FileStamp?] = []
     /// Values read whole by their row's key (a text cut at 10,000 characters on the page), until the
     /// page is read again.
-    private var wholeValues: [CellKey: SQLiteValue] = [:]
+    private(set) var wholeValues: [CellKey: SQLiteValue] = [:]
     /// Moves on with every current cell, so a whole value read for a cell left behind is not shown.
     private var detailToken = 0
     #if DEBUG
-    /// For the self-test: how many values were read whole.
+    /// For the self-test: how many values were read whole, and what the last write did.
     private(set) var fetches = 0
+    var lastOutcome: SQLiteSaveOutcome?
     #endif
 
     struct CellKey: Hashable {
@@ -98,7 +106,13 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         sendButton.target = self
         sendButton.action = #selector(sendClicked)
         sendTip = ShortcutToolTip(sendButton, "Send the selected rows to the agent in this window", #selector(TerminalWindowController.sendToAgent(_:)))
-        header.setViews([titleLabel, summary, NSView(), split.toggle, copyAs, sendButton], in: .leading)
+        editingButton.bezelStyle = .rounded
+        editingButton.controlSize = .small
+        editingButton.font = .systemFont(ofSize: 11)
+        editingButton.target = self
+        editingButton.action = #selector(editingButtonClicked)
+        showEditButton()
+        header.setViews([titleLabel, summary, NSView(), editingButton, split.toggle, copyAs, sendButton], in: .leading)
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
@@ -134,9 +148,18 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         grid.setAccessibilityLabel("Rows")
         grid.onCopy = { [weak self] in self?.copy(TableExport.csv) }
         grid.onCurrentCellChange = { [weak self] in self?.showCurrentCell() }
-        grid.onClickCell = { [weak self] _ in self?.showDetail(true) }
+        grid.onClickCell = { [weak self] clicks in
+            guard let self else { return }
+            self.showDetail(true)
+            if clicks == 2, self.isEditingAllowed { self.beginEditing() }
+        }
         grid.onSpace = { [weak self] in self?.toggleDetail() }
-        grid.onEnter = { [weak self] in self?.enterValue() }
+        grid.onEnter = { [weak self] in
+            guard let self else { return }
+            self.isEditingAllowed ? self.beginEditing() : self.enterValue()
+        }
+        grid.shouldMoveCurrentCell = { [weak self] row, column in self?.shouldLeaveDraft(to: row, column: column) ?? true }
+        detail.editor = self
         split.onShownChange = { [weak self] in self?.showCurrentCell() }
         detail.onSelectColumn = { [weak self] column in
             guard let self else { return }
@@ -217,17 +240,21 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         titleLabel.toolTip = path
     }
 
-    /// "SQLite · 4 tables · read-only", or what is wrong.
-    private func showSummary() {
+    /// "SQLite · 4 tables · read-only" ("editing allowed" while it is), or what is wrong.
+    func showSummary() {
         var parts = ["SQLite"]
         let count = tables.filter { !$0.isView }.count, views = tables.count - count
         if !tables.isEmpty || loadError == nil { parts.append(count == 1 ? "1 table" : "\(count) tables") }
         if views > 0 { parts.append(views == 1 ? "1 view" : "\(views) views") }
         if isLoading { parts.append("reading…") }
-        parts.append(isDeletedOnDisk ? "deleted on disk" : "read-only")
-        summary.stringValue = parts.joined(separator: " · ")
-        summary.textColor = isDeletedOnDisk ? Theme.linesRemoved : Theme.textDim
-        summary.toolTip = "Opened read-only. Nothing here writes to the file."
+        let state = isDeletedOnDisk ? "deleted on disk" : isEditingAllowed ? "editing allowed" : "read-only"
+        let text = NSMutableAttributedString(string: parts.joined(separator: " · ") + " · ",
+                                             attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.textDim])
+        let color = isDeletedOnDisk ? Theme.linesRemoved : isEditingAllowed ? Theme.attention : Theme.textDim
+        text.append(NSAttributedString(string: state, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: color]))
+        summary.attributedStringValue = Typography.truncating(text, .byTruncatingTail)
+        summary.toolTip = isEditingAllowed ? "Editing is allowed in this tab: Save writes one value to the file. Stop Editing makes it read-only again."
+                                           : "Opened read-only. Nothing here writes to the file."
         if let page, let total {
             let first = page.rows.isEmpty ? 0 : page.offset + 1
             pageLabel.stringValue = total == 0 ? "No rows" : "Rows \(first.formatted())–\((page.offset + page.rows.count).formatted()) of \(total.formatted())"
@@ -345,7 +372,8 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     /// The file changed on disk (a migration ran, an agent wrote to it): read it again. About once a second.
     func refreshIfChanged() {
-        guard !isLoading else { return }
+        checkIdentity()
+        guard !isLoading, !edit.isSaving else { return }
         let now = Self.stamps(path)
         guard now != stamps else { return }
         if now.first == nil {
@@ -477,10 +505,17 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return cell
     }
 
+    /// Another table with a draft open: Save, Don't Save or Cancel first.
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        guard tableView === tableList, hasDraft, row != tableList.selectedRow else { return true }
+        return askToLeaveDraft { [weak self] in self?.tableList.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard notification.object as? NSTableView === tableList else { return }
         let row = tableList.selectedRow
         guard tables.indices.contains(row), tables[row].name != selectedTable || page == nil else { return }
+        if edit.draft != nil { endDraft() }
         grid.deselectAll(nil)
         load(tables[row].name, offset: 0)
     }
@@ -491,7 +526,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var currentTable: SQLiteTable? { page.flatMap { page in tables.first { $0.name == page.table } } }
 
     /// The current cell's row key and column, with its table.
-    private var currentCellKey: (table: String, cell: CellKey)? {
+    var currentCellKey: (table: String, cell: CellKey)? {
         guard let page, let cell = grid.currentCell, cell.row < page.keys.count, cell.column < page.columns.count,
               let key = page.keys[cell.row] else { return nil }
         return (page.table, CellKey(key: key, column: page.columns[cell.column]))
@@ -538,6 +573,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         } else {
             detail.show(CellDetail.make(column: name, declaredType: declared, value: value, source: source), items: items, current: cell.column)
         }
+        detail.showEditing(editingUI)
         if case .page(fetching: true, _) = source, let key { readWhole(page.table, column: name, declaredType: declared, key: key, items: items, current: cell.column) }
     }
 
@@ -555,7 +591,10 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 guard let self, generation == self.generation else { return }
                 if let value { self.wholeValues[CellKey(key: key, column: column)] = value }
                 guard token == self.detailToken else { return }
-                if let made { return self.detail.show(made, items: items, current: current) }
+                if let made {
+                    self.detail.show(made, items: items, current: current)
+                    return self.detail.showEditing(self.editingUI)
+                }
                 if case .failure = read { return self.detail.showNote("The whole value could not be read.") }
                 self.detail.showNote("This row was deleted since the page was read.")
             }
@@ -580,6 +619,23 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func select(table name: String) {
         guard let index = tables.firstIndex(where: { $0.name == name }) else { return }
         tableList.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+    }
+}
+
+extension DatabasePane: CellDetailEditor {
+    func detailBeginEdit() { beginDetailEdit() }
+    func detailTyped(_ text: String) { draftTyped(text) }
+    func detailSetNull() { setDraftNull() }
+    func detailRevert() { revertDraft() }
+    func detailSave() { save() }
+
+    /// For the self-test: the header's summary as it reads.
+    var summaryText: String { summary.stringValue }
+    var summaryTip: String { summary.toolTip ?? "" }
+
+    func showEditButton() {
+        editingButton.title = isEditingAllowed ? "Stop Editing" : "Allow Editing…"
+        editingButton.toolTip = isEditingAllowed ? "Make this tab read-only again" : "Edit values in this file, after a question; Save writes one value at a time"
     }
 }
 
