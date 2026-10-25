@@ -44,9 +44,11 @@ final class GitMonitor {
         refresh()
     }
 
+    /// Watches nothing: the window closed, or its tree shows no project. The last snapshot goes too.
     func stop() {
         directory = nil
         generation += 1
+        snapshot = nil
         gated.cancel()
     }
 

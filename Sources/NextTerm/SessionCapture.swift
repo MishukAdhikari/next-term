@@ -73,17 +73,18 @@ enum SessionCapture {
         var pane = SessionSnapshot.Pane(id: tab.id, userTitle: tab.userTitle, command: command(tab), stateBefore: state(tab),
                                         interrupted: interrupted(tab), lastSelected: tab.lastSelected, scrollback: scrollback)
         if let remote = tab.remote {
-            let keep: KeepMode = tab.fellBack ? .off : remote.keep
+            let keep = remote.keep.shown(fellBack: tab.fellBack)
             pane.remote = RemoteTabRecord(hostID: remote.host.id, destination: remote.host.destination, port: remote.host.port,
                                           directory: keep == .tmux ? remote.directory : tab.directory, session: remote.session,
-                                          keep: keep, project: project, title: tab.userTitle)
+                                          keep: keep, project: project, title: tab.userTitle,
+                                          herdrSession: keep == .herdr ? remote.herdrSession : nil)
         } else {
             pane.folder = tab.liveDirectory
             pane.systemZsh = tab.shellPath == "/bin/zsh"
             if status.running && !tab.exited {
                 pane.agent = ProcessInspector.agentEvidence(ptyFileDescriptor: tab.view.process.childfd,
                                                             shellPid: tab.view.process.shellPid, status: status,
-                                                            home: RestorePlanning.agentHome)
+                                                            home: RestorePlanning.agentHome, shownSession: tab.shownSessionID)
             }
         }
         return pane

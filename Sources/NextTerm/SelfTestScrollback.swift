@@ -111,6 +111,31 @@ extension SelfTest {
         }
         _ = await wait(6) { !terminal.isCurrentBufferAlternate && !tab.status.running }
 
+        // ⌘K in a full-screen program (herdr, tmux): its own Ctrl+L, for the pane it has in front, never a wipe here of
+        // every pane it drew. `cat -v` stands in for its pane: it prints the ^L it was given, and what was drawn stays.
+        // The alternate-screen command above must be over first (its sleep would take this line as input).
+        _ = await wait(10) { !terminal.isCurrentBufferAlternate && !tab.status.running }
+        await atPrompt()
+        tab.view.send(txt: "printf '\\e[?1049hPANE-A  PANE-B\\n'; cat -v; printf '\\e[?1049l'\r")
+        if await wait(8, { terminal.isCurrentBufferAlternate && tab.screenTail().joined().contains("PANE-A") }) {
+            holder.clear(tab)
+            let given = await wait(3) { tab.screenTail().joined().contains("^L") }
+            check(given && tab.screenTail().joined().contains("PANE-A  PANE-B"),
+                  "Clear Buffer in a full-screen program gives it Ctrl+L for its pane, and wipes nothing else it drew",
+                  tab.screenTail().suffix(4).joined(separator: " | "))
+        } else {
+            check(false, "Clear Buffer: a full-screen stand-in starts in the tab",
+                  "alternate \(terminal.isCurrentBufferAlternate), running \(tab.status.running): " + tab.screenTail().suffix(3).joined(separator: " | "))
+        }
+        // ^D twice: the line with the ^L, then the end, so cat stops and the line's printf leaves the alternate screen
+        // (^C would stop the whole line, printf too). Whatever happened, the tab is back at its prompt after.
+        tab.view.send(txt: "\u{04}\u{04}")
+        if !(await wait(6) { !terminal.isCurrentBufferAlternate && !tab.status.running }) {
+            tab.view.send(txt: "\u{03}")
+            tab.view.feed(text: "\u{1b}[?1049l")
+            _ = await wait(4) { !tab.status.running }
+        }
+
         // An agent's pane keeps only what came before its command.
         await atPrompt()
         tab.view.send(txt: home + "/bin/claude 60\r")

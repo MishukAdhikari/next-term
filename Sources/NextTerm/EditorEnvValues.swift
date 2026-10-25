@@ -1,33 +1,105 @@
 import AppKit
 import NextTermCore
 
-/// The editor's layout manager. It lays text out exactly as NSLayoutManager does, and only draws some
-/// characters as bullets instead of their glyphs: a .env file's values, while they are hidden. The
-/// text, its glyphs and where they go stay the same, so soft wrap, line numbers, the blame column, the
-/// change marks, the caret and selections are where they would be, and copy, find, save and undo work
-/// on the real text. (Swapping the glyphs instead would lay the line out again each time the caret
-/// moved onto it, and a wide character's bullet would rewrap it.)
+/// The editor's layout manager. It lays text out exactly as NSLayoutManager does, and only draws some characters
+/// differently: a .env file's values as bullets while they are hidden, and in Live Preview a Markdown file's list
+/// bullets, task boxes, rules and quote bars in the place of their characters, a done task's text faint, and a fence's
+/// lines on a tint across the editor. The text, its glyphs and where they go stay the same, so soft wrap, line
+/// numbers, the blame column, the change marks, the caret and selections are where they would be, and copy, find, save
+/// and undo work on the real text. (Swapping the glyphs instead would lay the line out again each time the caret moved
+/// onto it, and a wide character's bullet would rewrap it.)
 final class CodeLayoutManager: NSLayoutManager {
-    /// Character ranges drawn as bullets, in order. Asked each time glyphs are drawn.
-    var hiddenRanges: (() -> [NSRange])?
+    enum Drawing: Equatable {
+        /// A bullet for each character: a hidden .env value.
+        case bullet
+        /// One list bullet for a Markdown item's `-`, `*` or `+`.
+        case listBullet
+        case checkbox(done: Bool)
+        /// A line across the editor, for a thematic break.
+        case rule
+        case quoteBar
+        /// Nothing: the characters keep their room.
+        case blank
+        /// The characters themselves, faint.
+        case dim
+    }
+
+    struct DrawOver: Equatable {
+        var range: NSRange
+        var drawing: Drawing
+    }
+
+    /// What is drawn over the characters in a range, in order and apart. Asked each time glyphs are drawn.
+    var drawOver: ((NSRange) -> [DrawOver])?
+    /// Lines (character ranges) drawn on a tint across the editor: a Markdown fence's.
+    var tintedLines: ((NSRange) -> [NSRange])?
+    /// Runs of characters drawn on a tint behind their text, in order: a Markdown code span's.
+    var tintedRuns: ((NSRange) -> [NSRange])?
     private static let bullet = "•" as NSString
+    static let fenceTint = NSColor(white: 1, alpha: 0.035)
+    static let codeTint = NSColor(white: 1, alpha: 0.07)
+    static let markColor = NSColor(hex: 0x9DA0A8)
+    static let ruleColor = NSColor(hex: 0x43454A)
+    static let quoteColor = NSColor(hex: 0x4E5157)
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        guard let hidden = hiddenRanges?(), !hidden.isEmpty else { return super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin) }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        guard let over = drawOver?(characters), !over.isEmpty else { return super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin) }
         var next = glyphsToShow.location
-        for range in hidden {
-            if range.location >= NSMaxRange(characters) { break }
-            let overlap = NSIntersectionRange(range, characters)
+        for item in over {
+            if item.range.location >= NSMaxRange(characters) { break }
+            let overlap = NSIntersectionRange(item.range, characters)
             guard overlap.length > 0 else { continue }
             let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: overlap, actualCharacterRange: nil), glyphsToShow)
             guard glyphs.length > 0, glyphs.location >= next else { continue }
             if glyphs.location > next { super.drawGlyphs(forGlyphRange: NSRange(location: next, length: glyphs.location - next), at: origin) }
-            drawBullets(glyphs, at: origin)
+            draw(item.drawing, glyphs, at: origin)
             next = NSMaxRange(glyphs)
         }
         if next < NSMaxRange(glyphsToShow) {
             super.drawGlyphs(forGlyphRange: NSRange(location: next, length: NSMaxRange(glyphsToShow) - next), at: origin)
+        }
+    }
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        if let tinted = tintedLines?(characters), !tinted.isEmpty, let width = textContainers.first?.textView?.bounds.width {
+            Self.fenceTint.setFill()
+            for line in tinted {
+                let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: line, actualCharacterRange: nil), glyphsToShow)
+                guard glyphs.length > 0 else { continue }
+                enumerateLineFragments(forGlyphRange: glyphs) { fragment, _, _, _, _ in
+                    NSRect(x: 0, y: fragment.minY + origin.y, width: width, height: fragment.height).fill(using: .sourceOver)
+                }
+            }
+        }
+        if let runs = tintedRuns?(characters), !runs.isEmpty, let container = textContainers.first {
+            Self.codeTint.setFill()
+            let none = NSRange(location: NSNotFound, length: 0)
+            for run in runs {
+                let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: run, actualCharacterRange: nil), glyphsToShow)
+                guard glyphs.length > 0 else { continue }
+                // One rect a row, as a background colour's (a span that wraps is tinted on each of its rows).
+                enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: none, in: container) { rect, _ in
+                    rect.offsetBy(dx: origin.x, dy: origin.y).fill(using: .sourceOver)
+                }
+            }
+        }
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+
+    private func draw(_ drawing: Drawing, _ glyphs: NSRange, at origin: NSPoint) {
+        switch drawing {
+        case .bullet: drawBullets(glyphs, at: origin)
+        case .blank: break
+        case .dim:
+            guard let context = NSGraphicsContext.current?.cgContext else { return super.drawGlyphs(forGlyphRange: glyphs, at: origin) }
+            context.saveGState()
+            context.setAlpha(0.45)
+            super.drawGlyphs(forGlyphRange: glyphs, at: origin)
+            context.restoreGState()
+        case .listBullet, .checkbox, .rule, .quoteBar:
+            drawMark(drawing, glyphs, at: origin)
         }
     }
 
@@ -53,6 +125,54 @@ final class CodeLayoutManager: NSLayoutManager {
                 let point = NSPoint(x: origin.x + cell.midX - width / 2, y: origin.y + baseline - font.ascender)
                 Self.bullet.draw(at: point, withAttributes: attributes)
             }
+        }
+    }
+
+    /// A Markdown mark in the place of its characters, in the first row they are on, centred on the text's x-height.
+    private func drawMark(_ drawing: Drawing, _ glyphs: NSRange, at origin: NSPoint) {
+        guard let storage = textStorage, storage.length > 0, let container = textContainer(forGlyphAt: glyphs.location, effectiveRange: nil) else { return }
+        let first = min(characterIndexForGlyph(at: glyphs.location), storage.length - 1)
+        let font = storage.attribute(.font, at: first, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
+        let fragment = lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        let cells = boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
+        let baseline = fragment.minY + origin.y + location(forGlyphAt: glyphs.location).y
+        let middle = baseline - font.xHeight / 2
+        switch drawing {
+        case .listBullet:
+            let size = max(4, round(font.pointSize * 0.36))
+            Self.markColor.setFill()
+            NSBezierPath(ovalIn: NSRect(x: cells.midX - size / 2, y: middle - size / 2, width: size, height: size)).fill()
+        case .checkbox(let done):
+            let side = round(min(font.pointSize * 0.95, cells.width))
+            let box = NSRect(x: cells.midX - side / 2, y: middle - side / 2, width: side, height: side)
+            let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            if done {
+                Theme.accent.setFill()
+                path.fill()
+                let tick = NSBezierPath()
+                tick.move(to: NSPoint(x: box.minX + side * 0.25, y: box.midY))
+                tick.line(to: NSPoint(x: box.minX + side * 0.43, y: box.maxY - side * 0.27))
+                tick.line(to: NSPoint(x: box.maxX - side * 0.22, y: box.minY + side * 0.27))
+                tick.lineWidth = max(1.5, side * 0.12)
+                tick.lineCapStyle = .round
+                tick.lineJoinStyle = .round
+                NSColor.white.setStroke()
+                tick.stroke()
+            } else {
+                path.lineWidth = 1.2
+                Self.markColor.setStroke()
+                path.stroke()
+            }
+        case .rule:
+            // To the right edge of what shows (with wrapping off, the text can be far wider).
+            let right = (container.textView?.visibleRect.maxX ?? cells.maxX) - container.lineFragmentPadding
+            Self.ruleColor.setFill()
+            NSRect(x: cells.minX, y: round(fragment.midY + origin.y), width: max(0, right - cells.minX), height: 1).fill()
+        case .quoteBar:
+            Self.quoteColor.setFill()
+            NSRect(x: cells.minX + 1, y: fragment.minY + origin.y, width: 3, height: fragment.height).fill()
+        case .bullet, .blank, .dim:
+            break
         }
     }
 }
@@ -104,6 +224,7 @@ extension CodeEditorView {
 
     /// What the layout manager draws as bullets: the values, when hidden, but not the caret's line
     /// while you work on it. Only that line shows: the rest of a value over several lines stays hidden.
+    /// (Markdown Live Preview's marks come through the same hook: drawOver(in:).)
     func hiddenEnvValues() -> [NSRange] {
         guard hidesEnvValues else { return [] }
         let ranges = envValues.ranges(in: document.text)

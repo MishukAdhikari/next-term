@@ -3,9 +3,9 @@ import NextTermCore
 
 /// The Databases rows' menu (right-click and ⋯) and what its items do.
 extension ProjectSidebarView {
-    /// Open (SQLite), the hand-offs that apply, Copy Connection Name, Reveal Source File, each with the key of its
-    /// sidebar command (Open's ⌘↓; the client in a new tab is Open in New Tab's). Remote rows get no terminal hand-off,
-    /// and TablePlus asks first (its title ends in an ellipsis).
+    /// Each provider's page ("Open Neon Console"), Open (SQLite), the hand-offs that apply, Copy Connection Name, Reveal
+    /// Source File, each with the key of its sidebar command (Open's ⌘↓; the client in a new tab is Open in New Tab's).
+    /// Remote rows get no terminal hand-off, and TablePlus asks first (its title ends in an ellipsis).
     func databaseMenu(for db: DetectedDatabase) -> NSMenu {
         let menu = NSMenu(title: "Database")
         func add(_ title: String, _ action: Selector, _ command: String) {
@@ -14,6 +14,7 @@ extension ProjectSidebarView {
             item.representedObject = db
             KeyboardShortcuts.show(command, on: item)
         }
+        addServicePages(db.links, to: menu)
         if db.engine == .sqlite, db.isConnection { add("Open", #selector(openDatabaseFromMenu(_:)), "sidebar.open") }
         if DatabaseHandOff.tablePlusOpens(db), DatabaseHandOff.tablePlus != nil {
             let title = db.environment == .remote ? "Open in TablePlus…" : "Open in TablePlus"
@@ -25,7 +26,7 @@ extension ProjectSidebarView {
         if databaseScan.isVercelLinked || db.providers.contains(.vercel), DatabaseHandOff.vercelCLI != nil {
             add("Open in Vercel", #selector(openInVercelFromMenu(_:)), "sidebar.openInVercel")
         }
-        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) }
         add("Copy Connection Name", #selector(copyDatabaseName(_:)), "sidebar.copyName")
         if db.sourceFile != nil { add("Reveal Source File", #selector(revealDatabaseSource(_:)), "sidebar.revealSource") }
         return menu

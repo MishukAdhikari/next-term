@@ -26,31 +26,46 @@ public enum MCPRedaction {
     /// for a secret word: a long run of names is read once, not again from each place a name could start.
     static let assignedName = #"(?<![A-Za-z0-9_.\-])([A-Za-z0-9_.\-]{1,256}+)"#
 
-    /// `api_key = "…"`, `"password": "…"`, `'token' => '…'`: the quoted value.
-    static let quotedValue = try! NSRegularExpression(
-        pattern: assignedName + #"["']?\s*+(?:=>|:=|[:=])\s*+(?:"([^"\n]{4,}+)"|'([^'\n]{4,}+)'|`([^`\n]{4,}+)`)"#)
+    /// A value in quotes of one kind, 4 characters at least, on one line: its text is the group of its quote.
+    static let quotedText = #"(?:"([^"\n]{4,}+)"|'([^'\n]{4,}+)'|`([^`\n]{4,}+)`)"#
+
+    /// `api_key = "…"`, `"password": "…"`, `'token' => '…'`: the quoted value. It may be on a line under the `=` or `:`
+    /// (`password:` then `"…"`), but there one with its own `:` or `=` after it is a key (`production:` then
+    /// `"password": "…"`), not the value above it: taken as one, the match ran past that key's name, and its own value
+    /// was never matched.
+    static let quotedValue: NSRegularExpression = {
+        let named: String = assignedName + #"["']?\s*+(?:=>|:=|[:=])"#
+        let sameLine: String = #"\h*+"# + quotedText
+        let lineUnder: String = #"\s*+"# + quotedText + #"(?!\h*+[:=])"#
+        let value: String = "(?:" + sameLine + "|" + lineUnder + ")"
+        return try! NSRegularExpression(pattern: named + value)
+    }()
 
     /// `API_KEY=…` or `password: …` on a line of its own (env, YAML, INI): the bare value. In a diff the
-    /// line starts with its + or -.
+    /// line starts with its + or -. The spaces around the `=` or `:` are those on the name's line (ICU's `\h`: a tab and
+    /// the space separators): an empty value (`DB_PASSWORD=`) never takes the next line with text as its value.
     static let bareValue = try! NSRegularExpression(
-        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"\s*+[:=]\s*+([^\s"'`#]{6,}+)\s*$"#,
+        pattern: #"^[+\-]?[ \t]*+(?:export\s++)?+"# + assignedName + #"\h*+[:=]\h*+([^\s"'`#]{6,}+)\s*$"#,
         options: [.caseInsensitive, .anchorsMatchLines])
 
     /// A run long enough to be a key; masked only if it looks random (see `looksRandom`).
     static let longRun = try! NSRegularExpression(pattern: #"[A-Za-z0-9+/_\-]{32,}={0,2}"#)
 
-    /// The text with credentials masked, and how many were.
-    public static func redact(_ text: String) -> (text: String, count: Int) {
-        let redacted = redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil })
+    /// The text with credentials masked, and how many were. The exact values of keys stored in Secrets go
+    /// first (`secrets`, `SecretMask.current` unless a test gives its own).
+    public static func redact(_ text: String, mask secrets: SecretMask = .current) -> (text: String, count: Int) {
+        let redacted = redact(text, maskingRun: { (run: String) -> String? in looksRandom(run) ? mask : nil }, mask: secrets)
         return (redacted.text, redacted.count)
     }
 
     /// As `redact(_:)`, with `maskingRun` deciding what a long run becomes (nil keeps it), and whether
     /// every pattern read the whole text (see `replace`). Command lines pass one that spares paths
     /// (CommandSecrets).
-    static func redact(_ text: String, maskingRun: (String) -> String?) -> (text: String, count: Int, complete: Bool) {
-        var result = text
-        var count = 0
+    static func redact(_ text: String, maskingRun: (String) -> String?,
+                       mask secrets: SecretMask = .current) -> (text: String, count: Int, complete: Bool) {
+        let exact = secrets.masked(text)
+        var result = exact.text
+        var count = exact.count
         var complete = true
         // Line by line inside a key block, so line numbers around it stay right.
         count += replace(privateKey, in: &result, complete: &complete) { match, ns in
@@ -65,11 +80,16 @@ public enum MCPRedaction {
         count += replace(urlPassword, in: &result, complete: &complete) { match, ns in
             ns.substring(with: match.range(at: 1)) + mask + "@"
         }
-        for expression in [quotedValue, bareValue] {
+        // Each with the group of its name; the value's groups come after it (the indented values' key has its sign, indent
+        // and list item's dash first). A diff's added side, then its removed side: a rotated value is masked in each.
+        let named: [(expression: NSRegularExpression, name: Int)] = [
+            (quotedValue, 1), (bareValue, 1), (indentedValue, indentedName), (removedIndentedValue, indentedName),
+        ]
+        for (expression, name) in named {
             count += replace(expression, in: &result, complete: &complete) { match, ns in
-                guard isSecretName(ns.substring(with: match.range(at: 1))) else { return nil }
+                guard isSecretName(ns.substring(with: match.range(at: name))) else { return nil }
                 let whole = ns.substring(with: match.range)
-                for group in 2..<match.numberOfRanges where match.range(at: group).location != NSNotFound {
+                for group in name + 1..<match.numberOfRanges where match.range(at: group).location != NSNotFound {
                     let value = ns.substring(with: match.range(at: group))
                     guard isValue(value) else { return nil }
                     let offset = match.range(at: group).location - match.range.location

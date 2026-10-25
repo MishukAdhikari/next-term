@@ -52,6 +52,30 @@ import Testing
         #expect(EnvFile.values(EnvFile.parse("KEY=\"a\r\nb\"\r\nN=1")) == ["KEY": "a\nb", "N": "1"])
     }
 
+    @Test func withoutInterpolationAValueIsLeftAsWritten() {
+        let text = "A=x\nB=${A}\nC=\"pre ${A} post\"\nD=$A\n"
+        // As dotenv reads it: `${A}` from a key earlier in the file.
+        let expanded = EnvFile.values(EnvFile.parse(text))
+        #expect(expanded["B"] == "x")
+        #expect(expanded["C"] == "pre x post")
+        // A value that must not take in another key's value keeps the text.
+        let written = EnvFile.values(EnvFile.parse(text, interpolating: false))
+        #expect(written["B"] == "${A}")
+        #expect(written["C"] == "pre ${A} post")
+        #expect(written["D"] == "$A")
+        #expect(written["A"] == "x")
+    }
+
+    @Test func readingAFileWithoutInterpolation() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nt-env-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent(".env").path
+        try "HOST=db.example.com\nURL=https://${HOST}/x\n".write(toFile: path, atomically: true, encoding: .utf8)
+        #expect(EnvFile.read(path).map(EnvFile.values)?["URL"] == "https://db.example.com/x")
+        #expect(EnvFile.read(path, interpolating: false).map(EnvFile.values)?["URL"] == "https://${HOST}/x")
+    }
+
     @Test func aQuotedValueOverSeveralLinesIsOneRange() {
         let text = "KEY=\"-----BEGIN KEY-----\nabc\n-----END KEY-----\"\nAFTER=1\n"
         #expect(values(text) == ["\"-----BEGIN KEY-----\nabc\n-----END KEY-----\"", "1"])

@@ -134,11 +134,12 @@ final class SkillsWindowController: NSWindowController, NSTableViewDataSource, N
 
     func windowWillClose(_ notification: Notification) { fetchTask?.cancel() }
 
-    /// The names installed in the agents' folders: a directory listing, not a full inventory scan.
+    /// The names installed in the agents' folders (SkillRoot.personal, OpenCode's included): a directory listing, not a
+    /// full inventory scan.
     @objc private func refresh() {
         let home = SkillsStore.home
-        installedNames = Set([".agents/skills", ".claude/skills", ".codex/skills", ".commandcode/skills"].flatMap { folder in
-            ((try? FileManager.default.contentsOfDirectory(atPath: (home as NSString).appendingPathComponent(folder))) ?? []).filter { !$0.hasPrefix(".") }
+        installedNames = Set(SkillRoot.personal(home: home).flatMap { (root: SkillRoot) -> [String] in
+            ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).filter { !$0.hasPrefix(".") }
         })
         featured.reloadData()
         updatesBanner.stringValue = SkillUpdates.phrase(SkillUpdates.count(SkillsInstaller.updates)).map { $0 + " available" } ?? ""

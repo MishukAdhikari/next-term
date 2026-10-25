@@ -57,6 +57,37 @@ enum ProcessInspector {
         return (path, args)
     }
 
+    /// Every argument of a process owned by this user, with its executable path: `commandLine(of:)` without its
+    /// 16-argument limit, for Secrets' peer check. Its own caps: nil past 4,096 arguments or 256 KB in all.
+    static func fullCommandLine(of pid: pid_t, maxArguments: Int = 4096, maxBytes: Int = 256 * 1024) -> (path: String, arguments: [String])? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard pid > 0, sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        let argc = buffer.withUnsafeBytes { Int($0.load(as: Int32.self)) }
+        guard argc >= 0, argc <= maxArguments else { return nil }
+        var index = MemoryLayout<Int32>.size
+        func nextString() -> String? {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            guard index < size else { return nil } // cut off: not a whole argument
+            return String(decoding: buffer[start..<index], as: UTF8.self)
+        }
+        guard let path = nextString() else { return nil }
+        while index < size, buffer[index] == 0 { index += 1 } // padding after the executable path
+        var arguments: [String] = []
+        var bytes = 0
+        while arguments.count < argc {
+            guard let argument = nextString() else { return nil }
+            bytes += argument.utf8.count + 1
+            guard bytes <= maxBytes else { return nil }
+            arguments.append(argument)
+            index += 1
+        }
+        return (path, arguments)
+    }
+
     /// Current working directory of a process.
     static func currentDirectory(of pid: pid_t) -> String? {
         guard pid > 0 else { return nil }
@@ -94,11 +125,14 @@ enum ProcessInspector {
     /// shows the kernel no environment, and what its rc files export never reaches that record. The launch is kept as a
     /// put-back line replays it (U2): the leader's argv gives its options, the integration's typed line and its alias
     /// expansion (held in memory only) give the launcher and the permission options they confirm, and the path the
-    /// kernel ran gives the version, with no process started to ask. Nil when the tab runs no agent.
+    /// kernel ran gives the version, with no process started to ask. `shownSession` is the id of the session OpenCode's
+    /// title names, as the tab kept it (TerminalTab.shownSessionID): capture opens no store for it. Nil when the tab
+    /// runs no agent.
     static func agentEvidence(ptyFileDescriptor fd: Int32, shellPid: pid_t, status: TabStatus,
-                              home: String = NSHomeDirectory()) -> SessionSnapshot.Evidence? {
+                              home: String = NSHomeDirectory(), shownSession: String? = nil) -> SessionSnapshot.Evidence? {
         var capture = AgentEvidence.Capture(status: status, home: home)
         capture.shellRouting = LoginShell.routing
+        capture.shownSession = shownSession
         let leaderID = fd >= 0 && shellPid > 0 ? tcgetpgrp(fd) : -1
         if leaderID > 0, let found = agentProcess(leaderID) {
             let agent = RestoreAgent(process: found)

@@ -479,11 +479,19 @@ extension SelfTest {
         }
         NSPasteboard.general.clearContents()
         if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
-        tab.view.send(txt: "(sleep 1.2; print bg-output) &!\r")
+        // The job prints on the test's signal, sent once the list shows (open() returns after the first line report has
+        // set the caret's row), so no clock decides which comes first.
+        let go = dir.appendingPathComponent("bg-go")
+        try? FileManager.default.removeItem(at: go)
+        defer { FileManager.default.createFile(atPath: go.path, contents: nil) } // a disowned job gets no hang-up: always let it end
+        tab.view.send(txt: "(until [[ -e '\(go.path)' ]]; do sleep 0.05; done; print bg-output) &!\r")
         _ = await wait(3) { session.state.isArmed }
         if await open("cd ") {
-            check(await wait(4) { !popup.isVisible }, "Tab completion: output that moves the caret's row closes the list")
+            FileManager.default.createFile(atPath: go.path, contents: nil)
+            check(await wait(4) { !popup.isVisible }, "Tab completion: output that moves the caret's row closes the list", promptLine(tab))
             await clearLine(tab)
+        } else {
+            check(false, "Tab completion: `cd ` + Tab opens the list before the background job prints", promptLine(tab))
         }
     }
 

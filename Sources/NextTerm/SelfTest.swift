@@ -52,6 +52,13 @@ enum SelfTest {
         return support?.appendingPathComponent("Next Term", isDirectory: true)
     }
 
+    /// Where the record of your commands is kept (CommandHistoryStore): `supportFolder`, the relaunch harness's own in its
+    /// runs; for the plain self-test a temporary folder of its own, so it never reads or writes yours.
+    nonisolated static var historyFolder: URL? {
+        guard mode == .plain else { return supportFolder }
+        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nextterm-history-\(getpid())", isDirectory: true)
+    }
+
     /// Where the sessions folder is made (SessionFiles): `supportFolder`, or none for the plain self-test, which never
     /// saves or restores sessions.
     nonisolated static var sessionsParent: URL? { mode == .plain ? nil : supportFolder }
@@ -80,6 +87,14 @@ enum SelfTest {
     private static var failures = 0
 
     static func run() {
+        #if DEBUG
+        // An exception nothing catches ends the run with a crash report, rather than AppKit logging it and the run going on
+        // half done or stalling where it was (the script then says the run did not finish). In this process's registration
+        // domain only, so never in your defaults.
+        UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
+        #endif
+        // Suggestions while typing only in their own part (ghostText): elsewhere → and End move the cursor, as before.
+        GhostPreferences.testIsOn = false
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
@@ -129,6 +144,11 @@ enum SelfTest {
     /// `seconds`: the caller skips what needs it, with a note. With the app in front and the window still not
     /// key (a sheet left over it), that is the app's own doing: a failed check, not only a skip.
     static func bringToFront(_ window: NSWindow, within seconds: Double = 6) async -> Bool {
+        // A sheet an earlier check left over this window would take the keyboard from it: say so, and end it.
+        if window.attachedSheet != nil {
+            check(false, "the window takes the keyboard with no sheet left over it", sheetText(window))
+            _ = await endSheets(over: window, with: .alertSecondButtonReturn)
+        }
         let deadline = Date().addingTimeInterval(seconds)
         repeat {
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -192,6 +212,30 @@ enum SelfTest {
     }
 
     /// The text of the sheet over `window`: an alert's title and message.
+    /// `controller`'s window is gone (AppDelegate drops it a moment after it closes), else a FAIL saying what its sheet asks,
+    /// and the sheet is answered with its first button (Close Window), whose own handler closes it.
+    static func closedAskingNothing(_ controller: TerminalWindowController, _ name: String) async {
+        let app: AppDelegate = AppDelegate.shared
+        let gone = await wait(3) { !app.controllers.contains { $0 === controller } }
+        check(gone, name, controller.window.map { "a sheet asks: " + sheetText($0) } ?? "")
+        guard !gone, let window = controller.window else { return }
+        _ = await endSheets(over: window)
+        _ = await wait(3) { !app.controllers.contains { $0 === controller } }
+    }
+
+    /// Sheets or a modal alert a group of checks left behind: a FAIL naming the group and what each asked, then each is
+    /// ended with Cancel, so one check's leftover never fails the checks after it.
+    static func endStrayQuestions(after group: String) async {
+        for window in NSApp.windows where window.attachedSheet != nil {
+            check(false, "\(group) leave no sheet up", "\(type(of: window)) “\(window.title)”: \(sheetText(window))")
+            _ = await endSheets(over: window, with: .alertSecondButtonReturn)
+        }
+        if let modal = NSApp.modalWindow {
+            check(false, "\(group) leave no modal alert up", modal.title)
+            NSApp.stopModal(withCode: .cancel)
+        }
+    }
+
     static func sheetText(_ window: NSWindow) -> String {
         func fields(_ view: NSView) -> [String] { view.subviews.flatMap { ($0 as? NSTextField).map { [$0.stringValue] } ?? fields($0) } }
         return window.attachedSheet?.contentView.map(fields)?.joined(separator: " ") ?? ""
@@ -248,6 +292,12 @@ enum SelfTest {
         // The notifications checked along the way (a decision, below) come as they do by default.
         let restoreNotificationSettings = defaultNotificationSettings()
         defer { restoreNotificationSettings() }
+        // Tabs the checks open over MCP stay behind, as the checks expect: a window that came forward for one seconds
+        // later (AgentArrival waits out the self-test's own keys) would take the keyboard from a later check. The
+        // arrival checks set the mode themselves; the user's choice is back afterwards.
+        let arrivalBefore = AppDelegate.shared.agentArrival
+        AppDelegate.shared.agentArrival = .off
+        defer { AppDelegate.shared.agentArrival = arrivalBefore }
         // Diffs side by side, as the checks read them (a run stopped part-way may have left Unified on), and the
         // user's choice back afterwards.
         let restoreDiffSettings = keepDiffSettings()
@@ -552,6 +602,8 @@ enum SelfTest {
         await pause(0.2)
         check(asked.contains("sleep 30") && c.tabs.contains { $0 === busy }, "Cancel keeps the tab")
         c.closeTab(nil)
+        // On a slow machine the sheet comes a moment later: wait for it, or it stays up over the window.
+        _ = await wait(2) { window.attachedSheet != nil }
         if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
         check(await wait(2) { !c.tabs.contains { $0 === busy } }, "Close Tab removes it")
         check(await wait(4) { kill(shellPid, 0) != 0 }, "its shell is stopped and reaped")
@@ -596,18 +648,53 @@ enum SelfTest {
         try? Data().write(to: proj.appendingPathComponent("AGENTS.md"))
         check(await wait(4) { c.sidebar.root?.children?.contains { $0.name == "AGENTS.md" } == true && c.sidebar.outline.numberOfRows == 4 },
               "a new file appears in the sidebar by itself")
+        // Every tab reads the self-test's own zsh config, never the user's: a tab of its own, zdotTab for its ZDOTDIR, then closed.
+        let ownConfig = shellConfigFolder ?? ""
+        let zdotTab = c.addTab(directory: proj.path, select: false)
+        _ = await wait(20) { zdotTab.status.integrated }
+        zdotTab.view.send(txt: "[[ ${ZDOTDIR-} == \(ShellQuote.quote(ownConfig)) ]] && echo ZD\"\"OWN || echo ZD\"\"OTHER=${ZDOTDIR-unset}\r")
+        let answered = await wait(10) { zdotTab.screenTail(6).contains { $0.contains("ZDOWN") || $0.contains("ZDOTHER=") } }
+        check(!ownConfig.isEmpty && answered && zdotTab.screenTail(6).contains { $0.contains("ZDOWN") },
+              "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
+        c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, worktrees or notifications), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
         case "import": return await importPartChecks(c, proj: proj)
         case "rollback": return await rollbackChecks(c)
         case "held": return await heldWorktreeChecks(c)
+        case "closeWorktree": return await closeWorktreeChecks()
+        case "parallel":
+            await parallelTabsChecks(c, proj: proj)
+            await arrivalChecks(c, proj: proj)
+            return await scrollbackChecks(proj: proj) // ⌘K in a full-screen program is there
         case "worktrees": return await worktreeChecks(c)
+        case "markdown": return await markdownChecks(c, proj: proj) // Live Preview: bytes kept, hiding, commands, Go to Heading
+        case "skills": return await skillsChecks() // Settings › Skills, Personal and Project, and the skills MCP tools
+        case "mcpWrite": return await mcpWriteChecks(c, proj: proj) // the MCP tools that ask, settings, list_shortcuts, show_settings
         case "notifications":
             notificationsMenuChecks()
             return agentSpinnerChecks()
+        case "services": return await serviceChecks(c)
+        case "secrets": return await secretsChecks(c, proj: proj)
+        case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
+        case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
+        case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
+        case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
+        case "terminalPosition": return await terminalPositionChecks(c, proj: proj) // a position chosen again, folds, shares
+        case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
+        case "ghostText": return await ghostTextChecks(c) // what read_tab says is typed, and suggestions while typing
+        case "clicks": return await singleClickChecks(c, proj: proj, tab: inProject) // the sidebar's clicks, previews and viewers
+        case "gitRefresh": return await gitRefreshChecks(c) // the sidebar's git refresh and Databases scan, in a repository of its own
+        case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
+        case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
+        case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
+        case "newTerminal": return await newTerminalChecks() // a window with no project: "No project open", no protected place read
+        case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
+        case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
+        case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         default: break
         }
         #endif
@@ -736,10 +823,17 @@ enum SelfTest {
         await goToFileChecks(c, proj: proj)
         await gutterAndCollapseChecks(c, proj: proj)
         await railChecks(c, proj: proj)
+        await terminalPositionChecks(c, proj: proj)
+        // The checks below read the project in the sidebar: a part before them that leaves another tab in front fails here.
+        check(await wait(4) { c.sidebar.root?.path == proj.path }, "the window's sidebar is on the test project again after the layout checks",
+              c.sidebar.root?.path ?? "nil")
         await blameChecks(c, proj: proj)
         await deletedFileChecks(c, proj: proj)
         await notebookChecks(c, proj: proj)
         await databaseChecks(c, proj: proj)
+        #if DEBUG
+        await serviceChecks(c)
+        #endif
         await dataChecks(c, proj: proj)
         await updateChecks(c)
         await updateSheetChecks(c)
@@ -755,6 +849,12 @@ enum SelfTest {
         await placeChecks(c)
         await worktreeChecks(c)
         await heldWorktreeChecks(c)
+        await closeWorktreeChecks()
+        await projectColorChecks()
+        await newTerminalChecks()
+        await windowNavChecks()
+        await parallelTabsChecks(c, proj: proj)
+        await arrivalChecks(c, proj: proj)
         await branchCompareChecks(c)
         await gitDiffChecks(c, proj: proj)
         await backgroundFetchChecks(c)
@@ -763,6 +863,7 @@ enum SelfTest {
         await drawingChecks(c)
         await ragColorChecks(c, proj: proj)
         await envValueChecks(c, proj: proj)
+        await markdownChecks(c, proj: proj)
         await importPartChecks(c, proj: proj)
         await behaviourSettingsChecks(c, proj: proj)
         await singleClickChecks(c, proj: proj, tab: inProject)
@@ -848,8 +949,11 @@ enum SelfTest {
         let windowsNow = app.controllers.count
         app.openProject(at: proj, from: fresh)
         check(app.controllers.count == windowsNow && fresh.project == proj.path && fresh.tabs.count == 1, "an untouched window is reused for the project")
+        // The adopted tab's shell is still starting: its children (a theme's mkdir) would make Close Project ask, in a
+        // sheet left over the window for the rest of the run (as for the extra tabs below).
+        _ = await wait(20) { fresh.tabs.first?.status.integrated == true && fresh.busyTabs.isEmpty }
         fresh.closeProject(nil)
-        _ = await wait(3) { !app.controllers.contains { $0 === fresh } }
+        await closedAskingNothing(fresh, "Close Project closes the reused window, asking nothing")
         // Outside a repository Git Log is off, like the Git menu's other commands.
         let plain = app.openWindow(directory: dir.path)
         _ = await wait(20) { plain.tabs.first?.status.integrated == true }
@@ -858,8 +962,9 @@ enum SelfTest {
         let branchesItem = NSMenuItem(title: "Branches…", action: #selector(TerminalWindowController.showBranches(_:)), keyEquivalent: "")
         check(!plain.validateMenuItem(gitLogItem) && !plain.validateMenuItem(branchesItem),
               "outside a repository Git Log is off, like Branches", plain.sidebar.root?.path ?? "no sidebar root")
+        _ = await wait(20) { plain.busyTabs.isEmpty }
         plain.window?.performClose(nil)
-        _ = await wait(3) { !app.controllers.contains { $0 === plain } }
+        await closedAskingNothing(plain, "the plain window closes, asking nothing")
         app.showWelcome(nil)
         check(NSApp.windows.contains { $0.title == "Welcome to Next Term" && $0.isVisible }, "the Welcome window lists recent projects")
         NSApp.windows.first { $0.title == "Welcome to Next Term" }?.close()
@@ -905,13 +1010,16 @@ enum SelfTest {
         let a = c.tabs[0], b = c.tabs[1]
         c.tabBar(c.tabBar, didMove: 0, to: 1)
         check(c.tabs[0] === b && c.tabs[1] === a, "drag reorder moves the tab")
+        await tabListChecks(c, proj: proj)
 
+        await endStrayQuestions(after: "the project and window checks")
         await paneChecks(c)
         await menuChecks(c)
         await MainActor.run { acknowledgementsChecks() }
         await newFileChecks(c)
         await paneHeaderChecks(c)
 
+        await endStrayQuestions(after: "the pane, menu and new-file checks")
         await sessionChecks(proj: proj)
         await moreSessionChecks(proj: proj)
         await agentEvidenceChecks(proj: proj)
@@ -931,13 +1039,21 @@ enum SelfTest {
         AppDelegate.shared.fontSize = size
 
         await linkChecks(c)
+        await mouseReportChecks(c)
+        await cellSnapChecks(c)
         await notificationChecks(c)
+        await opencodeScreenChecks(c)
         notificationsMenuChecks()
+        await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
         await skillsChecks()
+        await secretsChecks(c, proj: proj)
         await mcpWriteChecks(c, proj: proj)
+        await endStrayQuestions(after: "the checks before the MCP restore")
         await restoreMCPChecks(proj: proj)
+        await endStrayQuestions(after: "the MCP restore checks")
         await completionChecks(c)
+        await ghostTextChecks(c)
 
         try? FileManager.default.removeItem(at: dir)
     }
@@ -1230,10 +1346,12 @@ enum SelfTest {
         // window closes: the same project, every session listed.
         welcome.sessionQuery = "loop fix"
         app.showWelcome(nil)
+        welcome.select(project: project) // a show starts on the other project used last (the Welcome switcher)
         check(await wait(5) { welcome.sessionQuery.isEmpty && welcome.shownSessionTitles.count == 3 },
               "the Welcome window shown again empties the sessions search, and lists every session",
               "“\(welcome.sessionQuery)”, \(welcome.shownSessionTitles.count) shown, project \(welcome.selectedProject ?? "none")")
         welcome.close()
+        await welcomeSwitcherChecks() // the switcher: its list, marks, order and keys (SelfTestWelcomeSwitcher)
 
         guard let holder = app.controllers.first(where: { $0.project == project }) ?? app.controllers.first(where: { $0.tabs.contains { $0 === tab } }),
               let window = holder.window else { return check(false, "a window for the project") }
@@ -3425,12 +3543,12 @@ enum SelfTest {
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard
-        let saved = (position: app.terminalPosition, side: app.sidebarSide, fraction: defaults.object(forKey: "editorFraction"),
+        let saved = (position: app.terminalPosition, side: app.sidebarSide, shares: savedEditorShares(),
                      width: defaults.object(forKey: "sidebarWidth"), sidebar: c.isSidebarVisible, frame: window.frame)
         func restore(_ key: String, _ value: Any?) {
             if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
-        func restoreFraction() { restore("editorFraction", saved.fraction) }
+        func restoreFraction() { restoreEditorShares(saved.shares) }
         let readme = proj.appendingPathComponent("README.md")
         area.closeAll()
         c.show(tab) // in the git project: the sidebar has its branch
@@ -3465,7 +3583,7 @@ enum SelfTest {
         let unproven = "the drag on the visible line did not move it, so these presses prove nothing"
         area.closeAll()
         restoreFraction()
-        let fraction = app.editorFraction
+        let fractions = [app.editorFraction(sideBySide: true), app.editorFraction(sideBySide: false)]
 
         /// What is wrong while nothing is open: an editor showing, a terminal short of the whole work area.
         func problems() -> String {
@@ -3478,7 +3596,8 @@ enum SelfTest {
             let (start, size) = work.isVertical ? (frame.minX, frame.width) : (frame.minY, frame.height)
             if abs(start) > 0.5 || abs(size - length) > 0.5 { found.append("the terminal has \(size) of \(length) from \(start)") }
             if c.tabBar.onToggleCollapse != nil { found.append("the terminal offers to collapse beside it") }
-            if app.editorFraction != fraction { found.append("the editor's share went from \(fraction) to \(app.editorFraction)") }
+            let shares = [app.editorFraction(sideBySide: true), app.editorFraction(sideBySide: false)]
+            if shares != fractions { found.append("the editor's shares went from \(fractions) to \(shares)") }
             return found.joined(separator: "; ")
         }
         var shot = false
@@ -4185,11 +4304,12 @@ enum SelfTest {
             delegate.editorLineHeight = savedHeight
         }
 
-        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off.
-        let wide = proj.appendingPathComponent("wide.md")
+        // Soft wrap: a long line wraps at the edge (the default) or scrolls sideways when it is off. (Plain text: a Markdown
+        // paragraph's wrapped rows start at the margin, as prose's do.)
+        let wide = proj.appendingPathComponent("wide.txt")
         try? (String(repeating: "lorem ipsum dolor sit amet ", count: 40) + "\nshort\n").write(to: wide, atomically: true, encoding: .utf8)
         c.openFile(wide)
-        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.md", let layout = wideEditor.textView.layoutManager,
+        if let wideEditor = area.activeEditor, wideEditor.document.name == "wide.txt", let layout = wideEditor.textView.layoutManager,
            let container = wideEditor.textView.textContainer {
             func rows() -> Int {
                 layout.ensureLayout(for: container)
@@ -4239,7 +4359,7 @@ enum SelfTest {
             area.applyWrap()
             area.closeActive()
         } else {
-            check(false, "a markdown file opens")
+            check(false, "a file with a long line opens")
         }
         try? FileManager.default.removeItem(at: wide)
 
@@ -4344,10 +4464,11 @@ enum SelfTest {
         check(shortcuts.chord(for: "newTab:")?.display == "⌘T" && shortcuts.chord(for: "showNextTab:")?.display == "⇧⌘]",
               "today's shortcuts are the defaults", shortcuts.chord(for: "showNextTab:")?.display ?? "none")
         let newTabItem = shortcuts.commands.first { $0.id == "newTab:" }?.item
-        shortcuts.set(KeyChord(key: "t", command: true, control: true), for: "newTab:")
-        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .control],
+        // ⌃⌥⌘T: a key no command has (⌃⌘T is Add Task…).
+        shortcuts.set(KeyChord(key: "t", command: true, option: true, control: true), for: "newTab:")
+        check(newTabItem?.keyEquivalent == "t" && newTabItem?.keyEquivalentModifierMask == [.command, .option, .control],
               "a new shortcut goes straight into the menu", newTabItem.map { "\($0.keyEquivalentModifierMask.rawValue)" } ?? "")
-        check(c.tabBar.newTabToolTip == "New tab (⌃⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
+        check(c.tabBar.newTabToolTip == "New tab (⌃⌥⌘T)", "and into the tooltip that names it", c.tabBar.newTabToolTip ?? "none")
         check(shortcuts.bindings.owner(of: KeyChord(key: "f", command: true), defaults: shortcuts.defaults, except: "newTab:") == "performFindPanelAction:#1",
               "a shortcut already in use is found, so it can be moved deliberately")
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
@@ -4807,8 +4928,11 @@ enum SelfTest {
         }
         let waited = await tool("wait_for_tab", ["tab_id": workerID, "timeout_seconds": 10])
         let screen = await tool("read_tab", ["tab_id": workerID, "lines": 20])
-        check(waited.json?["timed_out"] as? Bool == false && (screen.json?["screen"] as? String)?.contains("mcp-started") == true,
-              "MCP: the command ran; wait_for_tab and read_tab see its output", waited.text + " / " + screen.text)
+        let ran = waited.json?["timed_out"] as? Bool == false && (screen.json?["screen"] as? String)?.contains("mcp-started") == true
+        check(ran, "MCP: the command ran; wait_for_tab and read_tab see its output",
+              "integrated \(worker.status.integrated), history armed \(worker.history.armed); " + waited.text + " / " + screen.text)
+        // Every check below drives this tab: one that never ran its first command is one failure, not a dozen.
+        guard ran else { return }
 
         // A pane beside the worker, so both can be watched.
         let beside = await tool("new_tab", ["directory": proj.path, "split_beside": workerID, "direction": "down"])
@@ -4827,8 +4951,15 @@ enum SelfTest {
               lines.suffix(6).joined(separator: " | "))
 
         // Keys: Ctrl-C stops what runs; closing a busy tab needs force.
-        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "sleep 30"])
-        _ = await wait(5) { worker.status.running }
+        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "sleep 29"])
+        // Not running, an unforced close_tab would close the worker, and with it the window the rest needs.
+        guard await wait(5, { worker.status.running }) else {
+            return check(false, "MCP: send_to_tab runs `sleep 29`", worker.screenTail(6).joined(separator: " | "))
+        }
+        // While it runs zsh takes no bracketed paste, so a Return in the text, a lone "\r" too, would run as typed-ahead.
+        let returnInText = await tool("send_to_tab", ["tab_id": workerID, "text": "echo cr-line\r", "submit": false])
+        check(returnInText.isError && returnInText.text.contains("one line at a time"),
+              "MCP: send_to_tab refuses a Return in its text where the program takes no paste", returnInText.text)
         let refused = await tool("close_tab", ["tab_id": workerID])
         check(refused.isError && refused.text.contains("force"), "MCP: close_tab will not stop a running command unless forced", refused.text)
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["ctrl+c"]])
@@ -4837,6 +4968,32 @@ enum SelfTest {
         check(bogus.isError, "MCP: raw escape sequences are not keys", bogus.text)
         let unknown = await tool("send_to_tab", ["tab_id": "no-such-tab", "text": "x"])
         check(unknown.isError, "MCP: an unknown tab is an error, not a guess")
+
+        // Lines an agent submits stay out of the shell's history (ShellHistory): new_tab's command, the two-line prompt,
+        // `sleep 29`, and text sent with no Return that press_keys' Return then submits. A line typed as the user types it
+        // goes in. The worker's zsh reads the self-test's own config, so its history is the test's, never the user's; that
+        // history is shared with the test's other tabs, where `sleep 30` is typed by hand, so the agent sleeps 29.
+        MCPControl.typedByUser(worker)
+        _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo tied-line", "submit": false])
+        check(MCPControl.isDriven(worker), "MCP: text sent with no Return makes the tab the agent's until you type in it")
+        _ = await tool("press_keys", ["tab_id": workerID, "keys": ["enter"]])
+        _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("tied-line") } }
+        worker.view.send(txt: "\u{15}echo typed-by-hand\r")
+        _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("typed-by-hand") } }
+        let historyFile = proj.appendingPathComponent(".mcp-history.txt")
+        worker.view.send(txt: "\u{15}fc -ln -100 > \(ShellQuote.quote(historyFile.path))\r")
+        func listedHistory() -> [String] {
+            let text: String = (try? String(contentsOf: historyFile, encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").map { (line: Substring) -> String in line.trimmingCharacters(in: .whitespaces) }
+        }
+        _ = await wait(10) { listedHistory().contains("echo typed-by-hand") }
+        let history: [String] = listedHistory()
+        let agents: [String] = history.filter { (line: String) -> Bool in
+            line.contains("mcp-%s") || line.contains("multi-") || line == "sleep 29" || line.contains("tied-line")
+        }
+        check(history.contains("echo typed-by-hand") && agents.isEmpty, "MCP: lines an agent submits stay out of zsh's history; the user's go in",
+              history.suffix(8).joined(separator: " | "))
+        try? FileManager.default.removeItem(at: historyFile)
 
         // The caller's own tab is marked, and it cannot type into itself.
         let out = proj.appendingPathComponent(".mcp-self.json")
@@ -4852,6 +5009,12 @@ enum SelfTest {
         let file = proj.appendingPathComponent("mcp-target.txt")
         try? "one\ntwo\nthree\n".write(to: file, atomically: true, encoding: .utf8)
         let opened = await tool("open_in_editor", ["path": file.path, "line": 2])
+        // The selection is the front window's: the window that opened the file (its project's) comes forward as the user
+        // would bring it, whatever Settings › Editor › When an agent opens a tab says.
+        let path = canonicalPath(file.path)
+        let opener = AppDelegate.shared.controllers.filter { !$0.hasClosed && ($0.project.map { path.hasPrefix($0 + "/") } ?? false) }
+            .max { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }
+        if let window = opener?.window { _ = await bringToFront(window) }
         let selection = await tool("get_editor_selection")
         let open = await tool("get_open_files")
         check(!opened.isError && selection.json?["file"] as? String == canonicalPath(file.path)
@@ -5049,6 +5212,8 @@ enum SelfTest {
         CopilotIDEServer.shared.stop()
         try? FileManager.default.removeItem(at: copilotLockFolder)
         try? FileManager.default.removeItem(at: claudeLockFolder)
+        if let ownShellConfig { try? FileManager.default.removeItem(at: ownShellConfig) } // its tabs' zsh config and history
+        if mode == .plain { try? FileManager.default.removeItem(at: RollbackBackup.selfTestFolder) } // its rollbacks' copies
         record(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         try? reportHandle?.close()
         let report = lines.joined(separator: "\n") + "\n"

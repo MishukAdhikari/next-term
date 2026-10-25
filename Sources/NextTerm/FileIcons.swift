@@ -48,10 +48,12 @@ enum FileIcons {
                 name = quiet ? (expanded ? theme.folderExpanded : theme.folder)
                     : theme.icon(forFolder: node.name, parent: node.parent?.name, expanded: expanded, isRoot: node.parent == nil)
             } else {
-                // A symlink gets its target's icon, so a link to a script does not pass for a document.
-                let real = node.isSymlink ? node.url.resolvingSymlinksInPath() : node.url
+                // A symlink gets its target's icon, so a link to a script does not pass for a document: by the name the
+                // link itself gives, so drawing never looks past it, and by its first line only where that look asks
+                // nothing (FileNode.targetUnopened).
+                let real = node.linkTarget.map { (target: String) -> URL in URL(fileURLWithPath: target) } ?? node.url
                 name = theme.icon(forFile: real.lastPathComponent, parent: node.url.deletingLastPathComponent().lastPathComponent,
-                                  language: language(of: real))
+                                  language: node.targetUnopened ? nil : language(of: real))
             }
             if let image = image(named: name) { return image }
         }

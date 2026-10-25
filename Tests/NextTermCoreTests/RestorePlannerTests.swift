@@ -669,6 +669,34 @@ import Testing
         #expect(none.line == "gemini" && none.session == nil && lookups.newests.isEmpty)
     }
 
+    /// After `opencode -c`, the session OpenCode's title named when the tab was saved: a guess, put on the line with
+    /// OpenCode's resume form, whatever the restore, and never run by itself.
+    @Test func theSessionOpencodeShowedGoesOnTheLineAsAGuess() {
+        let id = "ses_7f3a9c"
+        let lookups = Lookups()
+        lookups.sessions = [session(.opencode, "ses_newest", at: 30)]
+        let evidence = Evidence(agent: .opencode, sessionID: id, source: .shownTitle, sessionFolder: folder, startedAt: start,
+                                routingMatchesShell: true, autoContinueOff: true, ranAsTyped: true, options: [])
+        let continued = pane(1, typed("opencode -c"), agent: evidence)
+        let facts = ResumeFacts(user: geteuid(), sessionAvailable: true, projectConfigChanged: false, settingsAutoContinue: false)
+        let restores: [(SessionSnapshot.RestoreKind, Bool, Bool)] = [
+            (.update, false, false), (.quit, true, false), (.crash, false, false), (.update, false, true), (.quit, true, true),
+        ]
+        for (kind, consent, safeMode) in restores {
+            let result = plan(continued, kind: kind, safeMode: safeMode, quitConsent: consent, world: world(facts: facts, lookups: lookups))
+            let label = "\(kind) safe mode \(safeMode)"
+            #expect(result.outcome == .agentOnTheLine && result.line == "opencode -s \(id)", "\(label)")
+            #expect(result.session == NamedSession(agent: .opencode, id: id, naming: .shown), "\(label)")
+            #expect(text(result).contains("This is a guess: the session \(RestoreAgent.opencode.name) showed."), "\(label)")
+        }
+        // The id it showed is the pane's own: nothing is guessed by time in its place.
+        #expect(lookups.newests.isEmpty && lookups.reads.isEmpty)
+        // With none kept, the newest session in the folder is guessed, as before.
+        let untitled = Evidence(agent: .opencode, sessionFolder: folder, startedAt: start)
+        let guessed = plan(pane(2, typed("opencode -c"), agent: untitled), world: world(lookups: lookups))
+        #expect(guessed.line == "opencode -s ses_newest" && guessed.session?.naming == .newest)
+    }
+
     @Test func agyAiderAndUnknownAgentsGetANoteOnly() {
         let cases: [(RestoreAgent, String)] = [
             (.agy, "agy was running. Type /resume in agy to reopen the conversation."),

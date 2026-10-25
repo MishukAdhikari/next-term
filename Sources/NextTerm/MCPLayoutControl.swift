@@ -8,6 +8,7 @@ extension MCPWriteControl {
     // MARK: panes
 
     static func focusTab(_ arguments: [String: Any], _ context: Context, reply: @escaping Reply) {
+        if let raw = arguments["tab_id"] as? String, let target = HerdrTarget.parse(raw) { return focusAgent(target, context, reply: reply) }
         let tab: TerminalTab, controller: TerminalWindowController
         switch paneTarget(arguments) {
         case .failure(let error): return reply(MCPControl.fail(error.text))
@@ -23,8 +24,38 @@ extension MCPWriteControl {
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
             if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
+            tab.view.awaitsChoice = false // the user approved giving it the keyboard
             controller.show(tab)
             reply(MCPControl.ok(["id": id, "focused": true, "approved": approved]))
+        }
+    }
+
+    /// focus_tab with a herdr agent's id: asked first, since herdr moves its view in every window attached to that
+    /// session, not only here; then the tab takes the keyboard and herdr shows the agent's pane (HerdrMCP.focus).
+    static func focusAgent(_ target: HerdrTarget, _ context: Context, reply: @escaping Reply) {
+        let found: (ref: HerdrAgentRef, agent: HerdrAgent)
+        switch HerdrMCP.agent(target, caller: context.caller, herdrCaller: [:], typing: false) {
+        case .failure(let error): return reply(MCPControl.fail(error.text))
+        case .success(let pair): found = pair
+        }
+        let tab = found.ref.tab
+        guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab is gone.")) }
+        if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
+        let host = found.ref.machineLabel.map { "on its machine “\($0)”" } ?? tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
+        let ask = Ask(title: "An agent asks to show a herdr agent",
+                      details: "“\(found.agent.name)” (\(found.agent.paneID)) in herdr \(host) comes to the front of \(place(controller)): herdr shows that pane in every window attached to its session, and the tab takes the keyboard.")
+        approve(ask, context, reply: reply) { approved, window in
+            window?.finish()
+            guard let controller = MCPControl.controller(of: tab) else {
+                return reply(MCPControl.fail("That tab closed meanwhile; nothing changed."))
+            }
+            guard let agent = found.ref.agent else {
+                return reply(MCPControl.fail("herdr no longer lists \(target.pane) there; nothing changed."))
+            }
+            if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
+            tab.view.awaitsChoice = false // the user approved giving it the keyboard
+            controller.show(tab)
+            HerdrMCP.focus(found.ref, agent, approved: approved, reply: reply)
         }
     }
 
@@ -55,9 +86,10 @@ extension MCPWriteControl {
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
-            guard let pane = controller.split(vertical: !down, from: tab, directory: directory, focus: false) else {
+            guard let pane = controller.split(vertical: !down, from: tab, directory: directory, focus: false, byAgent: true) else {
                 return reply(MCPControl.fail("Could not split that tab."))
             }
+            controller.presentForAgent(nil) // its window comes forward; the pane waits for the user's click
             MCPControl.driven.insert(pane.id) // the agent that asked for it waits for its work
             reply(MCPControl.ok(["id": pane.id.uuidString.lowercased(), "beside": tab.id.uuidString.lowercased(),
                                  "directory": pane.directory, "approved": approved]))
@@ -146,6 +178,7 @@ extension MCPWriteControl {
         let app = AppDelegate.shared!
         var layout: [String: Any] = [
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
+            "terminal_tabs": app.terminalTabs.rawValue,
             "sidebar": controller.isSidebarVisible ? "shown" : "hidden", "terminal_folded": controller.terminalCollapsed,
         ]
         if let project = controller.project { layout["project"] = project }
@@ -174,6 +207,10 @@ extension MCPWriteControl {
             change.sidebarSide = side
             lines.append("The project sidebar moves to the \(side), in every window.")
         }
+        if let tabs = wanted.terminalTabs, tabs != app.terminalTabs.rawValue {
+            change.terminalTabs = tabs
+            lines.append(TerminalTabsSetting(stored: tabs).approvalLine)
+        }
         if let shown = wanted.sidebarShown, shown != controller.isSidebarVisible {
             change.sidebarShown = shown
             lines.append("The project sidebar is \(shown ? "shown" : "hidden") in \(place(controller)).")
@@ -182,8 +219,8 @@ extension MCPWriteControl {
             if folded, controller.editorArea.isHidden {
                 return reply(MCPControl.fail("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
             }
-            // A new terminal position unfolds it: fold again after the move.
-            if folded != controller.terminalCollapsed || (folded && change.terminalPosition != nil) {
+            // A new terminal position unfolds it: fold again after the move. Moving the sidebar leaves it as it is.
+            if MCPLayoutChange.needsFoldStep(wanted: folded, folded: controller.terminalCollapsed, newPosition: change.terminalPosition != nil) {
                 change.terminalFolded = folded
                 lines.append("The terminal is \(folded ? "folded" : "unfolded") in \(place(controller)).")
             }
@@ -203,6 +240,11 @@ extension MCPWriteControl {
             if let side = change.sidebarSide {
                 app.applyImported(.sidebarSide(side))
                 changed.append("sidebar_side")
+            }
+            // Only the tabs move: a folded terminal stays folded, so terminal_folded needs no step for it.
+            if let tabs = change.terminalTabs {
+                app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
+                changed.append("terminal_tabs")
             }
             let open = AppDelegate.shared.controllers.contains { $0 === controller }
             if open, let shown = change.sidebarShown {
@@ -236,6 +278,10 @@ extension MCPWriteControl {
         case "notify_agent_finished": return .flag(notifications.agentFinished)
         case "notify_program_alerts": return .flag(notifications.programAlerts)
         case "notification_sound": return .flag(notifications.sound)
+        case "notify_commands": return .choice(mcpName(notifications.commands))
+        case "agent_spinner": return .choice(AgentSpinner.current.rawValue)
+        case "agents_offer_tabs": return .flag(app.agentsOfferTabs)
+        case "agents_bring_tabs_forward": return .choice(app.agentArrival.rawValue)
         default: return .flag(false)
         }
     }
@@ -252,10 +298,26 @@ extension MCPWriteControl {
         case ("notify_agent_finished", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.agentFinished)
         case ("notify_program_alerts", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.programAlerts)
         case ("notification_sound", .flag(let on)): UserDefaults.standard.set(on, forKey: NotificationSettings.Key.sound)
+        case ("notify_commands", .choice(let name)):
+            if let choice = CommandNotifications.allCases.first(where: { mcpName($0) == name }) {
+                UserDefaults.standard.set(choice.rawValue, forKey: NotificationSettings.Key.commands)
+            }
+        case ("agent_spinner", .choice(let name)): if let choice = AgentSpinner(rawValue: name) { AgentSpinner.current = choice }
+        case ("agents_offer_tabs", .flag(let on)): app.agentsOfferTabs = on
+        case ("agents_bring_tabs_forward", .choice(let name)): if let mode = AgentArrival.Mode(rawValue: name) { app.agentArrival = mode }
         default: break
         }
         // Settings › Notifications shows it, if open.
         if setting.name.hasPrefix("notif") { NotificationCenter.default.post(name: NotificationsMenu.changed, object: nil) }
+    }
+
+    /// A command notification choice as MCP names it: in_another_app, always, never.
+    private static func mcpName(_ choice: CommandNotifications) -> String {
+        switch choice {
+        case .inAnotherApp: return "in_another_app"
+        case .always: return "always"
+        case .never: return "never"
+        }
     }
 
     private static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {

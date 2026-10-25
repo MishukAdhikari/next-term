@@ -116,12 +116,14 @@ final class KeyboardShortcuts {
     }
 
     /// The menu bar opened: the editor's items show their keys, and with the editor's keyboard a shared key is
-    /// shown on the editor's command only, since that is what it does there.
+    /// shown on the editor's command only, since that is what it does there; a Markdown command's, only in a
+    /// Markdown file's editor (⌘B: Bold there, Hide Project Sidebar in any other).
     func menuBarOpened() {
-        let inEditor = NSApp.keyWindow?.firstResponder is CodeTextView
+        let editor = NSApp.keyWindow?.firstResponder as? CodeTextView
         for (chord, item) in editorKeys {
             if let other = sharedKeys[chord] {
-                guard inEditor else { continue }
+                let markdownOnly = Self.id(of: item).map { KeyBindings.markdownCommands.contains($0) } ?? false
+                guard let editor, !markdownOnly || editor.markdownStyler != nil else { continue }
                 Self.set(nil, on: other)
             }
             Self.set(chord, on: item)
@@ -633,8 +635,16 @@ final class KeyHintOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (hint?.backdrop ?? Theme.bar).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
+        let backdrop: NSColor = hint?.backdrop ?? Theme.bar
+        let shape = NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4)
+        backdrop.setFill()
+        shape.fill()
+        // Over the top row the bar's colour has the project's glow on it, where the key now is: no plain patch in it.
+        guard backdrop === Theme.bar, let glow = (superview as? ProjectGlowing)?.projectGlow else { return }
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        glow.paint(bounds, in: self)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -648,7 +658,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private var rows: [KeyboardShortcuts.Command] = []
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 700), styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 730), styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.minSize = NSSize(width: 480, height: 320)
@@ -683,14 +693,25 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         tabs.addTabViewItem(importTab)
         let skillsTab = NSTabViewItem(identifier: "skills")
         skillsTab.label = "Skills"
-        skillsTab.view = SkillsSettingsView()
+        skillsTab.view = SkillsPane()
         tabs.addTabViewItem(skillsTab)
+        // Where the todo folder is (Tasks › Task Settings…).
+        let tasksTab = NSTabViewItem(identifier: "tasks")
+        tasksTab.label = "Tasks"
+        tasksTab.view = TaskSettingsView()
+        tabs.addTabViewItem(tasksTab)
         let remoteAccessTab = NSTabViewItem(identifier: RemoteAccessSettingsView.tabID)
         remoteAccessTab.label = "Remote Access"
         remoteAccessTab.view = RemoteAccessSettingsView()
         tabs.addTabViewItem(remoteAccessTab)
+        // Secrets is last: after Skills and Tasks, and after Remote Access once that tab is in.
+        let secretsTab = NSTabViewItem(identifier: "secrets")
+        secretsTab.label = "Secrets"
+        secretsTab.view = SecretsView()
+        tabs.addTabViewItem(secretsTab)
         // A preset switched (here or by an import) changes the shortcuts listed.
         NotificationCenter.default.addObserver(self, selector: #selector(presetChanged), name: ImportCoordinator.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(closing), name: NSWindow.willCloseNotification, object: window)
         window.contentView = tabs
         shortcutsContent = keysTab.view
         build()
@@ -705,6 +726,27 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     func showTab(_ identifier: String) {
         (window?.contentView as? NSTabView)?.selectTabViewItem(withIdentifier: identifier)
     }
+
+    /// Settings › Terminal.
+    var terminalSettings: TerminalSettingsView? {
+        let tabs = window?.contentView as? NSTabView
+        return tabs?.tabViewItems.first { $0.identifier as? String == "terminal" }?.view as? TerminalSettingsView
+    }
+
+    /// Settings › Terminal at its Suggestions row, which says Suggest a Command is off and how to turn it on.
+    func showSuggestions() {
+        showTab("terminal")
+        window?.layoutIfNeeded()
+        terminalSettings?.completionPane.pointOutSuggestions()
+    }
+
+    /// The Suggestions row's note is for the visit Agents › Suggest a Command… began.
+    @objc private func closing() {
+        terminalSettings?.completionPane.rows.suggestions.pointOut(false)
+    }
+
+    /// The tab shown, by its identifier (for the self-test of show_settings).
+    var shownTab: String? { (window?.contentView as? NSTabView)?.selectedTabViewItem?.identifier as? String }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -903,19 +945,24 @@ final class ShortcutRecorder: NSButton {
     }
 }
 
-/// Settings › Editor: line height, soft wrap, hidden .env values and font size, the sidebar, agents and git,
-/// applied as they change.
+/// Settings › Editor: line height, soft wrap, hidden .env values, Markdown's Live Preview and font size, the sidebar,
+/// agents and git, applied as they change.
 final class EditorSettingsView: NSView {
     private let lineHeight = NSSlider(value: 1.35, minValue: 1.0, maxValue: 2.0, target: nil, action: nil)
     private let lineHeightValue = NSTextField(labelWithString: "")
     private let wrap = NSButton(checkboxWithTitle: "Wrap long lines at the edge", target: nil, action: nil)
     private let envValues = NSButton(checkboxWithTitle: "Hide values in .env files", target: nil, action: nil)
-    private let singleClick = NSButton(checkboxWithTitle: "Open files with a single click", target: nil, action: nil)
+    private let markdownPreview = NSButton(checkboxWithTitle: "Show Markdown files in Live Preview", target: nil, action: nil)
+    private let singleClick = NSButton(checkboxWithTitle: "Open files and folders with a single click", target: nil, action: nil)
     private let dotIcons = NSButton(checkboxWithTitle: "Icons on configuration folders (.github, .claude, .idea…)", target: nil, action: nil)
-    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, opencode)", target: nil, action: nil)
+    private let claude = NSButton(checkboxWithTitle: "Agents in a tab see the editor (Claude Code, Gemini CLI, Qwen Code, OpenCode)", target: nil, action: nil)
     private let copilot = NSButton(checkboxWithTitle: "GitHub Copilot CLI in a tab sees the editor", target: nil, action: nil)
     private let control = NSButton(checkboxWithTitle: "Let agents control Next Term (MCP: projects, tabs, prompts, the editor)", target: nil, action: nil)
     private let controlStatus = NSTextField(wrappingLabelWithString: "")
+    /// AppDelegate.agentsOfferTabs: the next-term-tabs skill in Next Term's skill library and the offer in the MCP instructions.
+    let offerTabs = NSButton(checkboxWithTitle: "Agents offer to run parallel work in tabs (the next-term-tabs skill)", target: nil, action: nil)
+    /// AppDelegate.agentArrival: whether the window of a tab an agent opens comes forward (AgentArrival).
+    let arrival = NSPopUpButton()
     private let fontSize = NSStepper()
     private let fontSizeValue = NSTextField(labelWithString: "")
     private let fontFamily = FontFamilyPopup()
@@ -929,6 +976,17 @@ final class EditorSettingsView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         fontFamily.onChange = { family in AppDelegate.shared.setEditorFontFamily(family) }
+        // agents_offer_tabs changed by an agent over MCP (settings_set): the box follows.
+        NotificationCenter.default.addObserver(self, selector: #selector(offerTabsFollow), name: AppDelegate.offerTabsChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(arrivalFollow), name: AppDelegate.agentArrivalChanged, object: nil)
+        for (mode, title) in [(AgentArrival.Mode.focus, "Bring its window forward and focus it"), (.show, "Bring its window forward"),
+                              (.off, "Leave it in the background")] {
+            arrival.addItem(withTitle: title)
+            arrival.lastItem?.representedObject = mode.rawValue
+        }
+        arrival.target = self
+        arrival.action = #selector(arrivalChanged)
+        arrival.toolTip = "The new tab is selected so you can see it, but it never takes what you type: click it to type there. In the window you are typing in, it opens behind your tab, and while you type, its window waits until you stop. From another app, the Dock icon bounces instead."
         for frequency in FetchFrequency.allCases {
             backgroundFetch.addItem(withTitle: frequency.title)
             backgroundFetch.lastItem?.representedObject = frequency.rawValue
@@ -957,18 +1015,25 @@ final class EditorSettingsView: NSView {
         envValues.target = self
         envValues.action = #selector(envValuesChanged)
         envValues.toolTip = "For screen sharing: values show as dots, and the file itself does not change. The line you click or type in shows its value."
+        markdownPreview.target = self
+        markdownPreview.action = #selector(markdownPreviewChanged)
+        markdownPreview.toolTip = "Headings, bold, links, lists, tasks and quotes show styled where you type, with their syntax hidden except on the lines you are on. The file itself never changes. View › Markdown Live Preview switches one file to its source and back."
         singleClick.target = self
         singleClick.action = #selector(singleClickChanged)
-        singleClick.toolTip = "A click opens the file in a preview tab that the next click reuses. Edit the file or double-click its tab to keep it. Off: a double-click opens, as in Finder."
+        singleClick.toolTip = "A click opens a file in a preview tab and opens or closes a folder; a double-click keeps the file as a tab. Off: a click selects, and a double-click opens."
         dotIcons.target = self
         dotIcons.action = #selector(dotIconsChanged)
         claude.target = self
+        claude.toolTip = "Claude Code, Gemini CLI, Qwen Code and OpenCode started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn this off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, OpenCode and Copilot."
         claude.action = #selector(claudeChanged)
         copilot.target = self
         copilot.action = #selector(copilotChanged)
         copilot.toolTip = "Copilot CLI connects when it starts in a tab’s folder or an open project. Its proposed edits open as diffs to accept or reject."
         control.target = self
         control.action = #selector(controlChanged)
+        offerTabs.target = self
+        offerTabs.action = #selector(offerTabsChanged)
+        offerTabs.toolTip = "When you ask an agent in a tab for work in parallel, or for another agent's help, it offers to run each task in a tab of its own that you can watch and answer, and opens them only after your yes. Agents read its next-term-tabs skill from Next Term over MCP (get_skill); nothing is written in their folders, and off takes it out."
         controlStatus.textColor = .secondaryLabelColor
         controlStatus.font = .systemFont(ofSize: 11)
         controlStatus.preferredMaxLayoutWidth = 400
@@ -987,7 +1052,7 @@ final class EditorSettingsView: NSView {
             stack.spacing = 10
             return stack
         }
-        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own line height; 1.35 reads well for code. Terminals use this font size too unless the Terminal tab gives them their own; ⌘+ and ⌘- change the size of what has the keyboard. The terminal’s font is in the Terminal tab. Claude Code, Gemini CLI, Qwen Code, opencode and Copilot CLI started in a new tab connect to Next Term as their IDE: the selected lines go with each prompt (and for Gemini and Qwen, the open files), never from .env files. They connect by themselves (Next Term turns Gemini's and Qwen's IDE mode on); turn these off to stop sharing. ⌥⌘K adds an @-mention to the prompt of Claude, opencode and Copilot.")
+        let note = NSTextField(wrappingLabelWithString: "Line height is a multiple of the font’s own; 1.35 reads well for code. Terminals use this size unless the Terminal tab gives them their own (and their font); ⌘+ and ⌘- size what has the keyboard. Agents started in a new tab see your selected lines, never from .env files; ⌥⌘K @-mentions them in the prompt. A Markdown file shows its syntax only on the lines you are on, and its bytes never change unless you type; ⇧⌘V shows one file's source.")
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.preferredMaxLayoutWidth = 420
@@ -998,6 +1063,7 @@ final class EditorSettingsView: NSView {
             row("Line height:", [lineHeight, lineHeightValue]),
             row("", [wrap]),
             row("", [envValues]),
+            row("", [markdownPreview]),
             row("On save:", [saving.trim, saving.newline]),
             row("Sidebar:", [singleClick]),
             row("", [dotIcons]),
@@ -1007,12 +1073,17 @@ final class EditorSettingsView: NSView {
             row("Agents:", [claude]),
             row("", [copilot]),
             row("", [control]),
+            row("", [offerTabs]),
+            row("", [NSTextField(labelWithString: "When an agent opens a tab:"), arrival]),
             row("", [controlStatus]),
             note,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
+        // The agents' options sit closer together, as one group.
+        let agents = stack.arrangedSubviews.suffix(7).dropLast(2)
+        for view in agents { stack.setCustomSpacing(8, after: view) }
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -1041,11 +1112,16 @@ final class EditorSettingsView: NSView {
         lineHeightValue.stringValue = String(format: "%.2f×", app.editorLineHeight)
         wrap.state = app.softWrap ? .on : .off
         envValues.state = app.hidesEnvValues ? .on : .off
+        markdownPreview.state = app.markdownLivePreview ? .on : .off
         singleClick.state = app.sidebarSingleClickOpens ? .on : .off
         dotIcons.state = app.iconsOnDotFolders ? .on : .off
         claude.state = app.shareWithClaude ? .on : .off
         copilot.state = app.shareWithCopilot ? .on : .off
         control.state = app.agentControl ? .on : .off
+        offerTabs.state = app.agentsOfferTabs ? .on : .off
+        offerTabs.isEnabled = app.agentControl // it needs the tab tools
+        arrival.selectItem(at: arrival.indexOfItem(withRepresentedObject: app.agentArrival.rawValue))
+        arrival.isEnabled = app.agentControl
         let status = !app.agentControl ? "Off: no agent can reach Next Term, and it is removed from the agents it was added to."
             : CommandLineTool.script == nil ? "Only the installed app adds itself to your agents."
             : "Any agent can open projects and tabs, start agents, give them prompts and read their screens. " + MCPRegistration.summary
@@ -1083,6 +1159,11 @@ final class EditorSettingsView: NSView {
         refresh()
     }
 
+    @objc private func markdownPreviewChanged() {
+        AppDelegate.shared.markdownLivePreview = markdownPreview.state == .on
+        refresh()
+    }
+
     @objc private func claudeChanged() {
         AppDelegate.shared.shareWithClaude = claude.state == .on
         refresh()
@@ -1095,6 +1176,20 @@ final class EditorSettingsView: NSView {
 
     @objc private func controlChanged() {
         AppDelegate.shared.agentControl = control.state == .on
+        refresh()
+    }
+
+    @objc private func offerTabsFollow() { offerTabs.state = AppDelegate.shared.agentsOfferTabs ? .on : .off }
+
+    @objc private func arrivalFollow() { arrival.selectItem(at: arrival.indexOfItem(withRepresentedObject: AppDelegate.shared.agentArrival.rawValue)) }
+
+    @objc private func arrivalChanged() {
+        guard let raw = arrival.selectedItem?.representedObject as? String, let mode = AgentArrival.Mode(rawValue: raw) else { return }
+        AppDelegate.shared.agentArrival = mode
+    }
+
+    @objc private func offerTabsChanged() {
+        AppDelegate.shared.agentsOfferTabs = offerTabs.state == .on
         refresh()
     }
 

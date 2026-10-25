@@ -11,6 +11,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastBadge = -1
     /// Last notification per tab, to rate-limit noisy programs.
     private var lastNotified: [UUID: (at: Date, key: String)] = [:]
+    /// The same for each of herdr's agents, by its id ("<tab id>/<pane>").
+    private var lastHerdrNotified: [String: (at: Date, key: String)] = [:]
+    /// herdr agents' notices still in Notification Center, by id: who posted each (a tab's id, or "host:<id>" for a host
+    /// with no herdr tab), its agent's pane, and whether it was about a decision (else a finish), so each is withdrawn
+    /// once its agent no longer needs the user that way.
+    private var herdrDelivered: [String: (owner: String, pane: String, decision: Bool)] = [:]
+    /// The categories registered for notices' buttons, by id, the order they came in (the oldest give way), and their
+    /// buttons, which the self-test reads.
+    var noticeCategories: [String: UNNotificationCategory] = [:]
+    var noticeCategoryOrder: [String] = []
+    var noticeActions: [String: [NoticeActions.Action]] = [:]
+    /// When Next Term last posted its own notice for each tab (system uptime): a program's notice for the tab soon
+    /// after it is dropped (ProgramNotice.repeatWindow). The self-test clears it between its checks.
+    var ownNoticeAt: [UUID: TimeInterval] = [:]
+    #if DEBUG
+    /// Stands in for whether Next Term is in front, for the self-test's notices that come from a tab's own output.
+    var appActiveStandIn: Bool?
+    #endif
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
@@ -53,15 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Where the terminal sits relative to the editor.
-    enum TerminalPosition: String, CaseIterable {
-        case bottom, right, left, top
-        var title: String { rawValue.capitalized }
-    }
+    typealias TerminalPosition = NextTermCore.TerminalPosition
 
     enum SidebarSide: String { case left, right }
 
     var terminalPosition: TerminalPosition {
-        get { TerminalPosition(rawValue: UserDefaults.standard.string(forKey: "terminalPosition") ?? "") ?? .bottom }
+        get { TerminalPosition(stored: UserDefaults.standard.string(forKey: "terminalPosition")) }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "terminalPosition") }
     }
 
@@ -70,10 +85,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "sidebarSide") }
     }
 
+    /// Where the terminal's tabs show: along its bar at the top, or in a list down its left or right.
+    var terminalTabs: TerminalTabsSetting {
+        get { TerminalTabsSetting(stored: UserDefaults.standard.string(forKey: TerminalTabsSetting.key)) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: TerminalTabsSetting.key) }
+    }
+
+    /// Show Folders: every row of the tab list gets a second line, the tab's folder or the question its agent asks.
+    var tabListShowsFolders: Bool {
+        get { UserDefaults.standard.bool(forKey: "tabListShowsFolders") }
+        set { UserDefaults.standard.set(newValue, forKey: "tabListShowsFolders") }
+    }
+
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
+        moveTerminal(to: position, announce: true)
+    }
+
+    /// Settings › Terminal › Position follows the menus.
+    static let terminalPositionChanged = Notification.Name("NextTermTerminalPositionChanged")
+
+    /// Moves the terminal in every window. The position it has already changes nothing: no window is laid out
+    /// again, so a folded terminal stays folded and no divider moves. `announce`: the user chose it (a menu,
+    /// Settings); with no file open in the window in front its terminal fills it, so a notice says where the
+    /// terminal goes once a file opens, rather than the choice seeming ignored.
+    func moveTerminal(to position: TerminalPosition, announce: Bool = false) {
+        guard position != terminalPosition else { return }
         terminalPosition = position
         controllers.forEach { $0.applyLayout() }
+        NotificationCenter.default.post(name: Self.terminalPositionChanged, object: nil)
+        guard announce, let front = TerminalWindow.front, let controller = front.windowController as? TerminalWindowController,
+              controller.editorArea.isHidden else { return }
+        GitToast.show(position.noticeWithNoFileOpen, in: front)
     }
 
     /// The editor's line height, as a multiple of the font's natural line height (1.35: readable code).
@@ -118,7 +161,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Settings › Editor › "Agents offer to run parallel work in tabs" (MCP: agents_offer_tabs): Next Term's next-term-tabs
+    /// skill (BuiltInSkill) in its skill library over MCP (list_skills, get_skill), and its line first in the MCP
+    /// instructions an agent in a tab gets (MCPBridge). On by default; nothing is written in the agents' folders, so off
+    /// takes both out at once.
+    static let offerTabsKey = "agentsOfferTabs"
+    static let offerTabsChanged = Notification.Name("NextTermAgentsOfferTabsChanged")
+    var agentsOfferTabs: Bool {
+        get { UserDefaults.standard.object(forKey: Self.offerTabsKey) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.offerTabsKey)
+            NotificationCenter.default.post(name: Self.offerTabsChanged, object: nil)
+        }
+    }
+
+    /// Next Term's own skills in its library: none while agents may not control Next Term, next-term-tabs only while
+    /// agents offer tabs.
+    var builtInSkills: [BuiltInSkill] { agentControl ? BuiltInSkill.offered(tabs: agentsOfferTabs) : [] }
+
+    /// Settings › Editor › "When an agent opens a tab" (MCP: agents_bring_tabs_forward): its window comes forward and
+    /// takes focus, comes forward only, or stays where it is (AgentArrival). The tab never takes the keyboard by itself.
+    static let agentArrivalKey = "agentsBringTabsForward"
+    static let agentArrivalChanged = Notification.Name("NextTermAgentArrivalChanged")
+    var agentArrival: AgentArrival.Mode {
+        get { UserDefaults.standard.string(forKey: Self.agentArrivalKey).flatMap(AgentArrival.Mode.init(rawValue:)) ?? .focus }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Self.agentArrivalKey)
+            NotificationCenter.default.post(name: Self.agentArrivalChanged, object: nil)
+        }
+    }
+
     func startAgentControl() {
+        SecretsStore.marksLoadedBeforeSocket = SecretsStore.marksLoaded
         MCPControlServer.shared.start(path: SelfTest.isRequested ? SelfTest.mcpSocketPath : nil)
         MCPRegistration.update(on: true)
     }
@@ -200,17 +274,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own root): Gemini CLI and
-    /// Qwen Code connect only from inside one of these.
+    /// Every folder a tab works in (projects, the sidebar's roots, each tab's own project): Gemini CLI and
+    /// Qwen Code connect only from inside one of these. Never a folder that is never a project (the home folder, /:
+    /// ProjectRoot.isNeverRoot), from which they would connect wherever they start.
     var agentWorkspaces: [String] {
         var roots: [String] = []
         for controller in controllers {
             if let project = controller.project { roots.append(project) }
             if let root = controller.sidebar.root?.path { roots.append(root) }
-            roots += controller.tabs.map { ProjectRoot.find(from: $0.directory) }
+            roots += controller.tabs.compactMap { (tab: TerminalTab) -> String? in ProjectRoot.project(from: tab.directory) }
         }
         var seen = Set<String>()
-        return roots.map(canonicalPath).filter { seen.insert($0).inserted }
+        return roots.map(canonicalPath).filter { !ProjectRoot.isNeverRoot($0) && seen.insert($0).inserted }
     }
 
     /// The `claude` clients whose tab is in `controller` (and, for the key window, ones whose tab is unknown).
@@ -237,6 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         GeminiIDEServer.shared.updateWorkspaces(agentWorkspaces)
         updateCopilotFolders()
         RemoteConnection.projectsChanged()
+        MainActor.assumeIsolated { ProjectHistoryRecorder.shared.update(controllers) }
     }
 
     /// Brand icons on configuration folders (.github, .claude, .idea); off: they stay plain and quiet.
@@ -248,13 +324,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// One click on a file in the project sidebar opens it, in a preview tab (off: a double-click does, as
-    /// in Finder). Read at each click, so it applies to every window at once. Turning it off keeps every
-    /// preview as an ordinary tab.
+    /// One click in the project sidebar opens a file, in a preview tab, and opens or closes a folder (off: a click
+    /// selects, and a double-click does those). Read at each click, so it applies to every window at once. Turning it
+    /// off keeps every preview as an ordinary tab. A new install has it on, stored at its first launch
+    /// (`SidebarClick.settleDefault`); an install used before that never chose keeps it off, and a key never written
+    /// reads off.
     var sidebarSingleClickOpens: Bool {
-        get { UserDefaults.standard.bool(forKey: "sidebarSingleClickOpens") }
+        get { UserDefaults.standard.bool(forKey: SidebarClick.settingKey) }
         set {
-            UserDefaults.standard.set(newValue, forKey: "sidebarSingleClickOpens")
+            UserDefaults.standard.set(newValue, forKey: SidebarClick.settingKey)
             if !newValue { controllers.forEach { $0.editorArea.keepPreview() } }
         }
     }
@@ -267,6 +345,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var softWrap: Bool {
         get { UserDefaults.standard.object(forKey: "softWrap") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
+    }
+
+    /// View › Suggestions While Typing: on or off for every tab, as Settings › Terminal › While typing sets it (stored).
+    @objc func toggleSuggestionsWhileTyping(_ sender: Any?) {
+        GhostPreferences.set(!GhostPreferences.isOn)
+    }
+
+    /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
+    /// turned off or Next Term quits.
+    @objc func togglePrivateMode(_ sender: Any?) {
+        GhostPreferences.setPrivateMode(!GhostPreferences.privateMode)
     }
 
     @objc func toggleSoftWrap(_ sender: Any?) {
@@ -282,6 +371,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue, forKey: "hideEnvValues")
             controllers.forEach { $0.editorArea.applyEnvValuesSetting() }
         }
+    }
+
+    /// Markdown files open in Live Preview (on unless turned off in Settings › Editor). A file's own choice from View ›
+    /// Markdown Live Preview wins (markdownViewChoices); changing this, every open file without one follows.
+    var markdownLivePreview: Bool {
+        get { UserDefaults.standard.object(forKey: "markdownLivePreview") as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "markdownLivePreview")
+            controllers.forEach { $0.editorArea.applyMarkdownPreviewSetting() }
+        }
+    }
+
+    /// Each Markdown file's own choice of Live Preview or Source, the newest 500.
+    var markdownViewChoices: MarkdownViewChoices {
+        get { MarkdownViewChoices.decode(UserDefaults.standard.data(forKey: MarkdownViewChoices.defaultsKey)) }
+        set { UserDefaults.standard.set(newValue.encoded(), forKey: MarkdownViewChoices.defaultsKey) }
     }
 
     /// Who last changed each line, in a column beside the line numbers (off unless turned on).
@@ -322,13 +427,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.forEach { $0.applyLayout() }
     }
 
-    /// How much of the work area open files get; the terminal has the rest.
-    var editorFraction: CGFloat {
-        get {
-            let saved = UserDefaults.standard.double(forKey: "editorFraction")
-            return saved >= 0.15 && saved <= 0.9 ? CGFloat(saved) : 0.62
-        }
-        set { UserDefaults.standard.set(Double(min(0.9, max(0.15, newValue))), forKey: "editorFraction") }
+    @objc func setTerminalTabs(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let tabs = TerminalTabsSetting(rawValue: raw) else { return }
+        moveTerminalTabs(to: tabs)
+    }
+
+    /// Settings › Terminal › Tabs follows the menus.
+    static let terminalTabsChanged = Notification.Name("NextTermTerminalTabsChanged")
+
+    /// Puts the terminal's tabs on top, or in a list down its left or right, in every window. Only the tabs move: the
+    /// sidebar, the editor, the terminal's position and every split stay where they are, and a folded terminal stays
+    /// folded. The place they have already changes nothing.
+    func moveTerminalTabs(to tabs: TerminalTabsSetting) {
+        guard tabs != terminalTabs else { return }
+        terminalTabs = tabs
+        controllers.forEach { $0.applyTerminalTabs() }
+        NotificationCenter.default.post(name: Self.terminalTabsChanged, object: nil)
+    }
+
+    /// View › Terminal Tabs › Show Folders, in every window.
+    @objc func toggleTabListFolders(_ sender: Any?) {
+        tabListShowsFolders.toggle()
+        controllers.forEach { $0.refresh() }
+    }
+
+    /// How much of the work area open files get; the terminal has the rest. Kept apart for the terminal beside
+    /// the editor and above or below it, as a width dragged for one is no height for the other.
+    func editorFraction(sideBySide: Bool) -> CGFloat {
+        let defaults = UserDefaults.standard
+        let own = defaults.object(forKey: EditorShare.key(sideBySide: sideBySide)) as? Double
+        return EditorShare.share(own: own, shared: defaults.object(forKey: EditorShare.sharedKey) as? Double)
+    }
+
+    func setEditorFraction(_ share: CGFloat, sideBySide: Bool) {
+        UserDefaults.standard.set(Double(EditorShare.kept(share)), forKey: EditorShare.key(sideBySide: sideBySide))
     }
 
     /// Notifications need a real bundle (`swift run` has none).
@@ -351,6 +483,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single clicks in the sidebar: on for a new install, kept as it was for one used before. First, before this
+        // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
+        // whose defaults look new at every run: its clicks part sets the setting itself.
+        if !SelfTest.isRequested { SidebarClick.settleDefault(in: .standard) }
+        // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
+        // load check, off the main thread.
+        MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
+        Task { @MainActor in await SecretsStore.shared.load() }
+        // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            UserKeys.pressed()
+            return event
+        }
         RemotePoller.shared.start() // status of remote tabs, from their hosts
         followAgentSpinner()
         // Claude Code's IDE link, before the first tab so every tab can use it.
@@ -397,13 +543,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             openAtLaunch(kind: kind, restore: restore, settings: LaunchSettings(defaults: launchDefaults), mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
+            GhostPreferences.testIsOn = false // its tabs record nothing, and → moves the cursor
             return SelfTestRestore.run(restore: restore)
         }
         #endif
         if SelfTest.isRequested {
             // A normal launch, with the Welcome window whatever is saved and no import offer. The self-test's first
             // check opens the window the others use.
-            openAtLaunch(kind: .normal, restore: .notRun, settings: LaunchSettings(), mayOfferImport: false)
+            var welcomeFirst = LaunchSettings()
+            welcomeFirst.opens = .welcome
+            openAtLaunch(kind: .normal, restore: .notRun, settings: welcomeFirst, mayOfferImport: false)
             requests.shown()
             restoreRemoteTabsOnceAWindowOpens()
             SelfTest.run()
@@ -459,6 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
+        case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
         }
     }
 
@@ -504,57 +654,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// A folder from outside (nxtrm, Finder, an agent): its window if it is open, an unused window, or a new one.
     /// A linked worktree's folder is kept out of Recent Projects, as Open in New Window keeps it (openWorktreeWindow).
+    /// `forAgent`: an agent asked over MCP. Nothing comes forward here (the caller's presentForAgent brings it as
+    /// AgentArrival says), a new window's first tab waits for the user's choice, the Welcome window stays while the user
+    /// types in it, and the empty window the user is in is not taken for the project.
     @discardableResult
-    func openFolder(_ path: String, newWindow: Bool) -> TerminalWindowController {
+    func openFolder(_ path: String, newWindow: Bool, forAgent: Bool = false) -> TerminalWindowController {
         let path = canonicalPath(path)
         if WorktreeWindow.repository(ofLinkedWorktree: path) == nil { recent.add(path) }
-        welcome?.close()
-        if !newWindow, let open = controllers.first(where: { $0.project == path }) {
-            open.window?.makeKeyAndOrderFront(nil)
+        closeWelcome(forAgent: forAgent)
+        if !newWindow, let open = controllers.first(where: { $0.project == path && !$0.hasClosed }) {
+            if !forAgent { open.window?.makeKeyAndOrderFront(nil) }
             return open
-        } else if !newWindow, let unused = controllers.first(where: \.isPristine) {
+        } else if !newWindow, let unused = controllers.first(where: { $0.isPristine && !$0.hasClosed && !(forAgent && $0.hasUsersKeyboard) }) {
             unused.adoptProject(path)
-            unused.window?.makeKeyAndOrderFront(nil)
+            if !forAgent { unused.window?.makeKeyAndOrderFront(nil) }
             return unused
         } else {
-            return openWindow(directory: path, project: path)
+            return openWindow(directory: path, project: path, forAgent: forAgent)
         }
     }
 
+    /// The Welcome window closes as a project opens, unless an agent opened it while the user types in the Welcome window.
+    private func closeWelcome(forAgent: Bool) {
+        if forAgent, let window = welcome?.window, window.isKeyWindow { return }
+        welcome?.close()
+    }
+
     /// A file from outside: in the window whose project holds it, else the front window, else a new window
-    /// on the file's project (its git root, or its folder).
-    func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool) {
+    /// on the file's project (its git root, or its folder), or one with no project when its folder is never one.
+    /// `forAgent`: open_in_editor. The file opens without taking the keyboard, and its window comes forward as
+    /// AgentArrival says, not as a window the user went to.
+    func openFile(_ path: String, line: Int?, column: Int, newWindow: Bool, forAgent: Bool = false) {
         let path = canonicalPath(path)
-        let owners = controllers.filter { controller in controller.project.map { path.hasPrefix($0 + "/") } ?? false }
+        let owners = controllers.filter { controller in !controller.hasClosed && (controller.project.map { path.hasPrefix($0 + "/") } ?? false) }
         let owner = owners.max { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }
         let front = (NSApp.keyWindow?.windowController as? TerminalWindowController) ?? controllers.last
         let target: TerminalWindowController
         if !newWindow, let window = owner ?? front {
             target = window
-        } else {
-            let root = ProjectRoot.find(from: (path as NSString).deletingLastPathComponent)
+        } else if let root = ProjectRoot.project(from: (path as NSString).deletingLastPathComponent) {
             recent.add(root)
-            target = openWindow(directory: root, project: root)
+            target = openWindow(directory: root, project: root, forAgent: forAgent)
+        } else {
+            // A file in a folder that is never a project (~/notes.txt): a window with no project, in that folder.
+            target = openWindow(directory: (path as NSString).deletingLastPathComponent, forAgent: forAgent)
         }
-        welcome?.close()
+        closeWelcome(forAgent: forAgent)
+        if forAgent {
+            target.openFile(URL(fileURLWithPath: path), line: line, column: column, focus: false)
+            target.presentForAgent(nil)
+            return
+        }
         target.window?.makeKeyAndOrderFront(nil)
         target.openFile(URL(fileURLWithPath: path), line: line, column: column)
     }
 
     private var settings: SettingsWindowController?
+    /// The Settings window while it is open, for the self-test.
+    var openSettings: SettingsWindowController? { settings?.window?.isVisible == true ? settings : nil }
 
     @objc func showSettings(_ sender: Any?) { showSettings(tab: nil) }
 
-    /// Settings, on the tab it was left on, or on `tab` ("skills", SettingsWindowController's identifiers).
-    func showSettings(tab: String?) {
+    /// Settings, on the tab it was left on, or on `tab` ("skills", SettingsWindowController's identifiers). `forAgent`
+    /// (MCP show_settings): in front, but the keyboard stays where the user has it, as the approval window does.
+    func showSettings(tab: String?, forAgent: Bool = false) {
         // The Claude app may have been opened since the last pass: what waits for it to quit, under the setting, is
         // worked out again (nothing is written while it is open).
         MCPRegistration.update(on: agentControl, claudeAppOnly: true)
         if settings == nil { settings = SettingsWindowController() }
         settings?.reload()
         if let tab { settings?.showTab(tab) }
+        guard !forAgent else {
+            if settings?.window?.isMiniaturized == true { settings?.window?.deminiaturize(nil) }
+            settings?.window?.orderFront(nil)
+            return
+        }
         settings?.showWindow(nil)
         settings?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// What Agents › Suggest a Command… does while it is off: Settings › Terminal at its Suggestions row, which says so
+    /// and how to turn it on.
+    func showSuggestionSettings() {
+        showSettings(tab: "terminal")
+        settings?.showSuggestions()
     }
 
     @objc func checkForUpdates(_ sender: Any?) {
@@ -841,19 +1024,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidBecomeActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() } // the window in front has its project's glow at full strength again
     }
 
     func applicationDidResignActive(_ notification: Notification) {
         controllers.forEach { $0.refreshVisibility() }
+        controllers.forEach { $0.activityChanged() }
     }
 
     // MARK: windows
 
+    /// `forAgent`: an agent asked over MCP. The window is placed but not shown here (the caller's presentForAgent brings
+    /// it), and its first tab waits for the user's choice.
     @discardableResult
-    func openWindow(directory: String?, project: String? = nil) -> TerminalWindowController {
-        let controller = TerminalWindowController(directory: directory, project: project)
+    func openWindow(directory: String?, project: String? = nil, forAgent: Bool = false) -> TerminalWindowController {
+        let controller = TerminalWindowController(directory: directory, project: project, byAgent: forAgent)
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
-        welcome?.close()
+        closeWelcome(forAgent: forAgent)
         // Cascade from the terminal window in front (not the About panel or a sheet), at its size unless it
         // is in full screen, and never below the minimum.
         let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controllers.last?.window
@@ -869,6 +1056,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controllers.append(controller)
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
+        if forAgent { return controller }
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         return controller
@@ -887,6 +1075,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// A terminal window closed.
     private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
+        // Out of the index at once: Go to Next Agent Needing You and the Welcome window never go to a closed window.
+        windowIndex.remove(window: closed.indexID)
+        self.welcome?.windowsChanged()
         // Defer: the window is still mid-close in this call.
         DispatchQueue.main.async { [self] in
             controllers.removeAll { $0 === closed }
@@ -898,8 +1089,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// New Terminal (File › New Window, ⌘N, the Welcome window's row): a window with no project, its shell where Settings ›
+    /// Terminal › New tabs says, as ⌘T with no window open (the home folder unless a folder is chosen there).
     @objc func newWindow(_ sender: Any?) {
-        openWindow(directory: nil)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// A worktree's own window, with one shell tab in its folder, titled "xCloud ▸ 7027-sso": the window
@@ -923,17 +1116,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "worktreeLocation") }
     }
 
-    /// Open in New Worktree's "Copy ignored files too", as it was last left for the repository whose main checkout is
-    /// `main`: off for one never seen. Saved when Create is pressed; the box is the setting.
-    func copiesIgnoredFiles(for main: String) -> Bool {
-        (UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[canonicalPath(main)] as? Bool) ?? false
+    /// Open in New Worktree's choice for the ignored files (Copy, Link or Leave Out), as it was last left for the
+    /// repository whose main checkout is `main`: before there was a choice, Copy where "Copy ignored files too" was
+    /// ticked; Leave Out for one never seen. Saved when Create is pressed; the choice is the setting.
+    func ignoredFilesChoice(for main: String) -> WorktreeCopy.Choice {
+        let path = canonicalPath(main)
+        let saved = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles")?[path] as? String
+        let before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored")?[path] as? Bool
+        return WorktreeCopy.Choice.remembered(saved, copiedBefore: before)
     }
 
-    func setCopiesIgnoredFiles(_ on: Bool, for main: String) {
-        var choices = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored") ?? [:]
+    func setIgnoredFilesChoice(_ choice: WorktreeCopy.Choice, for main: String) {
+        let path = canonicalPath(main)
+        var choices = UserDefaults.standard.dictionary(forKey: "worktreeIgnoredFiles") ?? [:]
         choices = choices.filter { FileManager.default.fileExists(atPath: $0.key) } // repositories gone since
-        choices[canonicalPath(main)] = on
-        UserDefaults.standard.set(choices, forKey: "worktreeCopiesIgnored")
+        choices[path] = choice.rawValue
+        UserDefaults.standard.set(choices, forKey: "worktreeIgnoredFiles")
+        // The checkbox's own setting, now the choice holds it.
+        if var before = UserDefaults.standard.dictionary(forKey: "worktreeCopiesIgnored"), before.removeValue(forKey: path) != nil {
+            if before.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "worktreeCopiesIgnored")
+            } else {
+                UserDefaults.standard.set(before, forKey: "worktreeCopiesIgnored")
+            }
+        }
     }
 
     // MARK: projects
@@ -944,6 +1150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UserDefaults.standard.set(newValue.paths, forKey: "recentProjects")
             // A folder dropped as missing, Clear Menu, or an import under the Welcome window: it lists them as they are now.
             if welcome?.window?.isVisible == true { welcome?.reloadProjects() }
+            // And every window's "No project open", which otherwise refreshes only when its window becomes key.
+            let showing: [TerminalWindowController] = controllers.filter { (controller: TerminalWindowController) -> Bool in
+                controller.sidebar.showsNoProject
+            }
+            guard !showing.isEmpty else { return }
+            let shown: [String] = newValue.existing()
+            for controller in showing { controller.sidebar.noProject.show(recent: shown) }
         }
     }
 
@@ -968,14 +1181,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         var list = recent
         for project in list.paths where places.contains(where: { project == $0 || project.hasPrefix($0 + "/") }) { list.remove(project) }
         if list.paths != recent.paths { recent = list }
+        // The Welcome window's history too, so a removed worktree is not kept there as a folder gone for now.
+        MainActor.assumeIsolated { ProjectHistoryRecorder.shared.forget(under: places) }
     }
 
     /// Where Open Project goes when the current window is in use: ask, this window, or a new one.
     typealias ProjectTarget = ProjectOpening.Setting
 
+    /// File › Open Projects In, Settings › General's Projects row, the Ask dialog's remembered choice or an import set
+    /// `projectTarget`: the Settings row follows.
+    static let projectTargetChanged = Notification.Name("NextTermProjectTargetChanged")
+
     var projectTarget: ProjectTarget {
         get { ProjectTarget(rawValue: UserDefaults.standard.string(forKey: "openProjectsIn") ?? "") ?? .ask }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn") }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "openProjectsIn")
+            NotificationCenter.default.post(name: Self.projectTargetChanged, object: self)
+        }
     }
 
     private var welcome: WelcomeWindowController?
@@ -996,19 +1218,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Open…: the panel to choose a folder as a project. On the Welcome window in front (its Open… button, ⌘O there,
     /// Return with no project chosen) it comes over it; otherwise over the terminal window in front, or on its own.
     @objc func chooseProjectFolder(_ sender: Any?) {
+        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
+        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
+        chooseProjectFolder(from: from, over: overWelcome)
+    }
+
+    /// The same panel for a window that asked itself, not the key one (a notice in it, which can't be key): over `sheet`,
+    /// else over `from`'s window, or on its own with neither; the folder chosen opens as if from `from`.
+    func chooseProjectFolder(from: TerminalWindowController?, over sheet: NSWindow? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         panel.message = "Choose a project folder"
-        let overWelcome = welcome?.window.flatMap { $0.isVisible && $0.isKeyWindow ? $0 : nil }
-        let from = overWelcome == nil ? NSApp.keyWindow?.windowController as? TerminalWindowController : welcomeOrigin
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.openProject(at: url, from: from)
         }
-        if let window = overWelcome ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
+        if let window = sheet ?? from?.window { panel.beginSheetModal(for: window, completionHandler: handler) } else { handler(panel.runModal()) }
     }
 
     /// The terminal window the Welcome window was last asked from, while it is open and shown: where a project chosen
@@ -1025,6 +1253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func clearRecentProjects(_ sender: Any?) {
+        MainActor.assumeIsolated { ProjectHistoryRecorder.shared.clear() }
         recent = RecentProjects()
     }
 
@@ -1142,6 +1371,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
+        // The windows with a terminal or one of herdr's agents that needs you, first: the one Go to Next Agent Needing You
+        // goes to at the top, each with its most urgent mark, as its tab bar or tab list shows it.
+        refreshWindowIndex()
+        for window in windowIndex.windowsWaiting {
+            guard let waiting = windowIndex.firstWaiting(in: window.id) else { continue }
+            let item = menu.addItem(withTitle: window.title, action: #selector(goToWaitingWindow(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = window.id
+            item.image = StatusGlyph.image(for: waiting.state)
+            item.toolTip = window.marks.spoken(working: false)
+        }
+        if menu.numberOfItems > 0 { menu.addItem(.separator()) }
         menu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "").target = self
         let projects = recentProjects
         if !projects.isEmpty {
@@ -1172,7 +1413,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 item.toolTip = path
             }
             if !projects.isEmpty { menu.addItem(.separator()) }
-            let clear = menu.addItem(withTitle: "Clear Menu", action: projects.isEmpty ? nil : #selector(clearRecentProjects(_:)), keyEquivalent: "")
+            // On while the Welcome window lists a closed project too: Recent Projects can be empty while it does.
+            let clears: Bool = !projects.isEmpty || MainActor.assumeIsolated { ProjectHistoryRecorder.shared.canClear }
+            let clearAction: Selector? = clears ? #selector(clearRecentProjects(_:)) : nil
+            let clear = menu.addItem(withTitle: "Clear Menu", action: clearAction, keyEquivalent: "")
             clear.target = self
         } else if menu.title == "Open Projects In" {
             for (title, value) in [("Ask Each Time", ProjectTarget.ask), ("This Window", .thisWindow), ("New Window", .newWindow)] {
@@ -1186,12 +1430,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// ⌘T with no window open (every window closed, app still running), where Settings › Terminal › New tabs says.
     @objc func newTab(_ sender: Any?) {
-        openWindow(directory: newTabWindowDirectory)
+        openWindow(directory: newWindowDirectory)
     }
 
     /// The terminal window used last, for a tab command given while another window is in front (Welcome,
     /// Settings).
-    private var lastUsedController: TerminalWindowController? { controllers.max { $0.lastKey < $1.lastKey } }
+    /// The terminal window the user went to last (one brought forward for an agent doesn't count: keyingForAgent).
+    var lastUsedController: TerminalWindowController? { controllers.max { $0.lastKey < $1.lastKey } }
 
     /// ⌥⌘T with no terminal window in front, and the Welcome window's Connect to Server…. From the Welcome
     /// window (in front, or the only one open) the sheet comes over it: Connect opens a window for the tab,
@@ -1257,8 +1502,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = item.representedObject as? String == terminalPosition.rawValue ? .on : .off
         }
         if item.action == #selector(toggleSidebarSide(_:)) { item.state = sidebarSide == .right ? .on : .off }
+        if item.action == #selector(setTerminalTabs(_:)) {
+            item.state = item.representedObject as? String == terminalTabs.rawValue ? .on : .off
+        }
+        if item.action == #selector(toggleTabListFolders(_:)) {
+            item.state = tabListShowsFolders ? .on : .off
+            return terminalTabs.listSide != nil // a second line for the list's rows: the bar has none
+        }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
+        if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
+        if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
         if item.action == #selector(setAgentSpinner(_:)) { item.state = item.representedObject as? String == AgentSpinner.current.rawValue ? .on : .off }
@@ -1269,6 +1524,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item.state = MainActor.assumeIsolated { Updater.shared.automaticChecks } ? .on : .off
         }
         return true
+    }
+
+    /// View › Project Color › Show Project Colors (and Settings › General): every window's colour, shown or not. Each
+    /// project keeps its own while they are hidden.
+    @objc func toggleProjectColors(_ sender: Any?) {
+        ProjectColorStore.isShown.toggle()
     }
 
     /// View › Agent Spinner: Spinning, Still or Off, for every window at once.
@@ -1318,10 +1579,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         min(max(size, Theme.fontSizeRange.lowerBound), Theme.fontSizeRange.upperBound)
     }
 
+    // MARK: every window's agents
+
+    /// Every terminal window and what its terminals and herdr's agents show (WindowIndex): for Agents › Go to Next Agent
+    /// Needing You, the Welcome window's rows and the Dock menu. Each window tells it as it refreshes, from its tabs' own
+    /// status and what herdr's last checks left, so nothing is polled for it, and leaves it as it closes.
+    private(set) var windowIndex = WindowIndex()
+
+    /// A window refreshed: its entry as it is now. A change reaches the Welcome window while it shows.
+    func indexed(_ controller: TerminalWindowController) {
+        // A window being made is told once it is listed; one closing, never again.
+        guard !controller.hasClosed, controllers.contains(where: { $0 === controller }) else { return }
+        guard windowIndex.update(controller.indexEntry) else { return }
+        welcome?.windowsChanged()
+    }
+
+    /// Every window's entry as it is this moment, not at its last refresh (a window no one can see refreshes once a
+    /// second): before a key or a menu reads the index.
+    func refreshWindowIndex() {
+        for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
+    }
+
+    /// Agents › Go to Next Agent Needing You: the terminal or herdr agent that has waited longest for you (a decision, then
+    /// a failure, then a finished agent or command), its window brought forward and its tab or pane selected, herdr's view
+    /// moved to the agent's pane; pressed again there, the next one, round to the first. With none, a notice says so and
+    /// nothing beeps.
+    @objc func goToNextAgentNeedingYou(_ sender: Any?) {
+        refreshWindowIndex()
+        // A panel of the window's own has the keyboard (Peek, ⌘P, a sheet): that window is still the one in front.
+        let keyWindow: NSWindow? = NSApp.keyWindow?.windowController == nil ? NSApp.mainWindow : NSApp.keyWindow
+        let key = keyWindow?.windowController as? TerminalWindowController
+        // The tab in front counts as gone to only while it shows; folded, what it holds is news like any other tab's.
+        let front: TerminalTab? = key?.activeTab.flatMap { (tab: TerminalTab) -> TerminalTab? in
+            key?.isOnScreen(tab) == true ? tab : nil
+        }
+        guard let next = windowIndex.next(from: front?.id) else {
+            let shown: NSWindow? = NSApp.keyWindow ?? TerminalWindow.front
+            GitToast.show(WindowIndex.nothingWaiting, in: shown)
+            return
+        }
+        go(to: next)
+    }
+
+    /// The Dock menu's item for a window waiting for you (its `tag`, the window's id): its terminal that needs you most;
+    /// seen since, the window as it is.
+    @objc func goToWaitingWindow(_ sender: NSMenuItem) {
+        refreshWindowIndex()
+        if let waiting = windowIndex.firstWaiting(in: sender.tag) { return go(to: waiting) }
+        let controller = controllers.first { $0.indexID == sender.tag && !$0.hasClosed }
+        NSApp.activate(ignoringOtherApps: true)
+        controller?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// `waiting`'s window in front, with its tab selected and its pane focused, as a click on its notification does. One
+    /// of herdr's agents is gone to as choosing it in Go to Agent does: herdr's view moves to its pane, a server's with no
+    /// herdr tab gets one, and one on a machine saved in herdr is peeked at.
+    private func go(to waiting: WindowIndex.Waiting) {
+        guard let controller = controllers.first(where: { $0.indexID == waiting.window && !$0.hasClosed }),
+              let tab = controller.tabs.first(where: { $0.id == waiting.tab }) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        // The herdr tab that opens for a server's agent comes forward, not the tab it was reached from.
+        if let agent = waiting.agent, case .host = agent { return HerdrAgentMenu.go(to: agent) }
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.show(tab)
+        if let agent = waiting.agent { HerdrAgentMenu.go(to: agent) }
+    }
+
     // MARK: dock badge and notifications
 
+    /// The tabs that need you, and each of herdr's agents that does (blocked, done and not seen, or kept unread) while
+    /// its tab follows them: once per host, herdr session and pane, however many tabs show that session.
     func updateBadge() {
-        let count = controllers.reduce(0) { $0 + $1.unseenTabCount }
+        var agents = Set<String>()
+        // An agent that one tab of its session shows on screen counts in none.
+        var shown = Set<String>()
+        for tab in controllers.flatMap(\.tabs) where tab.followsHerdr {
+            let tracker = tab.herdrTracker
+            for pane in tracker.needsYou { agents.insert(tab.herdrPlace + "\u{0}" + pane) }
+            guard tracker.tabVisible else { continue }
+            for agent in tracker.agents where tracker.isOnScreen(agent.paneID) {
+                shown.insert(tab.herdrPlace + "\u{0}" + agent.paneID)
+            }
+        }
+        agents.subtract(shown)
+        // Hosts with no herdr tab, counted once with any tab of the same session.
+        for overview in RemotePoller.shared.overviews {
+            for pane in overview.tracker.needsYou { agents.insert(overview.place + "\u{0}" + pane) }
+        }
+        // The machines saved in a herdr here: a pane id is a machine's own, so the machine is part of the key.
+        for watch in LocalHerdrWatch.shared.allMachines {
+            guard let tab = watch.tab else { continue }
+            for machine in watch.machines {
+                for pane in machine.tracker.needsYou { agents.insert("\(tab.herdrPlace) @\(machine.id)\u{0}" + pane) }
+            }
+        }
+        let count = controllers.reduce(0) { $0 + $1.unseenTabCount } + agents.count
         guard count != lastBadge else { return }
         lastBadge = count
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
@@ -1332,9 +1684,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// is in front, for the self-test.
     func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController, appActive: Bool? = nil) {
         let settings = NotificationSettings(defaults: .standard)
+        #if DEBUG
+        let active = appActive ?? appActiveStandIn ?? NSApp.isActive
+        #else
         let active = appActive ?? NSApp.isActive
+        #endif
         let visible = controller.isOnScreen(tab)
         guard settings.shouldNotify(notice, appActive: active, tabVisible: visible, drivenByAgent: MCPControl.isDriven(tab)) else { return }
+        // A program's notice straight after Next Term's own for the tab says less: the decision, or the finish, stays.
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if notice.fromProgram, ProgramNotice.isRepeat(lastOwnNoticeAt: ownNoticeAt[tab.id], now: uptime) { return }
         let program = Typography.shortened(notice.program, to: 60)
         let title = Typography.shortened(tab.title, to: 80)
         // Which project the tab is in (or its folder), unless its title says it already.
@@ -1346,6 +1705,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             content.title = "\(program.isEmpty ? "The agent" : program) needs your decision"
             content.subtitle = [title, shownPlace].compactMap { $0 }.joined(separator: " — ")
             content.body = question
+        } else if let message = notice.message {
+            // A program's own words, under its name, as a decision's question is: an agent's that came as its turn ended
+            // ride on its finish, which then reads as they would alone (the same notification is not posted twice).
+            content.title = program.isEmpty ? title : program
+            let under = program.isEmpty ? [shownPlace] : [title, shownPlace]
+            content.subtitle = under.compactMap { $0 }.joined(separator: " — ")
+            content.body = message
         } else {
             content.title = title
             content.subtitle = shownPlace ?? ""
@@ -1366,20 +1732,214 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let key = content.title + "\u{0}" + content.body
         if let last = lastNotified[tab.id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
         lastNotified[tab.id] = (Date(), key)
+        if !notice.fromProgram { ownNoticeAt[tab.id] = uptime }
         let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
         content.sound = audible ? .default : nil
         if audible { lastSoundAt = Date() }
         // A window's notifications stack together in Notification Center.
         content.threadIdentifier = controller.placeName(of: tab)
         content.userInfo = ["tab": tab.id.uuidString]
+        // An agent's decision whose choices read off its screen carries them as buttons; a finish, Reply.
+        if notice.kind == .agent, notice.stillRunning, tab.remote == nil || tab.remoteConnected {
+            if let question = notice.question, let menu = MCPControl.fieldMenu(tab, question: question),
+               let id = MCPControl.questionID(tab) {
+                content.categoryIdentifier = noticeCategory(tab.id.uuidString, choices: menu.choices) ?? ""
+                content.userInfo["question_id"] = id
+            } else if notice.question == nil, notice.state == .done {
+                content.categoryIdentifier = noticeCategory(nil, choices: [])  ?? ""
+            }
+        }
         deliver(UNNotificationRequest(identifier: tab.id.uuidString, content: content, trigger: nil))
+    }
+
+    /// A notice for one of herdr's agents (TerminalTab.herdrEvents): "codex needs your decision" with its question, or
+    /// "codex is waiting for you", as Settings › Notifications says. None while that agent is on screen (a tab of its
+    /// session is, and herdr shows the agent's own herdr tab there), and none for an agent whose notices the user muted.
+    /// The subtitle says where: the host and the tab for an agent on a server. One notice per agent however many tabs
+    /// show its session (TerminalTab.herdrPeers): the first of them posts it. Each agent's notice replaces its own earlier
+    /// one, never another agent's, and is withdrawn once the agent no longer needs the user that way; a click brings the
+    /// tab forward and moves herdr's view to the agent's pane.
+    func post(herdrAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, tab: TerminalTab,
+              in controller: TerminalWindowController, appActive: Bool? = nil) {
+        guard !tab.herdrTracker.isMuted(agent.paneID) else { return }
+        let peers = tab.herdrPeers
+        let ids = peers.map { HerdrTarget(tabID: $0.id.uuidString, pane: agent.paneID).id }
+        let id = HerdrTarget(tabID: tab.id.uuidString, pane: agent.paneID).id
+        // Another tab of the session posts it, or has a notice of this kind out for it already (posted while it was
+        // the first, say while this tab reconnected).
+        let decision = question != nil
+        let postedElsewhere = ids.contains { $0 != id && herdrDelivered[$0]?.decision == decision }
+        guard peers.first === tab, !postedElsewhere else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        // A turn only herdr's counts saw end is as long as the shortest that is news.
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        let onScreen = peers.contains { $0.herdrTracker.isOnScreen(agent.paneID) }
+        // An agent an MCP agent drives (through any tab of its session) is quiet while Next Term is in front; its herdr
+        // neighbours are not.
+        let driven = ids.contains(where: HerdrMCP.isDriven)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: onScreen, drivenByAgent: driven) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let title = Typography.shortened(tab.title, to: 80)
+        let place = Typography.shortened(controller.placeName(of: tab), to: 60)
+        // Where it runs: "web-1 — <tab>" on a server, the tab and its project here.
+        let host = tab.remote.map { Typography.shortened($0.host.name, to: 40) }
+        let whereShown = host.map { title.hasPrefix($0 + ":") ? [title] : [$0, title] } ?? [title, place == title ? nil : place].compactMap { $0 }
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = whereShown.joined(separator: " — ")
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = controller.placeName(of: tab)
+        content.userInfo = ["tab": tab.id.uuidString, "herdr_pane": agent.paneID]
+        // A decision whose choices were read from its pane carries them as buttons; a finish, Reply. None while the tab is
+        // not connected: nothing could answer.
+        if tab.remote == nil || tab.remoteConnected {
+            if question != nil, let asked = tab.herdrTracker.question(agent.paneID) {
+                content.categoryIdentifier = noticeCategory(id, choices: asked.choices) ?? ""
+                content.userInfo["question_id"] = HerdrMCP.questionID(asked, pane: agent.paneID, in: tab)
+            } else if question == nil {
+                content.categoryIdentifier = noticeCategory(nil, choices: []) ?? ""
+            }
+        }
+        herdrDelivered[id] = (tab.id.uuidString, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// Withdraws one herdr agent's notice from Notification Center (and the self-test's sink).
+    func withdrawHerdrNotice(_ id: String) {
+        guard herdrDelivered.removeValue(forKey: id) != nil else { return }
+        forgetNoticeCategory(id)
+        lastHerdrNotified[id] = nil
+        testNotifications.removeAll { $0.identifier == id }
+        notificationCenter?.removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    /// Withdraws the notices of `tab`'s agents that no longer need the user as their notice said: a decision's once the
+    /// agent is not blocked, a finish's once it is neither done nor kept unread, and either once herdr no longer lists
+    /// it or the agent is on screen.
+    func withdrawStaleHerdrNotices(of tab: TerminalTab) {
+        withdrawStaleHerdrNotices(owner: tab.id.uuidString, tracker: tab.herdrTracker)
+    }
+
+    /// The same for any owner of notices (a tab, or a host with no herdr tab), from its tracker.
+    func withdrawStaleHerdrNotices(owner: String, tracker: HerdrAgents) {
+        for (id, posted) in herdrDelivered where posted.owner == owner {
+            let agent = tracker.agents.first { $0.paneID == posted.pane }
+            let finished = agent.map { $0.status == .done || tracker.isUnread($0.paneID) } ?? false
+            let still = posted.decision ? agent?.status == .blocked : finished && agent?.status != .blocked
+            if !still || tracker.isOnScreen(posted.pane) { withdrawHerdrNotice(id) }
+        }
+    }
+
+    /// Withdraws every notice of `tab`'s agents: the tab closed, or no longer follows herdr.
+    func withdrawHerdrNotices(of tab: TerminalTab) {
+        withdrawHerdrNotices(owner: tab.id.uuidString)
+    }
+
+    func withdrawHerdrNotices(owner: String) {
+        for (id, posted) in herdrDelivered where posted.owner == owner { withdrawHerdrNotice(id) }
+    }
+
+    /// A notice for an agent on one of the machines saved in a herdr here (HerdrMachineWatch), as `post(herdrAgent:)`
+    /// posts one: "Build machine (herdr)" in the subtitle, its own id, its question's choices as buttons and Reply on a
+    /// finish (answered through that herdr, `--machine`), withdrawn as the agent moves on. A click peeks at it: herdr
+    /// cannot be told which machine its screen shows.
+    func post(machineAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, machine: HerdrMachineWatch.Machine,
+              owner: String, tab: TerminalTab, appActive: Bool? = nil) {
+        guard !machine.tracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        let id = HerdrTarget(tabID: tab.id.uuidString, machine: machine.id, pane: agent.paneID).id
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: false, drivenByAgent: HerdrMCP.isDriven(id)) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = AgentQueue.onMachine(Typography.shortened(machine.label, to: 40))
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = machine.label
+        content.userInfo = ["tab": tab.id.uuidString, "herdr_machine": machine.id, "herdr_pane": agent.paneID]
+        if question != nil, let asked = machine.tracker.question(agent.paneID) {
+            content.categoryIdentifier = noticeCategory(id, choices: asked.choices) ?? ""
+            content.userInfo["question_id"] = HerdrMCP.questionID(asked, id: id)
+        } else if question == nil {
+            content.categoryIdentifier = noticeCategory(nil, choices: []) ?? ""
+        }
+        herdrDelivered[id] = (owner, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// A notice for an agent of a connected host with no herdr tab (HerdrOverview), as `post(herdrAgent:)` posts one: the
+    /// host in the subtitle, its own id, withdrawn as the agent moves on. A click opens a herdr tab there, on that pane.
+    func post(overviewAgent agent: HerdrAgent, question: String?, duration: TimeInterval?, overview: HerdrOverview,
+              appActive: Bool? = nil) {
+        guard !overview.tracker.isMuted(agent.paneID) else { return }
+        let settings = NotificationSettings(defaults: .standard)
+        let active = appActive ?? NSApp.isActive
+        let notice = TabNotice(state: question == nil ? .done : .attention, command: "", program: agent.name, kind: .agent,
+                               stillRunning: true, question: question, duration: duration ?? TabStatus.notifyAfter)
+        guard settings.shouldNotify(notice, appActive: active, tabVisible: false) else { return }
+        let name = Typography.shortened(agent.name, to: 60)
+        let content = UNMutableNotificationContent()
+        if let question {
+            content.title = "\(name) needs your decision"
+            content.body = question
+        } else {
+            content.title = "\(name) is waiting for you"
+            content.body = HerdrAgents.label(agent) + (agent.title.map { " · " + $0 } ?? "")
+        }
+        content.subtitle = Typography.shortened(overview.host.name, to: 40) + " — no herdr tab"
+        let id = overview.noticeID(agent.paneID)
+        let key = content.title + "\u{0}" + content.body
+        if let last = lastHerdrNotified[id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
+        lastHerdrNotified[id] = (Date(), key)
+        let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
+        content.sound = audible ? .default : nil
+        if audible { lastSoundAt = Date() }
+        content.threadIdentifier = overview.host.name
+        content.userInfo = ["herdr_host": overview.host.id, "herdr_pane": agent.paneID]
+        herdrDelivered[id] = (overview.owner, agent.paneID, question != nil)
+        deliver(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
     /// While the self-test runs, notifications land here instead of in Notification Center: it checks what
     /// would be shown, and shows you nothing.
     var testNotifications: [UNNotificationRequest] = []
 
-    private func deliver(_ request: UNNotificationRequest) {
+    func deliver(_ request: UNNotificationRequest) {
+        // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
+        var request = request
+        let mask = SecretMask.current
+        if !mask.isEmpty, let content = request.content.mutableCopy() as? UNMutableNotificationContent {
+            content.title = mask.mask(content.title)
+            content.subtitle = mask.mask(content.subtitle)
+            content.body = mask.mask(content.body)
+            request = UNNotificationRequest(identifier: request.identifier, content: content, trigger: request.trigger)
+        }
         if SelfTest.isRequested { return testNotifications.append(request) }
         notificationCenter?.add(request)
     }
@@ -1441,12 +2001,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let tabID = response.notification.request.content.userInfo["tab"] as? String
+        // One of herdr's agents: herdr's view moves to its pane too (the user clicked, so nothing asks).
+        let pane = response.notification.request.content.userInfo["herdr_pane"] as? String
+        // An agent of a host with no herdr tab: a herdr tab opens there, on its pane.
+        let host = response.notification.request.content.userInfo["herdr_host"] as? String
+        // An agent on one of a local herdr's machines: Peek at it.
+        let machine = response.notification.request.content.userInfo["herdr_machine"] as? String
+        let action = response.actionIdentifier
+        if NoticeActions.choice(action) != nil || action == NoticeActions.reply {
+            // A button on the notice: answered here, Next Term staying where it is.
+            let request = response.notification.request
+            let text = (response as? UNTextInputNotificationResponse)?.userText
+            var info: [String: String] = [:]
+            for (key, value) in request.content.userInfo {
+                if let key = key as? String, let value = value as? String { info[key] = value }
+            }
+            return DispatchQueue.main.async { [self] in
+                respond(to: request.identifier, title: request.content.title, info: info, action: action, text: text)
+                completionHandler()
+            }
+        }
+        let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let reminder { // a key rotation reminder: Rotate… for its key
+                SecretReminders.open(reminder)
+                return completionHandler()
+            }
+            if let host, let pane {
+                HerdrAgentMenu.go(to: .host(id: host, pane: pane))
+                return completionHandler()
+            }
+            if let machine, let pane, let tabID {
+                HerdrAgentMenu.go(to: .machine(tab: tabID, machine: machine, pane: pane))
+                return completionHandler()
+            }
             for controller in controllers {
                 if let tab = controller.tabs.first(where: { $0.id.uuidString == tabID }) {
-                    controller.window?.makeKeyAndOrderFront(nil)
-                    controller.show(tab)
+                    if let pane {
+                        HerdrAgentMenu.show(tab: tab, pane: pane)
+                    } else {
+                        controller.window?.makeKeyAndOrderFront(nil)
+                        controller.show(tab)
+                    }
                     break
                 }
             }
@@ -1545,6 +2142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(find, "Replace in Files…", #selector(TerminalWindowController.replaceInFiles(_:)), "r", [.command, .shift])
         edit.addItem(.separator())
         item(edit, "Go to Line…", #selector(TerminalWindowController.goToLine(_:)), "l")
+        // ⇧⌘O, VS Code's Go to Symbol (headings, in a Markdown file); ⌘F12 under JetBrains' keys, whose ⇧⌘O is Go to File.
+        item(edit, "Go to Heading…", #selector(TerminalWindowController.goToHeading(_:)), "o", [.command, .shift])
         item(edit, "Comment Line", #selector(CodeTextView.toggleComment(_:)), "/")
         item(edit, "Indent", #selector(CodeTextView.indentSelection(_:)), "]")
         item(edit, "Outdent", #selector(CodeTextView.outdentSelection(_:)), "[")
@@ -1558,8 +2157,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(line, "Move Line Down", #selector(CodeTextView.moveLineDown(_:)), down, [.command, .control])
         line.addItem(.separator())
         item(line, "Copy Path with Line", #selector(CodeTextView.copyPathWithLine(_:)), "")
+        // A Markdown file's, in the markers it already uses; their keys work while its editor has the keyboard, so ⌘B hides
+        // the sidebar everywhere else. ⌥⌘0 to ⌥⌘6 for the headings, as ⌘1 to ⌘9 select tabs.
+        let markdown = NSMenu(title: "Markdown")
+        edit.addItem(withTitle: "Markdown", action: nil, keyEquivalent: "").submenu = markdown
+        item(markdown, "Bold", #selector(CodeTextView.toggleMarkdownBold(_:)), "b")
+        item(markdown, "Italic", #selector(CodeTextView.toggleMarkdownItalic(_:)), "i")
+        item(markdown, "Strikethrough", #selector(CodeTextView.toggleMarkdownStrikethrough(_:)), "x", [.command, .shift])
+        item(markdown, "Code", #selector(CodeTextView.toggleMarkdownCode(_:)), "")
+        item(markdown, "Link", #selector(CodeTextView.insertMarkdownLink(_:)), "k")
+        markdown.addItem(.separator())
+        let headings = NSMenu(title: "Heading")
+        markdown.addItem(withTitle: "Heading", action: nil, keyEquivalent: "").submenu = headings
+        item(headings, "Body Text", #selector(CodeTextView.markdownBodyText(_:)), "0", [.command, .option])
+        for level in 1...6 {
+            item(headings, "Heading \(level)", #selector(CodeTextView.markdownHeading(_:)), "\(level)", [.command, .option]).tag = level
+        }
+        item(markdown, "Bulleted List", #selector(CodeTextView.toggleMarkdownBullets(_:)), "")
+        item(markdown, "Numbered List", #selector(CodeTextView.toggleMarkdownNumbers(_:)), "")
+        item(markdown, "Toggle Task", #selector(CodeTextView.toggleMarkdownTask(_:)), "l", [.command, .shift])
+        item(markdown, "Quote", #selector(CodeTextView.toggleMarkdownQuote(_:)), "")
+        item(markdown, "Code Block", #selector(CodeTextView.insertMarkdownCodeBlock(_:)), "")
         edit.addItem(.separator())
         item(edit, "Clear Buffer", #selector(TerminalWindowController.clearBuffer(_:)), "k")
+        // While a suggestion shows after the cursor: that command leaves Next Term's record of yours.
+        item(edit, "Forget This Suggestion", #selector(TerminalWindowController.forgetSuggestion(_:)), "\u{8}", [.command, .shift])
 
         let view = submenu(main, "View")
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
@@ -1573,6 +2195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             entry.representedObject = position.rawValue
         }
         view.addItem(withTitle: "Terminal Position", action: nil, keyEquivalent: "").submenu = positions
+        view.addItem(withTitle: "Terminal Tabs", action: nil, keyEquivalent: "").submenu = TabListMenus.view(target: self)
         item(view, "Show Changes", #selector(TerminalWindowController.showChanges(_:)), "g", [.command, .option])
         // ⌃⌘ as Git Diff's ⌃⌘G: U for Unified. The blame toggles are A for Annotate (Xcode's Authors key) and L for Line.
         item(view, "Unified Diffs", #selector(DiffLayoutMenu.toggleUnifiedDiffs(_:)), "u", [.command, .control], target: DiffLayoutMenu.shared) // checked: one column
@@ -1582,6 +2205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ⌥⌘W, as TextMate has it: VS Code's ⌥Z types a letter on some keyboards (ż in Polish), so it can't be a default here.
         item(view, "Soft Wrap", #selector(toggleSoftWrap(_:)), "w", [.command, .option], target: self)
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
+        // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
+        item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
+        item(view, "Suggestions While Typing", #selector(toggleSuggestionsWhileTyping(_:)), "", target: self).toolTip =
+            "A command you ran before, dimmed after the cursor at a zsh prompt. Off, none shows and no command is recorded."
+        item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
+            "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
         let heights = NSMenu(title: "Line Height")
         for value in Self.lineHeights {
             let title = ["1.0", "1.15", "1.25", "1.35 (default)", "1.5", "1.75", "2.0"][Self.lineHeights.firstIndex(of: value) ?? 0]
@@ -1595,6 +2224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item(spinner, choice.title, #selector(setAgentSpinner(_:)), "", target: self).representedObject = choice.rawValue
         }
         view.addItem(withTitle: "Agent Spinner", action: nil, keyEquivalent: "").submenu = spinner
+        // The window's colour along its top row; also a right-click there, and Show Project Colors in Settings › General.
+        view.addItem(withTitle: ProjectColorMenu.title, action: nil, keyEquivalent: "").submenu = ProjectColorMenu.submenu()
         item(view, "Project Sidebar on the Right", #selector(toggleSidebarSide(_:)), "", target: self)
         view.addItem(.separator())
         item(view, "Bigger", #selector(increaseFontSize(_:)), "+", target: self)
@@ -1612,10 +2243,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let skills = item(agents, SkillsMenuItem.title, #selector(showSkillsSettings(_:)), "", target: self)
         MainActor.assumeIsolated { SkillsMenuItem.follow(skills) } // with the count of skill updates
         agents.addItem(.separator())
+        // Across every window, the agent waiting longest, then the next. ⇧⌘U, U for Unread, as agent apps have it; free in
+        // every shortcut set (MenuKeys).
+        item(agents, "Go to Next Agent Needing You", #selector(goToNextAgentNeedingYou(_:)), "u", [.command, .shift], target: self)
+        agents.addItem(.separator())
         item(agents, "Resume Agent Session…", #selector(TerminalWindowController.resumeSession(_:)), "o", [.command, .option])
         item(agents, "Send to Agent", #selector(TerminalWindowController.sendToAgent(_:)), "k", [.command, .option])
         item(agents, "Suggest a Command…", #selector(CommandSuggestionController.suggestCommand(_:)), "k", [.command, .control],
              target: CommandSuggestionController.shared)
+
+        // Prompts as tasks in the project's todo folder, for tomorrow's agent.
+        MainActor.assumeIsolated { TasksMenu.shared.fill(submenu(main, "Tasks")) }
+        // Secrets, after Tasks, whose servers and commands use its keys. Show Secrets keeps Window › Secrets' action, so its key stays.
+        MainActor.assumeIsolated { SecretsMenu.shared.fill(submenu(main, "Secrets")) }
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
@@ -1656,6 +2296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(window, "Select Pane Below", #selector(TerminalWindowController.selectPaneBelow(_:)), arrow(NSDownArrowFunctionKey), [.command, .option])
         item(window, "Select Next Pane", #selector(TerminalWindowController.selectNextPane(_:)), "]", [.command, .option])
         item(window, "Select Previous Pane", #selector(TerminalWindowController.selectPreviousPane(_:)), "[", [.command, .option])
+        // ⌃⌘A: any agent, herdr's or a tab's, from the keyboard (⌃⇧⌘A is Annotate with Git Blame).
+        item(window, "Go to Agent…", #selector(TerminalWindowController.goToAgent(_:)), "a", [.command, .control])
         item(window, "Maximize Pane", #selector(TerminalWindowController.toggleZoomPane(_:)), "\r", [.command, .shift])
         item(window, "Make Panes Equal", #selector(TerminalWindowController.equalizePanes(_:)), "")
         window.addItem(.separator())
@@ -1693,5 +2335,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                           _ modifiers: NSEvent.ModifierFlags = .command) {
         let item = self.item(menu, title, #selector(NSTextView.performFindPanelAction(_:)), key, modifiers)
         item.tag = Int(action.rawValue)
+    }
+}
+
+// MARK: answering from a notice
+
+extension AppDelegate {
+    /// The category for a notice's buttons: its own (`agent.<notice id>`) for a decision whose choices fit, the shared
+    /// one with Reply for a finish (`notice` nil); registered with every other one still delivered, 64 at most, the
+    /// oldest first out. nil: no buttons (no choices, or more than fit).
+    func noticeCategory(_ notice: String?, choices: [String]) -> String? {
+        let category: String
+        let actions: [UNNotificationAction]
+        if let notice {
+            guard let planned = NoticeActions.plan(choices: choices) else { return nil }
+            category = NoticeActions.category(for: notice)
+            actions = planned.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: []) }
+            noticeActions[category] = planned
+        } else {
+            category = NoticeActions.finishCategory
+            actions = [UNTextInputNotificationAction(identifier: NoticeActions.reply, title: "Reply", options: [],
+                                                     textInputButtonTitle: "Send", textInputPlaceholder: "A line for the agent")]
+            noticeActions[category] = [NoticeActions.Action(id: NoticeActions.reply, title: "Reply")]
+        }
+        noticeCategories[category] = UNNotificationCategory(identifier: category, actions: actions, intentIdentifiers: [], options: [])
+        noticeCategoryOrder = NoticeActions.kept(noticeCategoryOrder, adding: category)
+        registerNoticeCategories()
+        return category
+    }
+
+    /// A notice is gone: its own category goes with it.
+    func forgetNoticeCategory(_ notice: String) {
+        let category = NoticeActions.category(for: notice)
+        guard noticeCategories.removeValue(forKey: category) != nil else { return }
+        noticeActions[category] = nil
+        noticeCategoryOrder.removeAll { $0 == category }
+        registerNoticeCategories()
+    }
+
+    private func registerNoticeCategories() {
+        let kept = Set(noticeCategoryOrder)
+        for category in noticeCategories.keys where !kept.contains(category) {
+            noticeCategories[category] = nil
+            noticeActions[category] = nil
+        }
+        notificationCenter?.setNotificationCategories(Set(noticeCategories.values))
+    }
+
+    /// A notice's button was clicked (or the self-test's sink stands in for one): a choice answers the question the
+    /// notice showed, the way answer_agent does, reading the screen again first; Reply sends its line as a prompt. Both
+    /// are the user's own act and mark the agent seen. What could not be done replaces the notice, saying why: a question
+    /// that changed types nothing.
+    func respond(to notice: String, title: String, info: [String: String], action: String, text: String?) {
+        guard let tabID = info["tab"], let tab = HerdrAgentMenu.tab(tabID) else { return }
+        let name = title.components(separatedBy: " needs your decision").first?.components(separatedBy: " is waiting").first ?? title
+        func replace(_ said: String) {
+            let content = UNMutableNotificationContent()
+            content.title = name
+            content.body = said
+            content.userInfo = info
+            deliver(UNNotificationRequest(identifier: notice, content: content, trigger: nil))
+        }
+        if let pane = info["herdr_pane"] {
+            // The tab's own herdr's agent, or one on a machine saved in it.
+            let ref = HerdrAgentRef(tab: tab, machine: info["herdr_machine"], pane: pane)
+            if let choice = NoticeActions.choice(action) {
+                let expected = info["question_id"] ?? ""
+                HerdrMCP.answer(ref, expected: expected, choice: choice, answer: nil, typing: { HerdrMCP.userActed(on: ref.id) }) { said in
+                    switch said {
+                    case .answered: ref.seen()
+                    case .refused(.changed(let question, _)): replace("The question changed: \(question). Nothing was typed.")
+                    case .refused(let refusal): replace(refusal.sentence)
+                    case .failed(let problem): replace(problem)
+                    }
+                }
+                return
+            }
+            let line = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { return }
+            if let refusal = HerdrCommand.textRefusal(line) { return replace(refusal) }
+            HerdrMCP.userActed(on: ref.id)
+            ref.run(.prompt(pane: pane), input: line) { result in
+                if let problem = HerdrMCP.problem(result, pane: pane) { return replace("The reply was not sent: " + problem) }
+                ref.seen()
+            }
+            return
+        }
+        // An agent tab: answer_agent's own path, or a line typed and entered as send_to_tab types it.
+        if let choice = NoticeActions.choice(action) {
+            let arguments: [String: Any] = ["tab_id": tab.id.uuidString.lowercased(), "question_id": info["question_id"] ?? "", "choice": choice]
+            MCPControl.call("answer_agent", arguments, caller: nil) { result in
+                MCPControl.typedByUser(tab)
+                if result.isError { replace(result.text) }
+            }
+            return
+        }
+        let line = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return }
+        guard MCPControl.canType(tab) else { return replace("The reply was not sent: that tab cannot take input now.") }
+        MCPControl.type(line, into: tab, submit: true)
+        MCPControl.typedByUser(tab)
     }
 }

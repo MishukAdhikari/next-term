@@ -32,13 +32,26 @@ public struct RecentProjects: Equatable, Sendable {
         paths.removeAll { $0 == path }
     }
 
+    /// Undo of a forget: the path back at `index`, where it stood, or at the end when the list is shorter now. One
+    /// listed again since stays where it is. Past the limit the last one goes, as for an open.
+    public mutating func restore(_ path: String, at index: Int) {
+        guard !paths.contains(path) else { return }
+        paths.insert(path, at: min(max(index, 0), paths.count))
+        if paths.count > Self.limit { paths.removeLast(paths.count - Self.limit) }
+    }
+
     public mutating func clear() {
         paths.removeAll()
     }
 
-    /// The ones whose folder still exists.
-    public func existing(fileManager: FileManager = .default) -> [String] {
+    /// The ones whose folder still exists. One in a protected place (ProtectedPlaces: ~/Documents/site, a disk in
+    /// /Volumes) is listed as saved, without a look: looking would set off macOS's prompt for that place before the user
+    /// opened anything. It is checked when it is opened. One on a disk is listed while the kernel's mount table
+    /// (`mounted`) has that disk, so one on an unplugged disk is left out, never chosen and dropped as gone.
+    public func existing(fileManager: FileManager = .default, protected: ProtectedPlaces = .current,
+                         mounted: Set<String> = ProtectedPlaces.mountPoints()) -> [String] {
         paths.filter { path in
+            if protected.holds(path) { return ProtectedPlaces.seemsThere(path, mounted: mounted) }
             var isDir: ObjCBool = false
             return fileManager.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
         }

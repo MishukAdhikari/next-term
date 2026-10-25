@@ -66,4 +66,12 @@ public enum StartFolder: Equatable, Sendable {
         case .folder(let path): return exists(path) ? path : project ?? current
         }
     }
+
+    /// Where a window with no project starts its shell: New Terminal (the Welcome window's row, File › New Window, ⌘N),
+    /// "Open a new terminal" at launch, and ⌘T with no window open. As a new tab there would, with no project and no tab
+    /// in front: a folder of the user's choosing while it is there, else the home folder (nil leaves it to the shell,
+    /// which starts in it).
+    public func newWindowDirectory(home: String, exists: (String) -> Bool) -> String? {
+        directory(project: nil, current: nil, home: home, exists: exists)
+    }
 }

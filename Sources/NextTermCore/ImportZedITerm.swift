@@ -41,9 +41,9 @@ public enum ImportZed {
         let folder = app.configPath.isEmpty ? settingsFolder(home: home) : app.configPath
         switch settings((folder as NSString).appendingPathComponent("settings.json")) {
         case .unreadable:
-            plan.skipped.append(SkippedItem("settings.json", "couldn't be read, so no settings came over"))
+            plan.skipped.append(SkippedItem("settings.json", "couldn't be read, so none of its settings came over"))
         case .invalid:
-            plan.skipped.append(SkippedItem("settings.json", "isn't valid JSON, so no settings came over"))
+            plan.skipped.append(SkippedItem("settings.json", "isn't valid JSON, so none of its settings came over"))
         case .members(let members, text: let text):
             let raw = members.first { $0.key == "base_keymap" }.flatMap { $0.value.object(in: text) }
             let (preset, note) = preset(baseKeymap: raw)
@@ -57,6 +57,9 @@ public enum ImportZed {
             plan.skipped += rows.skipped
             plan.skipped += report(members, in: text)
         }
+        // The project panel's click, which no setting of Zed's changes: whatever settings.json holds.
+        plan.addSingleClickDefault(for: app.kind, source: "Zed's project panel",
+                                   note: "Zed opens files and folders with a single click; no setting changes that")
         let keys = keymapPlan((folder as NSString).appendingPathComponent("keymap.json"), usKeyboard: usKeyboard)
         plan.shortcuts = keys.shortcuts
         plan.skipped += keys.skipped

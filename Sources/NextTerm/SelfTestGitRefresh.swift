@@ -42,6 +42,10 @@ extension SelfTest {
               "\(String(describing: monitor.snapshot?.wholeFolders))")
         guard read else { return }
         await pause(1.5) // the opening refresh, and the events of making the repository, are over
+        // The refresh runs only for a window someone can see (GatedRefresh): with the screen in use elsewhere, say so.
+        if let window = w.window, !(await bringToFront(window)) || !window.canBeSeen {
+            return note("git refresh checks skipped: the repository's window can't be brought to the front (" + notFrontmost(window) + ")")
+        }
 
         // next dev appends to .next/trace twice a second (and a SvelteKit dev server to .svelte-kit/): no git at
         // all, and no Databases scan, while the tree stays live.

@@ -2,16 +2,22 @@ import AppKit
 import NextTermCore
 import SQLite3
 
-/// "Open files with a single click" (Settings › Editor). Off, a click in the project tree selects and a
-/// double-click opens. On, a click opens the file in a preview tab that the next click reuses, and what a
-/// click must never open (folders, images, binaries, big files, deleted rows, Databases rows, modified
-/// clicks, drags, the click that ends a rename) still only selects. The clicks are real mouse events.
+/// "Open files and folders with a single click" (Settings › Editor). Off, a click in the project tree selects and a
+/// double-click opens a file or opens or closes a folder. On, a click opens the file in a preview tab that the
+/// next click reuses, a click opens or closes a folder (a deleted one too) and the double-click after it leaves it
+/// so, and what a click must never open (the project's own row, images, binaries, big files, deleted files,
+/// Databases rows, modified clicks, drags, the click that ends a rename) still only selects. The clicks are real
+/// mouse events.
 extension SelfTest {
+    /// The setting's name in Settings › Editor and in the sidebar's ⋯ menu: one name, in each place's case.
+    private static let boxTitle = "Open files and folders with a single click"
+    private static let menuTitle = "Open Files and Folders with a Single Click"
+
     static func singleClickChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
         guard let window = c.window, let app = AppDelegate.shared else { return }
         guard await frontmost(window, "every check") else { return }
         let fm = FileManager.default
-        let key = "sidebarSingleClickOpens"
+        let key = SidebarClick.settingKey
         let savedSetting = UserDefaults.standard.object(forKey: key)
         c.show(tab)
         if !c.isSidebarVisible { c.toggleProjectSidebar(nil) }
@@ -19,10 +25,14 @@ extension SelfTest {
             return check(false, "single click: the sidebar shows the test project", c.sidebar.root?.path ?? "nil")
         }
 
-        // The files: five small ones (and three more), a folder, an image, a binary, one at the size limit
-        // and one past it with a link to it, and a committed file to delete.
+        // The files: five small ones (and three more), a folder with a link to it and one the tree has not read, an
+        // image, a binary, one at the size limit and one past it with a link to it, and a committed file and folder
+        // to delete.
         let folder = proj.appendingPathComponent("clicks")
         try? fm.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: folder.appendingPathComponent("later"), withIntermediateDirectories: true)
+        try? "deep\n".write(to: folder.appendingPathComponent("later/deep.txt"), atomically: true, encoding: .utf8)
+        try? fm.createSymbolicLink(at: folder.appendingPathComponent("sub-link"), withDestinationURL: folder.appendingPathComponent("sub"))
         let files = ["a", "b", "c", "d", "e", "f", "g", "h"].map { folder.appendingPathComponent("\($0).txt") }
         for file in files { try? "\(file.deletingPathExtension().lastPathComponent)\n".write(to: file, atomically: true, encoding: .utf8) }
         try? "inner\n".write(to: folder.appendingPathComponent("sub/inner.txt"), atomically: true, encoding: .utf8)
@@ -38,6 +48,9 @@ extension SelfTest {
         try? fm.createSymbolicLink(at: folder.appendingPathComponent("large-link.log"), withDestinationURL: large)
         let gone = folder.appendingPathComponent("gone.txt")
         try? "1\n2\n".write(to: gone, atomically: true, encoding: .utf8)
+        let goneFolder = folder.appendingPathComponent("gonedir")
+        try? fm.createDirectory(at: goneFolder, withIntermediateDirectories: true)
+        try? "x\n".write(to: goneFolder.appendingPathComponent("x.txt"), atomically: true, encoding: .utf8)
         let gitPath = GitRunner.locateGit()
         func git(_ args: String...) {
             guard let gitPath else { return }
@@ -50,8 +63,8 @@ extension SelfTest {
             try? p.run()
             p.waitUntilExit()
         }
-        git("add", "clicks/gone.txt")
-        git("commit", "-qm", "single click", "--", "clicks/gone.txt")
+        git("add", "clicks/gone.txt", "clicks/gonedir/x.txt")
+        git("commit", "-qm", "single click", "--", "clicks/gone.txt", "clicks/gonedir/x.txt")
 
         let outline = c.sidebar.outline
         let area = c.editorArea
@@ -74,14 +87,15 @@ extension SelfTest {
             if marked > 1 || dirty || (marked == 1) != (area.previewPane != nil) { broken.append(step) }
         }
 
-        // Off, as it is by default: a click selects, a double-click opens.
+        // Off, as a key never written reads, and as existing installs keep it: a click selects, a double-click opens.
         UserDefaults.standard.removeObject(forKey: key)
-        let box = checkbox(in: EditorSettingsView(frame: .zero), titled: "Open files with a single click")
-        let menuItem = LayoutMenu.sidebar().items.first { $0.title == "Open Files with a Single Click" }
+        let box = checkbox(in: EditorSettingsView(frame: .zero), titled: boxTitle)
+        let menuItem = LayoutMenu.sidebar().items.first { $0.title == menuTitle }
         check(!app.sidebarSingleClickOpens && box?.state == .off && menuItem?.state == .off,
-              "single click: off by default, in Settings › Editor and in the sidebar's ⋯ menu",
+              "single click: off when never set, in Settings › Editor and in the sidebar's ⋯ menu, under the same name",
               "setting \(app.sidebarSingleClickOpens), box \(String(describing: box?.state)), menu \(String(describing: menuItem?.state))")
-        check(box?.toolTip?.hasPrefix("A click opens the file in a preview tab") == true, "the checkbox says what it does", box?.toolTip ?? "no tooltip")
+        check(box?.toolTip?.hasPrefix("A click opens a file in a preview tab and opens or closes a folder") == true, "the checkbox says what it does",
+              box?.toolTip ?? "no tooltip")
         if await frontmost(window, "the clicks with the setting off") {
             // Nothing selected first (showing a.txt above selected it): the click is what must select it.
             window.makeFirstResponder(outline)
@@ -94,13 +108,14 @@ extension SelfTest {
             check(area.panes.count == 1 && area.activePath == path(files[0]) && area.previewPane == nil && c.isEditorFocused,
                   "single click off: a double-click opens it in an ordinary tab, with the keyboard", "\(area.panes.count) tabs")
             area.closeAll()
+            await folderOffChecks(c, folder: folder, invariant: invariant)
         }
 
         // On, from the ⋯ menu.
         let menu = LayoutMenu.sidebar()
-        if let index = menu.items.firstIndex(where: { $0.title == "Open Files with a Single Click" }) { menu.performActionForItem(at: index) }
-        let boxOn = checkbox(in: EditorSettingsView(frame: .zero), titled: "Open files with a single click")?.state == .on
-        let itemOn = LayoutMenu.sidebar().items.first { $0.title == "Open Files with a Single Click" }?.state == .on
+        if let index = menu.items.firstIndex(where: { $0.title == menuTitle }) { menu.performActionForItem(at: index) }
+        let boxOn = checkbox(in: EditorSettingsView(frame: .zero), titled: boxTitle)?.state == .on
+        let itemOn = LayoutMenu.sidebar().items.first { $0.title == menuTitle }?.state == .on
         check(app.sidebarSingleClickOpens && boxOn && itemOn, "the ⋯ menu item turns single clicks on, and both places show it")
 
         // Each group again: the app can lose the front during a long run.
@@ -113,11 +128,15 @@ extension SelfTest {
         if await frontmost(window, "the clicks that only select") {
             await selectOnlyChecks(c, folder: folder, files: files, png: png, binary: binary, large: large, invariant: invariant)
         }
+        if await frontmost(window, "folders") {
+            await folderChecks(c, folder: folder, files: files, invariant: invariant)
+        }
         if await frontmost(window, "keys, Locate and proposals") {
             await keyboardAndLoopChecks(c, files: files, invariant: invariant)
         }
         if await frontmost(window, "deleted files and databases") {
-            await deletedAndDatabaseChecks(c, proj: proj, folder: folder, files: files, gone: gone, hasGit: gitPath != nil, invariant: invariant)
+            await deletedAndDatabaseChecks(c, proj: proj, folder: folder, files: files, gone: gone, goneFolder: goneFolder, hasGit: gitPath != nil,
+                                           invariant: invariant)
         }
         if await frontmost(window, "renames and turning it off") {
             await renameAndOffChecks(c, files: files, invariant: invariant)
@@ -127,7 +146,7 @@ extension SelfTest {
         area.closeAll()
         if let savedSetting { UserDefaults.standard.set(savedSetting, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
         if gitPath != nil { // deleted by the checks, or still there when they were skipped
-            git("rm", "-q", "--", "clicks/gone.txt")
+            git("rm", "-rq", "--", "clicks/gone.txt", "clicks/gonedir")
             git("commit", "-qm", "single click done")
         }
         try? fm.removeItem(at: folder)
@@ -290,33 +309,13 @@ extension SelfTest {
             note("no empty space below the sidebar's rows: that click is not checked")
         }
 
-        let sub = folder.appendingPathComponent("sub")
-        if let subNode = root.node(at: canonicalPath(sub.path)) {
-            let wasOpen = outline.isItemExpanded(subNode)
-            let folderTracked = clickRow(c, sub)
-            let folderSelected = isSelection(c, sub)
-            await pause(0.3)
-            check(folderTracked && folderSelected && outline.isItemExpanded(subNode) == wasOpen && unchanged(),
-                  "a click on a folder's name selects it and neither opens nor closes it", "tracked \(folderTracked), selected \(folderSelected)")
-            let rootRow = outline.row(forItem: root)
-            outline.scrollRowToVisible(rootRow)
-            let rootTracked = click(outline, at: namePoint(outline, rootRow))
-            let rootSelected = rootRow >= 0 && outline.selectedRowIndexes == IndexSet(integer: rootRow)
-            await pause(0.3)
-            check(rootTracked && rootSelected && outline.isItemExpanded(root) && unchanged(), "nor does a click on the project's own row",
-                  "tracked \(rootTracked), selected \(rootSelected)")
-            if !outline.isItemExpanded(subNode) {
-                let row = outline.row(forItem: subNode)
-                let rowView = outline.rowView(atRow: row, makeIfNecessary: true)
-                let disclosure = rowView?.subviews.first { $0.identifier == NSOutlineView.disclosureButtonIdentifier }
-                if let disclosure {
-                    click(disclosure, at: NSPoint(x: disclosure.bounds.midX, y: disclosure.bounds.midY))
-                    check(await wait(3) { outline.isItemExpanded(subNode) } && unchanged(), "a click on a folder's arrow opens the folder, and no file")
-                } else {
-                    note("no disclosure button on the folder's row: the arrow click is not checked")
-                }
-            }
-        }
+        let rootRow = outline.row(forItem: root)
+        outline.scrollRowToVisible(rootRow)
+        let rootTracked = click(outline, at: namePoint(outline, rootRow))
+        let rootSelected = rootRow >= 0 && outline.selectedRowIndexes == IndexSet(integer: rootRow)
+        await pause(0.3)
+        check(rootTracked && rootSelected && outline.isItemExpanded(root) && unchanged(), "a click on the project's own row selects it and leaves it open",
+              "tracked \(rootTracked), selected \(rootSelected)")
 
         // Nothing a click opens may reach another app. A double-click still hands an image to its app.
         SafeOpen.launches = false
@@ -374,6 +373,190 @@ extension SelfTest {
         clickRow(c, files[2])
         check(area.panes.count == 1 && area.previewPane != nil, "and the next plain click opens again")
         invariant("drags")
+    }
+
+    /// Single clicks off: a click on a folder selects it, a double-click opens it and the next closes it, and its arrow
+    /// opens and closes it once.
+    private static func folderOffChecks(_ c: TerminalWindowController, folder: URL, invariant: (String) -> Void) async {
+        guard let window = c.window else { return }
+        let area = c.editorArea
+        let outline = c.sidebar.outline
+        let sub = folder.appendingPathComponent("sub")
+        guard let subNode = sidebarNode(c, sub) else { return check(false, "single click off: the folder clicks/sub is in the tree") }
+        if outline.isItemExpanded(subNode) { outline.collapseItem(subNode) }
+        window.makeFirstResponder(outline)
+        let tracked = clickRow(c, sub)
+        await pause(0.3)
+        check(tracked && isSelection(c, sub) && !outline.isItemExpanded(subNode) && area.panes.isEmpty,
+              "single click off: a click on a folder only selects it", "tracked \(tracked), open \(outline.isItemExpanded(subNode))")
+        doubleClickRow(c, sub)
+        let opened = await wait(3) { outline.isItemExpanded(subNode) }
+        await pause(0.3)
+        let stayedOpen = outline.isItemExpanded(subNode)
+        doubleClickRow(c, sub)
+        let closed = await wait(3) { !outline.isItemExpanded(subNode) }
+        check(opened && stayedOpen && closed && area.panes.isEmpty, "single click off: a double-click opens a folder, and the next closes it",
+              "opened \(opened), stayed \(stayedOpen), closed \(closed)")
+        invariant("folder off")
+        await arrowCheck(c, subNode, "single click off")
+        invariant("arrow off")
+    }
+
+    /// Single clicks on: a click opens or closes a folder at once, the double-click it begins leaves the folder as
+    /// that click did, and every click that only selects a file only selects a folder too.
+    private static func folderChecks(_ c: TerminalWindowController, folder: URL, files: [URL], invariant: (String) -> Void) async {
+        guard let window = c.window else { return }
+        let fm = FileManager.default
+        let area = c.editorArea
+        let outline = c.sidebar.outline
+        area.closeAll()
+        let sub = folder.appendingPathComponent("sub")
+        guard let subNode = sidebarNode(c, sub) else { return check(false, "single click: the folder clicks/sub is in the tree") }
+        if outline.isItemExpanded(subNode) { outline.collapseItem(subNode) }
+        func shows(_ node: FileNode) -> Bool { (node.children ?? []).contains { outline.row(forItem: $0) >= 0 } }
+        window.makeFirstResponder(outline)
+
+        let opened = clickRow(c, sub)
+        let open = await wait(3) { outline.isItemExpanded(subNode) && shows(subNode) }
+        check(opened && open && isSelection(c, sub) && window.firstResponder === outline && area.panes.isEmpty,
+              "single click: a click on a folder opens it, the keyboard still in the tree, and opens no tab",
+              "tracked \(opened), open \(outline.isItemExpanded(subNode)), \(area.panes.count) tabs")
+        invariant("folder opened")
+        let closing = clickRow(c, sub)
+        let closed = await wait(3) { !outline.isItemExpanded(subNode) }
+        check(closing && closed && !shows(subNode) && area.panes.isEmpty, "and the next click closes it", "open \(outline.isItemExpanded(subNode))")
+        invariant("folder closed")
+
+        // The double-click's first click opens or closes the folder: the double-click must not undo it.
+        doubleClickRow(c, sub)
+        await pause(0.4)
+        let stayedOpen = outline.isItemExpanded(subNode)
+        doubleClickRow(c, sub)
+        await pause(0.4)
+        let stayedClosed = !outline.isItemExpanded(subNode)
+        check(stayedOpen && stayedClosed && area.panes.isEmpty, "a double-click on a closed folder leaves it open, and on an open one leaves it closed",
+              "open after the first \(stayedOpen), closed after the second \(stayedClosed)")
+        invariant("folder double-click")
+
+        // A folder closing can move the rows under the pointer (at the end of a scrolled tree), so the double-click's
+        // second press lands on another row: it opens nothing there, and the folder keeps the selection.
+        clickRow(c, sub)
+        _ = await wait(3) { outline.isItemExpanded(subNode) }
+        if let other = files.first {
+            clickRow(c, sub)
+            clickRow(c, other, count: 2)
+            await pause(0.4)
+            check(!outline.isItemExpanded(subNode) && area.panes.isEmpty && isSelection(c, sub),
+                  "a double-click whose second press lands on another row, the rows moved as the folder closed, opens nothing there",
+                  "open \(outline.isItemExpanded(subNode)), \(area.panes.count) tabs, folder selected \(isSelection(c, sub))")
+            invariant("moved double-click")
+        }
+
+        // A folder the tree has not read yet opens once it has been read.
+        let later = folder.appendingPathComponent("later")
+        if let laterNode = sidebarNode(c, later) {
+            let wasRead = laterNode.isLoaded
+            let tracked = clickRow(c, later)
+            let read = await wait(5) { laterNode.isLoaded && outline.isItemExpanded(laterNode) && shows(laterNode) }
+            check(!wasRead && tracked && read && area.panes.isEmpty, "a click on a folder not read yet opens it once it has been read",
+                  "read before \(wasRead), tracked \(tracked), open \(outline.isItemExpanded(laterNode))")
+            clickRow(c, later)
+            _ = await wait(3) { !outline.isItemExpanded(laterNode) }
+        } else {
+            check(false, "the folder clicks/later is in the tree")
+        }
+        invariant("folder not read")
+
+        // ⌘-, ⇧- and ⌥-clicks select, and neither open nor close it.
+        var moved: [String] = []
+        for (name, flags) in [("⌘", NSEvent.ModifierFlags.command), ("⇧", .shift), ("⌥", .option)] {
+            let was = outline.isItemExpanded(subNode)
+            let tracked = clickRow(c, sub, flags: flags)
+            await pause(0.2)
+            if !tracked || outline.isItemExpanded(subNode) != was { moved.append("\(name) (tracked \(tracked))") }
+        }
+        check(moved.isEmpty && area.panes.isEmpty, "⌘-, ⇧- and ⌥-clicks on a folder neither open nor close it", moved.joined(separator: ", "))
+        invariant("folder modified clicks")
+
+        // A drag that begins on the folder, and a press on it let go on another row.
+        let before = outline.isItemExpanded(subNode)
+        outline.whilePressed = { outline.dragBegan = true }
+        let dragTracked = clickRow(c, sub)
+        outline.whilePressed = nil
+        await pause(0.2)
+        let afterDrag = outline.isItemExpanded(subNode)
+        let canDrag = outline.verticalMotionCanBeginDrag
+        outline.verticalMotionCanBeginDrag = false
+        let from = sidebarRow(c, sub), to = sidebarRow(c, files[0])
+        let pressTracked = click(outline, at: namePoint(outline, from), dragTo: namePoint(outline, to))
+        outline.verticalMotionCanBeginDrag = canDrag
+        await pause(0.2)
+        check(dragTracked && pressTracked && afterDrag == before && outline.isItemExpanded(subNode) == before && area.panes.isEmpty,
+              "a drag from a folder, and a press on it let go on another row, neither open nor close it",
+              "tracked \(dragTracked) \(pressTracked), open \(before) → \(afterDrag) → \(outline.isItemExpanded(subNode))")
+        invariant("folder drags")
+
+        // The click that ends a folder's rename only ends it: the folder it lands on stays as it was.
+        if let laterNode = sidebarNode(c, later) {
+            c.sidebar.beginRename(subNode)
+            let renaming = window.firstResponder is NSTextView
+            let was = outline.isItemExpanded(laterNode)
+            let tracked = clickRow(c, later)
+            if window.firstResponder is NSTextView { window.makeFirstResponder(outline) } // as a click elsewhere would end it
+            await pause(0.3)
+            check(renaming && tracked && outline.isItemExpanded(laterNode) == was && fm.fileExists(atPath: sub.path) && area.panes.isEmpty,
+                  "the click that ends a folder's rename only ends it, opening and closing nothing",
+                  "renaming \(renaming), tracked \(tracked), open \(was) → \(outline.isItemExpanded(laterNode))")
+        }
+        invariant("folder rename")
+
+        // A link to the folder opens and closes as the folder does, once a click.
+        let link = folder.appendingPathComponent("sub-link")
+        if let linkNode = sidebarNode(c, link), linkNode.isSymlink, linkNode.isDirectory {
+            if outline.isItemExpanded(linkNode) { outline.collapseItem(linkNode) }
+            clickRow(c, link)
+            let linkOpened = await wait(3) { outline.isItemExpanded(linkNode) && shows(linkNode) }
+            await pause(0.3)
+            let linkStayed = outline.isItemExpanded(linkNode)
+            clickRow(c, link)
+            let linkClosed = await wait(3) { !outline.isItemExpanded(linkNode) }
+            await pause(0.3)
+            check(linkOpened && linkStayed && linkClosed && !outline.isItemExpanded(linkNode) && area.panes.isEmpty,
+                  "a click on a link to a folder opens it, and the next closes it, once each",
+                  "opened \(linkOpened), stayed \(linkStayed), closed \(linkClosed)")
+        } else {
+            check(false, "the link to clicks/sub is listed as a folder", sidebarNode(c, link).map { "link \($0.isSymlink), folder \($0.isDirectory)" } ?? "not listed")
+        }
+        invariant("folder link")
+
+        await arrowCheck(c, subNode, "single click on")
+        invariant("arrow on")
+    }
+
+    /// A click on the folder's arrow opens it, and the next closes it, once each, whatever the setting: the arrow
+    /// sends no click to the tree.
+    private static func arrowCheck(_ c: TerminalWindowController, _ node: FileNode, _ mode: String) async {
+        let outline = c.sidebar.outline
+        if outline.isItemExpanded(node) { outline.collapseItem(node) }
+        func pressArrow() -> Bool {
+            let row = outline.row(forItem: node)
+            guard row >= 0 else { return false }
+            outline.scrollRowToVisible(row)
+            let rowView = outline.rowView(atRow: row, makeIfNecessary: true)
+            guard let disclosure = rowView?.subviews.first(where: { $0.identifier == NSOutlineView.disclosureButtonIdentifier }) else { return false }
+            click(disclosure, at: NSPoint(x: disclosure.bounds.midX, y: disclosure.bounds.midY))
+            return true
+        }
+        guard pressArrow() else { return note("\(mode): no disclosure button on the folder's row: the arrow click is not checked") }
+        let opened = await wait(3) { outline.isItemExpanded(node) }
+        await pause(0.3)
+        let stayedOpen = outline.isItemExpanded(node)
+        let pressed = pressArrow()
+        let closed = await wait(3) { !outline.isItemExpanded(node) }
+        await pause(0.3)
+        check(opened && stayedOpen && pressed && closed && !outline.isItemExpanded(node) && c.editorArea.panes.isEmpty,
+              "\(mode): a click on a folder's arrow opens it, and the next closes it, once each",
+              "opened \(opened), stayed \(stayedOpen), closed \(closed)")
     }
 
     /// Keys move the selection and never open; showing the file in the tree never loops; proposals are
@@ -439,8 +622,8 @@ extension SelfTest {
 
     /// A deleted file and the Databases rows only select; a SQLite file in the tree opens in its viewer;
     /// ⌘↓ on all three kinds at once opens every one.
-    private static func deletedAndDatabaseChecks(_ c: TerminalWindowController, proj: URL, folder: URL, files: [URL], gone: URL, hasGit: Bool,
-                                                 invariant: (String) -> Void) async {
+    private static func deletedAndDatabaseChecks(_ c: TerminalWindowController, proj: URL, folder: URL, files: [URL], gone: URL, goneFolder: URL,
+                                                 hasGit: Bool, invariant: (String) -> Void) async {
         guard let window = c.window else { return }
         let fm = FileManager.default
         let area = c.editorArea
@@ -466,6 +649,9 @@ extension SelfTest {
             } else {
                 check(false, "the deleted test file keeps its row")
             }
+            invariant("deleted file")
+            await deletedFolderChecks(c, goneFolder: goneFolder)
+            invariant("deleted folder")
         }
 
         // A SQLite file in the tree, and a MySQL connection in .env: both listed under Databases.
@@ -517,6 +703,43 @@ extension SelfTest {
         try? fm.removeItem(at: sqlite)
     }
 
+    /// A deleted folder opens and closes on a click, as a folder does, and the double-click it begins leaves it so.
+    private static func deletedFolderChecks(_ c: TerminalWindowController, goneFolder: URL) async {
+        let area = c.editorArea
+        let outline = c.sidebar.outline
+        func entry(_ name: String) -> (row: Int, entry: DeletedEntry)? {
+            for row in 0..<outline.numberOfRows {
+                if let entry = outline.item(atRow: row) as? DeletedEntry, entry.url.lastPathComponent == name { return (row, entry) }
+            }
+            return nil
+        }
+        func clickFolder(count: Int = 1) -> Bool {
+            guard let found = entry("gonedir") else { return false }
+            outline.scrollRowToVisible(found.row)
+            return click(outline, at: namePoint(outline, found.row), count: count)
+        }
+        func isOpen() -> Bool { entry("gonedir").map { outline.isItemExpanded($0.entry) } ?? false }
+        let tabs = area.panes.count // the deleted file's diff
+        try? FileManager.default.removeItem(at: goneFolder)
+        guard await wait(8, { entry("gonedir") != nil }) else { return check(false, "the deleted test folder keeps its row") }
+        if isOpen(), let found = entry("gonedir") { outline.collapseItem(found.entry) }
+        let tracked = clickFolder()
+        let opened = await wait(3) { isOpen() && entry("x.txt") != nil }
+        check(tracked && opened && area.panes.count == tabs, "a click on a deleted folder opens it, showing what was in it", "tracked \(tracked), open \(isOpen())")
+        let closing = clickFolder()
+        let closed = await wait(3) { !isOpen() }
+        check(closing && closed && entry("x.txt") == nil, "and the next click closes it")
+        _ = clickFolder()
+        _ = clickFolder(count: 2)
+        await pause(0.4)
+        let stayedOpen = isOpen()
+        _ = clickFolder()
+        _ = clickFolder(count: 2)
+        await pause(0.4)
+        check(stayedOpen && !isOpen() && area.panes.count == tabs, "a double-click on a deleted folder leaves it as its first click did",
+              "open after the first \(stayedOpen), after the second \(isOpen())")
+    }
+
     /// The click that ends a rename only ends it; turning single clicks off keeps the preview.
     private static func renameAndOffChecks(_ c: TerminalWindowController, files: [URL], invariant: (String) -> Void) async {
         guard let window = c.window, let app = AppDelegate.shared else { return }
@@ -546,7 +769,7 @@ extension SelfTest {
         clickRow(c, files[4])
         let hadPreview = area.previewPane != nil
         let settings = EditorSettingsView(frame: .zero) // the checkbox's target: kept until it has been clicked
-        withExtendedLifetime(settings) { checkbox(in: settings, titled: "Open files with a single click")?.performClick(nil) }
+        withExtendedLifetime(settings) { checkbox(in: settings, titled: boxTitle)?.performClick(nil) }
         check(hadPreview && !app.sidebarSingleClickOpens && area.previewPane == nil && area.panes.count == 1 && !area.tabBar.items.contains { $0.preview },
               "turning single clicks off in Settings keeps the preview as an ordinary tab")
         window.makeFirstResponder(outline)

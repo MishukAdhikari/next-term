@@ -13,6 +13,44 @@ extension SelfTest {
         await importedWindowSettingsChecks(app)
         importJetBrainsKeysChecks()
         await importNotUsedLatelyChecks()
+        importJetBrainsClickChecks(app)
+    }
+
+    /// An IDE that never changed how its Project view opens files opens them on a double-click: with single clicks
+    /// on, its import turns them off, and Undo Import puts them back on. The setting and the last import are put
+    /// back as they were.
+    private static func importJetBrainsClickChecks(_ app: AppDelegate) {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("nextterm-import-click-\(getpid())")
+        let home = (root as NSString).appendingPathComponent("home")
+        let options = (home as NSString).appendingPathComponent("Library/Application Support/JetBrains/GoLand2026.1/options")
+        let key = SidebarClick.settingKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        let coordinator = ImportCoordinator.shared
+        let lastBefore = coordinator.last
+        defer {
+            coordinator.last = lastBefore
+            if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            try? FileManager.default.removeItem(atPath: root)
+        }
+        do {
+            try FileManager.default.createDirectory(atPath: options, withIntermediateDirectories: true)
+            try "<application />".write(toFile: (options as NSString).appendingPathComponent("ide.general.xml"), atomically: true, encoding: .utf8)
+        } catch {
+            return check(false, "import of an IDE's click: a made-up home to read", "\(error)")
+        }
+        guard let ide = ImportJetBrains.detect(home: home, applications: []).first else {
+            return check(false, "import of an IDE's click: the made-up IDE is detected")
+        }
+        app.sidebarSingleClickOpens = true
+        let plan = ImportJetBrains.plan(for: ide, home: home, applications: [])
+        let rows = plan.settings.filter { if case .sidebarSingleClick = $0.setting { return true } else { return false } }
+        check(rows.map(\.setting) == [.sidebarSingleClick(false)] && rows.first?.note == "JetBrains IDEs' default"
+              && ImportWindowController.describe(.sidebarSingleClick(false)) == "Open files and folders with a double click",
+              "a JetBrains IDE with no projectView.xml brings its own click: a double click", "\(plan.settings.map(\.setting))")
+        coordinator.apply(ImportChoice(usePreset: false, settings: rows, recentProjects: []), plan: plan, from: ide.name)
+        check(!app.sidebarSingleClickOpens, "Apply turns single clicks off")
+        coordinator.undo()
+        check(app.sidebarSingleClickOpens, "and Undo Import turns them back on")
     }
 
     /// Each new setting applied by an import, then Undo.

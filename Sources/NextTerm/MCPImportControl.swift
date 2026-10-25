@@ -497,6 +497,8 @@ enum ImportCurrent {
         case .openProjectsIn(let raw): return app.projectTarget.rawValue == raw
         case .launchOpens(let raw):
             return (UserDefaults.standard.string(forKey: LaunchSettings.Key.opens) ?? LaunchOpens.standard.rawValue) == raw
+        case .tabList(let list):
+            return list.isSet(tabs: app.terminalTabs.rawValue, sidebarSide: app.sidebarSide.rawValue, showsFolders: app.tabListShowsFolders)
         default: return false
         }
     }

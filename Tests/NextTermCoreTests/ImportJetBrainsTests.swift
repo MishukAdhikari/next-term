@@ -392,12 +392,13 @@ import Testing
 
     // MARK: Settings
 
+    /// The plan for a settings folder holding `files`, without the row for JetBrains' own click (ImportClickDefaultTests).
     func plan(_ files: [String: String], usKeyboard: Bool = true) throws -> ImportPlan {
         let home = try home()
         defer { try? fm.removeItem(atPath: home) }
         let config = try ide(home, "PhpStorm2026.1")
         for (path, text) in files { try write(text, to: config + "/" + path) }
-        return ImportJetBrains.plan(for: app(config), home: home, usKeyboard: usKeyboard, now: Date(), fonts: testFonts)
+        return ImportJetBrains.plan(for: app(config), home: home, usKeyboard: usKeyboard, now: Date(), fonts: testFonts).droppingClickDefault
     }
 
     @Test func editorFontSizeAndLineSpacing() throws {
@@ -690,7 +691,7 @@ import Testing
         try write(component("SshConfigs", [("password", token)]), to: config + "/options/sshConfigs.xml")
         try write(component("x", [("x", token)]), to: config + "/workspace/abc.xml")
 
-        let plan = ImportJetBrains.plan(for: app(config), home: home, applications: [])
+        let plan = ImportJetBrains.plan(for: app(config), home: home, applications: []).droppingClickDefault
         let everything = String(describing: plan)
         #expect(!everything.contains(token) && !everything.contains(apiKey) && !everything.contains("export"))
         #expect(plan.settings.map(\.setting) == [.fontSize(13), .optionAsMeta(true)])
@@ -739,17 +740,21 @@ import Testing
         // A settings folder that disappeared, an empty one, broken XML, a folder where a file should be, a huge file.
         let home = try home()
         defer { try? fm.removeItem(atPath: home) }
+        // Nothing set anywhere: only JetBrains' own click, a double click, comes over.
+        let nothing = ImportPlan(preset: .jetBrains, settings: [
+            PlannedSetting(.sidebarSingleClick(false), source: "options/projectView.xml (not set: double click)", note: "JetBrains IDEs' default"),
+        ])
         let gone = ImportJetBrains.plan(for: app(home + "/nowhere"), home: home, applications: [])
-        #expect(gone == ImportPlan(preset: .jetBrains))
+        #expect(gone == nothing)
         let config = try ide(home, "PhpStorm2026.1")
-        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []) == ImportPlan(preset: .jetBrains))
+        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []) == nothing)
         try write("<application><component name=\"DefaultFont\"><option name=\"FONT_SIZE\" value=\"14\" />", to: config + "/options/editor-font.xml")
         try write("", to: config + "/options/terminal.xml")
         try folder(config + "/options/editor.xml")
         try write(component("TerminalFontOptions", [("FONT_SIZE", "15")]) + String(repeating: " ", count: 5 << 20),
                   to: config + "/options/terminal-font.xml")
         try write("\u{0}\u{1}not xml", to: config + "/options/recentProjects.xml")
-        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []) == ImportPlan(preset: .jetBrains))
+        #expect(ImportJetBrains.plan(for: app(config), home: home, applications: []) == nothing)
     }
 
     @Test func noNetworkingInTheImporter() throws {

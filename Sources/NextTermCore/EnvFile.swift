@@ -20,16 +20,18 @@ public enum EnvFile {
         return lower.hasPrefix(".env.") || lower.hasSuffix(".env") || lower == ".flaskenv"
     }
 
-    /// The file's entries, or nil if it is missing, not a plain file, or too large.
-    static func read(_ path: String) -> [EnvEntry]? {
+    /// The file's entries, or nil if it is missing, not a plain file, or too large. Without `interpolating`, a
+    /// `${NAME}` in a value is left as written, so a value never takes in another key's.
+    static func read(_ path: String, interpolating: Bool = true) -> [EnvEntry]? {
         guard isRegularFile(path),
               let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int), size <= maxSize,
               let data = FileManager.default.contents(atPath: path) else { return nil }
-        return parse(String(decoding: data, as: UTF8.self))
+        return parse(String(decoding: data, as: UTF8.self), interpolating: interpolating)
     }
 
-    /// Entries in file order. A key set twice keeps both entries; `values` keeps the last, as dotenv does.
-    static func parse(_ text: String) -> [EnvEntry] {
+    /// Entries in file order. A key set twice keeps both entries; `values` keeps the last, as dotenv does. Without
+    /// `interpolating`, every value is kept as written.
+    static func parse(_ text: String, interpolating: Bool = true) -> [EnvEntry] {
         var body = text
         if body.hasPrefix("\u{FEFF}") { body.removeFirst() }
         // A CRLF is one Character in Swift, never equal to "\n", so it is a separator of its own.
@@ -58,7 +60,7 @@ public enum EnvFile {
             } else {
                 value = String(unquoted(rest))
             }
-            if expand { value = interpolate(value, known) }
+            if expand && interpolating { value = interpolate(value, known) }
             known[key] = value
             entries.append(EnvEntry(key: key, value: value, line: number))
         }

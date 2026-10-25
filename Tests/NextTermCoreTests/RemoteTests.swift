@@ -212,6 +212,33 @@ import Testing
         let poll = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
         #expect(poll.tabs["tab1"]?.token == "abc123")
     }
+
+    @Test func aTmuxTabSaysWhenItsPaneIsInCopyMode() throws {
+        // A stand-in tmux where findTmux looks (~/.local/bin), answering display-message for the tab's pane.
+        let home = try temporaryHome()
+        try FileManager.default.createDirectory(atPath: home + "/.local/bin", withIntermediateDirectories: true)
+        let tmux = home + "/.local/bin/tmux"
+        func standIn(mode: String) throws {
+            let answers = "case \"$f\" in '#{pane_in_mode}') echo \(mode) ;; '#{pane_current_path}') echo /srv/app ;; esac"
+            try "#!/bin/sh\nfor a; do f=$a; done\n\(answers)\n".write(toFile: tmux, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmux)
+        }
+        let script = RemoteShell.pollScript(tabs: [(id: "tab1", keep: .tmux, session: "nt-app-123456")])
+        #expect(script.contains("-t '=nt-app-123456:' '#{pane_in_mode}'"))
+        try standIn(mode: "1")
+        let copying = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
+        #expect(copying.tabs["tab1"]?.inMode == true)
+        #expect(copying.tabs["tab1"]?.directory == "/srv/app")
+        // Out of copy mode, or an answer that is not exactly 1: no mode line.
+        for answer in ["0", "1x", ""] {
+            try standIn(mode: answer)
+            let back = try #require(RemotePoll.parse(try run(RemoteShell.command(script), home: home)))
+            #expect(back.tabs["tab1"]?.inMode == false, "\(answer)")
+        }
+        // Only a tmux tab asks.
+        #expect(!RemoteShell.pollScript(tabs: [(id: "tab1", keep: .off, session: "s")]).contains("pane_in_mode"))
+        #expect(!RemoteShell.pollScript(tabs: [(id: "tab1", keep: .herdr, session: "s")]).contains("pane_in_mode"))
+    }
 }
 
 @Suite struct RemoteParsingTests {
@@ -230,6 +257,8 @@ import Testing
             f6\tshell
             f6\tup\t0123abcd
             f6\tjobs\t2\tsleep (running);vim (suspended);
+            g7\tmode
+            g7\tshell
             """
         let poll = try #require(RemotePoll.parse(output))
         #expect(poll.tabs["a1"]?.foreground?.isShell == true)
@@ -245,6 +274,8 @@ import Testing
         #expect(poll.tabs["f6"]?.plain == true && poll.tabs["f6"]?.folderMissing == true && poll.tabs["f6"]?.started == true)
         #expect(poll.tabs["f6"]?.token == "0123abcd")
         #expect(poll.tabs["f6"]?.jobs == 2 && poll.tabs["f6"]?.jobSummary == "sleep (running)\nvim (suspended)")
+        #expect(poll.tabs["g7"]?.inMode == true && poll.tabs["g7"]?.foreground?.isShell == true)
+        #expect(poll.tabs["a1"]?.inMode == false)
         #expect(RemotePoll.parse("no marker at all") == nil)
     }
 
@@ -288,21 +319,6 @@ import Testing
         #expect(wrapped[1].name == "reviewer")
         #expect(wrapped[1].directory == "/srv/app")
         #expect(HerdrAgent.parseList("not json") == nil)
-    }
-
-    @Test func herdrAgentsBecomeOneTabActivity() {
-        func agent(_ status: HerdrAgent.Status, _ name: String = "claude") -> HerdrAgent {
-            HerdrAgent(paneID: "p", name: name, status: status)
-        }
-        #expect(HerdrAgent.activity([agent(.idle), agent(.working)]) == .working)
-        #expect(HerdrAgent.activity([agent(.done)]) == .idle)
-        #expect(HerdrAgent.activity([]) == .idle)
-        guard case .asking(let question) = HerdrAgent.activity([agent(.working), agent(.blocked, "codex"), agent(.blocked)]) else {
-            Issue.record("blocked should ask")
-            return
-        }
-        #expect(question.contains("codex"))
-        #expect(question.contains("1 more"))
     }
 
     @Test func aHerdrTabFollowsWhatHerdrReports() {
@@ -352,9 +368,58 @@ import Testing
         old.tmux = "tmux next-3.5"
         #expect(old.tmuxUsable)
 
-        let listed = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nsession\tnt-x-1\t0\t/srv\tzsh\n\(RemoteShell.herdrMarker)\n{\"agents\":[]}\n"))
+        let section = "\(RemoteShell.herdrMarker)\nwhere\t/usr/local/bin/herdr\tpath\nexit\t0\tagent\nout\t{\"agents\":[]}\n\(RemoteShell.herdrEndMarker)\n"
+        let listed = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nsession\tnt-x-1\t0\t/srv\tzsh\n" + section))
         #expect(listed.sessions.map(\.name) == ["nt-x-1"])
-        #expect(listed.herdr == [])
+        #expect(listed.herdr?.listing == .agents([]))
+
+        // herdr where a tab finds it: version, path, and how; or where the check looked.
+        let found = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nherdr\therdr 0.9.4\t/home/me/.local/share/mise/installs/herdr/0.9.4/herdr\tlogin\n"))
+        #expect(found.herdrSummary == "herdr 0.9.4 at /home/me/.local/share/mise/installs/herdr/0.9.4/herdr (found on your login shell’s PATH)")
+        let missing = try #require(RemoteProbe.parse("\(RemoteShell.marker)\nherdr-missing\t/x/herdr did not run (herdr --version said: no)\n"))
+        #expect(missing.herdr == nil && missing.herdrMissing && missing.herdrBroken == "/x/herdr did not run (herdr --version said: no)")
+        #expect(missing.herdrSummary?.hasPrefix("/x/herdr did not run (herdr --version said: no); herdr not found: looked on your login shell’s PATH") == true)
+        #expect(probe.herdrSummary == "herdr 0.9.3")
+    }
+
+    /// check_host looks for OpenCode beside Claude Code, Codex and Gemini CLI: on the PATH a command over ssh gets, or
+    /// where its installer puts it (~/.opencode/bin, which only the end of .bashrc puts on PATH, past the guard that
+    /// stops a shell that is not interactive), and OpenCode 2's opencode2 when that is all there is. Run as a host runs it.
+    @Test func theProbeFindsOpencodeWhereItsInstallerPutsIt() throws {
+        #expect(RemoteShell.probeScript.contains(RemoteShell.agentLines))
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("nt-agents-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        func program(_ relative: String, mode: Int = 0o755) throws {
+            let path = home + "/" + relative
+            try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try "#!/bin/sh\nexit 0\n".write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+        }
+        func agents() throws -> [String] {
+            let script = "PATH=\"$HOME/npm/bin:$PATH\"\n" + RemoteShell.agentLines
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", RemoteShell.command(script)]
+            process.environment = ["HOME": home, "PATH": "/usr/bin:/bin"]
+            let out = Pipe()
+            process.standardOutput = out
+            try process.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return try #require(RemoteProbe.parse(RemoteShell.marker + "\n" + String(decoding: data, as: UTF8.self))).agents
+        }
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        #expect(try agents() == [])
+        try program(".opencode/bin/opencode", mode: 0o644)
+        #expect(try agents() == [])
+        try program(".opencode/bin/opencode")
+        #expect(try agents() == ["opencode"])
+        try FileManager.default.removeItem(atPath: home + "/.opencode")
+        try program("npm/bin/opencode2")
+        #expect(try agents() == ["opencode2"])
+        try program(".opencode/bin/opencode")
+        try program("npm/bin/claude")
+        #expect(try agents() == ["claude", "opencode"])
     }
 
     @Test func changesSplitIntoStatusStatAndDiff() throws {
@@ -466,5 +531,105 @@ import Testing
     @Test func aHostAliasNamedLikeTheHostIsSaidOnce() {
         #expect(RemoteMark(host: "web-1", destination: "web-1", link: .connected).summary == "Remote: web-1, connected")
         #expect(RemoteMark(host: "web-1", destination: "deploy@web-1", link: .connected).place == "web-1 (deploy@web-1)")
+    }
+}
+
+/// herdr's sessions: a tab's own, the status check per session, and the sessions listed on a host.
+@Suite struct HerdrSessionPollTests {
+    func fixture(_ name: String) throws -> String {
+        try String(contentsOf: HerdrListingTests.fixtures.appendingPathComponent(name), encoding: .utf8)
+    }
+
+    @Test func aHerdrTabOpensItsSessionOnlyIfHerdrListsIt() {
+        let named = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "t1", herdrSession: "review")
+        #expect(named.contains("unset HERDR_SOCKET_PATH HERDR_SESSION; exec \"$H\" --session 'review'"))
+        #expect(named.contains("nt_sl=$(nt_hd 5 \"$H\" session list --json 2>&1 </dev/null)"))
+        #expect(named.contains(#"grep -Eq '"name"[[:space:]]*:[[:space:]]*"review"'"#))
+        // herdr's default, as before: nothing about sessions, and herdr itself last.
+        let plain = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "t1")
+        #expect(plain.hasSuffix("\nfi\nexec \"$H\"") && !plain.contains("--session") && !plain.contains("session list"))
+        // A name outside herdr's rules is never listed, so never opened.
+        let odd = RemoteShell.tabScript(keep: .herdr, directory: "~", session: "s", tabID: "t1", herdrSession: "a'b")
+        #expect(odd.contains("|| ! false; then"))
+        // Other modes have no herdr session.
+        #expect(!RemoteShell.tabScript(keep: .tmux, directory: "~", session: "s", tabID: "t1", herdrSession: "review").contains("--session"))
+    }
+
+    @Test func thePollAsksEachSessionInASectionOfItsOwn() {
+        let script = RemoteShell.pollScript(tabs: [(id: "a1", keep: .herdr, session: "s")],
+                                            herdrSessions: [HerdrPollSession(name: nil), HerdrPollSession(name: "review", wantsFocus: true)])
+        #expect(script.components(separatedBy: "printf '\\n%s\\n' '\(RemoteShell.herdrMarker)'").count == 3)
+        #expect(script.contains("printf 'session\\t%s\\n' 'review'"))
+        // Each herdr call ends after herdrCallLimit seconds: a session whose server hangs leaves the others theirs.
+        let limit = RemoteShell.herdrCallLimit
+        #expect(script.contains("nt_out=$( ( unset HERDR_SOCKET_PATH HERDR_SESSION; nt_hd \(limit) \"$H\" --session 'review' agent list ) 2>&1 </dev/null)"))
+        #expect(script.contains("nt_out=$(nt_hd \(limit) \"$H\" agent list 2>&1 </dev/null)"))
+        // Only the session on screen asks which tab has the focus, and only when no agent has it.
+        #expect(script.components(separatedBy: "tab list").count == 2)
+        #expect(script.contains(#"! printf '%s' "$nt_out" | grep -Eq '"focused"[[:space:]]*:[[:space:]]*true'"#))
+        // As before with no sessions given: herdr's default for a herdr tab, nothing for the others.
+        #expect(RemoteShell.pollScript(tabs: [(id: "a1", keep: .herdr, session: "s")]).contains(RemoteShell.herdrMarker))
+        #expect(!RemoteShell.pollScript(tabs: [(id: "a1", keep: .off, session: "s")]).contains(RemoteShell.herdrMarker))
+        #expect(!RemoteShell.pollScript(tabs: [], herdrSessions: []).contains(RemoteShell.herdrMarker))
+    }
+
+    @Test func eachSessionsReportIsItsOwnAndAnOldOneIsTheDefault() throws {
+        let poll = try #require(RemotePoll.parse(try fixture("poll-two-sessions.txt")))
+        #expect(poll.tabs["a1"]?.token == "c0ffee" && poll.tabs["b2"]?.token == "beef01")
+        #expect(Set(poll.herdrSessions.keys) == ["", "review"])
+        guard case .agents(let main) = poll.herdr?.listing, case .agents(let review) = poll.herdrSessions["review"]?.listing else {
+            Issue.record("\(poll.herdrSessions)")
+            return
+        }
+        #expect(main.map(\.paneID) == ["w1:p1", "w2:p1"] && review.map(\.kind) == ["codex"])
+        #expect(poll.herdrSessions["review"]?.session == "review" && poll.herdrSessions["review"]?.focusedTab == "w2:t1")
+        #expect(poll.herdr?.session == nil && poll.herdr?.focusedTab == nil)
+        // A section with no session line, from before sessions: the default.
+        let old = try #require(RemotePoll.parse("\(RemoteShell.marker)\n\(RemoteShell.herdrMarker)\nexit\t0\tagent\nout\t{\"agents\":[]}\n\(RemoteShell.herdrEndMarker)\n"))
+        #expect(old.herdrSessions.keys.sorted() == [""] && old.herdr?.listing == .agents([]))
+    }
+
+    @Test func aRecordKeepsItsHerdrSessionAndAnOldOneHasNone() throws {
+        let old = #"{"hostID":"h1","directory":"~","session":"nt-x","keep":"herdr"}"#
+        let decoded = try JSONDecoder().decode(RemoteTabRecord.self, from: Data(old.utf8))
+        #expect(decoded.herdrSession == nil && decoded.keep == .herdr)
+        let record = RemoteTabRecord(hostID: "h1", directory: "~", session: "nt-x", keep: .herdr, herdrSession: "review")
+        let again = try JSONDecoder().decode(RemoteTabRecord.self, from: JSONEncoder().encode(record))
+        #expect(again == record && again.herdrSession == "review")
+    }
+
+    @Test func theSessionsListGivesHerdrsSessionsAndTheRunningOnesAgents() throws {
+        let sessions = try fixture("session-list-0.9.1.json").trimmingCharacters(in: .whitespacesAndNewlines)
+        let agents = try fixture("agent-list-0.9.1.json").trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = [
+            RemoteShell.marker, "session\tnt-x-1\t0\t/srv\tzsh",
+            RemoteShell.herdrMarker, "where\t/h\tknown", "exit\t0\tagent", "out\t" + agents, RemoteShell.herdrEndMarker,
+            "herdr-sessions\t" + sessions,
+            RemoteShell.herdrMarker, "session\treview", "where\t/h\tknown", "exit\t0\tagent", "out\t{\"agents\":[]}", RemoteShell.herdrEndMarker,
+        ].joined(separator: "\n") + "\n"
+        let listed = try #require(RemoteSession.parseList(output))
+        #expect(listed.sessions.map(\.name) == ["nt-x-1"])
+        #expect(listed.herdrSessions?.map(\.name) == ["default", "review", "scratch"])
+        #expect(Array(listed.herdrReports.keys) == ["review"] && listed.herdrReports["review"]?.listing == .agents([]))
+        guard case .agents(let main) = listed.herdr?.listing else { Issue.record("no default"); return }
+        #expect(main.count == 2)
+        // herdr without named sessions said nothing on that line.
+        let none = try #require(RemoteSession.parseList("\(RemoteShell.marker)\nherdr-sessions\t\n"))
+        #expect(none.herdrSessions == nil && none.herdrReports.isEmpty)
+        // The script lists the agents of the running sessions besides the default, 8 at most, names as herdr allows them.
+        #expect(RemoteShell.sessionsScript.contains("session list --json") && RemoteShell.sessionsScript.contains("head -n 8"))
+        #expect(RemoteShell.sessionsScript.contains(#"[A-Za-z0-9_-]\{1,64\}"#))
+        #expect(RemoteShell.sessionsScript.contains("nt_hd \(RemoteShell.herdrCallLimit) \"$H\" --session \"$nt_n\" agent list"))
+    }
+
+    @Test func aCheckAsksFourSessionsAtMostAndTheRestTakeTurns() {
+        let tabs: [(session: String?, onScreen: Bool)] = [(nil, false), ("a", false), ("b", true), ("c", false), ("d", false), ("a", true)]
+        let first = HerdrPollSession.plan(tabs, round: 0)
+        #expect(first.map(\.name) == [nil, "a", "b", "c"] && first.map(\.wantsFocus) == [false, true, true, false])
+        let second = HerdrPollSession.plan(tabs, round: 1)
+        #expect(second.map(\.name) == ["d", nil, "a", "b"])
+        // Four or fewer: all of them, every time.
+        #expect(HerdrPollSession.plan([(nil, false), (nil, true)], round: 7) == [HerdrPollSession(name: nil, wantsFocus: true)])
+        #expect(HerdrPollSession.plan([], round: 0).isEmpty)
     }
 }

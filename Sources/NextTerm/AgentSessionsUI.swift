@@ -10,12 +10,12 @@ enum SessionStore {
     private static let queue = DispatchQueue(label: "nextterm.sessions", qos: .userInitiated)
 
     /// The sessions for a project (its subfolders included), and the tabs any of them are open in, off the
-    /// main thread.
-    static func load(_ project: String, done: @escaping (AgentSessions.Listing, SessionTabs) -> Void) {
+    /// main thread. `resolving`: as AgentSessions.list's (false: nothing in the project's folder is looked at).
+    static func load(_ project: String, resolving: Bool = true, done: @escaping (AgentSessions.Listing, SessionTabs) -> Void) {
         let home = self.home
         let running = runningAgents()
         queue.async {
-            let listing = AgentSessions.list(project: project, home: home, subfolders: true)
+            let listing = AgentSessions.list(project: project, home: home, subfolders: true, resolving: resolving)
             let open = AgentSessions.openSessions(running, home: home)
             DispatchQueue.main.async { done(listing, SessionTabs(open: open)) }
         }
@@ -34,8 +34,10 @@ enum SessionStore {
             // web), and by its process Claude Code and Copilot CLI say which session it has open.
             let pgid = tcgetpgrp(tab.view.process.childfd)
             let folder = (pgid > 0 ? ProcessInspector.currentDirectory(of: pgid) : nil) ?? tab.currentDirectory()
+            // OpenCode's title names the session it shows ("OC | <title>"), matched off the main thread.
+            let shown = agent == .opencode ? tab.programTitle : nil
             return RunningAgent(key: tab.id.uuidString, agent: agent, directory: folder, commandLine: line,
-                                startedAt: startDate(of: tab, since: since), pid: pgid > 0 ? pgid : nil)
+                                startedAt: startDate(of: tab, since: since), pid: pgid > 0 ? pgid : nil, shownTitle: shown)
         }
     }
 
@@ -72,10 +74,22 @@ enum SessionStore {
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "\(Int(seconds / 3600)) h ago" }
         if calendar.isDateInYesterday(date) { return "yesterday" }
+        if seconds < 6 * 86400 { return weekday.string(from: date) }
+        let thisYear: Bool = calendar.isDate(date, equalTo: now, toGranularity: .year)
+        return (thisYear ? monthDay : monthDayYear).string(from: date)
+    }
+
+    /// Made once each, not for every row drawn: "Tue", "Sep 14" and "Sep 14, 2025", as the user's region writes them.
+    private static let weekday: DateFormatter = formatter("EEE")
+    private static let monthDay: DateFormatter = formatter("MMM d")
+    private static let monthDayYear: DateFormatter = formatter("MMM d yyyy")
+
+    private static func formatter(_ template: String) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate(seconds < 6 * 86400 ? "EEE" : calendar.isDate(date, equalTo: now, toGranularity: .year) ? "MMM d" : "MMM d yyyy")
-        return formatter.string(from: date)
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
     }
 
     static func color(_ agent: AgentKind) -> NSColor {

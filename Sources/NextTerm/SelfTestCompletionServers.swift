@@ -251,11 +251,17 @@ extension SelfTest {
             await pause(0.3)
             await type("ls fo")
             let lagging = session.screenReady
+            // Suggest a Command reads the same rule: its panel may open, but nothing is typed in until then either.
+            let suggestLagging = CommandSuggestionController.atPrompt(tab)
+            let mayAsk = CommandSuggestionController.mayAsk(tab)
             tabKey()
             check(!lagging && session.lastTab == .plain, "Tab completion, servers: a Tab right after Return is the shell's own (the poll lags)",
                   "\(session.reportsSinceReturn) reports")
+            check(!suggestLagging && mayAsk, "Suggest a Command, servers: right after Return it may be asked, but types nothing in yet",
+                  "\(session.reportsSinceReturn) reports")
             await clear()
             check(await wait(8) { session.screenReady }, "and Tab completes again after the second report", "\(session.reportsSinceReturn) reports")
+            check(CommandSuggestionController.atPrompt(tab), "and Suggest a Command may type in again too")
         }
 
         // Off: no prefetch when the folder changes. Only where the status checks report the shell's folder (/proc).
@@ -315,6 +321,26 @@ extension SelfTest {
                     pressKey(window, "\u{1b}", code: 53)
                     inTmux.view.send(txt: "\u{15}")
                 }
+                // tmux's copy mode (the mouse wheel enters it): keys there are tmux's, so neither Tab completion nor
+                // Suggest a Command types into the pane until it leaves.
+                func tmux(_ args: String...) {
+                    let run = Process()
+                    run.executableURL = server.bin.appendingPathComponent("tmux")
+                    run.arguments = ["-L", "nextterm"] + args
+                    run.environment = ["TMUX_TMPDIR": server.tmuxSockets.path, "PATH": "/usr/bin:/bin"]
+                    try? run.run()
+                    run.waitUntilExit()
+                }
+                let pane = "=" + (inTmux.remote?.session ?? "") + ":"
+                tmux("copy-mode", "-t", pane)
+                let inMode = await wait(8) { inTmux.paneInMode }
+                check(inMode && !inTmux.completion.screenReady && !CommandSuggestionController.atPrompt(inTmux),
+                      "Tab completion and Suggest a Command, servers: nothing is typed into a tmux pane in copy mode",
+                      "in mode \(inMode), screen ready \(inTmux.completion.screenReady)")
+                tmux("send-keys", "-t", pane, "-X", "cancel")
+                let left = await wait(8) { !inTmux.paneInMode && inTmux.completion.screenReady }
+                check(left && CommandSuggestionController.atPrompt(inTmux), "and both type in again once the pane leaves copy mode",
+                      "in mode \(inTmux.paneInMode), \(inTmux.completion.reportsSinceReturn) reports")
             } else {
                 check(false, "Tab completion, servers: a tmux tab on the stand-in server is ready",
                       "connected \(inTmux.remoteConnected), ready \(inTmux.remoteReady), \(inTmux.completion.reportsSinceReturn) reports: "

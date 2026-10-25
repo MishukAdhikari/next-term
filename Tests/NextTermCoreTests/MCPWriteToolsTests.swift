@@ -41,8 +41,9 @@ import Testing
             let meta = try #require(tool["_meta"] as? [String: Any])
             let name = tool["name"] as? String ?? ""
             #expect(meta["next-term/scope"] as? String == MCPServer.tool(named: name)?.scope?.rawValue, "\(name)")
-            // The import tools, used once in a while, are left for tool search to find.
-            #expect(meta["anthropic/alwaysLoad"] as? Bool == (MCPServer.isImportTool(name) ? nil : true), "\(name)")
+            // The import tools and add_task, used once in a while, are left for tool search to find.
+            #expect(meta["anthropic/alwaysLoad"] as? Bool == (MCPServer.isDeferred(name) ? nil : true), "\(name)")
+            #expect(MCPServer.tool(named: name)?.alwaysLoad == !MCPServer.isDeferred(name), "\(name)")
         }
     }
 
@@ -83,7 +84,15 @@ import Testing
 @Suite struct MCPSettingsTests {
     @Test func theAllowlistIsShortAndHarmless() {
         #expect(MCPSettings.allowlist.map(\.name) == ["font_size", "line_height", "soft_wrap", "terminal_position", "notify_decisions",
-                                                      "notify_agent_finished", "notify_program_alerts", "notification_sound"])
+                                                      "notify_agent_finished", "notify_program_alerts", "notification_sound", "notify_commands",
+                                                      "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward"])
+        if case .success(let changes) = MCPSettings.changes(["agent_spinner": "still", "agents_offer_tabs": false]) {
+            #expect(changes.map(\.1) == [.choice("still"), .flag(false)])
+        } else {
+            Issue.record("agent_spinner and agents_offer_tabs are settings agents may change")
+        }
+        #expect(MCPSettings.changes(["agent_spinner": "slow"]).failureText?.contains("takes spinning, still, off") == true)
+        #expect(MCPSettings.changes(["agents_bring_tabs_forward": "steal"]).failureText?.contains("takes focus, show, off") == true)
         // The guards and the switches that reach other programs are never on it, by any spelling.
         for name in ["agent_control", "agentControl", "share_with_claude", "shareWithClaude", "shareWithCopilot", "remote_access",
                      "check_for_updates", "checkForUpdates", "updateInstallWithoutAsking", "keyBindings", "key_bindings", "hideEnvValues",
@@ -119,6 +128,51 @@ import Testing
         let change = try MCPLayoutChange.parse(["terminal_position": "right", "sidebar": "hidden", "terminal_folded": true]).get()
         #expect(change == MCPLayoutChange(terminalPosition: "right", sidebarShown: false, terminalFolded: true))
         #expect(try MCPLayoutChange.parse(["sidebar_side": "right"]).get().sidebarSide == "right")
+    }
+
+    @Test func terminalTabsGoTopLeftOrRight() throws {
+        for side in ["top", "left", "right"] {
+            let change = try MCPLayoutChange.parse(["terminal_tabs": side]).get()
+            #expect(change == MCPLayoutChange(terminalTabs: side) && !change.isEmpty, "\(side)")
+        }
+        // Any other word, or not a word, asks nothing and says what it takes.
+        #expect(MCPLayoutChange.parse(["terminal_tabs": "side"]).failureText == "terminal_tabs is one of top, left, right.")
+        #expect(MCPLayoutChange.parse(["terminal_tabs": "Left"]).isFailure)
+        #expect(MCPLayoutChange.parse(["terminal_tabs": true]).isFailure)
+        // With the others in one call.
+        let both = try MCPLayoutChange.parse(["terminal_tabs": "right", "terminal_position": "bottom", "terminal_folded": true]).get()
+        #expect(both == MCPLayoutChange(terminalPosition: "bottom", terminalTabs: "right", terminalFolded: true))
+        // An empty call names all five.
+        let empty = try #require(MCPLayoutChange.parse([:]).failureText)
+        for name in ["terminal_position", "sidebar_side", "terminal_tabs", "sidebar", "terminal_folded"] {
+            #expect(empty.contains(name), "\(name)")
+        }
+    }
+
+    @Test func setLayoutListsTerminalTabs() throws {
+        let tool = try #require(MCPServer.tool(named: "set_layout"))
+        let schema = try #require(try JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8)) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let tabs = try #require(properties["terminal_tabs"] as? [String: Any])
+        #expect(tabs["type"] as? String == "string")
+        #expect(tabs["enum"] as? [String] == TerminalTabsSetting.allCases.map(\.rawValue))
+        #expect(tool.description.contains("terminal_tabs (top, or left or right"))
+        // Every window has the same, as the terminal's position: said with the arguments that apply to every window.
+        let everyWindow = try #require(tool.description.range(of: "apply to every window"))
+        let named = try #require(tool.description.range(of: "terminal_tabs"))
+        #expect(named.lowerBound < everyWindow.lowerBound)
+    }
+
+    @Test func aFoldedTerminalAskedFoldedNeedsAStepOnlyWhenItMoves() {
+        // {sidebar_side, terminal_folded: true} on a folded terminal: moving the sidebar keeps it folded.
+        #expect(!MCPLayoutChange.needsFoldStep(wanted: true, folded: true, newPosition: false))
+        // A new terminal position unfolds it: folded again after the move.
+        #expect(MCPLayoutChange.needsFoldStep(wanted: true, folded: true, newPosition: true))
+        #expect(MCPLayoutChange.needsFoldStep(wanted: true, folded: false, newPosition: false))
+        #expect(MCPLayoutChange.needsFoldStep(wanted: false, folded: true, newPosition: false))
+        // Unfolded and asked unfolded: nothing, moved or not.
+        #expect(!MCPLayoutChange.needsFoldStep(wanted: false, folded: false, newPosition: true))
+        #expect(!MCPLayoutChange.needsFoldStep(wanted: false, folded: false, newPosition: false))
     }
 }
 

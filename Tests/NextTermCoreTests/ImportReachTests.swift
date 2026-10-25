@@ -34,7 +34,8 @@ import Testing
         #expect(odd.settings.isEmpty)
         #expect(odd.skipped == [SkippedItem("workbench.list.openMode", "value not recognised"),
                                 SkippedItem("diffEditor.renderSideBySide", "value not recognised")])
-        // Unset, nothing: VS Code's defaults say nothing about the user.
+        // Unset, nothing: VS Code's defaults say nothing about the user. An app's whole plan adds its own click, which
+        // a file on its own never implies (ImportClickDefaultTests).
         #expect(try rows("{}").isEmpty)
     }
 
@@ -123,20 +124,24 @@ import Testing
         let titles = ["clearBuffer:": "Clear Buffer", "gitCommit:": "Commit…"]
         #expect(KeyBindings.sharingNote(commandK, ["gitCommit:", "clearBuffer:"], title: { titles[$0] ?? $0 })
                 == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else")
-        // Under Next Term's own set, a Commit… key on ⌘K shares it with Clear Buffer instead of taking it away.
+        // Under Next Term's own set, a Commit… key on ⌘K shares it with Clear Buffer and Link instead of taking it away
+        // (with the menu's title for Link, as the app gives it).
         let row = ImportShortcuts.row("gitCommit:", commandK, source: "keymap: CheckinProject")
-        let plan = ImportPlan(preset: .nextTerm, shortcuts: [row]).settlingShortcuts(current: ImportShortcutsTests.current())
+        let plan = ImportPlan(preset: .nextTerm, shortcuts: [row])
+            .settlingShortcuts(current: ImportShortcutsTests.current(), titles: ["insertMarkdownLink:": "Link"])
         #expect(plan.shortcuts.first?.ticked == true)
-        #expect(plan.shortcuts.first?.note == "⌘K is Clear Buffer while a terminal has the keyboard, Commit… everywhere else")
+        #expect(plan.shortcuts.first?.note == "⌘K is Link while a Markdown file’s editor has the keyboard, Clear Buffer while a terminal has "
+                + "the keyboard, Commit… everywhere else")
     }
 
     // MARK: Undo names them
 
     @Test func everyNewSettingHasATitle() {
         let settings: [ImportedSetting] = [.sidebarSingleClick(true), .backgroundFetch("5"), .diffLayout("unified"), .currentLineBlame(true),
-                                           .openProjectsIn("ask"), .launchOpens("welcome"), .terminalFontSize(12)]
+                                           .openProjectsIn("ask"), .launchOpens("welcome"), .terminalFontSize(12),
+                                           .tabList(TabListImport(tabs: "right", sidebarSide: "left", showsFolders: true))]
         for key in settings.flatMap(\.keys) { #expect(ImportSnapshot.title(of: key) != key, "\(key)") }
-        #expect(ImportedSetting.boolKeys.isSuperset(of: ["sidebarSingleClickOpens", "currentLineBlame"]))
+        #expect(ImportedSetting.boolKeys.isSuperset(of: ["sidebarSingleClickOpens", "currentLineBlame", "tabListShowsFolders"]))
         #expect(ImportedSetting.launchOpens("welcome").key == LaunchSettings.Key.opens)
     }
 }

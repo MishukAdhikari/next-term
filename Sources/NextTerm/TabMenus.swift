@@ -39,7 +39,8 @@ enum ClosedTabs {
         if remote.keep == .tmux, !shown {
             return RemoteTab(host: host, directory: remote.directory, session: remote.session, keep: remote.keep)
         }
-        return RemoteTab(host: host, directory: directory, keep: remote.keep)
+        // A herdr tab opens its herdr session again.
+        return RemoteTab(host: host, directory: directory, keep: remote.keep, herdrSession: remote.herdrSession)
     }
 }
 
@@ -77,6 +78,10 @@ extension TerminalWindowController {
         menu.addCommand("Copy", "copy:", enabled: selected) { view.copy(view) }
         menu.addCommand("Paste", "paste:", enabled: pasteable) { view.paste(view) }
         menu.addCommand("Select All", "selectAll:") { view.selectAll(nil) }
+        if tab.ghost.isShowing {
+            menu.addItem(.separator())
+            menu.addCommand("Forget This Suggestion", "forgetSuggestion:") { tab.ghost.forget() }
+        }
         menu.addItem(.separator())
         menu.addCommand("Clear", "clearBuffer:") { [weak self] in self?.clear(tab) }
         menu.addCommand("Find…", "performFindPanelAction:#1") { [weak self] in self?.showFind(in: tab) }
@@ -169,7 +174,9 @@ extension TerminalWindowController {
             guard let self else { return }
             self.closeTabs(self.groups.filter { $0 !== group })
         }
-        menu.addCommand("Close Tabs to the Right", "closeTabsToTheRight:", enabled: index < groups.count - 1) { [weak self] in
+        // Down a tab list, the tabs after it are below it: the same command, named for where they are.
+        let after = barShowsTabs ? "Close Tabs to the Right" : "Close Tabs Below"
+        menu.addCommand(after, "closeTabsToTheRight:", enabled: index < groups.count - 1) { [weak self] in
             self?.closeTabs(toTheRightOf: group)
         }
         return menu
@@ -177,7 +184,7 @@ extension TerminalWindowController {
 
     private func rename(_ group: PaneGroup) {
         guard let index = groups.firstIndex(where: { $0 === group }) else { return }
-        tabBar.beginRename(at: index)
+        tabStrip.beginRename(at: index)
     }
 
     /// A split of the tab's pane with the keyboard, the tab brought to the front first.

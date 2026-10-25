@@ -42,7 +42,9 @@ func visibleText(_ scan: DatabaseScan) -> String {
         parts.append(String(reflecting: db))
         parts.append(db.tools.joined(separator: " "))
     }
+    parts.append(linkText(scan))
     parts.append(String(describing: scan))
+    parts.append(String(reflecting: scan))
     return parts.joined(separator: "\n")
 }
 
@@ -267,7 +269,7 @@ func visibleText(_ scan: DatabaseScan) -> String {
         let project = FixtureProject()
         project.write(".env", "DB_CONNECTION=mysql\nDB_HOST=mysql-prod.c9akciq32.eu-west-1.rds.amazonaws.com\nDB_DATABASE=shop\nDB_USERNAME=admin\nDB_PASSWORD=Rds!2024\n")
         let db = try #require(project.scan().databases.first)
-        #expect(db.environment == .remote && db.providers.isEmpty && db.name == "shop")
+        #expect(db.environment == .remote && db.providers == [.aws] && db.name == "shop")
     }
 
     // MARK: examples, ORMs, other engines
@@ -362,6 +364,24 @@ func visibleText(_ scan: DatabaseScan) -> String {
         #expect(Databases.scanMayChange(after: root, root: root))
         #expect(!Databases.scanMayChange(after: "/Users/me/shop-old/src/", root: root))
         #expect(!Databases.scanMayChange(after: "/Users/me/", root: root))
+    }
+
+    /// The same scan names the project's services, whose readers look in a few hidden folders too: `supabase link`
+    /// writing `supabase/.temp/project-ref`, or a change to `.ddev/config.yaml`, `.streamlit/config.toml` or
+    /// `.chainlit/config.toml`, scans again. Folders as FSEvents reports them; what sits deeper in those does not.
+    @Test func theServicesHiddenFoldersCanChangeTheScan() {
+        let root = "/Users/me/support-bot"
+        func may(_ relative: String) -> Bool {
+            Databases.scanMayChange(after: relative.isEmpty ? root + "/" : root + "/" + relative + "/", root: root)
+        }
+        for yes in ["", "supabase/.temp", ".ddev", ".streamlit", ".chainlit", "src/mastra", "requirements"] {
+            #expect(may(yes), "\(yes)")
+        }
+        let no = ["node_modules/x", ".git/objects", ".next/cache", "a/b/c/d", ".ddev/db_snapshots", ".streamlit/x",
+                  "supabase/.temp/cache", ".temp", ".chainlit/translations"]
+        for folder in no {
+            #expect(!may(folder), "\(folder)")
+        }
     }
 
     /// The filter and the search agree: a SQLite file in a folder the filter lets through is found, and one in a

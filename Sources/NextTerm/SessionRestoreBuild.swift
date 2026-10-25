@@ -297,7 +297,8 @@ enum RestoreBuild {
                 }
                 let keep: KeepMode = plan.outcome == .reattach ? record.keep : .off
                 let session: String? = keep == .off ? nil : record.session
-                let remote = RemoteTab(host: host, directory: record.directory, session: session, keep: keep)
+                let remote = RemoteTab(host: host, directory: record.directory, session: session, keep: keep,
+                                       herdrSession: keep == .herdr ? record.herdrSession : nil)
                 tab = controller.restoredTab(directory: nil, remote: remote, id: id)
                 if keep != .off { keptRemote.append(record) }
                 remoteToStart.append(tab)

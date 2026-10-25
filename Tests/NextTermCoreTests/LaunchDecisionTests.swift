@@ -5,23 +5,40 @@ import Testing
 @Suite struct LaunchSettingsTests {
     @Test func defaults() {
         let s = LaunchSettings()
-        #expect(s.opens == LaunchOpens.welcome)
+        #expect(s.opens == LaunchOpens.lastProjects && LaunchOpens.standard == .lastProjects)
         #expect(!s.opensChosen)
         #expect(s.askToReopenOnQuit)
         #expect(s.keepScrollback)
         // In the order of the radio buttons. Compared outside `#expect`, where arrays are slow to type-check.
         let titles: [String] = LaunchOpens.allCases.map(\.title)
-        let expected: [String] = ["Show the Welcome window", "Resume where I left off"]
+        let expected: [String] = ["Show the Welcome window", "Resume where I left off", "Open a new terminal"]
         let same: Bool = titles == expected
         #expect(same, "\(titles)")
     }
 
+    @Test func aStoredNewTerminalReadsBack() throws {
+        // "Open a new terminal" is kept as `newTerminal`. A build from before it reads that as any unknown value, the
+        // Welcome window; this one reads a value it does not know as the default, Resume.
+        let (defaults, name) = try TestDefaults.make("launch-settings-new-terminal")
+        defer { TestDefaults.remove(defaults, name) }
+        var terminal = LaunchSettings()
+        terminal.opens = .newTerminal
+        terminal.save(.opens, to: defaults)
+        let stored: String? = defaults.string(forKey: LaunchSettings.Key.opens)
+        #expect(stored == "newTerminal")
+        let read = LaunchSettings(defaults: defaults)
+        #expect(read.opens == .newTerminal && read.opensChosen)
+        #expect(read.opens.title == "Open a new terminal")
+        defaults.set("newTerminals", forKey: LaunchSettings.Key.opens)
+        let unknown = LaunchSettings(defaults: defaults)
+        #expect(unknown.opens == .lastProjects && !unknown.opensChosen)
+    }
+
     @Test func readAndSavedInTheDefaults() throws {
-        let name = "nextterm-launch-settings-tests-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
-        // Never set, for a new user and for one updating into this release: the Welcome window, never chosen, Ask on, and
-        // scrollback kept.
+        let (defaults, name) = try TestDefaults.make("launch-settings-tests")
+        defer { TestDefaults.remove(defaults, name) }
+        // Never set, for a new user and for one updating into this release: Resume, never chosen, Ask on, and scrollback
+        // kept.
         #expect(LaunchSettings(defaults: defaults) == LaunchSettings())
         #expect(!LaunchSettings(defaults: defaults).opensChosen)
         var changed = LaunchSettings()
@@ -54,9 +71,8 @@ import Testing
 
     @Test func aStoredReopenReadsAsResume() throws {
         // 0.10 stored "Reopen the projects that were open" as `lastProjects`: 0.11 reads it as "Resume where I left off".
-        let name = "nextterm-launch-settings-resume-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("launch-settings-resume")
+        defer { TestDefaults.remove(defaults, name) }
         defaults.set("lastProjects", forKey: LaunchSettings.Key.opens)
         let read = LaunchSettings(defaults: defaults)
         #expect(read.opens == .lastProjects && read.opensChosen)
@@ -65,9 +81,8 @@ import Testing
 
     @Test func eachSettingSavesOnlyItsOwnKey() throws {
         // Settings › General's controls: "At launch" counts as chosen only once the user chose it.
-        let name = "nextterm-launch-settings-own-key-\(getpid())"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("launch-settings-own-key")
+        defer { TestDefaults.remove(defaults, name) }
         var settings = LaunchSettings(defaults: defaults)
         settings.keepScrollback = false
         settings.save(.keepScrollback, to: defaults)
@@ -83,11 +98,12 @@ import Testing
         settings.save(.opens, to: defaults)
         #expect(LaunchSettings(defaults: defaults).opensChosen)
         // A whole save of settings whose "At launch" nobody chose leaves it unchosen.
-        let name2 = name + "-whole"
-        let other = try #require(UserDefaults(suiteName: name2))
-        defer { other.removePersistentDomain(forName: name2) }
+        let (other, name2) = try TestDefaults.make("launch-settings-whole")
+        defer { TestDefaults.remove(other, name2) }
         LaunchSettings().save(to: other)
-        #expect(other.object(forKey: LaunchSettings.Key.opens) == nil)
+        let unchosen: Any? = other.object(forKey: LaunchSettings.Key.opens)
+        let unset: Bool = unchosen == nil
+        #expect(unset)
         #expect(!LaunchSettings(defaults: other).opensChosen)
     }
 }
@@ -127,10 +143,28 @@ import Testing
         }
     }
 
-    @Test func aNormalLaunchShowsTheWelcomeWindowByDefault() {
+    @Test func aNormalLaunchUnderWelcomeShowsTheWelcomeWindow() {
         // AE1: the projects from the last quit are there, and only listed.
         #expect(decide(input(.normal)) == .welcome)
         #expect(decide(input(.normal, .welcome), existing: []) == .welcome)
+    }
+
+    @Test func aLaunchThatChoseNothingResumesAndTheFirstShowsTheWelcomeWindow() {
+        // Never chosen: what was open at the last quit comes back.
+        var unchosen = LaunchInput(kind: .normal, restore: .notRun, terminalWindowOpen: false, settings: LaunchSettings(),
+                                   sessionProjects: [app, api], recentProjects: [api, app], mayOfferImport: false)
+        #expect(!unchosen.settings.opensChosen)
+        #expect(decide(unchosen) == .reopen([app, api]))
+        // The very first run has nothing to bring back: the import offer, then the Welcome window; or that window alone.
+        unchosen.sessionProjects = []
+        unchosen.recentProjects = []
+        #expect(decide(unchosen) == .welcome)
+        unchosen.mayOfferImport = true
+        #expect(decide(unchosen) == .importThenWelcome)
+        // A Dock click with every window closed opens the most recent project, as Resume does.
+        var dock = input(.dockReopen)
+        dock.settings = LaunchSettings()
+        #expect(decide(dock) == .reopen([api]))
     }
 
     @Test func reopenBringsBackTheProjectsOpenAtTheLastQuitThatStillExist() {
@@ -142,6 +176,25 @@ import Testing
         var none = input(.normal, .lastProjects)
         none.sessionProjects = []
         #expect(decide(none) == .welcome)
+    }
+
+    /// Under any setting but Reopen the folders open at the last quit are never checked: a look at one in ~/Documents
+    /// would ask for Documents before anything was shown.
+    @Test func onlyReopenChecksTheProjectsOpenAtTheLastQuit() {
+        for opens in LaunchOpens.allCases where opens != .lastProjects {
+            for mayOfferImport in [false, true] {
+                var launch = input(.normal, opens)
+                launch.mayOfferImport = mayOfferImport
+                var checked: [String] = []
+                let shown = LaunchDecision.opening(launch) { (path: String) -> Bool in
+                    checked.append(path)
+                    return true
+                }
+                #expect(checked.isEmpty, "\(opens): \(checked)")
+                let expected: LaunchOpening = opens == .newTerminal ? .newTerminal : (mayOfferImport ? .importThenWelcome : .welcome)
+                #expect(shown == expected, "\(opens), import \(mayOfferImport)")
+            }
+        }
     }
 
     @Test func aReopenKeepsTheSavedOrderAndDropsRepeats() {
@@ -211,6 +264,56 @@ import Testing
                 #expect(decide(launch, existing: []) == .welcome, "\(kind), \(restore)")
             }
         }
+    }
+
+    @Test func openANewTerminalTakesTheWelcomeWindowsPlace() {
+        // A launch that names nothing and restores nothing: a shell window, never the projects open at the last quit.
+        #expect(decide(input(.normal, .newTerminal)) == .newTerminal)
+        #expect(decide(input(.normal, .newTerminal), existing: []) == .newTerminal)
+        // A request that opened nothing goes on as a normal launch.
+        #expect(decide(input(.request, .newTerminal)) == .newTerminal)
+        // A restore that left no terminal window falls back to the setting too.
+        for restore in LaunchRestoreResult.allCases {
+            var launch = input(.normal, .newTerminal)
+            launch.restore = restore
+            #expect(decide(launch) == .newTerminal, "\(restore)")
+        }
+    }
+
+    @Test func openANewTerminalAddsNothingToTheWindowsALaunchOpened() {
+        // A restore that built windows, or `nxtrm` with a folder: those windows, and no extra shell window.
+        var restored = input(.normal, .newTerminal)
+        restored.restore = .openedWindows
+        restored.terminalWindowOpen = true
+        #expect(decide(restored) == .nothing)
+        var request = input(.request, .newTerminal)
+        request.terminalWindowOpen = true
+        #expect(decide(request) == .nothing)
+    }
+
+    @Test func openANewTerminalOnADockClickWithNoWindow() {
+        // A shell window, not the most recent project and not the Welcome window.
+        #expect(decide(input(.dockReopen, .newTerminal)) == .newTerminal)
+        #expect(decide(input(.dockReopen, .newTerminal), existing: []) == .newTerminal)
+        var reopen = input(.dockReopen, .newTerminal)
+        reopen.mayOfferImport = true
+        #expect(decide(reopen) == .newTerminal)
+    }
+
+    @Test func openANewTerminalIsAChoiceTheImportOfferNeverOverrides() {
+        // The offer stays pending while no app to import from was ever found and no project was opened, which is how a
+        // user who only opens shell windows launches: the shell window they chose, not the Welcome window. A first launch
+        // has chosen nothing, and still gets the offer.
+        var later = input(.normal, .newTerminal)
+        later.mayOfferImport = true
+        later.recentProjects = []
+        #expect(decide(later) == .newTerminal)
+        #expect(decide(later, existing: []) == .newTerminal)
+        var first = LaunchInput(kind: .normal, restore: .notRun, terminalWindowOpen: false, settings: LaunchSettings(),
+                                sessionProjects: [], recentProjects: [], mayOfferImport: true)
+        #expect(decide(first) == .importThenWelcome)
+        first.settings.opens = .welcome
+        #expect(decide(first) == .importThenWelcome)
     }
 }
 
@@ -567,7 +670,9 @@ enum RestoreFixture {
         let restore = decision.launchRestore(openedWindow: false)
         #expect(restore == .notRun)
         let app = "/Users/x/Code/app"
-        var launch = LaunchInput(kind: .normal, restore: restore, terminalWindowOpen: false, settings: LaunchSettings(),
+        var welcome = LaunchSettings()
+        welcome.opens = .welcome
+        var launch = LaunchInput(kind: .normal, restore: restore, terminalWindowOpen: false, settings: welcome,
                                  sessionProjects: [app], recentProjects: [app], mayOfferImport: false)
         #expect(LaunchDecision.opening(launch) { _ in true } == .welcome)
         launch.settings.opens = .lastProjects

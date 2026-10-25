@@ -288,9 +288,9 @@ extension TerminalTab {
     /// starts sends no mark: one run as it is gets a process group of its own, and one in a command substitution
     /// (fzf's ⌃T, ⌃R and ⌥C) joins the shell's. So on this Mac the group in front must be the shell's, with nothing
     /// else in it. A builtin such a binding runs (`read`) can't be seen. A server's processes are out of sight: its
-    /// status checks must say nothing runs.
+    /// status checks must say nothing runs, and its tmux pane is not in copy mode (keys there are tmux's).
     var shellAlone: Bool {
-        if remote != nil { return !status.running }
+        if remote != nil { return !status.running && !paneInMode }
         return CompletionController.aloneInFront(fd: view.process.childfd, shell: view.process.shellPid)
     }
 }

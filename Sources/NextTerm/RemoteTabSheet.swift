@@ -25,10 +25,17 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     private let folderField = NSTextField()
     private let keepControl = NSSegmentedControl(labels: KeepMode.allCases.map(\.label), trackingMode: .selectOne, target: nil, action: nil)
     private let keepNote = NSTextField(wrappingLabelWithString: "")
-    /// Next Term's tmux sessions still running on the host, to reattach one (after a closed tab).
+    /// Next Term's tmux sessions still running on the host, to reattach one (after a closed tab); for keep herdr, herdr's
+    /// sessions there, to open one.
     private let sessionPopup = NSPopUpButton()
     private let sessionNote = NSTextField(wrappingLabelWithString: "")
     private var sessions: [RemoteSession] = []
+    /// herdr's sessions on the host (nil: none listed, so herdr's default only), and the running ones' agents, by session
+    /// ("" for the default).
+    private var herdrSessions: [HerdrSession]?
+    private var herdrAgents: [String: [HerdrAgent]] = [:]
+    /// What the line under the popup says instead of the sessions (looking, or why there are none); nil once listed.
+    private var sessionStatus: String?
     /// Each load of the session list; an answer to an older one is dropped.
     private var sessionLoad = 0
     private let problemLabel = NSTextField(wrappingLabelWithString: "")
@@ -172,38 +179,98 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     @objc private func keepChanged(_ sender: Any?) {
         let keep = KeepMode.allCases[max(0, keepControl.selectedSegment)]
         keepNote.stringValue = keep.summary
-        sessionPopup.isEnabled = keep == .tmux && !sessions.isEmpty
+        fillSessions(keep)
     }
 
-    /// The saved host's tmux sessions, over a connection a tab already has (the sheet never logs in).
+    /// The session popup for `keep`: tmux's sessions to reattach, or herdr's to open, from the last list; nothing else.
+    private func fillSessions(_ keep: KeepMode) {
+        let chosen = sessionPopup.selectedItem?.representedObject as? String
+        sessionPopup.removeAllItems()
+        switch keep {
+        case .herdr:
+            sessionPopup.addItem(withTitle: "Default session")
+            for session in herdrSessions ?? [] where !session.isDefault {
+                sessionPopup.addItem(withTitle: session.name + (session.running ? "" : " (not running)"))
+                sessionPopup.lastItem?.representedObject = session.name
+            }
+            sessionNote.stringValue = sessionStatus ?? herdrSummary()
+        case .tmux, .off:
+            sessionPopup.addItem(withTitle: "New session")
+            for session in sessions {
+                let what = session.program.isEmpty ? "" : " — \(session.program)"
+                sessionPopup.addItem(withTitle: "Reattach \(session.name)\(what) (\((session.directory as NSString).lastPathComponent))")
+                sessionPopup.lastItem?.representedObject = session.name
+            }
+            sessionNote.stringValue = sessionStatus ?? tmuxSummary()
+        }
+        if let chosen, let item = sessionPopup.itemArray.first(where: { $0.representedObject as? String == chosen }) {
+            sessionPopup.select(item)
+        }
+        sessionPopup.isEnabled = keep != .off && sessionPopup.numberOfItems > 1
+    }
+
+    private func tmuxSummary() -> String {
+        sessions.isEmpty ? "No other sessions are running there."
+            : "\(sessions.count) session\(sessions.count == 1 ? "" : "s") still running there, from tabs that were closed."
+    }
+
+    /// The running sessions' agents, a few: "claude — working — ~/api; review: codex — blocked — ~/web".
+    private func herdrSummary() -> String {
+        var parts: [String] = []
+        var count = 0
+        let named = (herdrSessions ?? []).filter { !$0.isDefault }.map(\.name)
+        for session in [""] + named {
+            for agent in herdrAgents[session] ?? [] {
+                count += 1
+                guard parts.count < 6 else { continue }
+                let folder = agent.directory.map { " — " + $0 } ?? ""
+                let line = "\(agent.name) — \(agent.status.rawValue)\(folder)"
+                parts.append(session.isEmpty ? line : "\(session): \(line)")
+            }
+        }
+        if parts.isEmpty {
+            return herdrSessions == nil ? "herdr lists its sessions here once it answers on the host." : "No agents run in herdr there now."
+        }
+        let more = count > parts.count ? "; and \(count - parts.count) more" : ""
+        return SecretMask.current.mask(parts.joined(separator: "; ") + more)
+    }
+
+    /// The saved host's tmux sessions and herdr's sessions and agents, over a connection a tab already has (the sheet never
+    /// logs in).
     private func loadSessions() {
         sessionLoad += 1
         let load = sessionLoad
         sessions = []
+        herdrSessions = nil
+        herdrAgents = [:]
+        sessionStatus = nil
         sessionPopup.removeAllItems()
         sessionPopup.addItem(withTitle: "New session")
         sessionPopup.isEnabled = false
-        guard let host = selectedHost else { sessionNote.stringValue = ""; return }
-        guard RemoteConnection.masterAlive(host) else {
-            sessionNote.stringValue = "Sessions kept on this host are listed here while a tab on it is connected."
-            return
+        guard let host = selectedHost else {
+            sessionStatus = ""
+            return keepChanged(nil)
         }
-        sessionNote.stringValue = "Looking for sessions on \(host.name)…"
+        guard RemoteConnection.masterAlive(host) else {
+            sessionStatus = "Sessions kept on this host are listed here while a tab on it is connected."
+            return keepChanged(nil)
+        }
+        sessionStatus = "Looking for sessions on \(host.name)…"
+        keepChanged(nil)
         RemoteConnection.run(host, script: RemoteShell.sessionsScript, timeout: 15) { [weak self] output in
             guard let self, load == self.sessionLoad, self.selectedHost?.id == host.id else { return }
             guard let listed = RemoteSession.parseList(output.output) else {
-                self.sessionNote.stringValue = "Could not list the sessions: \(output.problem)"
-                return
+                self.sessionStatus = "Could not list the sessions: \(output.problem)"
+                return self.keepChanged(nil)
             }
             let open = Set(AppDelegate.shared.controllers.flatMap(\.tabs).compactMap { $0.exited ? nil : $0.remote?.session })
             self.sessions = listed.sessions.filter { !open.contains($0.name) }
-            for session in self.sessions {
-                let what = session.program.isEmpty ? "" : " — \(session.program)"
-                self.sessionPopup.addItem(withTitle: "Reattach \(session.name)\(what) (\((session.directory as NSString).lastPathComponent))")
-                self.sessionPopup.lastItem?.representedObject = session.name
+            self.herdrSessions = listed.herdrSessions
+            if let report = listed.herdr, case .agents(let agents) = report.listing { self.herdrAgents[""] = agents }
+            for (name, report) in listed.herdrReports {
+                if case .agents(let agents) = report.listing { self.herdrAgents[name] = agents }
             }
-            self.sessionNote.stringValue = self.sessions.isEmpty ? "No other sessions are running there."
-                : "\(self.sessions.count) session\(self.sessions.count == 1 ? "" : "s") still running there, from tabs that were closed."
+            self.sessionStatus = nil
             self.keepChanged(nil)
         }
     }
@@ -264,7 +331,10 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         UserDefaults.standard.set(host.id, forKey: "lastRemoteHost")
         let chosen = sessionPopup.selectedItem?.representedObject as? String
         let session = host.keep == .tmux ? sessions.first { $0.name == chosen } : nil
+        // Only a session herdr listed: a tab never makes one by its name.
+        let herdrSession = host.keep == .herdr ? herdrSessions?.first { $0.name == chosen && !$0.isDefault }?.name : nil
         panel.sheetParent?.endSheet(panel)
-        open(RemoteTab(host: host, directory: session?.directory.isEmpty == false ? session?.directory : nil, session: session?.name))
+        open(RemoteTab(host: host, directory: session?.directory.isEmpty == false ? session?.directory : nil, session: session?.name,
+                       herdrSession: herdrSession))
     }
 }

@@ -127,14 +127,14 @@ import Testing
         defer { remove(home) }
         let found = detect(home)
         let studio = try #require(found.first { $0.name.hasPrefix("Android Studio") })
-        let studioSettings: [ImportedSetting] = [.terminalFontSize(12)]
+        let studioSettings: [ImportedSetting] = [.sidebarSingleClick(false), .terminalFontSize(12)] // the first, JetBrains' own click
         #expect(plan(studio, home).settings.map(\.setting) == studioSettings)
         let goLand = try #require(found.first { $0.name.hasPrefix("GoLand") })
-        let goLandSettings: [ImportedSetting] = [.fontSize(15)]
+        let goLandSettings: [ImportedSetting] = [.fontSize(15), .sidebarSingleClick(false)]
         #expect(plan(goLand, home).settings.map(\.setting) == goLandSettings)
         let rubyMine = try #require(found.first { $0.name.hasPrefix("RubyMine") })
         let rubyPlan = plan(rubyMine, home)
-        let rubySettings: [ImportedSetting] = [.softWrap(true)]
+        let rubySettings: [ImportedSetting] = [.softWrap(true), .sidebarSingleClick(false)]
         #expect(rubyPlan.settings.map(\.setting) == rubySettings)
         let note = SkippedItem("idea.config.path in idea.properties",
                                "uses a variable; only a full path or ${user.home} is read, so the settings here were read")

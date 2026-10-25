@@ -3,11 +3,11 @@ import Foundation
 
 /// Which process is at the other end of a loopback connection to the Claude Code link.
 ///
-/// opencode reads Claude Code's lock files, but in a Next Term tab, where `CLAUDE_CODE_SSE_PORT` is set,
+/// OpenCode reads Claude Code's lock files, but in a Next Term tab, where `CLAUDE_CODE_SSE_PORT` is set,
 /// it connects to that port without the token (and without the "mcp" subprotocol). ClaudeIDEServer takes
 /// such a connection only when the process holding its socket is opencode running in one of this app's own
 /// tabs: it is looked for among the tabs' shells and their descendants, by the two ports of its TCP socket.
-/// Any other client without the token is refused, as before. opencode inside tmux is not found: tmux runs
+/// Any other client without the token is refused, as before. OpenCode inside tmux is not found: tmux runs
 /// its panes under its own server, not under the tab's shell.
 public enum IDEPeer {
     /// How processes are looked up: the kernel's (libproc), or a stand-in for the tests.

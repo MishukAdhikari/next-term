@@ -89,6 +89,9 @@ extension ImportVSCode {
             "git.pull": "gitUpdate:",
             "git.fetch": "gitFetch:",
             "git.checkout": "showBranches:",
+            // Its Markdown preview and back: here the file in front between Live Preview and its source.
+            "markdown.showPreview": "toggleMarkdownPreview:",
+            "markdown.showSource": "toggleMarkdownPreview:",
         ]
         for position in ["Bottom", "Right", "Left", "Top"] {
             map["workbench.action.positionPanel" + position] = "setTerminalPosition:" + position.lowercased()

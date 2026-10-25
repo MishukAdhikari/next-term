@@ -175,7 +175,8 @@ extension SelfTest {
         // Flags in the test folder: "deny" makes ssh refuse the login (a wrong password), "unreachable"
         // fails the network, "drop" ends a tab's connection (255) once its remote command ends. Only a
         // tab's ssh (-t) takes "drop": a status check (-T) running at that moment must not use it up.
-        // "slow" holds each check (not a tab's ssh) 2 s before it runs.
+        // "slow" holds each check (not a tab's ssh) 2 s before it runs. "loginsh" makes the host's login shell a stand-in
+        // that runs what it is given (the herdr checks, SelfTestRemoteHerdr).
         let fakeSSH = bin.appendingPathComponent("ssh")
         let script = """
             #!/bin/bash
@@ -196,6 +197,7 @@ extension SelfTest {
             if [ -e "$B/unreachable" ]; then echo 'ssh: connect to host selftest.invalid port 22: Connection refused' >&2; exit 255; fi
             if [ -z "$tty" ] && [ -e "$B/slow" ]; then sleep 2; fi
             export HOME=\(RemoteShell.quote(home.path)) SHELL=/bin/zsh PATH=\(RemoteShell.quote(bin.path)):/usr/bin:/bin:/usr/sbin:/sbin TMUX_TMPDIR="$B/tmux"
+            if [ -e "$B/loginsh" ]; then SHELL="$B/shells/zsh"; fi
             unset ZDOTDIR NEXTTERM_USER_ZDOTDIR
             cd "$HOME"
             /bin/zsh -f -c "$cmd"
@@ -256,16 +258,21 @@ extension SelfTest {
               "remote: once connected, the tab's mark and its spoken label say so", "\(up.link?.rawValue ?? "no mark") / \(up.spoken)")
         check(plain.paneSummary == "\(plain.title): \(plain.stateDescription)", "remote: and a split tab's line for the pane gives its state",
               plain.paneSummary)
-        // The window title names the host once: "selftest: app — …", or "sleep — on selftest — …" (below).
+        // The window title names the host once, first: this window has no project, so with the server's tab in front it is
+        // named after the server, "selftest — app", or "selftest — sleep" (below), never "selftest — selftest: app".
         // It names the editor's file while that has the keyboard, so the tab takes it first.
         c.window?.makeFirstResponder(plain.view)
         c.refresh()
         check(c.activeTab === plain && !c.isEditorFocused, "remote: the new remote tab has the keyboard",
               "\(c.activeTab?.title ?? "no tab") / \(c.window?.firstResponder.map { "\(type(of: $0))" } ?? "nothing")")
         let windowTitle = c.window?.title ?? ""
-        check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest"
-              && windowTitle.hasPrefix("selftest: ") != windowTitle.contains("— on selftest —"),
-              "remote: the sidebar says its files are this Mac's, and the window title names the host once",
+        // With a project (a check before may have given the window one), the project first and the host after the tab.
+        let named: String = c.project == nil ? "selftest" : c.projectTitle
+        let tabTitle: String = AgentTitle.withoutSpinnerFrame(plain.title)
+        let hostOnce: Bool = windowTitle == WindowTitle.make(name: named, front: tabTitle, host: "selftest")
+            && windowTitle.hasPrefix(named + " — ") && (c.project != nil || c.windowKind == .server)
+        check(!c.sidebar.remoteNote.isHidden && c.sidebar.remoteNote.shown?.host == "selftest" && hostOnce,
+              "remote: the sidebar says its files are this Mac's, and the window title names the host once, first in a window with no project",
               "\(c.sidebar.remoteNote.shown?.host ?? "no note") / \(windowTitle)")
         let local = c.groups.firstIndex { $0.focused.remote == nil }
         check(local.map { c.tabBar.shownRemoteLink(at: $0) == nil && !(c.tabBar.spokenLabel(at: $0) ?? "").contains("Remote") } ?? true,
@@ -273,6 +280,7 @@ extension SelfTest {
         check(await wait(20) { plain.remoteReady }, "remote: the host reports the tab's shell at its prompt",
               plain.screenTail(6).joined(separator: " | "))
         check(!plain.view.opensFiles, "remote: ⌘-click does not open this Mac's files from a remote tab")
+        check(plain.view.passesOtherButtons(), "remote: a plain remote tab passes right and middle clicks to a program that reads the mouse")
         // Its right-click menu: a web link's items, never a path's (a path there names a file on the host).
         let onPath = c.terminalMenu(for: plain, link: "/etc/hosts").items.first?.title
         let onWeb = c.terminalMenu(for: plain, link: "https://example.com/docs").items.first?.title
@@ -283,8 +291,9 @@ extension SelfTest {
               "\(plain.status.running) \(plain.status.program)")
         c.window?.makeFirstResponder(plain.view)
         c.refresh()
-        check(c.activeTab === plain && c.window?.title.contains(" — on selftest — ") == true,
-              "remote: while a program runs, the window title says on which host", c.window?.title ?? "")
+        let running: String = WindowTitle.make(name: named, front: "sleep", host: "selftest") // "selftest — sleep"
+        check(c.activeTab === plain && c.window?.title == running,
+              "remote: while a program runs, the window title says what runs, and on which host", c.window?.title ?? "")
         check(await wait(10) { !plain.status.running }, "remote: and when it ends")
         plain.view.send(txt: "sleep 60 &\r")
         check(await wait(8) { plain.closeWarning?.contains("sleep") == true }, "remote: closing warns about the shell's background jobs on the host",
@@ -452,6 +461,9 @@ extension SelfTest {
             check(false, "remote MCP: `nxtrm mcp` starts")
         }
         c.remove(plain)
+        await remoteHerdrChecks(c, host: host, base: base, home: home, bin: bin, flag: flag)
+        await herdrAgentChecks(c, host: host, base: base, home: home, bin: bin, flag: flag)
+        await localHerdrChecks(c, base: base)
 
         // tmux: the session outlives the connection, and the tab reattaches to it by itself.
         guard tmux != nil else {
@@ -467,6 +479,8 @@ extension SelfTest {
         kept.view.send(txt: "export NT_MARK=kept-\(getpid()); echo $NT_MARK\r")
         check(await wait(8) { kept.screenTail(20).contains { $0.contains("kept-\(getpid())") } }, "remote tmux: typed commands run in the session")
         check(sh("tmux -L nextterm list-sessions -F '#{session_name}'").contains(session), "remote tmux: the session is on the host's private tmux server")
+        // Its `mouse on` is for the wheel: tmux's own right-click menu (splits, kills) never opens in a tab.
+        check(!kept.view.passesOtherButtons(), "remote tmux: right and middle clicks stay Next Term's in a tab its own tmux keeps")
         await pause(10.5) // a connection that worked for a while reconnects by itself when it drops
         var clientPID: Int32?
         _ = await wait(10) {

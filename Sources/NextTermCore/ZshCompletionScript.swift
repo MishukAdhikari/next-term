@@ -204,6 +204,7 @@ __nextterm_cframe() {
 __nextterm_ckeywidget() {
   emulate -L zsh -o extendedglob
   __nextterm_cframe || return 0
+  local before=$BUFFER at=$CURSOR
   case $__nextterm_ck in
     (t) __nextterm_ctab $__nextterm_cid ;;
     (k) if [[ ${__nextterm_cf[1]-} == l ]]; then __nextterm_ctakeline
@@ -214,6 +215,12 @@ __nextterm_ckeywidget() {
     (c) __nextterm_cconfig ;;
     (s) __nextterm_csync $__nextterm_cid ;;
   esac
+  # zsh-autosuggestions never wraps these widgets, so a line changed here keeps the old suggestion, which → would then
+  # put into the line: it is asked for one that fits the new line (never autosuggest-clear: a lookup still running would
+  # then add the whole old suggestion).
+  if [[ $BUFFER != $before || $CURSOR != $at ]] && (( ${+widgets[autosuggest-fetch]} && ! ${+_ZSH_AUTOSUGGEST_DISABLED} )); then
+    zle autosuggest-fetch
+  fi
   return 0
 }
 
@@ -679,7 +686,8 @@ __nextterm_ctake() {
   return 0
 }
 
-# At each prompt: the private key bound in every keymap, and our line hooks back if a plugin replaced them.
+# At each prompt: the private key bound in every keymap, and our line hooks back if a plugin replaced them (its widget
+# kept).
 __nextterm_cprecmd() {
   emulate -L zsh
   local km hook fn
@@ -689,6 +697,8 @@ __nextterm_cprecmd() {
                  line-finish __nextterm_cfinish isearch-update __nextterm_cisearchhook isearch-exit __nextterm_cisearchexit; do
     zstyle -g list zle-$hook widgets
     [[ ${widgets[zle-$hook]-} == user:azhw:zle-$hook && -n ${(M)list:#<->:$fn} ]] && continue
+    # A widget that replaced the hook stays, and runs first: ours out of the list, so the re-add keeps it as entry 0.
+    [[ -n ${(M)list:#<->:$fn} ]] && add-zle-hook-widget -d $hook $fn
     add-zle-hook-widget $hook $fn
   done
   __nextterm_cquietstart

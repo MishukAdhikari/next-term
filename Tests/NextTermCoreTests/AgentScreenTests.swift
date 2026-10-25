@@ -1,6 +1,15 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NextTermCore
+
+/// What `AgentScreen.activity` reads, checked to read the same in an OpenCode tab: OpenCode's own shapes never change
+/// what another agent's screen says.
+private func screenActivity(_ lines: [String]) -> AgentActivity {
+    let read = AgentScreen.activity(screenLines: lines)
+    #expect(AgentScreen.activity(screenLines: lines, opencode: true) == read, "\(lines.suffix(3))")
+    return read
+}
 
 @Suite struct AgentScreenTests {
     @Test func claudeCodeWorkingAndIdle() {
@@ -14,7 +23,7 @@ import Testing
             "╰──────────────────────────────────────────╯",
             "  ⏵⏵ auto-accept edits on (shift+tab to cycle)",
         ]
-        #expect(AgentScreen.activity(screenLines: working) == .working)
+        #expect(screenActivity(working) == .working)
         let idle = [
             "⏺ Done. The login test passes now.",
             "",
@@ -23,7 +32,7 @@ import Testing
             "╰──────────────────────────────────────────╯",
             "  ? for shortcuts                 ctx 31% · 14:02:17", // a status line clock keeps redrawing
         ]
-        #expect(AgentScreen.activity(screenLines: idle) == .idle)
+        #expect(screenActivity(idle) == .idle)
     }
 
     @Test func claudeCodePermissionPrompt() {
@@ -37,7 +46,7 @@ import Testing
             "│   3. No, and tell Claude what to do differently (esc)        │",
             "╰──────────────────────────────────────────────────────────────╯",
         ]
-        #expect(AgentScreen.activity(screenLines: asking) == .asking("Do you want to make this edit to login.ts?"))
+        #expect(screenActivity(asking) == .asking("Do you want to make this edit to login.ts?"))
     }
 
     @Test func codexApprovalAndWorking() {
@@ -48,23 +57,23 @@ import Testing
             "  2. Yes, and don't ask again for commands that start with `npm`",
             "  3. No, and tell Codex what to do differently (esc)",
         ]
-        #expect(AgentScreen.activity(screenLines: asking) == .asking("Would you like to run the following command?"))
-        #expect(AgentScreen.activity(screenLines: ["• Working (5s • esc to interrupt)", "", "› Ask Codex to do anything"]) == .working)
+        #expect(screenActivity(asking) == .asking("Would you like to run the following command?"))
+        #expect(screenActivity(["• Working (5s • esc to interrupt)", "", "› Ask Codex to do anything"]) == .working)
     }
 
     @Test func commandCodeAndGemini() {
         let cc = ["Do you want to run npm install?", "❯ Yes", "  No", "↑↓ navigate · Enter to select · Esc to cancel"]
-        #expect(AgentScreen.activity(screenLines: cc) == .asking("Do you want to run npm install?"))
-        #expect(AgentScreen.activity(screenLines: ["⠋ Thinking esc to interrupt • 3s"]) == .working)
-        #expect(AgentScreen.activity(screenLines: ["⠏ Reading files... (esc to cancel, 12s)"]) == .working)
+        #expect(screenActivity(cc) == .asking("Do you want to run npm install?"))
+        #expect(screenActivity(["⠋ Thinking esc to interrupt • 3s"]) == .working)
+        #expect(screenActivity(["⠏ Reading files... (esc to cancel, 12s)"]) == .working)
     }
 
     @Test func aQuestionWithoutChoicesIsNotADecision() {
         // The agent's prose may ask a question; without choices on screen it is not blocked on you.
-        #expect(AgentScreen.activity(screenLines: ["Do you want to refactor the parser next?", "> "]) == .idle)
+        #expect(screenActivity(["Do you want to refactor the parser next?", "> "]) == .idle)
         // Only the bottom of the screen counts: an old prompt scrolled far up is history.
         let old = ["Do you want to proceed?", "❯ 1. Yes"] + Array(repeating: "output", count: 40) + ["> "]
-        #expect(AgentScreen.activity(screenLines: old) == .idle)
+        #expect(screenActivity(old) == .idle)
     }
 }
 
@@ -92,7 +101,7 @@ import Testing
     ]
 
     @Test func theModelsQuestionIsADecision() throws {
-        #expect(AgentScreen.activity(screenLines: Self.form) == .asking("Which approach should I take for the parser?"))
+        #expect(screenActivity(Self.form) == .asking("Which approach should I take for the parser?"))
         let menu = try #require(AgentScreen.menu(screenLines: Self.form))
         #expect(menu.question == "Which approach should I take for the parser?")
         // The model's options only: the row for an answer of your own and "Chat about this" are not choices.
@@ -105,7 +114,7 @@ import Testing
         let moved = try #require(AgentScreen.menu(screenLines: other))
         #expect(moved.highlighted == 3 && moved.keys(toPick: 0) == ["up", "up", "up", "enter"])
         // Below a long transcript: the form is still read in full.
-        #expect(AgentScreen.activity(screenLines: Array(repeating: "output", count: 60) + Self.form) == .asking("Which approach should I take for the parser?"))
+        #expect(screenActivity(Array(repeating: "output", count: 60) + Self.form) == .asking("Which approach should I take for the parser?"))
     }
 
     @Test func aLongQuestionWrapsWithAGutter() throws {
@@ -133,12 +142,12 @@ import Testing
             "Vim · Esc to cancel",
         ]
         let asked = "How should the website deploy when a release is tagged on the main branch of the repository?"
-        #expect(AgentScreen.activity(screenLines: narrow) == .asking(asked))
+        #expect(screenActivity(narrow) == .asking(asked))
         let menu = try #require(AgentScreen.menu(screenLines: narrow))
         #expect(menu.choices == ["On every tag", "By hand", "Nightly", "Never"] && menu.highlighted == 4)
         // The options reach above what the host passed: still a decision, but no choices to pick.
         let cut = Array(narrow.suffix(14))
-        #expect(AgentScreen.activity(screenLines: cut) == .asking(AgentScreen.formFallback))
+        #expect(screenActivity(cut) == .asking(AgentScreen.formFallback))
         #expect(AgentScreen.menu(screenLines: cut) == nil)
     }
 
@@ -161,7 +170,7 @@ import Testing
             "",
             "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel",
         ]
-        #expect(AgentScreen.activity(screenLines: preview) == .asking("Which layout do you prefer for the settings page?"))
+        #expect(screenActivity(preview) == .asking("Which layout do you prefer for the settings page?"))
         let menu = try #require(AgentScreen.menu(screenLines: preview))
         // No row of your own beside a preview; the numbered line inside the preview is not an option.
         #expect(menu.choices == ["Sidebar", "Tabs"] && menu.highlighted == 1)
@@ -183,7 +192,7 @@ import Testing
             "",
             "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
         ]
-        #expect(AgentScreen.activity(screenLines: first) == .asking("What should I build next?"))
+        #expect(screenActivity(first) == .asking("What should I build next?"))
         #expect(try #require(AgentScreen.menu(screenLines: first)).choices == ["Remote tabs", "Import"])
         let several = [
             "←  ☐ Next  ☐ Scope  ✔ Submit  →",
@@ -204,7 +213,7 @@ import Testing
             "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
         ]
         // A decision, but one choice and Return does not answer it: no menu to answer with.
-        #expect(AgentScreen.activity(screenLines: several) == .asking("Which parts should the release include?"))
+        #expect(screenActivity(several) == .asking("Which parts should the release include?"))
         #expect(AgentScreen.menu(screenLines: several) == nil)
         let review = [
             "←  ☐ Next  ☐ Scope  ✔ Submit  →",
@@ -218,7 +227,7 @@ import Testing
             "❯ 1. Submit answers",
             "  2. Cancel",
         ]
-        #expect(AgentScreen.activity(screenLines: review) == .asking("Ready to submit your answers?"))
+        #expect(screenActivity(review) == .asking("Ready to submit your answers?"))
         let menu = try #require(AgentScreen.menu(screenLines: review))
         #expect(menu.choices == ["Submit answers", "Cancel"] && menu.highlighted == 0)
     }
@@ -238,7 +247,7 @@ import Testing
             "────────────────────────────────────────────────────────",
             "  ⏸ manual mode on · ? for shortcuts · ← for agents",
         ]
-        #expect(AgentScreen.activity(screenLines: answered) == .idle)
+        #expect(screenActivity(answered) == .idle)
         let prose = [
             "⏺ Which approach should I take for the parser?",
             "",
@@ -252,14 +261,14 @@ import Testing
             "────────────────────────────────────────────────────────",
             "  ? for shortcuts",
         ]
-        #expect(AgentScreen.activity(screenLines: prose) == .idle)
+        #expect(screenActivity(prose) == .idle)
         #expect(AgentScreen.menu(screenLines: prose) == nil)
         // Another picker with the same hint, not a question to the user from the model.
         let picker = ["Select model", "", "❯ 1. Default (recommended)", "  2. Opus", "", "Enter to select · Esc to exit"]
-        #expect(AgentScreen.activity(screenLines: picker) == .idle)
+        #expect(screenActivity(picker) == .idle)
         // Such a list in the transcript with that picker open under it: the hint is the picker's, not the list's.
         let both = Array(prose.dropLast(3)) + picker
-        #expect(AgentScreen.activity(screenLines: both) == .idle)
+        #expect(screenActivity(both) == .idle)
         #expect(AgentScreen.menu(screenLines: both) == nil)
     }
 }
@@ -353,7 +362,7 @@ import Testing
         rang.commandStarted("claude", at: 0)
         rang.observe(agentScreen: .working, at: 0)
         rang.observe(agentScreen: .idle, at: 10)
-        rang.bell()
+        rang.bell(at: 10)
         #expect(rang.takeNotice()?.topic == .programAlert)
         rang.tick(at: 11)
         #expect(rang.takeNotice()?.topic == .agentFinished)
@@ -490,5 +499,114 @@ import Testing
     @Test func noMenuWithoutAQuestion() {
         #expect(AgentScreen.menu(screenLines: ["⏺ Done.", "> "]) == nil)
         #expect(AgentScreen.menu(screenLines: ["Do you want to refactor the parser next?", "> "]) == nil)
+    }
+}
+
+@Suite struct AgentQuestionMaskTests {
+    static let value = "Rk7vQp2xLm9nWz4cTb8hYq3sJ6dF"
+
+    static func mask() -> SecretMask {
+        let key = SymmetricKey(size: .bits256)
+        return SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
+    }
+
+    /// Whether `text` shows any 5 characters in a row of the stored value.
+    static func showsPart(_ text: String) -> Bool {
+        let characters = Array(value)
+        return (0...(characters.count - 5)).contains { text.contains(String(characters[$0..<$0 + 5])) }
+    }
+
+    /// A question is cut to 200 characters. A stored key across the cut is masked first, so none of it shows: cut first,
+    /// its start was left with no mark to match.
+    @Test func aKeyAcrossTheQuestionsCutIsMaskedFirst() throws {
+        let filler = String(repeating: "x", count: 160) // the key at 179..<207, across the cut at 200
+        let asking = ["Do you want to use " + filler + Self.value + "?", "❯ 1. Yes", "  2. No"]
+        let mask = Self.mask()
+        let asked = "Do you want to use " + filler + "•••?"
+        #expect(AgentScreen.activity(screenLines: asking, mask: mask) == .asking(asked))
+        let menu = try #require(AgentScreen.menu(screenLines: asking, mask: mask))
+        #expect(menu.question == asked && menu.choices == ["Yes", "No"])
+        guard case .asking(let plain) = AgentScreen.activity(screenLines: asking, mask: .empty) else {
+            return #expect(Bool(false), "no question read")
+        }
+        #expect(Self.showsPart(mask.mask(plain))) // masked after the cut, the key's start shows
+    }
+
+    /// A form's question that wraps with a gutter is joined from its rows. A key the wrap split is masked over the rows
+    /// first, so neither part shows.
+    @Test func aKeyAFormsWrapSplitIsMasked() throws {
+        let split = Self.value.index(Self.value.startIndex, offsetBy: 14)
+        let form = [
+            "────────────────────────────────────────────────────────",
+            " ☐ Key",
+            "",
+            "│ Should the deploy use the key " + Self.value[..<split],
+            "│ " + Self.value[split...] + " from the vault?",
+            "",
+            "❯ 1. Yes",
+            "  2. No",
+            "  3. Type something.",
+            "────────────────────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        let asked = "Should the deploy use the key ••• from the vault?"
+        let mask = Self.mask()
+        #expect(AgentScreen.activity(screenLines: form, mask: mask) == .asking(asked))
+        #expect(try #require(AgentScreen.menu(screenLines: form, mask: mask)).question == asked)
+        guard case .asking(let plain) = AgentScreen.activity(screenLines: form, mask: .empty) else {
+            return #expect(Bool(false), "no question read")
+        }
+        #expect(Self.showsPart(mask.mask(plain))) // joined first, with a space in the key, no mark matched
+    }
+
+    /// A form with no gutter, a key split across its question's rows and another across a choice's: the screen read for
+    /// an agent is masked over whole lines, where the key's two halves are "••• •••", but the tab's question, read from
+    /// the screen as it is, has one "•••". The menu is matched on the rows the question was read from, like with like, and
+    /// its choices come from the masked rows, so they are given, and show none of the key.
+    @Test func aFormsChoicesAreReadFromMaskedRowsAndMatchedOnTheQuestionsOwn() throws {
+        let value = Self.value
+        let split = value.index(value.startIndex, offsetBy: 14)
+        let choiceSplit = value.index(value.startIndex, offsetBy: 20)
+        let form: [String] = [
+            "────────────────────────────────────────────────────────",
+            " ☐ Key",
+            "",
+            "Should the deploy use the key " + String(value[..<split]),
+            String(value[split...]) + " from the vault?",
+            "",
+            "❯ 1. Yes, use " + String(value[..<choiceSplit]),
+            String(value[choiceSplit...]),
+            "  2. No",
+            "  3. Type something.",
+            "────────────────────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        let mask = Self.mask()
+        let shown = mask.mask(rows: form)
+        let asked = "Should the deploy use the key ••• from the vault?"
+        #expect(AgentScreen.activity(screenLines: form, mask: mask) == .asking(asked))
+        // Matched on the masked rows, as before: their question differs, and the choices were dropped.
+        #expect(try #require(AgentScreen.menu(screenLines: shown, mask: mask)).question != asked)
+        // Read from the rows as they are, a choice holds the key's head, which no mark matches alone.
+        let plain = try #require(AgentScreen.menu(screenLines: form, mask: mask))
+        #expect(Self.showsPart(plain.choices.map { mask.mask($0) }.joined()))
+        let menu = try #require(AgentScreen.menu(asking: asked, screenLines: form, shown: shown, mask: mask))
+        #expect(menu == AgentMenu(question: asked, style: .list, choices: ["Yes, use •••", "No"], highlighted: 0))
+        #expect(!Self.showsPart(menu.choices.joined()))
+        #expect(AgentScreen.menu(asking: "Should the deploy stop?", screenLines: form, shown: shown, mask: mask) == nil)
+    }
+
+    /// The masked rows must read as the same menu, its choices, style and cursor: otherwise nothing is given.
+    @Test func aMenuTheMaskedRowsReadOtherwiseIsNotGiven() {
+        let asking = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+        let mask = Self.mask()
+        #expect(AgentScreen.menu(asking: "Do you want to proceed?", screenLines: asking, shown: asking, mask: mask)?.choices == ["Yes", "No"])
+        let moved = ["Do you want to proceed?", "  1. Yes", "❯ 2. No"]
+        #expect(AgentScreen.menu(asking: "Do you want to proceed?", screenLines: asking, shown: moved, mask: mask) == nil)
+        #expect(AgentScreen.menu(asking: "Do you want to proceed?", screenLines: asking, shown: ["Do you want to proceed?"], mask: mask) == nil)
     }
 }

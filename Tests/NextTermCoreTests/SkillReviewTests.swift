@@ -388,12 +388,19 @@ import Testing
     }
 
     @Test(arguments: ["claude plugin install x", "Run /plugin install x@m in Claude Code.", "gemini extensions install https://github.com/example/ext",
-                      "gemini extension install x", "codex plugin add x"])
+                      "gemini extension install x", "codex plugin add x", "run `opencode plugin oh-my-tool -g`", "`opencode plugin add x`",
+                      "opencode plug @scope/tool", "opencode plugin superpowers --global", "opencode plugin tool@1.2.0",
+                      "npx opencode-ai plugin oh-my-tool", "bunx opencode-ai@1.19.0 plugin add x", "opencode2 plugin add x",
+                      "npx @opencode/cli plugin add x", "Run `opencode plugin superpowers` first.", "```\nopencode plugin superpowers\n```",
+                      "Then:\n$ opencode plugin superpowers"])
     func pluginInstallsWarn(_ line: String) {
         #expect(Self.texts(line).contains(Self.installsPlugin), "\(Self.texts(line))")
     }
 
-    @Test(arguments: ["The plugin installs itself.", "claude plugin installed", "a Claude plugin installer", "codex plugin list"])
+    @Test(arguments: ["The plugin installs itself.", "claude plugin installed", "a Claude plugin installer", "codex plugin list",
+                      "an OpenCode plugin that formats code", "the opencode plugin system", "opencode plugin list", "opencode plugin --help",
+                      "opencode plugins", "myopencode plugin oh-my-tool", "`opencode plugin list`", "see `opencode plugin` for more",
+                      "```\nopencode plugin ls\n```"])
     func otherPluginWordsDoNot(_ line: String) {
         #expect(!Self.texts(line).contains(Self.installsPlugin), "\(Self.texts(line))")
     }
@@ -454,10 +461,14 @@ import Testing
         let parts = String(repeating: "a-", count: 250_000) + " mcp"
         let runners = String(repeating: "{" + String(repeating: #""command":"npx""#, count: 130), count: 500)
         let downloads = String(repeating: "curl ", count: 20_000), decodes = String(repeating: "base64 -d x | tr ", count: 6_000)
+        // About 1 MB each of OpenCode's name, and of its plugin command with no module after it.
+        let opencode = String(repeating: "opencode ", count: 115_000), plugins = String(repeating: "opencode plugin ", count: 65_000)
+        // And of the forms told by where they stand: in a code span, and alone on a line.
+        let spans = String(repeating: "`opencode plugin `", count: 60_000), lines = String(repeating: "\nopencode plugin a b", count: 50_000)
         let patterns = [SkillReview.mcpAdd, SkillReview.pluginInstall, SkillReview.downloadAndRun, SkillReview.decodeAndRun]
             + SkillReview.quotedServerPatterns.map(\.pattern)
         let start = Date()
-        for text in [parts, runners, downloads, decodes] {
+        for text in [parts, runners, downloads, decodes, opencode, plugins, spans, lines] {
             for pattern in patterns { #expect(text.range(of: pattern, options: .regularExpression) == nil) }
         }
         // About half a second alone; the read-forward forms took 40 s and more. The margin is for a loaded machine.

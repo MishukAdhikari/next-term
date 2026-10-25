@@ -16,10 +16,119 @@ final class NextTermView: LocalProcessTerminalView {
     var beepAllowed = true
     /// False once the shell has ended: there is nothing left to send keystrokes to.
     var acceptsInput = true
+    /// An agent opened this tab over MCP and the user hasn't chosen it yet: it takes no keyboard (TerminalWindow refuses
+    /// it) until they click it, pick its tab, move to its pane, or paste or drop into it, so nothing meant for the tab
+    /// they were typing in lands in an agent's prompt (AgentArrival). A hint at its top says so.
+    var awaitsChoice = false {
+        didSet { if awaitsChoice != oldValue { showChoiceHint() } }
+    }
+    /// What the hint says.
+    var choiceHint = "An agent opened this tab. Click to type here." {
+        didSet { hintView?.stringValue = choiceHint }
+    }
+    private var hintView: NSTextField?
+
+    private func showChoiceHint() {
+        hintView?.removeFromSuperview()
+        hintView = nil
+        guard awaitsChoice else { return }
+        let hint = NSTextField(labelWithString: choiceHint)
+        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        hint.textColor = .white
+        hint.drawsBackground = true
+        hint.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        hint.alignment = .center
+        hint.wantsLayer = true
+        hint.layer?.cornerRadius = 5
+        hint.layer?.masksToBounds = true
+        hint.setAccessibilityLabel(choiceHint)
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hint)
+        NSLayoutConstraint.activate([
+            hint.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            hint.centerXAnchor.constraint(equalTo: centerXAnchor),
+            hint.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+        ])
+        hintView = hint
+    }
+
+    /// A line over the terminal's top for a few seconds, in the hint's style: what Next Term could not do in a program
+    /// that draws the whole screen (herdr), where nothing may be written into the terminal itself.
+    func showNote(_ text: String) {
+        noteView?.removeFromSuperview()
+        let note = NSTextField(labelWithString: SecretMask.current.mask(text))
+        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        note.textColor = .white
+        note.drawsBackground = true
+        note.backgroundColor = NSColor.black.withAlphaComponent(0.72)
+        note.lineBreakMode = .byTruncatingTail
+        note.wantsLayer = true
+        note.layer?.cornerRadius = 5
+        note.layer?.masksToBounds = true
+        note.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(note)
+        NSLayoutConstraint.activate([
+            note.topAnchor.constraint(equalTo: topAnchor, constant: awaitsChoice ? 30 : 6),
+            note.centerXAnchor.constraint(equalTo: centerXAnchor),
+            note.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+        ])
+        noteView = note
+        NSAccessibility.post(element: note, notification: .announcementRequested,
+                             userInfo: [.announcement: note.stringValue, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak note] in
+            guard let note, self?.noteView === note else { return }
+            note.removeFromSuperview()
+            self?.noteView = nil
+        }
+    }
+
+    private var noteView: NSTextField?
+
+    /// Suggestions while typing hide on these (GhostSession): a paste, a scroll, a selection, marked text (an input method),
+    /// and the screen switched.
+    var onPaste: (() -> Void)?
+    var onScrolled: (() -> Void)?
+    var onSelection: (() -> Void)?
+    var onMarkedText: (() -> Void)?
+    var onScreenSwitched: (() -> Void)?
+
+    /// The alternate screen on or off (DECSET or DECRST 1049, 1047, 47), or a full reset: SwiftTerm says so as it parses
+    /// them, whatever fed the bytes, the shell's output (`dataReceived`) or text Next Term feeds in itself (`feed`), which
+    /// never reaches `onOutput`.
+    override func bufferActivated(source: Terminal) {
+        super.bufferActivated(source: source)
+        onScreenSwitched?()
+    }
+
+    override func scrolled(source: TerminalView, position: Double) {
+        super.scrolled(source: source, position: position)
+        onScrolled?()
+    }
+
+    override func selectionChanged(source: Terminal) {
+        super.selectionChanged(source: source)
+        onSelection?()
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onMarkedText?()
+    }
+
+    /// No inline predictions from macOS beside or in place of the suggestion while typing.
+    @available(macOS 14.0, *)
+    @objc var inlinePredictionType: NSTextInputTraitType {
+        get { .no }
+        set {}
+    }
+
     /// Takes keystrokes before the program would (a remote tab waiting to reconnect); true: handled.
     var interceptInput: ((ArraySlice<UInt8>) -> Bool)?
     /// Tab completion's ordered writer (CompletionSession): true, the write waits and goes out later.
     var completionGate: ((ArraySlice<UInt8>) -> Bool)?
+    /// Each write `inputWrites` counts, as it comes, before that gate: a line it ends is one Next Term can no longer name
+    /// for zsh's history (TerminalTab.history).
+    var onWrite: ((ArraySlice<UInt8>) -> Void)?
     /// Writes into the shell other than the terminal's own answers: every key, paste and drop, and all text anything types
     /// into the tab (Insert Path, a suggested command, Send to Agent, MCP, the restore itself). A restored action types
     /// only onto a line nothing else wrote to (`RestoreLayout.LineWatch`), whether or not what wrote said it was the user.
@@ -89,13 +198,17 @@ final class NextTermView: LocalProcessTerminalView {
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         answering = true
         defer { answering = false }
-        super.send(source: source, data: data)
+        // A right or middle release being reported: SwiftTerm 1.20 sends every SGR release as the left button's.
+        super.send(source: source, data: releasing.map { MouseReport.sgrRelease(data, button: $0) } ?? data)
     }
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if let interceptInput, interceptInput(data) { return }
         guard acceptsInput else { return }
-        if !answering { inputWrites += 1 }
+        if !answering {
+            inputWrites += 1
+            onWrite?(data)
+        }
         if let completionGate, completionGate(data) { return }
         onInput?()
         super.send(source: source, data: Self.withoutScreenChecksum(data))
@@ -125,8 +238,14 @@ final class NextTermView: LocalProcessTerminalView {
     /// clipboard (from OSC 52, a web page or a file name) could otherwise end bracketed paste early and
     /// run the rest as typed input.
     override func paste(_ sender: Any) {
+        // An image alone (a screenshot) in a tab on a server: copied there first (RemoteDrop), its path pasted.
+        if acceptsInput, let onImagePaste, let image = Self.pastedImage(NSPasteboard.general) {
+            onKeyboard?()
+            return onImagePaste(image)
+        }
         guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         onKeyboard?()
+        onPaste?()
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
@@ -219,28 +338,51 @@ final class NextTermView: LocalProcessTerminalView {
         droppedPaths(sender).isEmpty ? [] : .copy
     }
 
+    /// A drop on a tab on a server: its files are copied there first (RemoteDrop), and their paths there pasted.
+    var onRemoteDrop: (([URL]) -> Void)?
+    /// ⌘V of an image alone (PNG data) in a tab on a server.
+    var onImagePaste: ((Data) -> Void)?
+
+    /// The pasteboard's image as PNG when it holds one and no text or file (a screenshot copied to the clipboard).
+    static func pastedImage(_ pasteboard: NSPasteboard) -> Data? {
+        guard pasteboard.string(forType: .string) == nil,
+              pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])?.isEmpty ?? true else { return nil }
+        if let png = pasteboard.data(forType: .png) { return png }
+        guard let tiff = pasteboard.data(forType: .tiff), let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let paths = droppedPaths(sender)
         guard !paths.isEmpty else { return false }
         onKeyboard?() // a drop is the user's input, as a key or a paste is
+        if let onRemoteDrop {
+            onRemoteDrop(paths.map { URL(fileURLWithPath: $0) })
+            window?.makeFirstResponder(self)
+            return true
+        }
         typeIn(paths.map(ShellQuote.quote).joined(separator: " ") + " ")
         window?.makeFirstResponder(self)
         return true
     }
 
     /// Types text at the prompt as a paste: with bracketed paste on (zsh's default), the line editor
-    /// inserts it literally and never runs it, even if it contained a newline.
-    func typeIn(_ text: String) {
+    /// inserts it literally and never runs it, even if it contained a newline. Returns the text as typed.
+    @discardableResult
+    func typeIn(_ text: String) -> String {
         let clean = String(text.unicodeScalars.filter { !ShellQuote.isControl($0) })
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + clean + "\u{1b}[201~" : clean)
+        return clean
     }
 
     /// Types text as a paste that keeps its line breaks (a prompt for an agent): other control
-    /// characters are dropped, so the text cannot end the paste early or press keys.
-    func typeText(_ text: String) {
+    /// characters are dropped, so the text cannot end the paste early or press keys. Returns the text as typed.
+    @discardableResult
+    func typeText(_ text: String) -> String {
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+        return lines
     }
 
     // MARK: links (⌘-click): web and mail links open; files open safely; other schemes are refused
@@ -318,6 +460,55 @@ final class NextTermView: LocalProcessTerminalView {
         super.mouseUp(with: event)
     }
 
+    /// SwiftTerm 1.20 snaps its cell width to the pixel grid only when the font (or the line spacing) is set, at the
+    /// scale of the window then, or of the main screen before there is one: on a screen of another scale it drew and
+    /// hit-tested cells snapped for the old one, and a table's box lines drifted from its text a little more each column.
+    /// Setting the font again snaps them for this screen. AppKit calls this also when the view first goes into a window
+    /// of another scale (a tab's font is set before it has one); SelfTestCellSnap checks both.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let scale = window?.backingScaleFactor else { return }
+        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
+        let snapped = max(1, (advance * scale).rounded() / scale)
+        // Only when it differs: setting the font clears the selection.
+        if abs(snapped - cellSize.width) > 0.001 { font = font }
+    }
+
+    // MARK: right and middle buttons, for a program that reads the mouse (TerminalMouse.swift)
+
+    /// False for a tab Next Term's own tmux keeps: its `mouse on` is there for the wheel, and tmux's menu (splits,
+    /// kills) has no place in a tab, so a right-click there stays Next Term's menu.
+    var passesOtherButtons: () -> Bool = { true }
+    /// The buttons (xterm's numbers) whose press went to the program: only their drags and release follow it.
+    var pressedForProgram: Set<Int> = []
+    /// The button a release is being sent for: send(source: Terminal) puts it back into the SGR release.
+    var releasing: Int?
+
+    // super: Next Term's menu (through menu(for:)) for a right-click, nothing for a middle one.
+    override func rightMouseDown(with event: NSEvent) {
+        if !reportOther(event, .press) { super.rightMouseDown(with: event) }
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        if !reportOther(event, .drag) { super.rightMouseDragged(with: event) }
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        if !reportOther(event, .release) { super.rightMouseUp(with: event) }
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if !reportOther(event, .press) { super.otherMouseDown(with: event) }
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        if !reportOther(event, .drag) { super.otherMouseDragged(with: event) }
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        if !reportOther(event, .release) { super.otherMouseUp(with: event) }
+    }
+
     // MARK: right-click
 
     /// The window's right-click menu for this terminal, with the link or path under the pointer if there is
@@ -339,13 +530,9 @@ final class NextTermView: LocalProcessTerminalView {
     func link(at point: NSPoint) -> String? {
         let terminal = getTerminal()
         guard terminal.rows > 0, terminal.cols > 0 else { return nil }
-        // SwiftTerm keeps its cell size to itself: the height from the rows, the width from the font, as it does.
-        let cellHeight = getOptimalFrameSize().height / CGFloat(terminal.rows)
-        let scale = window?.backingScaleFactor ?? 2
-        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
-        let cellWidth = max(1, (advance * scale).rounded() / scale)
-        let row = Int((frame.height - point.y) / cellHeight)
-        let col = Int(point.x / cellWidth)
+        let cell = cellSize
+        let row = Int((frame.height - point.y) / cell.height)
+        let col = Int(point.x / cell.width)
         guard row >= 0, row < terminal.rows, col >= 0, col < terminal.cols else { return nil }
         return terminal.link(at: .screen(Position(col: col, row: row)), mode: .explicitAndImplicit)
     }
@@ -392,6 +579,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     let id: UUID
     /// Set for a tab on a server.
     let remote: RemoteTab?
+    /// The tab whose agent started this one over MCP (new_tab): list_tabs says opened_by, the tooltip "Started by".
+    var openedBy: UUID?
     /// The connection to the host dropped; the tab waits to reconnect.
     private(set) var disconnected = false
     /// The tab's script runs on the host: ssh got past its login (password, host key). Until then
@@ -401,6 +590,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var remoteReady = false
     /// tmux or herdr was missing on the host, so this tab is a plain shell that nothing keeps.
     private(set) var fellBack = false
+    /// Why, when a copy was on the host but did not run ("herdr at … did not run (…)"); nil when none was found.
+    private(set) var fellBackReason: String?
+    /// The last status report said this tab's tmux pane is in one of tmux's modes (copy mode): keys go to tmux.
+    private(set) var paneInMode = false
     /// The folder asked for was not on the host (the tab opened in the home folder).
     private(set) var remoteFolderMissing = false
     /// Something on the host keeps this tab's session when the connection drops.
@@ -420,8 +613,35 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     var controlPath: String? { remote.flatMap { remote in controlSlot.map { RemoteConnection.controlPath(remote.host, slot: $0) } } }
     /// Lost its connection when the master went too: reconnect as soon as a master is up again (once).
     private(set) var wakesWithMaster = false
-    /// herdr's agents, last reported (a herdr tab).
-    private(set) var herdrAgents: [HerdrAgent] = []
+    /// What herdr's lists said (a herdr tab): its agents, and a note when it doesn't answer.
+    private(set) var herdrWatch = HerdrWatch()
+    /// herdr's agents, last reported (a herdr tab); none while herdr doesn't answer.
+    var herdrAgents: [HerdrAgent] { herdrWatch.agents ?? [] }
+    /// The same agents followed one by one: their decisions and finishes, what is on screen, what needs you, their rows.
+    private(set) var herdrTracker = HerdrAgents()
+    /// herdr's client in front of this tab on this Mac (its own screen, HerdrClient), whose agents the tab follows as a
+    /// server's (LocalHerdrWatch); nil otherwise. Next Term only reads it: the tab is not kept, nor rerun on restore.
+    private(set) var localHerdr: LocalHerdrClient?
+    /// This tab shows herdr and follows its agents one by one: herdr answers its checks.
+    var followsHerdr: Bool {
+        let shows = remote.map { $0.keep == .herdr && !fellBack } ?? (localHerdr != nil)
+        return shows && herdrWatch.agents != nil
+    }
+    /// herdr's agents as the tab list shows them, while this tab follows them.
+    var herdrRows: [TabListRows.Agent] { followsHerdr ? herdrTracker.rows : [] }
+    /// Where its herdr is, for the Dock badge, Go to Agent and the notices, which take an agent once however many tabs
+    /// show its session (herdrPeers): the host and the herdr session.
+    var herdrPlace: String {
+        remote.map { "\($0.host.id) \($0.herdrSession ?? "")" } ?? "mac \(localHerdr?.server ?? "")"
+    }
+    /// The herdr session it shows, when it is not herdr's default.
+    var herdrSessionName: String? { remote?.herdrSession ?? localHerdr?.session }
+    /// Its folded idle agents show in the tab list (HerdrAgents.fold), until the tab closes.
+    var herdrIdleOpen = false
+    /// When the tab began to need the user as it does now (its agent asks, or it finished and is not seen), for Go to
+    /// Agent's oldest-first order; nil while it needs nothing. The window's tick keeps it (noteNeed).
+    private(set) var needsSince: TimeInterval?
+    private var needState: TabState = .idle
     private var connectedAt: TimeInterval = 0
     private var reconnectAttempts = 0
     private var reconnectWork: DispatchWorkItem?
@@ -435,7 +655,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// Set by the user (double-click a tab). Wins over everything else.
     var userTitle: String?
     /// Set by the running program via OSC 0/2. Cleared at each command boundary.
-    private var programTitle: String?
+    private(set) var programTitle: String?
+    /// The session OpenCode's title names, looked up when the title changes (matchShownSession).
+    var shownSession = OpencodeShownSession()
     private(set) var directory: String {
         didSet { if !leftStartFolder, remote == nil, canonicalPath(directory) != canonicalPath(oldValue) { leftStartFolder = true } }
     }
@@ -451,6 +673,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private var execWatcher: DispatchSourceProcess?
     /// Tab completion in this tab.
     private(set) lazy var completion = CompletionSession(tab: self)
+    /// Suggestions while typing in this tab.
+    private(set) lazy var ghost = GhostSession(tab: self)
+    /// Whether this tab's zsh can take history's key now, so a line Next Term submits by itself stays out of its history
+    /// (ShellHistory, submitOwnLine).
+    private(set) var history = ShellHistory.Readiness()
     private var shellName: String { (shellPath as NSString).lastPathComponent }
 
     init(directory: String?, fontSize: CGFloat, remote: RemoteTab? = nil, id: UUID = UUID()) {
@@ -470,13 +697,39 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onOutput = { [weak self] in
             self?.status.output(at: Self.now)
             self?.completion.output()
+            self?.ghost.output()
         }
+        view.onPaste = { [weak self] in self?.ghost.hide() }
+        view.onScrolled = { [weak self] in self?.ghost.scrolled() }
+        view.onSelection = { [weak self] in
+            if self?.view.selection?.active == true { self?.ghost.hide() }
+        }
+        view.onMarkedText = { [weak self] in self?.ghost.hide() }
+        view.onScreenSwitched = { [weak self] in self?.ghost.hide() }
         view.onInput = { [weak self] in self?.status.input(at: Self.now) }
         view.onKeyboard = { [weak self] in self?.userInput() }
         view.onBell = { [weak self] in self?.attention() }
         view.completionGate = { [weak self] data in self?.completion.gate(data) ?? false }
+        view.onWrite = { [weak self] data in
+            self?.history.input(data)
+            self?.ghost.written(data)
+            self.map { AgentReadiness.shared.written(data, tab: $0) }
+        }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
+        // On a server, a drop or a pasted image is copied there first: this Mac's paths mean nothing to it.
+        if remote != nil {
+            view.onRemoteDrop = { [weak self] urls in
+                guard let self else { return }
+                RemoteDrop.drop(urls, into: self)
+            }
+            view.onImagePaste = { [weak self] png in
+                guard let self else { return }
+                RemoteDrop.pasteImage(png, into: self)
+            }
+        }
+        // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
+        view.passesOtherButtons = { [weak self] in !(self?.remote?.keep == .tmux && self?.isKept == true) }
 
         let terminal = view.getTerminal()
         terminal.registerOscHandler(code: ShellIntegration.oscCode) { [weak self] payload in
@@ -497,14 +750,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(clean, forType: .string)
         }
-        // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me".
-        // OSC 9;4 is a progress report, not a notification.
-        terminal.registerOscHandler(code: 9) { [weak self] payload in
-            if payload.starts(with: Array("4;".utf8)) { return }
-            self?.attention()
-        }
-        terminal.registerOscHandler(code: 777) { [weak self] payload in
-            if payload.starts(with: Array("notify;".utf8)) { self?.attention() }
+        // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me", in the program's own
+        // words when it gives some. OSC 9;4 is a progress report, not a notification.
+        for code in [9, 777] {
+            terminal.registerOscHandler(code: code) { [weak self] payload in
+                guard ProgramNotice.isNotification(code: code, payload: payload) else { return }
+                self?.attention(ProgramNotice.parse(code: code, payload: payload))
+            }
         }
     }
 
@@ -537,6 +789,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             disconnected = false
             remoteConnected = false
             remoteReady = false
+            // The tab script tries tmux or herdr again: whether this connection fell back, or its pane is in copy mode,
+            // is for its own reports to say (a .plain file comes back if the tool is still missing).
+            fellBack = false
+            fellBackReason = nil
+            // herdr's rows wait for its first list on this connection. Its agents are followed on from before the drop:
+            // one still blocked is not news again, and one that finished or moved on meanwhile says so.
+            herdrWatch = HerdrWatch()
+            status.suppressesNotices = false
+            paneInMode = false
             loginPrompt = false
             connectionToken = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased()
             view.interceptInput = nil
@@ -566,6 +827,11 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             self.programTitle = nil
             self.status.shellReplaced()
             self.completion.shellReplaced()
+            self.history.shellReplaced()
+            self.ghost.shellReplaced()
+            self.lastBuffer = nil
+            self.runEnded(exit: nil)
+            self.ownLine = nil
             self.delegate?.tabDidChange(self)
         }
         watcher.resume()
@@ -582,7 +848,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         execWatcher = nil
         reconnectWork?.cancel()
         reconnectWork = nil
+        runEnded(exit: nil)
         MCPControl.forget(self)
+        AppDelegate.shared?.withdrawHerdrNotices(of: self)
+        if localHerdr != nil { LocalHerdrWatch.shared.follow(self, false) }
         guard !exited else { return [] }
         // A disconnected remote tab's ssh has exited and was reaped: its pid may be another process's now,
         // so neither SwiftTerm (SIGTERM) nor we (SIGHUP) signal it, as for a shell that already exited.
@@ -676,11 +945,97 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.runWhenReady(command, waited: waited + 0.1) }
             return
         }
-        view.typeText(command)
+        let typed = view.typeText(command)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.exited else { return }
-            self.view.send(txt: "\r")
+            self.submitOwnLine(typed)
         }
+    }
+
+    /// Return for a line Next Term or an agent typed into this tab by itself (`typed`, as typeText or typeIn returned
+    /// it), never for the user's: every such Return comes here (MCP's send_to_tab, new_tab and press_keys, run_with_secrets,
+    /// runWhenReady's resumes and clients, a restore's resume). Where the tab's zsh can take history's key now, the key
+    /// names the line first, in the same write, so zsh keeps the line out of its history, ↑ and autosuggestions
+    /// (ShellHistory). Anywhere else (bash, fish, a server, a program in front, a zsh without the hook) a plain Return, as
+    /// before; and zsh keeps out only that line to the byte, so one the user typed on too goes in as theirs.
+    ///
+    /// Typed as a new prompt comes (a new tab's first, or just after a command ended), the line gets its Return once the
+    /// hook has marked it, a moment later at most. zsh's line editor turns bracketed paste on just after that mark: on,
+    /// the mark has come or never will. `then` runs once the Return went, or once the tab can no longer take it.
+    func submitOwnLine(_ typed: String, then: (() -> Void)? = nil) {
+        if history.awaitsMark(at: Self.now), !view.getTerminal().bracketedPasteMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, !self.exited, self.view.acceptsInput else {
+                    then?()
+                    return
+                }
+                self.submitOwnLine(typed, then: then)
+            }
+            return
+        }
+        // zle names the line only while it has the tty to itself: not under a program a widget started (^X^E's editor,
+        // fzf's or atuin's ^R), which would read the name as typed keys.
+        let pid = view.process.shellPid
+        let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd, shellPid: pid, shellName: shellName)
+        let inFront = foreground?.isShell == true
+        // A widget's $(...) (fzf, atuin) runs in the shell's own group: a child there means a program reads the tty.
+        let substituting = ProcessInspector.children(of: pid).contains { getpgid($0) == pid }
+        let bytes = ShellHistory.submit(typed: typed, armed: history.armed && inFront && !substituting)
+        // Never recorded as yours (CommandAuthor), with the history hook's word or without it.
+        ownLine = ShellHistory.heldLine(typed)
+        view.send(data: bytes[...])
+        then?()
+    }
+
+    /// What a program in this tab that asked to hear about focus (DECSET 1004) was last told of it.
+    private var focusReport = FocusReport()
+
+    /// One look at whether the user sees this tab with the keyboard in it (TerminalWindowController.refreshVisibility):
+    /// a program that asked is told when that changes, not only when the view gains or loses the keyboard, so herdr
+    /// keeps a turn that ends while Next Term is behind another app as not seen yet. SwiftTerm writes it only to a
+    /// program that asked.
+    func reportFocus(seen: Bool) {
+        guard !exited, view.acceptsInput else { return }
+        let keyboard = view.window?.firstResponder === view
+        guard let focused = focusReport.look(keyboard: keyboard, seen: seen) else { return }
+        view.getTerminal().setTerminalFocus(focused)
+    }
+
+    // MARK: the record of your commands (CommandHistoryStore)
+
+    /// The line Next Term last pressed Return for by itself (submitOwnLine), as zsh holds it, until the next command or prompt.
+    private var ownLine: String?
+    /// Your command running now, recorded when it ends, with its exit: its line, its folder, when it started, and your
+    /// command before it here (what it follows).
+    private var pendingRun: (line: String, folder: String, at: Date, after: String?)?
+    /// Your last command here, until another command (an agent's) came after it.
+    private var lastYours: String?
+
+    /// Commands run here are recorded: a tab on this Mac, suggestions on and Private Mode off, and no agent driving it.
+    private var recordsCommands: Bool { remote == nil && GhostPreferences.records && !MCPControl.isDriven(self) }
+
+    /// A command started (its `cmd` mark): kept to record at its end when it is yours.
+    private func runStarted(_ typed: String, flags: CommandMarkFlags) {
+        let own = ownLine
+        ownLine = nil
+        runEnded(exit: nil)
+        guard recordsCommands, CommandAuthor.decide(flags: flags, ownLine: own, typed: typed) == .you else {
+            lastYours = nil
+            return
+        }
+        pendingRun = (typed, directory, Date(), lastYours)
+    }
+
+    /// The command ended (`exit`), or can no longer say how (nil: the shell was replaced, the tab closed): recorded, unless
+    /// suggestions went off or Private Mode on meanwhile. Its line, when it was yours and recorded.
+    @discardableResult
+    private func runEnded(exit: Int32?) -> String? {
+        guard let run = pendingRun else { return nil }
+        pendingRun = nil
+        guard GhostPreferences.records else { return nil }
+        CommandHistoryStore.shared.record(run.line, folder: run.folder, at: run.at, exit: exit, after: run.after)
+        lastYours = run.line
+        return run.line
     }
 
     /// Twice a second. For shells without integration this is how the tab knows what runs and where it
@@ -688,8 +1043,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     func pollForeground() {
         guard !exited else { return }
         guard remote == nil else { return watchLogin() } // a remote tab's foreground comes from its host (applyRemote)
+        watchLocalHerdr()
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
+        let wasAgent = status.running && status.kind == .agent
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
                                                      shellPid: view.process.shellPid, shellName: shellName)
         status.observe(foreground, at: Self.now)
@@ -703,6 +1060,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                 changed = true
             }
         }
+        // OpenCode found behind a plain-looking command (a function that runs it) may have titled the tab already.
+        if !wasAgent, status.kind == .agent { matchShownSession() }
         if changed { delegate?.tabDidChange(self) }
     }
 
@@ -713,6 +1072,39 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         tailRows(count).rows
     }
 
+    /// `screenTail`, with stored keys masked over whole lines (`SecretMask.mask(window:rows:text:)`): the rows above the
+    /// window are masked with it, wrapped by the terminal or not (agent UIs wrap with a newline or cursor moves), so the
+    /// tail of a key whose start is above the window never shows. `excludingGhost`: cells left out of their rows (a
+    /// plugin's ghost, `typedInput`).
+    func screenTail(_ count: Int, masked mask: SecretMask, excludingGhost ghost: [GhostScreen.Span] = []) -> [String] {
+        let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let top = terminal.buffer.totalLinesTrimmed
+        let first = max(top, last - count + 1)
+        return mask.mask(window: first...last, rows: top...last) { row in rowText(row, excluding: ghost) }
+    }
+
+    /// `screenTail` without masks, with `ghost`'s cells left out of their rows.
+    func screenTail(_ count: Int, excludingGhost ghost: [GhostScreen.Span]) -> [String] {
+        guard !ghost.isEmpty else { return screenTail(count) }
+        let terminal = view.getTerminal()
+        guard let last = lastTextRow() else { return [] }
+        let first = max(terminal.buffer.totalLinesTrimmed, last - count + 1)
+        return (first...last).map { rowText($0, excluding: ghost) }
+    }
+
+    /// A scroll-invariant row's text, trimmed at its right, without the cells of `ghost` on it: what is left of them and
+    /// right of them, the right part trimmed, then the whole.
+    private func rowText(_ row: Int, excluding ghost: [GhostScreen.Span]) -> String {
+        guard let line = view.getTerminal().getScrollInvariantLine(row: row) else { return "" }
+        guard let cut = ghost.first(where: { $0.row == row }) else { return line.translateToString(trimRight: true) }
+        let end = min(cut.columns.upperBound, line.count)
+        let left = line.translateToString(trimRight: false, startCol: 0, endCol: min(cut.columns.lowerBound, line.count))
+        let right = end < line.count ? line.translateToString(trimRight: true, startCol: end) : ""
+        let text = left + right
+        return String(text.reversed().drop { $0 == " " || $0 == "\u{0}" }.reversed())
+    }
+
     /// `screenTail`, with the scroll-invariant row of its first line.
     private func tailRows(_ count: Int) -> (first: Int, rows: [String]) {
         let terminal = view.getTerminal()
@@ -721,17 +1113,36 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return (first, (first...last).map { terminal.getScrollInvariantLine(row: $0)?.translateToString(trimRight: true) ?? "" })
     }
 
-    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
-    func lastTextRow() -> Int? {
+    /// The last line that exists, in scroll-invariant rows, found by bisection (SwiftTerm keeps the line count internal).
+    private func lastRow() -> Int? {
         let terminal = view.getTerminal()
-        let top = terminal.buffer.totalLinesTrimmed
-        // The last line that exists, found by bisection (SwiftTerm keeps the line count internal).
-        var low = top, high = top + 1_000_000
+        var low = terminal.buffer.totalLinesTrimmed, high = low + 1_000_000
         guard terminal.getScrollInvariantLine(row: low) != nil else { return nil }
         while low < high {
             let mid = (low + high + 1) / 2
             if terminal.getScrollInvariantLine(row: mid) != nil { low = mid } else { high = mid - 1 }
         }
+        return low
+    }
+
+    /// The cursor's row, in scroll-invariant rows, wherever the view is scrolled: the screen is the buffer's last `rows`
+    /// lines. At the bottom, the line the view shows under the cursor must be that one.
+    func cursorRow() -> Int? {
+        let terminal = view.getTerminal()
+        guard let last = lastRow() else { return nil }
+        let y = terminal.getCursorLocation().y
+        let row = last - terminal.rows + 1 + y
+        if !view.canScroll || view.scrollPosition >= 1 {
+            guard let shown = terminal.getLine(row: y), shown === terminal.getScrollInvariantLine(row: row) else { return nil }
+        }
+        return row
+    }
+
+    /// The last line with text, in scroll-invariant rows (as getScrollInvariantLine counts them).
+    func lastTextRow() -> Int? {
+        let terminal = view.getTerminal()
+        let top = terminal.buffer.totalLinesTrimmed
+        guard let low = lastRow() else { return nil }
         // Skip blank rows at the bottom (at most one screen of them).
         var last = low
         while last > top, low - last < terminal.rows,
@@ -739,6 +1150,73 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             last -= 1
         }
         return last
+    }
+
+    // MARK: what is typed (the ghost hook's reports)
+
+    /// The ghost hook's last report of the line (GhostProtocol), with the tab's write count when it was read and when: it
+    /// says what is typed only while nothing was written to the shell since (GhostScreen.isCurrent).
+    private(set) var lastBuffer: (report: GhostProtocol.BufferReport, writes: Int, at: TimeInterval)?
+
+    /// The line as zsh has it at this tab's prompt, for MCP (read_tab, wait_for_tab): `input`, and the cells of a plugin's
+    /// ghost to leave out of the screen. Only for a tab on this Mac whose shell is alone in front with no command running,
+    /// on the normal screen, from a report nothing was written after; nil otherwise.
+    func typedInput(mask: (String) -> String) -> (input: [String: Any], ghost: [GhostScreen.Span])? {
+        guard let last = lastBuffer, atReportedPrompt,
+              GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites) else { return nil }
+        let ghost = pluginGhost(last.report)
+        let suggestion = ghost.isEmpty ? nil : last.report.postdisplay
+        guard let input = InputReport.make(from: last.report, suggestion: suggestion, mask: mask) else { return nil }
+        return (input, ghost)
+    }
+
+    /// Something was written to the shell at its prompt since the hook last reported the line: a report is on its way, if
+    /// the write changed the line.
+    var awaitsLineReport: Bool {
+        guard let last = lastBuffer else { return false }
+        return atReportedPrompt && !GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
+    }
+
+    /// The hook's last report is the line as it is now, and the shell has the terminal: a frame for its line editor reaches
+    /// nothing else, and nothing typed ahead is waiting.
+    var lineReportIsCurrent: Bool {
+        guard let last = lastBuffer else { return false }
+        return atReportedPrompt && GhostScreen.isCurrent(reportWrites: last.writes, currentWrites: view.inputWrites)
+    }
+
+    /// The hook reports this tab's line, and the shell has the terminal: on this Mac, alone in front with nothing running,
+    /// on the normal screen.
+    private var atReportedPrompt: Bool {
+        guard remote == nil, !exited, lastBuffer != nil, !status.running else { return false }
+        return !view.getTerminal().isCurrentBufferAlternate && shellAlone
+    }
+
+    /// The cells of a plugin's ghost (POSTDISPLAY) as zsh drew them, after the whole line and wrapping, once they are read
+    /// to show it (an async suggestion newer than the report doesn't); none otherwise. Rows past the last there is are cut
+    /// off.
+    private func pluginGhost(_ report: GhostProtocol.BufferReport) -> [GhostScreen.Span] {
+        guard let post = report.postdisplay, !post.isEmpty, let buffer = report.buffer, let ghostCells = GhostScreen.cells(post),
+              report.cursor <= buffer.unicodeScalars.count,
+              let rightCells = GhostScreen.cells(scalars: buffer.unicodeScalars.dropFirst(report.cursor)),
+              let caretRow = cursorRow() else { return [] }
+        let terminal = view.getTerminal()
+        let spans = GhostScreen.span(caretRow: caretRow, caretColumn: terminal.getCursorLocation().x, columns: terminal.cols,
+                                     rightCells: rightCells, ghostCells: ghostCells)
+        var shown: [GhostScreen.Span] = []
+        var read = ""
+        for span in spans {
+            guard let line = terminal.getScrollInvariantLine(row: span.row) else { break }
+            let end = min(span.columns.upperBound, line.count)
+            guard span.columns.lowerBound < end else { break }
+            read += line.translateToString(trimRight: false, startCol: span.columns.lowerBound, endCol: end,
+                                           skipNullCellsFollowingWide: true) { cell in
+                let character = cell.getCharacter()
+                return character == "\u{0}" ? " " : character
+            }
+            shown.append(GhostScreen.Span(row: span.row, columns: span.columns.lowerBound..<end))
+        }
+        let width = shown.reduce(0) { $0 + $1.columns.count }
+        return GhostScreen.matches(cells: read, postdisplay: post, width: width) ? shown : []
     }
 
     // MARK: scrollback on the update and quit paths (SessionScrollback)
@@ -774,6 +1252,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// typed that waits for its Return does not run; an agent over MCP no longer drives the tab.
     func userInput() {
         touchedByUser = true
+        ghost.userKey()
+        view.awaitsChoice = false // a paste or a drop into it is the user's choice
         MCPControl.typedByUser(self)
     }
 
@@ -898,13 +1378,53 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         servingScanned = last - 1 // the last line may still be being written
     }
 
-    /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's
-    /// status follows the agent itself.
+    /// herdr's client in front of this local tab, or no longer: the tab follows its agents while it is (LocalHerdrWatch),
+    /// with the client's own executable, session and socket. Looked at only while herdr runs in front.
+    private func watchLocalHerdr() {
+        var client: LocalHerdrClient?
+        if status.running, status.program == "herdr" {
+            let group = foregroundGroup
+            if let known = localHerdr, known.pid == group { return } // the same client as at the last look
+            let pid = view.process.shellPid
+            let found = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd, shellPid: pid, shellName: shellName)
+            if group > 0, let found, let match = HerdrClient.match(found) {
+                let environment = ProcessInspector.arguments(of: group, keeping: HerdrClient.variables)?.environment ?? [:]
+                client = LocalHerdrClient(pid: group, executable: match.executable, session: match.session, environment: environment)
+            }
+        }
+        guard client != localHerdr else { return }
+        localHerdr = client
+        herdrWatch = HerdrWatch()
+        herdrTracker = HerdrAgents()
+        decisionsToPost = []
+        status.suppressesNotices = false
+        AppDelegate.shared.withdrawHerdrNotices(of: self)
+        LocalHerdrWatch.shared.follow(self, client != nil)
+        delegate?.tabDidChange(self)
+    }
+
+    /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's status follows the
+    /// agent itself. Not herdr's own screen, here or on a server: its agents report their states.
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
+        guard status.program != "herdr" else { return }
         let before = (status.state, status.question)
-        status.observe(agentScreen: AgentScreen.activity(screenLines: liveTail()), at: Self.now)
+        status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
+    }
+
+    /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
+    /// (most of them, most of the time) is not parsed again 4 times a second. AgentScreen.activity is a function of the
+    /// lines and the masks alone (and whether they are OpenCode's), and TabStatus takes the same activity again as it did.
+    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, opencode: Bool, activity: AgentActivity)?
+
+    private func agentActivity(_ lines: [String]) -> AgentActivity {
+        let mask = ObjectIdentifier(SecretMask.current)
+        let opencode = isOpencodeScreen
+        if let last = lastAgentRead, last.mask == mask, last.opencode == opencode, last.lines == lines { return last.activity }
+        let activity = AgentScreen.activity(screenLines: lines, opencode: opencode)
+        lastAgentRead = (lines, mask, opencode, activity)
+        return activity
     }
 
     /// What the program in front started outside the terminal that its hangup stops, as the close alerts name it
@@ -1090,8 +1610,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if status.running && !status.command.isEmpty { lines.append(String(status.command.prefix(300))) }
         lines.append(remote == nil ? directory : "Folder on the host: \(directory)")
         if let servedURL { lines.append("Serving \(ServedURL.shared(servedURL))") } // its token, if any, stays out of sight
-        if let remote { lines.append("Sessions kept: \(remote.keep.label)") }
+        if let openedBy, let opener = AppDelegate.shared?.controllers.flatMap(\.tabs).first(where: { $0.id == openedBy }) {
+            lines.append("Started by “\(opener.title)”")
+        }
+        if let remote {
+            lines.append(remote.keep.keptLine(fellBack: fellBack))
+            if fellBack, let fellBackReason { lines.append(fellBackReason) }
+            if let note = herdrWatch.note { lines.append(note) }
+        }
+        if followsHerdr { lines += HerdrAgents.tooltipLines(herdrTracker.rows, now: Self.now) }
         lines.append(completion.engineLabel)
+        if let label = ghost.label { lines.append(label) }
         return lines.joined(separator: "\n")
     }
 
@@ -1101,9 +1630,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         switch event {
         case .completion(let message):
             return completion.handle(message)
-        case .commandStarted(let line, let expanded):
+        case .history(let version):
+            return history.marked(version: version)
+        case .ghost(let message):
+            if case .buffer(let report) = message { lastBuffer = (report, view.inputWrites, Self.now) }
+            return ghost.handle(message)
+        case .commandStarted(let line, let expanded, let flags):
             onCommandMark?(event)
+            runStarted(line, flags: flags)
+            ghost.lineEnded()
             completion.disarm()
+            history.disarm()
             programTitle = nil
             // Its output starts below the line the command was typed on.
             pendingServingStart = (lastTextRow() ?? 0) + 1
@@ -1114,6 +1651,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
             onCommandMark?(event)
+            ghost.commandEnded(yours: runEnded(exit: code))
+            ownLine = nil
+            history.prompted(at: Self.now)
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
@@ -1126,8 +1666,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         delegate?.tabDidChange(self)
     }
 
-    private func attention() {
-        status.bell()
+    private func attention(_ notice: ProgramNotice? = nil) {
+        status.bell(notice: notice, at: Self.now)
         delegate?.tabDidChange(self)
     }
 
@@ -1139,10 +1679,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // Programs redraw after a resize; that is not work.
         status.resized(at: Self.now)
         completion.viewChanged()
+        ghost.viewChanged()
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         programTitle = title
+        matchShownSession()
         delegate?.tabDidChange(self)
     }
 
@@ -1195,6 +1737,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     private func shellEnded(_ waitStatus: Int32?) {
         exited = true
+        runEnded(exit: nil)
         execWatcher?.cancel()
         execWatcher = nil
         guard let waitStatus, waitStatus != 0 else {
@@ -1334,8 +1877,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             reconnectAttempts = 0
         }
         guard remoteConnected else { return } // files on the host from another connection prove nothing
-        if report.plain { fellBack = true }
+        if report.plain {
+            fellBack = true
+            fellBackReason = report.plainReason
+        }
         if report.folderMissing { remoteFolderMissing = true }
+        paneInMode = report.inMode
         // A herdr tab shows herdr: its state comes from herdr's agents (applyHerdr), not from what runs in front.
         if let foreground = report.foreground, remote.keep != .herdr || fellBack {
             if foreground.isShell { remoteReady = true }
@@ -1349,16 +1896,203 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if (status.running, status.command, directory, remoteConnected, fellBack) != before { delegate?.tabDidChange(self) }
     }
 
-    /// herdr's agents on the host: the tab shows the one that most needs you. Only once this tab's own
-    /// connection is up (herdr's list says nothing about this tab's ssh).
-    func applyHerdr(_ agents: [HerdrAgent]) {
-        guard remote?.keep == .herdr, remoteConnected, !fellBack, !exited, !disconnected else { return }
-        herdrAgents = agents
+    /// What the host's status checks say about this tab's prompt, for what Next Term types in by itself (Suggest a
+    /// Command, Tab completion from the screen); nil for a tab on this Mac.
+    var serverPrompt: ServerPrompt? {
+        guard let remote else { return nil }
+        let alternate = view.getTerminal().isCurrentBufferAlternate
+        return ServerPrompt(keep: remote.keep, fellBack: fellBack, connected: remoteConnected && !disconnected && !exited,
+                            shellReported: remoteReady, running: status.running, inMode: paneInMode, alternateScreen: alternate,
+                            reportsSinceReturn: completion.reportsSinceReturn)
+    }
+
+    /// What herdr said on the host (its session's report): the tab follows each of herdr's agents (HerdrAgents) and shows
+    /// the one that most needs you, or says why herdr doesn't answer (HerdrWatch). Only once this tab's own connection is
+    /// up (herdr's list says nothing about this tab's ssh). A tab that fell back only learns whether herdr is on the host
+    /// now.
+    func applyHerdr(_ report: HerdrReport) {
+        guard !exited else { return }
+        if let remote {
+            guard remote.keep == .herdr, remoteConnected, !disconnected else { return }
+        } else {
+            guard localHerdr != nil, report.session == localHerdr?.session else { return }
+        }
+        let note = herdrWatch.note
+        let listed = herdrWatch.observe(report, showsHerdr: !fellBack)
+        if herdrWatch.note != note { delegate?.tabDidChange(self) }
+        guard let agents = listed else {
+            // herdr stopped answering: what its agents do is not known any more, and the tab's own notices are back. A
+            // check or two that fail (after a reconnect too) change nothing yet.
+            if herdrWatch.agents == nil, !herdrWatch.isRetrying, !herdrTracker.agents.isEmpty {
+                herdrTracker = HerdrAgents()
+                decisionsToPost = []
+                status.suppressesNotices = false
+                AppDelegate.shared.withdrawHerdrNotices(of: self)
+                delegate?.tabDidChange(self)
+            }
+            return
+        }
+        followHerdr(agents, focusedTab: report.focusedTab)
+    }
+
+    /// One check's list of herdr's agents: each agent followed, and the tab's own state from them, in order (a decision,
+    /// then work, else idle).
+    func followHerdr(_ listed: [HerdrAgent], focusedTab: String?) {
+        let rows = herdrTracker.rows
+        let agents = Self.masked(listed)
+        // herdr's view is its session's, so an agent it shows is on screen while any tab of that session is.
+        let visible = herdrPeers.contains { $0.isOnScreen }
+        let events = herdrTracker.update(agents, focusedTab: focusedTab, tabVisible: visible, now: Self.now)
         let before = (status.state, status.question)
         status.observeAgentHost("herdr", at: Self.now)
-        status.observe(agentScreen: HerdrAgent.activity(agents), at: Self.now)
-        if before != (status.state, status.question) { delegate?.tabDidChange(self) }
+        status.suppressesNotices = true // its agents post their own (herdrEvents)
+        status.observe(agentScreen: herdrTracker.activity, at: Self.now)
+        herdrEvents(events)
+        if before != (status.state, status.question) || rows != herdrTracker.rows { delegate?.tabDidChange(self) }
     }
+
+    /// herdr's agents with what their panes say masked, as read_tab masks a tab: their names, titles and folders, which
+    /// then show in rows, menus, notices and MCP as they are.
+    static func masked(_ agents: [HerdrAgent], mask: SecretMask = .current) -> [HerdrAgent] {
+        guard !mask.isEmpty else { return agents }
+        return agents.map { agent in
+            var copy = agent
+            copy.customName = agent.customName.map { mask.mask($0) }
+            copy.displayName = agent.displayName.map { mask.mask($0) }
+            copy.title = agent.title.map { mask.mask($0) }
+            copy.directory = agent.directory.map { mask.mask($0) }
+            return copy
+        }
+    }
+
+    /// What happened to herdr's agents since the last check: a blocked agent's question is read from its pane, then its
+    /// notice goes out with it; a finish's goes out at once; a notice about an agent that no longer needs the user as
+    /// it said is withdrawn.
+    private func herdrEvents(_ events: [HerdrAgents.Event]) {
+        for event in events {
+            switch event {
+            case .needsDecision(let pane):
+                if !decisionsToPost.contains(pane) { decisionsToPost.append(pane) }
+            case .finished(let pane, let duration):
+                postHerdr(pane, question: nil, duration: duration)
+            case .resolved(let pane), .gone(let pane):
+                decisionsToPost.removeAll { $0 == pane }
+            case .needsRead:
+                break
+            }
+        }
+        AppDelegate.shared.withdrawStaleHerdrNotices(of: self)
+        readHerdrQuestion()
+        postDecisions()
+    }
+
+    /// Agents whose decision is news, whose notice waits for their question to be read from their pane.
+    private var decisionsToPost: [String] = []
+
+    /// The notices of decisions whose question is read now (or whose read found none: herdr's words then).
+    private func postDecisions() {
+        var waiting: [String] = []
+        for pane in decisionsToPost {
+            if herdrTracker.awaitsRead(pane) {
+                waiting.append(pane)
+                continue
+            }
+            guard let agent = herdrTracker.agents.first(where: { $0.paneID == pane }), agent.status == .blocked else { continue }
+            let question = herdrTracker.question(pane)?.text ?? "\(agent.name) (\(pane)) needs a decision"
+            postHerdr(pane, question: question, duration: nil)
+        }
+        decisionsToPost = waiting
+    }
+
+    private func postHerdr(_ pane: String, question: String?, duration: TimeInterval?) {
+        guard let controller = delegate as? TerminalWindowController,
+              let agent = herdrTracker.agents.first(where: { $0.paneID == pane }) else { return }
+        AppDelegate.shared.post(herdrAgent: agent, question: question, duration: duration, tab: self, in: controller)
+    }
+
+    /// The tabs that show the same herdr session as this one and hear from it now, in tab order, this one included. A
+    /// split or a duplicate of a herdr tab is a second client of its session, and herdr says the same of its agents to
+    /// each: whether an agent is on screen, seen or muted is the session's, and so is its one notice.
+    var herdrPeers: [TerminalTab] {
+        let place = herdrPlace
+        return AppDelegate.shared.controllers.flatMap(\.tabs).filter { tab in
+            tab === self || (tab.followsHerdr && tab.hearsHerdr && tab.herdrPlace == place)
+        }
+    }
+
+    /// herdr's lists reach it now: on this Mac, or over its own connection while that is up.
+    private var hearsHerdr: Bool { !exited && (remote == nil || (remoteConnected && !disconnected)) }
+
+    /// The user chose one of its agents (its row, Go to Agent, its notice): Next Term's unread flag clears and its
+    /// notice goes, in every tab of its session.
+    func herdrSeen(_ pane: String) {
+        for tab in herdrPeers {
+            tab.herdrTracker.seen(pane)
+            AppDelegate.shared.withdrawHerdrNotice(HerdrTarget(tabID: tab.id.uuidString, pane: pane).id)
+            tab.delegate?.tabDidChange(tab)
+        }
+    }
+
+    /// Keep as Unread (true), or its undoing (seen).
+    func keepHerdrUnread(_ pane: String, _ on: Bool) {
+        guard on else { return herdrSeen(pane) }
+        for tab in herdrPeers {
+            tab.herdrTracker.markUnread(pane, now: Self.now)
+            tab.delegate?.tabDidChange(tab)
+        }
+    }
+
+    /// Mute Notices (true), or Unmute, in every tab of its session: a muted agent's notice goes at once.
+    func muteHerdr(_ pane: String, _ on: Bool) {
+        for tab in herdrPeers {
+            tab.herdrTracker.mute(pane, on)
+            if on { AppDelegate.shared.withdrawHerdrNotice(HerdrTarget(tabID: tab.id.uuidString, pane: pane).id) }
+            tab.delegate?.tabDidChange(tab)
+        }
+    }
+
+    /// The window's tick: when the tab began to need the user as it does now.
+    func noteNeed(at now: TimeInterval) {
+        let state = status.state
+        guard state != needState else { return }
+        needState = state
+        needsSince = state == .attention || state == .done || state == .failed ? now : nil
+    }
+
+    /// A read of a blocked agent's pane is running: one at a time per tab.
+    private var herdrReading = false
+
+    /// Reads the next blocked agent's question from its own pane (what it shows now), as a local agent's screen is read:
+    /// its words and choices then stand for herdr's "needs a decision". A pane that shows none, or a read that fails,
+    /// leaves herdr's words until herdr counts a change. One read at a time per session: a tab of the same session that
+    /// reads already gives this one its answer.
+    private func readHerdrQuestion() {
+        guard !herdrReading, !exited, let next = herdrTracker.nextRead else { return }
+        guard !herdrPeers.contains(where: { $0 !== self && $0.herdrReading }) else { return }
+        herdrReading = true
+        HerdrRunner.readVisible(next.pane, in: self) { [weak self] result in
+            guard let self else { return }
+            self.herdrReading = false
+            var found: (text: String, menu: AgentMenu?)?
+            if case .text(let screen) = result { found = HerdrAgents.question(onScreen: screen) }
+            self.herdrQuestionRead(next.pane, seq: next.seq, text: found?.text, menu: found?.menu)
+            self.readHerdrQuestion()
+            for tab in self.herdrPeers { tab.postDecisions() }
+        }
+    }
+
+    /// What a read of a blocked agent's pane found (here, or answer_agent's own read): its question, or none, for every
+    /// tab of the session that followed herdr to the same change.
+    func herdrQuestionRead(_ pane: String, seq: Int?, text: String?, menu: AgentMenu?) {
+        for tab in herdrPeers {
+            tab.herdrTracker.setQuestion(pane: pane, seq: seq, text: text, choices: menu?.choices ?? [], style: menu?.style)
+            tab.status.observe(agentScreen: tab.herdrTracker.activity, at: Self.now)
+            tab.delegate?.tabDidChange(tab)
+        }
+    }
+
+    /// The tab is on screen: in front of its window's visible terminal (TerminalWindowController.isOnScreen).
+    var isOnScreen: Bool { (delegate as? TerminalWindowController)?.isOnScreen(self) ?? false }
 
     // MARK: environment
 
@@ -1369,6 +2103,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var environmentPath = ""
     /// The Claude Code link's port as given to the shell (for the self-test).
     private(set) var claudePort: String?
+    /// What the shell was told about zsh-autosuggestions as it started (ShellIntegration.ghostVariable): Next Term's
+    /// suggestions were chosen for it, so its hook turned the plugin's off (GhostSession).
+    private(set) var ghostStart: String?
 
     private func environment(shellName: String) -> [String] {
         // A fresh terminal, not a child of whatever launched Next Term (see TerminalEnvironment).
@@ -1377,9 +2114,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        // OpenTUI programs (OpenCode) send their notifications as OSC 777, which a tab reads, unless the user chose.
+        ProgramNotice.prepare(&env)
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
-        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.find(from: directory)))
+        // Its project, or its own folder where it has none (the home folder: ProjectRoot.project).
+        GeminiIDEServer.shared.prepare(&env, workspace: canonicalPath(ProjectRoot.project(from: directory) ?? directory))
         // `nxtrm mcp`, started by an agent in this tab, reaches this copy of Next Term.
         if MCPControlServer.shared.isRunning { env[MCPServer.socketVariable] = MCPControlServer.shared.path }
         // `nxtrm` works in every tab from the first launch, with no install step.
@@ -1395,6 +2135,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             env[ShellIntegration.nonceVariable] = nonce // the shell removes it from its environment at once
             // Tab completion's hook loads; `q`: with zsh-autocomplete's list as you type off from the first prompt.
             if CompletionPreferences.isOn { env[ShellIntegration.completionVariable] = CompletionPreferences.quietsAutocomplete ? "q" : "1" }
+            // zsh-autosuggestions' suggestions off from the first line, where Next Term's were chosen for them.
+            ghostStart = GhostPreferences.startValue
+            if let ghostStart { env[ShellIntegration.ghostVariable] = ghostStart }
         }
         environmentPath = env["PATH"] ?? ""
         claudePort = env["CLAUDE_CODE_SSE_PORT"]

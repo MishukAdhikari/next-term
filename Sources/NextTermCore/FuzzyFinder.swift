@@ -288,7 +288,8 @@ public struct RecentFiles: Sendable, Equatable {
 }
 
 /// Files under a folder for Go to File when git cannot list them: a quick walk that leaves out hidden
-/// folders and the usual dependency and build folders, and stops at a limit.
+/// folders, the usual dependency and build folders and the protected places below it (ProtectedPlaces), and
+/// stops at a limit.
 public enum FileWalker {
     static let skipped: Set<String> = ["node_modules", "vendor", ".build", "build", "dist", "DerivedData", ".next", ".venv",
                                        "__pycache__", "Pods", "target", ".gradle", "Library",
@@ -296,9 +297,12 @@ public enum FileWalker {
                                        ".langgraph_api", "mlruns", "mlartifacts", ".ipynb_checkpoints", "wandb"]
 
     /// Paths relative to `root`, and whether the walk saw everything.
-    public static func files(in root: String, limit: Int = 200_000, seconds: TimeInterval = 5) -> (paths: [String], complete: Bool) {
+    public static func files(in root: String, limit: Int = 200_000, seconds: TimeInterval = 5,
+                             protected: ProtectedPlaces = .current) -> (paths: [String], complete: Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         var result: [String] = []
+        let walk = protected.walk(from: root)
+        ProtectedPlaces.noteListed(root)
         guard let walker = FileManager.default.enumerator(atPath: root) else { return ([], true) }
         var complete = true
         while let relative = walker.nextObject() as? String {
@@ -306,7 +310,11 @@ public enum FileWalker {
             let name = (relative as NSString).lastPathComponent
             let type = walker.fileAttributes?[.type] as? FileAttributeType
             if type == .typeDirectory {
-                if name.hasPrefix(".") || skipped.contains(name) { walker.skipDescendants() }
+                if name.hasPrefix(".") || skipped.contains(name) || !walk.mayEnter(relative) {
+                    walker.skipDescendants()
+                } else {
+                    ProtectedPlaces.noteListed((root as NSString).appendingPathComponent(relative))
+                }
                 continue
             }
             guard type == .typeRegular, name != ".DS_Store" else { continue }

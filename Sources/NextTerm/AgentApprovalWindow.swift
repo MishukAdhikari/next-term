@@ -68,7 +68,11 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         }
         let details = NSTextField(wrappingLabelWithString: request.details)
         details.font = .systemFont(ofSize: 12)
-        views.append(details)
+        details.preferredMaxLayoutWidth = 424 // the stack's 444, less room for the scroller
+        // Long details (a task's whole file) scroll in a box of their own, so Decline and Approve stay on the screen.
+        let detailsBox = UpdateListScroll(maxHeight: 320, bordered: false)
+        detailsBox.stack.addArrangedSubview(details)
+        views.append(detailsBox)
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.isHidden = true
         views.append(statusLabel)
@@ -102,6 +106,8 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36),
         ])
         for view in views where view is NSTextField { view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36).isActive = true }
+        detailsBox.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36).isActive = true
+        detailsBox.fit()
     }
 
     /// Shows the window in front without taking the keyboard; bounces the Dock icon if Next Term is not

@@ -74,11 +74,22 @@ final class GeminiIDEServer: @unchecked Sendable { // mutable state lives on `qu
         listener.start(queue: queue)
         self.listener = listener
         _ = ready.wait(timeout: .now() + 1)
+        // One keepalive however often the link is turned off and on again.
+        keepAlive?.invalidate()
         let keepAlive = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.heartbeat() }
+        keepAlive.tolerance = 5
         RunLoop.main.add(keepAlive, forMode: .common)
+        self.keepAlive = keepAlive
     }
 
-    func stop() { queue.sync { stopOnQueue() } }
+    /// The 30 s heartbeat to connected clients: one, gone when the link stops.
+    private var keepAlive: Timer?
+
+    func stop() {
+        keepAlive?.invalidate()
+        keepAlive = nil
+        queue.sync { stopOnQueue() }
+    }
 
     private func stopOnQueue() {
         listener?.cancel()
@@ -155,9 +166,21 @@ final class GeminiIDEServer: @unchecked Sendable { // mutable state lives on `qu
     /// The editor's state, as the CLIs want it: up to 10 recent files, the active one first with its
     /// caret and selection (1-based, selection at most 16 KB).
     func setContext(openFiles: [[String: Any]]) {
+        let openFiles = Self.masked(openFiles) // the editor's selection and a diff's both come through here
         queue.async {
             self.context = ["openFiles": openFiles]
             for stream in self.streams.values { self.push(["jsonrpc": "2.0", "method": "ide/contextUpdate", "params": ["workspaceState": self.context]], on: stream) }
+        }
+    }
+
+    /// The open files as Gemini CLI and Qwen Code are told of them: a stored key's value in the selected text is
+    /// masked, as it is in the selection sent to Claude Code and Copilot CLI.
+    static func masked(_ openFiles: [[String: Any]], mask: SecretMask = SecretMask.current) -> [[String: Any]] {
+        openFiles.map { (file: [String: Any]) -> [String: Any] in
+            guard let text = file["selectedText"] as? String else { return file }
+            var masked = file
+            masked["selectedText"] = mask.mask(text)
+            return masked
         }
     }
 

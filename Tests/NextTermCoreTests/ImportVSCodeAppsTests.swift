@@ -169,7 +169,7 @@ import Testing
         // Three others, one of them an id that looks like a token: counted, never named.
         #expect(plan.skipped.contains(SkippedItem("3 other extensions", "extensions aren't imported")))
         let settings: [ImportedSetting] = plan.settings.map(\.setting)
-        #expect(settings == [.fontSize(14), .softWrap(true)])
+        #expect(settings == [.fontSize(14), .softWrap(true), .sidebarSingleClick(true)]) // the last, the app's own click
         #expect(ImportFixtures.secrets(in: plan).isEmpty)
         // The extension removed, the settings still say Vim.
         try FileManager.default.removeItem(atPath: home + "/.trae/extensions/extensions.json")
@@ -186,7 +186,7 @@ import Testing
         let plan = plan(forky, home)
         #expect(plan.preset == .vsCode && !plan.skipped.contains { $0.item.contains("extension") })
         let settings: [ImportedSetting] = plan.settings.map(\.setting)
-        #expect(settings == [.fontSize(16)])
+        #expect(settings == [.fontSize(16), .sidebarSingleClick(true)])
     }
 
     @Test func dataFoldersComeFromTheInstalledAppOrTheKnownList() throws {

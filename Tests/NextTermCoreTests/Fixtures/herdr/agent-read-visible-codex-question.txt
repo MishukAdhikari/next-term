@@ -1,0 +1,5 @@
+• Cleaning the build folder before the release build.
+
+  $ rm -rf build
+
+  Allow rm -rf build? (y/n)

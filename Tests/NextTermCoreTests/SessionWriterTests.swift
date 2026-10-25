@@ -802,8 +802,11 @@ import Testing
     @Test func aQuitsIntentFollowsAtLaunchAndOnlyAUsersQuitCarriesTheConsent() {
         var resume = LaunchSettings()
         resume.opens = .lastProjects
-        let welcome = LaunchSettings()
+        var welcome = LaunchSettings()
+        welcome.opens = .welcome
         #expect(QuitIntent.ordinary(reason: .user, settings: resume, consent: true) == .quit(resume: true, consent: true))
+        // Never chosen is Resume, the default: a quit that asked nothing still saves what to bring back.
+        #expect(QuitIntent.ordinary(reason: .user, settings: LaunchSettings(), consent: false) == .quit(resume: true, consent: false))
         #expect(QuitIntent.ordinary(reason: .user, settings: resume, consent: false) == .quit(resume: true, consent: false))
         #expect(QuitIntent.ordinary(reason: .user, settings: welcome, consent: true) == .quit(resume: false, consent: false))
         // A logout, restart or shutdown, and an update relaunch, asked nothing that could give it.

@@ -8,9 +8,8 @@ import Testing
     typealias Value = ImportSnapshot.Value
 
     func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
-        let name = "nextterm-import-undo-tests-\(getpid())-\(UUID().uuidString.prefix(6))"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let (defaults, name) = try TestDefaults.make("import-undo-tests")
+        defer { TestDefaults.remove(defaults, name) }
         try body(defaults)
     }
 
@@ -151,9 +150,48 @@ import Testing
             .fontSize(13), .terminalFontSize(13), .editorLineHeight(1.2), .softWrap(true), .optionAsMeta(true), .terminalPosition("bottom"), .sidebarSide("left"),
             .editorFontFamily("Menlo"), .terminalFontFamily("Menlo"), .terminalPalette(TerminalPalette(name: "x")), .terminalScrollback(1_000),
             .terminalStartFolder("project"), .terminalCursorShape("bar"), .terminalCursorBlink(true), .trimTrailingWhitespace(true),
-            .insertFinalNewline(true), .hiddenFiles([]),
+            .insertFinalNewline(true), .hiddenFiles([]), .tabList(TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true)),
         ]
         let keys = settings.flatMap(\.keys) + ["keymapPreset", "keyBindings", "recentProjects"]
         for key in keys { #expect(ImportSnapshot.title(of: key) != key, "\(key)") }
+    }
+
+    // MARK: the tab list row
+
+    /// One row writes the tabs' side, and the sidebar's and Show Folders when it names them, so Apply keeps each for
+    /// Undo; Undo names them as Settings does.
+    @Test func theTabListRowKeepsEveryKeyItWrites() {
+        let every = ImportedSetting.tabList(TabListImport(tabs: "left", sidebarSide: "right", showsFolders: true))
+        let expected: [String] = ["terminalTabs", "sidebarSide", "tabListShowsFolders"]
+        #expect(every.key == "terminalTabs" && every.keys == expected)
+        #expect(ImportedSetting.tabList(TabListImport(tabs: "left")).keys == ["terminalTabs"])
+        #expect(ImportedSetting.tabList(TabListImport(tabs: "right", showsFolders: false)).keys == ["terminalTabs", "tabListShowsFolders"])
+        #expect(ImportSnapshot.title(of: "terminalTabs") == "Terminal tabs")
+        #expect(ImportSnapshot.title(of: "tabListShowsFolders") == "Folders in the tab list")
+        #expect(ImportedSetting.boolKeys.contains("tabListShowsFolders"))
+    }
+
+    /// Show Folders is kept as a Bool, so Undo puts back a Bool and not a number.
+    @Test func showFoldersReadsBackAsABool() throws {
+        try withDefaults { defaults in
+            defaults.set(true, forKey: "tabListShowsFolders")
+            defaults.set("left", forKey: "terminalTabs")
+            let values = ImportSnapshot.values(of: ["tabListShowsFolders", "terminalTabs"], in: defaults)
+            let expected: [String: Value] = ["tabListShowsFolders": .bool(true), "terminalTabs": .string("left")]
+            #expect(values == expected)
+        }
+    }
+
+    /// The tabs moved back to the top by hand since the import: Undo's alert names them.
+    @Test func undoNamesTheTerminalTabsChangedSince() {
+        let before: [String: Value] = ["sidebarSide": .string("left")]
+        let after: [String: Value] = ["terminalTabs": .string("left"), "sidebarSide": .string("right"), "tabListShowsFolders": .bool(true)]
+        let keys: [String] = ["terminalTabs", "sidebarSide", "tabListShowsFolders"]
+        let snapshot = ImportSnapshot.applied(keys: keys, before: before, after: after, source: "Terminal", summary: "1 setting")
+        #expect(snapshot?.touched == keys)
+        var current = after
+        current["terminalTabs"] = .string("top")
+        let changed: [String] = snapshot?.changedSince(current) ?? []
+        #expect(ImportSnapshot.titles(of: changed) == ["Terminal tabs"])
     }
 }

@@ -1,9 +1,9 @@
 import AppKit
 import NextTermCore
 
-/// What a launch shows, and a Dock click with every window closed: the Welcome window, or the projects Settings ›
-/// General says to reopen (LaunchDecision). Kept remote tabs wait for the first terminal window. And what a quit asks
-/// about resuming (R29).
+/// What a launch shows, and a Dock click with every window closed: the Welcome window, the projects Settings ›
+/// General says to reopen, or a shell window (LaunchDecision). Kept remote tabs wait for the first terminal window.
+/// And what a quit asks about resuming (R29).
 extension SelfTest {
     /// First of all: the self-test launches as a normal launch does, with the Welcome window whatever is saved, and
     /// then opens its window as New Terminal does, for every check after this one. Settings › General is checked here
@@ -14,7 +14,9 @@ extension SelfTest {
         check(welcome && app.controllers.isEmpty, "a launch that names nothing shows the Welcome window, and no terminal window",
               "Welcome \(welcome), terminal windows \(app.controllers.count)")
         check(app.remoteRestorePending, "kept remote tabs wait for the first terminal window, rather than opening one under the Welcome window")
-        app.newWindow(nil)
+        // The switcher's checks with the Welcome window alone, ending with ⌘N; without the keys, New Terminal as the menu runs it.
+        let pressed: Bool = await welcomeLaunchSwitcherChecks(app)
+        if !pressed { app.newWindow(nil) }
         let closed = await wait(5) { app.welcomeController?.window?.isVisible != true }
         check(closed && app.controllers.count == 1 && !app.remoteRestorePending,
               "New Terminal closes the Welcome window, and the kept remote tabs' restore starts once its window is open",
@@ -25,7 +27,7 @@ extension SelfTest {
 
     /// Settings › General back to its defaults, whatever is saved (a run stopped halfway leaves its choices behind).
     /// Call what it returns to put the saved ones back.
-    private static func defaultLaunchSettings(_ defaults: UserDefaults) -> () -> Void {
+    static func defaultLaunchSettings(_ defaults: UserDefaults) -> () -> Void {
         let keys = LaunchSettings.Key.all
         let saved = keys.map { defaults.object(forKey: $0) }
         keys.forEach(defaults.removeObject(forKey:))
@@ -44,17 +46,19 @@ extension SelfTest {
         defer { restore() }
         let view = GeneralSettingsView(frame: .zero)
         let titles: [String] = view.opens.map(\.title)
-        let welcome = view.radio(.welcome).state == .on && view.radio(.lastProjects).state == .off
+        let othersOff = view.radio(.welcome).state == .off && view.radio(.newTerminal).state == .off
+        let resume = view.radio(.lastProjects).state == .on && othersOff
         let asks = view.askToResume.state == .on
         let keeps = view.keepScrollback.state == .on
         let labels = view.askToResume.title == "Ask whether to resume when quitting" && view.keepScrollback.title == "Keep scrollback"
-        check(titles == ["Show the Welcome window", "Resume where I left off"] && welcome && asks && keeps && labels,
-              "Settings › General: At launch shows the Welcome window, At quit asks whether to resume, and scrollback is kept, until changed",
-              "\(titles), Welcome \(welcome), asks \(asks), keeps scrollback \(keeps), \(view.askToResume.title), \(view.keepScrollback.title)")
+        let expected: [String] = ["Show the Welcome window", "Resume where I left off", "Open a new terminal"]
+        check(titles == expected && resume && asks && keeps && labels,
+              "Settings › General: At launch resumes where you left off, At quit asks whether to resume, and scrollback is kept, until changed",
+              "\(titles), Resume \(resume), asks \(asks), keeps scrollback \(keeps), \(view.askToResume.title), \(view.keepScrollback.title)")
         let group = view.opensGroup
         let role = group.accessibilityRole()
         check(group.isAccessibilityElement() && role == .radioGroup && group.accessibilityLabel() == "At launch",
-              "VoiceOver reads the two choices as one radio group, named At launch as its visible label",
+              "VoiceOver reads the three choices as one radio group, named At launch as its visible label",
               "\(role?.rawValue ?? "no role"), \(group.accessibilityLabel() ?? "no label")")
         let opensHelp: [String] = view.opens.map { $0.accessibilityHelp() ?? "" }
         let askHelp = view.askToResume.accessibilityHelp() ?? ""
@@ -70,11 +74,18 @@ extension SelfTest {
         let scrollbackOff = defaults.object(forKey: LaunchSettings.Key.keepScrollback) as? Bool == false
         check(scrollbackOff && stored == [LaunchSettings.Key.keepScrollback] && !LaunchSettings(defaults: defaults).opensChosen,
               "unchecking Keep scrollback saves it alone, and At launch stays never chosen", "stored \(stored)")
+        // The Welcome window chosen is saved, so it stays whatever the default; then Resume, chosen again, is saved too.
+        view.radio(.welcome).performClick(nil)
+        let welcomeSaved = defaults.string(forKey: LaunchSettings.Key.opens)
+        let welcomeAlone = view.radio(.lastProjects).state == .off && view.radio(.newTerminal).state == .off
+        check(welcomeSaved == "welcome" && welcomeAlone && LaunchSettings(defaults: defaults).opens == .welcome,
+              "Show the Welcome window saves its choice, which the next launch reads, the other two off",
+              "\(welcomeSaved ?? "nothing saved"), others off \(welcomeAlone)")
         view.radio(.lastProjects).performClick(nil)
         view.askToResume.performClick(nil)
         let saved = LaunchSettings(defaults: defaults)
         let savedOpens = defaults.string(forKey: LaunchSettings.Key.opens)
-        let onlyOne = view.radio(.welcome).state == .off
+        let onlyOne = view.radio(.welcome).state == .off && view.radio(.newTerminal).state == .off
         check(savedOpens == "lastProjects" && !saved.askToReopenOnQuit && onlyOne,
               "each General control saves its choice as it changes, and one radio button is on at a time",
               "\(savedOpens ?? "nothing saved"), asks \(saved.askToReopenOnQuit), Welcome still on \(!onlyOne)")
@@ -82,6 +93,15 @@ extension SelfTest {
         let shown = reopened.radio(.lastProjects).state == .on && reopened.radio(.welcome).state == .off
         check(shown && reopened.askToResume.state == .off && reopened.keepScrollback.state == .off, "and a new General tab shows it",
               "Resume on \(shown), asks \(reopened.askToResume.state == .on), keeps \(reopened.keepScrollback.state == .on)")
+        // "Open a new terminal" is saved as newTerminal, alone on, and a new tab shows it.
+        view.radio(.newTerminal).performClick(nil)
+        let terminalSaved = defaults.string(forKey: LaunchSettings.Key.opens)
+        let terminalAlone = view.radio(.welcome).state == .off && view.radio(.lastProjects).state == .off
+        let terminalTab = GeneralSettingsView(frame: .zero)
+        let terminalShown = terminalTab.radio(.newTerminal).state == .on && terminalTab.radio(.welcome).state == .off
+        check(terminalSaved == "newTerminal" && terminalAlone && terminalShown,
+              "Open a new terminal saves its choice, turns the other two off, and a new General tab shows it",
+              "\(terminalSaved ?? "nothing saved"), others off \(terminalAlone), new tab \(terminalShown)")
         // A stored 0.10 "Reopen the projects that were open" selects Resume where I left off.
         defaults.set("lastProjects", forKey: LaunchSettings.Key.opens)
         let carried = GeneralSettingsView(frame: .zero)
@@ -89,8 +109,8 @@ extension SelfTest {
               "a stored lastProjects selects Resume where I left off")
     }
 
-    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons, "At quit:" and
-    /// "Sessions:" beside their checkboxes, in a 110 pt label column, so the controls start at one edge. The radio group is
+    /// The General tab's rows, laid out as the other tabs' are: "At launch:" beside the radio buttons, "At quit:",
+    /// "Sessions:" and "Windows:" beside their checkboxes, "Projects:" beside its pop-up, "Privacy:" beside Full Disk Access…, in a 110 pt label column, so the controls start at one edge. The radio group is
     /// named with the label's words, so VoiceOver does not read "At launch:" too. Measured as Auto Layout places each view,
     /// by its alignment rect: a label's frame is 2 pt wider on each side.
     private static func generalLayoutChecks() {
@@ -102,17 +122,29 @@ extension SelfTest {
         let launch: NSTextField = view.launchLabel
         let quit: NSTextField = view.quitLabel
         let sessions: NSTextField = view.sessionsLabel
+        let windows: NSTextField = view.windowsLabel
+        let projects: NSTextField = view.projectsLabel
+        let privacy: NSTextField = view.privacyLabel
+        let targets: [String] = ["Ask Each Time", "This Window", "New Window"]
         let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:" && sessions.stringValue == "Sessions:"
-        let widths: [CGFloat] = [placed(launch).width, placed(quit).width, placed(sessions).width]
+            && windows.stringValue == "Windows:" && view.projectColors.title == "Show project colors"
+            && projects.stringValue == "Projects:" && view.projectsIn.itemTitles == targets
+            && privacy.stringValue == "Privacy:" && view.fullDiskAccess.title == "Full Disk Access…"
+        let widths: [CGFloat] = [placed(launch).width, placed(quit).width, placed(sessions).width, placed(windows).width,
+                                 placed(projects).width, placed(privacy).width]
         let column = widths.allSatisfy { abs($0 - 110) < 0.5 }
         let besideRadios = launch.superview != nil && launch.superview === view.opensGroup.superview
         let besideAsk = quit.superview != nil && quit.superview === view.askToResume.superview
         let besideScrollback = sessions.superview != nil && sessions.superview === view.keepScrollback.superview
+            && privacy.superview != nil && privacy.superview === view.fullDiskAccess.superview
+            && windows.superview != nil && windows.superview === view.projectColors.superview
+            && projects.superview != nil && projects.superview === view.projectsIn.superview
         let radiosX: CGFloat = placed(view.opensGroup).minX
         let askX: CGFloat = placed(view.askToResume).minX
         let scrollbackX: CGFloat = placed(view.keepScrollback).minX
+        let colorsX: CGFloat = placed(view.projectColors).minX
         let labelEnd: CGFloat = placed(launch).maxX
-        let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && radiosX > labelEnd
+        let oneEdge = abs(radiosX - askX) < 0.5 && abs(radiosX - scrollbackX) < 0.5 && abs(radiosX - colorsX) < 0.5 && radiosX > labelEnd
         let readOnce = !launch.isAccessibilityElement()
         // The notes' rows start with an empty label in the column, which VoiceOver never reaches.
         var blanks: [NSTextField] = []
@@ -121,11 +153,23 @@ extension SelfTest {
             if let field = next as? NSTextField, field.stringValue.isEmpty { blanks.append(field) }
             views.append(contentsOf: next.subviews)
         }
-        let silent = blanks.count == 3 && blanks.allSatisfy { !$0.isAccessibilityElement() }
+        let silent = blanks.count == 6 && blanks.allSatisfy { !$0.isAccessibilityElement() }
         let beside = besideRadios && besideAsk && besideScrollback
         check(titles && column && beside && oneEdge && readOnce && silent,
-              "Settings › General: At launch, At quit and Sessions beside their controls, in a 110 pt label column as in the other tabs",
-              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideAsk) \(besideScrollback), radios at \(radiosX), checkboxes at \(askX) \(scrollbackX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
+              "Settings › General: At launch, At quit, Sessions, Windows, Projects and Privacy beside their controls, in a 110 pt label column as in the other tabs",
+              "titles \(titles), widths \(widths), beside \(besideRadios) \(besideAsk) \(besideScrollback), radios at \(radiosX), checkboxes at \(askX) \(scrollbackX) \(colorsX), label ends at \(labelEnd), VoiceOver once \(readOnce), empty labels silent \(silent)")
+        // The three choices, one under another at one edge, none over another.
+        let radios: [NSRect] = view.opens.map(placed)
+        let radioXs: [CGFloat] = radios.map(\.minX)
+        let aligned = radioXs.allSatisfy { abs($0 - radiosX) < 0.5 }
+        var apart = radios.allSatisfy { !$0.isEmpty }
+        for (index, radio) in radios.enumerated() where index > 0 {
+            let above: NSRect = radios[index - 1]
+            if radio.maxY > above.minY + 0.5 { apart = false }
+        }
+        check(radios.count == 3 && aligned && apart,
+              "Settings › General: the three At launch choices stand one under another at one edge, none overlapping",
+              "\(radios.map { (rect: NSRect) -> String in NSStringFromRect(rect) })")
     }
 
     /// The quit's resume question (R29), with its dialogs built and never run (QuitReopenPrompt): the plain dialog, the
@@ -248,9 +292,13 @@ extension SelfTest {
         try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: folder) }
         app.setRecentProjects([folder])
+        // The run's projects leave the Welcome list too (the self-test's own history), so it lists the one recent project.
+        ProjectHistoryRecorder.shared.clear()
 
         // "Show the Welcome window": the Welcome window, though a recent project is there.
-        LaunchSettings().save(to: defaults)
+        var welcomeChosen = LaunchSettings()
+        welcomeChosen.opens = .welcome
+        welcomeChosen.save(to: defaults)
         let welcomeHandled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
         let welcome = await wait(5) { app.welcomeController?.window?.isVisible == true }
         check(welcome && app.controllers.isEmpty && !welcomeHandled,
@@ -292,5 +340,22 @@ extension SelfTest {
         check(home && projects == ["none"] && !welcomeShown && !raceHandled,
               "nxtrm with every window closed opens what it asked for, and the Dock reopen it comes with adds nothing",
               "windows \(projects), Welcome \(welcomeShown), AppKit's reopen \(raceHandled)")
+
+        // "Open a new terminal": a shell window with no project, not the most recent project and not the Welcome window.
+        for controller in app.controllers { controller.window?.close() }
+        guard await wait(5, { app.controllers.isEmpty && app.welcomeController?.window?.isVisible != true }) else {
+            return note("the windows did not close, so a Dock click under Open a new terminal was not checked")
+        }
+        var terminal = LaunchSettings()
+        terminal.opens = .newTerminal
+        terminal.save(to: defaults)
+        let terminalHandled = app.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        let shell = await wait(5) { app.controllers.count == 1 }
+        await pause(0.5) // past the reopen's moment, for a second window
+        let shellProjects: [String] = app.controllers.map { $0.project ?? "none" }
+        let welcomeUp = app.welcomeController?.window?.isVisible == true
+        check(shell && shellProjects == ["none"] && !welcomeUp && !terminalHandled,
+              "with Open a new terminal, a Dock click with every window closed opens one shell window, and no Welcome window",
+              "windows \(shellProjects), Welcome \(welcomeUp), AppKit's reopen \(terminalHandled)")
     }
 }

@@ -12,6 +12,23 @@ enum CommandLineTool {
         if let targets = RemoteAccessGuardTargets.parse(arguments) { RemoteAccessTunnelGuard.run(targets) } // `nxtrm tunnel-guard …`: Remote access's tunnel watchdog
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
+        // `nxtrm secret run …`, `nxtrm secret import …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still
+        // opens a file named secret.
+        if arguments.count >= 2, arguments[0] == "secret" {
+            if arguments[1] == "run" { SecretWrapper.run(Array(arguments.dropFirst(2))) }
+            if arguments[1] == "import" { SecretPipe.run(Array(arguments.dropFirst(2))) }
+            if ["help", "-h", "--help"].contains(arguments[1]) {
+                print(SecretRun.help)
+                exit(0)
+            }
+        }
+        #if DEBUG
+        // The self-test's wrapper (SecretWrapper.runSelfTest); the app refuses this form outside the self-test, and a
+        // release build has no such form at all.
+        if arguments.count >= 5, arguments[0] == "--self-test-secret-wrapper", arguments[3] == "secret", arguments[4] == "run" {
+            SecretWrapper.runSelfTest(arguments)
+        }
+        #endif
         switch CommandLineOpen.parse(arguments, cwd: FileManager.default.currentDirectoryPath) {
         case .help:
             print(CommandLineOpen.usage)
@@ -359,7 +376,17 @@ enum MCPBridge {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         let environment = ProcessInfo.processInfo.environment
         let socket = environment[MCPServer.socketVariable].flatMap { $0.isEmpty ? nil : $0 } ?? MCPServer.socketPath()
+        // Next Term's own skills, first, for an agent in a Next Term tab; next-term-tabs while the setting is on.
+        let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
+        let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
         let calls = DispatchGroup()
+        #if DEBUG
+        // The self-test's shorter progress interval (SelfTestOpencodeProgress).
+        let progressEvery = MCPProgress.interval(testSeconds: environment["NEXTTERM_TEST_MCP_PROGRESS_SECONDS"])
+        #else
+        let progressEvery = MCPProgress.interval
+        #endif
+        let progress = MCPProgress.Tickers(every: progressEvery, send: send)
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
@@ -368,18 +395,20 @@ enum MCPBridge {
             }
             let messages = (object as? [[String: Any]]) ?? [(object as? [String: Any]) ?? [:]]
             for message in messages {
+                progress.cancel(message) // notifications/cancelled: that call's progress stops
                 if message["method"] as? String == "tools/call" {
-                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile.
-                    DispatchQueue.global().async(group: calls) {
-                        if let response = MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) }) {
-                            send(response)
-                        }
+                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
+                    // progress token gets progress until its answer is sent (MCPProgress).
+                    progress.answer(message, in: calls) {
+                        MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
                     }
-                } else if let response = MCPServer.respond(to: message, version: version, call: { _, _ in MCPServer.CallResult(text: "") }) {
+                } else if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
+                                                           call: { _, _ in MCPServer.CallResult(text: "") }) {
                     send(response)
                 }
             }
         }
+        progress.stopAll() // stdin closed: the calls in flight send no more progress
         calls.wait() // stdin closed: finish the answers in flight (a caller may still read them), then go
         exit(0)
     }
@@ -435,7 +464,8 @@ enum MCPBridge {
         let waitSeconds = tool == "wait_for_tab" ? Double(min(300, arguments["timeout_seconds"] as? Int ?? 50)) : (MCPServer.tool(named: tool)?.timeout ?? 30)
         var timeout = timeval(tv_sec: Int(min(1900, waitSeconds + 30)), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        guard let request = MCPServer.request(tool: tool, arguments: arguments) else {
+        let caller = MCPServer.herdrCaller(ProcessInfo.processInfo.environment) // the herdr pane this agent runs in, if any
+        guard let request = MCPServer.request(tool: tool, arguments: arguments, caller: caller) else {
             return .success(MCPServer.CallResult(text: "The arguments are not valid JSON.", isError: true))
         }
         let sent = request.withUnsafeBytes { raw -> Bool in

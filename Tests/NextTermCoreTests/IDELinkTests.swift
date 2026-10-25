@@ -283,3 +283,101 @@ import Testing
         #expect(IDEPeer.executablePath(me)?.hasPrefix("/") == true)
     }
 }
+
+@Suite struct IDELinkTests {
+    /// ⌥⌘K's @-mention: Claude Code counts lines from 0, as LSP does; OpenCode from 1, and drops a mention without lines.
+    @Test func aMentionCountsLinesTheWayTheAgentDoes() throws {
+        let opencode = try #require(IDELink.mention(path: "/work/demo/src/app.ts", lines: 10...20, opencode: true))
+        #expect(opencode == IDELink.Mention(filePath: "/work/demo/src/app.ts", lineStart: 10, lineEnd: 20))
+        let claude = try #require(IDELink.mention(path: "/work/demo/src/app.ts", lines: 10...20, opencode: false))
+        #expect(claude == IDELink.Mention(filePath: "/work/demo/src/app.ts", lineStart: 9, lineEnd: 19))
+        // One line: the same line at both ends.
+        #expect(IDELink.mention(path: "/w/a.ts", lines: 7...7, opencode: true) == IDELink.Mention(filePath: "/w/a.ts", lineStart: 7, lineEnd: 7))
+        // No lines: OpenCode would drop it, so there is none and the item is typed; Claude Code takes the path alone.
+        #expect(IDELink.mention(path: "/work/demo/src/app.ts", lines: nil, opencode: true) == nil)
+        #expect(IDELink.mention(path: "/work/demo/src/app.ts", lines: nil, opencode: false) == IDELink.Mention(filePath: "/work/demo/src/app.ts"))
+    }
+
+    /// Send to Agent mentions all of its items or none: one item that has to be typed makes it type them all, in one prompt.
+    @Test func mentionsAreAllOrNone() throws {
+        let lines = ContextItem(path: "/work/demo/src/app.ts", lines: 10...20)
+        let file = ContextItem(path: "/work/demo/src/util.ts")
+        // OpenCode drops a mention without lines: a list with a whole file is typed, both items, and nothing is mentioned.
+        #expect(IDELink.mentions([lines, file], opencode: true) == nil)
+        #expect(IDELink.mentions([file, lines], opencode: true) == nil)
+        #expect(IDELink.mentions([file], opencode: true) == nil)
+        let both = try #require(IDELink.mentions([lines, ContextItem(path: "/work/demo/src/b.ts", lines: 7...7)], opencode: true))
+        #expect(both == [IDELink.Mention(filePath: "/work/demo/src/app.ts", lineStart: 10, lineEnd: 20),
+                         IDELink.Mention(filePath: "/work/demo/src/b.ts", lineStart: 7, lineEnd: 7)])
+        // Claude Code takes a whole file.
+        let claude = try #require(IDELink.mentions([lines, file], opencode: false))
+        #expect(claude == [IDELink.Mention(filePath: "/work/demo/src/app.ts", lineStart: 9, lineEnd: 19),
+                           IDELink.Mention(filePath: "/work/demo/src/util.ts")])
+        // More to say than a file and its lines (a folder, a note, code not on disk): typed, for either agent.
+        for opencode in [true, false] {
+            #expect(IDELink.mentions([lines, ContextItem(path: "/work/demo/src", isFolder: true)], opencode: opencode) == nil)
+            #expect(IDELink.mentions([ContextItem(path: "/work/demo/src/app.ts", lines: 1...2, note: "as staged")], opencode: opencode) == nil)
+            #expect(IDELink.mentions([ContextItem(path: "/work/demo/src/app.ts", lines: 1...2, code: "x = 1")], opencode: opencode) == nil)
+        }
+        #expect(IDELink.mentions([], opencode: true) == [])
+    }
+
+    /// OpenCode by its handshake's name, or by the peer check: only opencode running in a tab gets in without the token, so
+    /// such a client is OpenCode whatever it calls itself.
+    @Test func opencodeIsKnownByNameOrByThePeerCheck() {
+        #expect(IDELink.isOpencode(clientName: "opencode", tokenless: false))
+        #expect(IDELink.isOpencode(clientName: "opencode", tokenless: true))
+        #expect(IDELink.isOpencode(clientName: "opencode-cli", tokenless: true))
+        #expect(IDELink.isOpencode(clientName: nil, tokenless: true))
+        #expect(!IDELink.isOpencode(clientName: "claude-code", tokenless: false))
+        #expect(!IDELink.isOpencode(clientName: "opencode-cli", tokenless: false))
+        #expect(!IDELink.isOpencode(clientName: nil, tokenless: false))
+    }
+
+    @Test func aMentionsParamsAreWhatTheLinkSends() throws {
+        let lines = try #require(IDELink.mention(path: "/w/a.ts", lines: 10...20, opencode: true)).params
+        #expect(lines["filePath"] as? String == "/w/a.ts" && lines["lineStart"] as? Int == 10 && lines["lineEnd"] as? Int == 20)
+        #expect(JSONSerialization.isValidJSONObject(lines))
+        let file = try #require(IDELink.mention(path: "/w/a.ts", lines: nil, opencode: false)).params
+        #expect(file.count == 1 && file["filePath"] as? String == "/w/a.ts")
+    }
+
+    /// OpenCode ignores a selection without a file and text, and keeps the old one: it gets the last file shared with it, with
+    /// no text and no range, which it tells its model only as an open file.
+    @Test func opencodesEmptySelectionNamesTheLastFile() throws {
+        let empty = try #require(IDELink.opencodeEmptySelection(lastShared: "/work/demo/src/app.ts"))
+        #expect(empty["filePath"] as? String == "/work/demo/src/app.ts" && empty["text"] as? String == "")
+        #expect(empty["fileUrl"] as? String == "file:///work/demo/src/app.ts")
+        let selection = try #require(empty["selection"] as? [String: Any])
+        let start = selection["start"] as? [String: Int], end = selection["end"] as? [String: Int]
+        #expect(start == ["line": 0, "character": 0] && end == ["line": 0, "character": 0])
+        #expect(selection["isEmpty"] as? Bool == true)
+        #expect(JSONSerialization.isValidJSONObject(empty))
+        // Nothing shared yet: nothing to send. A file that holds secrets is never named.
+        #expect(IDELink.opencodeEmptySelection(lastShared: nil) == nil)
+        #expect(IDELink.opencodeEmptySelection(lastShared: "/work/demo/.env") == nil)
+        #expect(IDELink.opencodeEmptySelection(lastShared: "/work/demo/certs/server.key") == nil)
+    }
+
+    /// What OpenCode is sent for the selection Claude Code is sent, and the file it remembers as the last one shared.
+    @Test func opencodeKeepsNoStaleSelection() throws {
+        let lines: [String: Any] = ["text": "two\n", "filePath": "/work/demo/src/app.ts", "fileUrl": "file:///work/demo/src/app.ts",
+                                    "selection": ["start": ["line": 9, "character": 0], "end": ["line": 20, "character": 0], "isEmpty": false]]
+        let shared = try #require(IDELink.opencodeSelection(lines, lastShared: nil))
+        #expect(shared.params["text"] as? String == "two\n" && shared.params["filePath"] as? String == "/work/demo/src/app.ts")
+        #expect(shared.lastShared == "/work/demo/src/app.ts")
+        // The editor then shows no file it shares (a .env, or none): the last file, with no text.
+        let cleared: [String: Any] = ["selection": ["start": ["line": 0, "character": 0], "end": ["line": 0, "character": 0], "isEmpty": true]]
+        let told = try #require(IDELink.opencodeSelection(cleared, lastShared: shared.lastShared))
+        #expect(told.params["filePath"] as? String == "/work/demo/src/app.ts" && told.params["text"] as? String == "")
+        #expect(told.lastShared == "/work/demo/src/app.ts")
+        // Cleared before any file was shared: nothing is sent.
+        #expect(IDELink.opencodeSelection(cleared, lastShared: nil) == nil)
+        // A secret file's selection is never passed on, nor remembered.
+        var secret = lines
+        secret["filePath"] = "/work/demo/.env.local"
+        let guarded = try #require(IDELink.opencodeSelection(secret, lastShared: "/work/demo/src/app.ts"))
+        #expect(guarded.params["filePath"] as? String == "/work/demo/src/app.ts" && guarded.params["text"] as? String == "")
+        #expect(guarded.lastShared == "/work/demo/src/app.ts")
+    }
+}

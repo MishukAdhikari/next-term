@@ -310,10 +310,7 @@ final class UpdateKeepSessions {
     }
 
     /// The terminal window in front, which the sheet sits over.
-    private static var frontWindow: NSWindow? {
-        let candidates = [NSApp.mainWindow, NSApp.keyWindow] + NSApp.orderedWindows
-        return candidates.compactMap { $0 }.first { window in window.isVisible && !window.isMiniaturized && window is TerminalWindow }
-    }
+    private static var frontWindow: NSWindow? { TerminalWindow.front }
 
     // MARK: the install's result
 

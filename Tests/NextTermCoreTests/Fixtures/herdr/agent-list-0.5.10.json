@@ -1,0 +1,1 @@
+{"id":"cli:agent:list","result":{"type":"agent_list","agents":[{"terminal_id":"term-1","name":"claude","agent":"claude","agent_status":"working","workspace_id":"64e95948145ed1","tab_id":"64e95948145ed1-1","pane_id":"1-1","focused":true,"cwd":"/home/me/app","revision":1}]}}

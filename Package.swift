@@ -8,7 +8,8 @@ let package = Package(
         .executable(name: "NextTerm", targets: ["NextTerm"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
+        // Within 1.20: a newer SwiftTerm changes the terminal view's API (1.99 removes getTerminal()), so it comes in on purpose.
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", .upToNextMinor(from: "1.20.0")),
         // TextMate grammars (as in VS Code), tokenized natively. Exact: 0.x and one author, so updates are
         // reviewed by hand. Only its engine ships; grammars come from Resources/Highlighting (licence-checked).
         .package(url: "https://github.com/fayazara/shiki-swift.git", exact: "0.1.2"),

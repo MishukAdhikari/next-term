@@ -3,7 +3,8 @@ import NextTermCore
 
 /// Editors built on VS Code in the import window: one found only by its product.json is listed under its own
 /// name, a keymap extension in it offers the JetBrains set and notes the Vim keys, other extensions are a
-/// count, and with nothing found the window names the editors it looks for. The apps come from a made-up home
+/// count, its settings.json saying nothing of the click brings the app's own (a single click, which Apply sets and
+/// Undo takes back), and with nothing found the window names the editors it looks for. The apps come from a made-up home
 /// in a temp folder (the readers never look at yours); no key is typed, so these run whether or not the app
 /// is in front. The detectors, the planner and the shortcut set are put back as they were.
 extension SelfTest {
@@ -56,6 +57,7 @@ extension SelfTest {
         check(all.contains("1 other extension: extensions aren't imported") && !all.contains("prettier"),
               "other extensions are a count, never named", all)
         window.window?.close()
+        await importForkClickChecks(found, home: home, applications: applications)
 
         ImportSources.detectors = []
         window.showChooser(firstRun: false, completion: nil)
@@ -66,6 +68,39 @@ extension SelfTest {
     }
 
     private static let forkName = "NT Self-Test Fork"
+
+    /// Its settings.json is `{}`: with single clicks off, the preview offers the app's own click, Apply turns single
+    /// clicks on and Undo puts them back off. The setting and the last import are put back as they were.
+    private static func importForkClickChecks(_ found: DetectedApp, home: String, applications: [String]) async {
+        guard let app = AppDelegate.shared else { return }
+        let key = SidebarClick.settingKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        let coordinator = ImportCoordinator.shared
+        let lastBefore = coordinator.last
+        let window = ImportWindowController.shared
+        defer {
+            window.window?.close()
+            coordinator.last = lastBefore
+            if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        app.sidebarSingleClickOpens = false
+        window.showPreview(for: found)
+        await pause(0.3)
+        let texts = importWindowTexts(window)
+        let title = "Open files and folders with a single click, files in a preview tab"
+        let detail = "workbench.list.openMode (not set: singleClick) — \(forkName)'s default"
+        check(texts.contains(title) && texts.contains(detail), "an editor built on VS Code whose settings say nothing of the click brings its own: a single click",
+              texts.joined(separator: " | "))
+        window.window?.close()
+        let plan = ImportVSCode.plan(for: found, home: home, usKeyboard: true, applications: applications)
+        let rows = plan.settings.filter { if case .sidebarSingleClick = $0.setting { return true } else { return false } }
+        guard rows.count == 1 else { return check(false, "the editor's plan has one click row", "\(plan.settings.map(\.setting))") }
+        coordinator.apply(ImportChoice(usePreset: false, settings: rows, recentProjects: []), plan: plan, from: forkName)
+        check(app.sidebarSingleClickOpens, "Apply turns single clicks on")
+        coordinator.undo()
+        check(!app.sidebarSingleClickOpens && UserDefaults.standard.object(forKey: key) as? Bool == false, "and Undo Import turns them back off",
+              String(describing: UserDefaults.standard.object(forKey: key)))
+    }
 
     /// A home with one made-up editor built on VS Code: its app (product.json only), its settings folder and
     /// its extensions list (the IntelliJ keys, Vim, one other).

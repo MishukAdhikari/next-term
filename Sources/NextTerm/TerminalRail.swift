@@ -4,7 +4,7 @@ import NextTermCore
 /// The terminal folded away beside the editor: a slim bar at the window's edge with the arrow that brings
 /// it back, and under it each tab's status mark, so an agent finishing or asking is still seen. A click
 /// on a mark opens that tab; anywhere else on the rail, the terminal at its size.
-final class TerminalRail: NSView {
+final class TerminalRail: NSView, ProjectGlowing {
     static let width: CGFloat = 24
     private static let slotHeight: CGFloat = 24
 
@@ -30,6 +30,10 @@ final class TerminalRail: NSView {
     var topInset: CGFloat = 0 {
         didSet { if topInset != oldValue { needsLayout = true; needsDisplay = true } }
     }
+    /// At the window's corner, the strip along its top has its slice of the project colour, as the tab bars beside it do.
+    private(set) lazy var projectGlow = ProjectGlow(self)
+    /// A right-click on the strip under the traffic lights: the window's Project Color menu.
+    var onTopRowMenu: (() -> NSMenu?)?
 
     /// The most urgent first, as the tab bar's » button has it.
     private static let urgency: [TabState] = [.attention, .failed, .done, .working]
@@ -212,6 +216,8 @@ final class TerminalRail: NSView {
     override func draw(_ dirtyRect: NSRect) {
         fill.setFill()
         bounds.fill()
+        // Lit while hovered or pressed, the rail is the button it is, with no glow.
+        if !hovering && !pressed { projectGlow.draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: TabBarView.height - 1)) }
         // The tab bars' bottom line runs on across the rail.
         Theme.border.setFill()
         NSRect(x: 0, y: TabBarView.height - 1, width: bounds.width, height: 1).fill()
@@ -255,6 +261,10 @@ final class TerminalRail: NSView {
 
     /// Under the traffic lights the strip above the arrow is title bar: it moves the window, as the tab bars do.
     func isTitleBar(_ point: NSPoint) -> Bool { point.y < topInset }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        isTitleBar(convert(event.locationInWindow, from: nil)) ? onTopRowMenu?() : nil
+    }
 
     // Like a button: it opens on letting go inside, so a press can still be dragged away.
     override func mouseDown(with event: NSEvent) {

@@ -31,13 +31,18 @@ enum TabHangup {
         return left
     }
 
-    /// The same, off the main thread: closing a tab or a window doesn't wait for it.
-    static func finishLater(_ waiting: [ProcessRecord]) {
-        guard !waiting.isEmpty else { return }
+    /// The same, off the main thread: closing a tab or a window doesn't wait for it. `then` runs on the main thread
+    /// once they have ended or had their SIGTERM (Close and Remove Worktree removes the folder only then).
+    static func finishLater(_ waiting: [ProcessRecord], then: (() -> Void)? = nil) {
+        guard !waiting.isEmpty else {
+            if let then { DispatchQueue.main.async(execute: then) }
+            return
+        }
         pending.add(waiting)
         DispatchQueue.global(qos: .utility).async {
             finish(waiting)
             pending.remove(waiting)
+            if let then { DispatchQueue.main.async(execute: then) }
         }
     }
 

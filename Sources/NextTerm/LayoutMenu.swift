@@ -29,7 +29,7 @@ final class MoreButton: NSButton {
 }
 
 enum LayoutMenu {
-    /// The terminal's ⋯: split the terminal, where the terminal goes, and the sidebar's side.
+    /// The terminal's ⋯: split the terminal, where the terminal and its tabs go, and the sidebar's side.
     static func terminal() -> NSMenu {
         let menu = NSMenu(title: "Terminal")
         for (title, action, id) in [("Split Right", #selector(TerminalWindowController.splitRight(_:)), "splitRight:"),
@@ -47,15 +47,17 @@ enum LayoutMenu {
             item.indentationLevel = 1
         }
         menu.addItem(.separator())
+        TabListMenus.items(into: menu) // where its tabs go
+        menu.addItem(.separator())
         sidebarItems(into: menu)
         return menu
     }
 
-    /// The sidebar's ⋯: its side, how a click opens files, and hiding it.
+    /// The sidebar's ⋯: its side, how a click opens files and folders, and hiding it.
     static func sidebar() -> NSMenu {
         let menu = NSMenu(title: "Project")
         sidebarItems(into: menu)
-        let singleClick = menu.addItem(withTitle: "Open Files with a Single Click", action: #selector(AppDelegate.toggleSidebarSingleClick(_:)),
+        let singleClick = menu.addItem(withTitle: "Open Files and Folders with a Single Click", action: #selector(AppDelegate.toggleSidebarSingleClick(_:)),
                                        keyEquivalent: "")
         singleClick.target = AppDelegate.shared
         singleClick.state = AppDelegate.shared.sidebarSingleClickOpens ? .on : .off // and AppDelegate.validateMenuItem keeps it so

@@ -7,7 +7,8 @@ import Glibc
 
 /// Who approves the change one of Next Term's write tools would make (the tools tagged `write` that the
 /// app's MCPWriteControl runs: write_file, create_file, stage, commit, focus_tab, split_pane, close_pane,
-/// zoom_pane, set_layout and settings_set), and the skill requests install_skill and remove_skill.
+/// zoom_pane, set_layout and settings_set, and add_task through its approval), and the skill requests
+/// install_skill and remove_skill.
 ///
 /// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, connection:,
 /// reply:)` in the app, on the main thread; its reply can come from any thread.
@@ -49,11 +50,13 @@ extension MCPServer {
     static let scopeTags: [String: Scope] = {
         let read = ["list_tabs", "read_tab", "wait_for_tab", "list_projects", "get_editor_selection", "get_open_files",
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
-                    "host_changes", "list_skills", "settings_get", "list_import_sources", "preview_import"]
+                    "host_changes", "list_skills", "get_skill", "list_shortcuts", "settings_get", "list_import_sources",
+                    "preview_import", "list_secrets"]
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
-                     "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor",
+                     "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
-                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import"]
+                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
+                     "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
         for name in write { tags[name] = .write }
@@ -89,8 +92,8 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {"message": {"type": "string", "description": "The commit message."}, "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 200, "description": "Files to stage and commit, relative to the project or absolute."}, "include_staged": {"type": "boolean", "description": "Also commit what is staged already. Default false."}, \#(projectArgument), \#(reasonArgument)}, "required": ["message"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: false, timeout: 120),
         Tool(name: "focus_tab", title: "Focus a tab",
-             description: "Puts a tab (or a pane of a split tab) in front of its window and gives it that window's keyboard, so what the user types there goes to it. Unlike show_tab, it does not bring the window or Next Term forward. The user is asked on the Mac first.",
-             inputSchema: #"{"type": "object", "properties": {\#(tabArgument), \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
+             description: "Puts a tab (or a pane of a split tab) in front of its window and gives it that window's keyboard, so what the user types there goes to it: a tab an agent opened takes it only this way, or by the user's click. Unlike show_tab, it does not bring the window or Next Term forward. The user is asked on the Mac first. A herdr agent's id also moves herdr's view to that agent's pane.",
+             inputSchema: #"{"type": "object", "properties": {\#(MCPServer.agentTabID), \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "split_pane", title: "Split a pane",
              description: "Opens a new terminal pane beside a tab's pane: to its right, or below it with direction down, in that pane's folder or directory, without taking the keyboard. Beside a remote tab with no directory, the new pane opens on the same host. The user is asked on the Mac first. Returns the new pane's id, which works like any tab's.",
@@ -105,15 +108,15 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "set_layout", title: "Set the layout",
-             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top) and sidebar_side (left or right) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
-             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
+             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right) and terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
+             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
-             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position and the notification switches. Other settings are not listed.",
+             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner, agents_offer_tabs and agents_bring_tabs_forward. Other settings are not listed.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "settings_set", title: "Change settings",
-             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
+             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false), notify_commands (in_another_app, always or never), agent_spinner (spinning, still or off: how a tab shows its agent working) agents_offer_tabs (true or false: agents offer to run parallel work in Next Term tabs, with the next-term-tabs skill) and agents_bring_tabs_forward (focus, show or off: whether the window of a tab an agent opens comes forward and takes focus; the tab itself waits for the user's click either way). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
              inputSchema: #"{"type": "object", "properties": {"values": {"type": "object", "description": "Setting names and their new values, as settings_get lists them.", "minProperties": 1}, \#(reasonArgument)}, "required": ["values"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
     ]
@@ -677,6 +680,11 @@ public enum MCPSettings {
         Setting(name: "notify_agent_finished", title: "Notify when an agent finishes", kind: .flag),
         Setting(name: "notify_program_alerts", title: "Notify on a program's own bell or notification", kind: .flag),
         Setting(name: "notification_sound", title: "Play a sound with notifications", kind: .flag),
+        Setting(name: "notify_commands", title: "Notify when a command finishes or fails", kind: .choice(["in_another_app", "always", "never"])),
+        Setting(name: "agent_spinner", title: "How a tab shows its agent working (View › Agent Spinner)", kind: .choice(["spinning", "still", "off"])),
+        Setting(name: "agents_offer_tabs", title: "Agents offer to run parallel work in tabs", kind: .flag),
+        Setting(name: "agents_bring_tabs_forward", title: "When an agent opens a tab, its window comes forward (the tab never takes the keyboard by itself)",
+                kind: .choice(["focus", "show", "off"])),
     ]
 
     public static func setting(_ name: String) -> Setting? { allowlist.first { $0.name == name } }
@@ -722,17 +730,31 @@ public enum MCPSettings {
 public struct MCPLayoutChange: Equatable, Sendable {
     public var terminalPosition: String?
     public var sidebarSide: String?
+    /// top, left or right, as `TerminalTabsSetting` stores it.
+    public var terminalTabs: String?
     public var sidebarShown: Bool?
     public var terminalFolded: Bool?
 
-    public init(terminalPosition: String? = nil, sidebarSide: String? = nil, sidebarShown: Bool? = nil, terminalFolded: Bool? = nil) {
+    public init(terminalPosition: String? = nil, sidebarSide: String? = nil, terminalTabs: String? = nil, sidebarShown: Bool? = nil,
+                terminalFolded: Bool? = nil) {
         self.terminalPosition = terminalPosition
         self.sidebarSide = sidebarSide
+        self.terminalTabs = terminalTabs
         self.sidebarShown = sidebarShown
         self.terminalFolded = terminalFolded
     }
 
-    public var isEmpty: Bool { terminalPosition == nil && sidebarSide == nil && sidebarShown == nil && terminalFolded == nil }
+    public var isEmpty: Bool {
+        let everyWindow: Bool = terminalPosition == nil && sidebarSide == nil && terminalTabs == nil
+        return everyWindow && sidebarShown == nil && terminalFolded == nil
+    }
+
+    /// Whether terminal_folded needs a step of its own: the terminal is not folded or unfolded as asked, or a new
+    /// terminal position unfolds it, so one asked folded folds again after the move. Moving the sidebar to its
+    /// other side leaves the terminal as it is, so it needs none for that.
+    public static func needsFoldStep(wanted: Bool, folded: Bool, newPosition: Bool) -> Bool {
+        wanted != folded || (wanted && newPosition)
+    }
 
     public static func parse(_ arguments: [String: Any]) -> Result<MCPLayoutChange, MCPToolError> {
         MCPFileTools.catching {
@@ -742,10 +764,14 @@ public struct MCPLayoutChange: Equatable, Sendable {
                 change.terminalPosition = try args.choice("terminal_position", of: ["bottom", "right", "left", "top"], default: "bottom")
             }
             if arguments["sidebar_side"] != nil { change.sidebarSide = try args.choice("sidebar_side", of: ["left", "right"], default: "left") }
+            if arguments["terminal_tabs"] != nil {
+                let sides: [String] = TerminalTabsSetting.allCases.map(\.rawValue)
+                change.terminalTabs = try args.choice("terminal_tabs", of: sides, default: TerminalTabsSetting.top.rawValue)
+            }
             if arguments["sidebar"] != nil { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
             if arguments["terminal_folded"] != nil { change.terminalFolded = try args.bool("terminal_folded", default: false) }
             guard !change.isEmpty else {
-                throw MCPToolError("Give at least one of terminal_position, sidebar_side, sidebar and terminal_folded.")
+                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, sidebar and terminal_folded.")
             }
             return change
         }

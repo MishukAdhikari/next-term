@@ -1,5 +1,5 @@
 {
-  "changes_if_applied" : 12,
+  "changes_if_applied" : 13,
   "not_brought_over" : [
     {
       "item" : "2 extensions",
@@ -82,6 +82,13 @@
       "note" : null,
       "ticked" : true,
       "title" : "hiddenFilePatterns title"
+    },
+    {
+      "from" : "workbench.list.openMode (not set: singleClick)",
+      "id" : "set:sidebarSingleClickOpens",
+      "note" : "Cursor's default",
+      "ticked" : true,
+      "title" : "sidebarSingleClickOpens title"
     }
   ],
   "shortcut_set" : {

@@ -31,8 +31,9 @@ final class RestoreActions {
 
     /// The panes still waiting, in reading order.
     private var waiting: [Waiting] = []
-    /// Automatic resumes typed whose Return has not gone yet, by tab, each with its line as typed and its plan.
-    private var typed: [UUID: (line: RestoreLayout.LineWatch, plan: PanePlan)] = [:]
+    /// Automatic resumes typed whose Return has not gone yet, by tab, each with its line as typed (the watch, and the
+    /// command as it went in) and its plan.
+    private var typed: [UUID: (line: RestoreLayout.LineWatch, command: String, plan: PanePlan)] = [:]
     /// Automatic resumes whose Return went, by tab, until their start watch settles (KTD6).
     private var watching: [UUID: StartWatcher] = [:]
     /// Safe mode holds every action until Keep As Is or Try Again.
@@ -159,10 +160,10 @@ final class RestoreActions {
             }
             settle(tab, .applied)
         case .run(let command):
-            tab.view.typeIn(command)
+            let typedCommand = tab.view.typeIn(command)
             var line = entry.line
             line.typed(writes: tab.view.inputWrites)
-            typed[tab.id] = (line, entry.plan)
+            typed[tab.id] = (line: line, command: typedCommand, plan: entry.plan)
             DispatchQueue.main.asyncAfter(deadline: .now() + RestoreLayout.returnDelay) { [weak self] in
                 MainActor.assumeIsolated { self?.pressReturn(tab) }
             }
@@ -171,7 +172,8 @@ final class RestoreActions {
 
     /// A typed resume's Return, onto the line it typed alone: anything put there since leaves the line as it is, the
     /// command and what came after it, and nothing runs. Once its Return goes, its start is watched (KTD6), and its
-    /// action settles with the watch's verdict, which MCP reads from then on.
+    /// action settles with the watch's verdict, which MCP reads from then on. The Return is the restore's own, so a zsh
+    /// with the history hook keeps the resume out of its history (TerminalTab.submitOwnLine).
     private func pressReturn(_ tab: TerminalTab) {
         guard let held = typed.removeValue(forKey: tab.id) else { return }
         let after = RestoreLayout.afterResumeTyped(lineTaken: Self.taken(held.line, in: tab), exited: tab.exited)
@@ -192,9 +194,11 @@ final class RestoreActions {
             }
             if !self.isWaiting { self.finished() }
         }
-        tab.view.send(txt: "\r")
-        MCPRestoredTabs.started(tab, StartWatch.Report(verdict: .watching))
-        watcher.begin()
+        // The watch counts the tab's writes from its Return on as the user's, so it starts once the Return went.
+        tab.submitOwnLine(held.command) {
+            MCPRestoredTabs.started(tab, StartWatch.Report(verdict: .watching))
+            watcher.begin()
+        }
     }
 
     /// Whether anything but the restore reached the tab's line since `line` was taken.
@@ -314,7 +318,7 @@ final class StartWatcher {
     private func mark(_ event: ShellIntegration.Event) {
         guard let tab else { return }
         switch event {
-        case .commandStarted(let line, _):
+        case .commandStarted(let line, _, _):
             if let armed {
                 // The user ran something else: the line is theirs now, and nothing is watched.
                 guard line.trimmingCharacters(in: .whitespaces) == armed else { return uninstall() }

@@ -462,9 +462,12 @@ extension SelfTest {
         }
         let savedHosts = RemoteHosts.all
         let savedLast = UserDefaults.standard.string(forKey: "lastRemoteHost")
+        // The click on the saved host below picks it in the Welcome window, which remembers it for the next show.
+        let savedPick = UserDefaults.standard.string(forKey: SwitcherSelection.lastPickKey)
         defer {
             RemoteHosts.all = savedHosts
             UserDefaults.standard.set(savedLast, forKey: "lastRemoteHost")
+            UserDefaults.standard.set(savedPick, forKey: SwitcherSelection.lastPickKey)
         }
         let host = RemoteHost(name: "selftest-welcome", destination: "nt@selftest.invalid", directory: "~", keep: .off)
         RemoteHosts.save(host)

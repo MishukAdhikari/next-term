@@ -1,0 +1,1 @@
+{"id":"cli:agent:focus","result":{"type":"agent_info","agent":{"terminal_id":"t4","agent":"codex","display_agent":"codex","agent_status":"blocked","state_labels":{},"tokens":{},"workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":true,"launch_pending":false,"interactive_ready":true,"state_change_seq":4,"cwd":"/home/me/web","revision":13}}}

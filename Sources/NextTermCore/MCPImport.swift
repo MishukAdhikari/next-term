@@ -123,6 +123,7 @@ public enum MCPImport {
         ("optionAsMeta", "on or off"),
         ("terminalPosition", "bottom, right, left or top"),
         ("sidebarSide", "left or right"),
+        (TerminalTabsSetting.key, "a list of the terminal’s tabs down its left or right, with the project sidebar’s side and Show Folders"),
         ("editorFontFamily", "an installed monospaced font"),
         ("terminalFontFamily", "an installed monospaced font"),
         ("terminalPalette", "16 colours with the text, background, cursor and selection colours"),
@@ -496,6 +497,7 @@ public enum MCPImport {
                 }
             }
             plan.skipped += result.skipped
+            if let folders = result.folderClick { plan.noteFolderClick(folders.single, source: folders.source) }
         case .vsCodeKeybindings:
             guard let rules = ImportVSCode.rules(text) else {
                 return .failure(MCPToolError("\(name) couldn't be read as a VS Code keybindings file (a JSON list with comments)."))

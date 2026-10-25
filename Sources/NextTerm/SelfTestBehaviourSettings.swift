@@ -75,7 +75,7 @@ extension SelfTest {
     }
 
     /// A chosen folder that is there (neither the project's, the tab's nor home): ⌘T opens in it, in this window
-    /// and with no window open, where ⌘T opens a window.
+    /// and with no window open, where ⌘T opens a window; New Terminal (⌘N) starts its window there too.
     private static func chosenFolderChecks(_ c: TerminalWindowController, app: AppDelegate) async {
         let chosen = canonicalPath(NSTemporaryDirectory())
         Preferences.terminalStartFolder = .folder(chosen)
@@ -90,6 +90,17 @@ extension SelfTest {
         _ = await wait(20) { opened.tabs.first?.status.integrated == true }
         opened.window?.performClose(nil)
         _ = await wait(3) { !app.controllers.contains { $0 === opened } }
+        let windows = app.controllers
+        app.newWindow(nil)
+        if let terminal = app.controllers.first(where: { window in !windows.contains { $0 === window } }) {
+            let starts = terminal.tabs.first.map { canonicalPath($0.directory) }
+            check(starts == chosen && terminal.project == nil, "New Terminal starts its window in the chosen folder too", starts ?? "no tab")
+            _ = await wait(20) { terminal.tabs.first?.status.integrated == true }
+            terminal.window?.performClose(nil)
+            _ = await wait(3) { !app.controllers.contains { $0 === terminal } }
+        } else {
+            check(false, "New Terminal opens a window")
+        }
         c.window?.makeKeyAndOrderFront(nil)
     }
 

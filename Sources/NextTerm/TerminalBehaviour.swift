@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 import SwiftTerm
 
-// Settings › Terminal: the cursor, the scrollback a tab keeps and where ⌘T opens a tab (NextTermCore/
-// TerminalSettings.swift). Applied at once to every open terminal; an import can set them too.
+// Settings › Terminal: the cursor, the scrollback a tab keeps, where ⌘T opens a tab (NextTermCore/
+// TerminalSettings.swift), where the terminal sits around the editor and where its tabs show. Applied at once to
+// every open terminal; an import can set them too.
 
 extension Preferences {
     static var terminalCursorShape: CursorShape {
@@ -80,29 +81,36 @@ extension TerminalWindowController {
 }
 
 extension AppDelegate {
-    /// Where ⌘T with no window open starts the window it opens: the home folder or a folder chosen in Settings ›
-    /// Terminal › New tabs. The project's and the current tab's folders have neither here, so the shell's own.
-    var newTabWindowDirectory: String? {
-        Preferences.terminalStartFolder.localDirectory(project: nil, current: nil)
+    /// Where a window with no project starts (New Terminal, ⌘N, "Open a new terminal" at launch, ⌘T with no window
+    /// open): the home folder or a folder chosen in Settings › Terminal › New tabs (StartFolder.newWindowDirectory).
+    var newWindowDirectory: String? {
+        Preferences.terminalStartFolder.newWindowDirectory(home: NSHomeDirectory(), exists: StartFolder.isLocalFolder)
     }
 }
 
 extension StartFolder {
     /// `directory`, with a chosen folder used while it is a folder on this Mac.
     func localDirectory(project: String?, current: String?) -> String? {
-        directory(project: project, current: current, home: NSHomeDirectory()) { path in
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
-        }
+        directory(project: project, current: current, home: NSHomeDirectory(), exists: Self.isLocalFolder)
+    }
+
+    static func isLocalFolder(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 }
 
-/// Settings › Terminal's rows for the cursor, the scrollback and where new tabs open.
+/// Settings › Terminal's rows for the cursor, the scrollback, where new tabs open, and where the terminal and its tabs
+/// go.
 final class TerminalBehaviourControls: NSObject {
     let shape = NSPopUpButton()
     let blink = NSButton(checkboxWithTitle: "Blink", target: nil, action: nil)
     let scrollback = NSPopUpButton()
     let startFolder = NSPopUpButton()
+    /// View › Terminal Position, here too.
+    let position = NSPopUpButton()
+    /// View › Terminal Tabs, here too, on the same row: where the terminal goes, then where its tabs go in it.
+    let tabs = NSPopUpButton()
 
     static let scrollbackChoices = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000]
 
@@ -121,14 +129,37 @@ final class TerminalBehaviourControls: NSObject {
         scrollback.toolTip = "Lines each terminal keeps above the screen. Fewer lines drops the oldest in open terminals at once."
         startFolder.target = self
         startFolder.action = #selector(startFolderChanged)
-        startFolder.toolTip = "Where ⌘T opens a tab. Splits open in the folder of the pane they split from."
+        startFolder.toolTip = "Where ⌘T opens a tab, and New Terminal (⌘N) a window: a folder chosen here, else your home folder. "
+            + "Splits open in the folder of the pane they split from."
+        for place in TerminalPosition.allCases {
+            position.addItem(withTitle: place.title)
+            position.lastItem?.representedObject = place.rawValue
+        }
+        position.target = self
+        position.action = #selector(positionChanged)
+        position.toolTip = "Where the terminal sits around the editor, in every window. With no file open it fills the window."
+        // Chosen from the View menu or the terminal's ⋯ while Settings is open.
+        NotificationCenter.default.addObserver(self, selector: #selector(showPosition), name: AppDelegate.terminalPositionChanged, object: nil)
+        for place in TerminalTabsSetting.allCases {
+            tabs.addItem(withTitle: place.title)
+            tabs.lastItem?.representedObject = place.rawValue
+        }
+        tabs.target = self
+        tabs.action = #selector(tabsChanged)
+        tabs.toolTip = "Where the terminal’s tabs show, in every window: along its bar at the top, or in a list down its left or right."
+        tabs.setAccessibilityLabel("Terminal tabs")
+        NotificationCenter.default.addObserver(self, selector: #selector(showTabs), name: AppDelegate.terminalTabsChanged, object: nil)
     }
 
     /// The rows, made with the settings view's own row maker.
     func rows(_ row: (String, [NSView]) -> NSStackView) -> [NSView] {
-        [row("Cursor:", [shape, blink]),
-         row("Scrollback:", [scrollback, NSTextField(labelWithString: "lines")]),
-         row("New tabs:", [startFolder])]
+        // Tabs shares Position's row: both say where the terminal's parts go, and Settings › Terminal stays as tall.
+        let place = row("Position:", [position, NSTextField(labelWithString: "Tabs:"), tabs])
+        place.setCustomSpacing(18, after: position)
+        return [row("Cursor:", [shape, blink]),
+                row("Scrollback:", [scrollback, NSTextField(labelWithString: "lines")]),
+                row("New tabs:", [startFolder]),
+                place]
     }
 
     func refresh() {
@@ -142,6 +173,18 @@ final class TerminalBehaviourControls: NSObject {
         }
         scrollback.selectItem(withTag: lines)
         fillStartFolder()
+        showPosition()
+        showTabs()
+    }
+
+    @objc private func showPosition() {
+        guard let current = AppDelegate.shared?.terminalPosition else { return }
+        position.selectItem(at: TerminalPosition.allCases.firstIndex(of: current) ?? 0)
+    }
+
+    @objc private func showTabs() {
+        guard let current = AppDelegate.shared?.terminalTabs else { return }
+        tabs.selectItem(at: TerminalTabsSetting.allCases.firstIndex(of: current) ?? 0)
     }
 
     static func formatted(_ lines: Int) -> String {
@@ -180,6 +223,16 @@ final class TerminalBehaviourControls: NSObject {
     @objc private func scrollbackChanged() {
         guard let item = scrollback.selectedItem else { return }
         AppDelegate.shared.setTerminalScrollback(item.tag)
+    }
+
+    @objc private func positionChanged() {
+        guard let raw = position.selectedItem?.representedObject as? String, let chosen = TerminalPosition(rawValue: raw) else { return }
+        AppDelegate.shared.moveTerminal(to: chosen, announce: true)
+    }
+
+    @objc private func tabsChanged() {
+        guard let raw = tabs.selectedItem?.representedObject as? String, let chosen = TerminalTabsSetting(rawValue: raw) else { return }
+        AppDelegate.shared.moveTerminalTabs(to: chosen)
     }
 
     @objc private func startFolderChanged() {

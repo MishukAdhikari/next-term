@@ -3,7 +3,7 @@ import CryptoKit
 import NextTermCore
 import SQLite3
 
-/// Agent sessions from every agent: Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot CLI beside
+/// Agent sessions from every agent: Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot CLI beside
 /// Claude Code, in the Welcome window, ⌥⌘O and the sidebar's Agent Sessions group; a session open in a
 /// tab (Go to Tab, "running"), whether it was resumed by id or started plainly; Continue Latest; More….
 /// Every store is made here by hand, and the commands are echoed, not run.
@@ -63,7 +63,7 @@ extension SelfTest {
         guard let welcome = app.welcomeController, let welcomeWindow = welcome.window else { return check(false, "sessions: the Welcome window opens") }
         welcome.select(project: project)
         check(await wait(10) { welcome.shownSessionTitles.count == 8 },
-              "Welcome lists Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot CLI sessions beside Claude Code's",
+              "Welcome lists Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot CLI sessions beside Claude Code's",
               welcome.shownSessionTitles.joined(separator: " | "))
         check(welcome.filterIsMenu, "with six agents in a folder, the agent filter is a menu")
         welcome.selectSession(titled: "Tidy the routes")
@@ -154,6 +154,12 @@ extension SelfTest {
         let cell = row >= 0 ? sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SessionRowCellView : nil
         check(cell?.badge.text == "running" && sidebar.outline.row(forItem: group.more) >= 0, "its row has a “running” badge, and More… is listed",
               "row \(row), badge \(cell?.badge.text ?? "none")")
+        // More… says the key that shows the whole list anywhere: Resume Agent Session…'s, as the menu has it now.
+        let moreRow = sidebar.outline.row(forItem: group.more)
+        let moreCell = moreRow >= 0 ? sidebar.outline.view(atColumn: 0, row: moreRow, makeIfNecessary: true) as? SessionRowCellView : nil
+        let resumeKey = SessionRowCellView.resumeKey ?? ""
+        check(!resumeKey.isEmpty && moreCell?.nameText.hasPrefix("More…") == true && moreCell?.nameText.hasSuffix(resumeKey) == true,
+              "More… shows Resume Agent Session…'s key", "\(moreCell?.nameText ?? "no row"), key \(resumeKey)")
         if let window = holder.window { await screenshot(window, suffix: "sidebar-sessions") }
 
         // Every item of a session's menu, More…'s and the group's is a command showing its key; of the agents' Continue
@@ -228,7 +234,7 @@ extension SelfTest {
     }
 
     /// One session per agent in its own format (two for Claude Code), newest to oldest: Claude Code 10 min
-    /// ago, Gemini CLI an hour, opencode two, Copilot CLI three, Qwen Code four, Cursor Agent five, Claude
+    /// ago, Gemini CLI an hour, OpenCode two, Copilot CLI three, Qwen Code four, Cursor Agent five, Claude
     /// Code again five days.
     private static func writeSessionStores(home: String, project: String) {
         let iso = ISO8601DateFormatter()

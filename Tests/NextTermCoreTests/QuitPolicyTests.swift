@@ -211,6 +211,26 @@ import Testing
         #expect(!QuitPolicy.settings(after: .quit(resume: true, dontAskAgain: true), from: noScrollback).keepScrollback)
     }
 
+    @Test func theAnswerNeverUndoesOpenANewTerminal() {
+        let terminal = chosen(.newTerminal)
+        let resume = chosen(.lastProjects)
+        // The box starts unchecked: nothing resumes under it.
+        #expect(!QuitPolicy.resumeCheckbox(terminal))
+        // Unchecked, on the plain dialog or an alert: "At launch" stays as it is.
+        #expect(QuitPolicy.settings(after: .quit(resume: false, dontAskAgain: false), from: terminal) == terminal)
+        #expect(QuitPolicy.settings(after: .checkbox(checked: false), from: terminal) == terminal)
+        var terminalQuietly = terminal
+        terminalQuietly.askToReopenOnQuit = false
+        #expect(QuitPolicy.settings(after: .quit(resume: false, dontAskAgain: true), from: terminal) == terminalQuietly)
+        // Checked: Resume where I left off, as from any other choice.
+        #expect(QuitPolicy.settings(after: .quit(resume: true, dontAskAgain: false), from: terminal) == resume)
+        #expect(QuitPolicy.settings(after: .checkbox(checked: true), from: terminal) == resume)
+        // Through the quit's replies too.
+        var unchecked = QuitAsking()
+        unchecked.reply(.goOn(resume: false, dontAskAgain: false), to: plain(false))
+        #expect(!unchecked.quitConsent && unchecked.settings(from: terminal) == terminal)
+    }
+
     func chosen(_ opens: LaunchOpens) -> LaunchSettings {
         var settings = LaunchSettings()
         settings.opens = opens

@@ -49,6 +49,8 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
                 // free once Delete Line moves to ⌘⌫. ⌘T stays New Tab, which it is in every terminal.
                 "gitCommit:": cmd("k"),
                 "gitPush:": KeyChord(key: "k", command: true, shift: true),
+                "insertMarkdownLink:": none,       // ⌘K is Commit… there, everywhere
+                "goToHeading:": cmd("\u{F70F}"),  // ⌘F12, the file's structure there; ⇧⌘O is Go to File
             ]
         }
     }
@@ -101,6 +103,17 @@ public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
 
     /// Whether its reader looks for the app itself, so an app not found was removed. Terminal comes with macOS.
     public var looksForApp: Bool { self != .terminalApp }
+
+    /// What a click in its file tree does when its settings say nothing, which is what its import sets the sidebar's
+    /// click to then: true opens a file (and a folder) with one click, false with two. Nil for an app with no file
+    /// tree, whose import leaves the setting as it is. Every new kind of app must say.
+    public var singleClickDefault: Bool? {
+        switch self {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .sublimeText, .zed: return true
+        case .jetBrains: return false
+        case .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return nil
+        }
+    }
 }
 
 /// The groups the import window lists apps in, in its order. Files (a theme or settings file picked by hand) come
@@ -193,12 +206,13 @@ public enum ImportedSetting: Equatable, Sendable {
     case trimTrailingWhitespace(Bool)     // on save
     case insertFinalNewline(Bool)         // on save
     case hiddenFiles([String])            // FileHiding patterns, added to the user's own
-    case sidebarSingleClick(Bool)         // a click on a file in the project sidebar opens it, in a preview tab
+    case sidebarSingleClick(Bool)         // a click in the project sidebar opens a file (in a preview tab) or a folder
     case backgroundFetch(String)          // a FetchFrequency: 5, 10, 30, popup or off
     case diffLayout(String)               // sideBySide or unified
     case currentLineBlame(Bool)           // the caret line's last commit, after its text
     case openProjectsIn(String)           // where Open Project goes when the window is in use: ask, thisWindow, newWindow
     case launchOpens(String)              // a LaunchOpens: welcome or lastProjects
+    case tabList(TabListImport)           // the terminal's tabs in a list down one side, with the sidebar's side
 
     /// The UserDefaults key the app keeps it under.
     public var key: String {
@@ -226,17 +240,19 @@ public enum ImportedSetting: Equatable, Sendable {
         case .currentLineBlame: return "currentLineBlame"
         case .openProjectsIn: return "openProjectsIn"
         case .launchOpens: return LaunchSettings.Key.opens
+        case .tabList: return TerminalTabsSetting.key
         }
     }
 
     /// The keys that hold a Bool (UserDefaults hands a number back for those too).
     public static let boolKeys: Set<String> = ["softWrap", "optionAsMeta", "terminalCursorBlink", "trimTrailingWhitespace", "insertFinalNewline",
-                                               "sidebarSingleClickOpens", "currentLineBlame"]
+                                               "sidebarSingleClickOpens", "currentLineBlame", TabListImport.showsFoldersKey]
 
     /// Every key applying it writes, for the snapshot Undo restores: custom colours are also kept for
-    /// Settings to offer again.
+    /// Settings to offer again, and the tab list's row writes the sidebar's side and Show Folders too.
     public var keys: [String] {
         if case .terminalPalette = self { return [key, "customTerminalPalette"] }
+        if case .tabList(let list) = self { return list.keys }
         return [key]
     }
 
@@ -251,6 +267,54 @@ public enum ImportedSetting: Equatable, Sendable {
     }
 
     public static func scrollback(clamping lines: Int) -> ImportedSetting { .terminalScrollback(Scrollback.clamped(lines)) }
+}
+
+/// The terminal's tabs in a list down one side, set by one row together with the project sidebar's side and Show
+/// Folders, so Apply keeps all three for Undo and a window is laid out once for them. Nil leaves that one as it is.
+public struct TabListImport: Equatable, Sendable {
+    /// The side the list goes, as Settings › Terminal › Tabs keeps it: left or right.
+    public let tabs: String
+    /// The project sidebar's side: left or right.
+    public let sidebarSide: String?
+    /// Show Folders: each row's second line, the tab's folder.
+    public let showsFolders: Bool?
+
+    public init(tabs: String, sidebarSide: String? = nil, showsFolders: Bool? = nil) {
+        self.tabs = tabs
+        self.sidebarSide = sidebarSide
+        self.showsFolders = showsFolders
+    }
+
+    /// Where Show Folders is kept.
+    public static let showsFoldersKey = "tabListShowsFolders"
+
+    /// Every key it writes.
+    public var keys: [String] {
+        var keys: [String] = [TerminalTabsSetting.key]
+        if sidebarSide != nil { keys.append("sidebarSide") }
+        if showsFolders != nil { keys.append(Self.showsFoldersKey) }
+        return keys
+    }
+
+    /// The preview's row: "Tabs on the left, project files on the right".
+    public var title: String {
+        guard let sidebarSide else { return "Tabs on the \(tabs)" }
+        return "Tabs on the \(tabs), project files on the \(sidebarSide)"
+    }
+
+    /// What a one-click import says it did, so the layout never changes unannounced.
+    public var movedLine: String {
+        guard let sidebarSide else { return "Tabs moved to the \(tabs)." }
+        return "Tabs moved to the \(tabs), project files to the \(sidebarSide)."
+    }
+
+    /// Next Term has it already: the tabs on that side, and the sidebar and Show Folders as it names them.
+    public func isSet(tabs current: String, sidebarSide side: String, showsFolders folders: Bool) -> Bool {
+        let sameTabs: Bool = current == tabs
+        let sameSide: Bool = sidebarSide.map { $0 == side } ?? true
+        let sameFolders: Bool = showsFolders.map { $0 == folders } ?? true
+        return sameTabs && sameSide && sameFolders
+    }
 }
 
 /// Rows for the settings several importers read the same way.
@@ -398,6 +462,32 @@ public struct ImportPlan: Equatable, Sendable {
         self.shortcuts = shortcuts
         self.recentProjects = recentProjects
         self.skipped = skipped
+    }
+
+    /// The sidebar's click the plan sets, if it sets one: true for a single click.
+    public var singleClick: Bool? {
+        settings.lazy.compactMap { row -> Bool? in
+            if case .sidebarSingleClick(let on) = row.setting { return on }
+            return nil
+        }.last
+    }
+
+    /// The other app's own click, its default (`ImportSourceKind.singleClickDefault`), when the plan has no click row:
+    /// its settings say nothing about it. Only for a settings file that was read, or that isn't there (the app's
+    /// defaults apply to it all): one that couldn't be read may say otherwise. An app with no file tree adds nothing.
+    mutating func addSingleClickDefault(for kind: ImportSourceKind, source: String, note: String) {
+        guard let value = kind.singleClickDefault, singleClick == nil else { return }
+        settings.append(PlannedSetting(.sidebarSingleClick(value), source: source, note: note))
+    }
+
+    /// Why a folder key is left out: Next Term has one switch for files and folders, which the file key sets.
+    static let sameClickForFolders = "Next Term opens folders with the same click as files"
+
+    /// The other app's click for folders (`folders`, true for a single click), when it differs from the one the plan
+    /// sets for files: listed as skipped, under `source`.
+    mutating func noteFolderClick(_ folders: Bool?, source: String) {
+        guard let folders, let files = singleClick, folders != files else { return }
+        skipped.append(SkippedItem(source, Self.sameClickForFolders))
     }
 }
 

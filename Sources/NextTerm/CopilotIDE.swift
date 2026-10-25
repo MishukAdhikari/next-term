@@ -580,19 +580,18 @@ extension AppDelegate {
 
 extension TerminalWindowController {
     /// The folders this window lists for `copilot` to connect from: the project, the sidebar's root, and each
-    /// local tab's folder and its root. Your home folder and / are left out: Copilot connects by itself to an
-    /// editor listing the folder it starts in, so every `copilot` started there in any terminal would come
-    /// to Next Term.
+    /// local tab's folder and its project. The folders that are never a project (your home folder, /, /Volumes and
+    /// ~/Library: ProjectRoot.isNeverRoot) are left out: Copilot connects by itself to an editor listing the folder it
+    /// starts in, so every `copilot` started there in any terminal would come to Next Term.
     var copilotFolders: [String] {
         var folders: [String] = []
         if let project { folders.append(project) }
         if let root = sidebar.root?.path { folders.append(root) }
         for tab in tabs where tab.remote == nil {
-            folders.append(ProjectRoot.find(from: tab.directory))
+            if let root = ProjectRoot.project(from: tab.directory) { folders.append(root) }
             folders.append(tab.directory)
         }
-        let home = canonicalPath(FileManager.default.homeDirectoryForCurrentUser.path)
-        return folders.map(canonicalPath).filter { $0 != home && $0 != "/" }
+        return folders.map(canonicalPath).filter { !ProjectRoot.isNeverRoot($0) }
     }
 
     /// `folder` is one of this window's Copilot folders, or inside one.

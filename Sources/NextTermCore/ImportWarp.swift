@@ -25,7 +25,11 @@ public enum ImportWarp {
     static let systemTheme = Key(table: "appearance.themes", key: "system_theme")
     static let systemThemes = Key(table: "appearance.themes", key: "selected_system_themes")
     static let meta = Key(table: "terminal.input", key: "extra_meta_keys")
-    static let allowlist: Set<Key> = [font, size, theme, systemTheme, systemThemes, meta]
+    static let verticalTabs = Key(table: "appearance.vertical_tabs", key: "enabled")
+    static let viewMode = Key(table: "appearance.vertical_tabs", key: "view_mode")
+    /// The vertical tab panel's side, where the settings name one, under either name.
+    static let panelSides = [Key(table: "appearance.vertical_tabs", key: "side"), Key(table: "appearance.vertical_tabs", key: "position")]
+    static let allowlist: Set<Key> = Set([font, size, theme, systemTheme, systemThemes, meta, verticalTabs, viewMode] + panelSides)
 
     struct Key: Hashable {
         let table: String
@@ -40,8 +44,8 @@ public enum ImportWarp {
 
     // MARK: plan
 
-    /// The terminal font, its size, Option as Meta and a custom theme's colours. `fonts`: the fonts this Mac
-    /// has (tests pass their own).
+    /// The vertical tab panel, the terminal font, its size, Option as Meta and a custom theme's colours. `fonts`: the
+    /// fonts this Mac has (tests pass their own).
     public static func plan(for app: DetectedApp, home: String = NSHomeDirectory(), usKeyboard: Bool = true,
                             fonts: FontCatalog = .system) -> ImportPlan {
         var plan = ImportPlan(preset: app.preset)
@@ -52,6 +56,8 @@ public enum ImportWarp {
             return plan
         }
         let scan = Scan(text)
+        // The vertical tab panel first: it is why many switch.
+        let panelUnused = addTabList(scan, to: &plan)
         if let name = scan.values[font].flatMap(TOML.string) {
             let row = ImportFonts.row(.terminal, list: name, source: "font_name", fonts: fonts)
             plan.settings += [row.setting].compactMap { $0 }
@@ -71,13 +77,40 @@ public enum ImportWarp {
         for table in scan.neverRead where !SecretGuard.looksSecret(table) {
             plan.skipped.append(SkippedItem("[\(table)]", "never imported: can hold secrets or configures agents"))
         }
-        if scan.others > 0 {
-            plan.skipped.append(SkippedItem("\(scan.others) other setting\(scan.others == 1 ? "" : "s")", "no matching Next Term setting yet"))
+        let others = scan.others + panelUnused
+        if others > 0 {
+            plan.skipped.append(SkippedItem("\(others) other setting\(others == 1 ? "" : "s")", "no matching Next Term setting yet"))
         }
         if isRegularFile((base as NSString).appendingPathComponent("keybindings.yaml")) {
             plan.skipped.append(SkippedItem("keybindings.yaml", "Warp's own shortcuts aren't brought over yet"))
         }
         return plan
+    }
+
+    /// The vertical tab panel turned on: one ticked row putting the terminal's tabs in a list down the panel's side,
+    /// the left unless the settings name the right, and the project files on the other side. Expanded view, which
+    /// shows more under each tab, also turns on each tab's folder under its title. Returns how many of the panel's
+    /// values were read and not used, for the other settings' count: with the panel off they are settings like any
+    /// other that didn't come over.
+    static func addTabList(_ scan: Scan, to plan: inout ImportPlan) -> Int {
+        let extras: [Key] = ([viewMode] + panelSides).filter { scan.values[$0] != nil }
+        guard let raw = scan.values[verticalTabs] else { return extras.count }
+        guard let on = TOML.bool(raw) else {
+            plan.skipped.append(SkippedItem("vertical_tabs.enabled", "value not recognised"))
+            return extras.count
+        }
+        guard on else { return extras.count }
+        let expanded: Bool = scan.values[viewMode].flatMap(TOML.string)?.lowercased() == "expanded"
+        let named: (key: String, side: String)? = panelSides.lazy.compactMap { (key: Key) -> (key: String, side: String)? in
+            guard let side = scan.values[key].flatMap(TOML.string)?.lowercased(), side == "left" || side == "right" else { return nil }
+            return (key.key, side)
+        }.first
+        let right: Bool = named?.side == "right"
+        let list = TabListImport(tabs: right ? "right" : "left", sidebarSide: right ? "left" : "right", showsFolders: expanded ? true : nil)
+        let source: String = "vertical_tabs.enabled true" + (named.map { ", \($0.key) \($0.side)" } ?? "")
+        let note: String? = expanded ? "with each tab’s folder under it, as expanded view had it" : nil
+        plan.settings.append(PlannedSetting(.tabList(list), source: source, note: note))
+        return 0
     }
 
     /// `extra_meta_keys`: both Option keys → on; one of them → offered unticked (Next Term can't set one side yet).

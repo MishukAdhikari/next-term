@@ -1,0 +1,482 @@
+import CryptoKit
+import Foundation
+import LocalAuthentication
+import NextTermCore
+import Security
+
+// The keyrings that guard Secrets' vault key. The vault's format and crypto are in Core (SecretVault.swift);
+// these hold the private keys.
+
+/// A P256 key in this Mac's Secure Enclave, made with user presence: every key agreement needs Touch ID or the Mac
+/// password. Its `dataRepresentation` is a blob the vault stores as `keyBlob`, not a keychain item, so no entitlement
+/// is needed. The blob opens only on the Mac that made it.
+final class SecureEnclaveKeyring: VaultKeyring {
+    let kind = VaultKeyringKind.secureEnclave
+    private let blob: Data
+    /// Known for a key made here; read from the blob otherwise.
+    private var knownPublicKey: Data?
+
+    /// Whether the load check opens the blob at launch. A hand check records whether opening it with interaction
+    /// not allowed raises a prompt; if it does, this turns off and the first use finds a key that can't open.
+    static let loadCheckOpensBlob = true
+
+    static var isAvailable: Bool { SecureEnclave.isAvailable }
+
+    /// The keyring of an existing vault.
+    init(blob: Data) {
+        self.blob = blob
+    }
+
+    private init(blob: Data, publicKey: Data) {
+        self.blob = blob
+        self.knownPublicKey = publicKey
+    }
+
+    /// A new Secure Enclave key, with the access control `UserPresence` evaluates.
+    static func make() throws -> SecureEnclaveKeyring {
+        guard let control = UserPresence.secureEnclaveAccessControl() else { throw SecretVault.Failure.cantOpen }
+        let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(compactRepresentable: false, accessControl: control,
+                                                                  authenticationContext: nil)
+        return SecureEnclaveKeyring(blob: key.dataRepresentation, publicKey: key.publicKey.x963Representation)
+    }
+
+    var keyBlob: Data? { blob }
+
+    func publicKey() throws -> Data {
+        if let knownPublicKey { return knownPublicKey }
+        let key = try open(context: Self.quietContext())
+        return key.publicKey.x963Representation
+    }
+
+    /// The load check, with no Touch ID: the key opened from its blob with no interaction allowed, its public key
+    /// compared with the vault's. Making the key object and reading its public key need no presence; only the agreement
+    /// is gated.
+    func check(publicKey: Data) -> Bool {
+        guard Self.loadCheckOpensBlob else { return true }
+        guard let key = try? open(context: Self.quietContext()) else { return false }
+        return key.publicKey.x963Representation == publicKey
+    }
+
+    func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
+        guard let context = context as? LAContext else { throw SecretVault.Failure.cancelled }
+        let key: SecureEnclave.P256.KeyAgreement.PrivateKey
+        do {
+            key = try open(context: context)
+        } catch {
+            throw Self.failure(error)
+        }
+        do {
+            let secret = try key.sharedSecretFromKeyAgreement(with: ephemeral)
+            return VaultKeyringSecret(secret: secret, publicKey: key.publicKey.x963Representation)
+        } catch {
+            throw Self.failure(error)
+        }
+    }
+
+    private func open(context: LAContext) throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {
+        try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: blob, authenticationContext: context)
+    }
+
+    private static func quietContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
+    }
+
+    /// What a failed open or key agreement means. An `LAError` that is a cancel is the user's, and any other `LAError`
+    /// is LocalAuthentication's, which the next try may pass: neither marks Secrets can't open. A CryptoKit or Security
+    /// error is a key that doesn't open on this Mac (another Mac's blob, a reset Secure Enclave), which does.
+    static func failure(_ error: Error) -> SecretVault.Failure {
+        guard error is LAError else { return .cantOpen }
+        return UserPresence.failure(error) == .cancelled ? .cancelled : .keyUnavailable
+    }
+}
+
+// MARK: the login keychain
+
+/// One generic password item: a keychain vault's private key, or the recovery key a copy of the vault key in the
+/// login keychain would be wrapped under. The self-test passes an in-memory store, so the keyring's rules are tested
+/// without the login keychain.
+protocol PasswordStore: AnyObject {
+    /// The item's data. Called only after a presence check: macOS may ask for the login password first.
+    func read() throws -> Data?
+    /// Adds the item. One that is there already is an error and is never written over: it may be the only key that
+    /// opens a vault.
+    func add(_ data: Data) throws
+    func delete() throws
+    /// Whether the item is there: its attributes only, never its data. Nil when the keychain wouldn't say (locked and
+    /// its unlock cancelled, or no interaction allowed): that is no sign the item is gone.
+    func exists() -> Bool?
+}
+
+/// A generic password in the login keychain, by `SecItem` calls. The login keychain is a file, so data-protection
+/// attributes such as `ThisDeviceOnly` don't apply to it. Every call names the login keychain (`LoginKeychain.login`).
+final class LoginKeychain: PasswordStore {
+    static let service = "Next Term Secrets"
+    /// The one item pre-release builds kept every keychain vault's key in, and the start of each vault's own item's
+    /// name. Never read or written: the vaults whose key it held are listed in no record, so none can be used.
+    static let sharedVaultKeyAccount = "vault key"
+    static let recoveryAccount = "vault key recovery"
+    /// Cancel or Deny at macOS's keychain prompt, or a keychain that can't ask just now: the user did not approve this
+    /// time, and the next try may ask again.
+    static let refusals: [OSStatus] = [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed]
+
+    /// What a search's status says of the item: there, gone, or nil when the keychain refused to say.
+    static func existence(_ status: OSStatus) -> Bool? {
+        if status == errSecSuccess { return true }
+        return refusals.contains(status) ? nil : false
+    }
+
+    /// A keychain vault's own item: named after its public key, so a new vault (after Start Over) never touches the
+    /// item of the vault it replaced.
+    static func vaultKeyAccount(publicKey: Data) -> String {
+        let hash = SHA256.hash(data: publicKey).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return sharedVaultKeyAccount + " " + hash
+    }
+
+    let service: String
+    let account: String
+
+    struct Failure: Error, Equatable, LocalizedError {
+        let status: OSStatus
+        var errorDescription: String? {
+            (SecCopyErrorMessageString(status, nil) as String?) ?? "The login keychain refused (\(status))."
+        }
+    }
+
+    init(service: String = LoginKeychain.service, account: String) {
+        self.service = service
+        self.account = account
+    }
+
+    private var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    /// The item's search, change and delete, in the login keychain alone. Nil when it couldn't be opened.
+    var searchQuery: [String: Any]? { Self.searching(query) }
+    /// The item's add, to the login keychain. Nil when it couldn't be opened.
+    var addQuery: [String: Any]? { Self.adding(query) }
+
+    func read() throws -> Data? {
+        guard var request = searchQuery else { throw Failure(status: Self.notOpened) }
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw Failure(status: status) }
+        return result as? Data
+    }
+
+    func add(_ data: Data) throws {
+        guard var item = addQuery else { throw Failure(status: Self.notOpened) }
+        item[kSecValueData as String] = data
+        item[kSecAttrLabel as String] = "Next Term Secrets"
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess else { throw Failure(status: status) }
+    }
+
+    func delete() throws {
+        guard let search = searchQuery else { throw Failure(status: Self.notOpened) }
+        let status = SecItemDelete(search as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure(status: status) }
+    }
+
+    func exists() -> Bool? {
+        guard var request = searchQuery else { return nil }
+        request[kSecReturnAttributes as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        return Self.existence(SecItemCopyMatching(request as CFDictionary, &result))
+    }
+}
+
+// MARK: the login keychain, by name
+
+/// `SecKeychainOpen` is deprecated with the rest of the file-based keychain's own calls, but `kSecMatchSearchList` and
+/// `kSecUseKeychain`, which are not, take only its references. It is called through a protocol, so the build warns of
+/// nothing.
+private protocol KeychainOpening {
+    func open(_ path: String) -> SecKeychain?
+}
+
+private struct KeychainOpener: KeychainOpening {
+    @available(macOS, deprecated: 10.10)
+    func open(_ path: String) -> SecKeychain? {
+        var keychain: SecKeychain?
+        guard SecKeychainOpen(path, &keychain) == errSecSuccess else { return nil }
+        return keychain
+    }
+}
+
+extension LoginKeychain {
+    /// The user's login keychain file.
+    static let loginPath = NSHomeDirectory() + "/Library/Keychains/login.keychain-db"
+    /// A reference to it, made once; opening it reads nothing. Nil if it couldn't be made.
+    static let login: SecKeychain? = (KeychainOpener() as KeychainOpening).open(loginPath)
+    /// What a call fails with when the login keychain couldn't be opened: the other keychains are never tried instead.
+    static let notOpened = errSecNoSuchKeychain
+
+    /// `base` for a search, a change or a delete in the login keychain alone: an item of the same name in a keychain put
+    /// ahead of it in the search list is never found. Nil when it couldn't be opened.
+    static func searching(_ base: [String: Any]) -> [String: Any]? {
+        guard let login else { return nil }
+        var query = base
+        query[kSecMatchSearchList as String] = [login]
+        return query
+    }
+
+    /// `base` for an add to the login keychain, never to the default keychain, which any program of the user's can
+    /// change. Nil when it couldn't be opened.
+    static func adding(_ base: [String: Any]) -> [String: Any]? {
+        guard let login else { return nil }
+        var item = base
+        item[kSecUseKeychain as String] = login
+        return item
+    }
+}
+
+/// This Mac's record of the vaults Next Term made: one login-keychain item of Next Term's service, outside Secrets'
+/// folder, with the vaults' bindings in its generic attribute. It is read as an attribute, never as data, so it needs
+/// no keychain password after an update, as the keychain keyring's load check doesn't. Every call names the login
+/// keychain, so a keychain put ahead of it in the search list can't stand in for it. A program of the user's that can
+/// add login-keychain items can still make the item where Next Term hasn't, or perhaps change it: see
+/// SecretVaultRecord.swift.
+final class LoginKeychainRecord: VaultRecord {
+    static let account = "vault bindings"
+
+    let service: String
+    let account: String
+
+    init(service: String = LoginKeychain.service, account: String = LoginKeychainRecord.account) {
+        self.service = service
+        self.account = account
+    }
+
+    private var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    /// The record's search and change, in the login keychain alone. Nil when it couldn't be opened.
+    var searchQuery: [String: Any]? { LoginKeychain.searching(query) }
+    /// The record's add, to the login keychain. Nil when it couldn't be opened.
+    var addQuery: [String: Any]? { LoginKeychain.adding(query) }
+
+    func read() throws -> Data? {
+        guard var request = searchQuery else { throw Self.failure(LoginKeychain.notOpened) }
+        request[kSecReturnAttributes as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw Self.failure(status) }
+        let attributes = result as? [String: Any]
+        return attributes?[kSecAttrGeneric as String] as? Data ?? Data()
+    }
+
+    func write(_ data: Data) throws {
+        guard let search = searchQuery, var item = addQuery else { throw Self.failure(LoginKeychain.notOpened) }
+        let change = [kSecAttrGeneric as String: data]
+        var status = SecItemUpdate(search as CFDictionary, change as CFDictionary)
+        if status == errSecItemNotFound {
+            item[kSecAttrGeneric as String] = data
+            item[kSecAttrLabel as String] = "Next Term Secrets"
+            item[kSecValueData as String] = Data()
+            status = SecItemAdd(item as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw Self.failure(status) }
+    }
+
+    /// A refused prompt is the user's cancel; any other failure, a record out of reach just now. Neither says the vault
+    /// was tampered with.
+    static func failure(_ status: OSStatus) -> SecretVault.Failure {
+        LoginKeychain.refusals.contains(status) ? .cancelled : .keyUnavailable
+    }
+}
+
+/// A `PasswordStore` in memory: the self-test's, which counts its reads and writes.
+final class MemoryPasswordStore: PasswordStore {
+    private var data: Data?
+    private(set) var reads = 0
+    /// The adds that wrote the item.
+    private(set) var writes = 0
+    private var failure: OSStatus?
+    private var searchStatus: OSStatus?
+    private let lock = NSLock()
+
+    /// The status every read fails with, as the login keychain's do when the user cancels its prompt. Nil: reads work.
+    var readFailure: OSStatus? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return failure
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            failure = newValue
+        }
+    }
+
+    /// The status every search for the item fails with, as the login keychain's does when it is locked and the user
+    /// cancels its unlock. Nil: searches work.
+    var searchFailure: OSStatus? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return searchStatus
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            searchStatus = newValue
+        }
+    }
+
+    func read() throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        reads += 1
+        if let failure { throw LoginKeychain.Failure(status: failure) }
+        return data
+    }
+
+    func add(_ data: Data) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard self.data == nil else { throw LoginKeychain.Failure(status: errSecDuplicateItem) }
+        writes += 1
+        self.data = data
+    }
+
+    func delete() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        data = nil
+    }
+
+    func exists() -> Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let searchStatus { return LoginKeychain.existence(searchStatus) }
+        return data != nil
+    }
+}
+
+/// In-memory items by account: the self-test's login keychain.
+final class MemoryKeychain {
+    private var items: [String: MemoryPasswordStore] = [:]
+    private let lock = NSLock()
+
+    /// The account's item, empty until something is added to it.
+    func item(_ account: String) -> PasswordStore { store(account) }
+
+    func store(_ account: String) -> MemoryPasswordStore {
+        lock.lock()
+        defer { lock.unlock() }
+        if let found = items[account] { return found }
+        let made = MemoryPasswordStore()
+        items[account] = made
+        return made
+    }
+
+    /// The accounts whose item is there, sorted.
+    var accounts: [String] { all.filter { $0.value.exists() == true }.map(\.key).sorted() }
+    var reads: Int { all.values.reduce(0) { $0 + $1.reads } }
+    var writes: Int { all.values.reduce(0) { $0 + $1.writes } }
+
+    private var all: [String: MemoryPasswordStore] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+}
+
+/// On a Mac without a Secure Enclave: a software P256 key kept in the login keychain, read only after Next Term's own
+/// presence check passed, never at launch. The gate is Next Term's code, not hardware, so Settings says "less
+/// protected". Each vault's key is an item of its own, named after the vault's public key.
+final class KeychainKeyring: VaultKeyring {
+    /// The item of one account: the login keychain's, or the self-test's in memory.
+    typealias Items = (String) -> PasswordStore
+
+    let kind = VaultKeyringKind.keychain
+    let keyBlob: Data? = nil
+    private let items: Items
+    /// The public key of the vault this keyring opens, which names its item.
+    private let vaultPublicKey: Data
+    /// The key made here, until the vault holding its public key is written.
+    private var made: SoftwareKeyring?
+    /// Runs on the thread that reads the item, just before: macOS may ask for the login password then.
+    var willRead: (() -> Void)?
+
+    /// The keyring of an existing vault, whose public key the vault records.
+    init(publicKey: Data, items: @escaping Items) {
+        self.vaultPublicKey = publicKey
+        self.items = items
+    }
+
+    /// A new software key, added to an item of its own. An item that is there already is an error, never written over.
+    static func make(items: @escaping Items) throws -> KeychainKeyring {
+        let key = SoftwareKeyring(kind: .keychain)
+        var raw = key.rawRepresentation
+        defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
+        try items(LoginKeychain.vaultKeyAccount(publicKey: key.publicKey())).add(raw)
+        let keyring = KeychainKeyring(publicKey: key.publicKey(), items: items)
+        keyring.made = key
+        return keyring
+    }
+
+    func publicKey() throws -> Data {
+        guard let made else { throw SecretVault.Failure.cantOpen } // read only with a presence check
+        return made.publicKey()
+    }
+
+    /// Deletes the item `make` added, for a first add whose vault was never written, so no item is left that opens
+    /// nothing. The keyring of an existing vault deletes nothing.
+    func discard() {
+        guard let made else { return }
+        try? items(LoginKeychain.vaultKeyAccount(publicKey: made.publicKey())).delete()
+        self.made = nil
+    }
+
+    /// The item of the vault this keyring opens, named after its public key.
+    var ownItem: PasswordStore { items(LoginKeychain.vaultKeyAccount(publicKey: vaultPublicKey)) }
+
+    /// The vault's own item is there. Its data is never read for this. A keychain that wouldn't say (locked and its
+    /// unlock cancelled) passes: only an item that is surely gone fails the check. The shared item of pre-release builds
+    /// counts for nothing: the vaults whose key it held are listed in no record.
+    func check(publicKey: Data) -> Bool {
+        items(LoginKeychain.vaultKeyAccount(publicKey: publicKey)).exists() != false
+    }
+
+    func sharedSecret(with ephemeral: P256.KeyAgreement.PublicKey, context: AnyObject?) throws -> VaultKeyringSecret {
+        guard context != nil else { throw SecretVault.Failure.cancelled }
+        if let made { return try made.sharedSecret(with: ephemeral, context: context) }
+        willRead?()
+        guard let key = try Self.key(in: ownItem) else { throw SecretVault.Failure.cantOpen }
+        return try key.sharedSecret(with: ephemeral, context: context)
+    }
+
+    /// The key an item holds, or nil when the item is not there. An item that can't be read is not passed over for
+    /// another. A read the user refused is `cancelled`, and any other failed read `keyUnavailable`: the next try may
+    /// work, so neither marks Secrets can't open. Data that is no key is `cantOpen`, which does.
+    private static func key(in item: PasswordStore) throws -> SoftwareKeyring? {
+        let read: Data?
+        do {
+            read = try item.read()
+        } catch {
+            throw isRefused(error) ? SecretVault.Failure.cancelled : SecretVault.Failure.keyUnavailable
+        }
+        guard var raw = read else { return nil }
+        defer { raw.resetBytes(in: raw.startIndex..<raw.endIndex) }
+        guard let key = try? SoftwareKeyring(kind: .keychain, rawRepresentation: raw) else { throw SecretVault.Failure.cantOpen }
+        return key
+    }
+
+    /// A read the user refused: one of `LoginKeychain.refusals`.
+    static func isRefused(_ error: Error) -> Bool {
+        guard let failure = error as? LoginKeychain.Failure else { return false }
+        return LoginKeychain.refusals.contains(failure.status)
+    }
+}

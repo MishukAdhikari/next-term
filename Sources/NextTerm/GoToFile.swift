@@ -86,13 +86,16 @@ final class GoToFileController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.maxY - 72 - height, width: width, height: height), display: false)
     }
 
-    /// The project's files: git's list (tracked and new, without ignored files), else a quick walk.
+    /// The project's files: git's list (tracked and new, without ignored files), else a quick walk. Neither goes into a
+    /// protected place below the root (ProtectedPlaces), and a repository that is never a project (dotfiles in ~) is
+    /// walked as a folder.
     private func reloadCatalog() {
         let root = self.root
         Self.queue.async { [weak self] in
             let paths: [String]
             var complete = true
-            if Self.git != nil, FileManager.default.fileExists(atPath: (ProjectRoot.find(from: root) as NSString).appendingPathComponent(".git")) {
+            let project: String? = ProjectRoot.project(from: root)
+            if Self.git != nil, let project, FileManager.default.fileExists(atPath: (project as NSString).appendingPathComponent(".git")) {
                 paths = ProjectSearch.files(in: root, git: Self.git)
             } else {
                 (paths, complete) = FileWalker.files(in: root)

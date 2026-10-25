@@ -18,6 +18,7 @@ import Testing
         #expect(MadeUpApp.sign(app))
         let signature = try #require(CodeSignature.of(URL(fileURLWithPath: app)))
         #expect(signature.team == nil)
+        #expect(signature.adHoc)
         #expect(signature.requirement.hasPrefix("cdhash H\""))
         let printed: String? = MadeUpApp.designated(app)
         #expect(printed == signature.requirement)
@@ -53,16 +54,56 @@ import Testing
 
     @Test func aTeamSignedAppTakesOnlyAnUpdateFromItsOwnTeam() {
         let running = CodeSignature(requirement: #"identifier "com.example.app" and certificate leaf[subject.OU] = "ABCDE12345""#,
-                                    team: "ABCDE12345")
+                                    team: "ABCDE12345", adHoc: false)
         let staged = CodeSignature(requirement: #"identifier "com.example.app" and certificate leaf[subject.OU] = "ZZZZZ99999""#,
-                                   team: "ZZZZZ99999")
+                                   team: "ZZZZZ99999", adHoc: false)
         #expect(CodeSignature.updateRequirement(running: running, staged: staged) == running.requirement)
     }
 
     @Test func anAppSignedAdHocTakesOnlyTheExactBuildThatWasStaged() {
-        let running = CodeSignature(requirement: #"cdhash H"0123456789abcdef0123456789abcdef01234567""#, team: nil)
-        let staged = CodeSignature(requirement: #"cdhash H"89abcdef0123456789abcdef0123456789abcdef""#, team: nil)
+        let running = CodeSignature(requirement: #"cdhash H"0123456789abcdef0123456789abcdef01234567""#, team: nil, adHoc: true)
+        let staged = CodeSignature(requirement: #"cdhash H"89abcdef0123456789abcdef0123456789abcdef""#, team: nil, adHoc: true)
         #expect(CodeSignature.updateRequirement(running: running, staged: staged) == staged.requirement)
+    }
+
+    /// The self-signed release identity has no team: its requirement pins the certificate (docs/signing.md).
+    static func selfSigned(_ leaf: String) -> CodeSignature {
+        CodeSignature(requirement: #"identifier "com.example.app" and certificate leaf = H""# + leaf + #"""#, team: nil, adHoc: false)
+    }
+
+    @Test func aSelfSignedAppTakesOnlyAnUpdateFromTheSameCertificate() {
+        let running = Self.selfSigned("0123456789abcdef0123456789abcdef01234567")
+        let other = Self.selfSigned("89abcdef0123456789abcdef0123456789abcdef")
+        let adHoc = CodeSignature(requirement: #"cdhash H"fedcba9876543210fedcba9876543210fedcba98""#, team: nil, adHoc: true)
+        #expect(CodeSignature.updateRequirement(running: running, staged: other) == running.requirement)
+        #expect(CodeSignature.updateRequirement(running: running, staged: adHoc) == running.requirement)
+    }
+
+    @Test func anAppSignedAdHocTakesTheFirstSelfSignedBuild() {
+        let running = CodeSignature(requirement: #"cdhash H"0123456789abcdef0123456789abcdef01234567""#, team: nil, adHoc: true)
+        let staged = Self.selfSigned("89abcdef0123456789abcdef0123456789abcdef")
+        #expect(CodeSignature.updateRequirement(running: running, staged: staged) == staged.requirement)
+    }
+
+    /// Apple's own tools are signed with a certificate and no team, as the self-signed release identity is: a missing team
+    /// is not ad hoc. Checked with codesign, as the updater and the install script check: such an app refuses an update
+    /// signed ad hoc, and an app signed ad hoc takes one signed with a certificate.
+    @Test func aCertificateWithNoTeamPinsItsUpdatesAndAnAdHocAppTakesIt() throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let certified = try #require(CodeSignature.of(URL(fileURLWithPath: "/usr/bin/true")))
+        #expect(certified.team == nil)
+        #expect(!certified.adHoc)
+        let app = root + "/Made Up.app"
+        try MadeUpApp.make(at: app, version: "1")
+        #expect(MadeUpApp.sign(app))
+        let adHoc = try #require(CodeSignature.of(URL(fileURLWithPath: app)))
+        let pinned = CodeSignature.updateRequirement(running: certified, staged: adHoc)
+        #expect(pinned == certified.requirement)
+        #expect(!MadeUpApp.meets(app, pinned))
+        let first = CodeSignature.updateRequirement(running: adHoc, staged: certified)
+        #expect(first == certified.requirement)
+        #expect(MadeUpApp.meets("/usr/bin/true", first))
     }
 }
 
@@ -91,6 +132,11 @@ enum MadeUpApp {
     /// Signs the app ad hoc, replacing any signature it has.
     static func sign(_ path: String) -> Bool {
         run(["-s", "-", "-f", path]).status == 0
+    }
+
+    /// Whether the code at `path` is intact and meets `requirement`, as the updater checks a staged app.
+    static func meets(_ path: String, _ requirement: String) -> Bool {
+        run(["--verify", "--deep", "--strict", "-R", "=" + requirement, path]).status == 0
     }
 
     /// The designated requirement as `codesign -d -r-` prints it.

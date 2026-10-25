@@ -1,0 +1,18 @@
+Welcome to web-1
+@@NEXTTERM@@
+a1	up	c0ffee
+a1	?
+b2	up	beef01
+b2	?
+@@NEXTTERM-HERDR@@
+where	/usr/local/bin/herdr	known
+exit	0	agent
+out	{"id":"cli:agent:list","result":{"type":"agent_list","agents":[{"terminal_id":"t1","name":"api","agent":"claude","display_agent":"claude","title":"✳ Fix the login","terminal_title":"✳ Fix the login","terminal_title_stripped":"Fix the login","agent_status":"working","screen_detection_skipped":false,"state_labels":{},"tokens":{},"agent_session":{"source":"hook","agent":"claude","kind":"id","value":"7d2e"},"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","focused":true,"launch_pending":false,"interactive_ready":true,"state_change_seq":9,"cwd":"/home/me/api","foreground_cwd":"/home/me/api/src","revision":31},{"terminal_id":"t4","agent":"codex","display_agent":"codex","agent_status":"blocked","state_labels":{},"tokens":{},"workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"launch_pending":false,"interactive_ready":true,"state_change_seq":4,"cwd":"/home/me/web","revision":12}]}}
+@@NEXTTERM-HERDR-END@@
+@@NEXTTERM-HERDR@@
+session	review
+where	/usr/local/bin/herdr	known
+exit	0	agent
+out	{"id":"cli:agent:list","result":{"type":"agent_list","agents":[{"terminal_id":"t9","agent":"codex","display_agent":"codex","agent_status":"idle","state_labels":{},"tokens":{},"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","focused":false,"launch_pending":false,"interactive_ready":true,"state_change_seq":2,"cwd":"/srv/review","revision":4}]}}
+tabs	{"id":"cli:tab:list","result":{"type":"tab_list","tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"api","focused":false,"pane_count":2,"agent_status":"working"},{"tab_id":"w2:t1","workspace_id":"w2","number":1,"label":"web","focused":true,"pane_count":1,"agent_status":"blocked"}]}}
+@@NEXTTERM-HERDR-END@@

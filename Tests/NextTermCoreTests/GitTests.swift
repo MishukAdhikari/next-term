@@ -58,6 +58,19 @@ import Testing
         #expect(s.count(of: .untracked) == 2)
     }
 
+    /// git takes a link for a file: `! vendor`, not `! vendor/`, for a link to a folder (Open in New Worktree's Link). Shown
+    /// as a folder, it and all in it are ignored, as the folder is; a tracked file of that name has no children.
+    @Test func aLinkToAnIgnoredFolder() {
+        let s = GitSnapshot.parse(root: "/r", status: z(["! vendor", "? scratch", "! .env", "1 .M N... 100644 100644 100644 aaa bbb lib"]), numstat: Data())
+        #expect(s.files["vendor"] == .ignored && s.wholeFolders["vendor"] == nil)
+        #expect(s.change(at: "vendor", isDirectory: true) == .ignored)
+        #expect(s.change(at: "vendor/pkg/a.php", isDirectory: false) == .ignored)
+        #expect(s.change(at: "vendor/pkg", isDirectory: true) == .ignored)
+        #expect(s.change(at: "scratch/notes.md", isDirectory: false) == .untracked)
+        #expect(s.change(at: ".env", isDirectory: false) == .ignored)
+        #expect(s.change(at: "lib/x", isDirectory: false) == nil)
+    }
+
     @Test func detachedAndUnborn() {
         let detached = GitSnapshot.parse(root: "/r", status: z(["# branch.oid abcdef0123456789", "# branch.head (detached)"]), numstat: Data())
         #expect(detached.branch == nil && detached.head == "abcdef01")

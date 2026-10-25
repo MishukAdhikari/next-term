@@ -35,16 +35,20 @@ enum DatabaseAction { case open, tablePlus, terminal, vercel }
 enum SessionAction: Equatable { case resume, fork, continueLatest(AgentKind), showAll }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
-/// ⌘↓ opens, and the right-click menu's other commands have theirs (by default: Settings can change them). It notes
-/// how each click began, for "Open files with a single click".
+/// ⌘↓ opens, ⌘↑ selects the enclosing folder, and the right-click menu's other commands have theirs (by default: Settings
+/// can change them). It notes how each click began, for "Open files and folders with a single click".
 final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     var onOpen: (() -> Void)?
+    /// ⌘↑, and whether it is the key held down repeating (only a fresh press steps out of the tree).
+    var onEnclosingFolder: ((_ isRepeat: Bool) -> Void)?
     /// The right-click menu's other commands (Copy Path, New File…), by their ids in KeyBindings.partCommands.
     var onCommand: ((String) -> Void)?
     /// The row the last click went down on (a click released over another row dragged across rows).
     private(set) var mouseDownRow = -1
+    /// Clicks gone down on the tree so far: the second click of a double-click is the one after its first.
+    private(set) var presses = 0
     /// A rename was going on when the last click went down: that click only ends it.
     private(set) var mouseDownWhileRenaming = false
     /// The event that ended the last rename. The window can end one, taking the keyboard back, before
@@ -57,6 +61,7 @@ final class SidebarOutlineView: NSOutlineView {
 
     override func mouseDown(with event: NSEvent) {
         mouseDownRow = row(at: convert(event.locationInWindow, from: nil))
+        presses &+= 1
         let responder = window?.firstResponder as? NSView
         let renaming = responder is NSTextView && responder?.isDescendant(of: self) == true
         let endedRename = renameEndedBy.map { $0.type == .leftMouseDown && $0.timestamp == event.timestamp } ?? false
@@ -79,14 +84,15 @@ final class SidebarOutlineView: NSOutlineView {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// Rename, Move to Trash and Open on their keys: ↩ (or Enter), ⌘⌫ and ⌘↓, or what Settings › Keyboard Shortcuts says;
-    /// the menu's other commands on theirs (⌥⌘C Copy Path, ⌥⌘N New File…).
+    /// Rename, Move to Trash, Open and Select Enclosing Folder on their keys: ↩ (or Enter), ⌘⌫, ⌘↓ and ⌘↑, or what
+    /// Settings › Keyboard Shortcuts says; the menu's other commands on theirs (⌥⌘C Copy Path, ⌥⌘N New File…).
     private func perform(_ event: NSEvent) -> Bool {
         guard let id = KeyboardShortcuts.shared.partCommand(for: event, in: .sidebar) else { return false }
         switch id {
         case "sidebar.rename": onRename?()
         case "sidebar.trash": onTrash?()
         case "sidebar.open": onOpen?()
+        case "sidebar.enclosingFolder": onEnclosingFolder?(event.isARepeat)
         default: onCommand?(id)
         }
         return true
@@ -102,9 +108,32 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     var headerInset: CGFloat = 70 { didSet { needsLayout = true } }
 
     private(set) var root: FileNode?
+    /// The main checkout of the linked worktree the tree shows, as the kernel spells it (WorktreeWindow): a link into it
+    /// has the link mark and says where it leads (`linkedTarget`). Nil for any other folder.
+    private var linkedMain: String?
     let header = SidebarHeaderView()
     /// "Files on this Mac", while the active tab runs on a server.
     let remoteNote = RemoteFilesNote()
+    /// "No project open", in place of the files, while a window with no project has its tab in none (`showNoProject`).
+    let noProject = NoProjectView()
+    /// Open as Project Window, while a window with no project shows the project its tab is in (`offerProjectWindow`).
+    let projectOffer = ProjectOfferNote()
+    /// "No project open"'s Browse Home Folder was clicked: the window shows the home folder's tree (`setRoot(browsing:)`).
+    var onBrowseHome: (() -> Void)?
+    /// Over the home folder's tree, while a window with no project browses it (`setRoot(breadcrumbs:)`): Back, and the path
+    /// to the selected row's folder (SidebarBreadcrumbs.swift).
+    let breadcrumbs = BreadcrumbBar()
+    /// The bar's Back, or ⌘↑ from the home folder's row: the window shows "No project open" again.
+    var onLeaveBrowsing: (() -> Void)?
+    /// The tree shows a folder that is no project (the home folder, after Browse Home Folder): its files only, each folder
+    /// read as the user opens it, with no git, Databases, Services or Agent Sessions, so nothing reads the protected
+    /// places in it until the user opens one.
+    private(set) var browsingOnly = false
+    /// The line in each folder macOS refused, by folder.
+    private var deniedEntries: [ObjectIdentifier: DeniedFolderEntry] = [:]
+    /// Links into a protected place whose look macOS refused (`settleKind`): they go on as their names suggest until the
+    /// window comes to the front again (`retryDenied`), the place perhaps allowed since.
+    private let kindRefused = NSHashTable<FileNode>.weakObjects()
     private let scrollView = NSScrollView()
     let outline = SidebarOutlineView()
     private var watcher: DirectoryWatcher?
@@ -149,6 +178,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private var collapsedDatabaseRoots: Set<String> = []
     private var expandDatabasesWithRoot = false
 
+    /// "Services" under Databases: what else the project's files say it uses, each opening its page (ProjectServices).
+    let servicesGroup = ServicesGroup()
+
     /// "Agent Sessions" under it: the newest sessions any agent kept for this folder.
     let sessionsGroup = SessionsGroup()
 
@@ -191,6 +223,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         outline.onRename = { [weak self] in self?.renameSelected() }
         outline.onTrash = { [weak self] in self?.trashSelected() }
         outline.onOpen = { [weak self] in self?.openSelected() }
+        outline.onEnclosingFolder = { [weak self] isRepeat in self?.selectEnclosingFolder(isRepeat: isRepeat) }
         outline.onCommand = { [weak self] id in self?.perform(command: id) }
         let menu = NSMenu()
         menu.delegate = self
@@ -205,7 +238,24 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         addSubview(header)
         remoteNote.isHidden = true
         addSubview(remoteNote)
+        projectOffer.isHidden = true
+        projectOffer.onOpen = { [weak self] folder in
+            guard let self else { return }
+            self.delegate?.sidebar(self, openProject: folder)
+        }
+        addSubview(projectOffer)
+        breadcrumbs.isHidden = true
+        breadcrumbs.onBack = { [weak self] in self?.onLeaveBrowsing?() }
+        breadcrumbs.onSelect = { [weak self] path in self?.selectFolder(path) }
+        addSubview(breadcrumbs)
         addSubview(scrollView)
+        noProject.isHidden = true
+        noProject.onOpen = { [weak self] folder in
+            guard let self else { return }
+            self.delegate?.sidebar(self, openProject: folder)
+        }
+        noProject.onBrowseHome = { [weak self] in self?.onBrowseHome?() }
+        addSubview(noProject)
         // Row tooltips through one area over the visible rows. Tooltips set on the row views themselves
         // stay live for rows scrolled out of sight, so hovering the header showed some hidden row's path.
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -244,10 +294,25 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         super.layout()
         header.inset = headerInset
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: TabBarView.height)
-        let top = TabBarView.height + (remoteNote.isHidden ? 0 : RemoteFilesNote.height)
-        remoteNote.frame = NSRect(x: 0, y: TabBarView.height, width: bounds.width, height: RemoteFilesNote.height)
+        var top = TabBarView.height
+        remoteNote.frame = NSRect(x: 0, y: top, width: bounds.width, height: RemoteFilesNote.height)
+        if !remoteNote.isHidden { top += RemoteFilesNote.height }
+        projectOffer.frame = NSRect(x: 0, y: top, width: bounds.width, height: ProjectOfferNote.height)
+        if !projectOffer.isHidden { top += ProjectOfferNote.height }
+        breadcrumbs.frame = NSRect(x: 0, y: top, width: bounds.width, height: BreadcrumbBar.height)
+        if !breadcrumbs.isHidden { top += BreadcrumbBar.height }
         scrollView.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
+        noProject.frame = scrollView.frame
         updateToolTips()
+    }
+
+    /// Open as Project Window under the header, for `folder`; nil takes it away. A window with no project offers it for
+    /// the project its tab is in.
+    func offerProjectWindow(_ folder: String?) {
+        if let folder { projectOffer.show(folder) }
+        guard projectOffer.isHidden != (folder == nil) else { return }
+        projectOffer.isHidden = folder == nil
+        needsLayout = true
     }
 
     /// The active tab's server, if it runs on one: the tree then says its files are this Mac's.
@@ -267,23 +332,74 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         let row = outline.row(at: point)
         guard row >= 0, outline.visibleRect.contains(point) else { return "" }
-        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DatabaseCellView { return cell.tipText }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DatabaseCellView {
+            return cell.tip(at: cell.convert(point, from: outline))
+        }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? ServiceCellView {
+            return cell.tip(at: cell.convert(point, from: outline))
+        }
         if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionRowCellView { return cell.tipText }
+        if let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? DeniedFolderCellView { return cell.tipText }
         guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileCellView else { return "" }
         return cell.tipText
     }
 
     // MARK: root
 
-    /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background.
-    func setRoot(_ path: String) {
+    /// Whether it shows "No project open" in place of the files.
+    var showsNoProject: Bool { !noProject.isHidden }
+
+    /// "No project open" in place of the files, with `recent` (Recent Projects) to open: the tree is put away, and
+    /// nothing is listed, watched or scanned until `setRoot` shows a project again (the tree it showed comes back as it
+    /// was). A window with no project shows it while its tab is in no project (ProjectRoot.project).
+    func showNoProject(recent: [String]) {
+        noProject.show(recent: recent)
+        offerProjectWindow(nil)
+        showBreadcrumbs(false)
+        guard !closed, root != nil || noProject.isHidden else { return }
+        if isRenaming { window?.makeFirstResponder(outline) }
+        runHeld()
+        saveCurrentTree()
+        rowCache.removeAll()
+        servicesGroup.clear()
+        root = nil
+        linkedMain = nil
+        browsingOnly = false
+        outline.reloadData()
+        watcher = nil
+        gitDirWatcher = nil
+        gitEvents = nil
+        git.stop()
+        gitChanged(nil)
+        databaseScanToken += 1 // a scan still reading is dropped
+        databaseScans.cancel()
+        showDatabases(DatabaseScan())
+        sessionsGroup.token += 1
+        showSessions([], tabs: SessionTabs())
+        scrollView.isHidden = true
+        noProject.isHidden = false
+        updateToolTips()
+    }
+
+    /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background. `browsing`: a folder
+    /// that is no project (`browsingOnly`), its files and nothing more. `breadcrumbs`: with the bar over it (a window with
+    /// no project browsing the home folder); any other tree has none.
+    func setRoot(_ path: String, browsing: Bool = false, breadcrumbs showsBar: Bool = false) {
         let canonical = canonicalPath(path)
+        noProject.isHidden = true
+        scrollView.isHidden = false
+        showBreadcrumbs(browsing && showsBar)
+        defer { refreshBreadcrumbs() } // the same root's selection, or the new one's
         guard canonical != root?.path, !closed else { return }
+        browsingOnly = browsing
+        // git's own files, read without running git.
+        linkedMain = browsing ? nil : WorktreeWindow.repository(ofLinkedWorktree: canonical)?.mainCheckout
         // A name being edited is done, as a click elsewhere would end it, while its row is still there.
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
         saveCurrentTree()
         rowCache.removeAll()
+        servicesGroup.clear()
         if let saved = savedTrees[canonical] {
             root = saved.node
             outline.reloadData()
@@ -304,7 +420,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         watcher = DirectoryWatcher(path: canonical) { [weak self] paths in self?.filesChanged(paths) }
         gitDirWatcher = nil
         gitEvents = nil
-        git.watch(canonical)
+        if browsing {
+            git.stop()
+            gitChanged(nil)
+        } else {
+            git.watch(canonical)
+        }
         showDatabases(DatabaseScan())
         databaseScans.cancel() // the old folder's
         scanDatabases()
@@ -314,9 +435,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     // MARK: databases
 
-    /// Reads the project's files for databases, off the main thread.
+    /// Reads the project's files for databases and services, off the main thread: one read for both groups, shown
+    /// together, each redrawn only if what it shows changed (ProjectScan).
     func scanDatabases() {
-        guard let root else { return }
+        guard let root, !browsingOnly else { return }
         let path = root.path
         databaseScanToken += 1
         let token = databaseScanToken
@@ -325,7 +447,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         databaseScans.started()
         DispatchQueue.global(qos: .utility).async {
             let began = Date()
-            let scan = Databases.scan(root: path)
+            let scan = ProjectScan.scan(root: path)
             let read = DatabaseScanStats.Event.read(waited: began.timeIntervalSince(queued), took: Date().timeIntervalSince(began))
             DispatchQueue.main.async { [weak self] in
                 self?.databaseScans.finished()
@@ -337,7 +459,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 if self.isRenaming { self.noteDatabaseScan(.held) }
                 self.whenNotRenaming("databases") { [weak self] in
                     guard let self, self.root?.path == path else { return }
-                    self.showDatabases(scan)
+                    self.showDatabases(scan.databases)
+                    self.showServices(scan.services)
                 }
             }
         }
@@ -390,10 +513,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// Something changed where the scan looks (an env file, a config, a folder that can hold a SQLite file):
-    /// scan again when the gate says. Hidden, dependency and build folders, and anything deeper than the search
-    /// goes, set off nothing (Databases.scanMayChange).
+    /// scan again when the gate says. Dependency, build and deep folders, and hidden ones other than those the
+    /// readers look in (.vercel, .ddev, supabase/.temp), set off nothing (Databases.scanMayChange).
     private func scheduleDatabaseScan(for paths: [String]) {
-        guard let root, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
+        guard let root, !browsingOnly, paths.contains(where: { Databases.scanMayChange(after: $0, root: root.path) }) else { return }
         databaseScans.changed()
     }
 
@@ -424,11 +547,29 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         updateToolTips()
     }
 
+    /// The Services rows of a scan (ProjectServices.scan), shown as the Databases rows are: each row keeps its place,
+    /// and the group opens the first time it appears unless you closed it for this project.
+    func showServices(_ scan: ServiceScan) {
+        let group = servicesGroup
+        let hadRows = !group.items.isEmpty
+        guard group.update(scan), let root else { return }
+        rowCache[ObjectIdentifier(root)] = nil
+        rowCache[ObjectIdentifier(group)] = nil
+        let hasRows = !group.items.isEmpty
+        if hadRows != hasRows {
+            outline.reloadItem(root, reloadChildren: true)
+        } else if hasRows {
+            outline.reloadItem(group, reloadChildren: true)
+        }
+        if !hadRows, hasRows { servicesGroupAppeared() }
+        updateToolTips()
+    }
+
     // MARK: agent sessions
 
     /// Reads the folder's agent sessions, and the tabs any are open in, off the main thread.
     func loadSessions() {
-        guard let root else { return }
+        guard let root, !browsingOnly else { return }
         let path = root.path
         sessionsGroup.token += 1
         let token = sessionsGroup.token
@@ -531,19 +672,19 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// Opens the folders down to a file (reading them as needed), selects it and scrolls it into view,
-    /// leaving the keyboard where it is. Files outside the tree are left alone.
-    func reveal(_ path: String) {
+    /// leaving the keyboard where it is. Files outside the tree are left alone. `expanding`: a folder is opened too.
+    func reveal(_ path: String, expanding: Bool = false) {
         let target = canonicalPath(path)
         guard let root, target.hasPrefix(root.path + "/") else { return }
         let names = target.dropFirst(root.path.count + 1).split(separator: "/").map(String.init)
         // Selecting another row would take the selection from a name being edited.
         whenNotRenaming("reveal") { [weak self] in
             guard let self, self.root === root else { return }
-            self.revealStep(root, names[...])
+            self.revealStep(root, names[...], expanding: expanding)
         }
     }
 
-    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>) {
+    private func revealStep(_ node: FileNode, _ rest: ArraySlice<String>, expanding: Bool = false) {
         load(node) { [weak self] in
             guard let self, let name = rest.first, let child = node.children?.first(where: { $0.name == name }) else { return }
             if !self.outline.isItemExpanded(node) { self.outline.expandItem(node) }
@@ -552,8 +693,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 guard row >= 0 else { return }
                 self.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 self.outline.scrollRowToVisible(row)
+                if expanding, child.isDirectory { self.load(child) { self.outline.expandItem(child) } }
             } else if child.isDirectory {
-                self.revealStep(child, rest.dropFirst())
+                self.revealStep(child, rest.dropFirst(), expanding: expanding)
             }
         }
     }
@@ -573,7 +715,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         loading.insert(id)
         let url = node.url, hiding = fileHiding
         DispatchQueue.global(qos: .userInitiated).async {
-            let listing = FileNode.readChildren(of: url, hiding: hiding)
+            let listing = FileNode.read(url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 self?.whenNotRenaming("load \(id)") { [weak self] in
                     guard let self else { return }
@@ -610,7 +752,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         reading.insert(id)
         let url = node.url, hiding = fileHiding, renamesAtRead = renames
         DispatchQueue.global(qos: .utility).async {
-            let listing = FileNode.readChildren(of: url, hiding: hiding)
+            let listing = FileNode.read(url, hiding: hiding)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.reading.remove(id)
@@ -621,7 +763,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                 if self.isRenaming { return self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in self?.refresh(node) } }
                 if self.renames != renamesAtRead { return self.refresh(node) } // read before a name given since
                 self.whenNotRenaming("refresh \(ObjectIdentifier(node))") { [weak self] in
-                    guard let self, node.install(listing) else { return }
+                    guard let self else { return }
+                    let wasDenied: Bool = node.accessDenied
+                    guard node.install(listing) else { return }
+                    if wasDenied, !node.accessDenied, self.isShowing(node), !self.browsingOnly {
+                        // Allowed in System Settings since: git and the Databases scan were refused with it.
+                        self.git.refresh()
+                        self.scanDatabases()
+                    }
                     self.syncHiddenRow(for: node)
                     self.rowCache[ObjectIdentifier(node)] = nil
                     if self.isShowing(node) { self.outline.reloadItem(node, reloadChildren: true) }
@@ -633,6 +782,24 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private func refreshLoadedFolders(of node: FileNode) {
         refresh(node)
         node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(refreshLoadedFolders(of:))
+    }
+
+    /// The folders macOS refused, read again: the user may have allowed them in System Settings since. As the window comes
+    /// to the front; a read macOS refused once is refused again without a prompt, so nothing asks twice.
+    func retryDenied() {
+        guard let root else { return }
+        kindRefused.removeAllObjects() // their next open looks again
+        func visit(_ node: FileNode) {
+            if node.accessDenied, node.kindSettled {
+                refresh(node)
+            } else if node.accessDenied {
+                // A link refused while its kind was its name's guess: what it is comes first (a file has nothing to
+                // read), and only a folder is read again.
+                settleKind(of: node) { [weak self] in if node.isDirectory { self?.refresh(node) } }
+            }
+            node.children?.filter { $0.isDirectory && $0.isLoaded }.forEach(visit)
+        }
+        visit(root)
     }
 
     /// Whether the node belongs to the tree on screen (the root may have changed while it loaded).
@@ -664,6 +831,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     /// Changes in the work tree or its .git: a refresh soon, unless none can change git's status (a writer in
     /// `.next/` or `node_modules/`, git's own objects, a nested worktree).
     private func gitFilesChanged(_ paths: [String]) {
+        guard !browsingOnly else { return }
         if let filter = gitEvents {
             let matters = paths.contains { filter.matters($0, isRepository: isNestedRepository) }
             guard matters else { return }
@@ -765,7 +933,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if let node = item as? FileNode {
             let children = node.children ?? []
             let gone = node.isLoaded ? deleted(in: node) : []
-            if gone.isEmpty {
+            if node.accessDenied {
+                rows = [deniedEntry(for: node)] // macOS refused it: one line saying so, with the way to change that
+            } else if gone.isEmpty {
                 rows = children
             } else {
                 let all: [(name: String, folder: Bool, item: AnyObject)] = children.map { ($0.name, $0.isDirectory, $0) } + gone.map { ($0.name, $0.isDirectory, $0) }
@@ -775,9 +945,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             }
             if let hidden = hiddenRows[id] { rows.append(hidden) }
             if node === root, !sessionsGroup.items.isEmpty { rows.insert(sessionsGroup, at: 0) }
+            if node === root, !servicesGroup.items.isEmpty { rows.insert(servicesGroup, at: 0) }
             if node === root, !databasesGroup.items.isEmpty { rows.insert(databasesGroup, at: 0) }
         } else if item === databasesGroup {
             rows = databasesGroup.items
+        } else if item === servicesGroup {
+            rows = servicesGroup.items
         } else if item === sessionsGroup {
             rows = sessionsGroup.children
         } else if let entry = item as? DeletedEntry, entry.isDirectory, let snapshot = git.snapshot {
@@ -787,6 +960,17 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         }
         rowCache[id] = (item, rows)
         return rows
+    }
+
+    /// The line in a folder macOS refused, the same object each time, so the outline keeps its row.
+    private func deniedEntry(for node: FileNode) -> DeniedFolderEntry {
+        let id = ObjectIdentifier(node)
+        if let entry = deniedEntries[id], entry.folder === node { return entry }
+        // A link's pane is the one of the place it leads to (~/mail to ~/Library/Mail is Full Disk Access's), and so is
+        // a folder's below a link (~/lib/Mail, ~/lib a link to ~/Library).
+        let entry = DeniedFolderEntry(folder: node, pane: PrivacySettings.pane(forDenied: node.refusedPlace))
+        deniedEntries[id] = entry
+        return entry
     }
 
     private func deleted(in node: FileNode) -> [DeletedEntry] {
@@ -824,19 +1008,59 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        if item is DatabasesGroup || item is SessionsGroup { return true }
+        if item is DatabasesGroup || item is SessionsGroup || item is ServicesGroup { return true }
         return (item as? FileNode)?.isDirectory ?? (item as? DeletedEntry)?.isDirectory ?? false
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
-        if item is DeletedEntry || item is DatabasesGroup || item is SessionsGroup { return true }
+        if item is DeletedEntry || item is DatabasesGroup || item is SessionsGroup || item is ServicesGroup { return true }
         guard let node = item as? FileNode else { return false }
-        if node.isLoaded { return true }
+        if needsKind(node) {
+            // A link into a protected place, a folder by its name's guess: the expand looks, and expands what is one.
+            settleKind(of: node) { [weak self] in if node.isDirectory { self?.outline.expandItem(node) } }
+            return false
+        }
+        if node.isLoaded {
+            if node.accessDenied { refresh(node) } // opened again: allowed in System Settings since, perhaps
+            return true
+        }
         load(node) { [weak self] in self?.outline.expandItem(node) }
         return false
     }
 
+    /// `node` is a link into a protected place the user had not opened, its kind its name's guess (FileNode.kindSettled),
+    /// and no look at what it is was refused since the window last came to the front.
+    private func needsKind(_ node: FileNode) -> Bool {
+        !node.kindSettled && !kindRefused.contains(node)
+    }
+
+    /// The user opened a link whose kind is its name's guess: what it is, read past it off the main thread (macOS may ask
+    /// for the place, holding the look until the user answers), takes the guess's place in its row, and `then` acts on
+    /// the node as it now is. A look macOS refused keeps the guess (`kindRefused`), and `then` acts on that.
+    private func settleKind(of node: FileNode, then: @escaping () -> Void) {
+        let url = node.url
+        DispatchQueue.global(qos: .userInitiated).async {
+            let folder: Bool? = FileNode.isFolder(followingLinkAt: url)
+            DispatchQueue.main.async { [weak self] in
+                self?.whenNotRenaming("kind \(ObjectIdentifier(node))") { [weak self] in
+                    guard let self, self.isShowing(node) else { return }
+                    if folder == nil { self.kindRefused.add(node) }
+                    if node.settleKind(folder) {
+                        let parent: FileNode = node.parent ?? node
+                        self.rowCache[ObjectIdentifier(parent)] = nil
+                        self.rowCache[ObjectIdentifier(node)] = nil
+                        self.outline.reloadItem(parent, reloadChildren: true)
+                    }
+                    then()
+                }
+            }
+        }
+    }
+
     // MARK: delegate
+
+    /// The breadcrumb bar follows the selection.
+    func outlineViewSelectionDidChange(_ notification: Notification) { refreshBreadcrumbs() }
 
     // Folder icons open and close with the folder.
     func outlineViewItemDidExpand(_ notification: Notification) { refreshIcon(of: notification) }
@@ -844,6 +1068,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
 
     private func refreshIcon(of notification: Notification) {
         guard let item = notification.userInfo?["NSObject"] else { return }
+        if servicesGroupExpansion(item, notification.name) { return }
         if item is DatabasesGroup, let root {
             // Remember a group you closed, for this project (not one that closed with its parent).
             if notification.name == NSOutlineView.itemDidCollapseNotification, outline.isItemExpanded(root) { collapsedDatabaseRoots.insert(root.path) }
@@ -892,6 +1117,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if item is SessionsGroup || item is SessionItem || item is MoreSessionsItem {
             return sessionCell(for: item)
         }
+        if ServicesGroup.holds(item) { return serviceCell(for: item) }
+        if let entry = item as? DeniedFolderEntry {
+            let id = NSUserInterfaceItemIdentifier("denied")
+            let cell = outlineView.makeView(withIdentifier: id, owner: self) as? DeniedFolderCellView ?? DeniedFolderCellView()
+            cell.identifier = id
+            cell.configure(entry)
+            return cell
+        }
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCellView ?? FileCellView()
         cell.identifier = id
@@ -902,83 +1135,172 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
                                   lines: git.snapshot?.stats(at: entry.relative, isDirectory: entry.isDirectory))
         } else if let node = item as? FileNode {
             let (change, lines) = gitState(for: node)
-            cell.configure(node: node, isRoot: node === root, expanded: outlineView.isItemExpanded(node), change: change, lines: lines)
+            cell.configure(node: node, isRoot: node === root, expanded: outlineView.isItemExpanded(node), change: change, lines: lines,
+                           linkedTo: linkedTarget(of: node))
         }
         return cell
+    }
+
+    /// Where a link in the tree leads, when that is in the main checkout of the linked worktree the tree shows (Open in New
+    /// Worktree's Link): the row says so, with a mark.
+    private func linkedTarget(of node: FileNode) -> String? {
+        guard node.isSymlink, let linkedMain, let target = node.linkTarget, target.hasPrefix(linkedMain + "/") else { return nil }
+        // A worktree nested in its main checkout (.claude/worktrees/x): a link within the worktree itself is no link into
+        // the main checkout. Both spelled from real folders (setRoot's canonical path, `linkTarget`).
+        if let root, target == root.path || target.hasPrefix(root.path + "/") { return nil }
+        return target
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 24 }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
         item is FileNode || item is DeletedEntry || item is DatabaseItem || item is SessionItem || item is MoreSessionsItem
+            || item is ServiceItem
     }
 
-    /// A click, sent on mouse-up (the first click of a double-click too). With "Open files with a single
-    /// click" on, a plain click on one file the editor can show cheaply opens it in the preview tab and
-    /// leaves the keyboard in the tree. Every other click only selects, as it does with the setting off.
+    /// A click, sent on mouse-up (the first click of a double-click too). With "Open files and folders with a single
+    /// click" on, a plain click on one file the editor can show cheaply opens it in the preview tab, and one on a
+    /// folder (a deleted one too) opens or closes it, at once, as its arrow does; the keyboard stays in the tree.
+    /// Every other click only selects, as every click does with the setting off (SidebarClick.outcome).
     @objc private func clicked() {
+        let event = NSApp.currentEvent
+        let isMouseUp = event?.type == .leftMouseUp
+        let clickCount = isMouseUp ? event?.clickCount ?? 0 : 0
+        // The second click of a double-click leaves its first click's toggle for the double action to see.
+        if clickCount < 2 { clickToggled = nil }
         // "More…" is a link: one click shows the whole list, whatever the setting.
         if outline.clickedRow >= 0, outline.item(atRow: outline.clickedRow) is MoreSessionsItem {
             return delegate?.sidebar(self, session: nil, perform: .showAll) ?? ()
         }
-        guard AppDelegate.shared.sidebarSingleClickOpens, let event = NSApp.currentEvent else { return }
+        guard AppDelegate.shared.sidebarSingleClickOpens, let event else { return }
         let row = outline.clickedRow
         let item = row >= 0 ? outline.item(atRow: row) : nil
-        let isMouseUp = event.type == .leftMouseUp
         let flags = event.modifierFlags
-        let click = SidebarClick.Click(isMouseUp: isMouseUp, clickCount: isMouseUp ? event.clickCount : 0,
+        let click = SidebarClick.Click(isMouseUp: isMouseUp, clickCount: clickCount,
                                        command: flags.contains(.command), shift: flags.contains(.shift),
                                        option: flags.contains(.option), control: flags.contains(.control),
                                        row: row, mouseDownRow: outline.mouseDownRow, selection: outline.selectedRowIndexes,
                                        dragBegan: outline.dragBegan, wasRenaming: outline.mouseDownWhileRenaming, kind: kind(of: item))
-        guard SidebarClick.outcome(of: click) == .open, let node = item as? FileNode,
-              SidebarClick.opensOnSingleClick(node.url.path) else { return }
+        guard SidebarClick.outcome(of: click) != .selectOnly else { return }
+        if let entry = item as? DeletedEntry {
+            clickToggled = (entry, outline.presses)
+            return toggle(entry)
+        }
+        guard let node = item as? FileNode else { return }
+        if needsKind(node) {
+            // A link into a protected place, its kind its name's guess: the click looks first, off the main thread, then
+            // opens or closes a folder and previews a file. macOS has its answer by then, so the single-click check
+            // after asks nothing again. Noted now, as the double-click can come before the answer.
+            clickToggled = (node, outline.presses)
+            return settleKind(of: node) { [weak self] in
+                guard let self else { return }
+                if node.isDirectory { return self.toggle(node) }
+                guard SidebarClick.opensOnSingleClick(node.url.path) else { return }
+                self.delegate?.sidebar(self, previewFile: node.url)
+            }
+        }
+        if node.isDirectory {
+            clickToggled = (node, outline.presses)
+            return toggle(node)
+        }
+        guard SidebarClick.opensOnSingleClick(node.url.path) else { return }
         delegate?.sidebar(self, previewFile: node.url)
+    }
+
+    /// The folder (or deleted folder) the last click opened or closed, and the press it was (`outline.presses`):
+    /// the double-click it began must not undo it.
+    private var clickToggled: (item: AnyObject, press: Int)?
+
+    /// Whether this double-click's first click already opened or closed `item`. Forgets that click either way.
+    private func takeClickToggle(of item: AnyObject) -> Bool {
+        defer { clickToggled = nil }
+        guard let toggled = clickToggled, toggled.item === item else { return false }
+        return outline.presses == toggled.press + 1
+    }
+
+    /// Opens or closes a folder, a deleted folder or a group, through the same path as its arrow (`shouldExpandItem`
+    /// reads a folder not read yet in the background, then opens it) and with the same animation.
+    func toggle(_ item: Any) {
+        if outline.isItemExpanded(item) { outline.animator().collapseItem(item) } else { outline.animator().expandItem(item) }
     }
 
     private func kind(of item: Any?) -> SidebarClick.Row {
         if let node = item as? FileNode { return node === root ? .root : node.isDirectory ? .folder : .file }
-        if item is DeletedEntry { return .deleted }
+        if let entry = item as? DeletedEntry { return entry.isDirectory ? .deletedFolder : .deleted }
         if item is DatabaseItem || item is DatabasesGroup { return .database }
+        if ServicesGroup.holds(item) { return .service }
         return .other
     }
 
+    /// A double-click. On a folder (a deleted one too) it opens or closes it, unless its first click already did
+    /// (single clicks on): a second toggle would undo the first, and nothing would seem to happen.
     @objc private func doubleClicked() {
-        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry { return openDeleted(entry) }
-        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem { return openDatabase(item.database) }
-        if outline.item(atRow: outline.clickedRow) is DatabasesGroup {
-            return outline.isItemExpanded(databasesGroup) ? outline.collapseItem(databasesGroup) : outline.expandItem(databasesGroup)
+        // Its first click opened or closed a folder (single clicks on), and the rows moved under the pointer as it did
+        // (a folder closing at the end of a scrolled tree): the second press is on another row, which it must not open.
+        // The double-click is done; the folder keeps the selection.
+        if let toggled = clickToggled, outline.presses == toggled.press + 1,
+           (toggled.item as? FileNode)?.isDirectory == true || (toggled.item as? DeletedEntry)?.isDirectory == true,
+           outline.item(atRow: outline.clickedRow) as AnyObject? !== toggled.item {
+            clickToggled = nil
+            let row = outline.row(forItem: toggled.item)
+            if row >= 0 { outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+            return
         }
+        if let entry = outline.item(atRow: outline.clickedRow) as? DeletedEntry {
+            return openDeleted(entry, clickToggled: takeClickToggle(of: entry))
+        }
+        if let item = outline.item(atRow: outline.clickedRow) as? DatabaseItem { return openDatabase(item.database) }
+        if outline.item(atRow: outline.clickedRow) is DatabasesGroup { return toggle(databasesGroup) }
+        if doubleClickedService(outline.item(atRow: outline.clickedRow)) { return }
         if let item = outline.item(atRow: outline.clickedRow) as? SessionItem {
             return delegate?.sidebar(self, session: item.session, perform: .resume) ?? ()
         }
         if outline.item(atRow: outline.clickedRow) is MoreSessionsItem { return } // its click showed the list
-        if outline.item(atRow: outline.clickedRow) is SessionsGroup {
-            return outline.isItemExpanded(sessionsGroup) ? outline.collapseItem(sessionsGroup) : outline.expandItem(sessionsGroup)
-        }
+        if outline.item(atRow: outline.clickedRow) is SessionsGroup { return toggle(sessionsGroup) }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
+        let toggled = takeClickToggle(of: node) // now: the click's own press, not one made while the kind is looked at
+        // A link whose kind is its name's guess: the double-click looks first, then opens a file or a folder.
+        if needsKind(node) { return settleKind(of: node) { [weak self] in self?.openOrToggle(node, clickToggled: toggled) } }
+        openOrToggle(node, clickToggled: toggled)
+    }
+
+    /// A double-click's: a file opens in the editor as an ordinary tab (keeping its preview), with the keyboard. A
+    /// folder opens or closes, unless the double-click's first click did that already (`clickToggled`, single clicks
+    /// on): it stays as that click left it.
+    private func openOrToggle(_ node: FileNode, clickToggled: Bool) {
         if node.isDirectory {
-            outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
+            if !clickToggled { toggle(node) }
         } else {
             delegate?.sidebar(self, openFile: node.url)
         }
     }
 
-    /// ⌘↓: every selected file, deleted file and database. The selection is read first: opening a file
-    /// shows it in the tree, which selects its row alone.
+    /// ⌘↓: every selected file, deleted file and database, and each selected service's page. The selection is read
+    /// first: opening a file shows it in the tree, which selects its row alone.
     private func openSelected() {
         let items = outline.selectedRowIndexes.compactMap { outline.item(atRow: $0) }
-        for case let node as FileNode in items where !node.isDirectory { delegate?.sidebar(self, openFile: node.url) }
+        for case let node as FileNode in items {
+            if needsKind(node) {
+                settleKind(of: node) { [weak self] in
+                    guard let self, !node.isDirectory else { return }
+                    self.delegate?.sidebar(self, openFile: node.url)
+                }
+            } else if !node.isDirectory {
+                delegate?.sidebar(self, openFile: node.url)
+            }
+        }
         for case let entry as DeletedEntry in items where !entry.isDirectory { openDeleted(entry) }
         for case let item as DatabaseItem in items { openDatabase(item.database) }
+        for case let item as ServiceItem in items { openService(item.row) }
         for case let item as SessionItem in items { delegate?.sidebar(self, session: item.session, perform: .resume) }
         if items.contains(where: { $0 is MoreSessionsItem }) { delegate?.sidebar(self, session: nil, perform: .showAll) }
     }
 
-    /// A deleted file opens as what was removed; a deleted folder opens and closes.
-    func openDeleted(_ entry: DeletedEntry) {
+    /// A deleted file opens as what was removed; a deleted folder opens and closes, unless a double-click's first click
+    /// did that already (`clickToggled`).
+    func openDeleted(_ entry: DeletedEntry, clickToggled: Bool = false) {
         if entry.isDirectory {
-            outline.isItemExpanded(entry) ? outline.collapseItem(entry) : outline.expandItem(entry)
+            if !clickToggled { toggle(entry) }
         } else {
             delegate?.sidebar(self, showChanges: entry.url)
         }
@@ -1042,11 +1364,13 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             }
             return
         }
-        if clicked is DatabasesGroup {
+        if let group = clicked as? DatabasesGroup {
+            // Its Vercel badge's page first, as on a database row (KTD1).
+            addServicePages(DatabaseLinks.groupBadges(vercelProject: group.vercelProject).compactMap(\.link), to: menu)
             add(menu, "Refresh Databases", #selector(refreshDatabasesFromMenu), "sidebar.refresh")
             return
         }
-        if let built = sessionsMenu(forRow: row) {
+        if let built = servicesMenu(forRow: row) ?? sessionsMenu(forRow: row) {
             for entry in built.items {
                 built.removeItem(entry)
                 menu.addItem(entry)
@@ -1103,14 +1427,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// A sidebar command's key, pressed while the tree has the keyboard: the item for it in the menu a right-click on
-    /// the selection shows, so the key does what that item says, to the same rows. A Databases or Agent Sessions row
+    /// the selection shows, so the key does what that item says, to the same rows. A Databases, Services or Agent Sessions row
     /// offers its group's items too (Refresh, Continue Latest): the group's own row can't be selected. A command neither
     /// menu offers (Open as Project on a file) does nothing. Rename, Move to Trash and Open have handlers of their own.
     func perform(command id: String) {
         guard let first = outline.selectedRowIndexes.first else { return }
         var rows = [first]
         let selected = outline.item(atRow: first)
-        if selected is DatabaseItem || selected is SessionItem, let group = outline.parent(forItem: selected) {
+        if selected is DatabaseItem || selected is SessionItem || selected is ServiceItem, let group = outline.parent(forItem: selected) {
             rows.append(outline.row(forItem: group))
         }
         for row in rows {
@@ -1173,7 +1497,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     var selection: [(url: URL, isFolder: Bool)] { selectedNodes.map { ($0.url, $0.isDirectory) } }
 
     @objc private func openNode() {
-        if let node = menuNodes.first { delegate?.sidebar(self, openFile: node.url) }
+        // The node is taken now: the menu's row is gone by the time a look past a link comes back.
+        guard let node = menuNodes.first else { return }
+        guard needsKind(node) else { return delegate?.sidebar(self, openFile: node.url) ?? () }
+        // A link whose kind is its name's guess: Open looks first, off the main thread, and opens only a file.
+        settleKind(of: node) { [weak self] in
+            guard let self, !node.isDirectory else { return }
+            self.delegate?.sidebar(self, openFile: node.url)
+        }
     }
 
     @objc private func revealNode() {
@@ -1424,9 +1755,12 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        // The line in a folder macOS refused is no place to drop: not the tree's root, and macOS would refuse the folder.
+        if item is DeniedFolderEntry { return [] }
         guard let target = item as? FileNode ?? (item as? DeletedEntry)?.realFolder ?? root, let root else { return [] }
         // Dropping on or between files means their folder.
         let folder = target.isDirectory ? target : (target.parent ?? root)
+        if folder.accessDenied { return [] }
         if folder !== target || index != NSOutlineViewDropOnItemIndex {
             outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
         }

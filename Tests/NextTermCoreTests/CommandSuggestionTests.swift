@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import NextTermCore
@@ -18,6 +19,16 @@ import Testing
         #expect((schema?["required"] as? [String]) == ["command"])
         // Agents that can't run that way are left out, and say why.
         #expect(CommandSuggestion.adapters.map(\.id) == ["claude"] && CommandSuggestion.leftOut.map(\.name).contains("Codex"))
+    }
+
+    /// OpenCode is never asked, and its reason says only what is true: Next Term hasn't confirmed that it can run
+    /// with no tools and no MCP servers. It claims no flag was tried and none failed.
+    @Test func openCodeIsLeftOutUntilItsNoToolsRunIsConfirmed() throws {
+        #expect(!CommandSuggestion.adapters.contains { $0.program == "opencode" })
+        #expect(CommandSuggestion.adapter("opencode") == nil)
+        let why = try #require(CommandSuggestion.leftOut.first { $0.name == "OpenCode" }?.why)
+        #expect(why == "Next Term hasn’t confirmed that OpenCode can run with no tools and no MCP servers", "\(why)")
+        #expect(!why.contains("couldn't be checked") && !why.contains("flags"), "\(why)")
     }
 
     @Test func thePromptSaysWhatItMustAndHidesSecrets() {
@@ -44,6 +55,21 @@ import Testing
         // Only the end of long output.
         withOutput.output = String(repeating: "x", count: 20_000) + "END"
         #expect(CommandSuggestion.prompt(withOutput).count < 9_000 && CommandSuggestion.prompt(withOutput).contains("END"))
+    }
+
+    /// Recent output is masked before its end is cut to `maxOutput` characters: a stored key across the cut never shows
+    /// its tail. Cut first, the key's last characters began the output, and no mark matched them.
+    @Test func outputIsMaskedBeforeItsEndIsCut() {
+        let key = SymmetricKey(size: .bits256)
+        let value = "Rk7vQp2xLm9nWz4cTb8hYq3s"
+        let mask = SecretMask(key: key, marks: SecretMask.marks(for: SecretBytes(utf8: value), key: key))
+        let after = "\n" + String(repeating: "ok\n", count: (CommandSuggestion.maxOutput - 11) / 3) // the cut is 10 into the key's end
+        let output = "$ printenv API\n" + value + after
+        #expect(String(output.suffix(CommandSuggestion.maxOutput)).hasPrefix(String(value.suffix(10))))
+        let sent = CommandSuggestion.redactedOutput(output, mask: mask)
+        let characters = Array(value)
+        let shown = (0...(characters.count - 5)).filter { sent.contains(String(characters[$0..<$0 + 5])) }
+        #expect(shown.isEmpty && sent.hasSuffix("ok\n") && sent.count <= CommandSuggestion.maxOutput, "\(sent.prefix(40))")
     }
 
     @Test func claudeCodesAnswerIsRead() throws {

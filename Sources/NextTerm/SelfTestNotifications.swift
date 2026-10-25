@@ -29,8 +29,9 @@ extension SelfTest {
             return check(false, "notifications menu: Notifications is in the menu bar, after Git", NSApp.mainMenu?.items.map(\.title).joined(separator: ", ") ?? "no menu")
         }
         let bar = NSApp.mainMenu?.items.map(\.title) ?? []
-        check(bar.firstIndex(of: "Notifications").map { bar[safe: $0 - 1] == "Git" && bar[safe: $0 + 1] == "Window" } == true,
-              "notifications menu: Notifications is in the menu bar, between Git and Window", bar.joined(separator: ", "))
+        let around = MenuBar.neighbours(of: "Notifications")
+        check(bar.firstIndex(of: "Notifications").map { bar[safe: $0 - 1] == around.before && bar[safe: $0 + 1] == around.after } == true,
+              "notifications menu: Notifications is in the menu bar, between \(around.before ?? "") and \(around.after ?? "")", bar.joined(separator: ", "))
         let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
         check(titles == ["When an Agent Needs Your Decision", "When an Agent Finishes", "When a Command Finishes or Fails", "Only for Work That Took at Least",
                          "A Program’s Own Bell or Notification", "Play a Sound", "—", "Send Test Notification", "Notification Settings…"],
@@ -203,7 +204,9 @@ extension SelfTest {
         check(silent != nil && silent?.content.sound == nil, "with “Play a sound” off, it has no sound")
         defaults.removeObject(forKey: NotificationSettings.Key.sound)
 
-        // A program's own bell or notification: from another app only (in Next Term the amber mark says it).
+        // A program's own bell or notification: from another app only (in Next Term the amber mark says it). Not straight
+        // after Next Term's own notice for the tab (the OpenCode checks look at that), so the ones above are forgotten.
+        app.ownNoticeAt[back.id] = nil
         check(posted(bell("make"), active: true) == nil && posted(bell("make"), active: false)?.content.body == "make needs your attention",
               "a program’s bell notifies from another app only")
         defaults.set(false, forKey: NotificationSettings.Key.programAlerts)

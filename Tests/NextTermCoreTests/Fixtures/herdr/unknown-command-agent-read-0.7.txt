@@ -1,0 +1,5 @@
+error: unrecognized subcommand 'read'
+
+Usage: herdr agent <COMMAND>
+
+For more information, try '--help'.

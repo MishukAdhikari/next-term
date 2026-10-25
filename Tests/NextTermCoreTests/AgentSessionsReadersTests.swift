@@ -3,7 +3,7 @@ import SQLite3
 import Testing
 @testable import NextTermCore
 
-/// Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot CLI, each from a store made here by hand in
+/// Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot CLI, each from a store made here by hand in
 /// that agent's format (no real sessions), plus `newest` and which tab a session is open in.
 @Suite struct AgentSessionsReadersTests {
     func home() throws -> String {
@@ -136,7 +136,7 @@ import Testing
         #expect(named.resumeCommand() == "qwen --resume \(id1)" && named.resumeCommand(fork: true) == "qwen --resume \(id1) --fork-session")
     }
 
-    // MARK: opencode
+    // MARK: OpenCode
 
     @Test func opencodeFromItsDatabase() throws {
         let home = try home()
@@ -198,9 +198,436 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: home) }
         try database(home + "/.local/share/opencode/opencode.db", "CREATE TABLE session (id TEXT, cwd TEXT);")
         #expect(throws: (any Error).self) { try OpencodeSessions(home: home).sessions(in: "/p", subfolders: false, since: nil) }
+        #expect(opencodeError(home) == "the session table changed")
         // The listing leaves only that agent out.
         let listing = AgentSessions.list(project: "/p", home: home)
         #expect(listing.problems.keys.contains(.opencode) && listing.sessions.isEmpty)
+    }
+
+    /// What reading OpenCode's sessions in `home` threw, as the listing words it; nil when it threw nothing.
+    func opencodeError(_ home: String) -> String? {
+        do {
+            _ = try OpencodeSessions(home: home).sessions(in: "/p", subfolders: false, since: nil)
+            return nil
+        } catch {
+            return String(describing: error)
+        }
+    }
+
+    @Test func opencode2WithAnotherSchemaSaysSoWhateverTheOldTableHolds() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let path = home + "/.local/share/opencode/opencode.db"
+        try database(path, "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, cwd TEXT, time_updated INTEGER);")
+        #expect(opencodeError(home) == "the session table changed")
+        // OpenCode 2's table is the one it writes: an old table that still reads does not hide that it changed.
+        try database(path, """
+            CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT, time_updated INTEGER);
+            INSERT INTO session VALUES ('ses_old', NULL, '/p', 'From the first line', 9000);
+            """)
+        #expect(opencodeError(home) == "the session table changed")
+    }
+
+    /// OpenCode 2's table, as its migration creates it (the columns a reader looks at, and a few around them).
+    static let opencode2Tables = """
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace_id TEXT, parent_id TEXT, slug TEXT NOT NULL,
+          directory TEXT NOT NULL, path TEXT, title TEXT, version TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL,
+          time_updated INTEGER NOT NULL, time_archived INTEGER, time_suspended INTEGER);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL,
+          time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+        """
+
+    @Test func opencode2FromItsSessionV2Table() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        // The store OpenCode 2 made: its sessions in session_v2.
+        let sql = Self.opencode2Tables + """
+            INSERT INTO session_v2 VALUES ('ses_a', 'p', NULL, NULL, 'a', '\(project)', NULL, 'Wire the cache', '2.0.3', 'build',
+              '{"id":"gpt-6","providerID":"openai"}', 1000, 9000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_b', 'p', NULL, NULL, 'b', '\(project)', NULL, NULL, '2.0.3', NULL, NULL, 1000, 8000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_c', 'p', NULL, NULL, 'c', '\(project)', NULL, '', '2.0.3', NULL, NULL, 1000, 7000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_d', 'p', NULL, NULL, 'd', '\(project)', NULL, NULL, '2.0.3', NULL, NULL, 1000, 6000, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_e', 'p', NULL, 'ses_a', 'e', '\(project)', NULL, 'A sub-agent', '2.0.3', NULL, NULL, 1000, 9500, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_f', 'p', NULL, NULL, 'f', '\(project)', NULL, 'Put away', '2.0.3', NULL, NULL, 1000, 9500, 9600, NULL);
+            INSERT INTO session_message VALUES ('m1', 'ses_b', 'user', 1, 1, 1, '{"text":"Add the retry"}');
+            INSERT INTO session_message VALUES ('m2', 'ses_c', 'user', 1, 1, 1, '{"text":"  Fix the flaky test  "}');
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        let found = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: nil)
+        // ses_d was never asked anything.
+        #expect(found.map(\.id) == ["ses_a", "ses_b", "ses_c"])
+        #expect(found.map(\.title) == ["Wire the cache", "Add the retry", "Fix the flaky test"])
+        #expect(found[0].model == "gpt-6" && found[0].resumeCommand() == "opencode --session ses_a")
+    }
+
+    @Test func opencodeMergesItsDatabasesByID() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let data = home + "/.local/share/opencode"
+        func row(_ id: String, _ title: String, updated: Int) -> String {
+            "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)', '2.0.3', NULL, NULL, 1000, \(updated), NULL, NULL);"
+        }
+        try database(data + "/opencode.db", Self.opencode2Tables + row("ses_1", "Older words", updated: 5000) + row("ses_2", "Only here", updated: 4000))
+        try database(data + "/opencode-dev.db", Self.opencode2Tables + row("ses_1", "Newer words", updated: 7000) + row("ses_3", "Dev only", updated: 6000))
+        // A channel store whose table changed leaves the others readable.
+        try database(data + "/opencode-old.db", "CREATE TABLE session (id TEXT, cwd TEXT);")
+        let found = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: nil)
+        #expect(found.map(\.id) == ["ses_1", "ses_3", "ses_2"] && found[0].title == "Newer words")
+        let fromMainOnly = OpencodeSessions(home: home, environment: ["OPENCODE_DISABLE_CHANNEL_DB": "1"])
+        #expect(try fromMainOnly.sessions(in: project, subfolders: false, since: nil).map(\.title) == ["Older words", "Only here"])
+    }
+
+    /// OpenCode 1's table, as a 1.x build writes it after OpenCode 2 has made session_v2 beside it.
+    static let opencode1Table = """
+        CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT, directory TEXT, title TEXT,
+          version TEXT, model TEXT, time_created INTEGER, time_updated INTEGER, time_archived INTEGER);
+        CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+        CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+        """
+
+    @Test func opencode2AlsoReadsTheOldTableBesideIt() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        func v2(_ id: String, _ title: String, updated: Int) -> String {
+            "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)', '2.0.3', NULL, NULL, 1000, \(updated), NULL, NULL);"
+        }
+        func v1(_ id: String, _ title: String, updated: Int, parent: String = "NULL", archived: String = "NULL") -> String {
+            "INSERT INTO session VALUES ('\(id)', 'p', \(parent), 's', '\(project)', '\(title)', '1.19.0', NULL, 1000, \(updated), \(archived));"
+        }
+        // Upgraded, then a 1.x build ran again: ses_new is only in the old table, ses_both moved on there, ses_same did not.
+        let rows: [String] = [
+            v2("ses_v2", "Wire the cache", updated: 9000),
+            v2("ses_both", "Imported words", updated: 5000), v1("ses_both", "Words since", updated: 8000),
+            v2("ses_same", "As imported", updated: 4000), v1("ses_same", "Older copy", updated: 4000),
+            v1("ses_new", "Written by 1.19", updated: 9500),
+            v1("ses_sub", "A sub-agent", updated: 9600, parent: "'ses_new'"), v1("ses_gone", "Put away", updated: 9700, archived: "9800"),
+        ]
+        try database(home + "/.local/share/opencode/opencode.db", Self.opencode2Tables + Self.opencode1Table + rows.joined())
+        let found = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: nil)
+        #expect(found.map(\.id) == ["ses_new", "ses_v2", "ses_both", "ses_same"])
+        #expect(found.map(\.title) == ["Written by 1.19", "Wire the cache", "Words since", "As imported"])
+        let since = try OpencodeSessions(home: home).sessions(in: project, subfolders: false, since: Date(timeIntervalSince1970: 8.5))
+        #expect(since.map(\.id) == ["ses_new", "ses_v2"])
+    }
+
+    @Test func opencode2ReadsPastAnOldTableThatChanged() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let sql = Self.opencode2Tables + """
+            CREATE TABLE session (id TEXT, cwd TEXT);
+            INSERT INTO session VALUES ('ses_odd', '/p');
+            INSERT INTO session_v2 VALUES ('ses_a', 'p', NULL, NULL, 'a', '/p', NULL, 'Wire the cache', '2.0.3', NULL, NULL, 1000, 9000, NULL, NULL);
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        #expect(try OpencodeSessions(home: home).sessions(in: "/p", subfolders: false, since: nil).map(\.id) == ["ses_a"])
+    }
+
+    @Test func opencode2UntitledSessionTakesItsPromptFromTheFirstLinesTables() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        // A session OpenCode 2 imported without a title: its prompt is still in the old message and part tables.
+        let sql = Self.opencode2Tables + Self.opencode1Table + """
+            INSERT INTO session_v2 VALUES ('ses_i', 'p', NULL, NULL, 'i', '/p', NULL, NULL, '2.0.3', NULL, NULL, 1000, 9000, NULL, NULL);
+            INSERT INTO message VALUES ('msg_1', 'ses_i', 1, 1, '{"role":"user"}');
+            INSERT INTO part VALUES ('prt_1', 'msg_1', 'ses_i', 1, 1, '{"type":"text","text":"Split the parser"}');
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        let found = try OpencodeSessions(home: home).sessions(in: "/p", subfolders: false, since: nil)
+        #expect(found.map(\.id) == ["ses_i"] && found.first?.title == "Split the parser")
+    }
+
+    @Test func opencodeMergedStoresKeepSinceAndTheMainStoreOnATie() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let data = home + "/.local/share/opencode"
+        func row(_ id: String, _ title: String, updated: Int) -> String {
+            "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)', '2.0.3', NULL, NULL, 1000, \(updated), NULL, NULL);"
+        }
+        try database(data + "/opencode.db", Self.opencode2Tables + row("ses_1", "Main words", updated: 7000) + row("ses_2", "Early", updated: 3000))
+        let dev: [String] = [row("ses_1", "Dev words", updated: 7000), row("ses_3", "Dev late", updated: 6000), row("ses_4", "Dev early", updated: 2000)]
+        try database(data + "/opencode-dev.db", Self.opencode2Tables + dev.joined())
+        let reader = OpencodeSessions(home: home)
+        let found = try reader.sessions(in: project, subfolders: false, since: nil)
+        #expect(found.map(\.id) == ["ses_1", "ses_3", "ses_2", "ses_4"] && found[0].title == "Main words")
+        let since = try reader.sessions(in: project, subfolders: false, since: Date(timeIntervalSince1970: 5))
+        #expect(since.map(\.id) == ["ses_1", "ses_3"])
+    }
+
+    @Test func opencodeWhereTheShellMovesItsStore() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        func store(_ title: String) -> String {
+            Self.opencode2Tables + "INSERT INTO session_v2 VALUES ('ses_\(title.count)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)',"
+                + " '2.0.3', NULL, NULL, 1000, 9000, NULL, NULL);"
+        }
+        try database(home + "/.local/share/opencode/opencode.db", store("In the default place"))
+        try database(home + "/xdg/opencode/opencode.db", store("Under XDG_DATA_HOME"))
+        try database(home + "/elsewhere/mine.db", store("Named by OPENCODE_DB"))
+        func titles(_ environment: [String: String]) throws -> [String] {
+            try OpencodeSessions(home: home, environment: environment).sessions(in: project, subfolders: false, since: nil).map(\.title)
+        }
+        #expect(try titles([:]) == ["In the default place"])
+        #expect(try titles(["XDG_DATA_HOME": home + "/xdg"]) == ["Under XDG_DATA_HOME"])
+        #expect(try titles(["OPENCODE_DB": home + "/elsewhere/mine.db"]) == ["Named by OPENCODE_DB"])
+        #expect(try titles(["OPENCODE_DB": ":memory:"]).isEmpty)
+        // A made-up home never takes the login shell's variables.
+        #expect(OpencodeSessions(home: home).environment.isEmpty)
+    }
+
+    @Test func opencodeWithoutATitleColumnUsesTheFirstPrompt() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let sql = """
+            CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL, time_updated INTEGER NOT NULL);
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT);
+            INSERT INTO session_v2 VALUES ('ses_t', '/p', 9000);
+            INSERT INTO session_message VALUES ('m1', 'ses_t', 'user', 1, '{"text":"Name the branch"}');
+            """
+        try database(home + "/.local/share/opencode/opencode.db", sql)
+        let found = try OpencodeSessions(home: home).sessions(in: "/p", subfolders: false, since: nil)
+        #expect(found.map(\.title) == ["Name the branch"] && found.first?.createdAt == nil)
+    }
+
+    // MARK: the session OpenCode shows
+
+    /// An OpenCode session in "/p", started a day before `start` and last written `updated` seconds after it.
+    func opencodeSession(_ id: String, _ title: String, updated: TimeInterval, start: Date, agent: AgentKind = .opencode) -> AgentSession {
+        AgentSession(agent: agent, id: id, cwd: "/p", title: title, named: false, createdAt: start.addingTimeInterval(-86400),
+                     updatedAt: start.addingTimeInterval(updated), gitBranch: nil, model: nil, isRunning: false)
+    }
+
+    @Test func opencodesTitleNamesTheSessionItShows() {
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        let sessions: [AgentSession] = [
+            opencodeSession("ses_login", "Fix the login test", updated: 30, start: start),
+            opencodeSession("ses_long", "A very long title that OpenCode cut at forty characters", updated: 40, start: start),
+            opencodeSession("ses_more", "Fix the login tests too", updated: 50, start: start),
+            opencodeSession("ses_quiet", "Tidy the docs", updated: -60, start: start),
+            opencodeSession("ses_history", "History cleanup", updated: 60, start: start),
+        ]
+        func shown(_ title: String, _ list: [AgentSession]? = nil, named: String? = nil) -> String? {
+            OpencodeSessions.shown(title: title, in: list ?? sessions, since: start, named: named)
+        }
+        #expect(shown("OC | Fix the login test") == "ses_login")
+        // Past 40 characters OpenCode shows the first 37 (UTF-16 units) and "…" (an older build "..."): the start of one title.
+        #expect(shown("OC | A very long title that OpenCode cut a…") == "ses_long")
+        #expect(shown("OC | A very long title that OpenCode cut a...") == "ses_long")
+        // A title that ends so before 37 units is whole: OpenCode cut nothing.
+        #expect(shown("OC | Fix the login test…") == nil)
+        #expect(shown("OC | Hi...") == nil && shown("OC | Hi…") == nil && shown("OC | Hi\u{FFFD}…") == nil)
+        // The first 37 units of two titles name neither.
+        let cutTwins = sessions + [opencodeSession("ses_kept", "A very long title that OpenCode cut and kept going", updated: 70, start: start)]
+        #expect(shown("OC | A very long title that OpenCode cut a…", cutTwins) == nil)
+        // JavaScript cuts by UTF-16 unit: a cut through an emoji leaves half of it, which the terminal reads as U+FFFD.
+        let head = "Teach the release notes to show one "
+        #expect(head.utf16.count == 36)
+        let emoji = opencodeSession("ses_emoji", head + "\u{1F389} in every heading", updated: 80, start: start)
+        #expect(shown("OC | " + head + "\u{FFFD}…", sessions + [emoji]) == "ses_emoji")
+        // Spaces count as the session list shows the title.
+        #expect(shown("  OC | Fix  the login\ttest ") == "ses_login")
+        // Two sessions with one title: neither, written since the agent started or not. OpenCode may show the older one
+        // while another tab writes the newer.
+        let twins = sessions + [opencodeSession("ses_twin", "Fix the login test", updated: 70, start: start)]
+        #expect(shown("OC | Fix the login test", twins) == nil)
+        let tidied = sessions + [opencodeSession("ses_tidied", "Tidy the docs", updated: 90, start: start)]
+        #expect(shown("OC | Tidy the docs", tidied) == nil)
+        // A session nothing wrote to since the agent started is not the one it shows.
+        #expect(shown("OC | Tidy the docs") == nil)
+        // OpenCode's home screen, a session with no title yet, a plugin's page ("OC | <plugin>", no session's title)
+        // and other programs' titles.
+        for title in ["OpenCode", "OC | ", "OC | …", "OC | ...", "OC | todo-board", "vim notes.txt", "Fix the login test",
+                      "OC|Fix the login test"] {
+            #expect(shown(title) == nil, "\(title)")
+        }
+        // Only an id in OpenCode's shape, and only OpenCode's sessions.
+        let odd = opencodeSession("not an id", "Odd one", updated: 30, start: start)
+        let gemini = opencodeSession("ses_gemini", "Odd one", updated: 30, start: start, agent: .gemini)
+        #expect(shown("OC | Odd one", [odd]) == nil && shown("OC | Odd one", [gemini]) == nil)
+        // One session listed twice is one match.
+        #expect(shown("OC | Fix the login test", sessions + [sessions[0]]) == "ses_login")
+    }
+
+    /// `opencode -s <id>` names the session its line resumed: while the title is that session's, it is the one shown,
+    /// written since the agent started or not, whatever other session has its title. Another title is a switch.
+    @Test func opencodesShownSessionKeepsTheOneItsLineNamed() {
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        let sessions: [AgentSession] = [
+            opencodeSession("ses_a", "Fix the login test", updated: -86000, start: start),
+            opencodeSession("ses_router", "Fix the router", updated: 200, start: start),
+        ]
+        // Another tab began a session with the same title since.
+        let twin = sessions + [opencodeSession("ses_b", "Fix the login test", updated: 30, start: start)]
+        func shown(_ title: String, _ list: [AgentSession], named: String?) -> String? {
+            OpencodeSessions.shown(title: title, in: list, since: start, named: named)
+        }
+        let login = "OC | Fix the login test"
+        #expect(shown(login, sessions, named: "ses_a") == "ses_a")
+        #expect(shown(login, twin, named: "ses_a") == "ses_a")
+        #expect(shown(login, twin, named: "SES_A") == nil) // OpenCode's ids hold both cases: another spelling is another id
+        #expect(shown(login, twin, named: nil) == nil) // `opencode -c`: either could be the one shown
+        // A switch inside OpenCode: the title is another session's.
+        #expect(shown("OC | Fix the router", twin, named: "ses_a") == "ses_router")
+        // A line's id out of OpenCode's shape, or one no session has, names nothing here.
+        #expect(shown(login, twin, named: "ses_a; rm -rf ~") == nil)
+        #expect(shown(login, sessions, named: "ses_gone") == nil)
+    }
+
+    @Test func opencodesShownSessionIsReadFromItsStore() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        func row(_ id: String, _ title: String, updated: Int) -> String {
+            "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)', '2.0.3', NULL, NULL, 1000, \(updated), NULL, NULL);"
+        }
+        let rows = row("ses_mine", "Fix the login test", updated: 200_000) + row("ses_old", "Fix the login test", updated: 50_000)
+            + row("ses_else", "Fix the router", updated: 210_000)
+        try database(home + "/.local/share/opencode/opencode.db", Self.opencode2Tables + rows)
+        let reader = OpencodeSessions(home: home)
+        let since = Date(timeIntervalSince1970: 100)
+        #expect(reader.shown(title: "OC | Fix the router", in: project, since: since) == "ses_else")
+        #expect(reader.shown(title: "OC | Fix the router", in: project, since: Date(timeIntervalSince1970: 300)) == nil)
+        // ses_old has the same title as ses_mine. Only ses_mine was written since the agent started at 100 s, but the
+        // agent may show ses_old, idle, while another tab writes ses_mine: the title names neither.
+        let title = "OC | Fix the login test"
+        #expect(reader.shown(title: title, in: project, since: since) == nil)
+        // The session the line names, while the title is its own.
+        #expect(reader.shown(title: title, in: project, since: since, named: "ses_old") == "ses_old")
+        #expect(reader.shown(title: title, in: project, since: since, named: "ses_mine") == "ses_mine")
+        #expect(OpencodeShownSession.lookUp(OpencodeShownSession.Ask(title: title, start: since), named: "ses_old",
+                                            in: project, home: home) == "ses_old")
+        #expect(reader.shown(title: "OC | Fix the router", in: project + "/api", since: since) == nil)
+        #expect(OpencodeSessions(home: home + "/nowhere").shown(title: "OC | Fix the router", in: project, since: since) == nil)
+    }
+
+    /// The tab's side: the store is read once per title, off the main thread, and the save reads only what was kept.
+    @Test func aTabKeepsTheSessionItsTitleNamed() throws {
+        typealias Ask = OpencodeShownSession.Ask
+        var kept = OpencodeShownSession()
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        let login = "OC | Fix the login test", router = "OC | Fix the router"
+        // The lookup to run when the tab's title is `title` at `now` (a mutating call, kept out of the macros).
+        func ask(_ title: String?, at now: TimeInterval, started: Date? = nil) -> Ask? {
+            kept.ask(title: title, start: started ?? start, at: now)
+        }
+        // A new title is looked up once.
+        let first = try #require(ask(login, at: 10))
+        #expect(first == Ask(title: login, start: start))
+        #expect(ask(login, at: 11) == nil)
+        #expect(kept.id(title: login, start: start) == nil) // not found yet
+        kept.found("ses_login", for: first)
+        #expect(kept.id(title: login, start: start) == "ses_login")
+        // The same title again looks up nothing.
+        #expect(ask(login, at: 500) == nil)
+        // A title that names no session looks up nothing, and has no id.
+        #expect(ask("OpenCode", at: 501) == nil && ask(nil, at: 501) == nil)
+        #expect(kept.id(title: "OpenCode", start: start) == nil && kept.id(title: nil, start: start) == nil)
+        // A new title: the id kept for the earlier one is not its id.
+        let second = try #require(ask(router, at: 502))
+        #expect(kept.id(title: router, start: start) == nil)
+        // An answer that comes after the title moved on is not kept.
+        kept.found("ses_login", for: first)
+        #expect(kept.id(title: router, start: start) == nil)
+        // Nothing found: looked up again only after a pause, as OpenCode writes to the session once it works in it.
+        kept.found(nil, for: second)
+        #expect(kept.id(title: router, start: start) == nil)
+        #expect(kept.retryDelay(for: second) == OpencodeShownSession.retryAfter)
+        #expect(kept.retryDelay(for: first) == nil) // a lookup the title moved on from waits for nothing
+        #expect(ask(router, at: 502 + OpencodeShownSession.retryAfter - 1) == nil)
+        let again = try #require(ask(router, at: 502 + OpencodeShownSession.retryAfter))
+        kept.found("ses_router", for: again)
+        #expect(kept.id(title: router, start: start) == "ses_router")
+        #expect(kept.retryDelay(for: again) == nil)
+        // The agent started again with the same title: looked up again, and the earlier start's id is not this one's.
+        let later = start.addingTimeInterval(600)
+        #expect(kept.id(title: router, start: later) == nil)
+        #expect(ask(router, at: 900, started: later) == Ask(title: router, start: later))
+    }
+
+    /// A title nothing matches is looked up again after a pause that doubles each time, `lookupsPerTitle` times at most:
+    /// an idle tab on an older session, or a title two sessions share, stops reading the store.
+    @Test func aTitleNothingMatchesIsLookedUpAFewTimes() {
+        var kept = OpencodeShownSession()
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        let login = "OC | Fix the login test"
+        func ask(_ title: String, at now: TimeInterval) -> OpencodeShownSession.Ask? {
+            kept.ask(title: title, start: start, at: now)
+        }
+        var now: TimeInterval = 100
+        var lookups = 0
+        var waits: [TimeInterval] = []
+        while let asked = ask(login, at: now) {
+            lookups += 1
+            kept.found(nil, for: asked)
+            guard let wait = kept.retryDelay(for: asked) else { break }
+            waits.append(wait)
+            #expect(ask(login, at: now + wait - 1) == nil)
+            now += wait
+        }
+        #expect(lookups == OpencodeShownSession.lookupsPerTitle)
+        #expect(waits == [20, 40, 80, 160, 320])
+        // Nothing more for that title however long it stays; a new title is looked up, and the first again after it.
+        #expect(ask(login, at: now + 100_000) == nil)
+        #expect(ask("OC | Fix the router", at: now + 100_001) != nil)
+        #expect(ask(login, at: now + 100_002) != nil)
+    }
+
+    @Test func twoOpencodeTabsInOneFolderEachHaveTheSessionTheyShow() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let start = (Date().timeIntervalSince1970 - 600).rounded()
+        func row(_ id: String, _ title: String, created: Double, updated: Double) -> String {
+            let times = "\(Int(created * 1000)), \(Int(updated * 1000))"
+            return "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, '\(title)', '2.0.3', NULL, NULL, \(times), NULL, NULL);"
+        }
+        // Tab A ran `opencode -c` on yesterday's session; tab B, started after it, began one of its own. Both wrote since.
+        let rows = row("ses_a", "Fix the login test", created: start - 86400, updated: start + 120)
+            + row("ses_b", "Fix the router", created: start + 30, updated: start + 200)
+        try database(home + "/.local/share/opencode/opencode.db", Self.opencode2Tables + rows)
+        func tab(_ key: String, at offset: Double, showing title: String?, line: String = "opencode -c") -> RunningAgent {
+            RunningAgent(key: key, agent: .opencode, directory: project, commandLine: line,
+                         startedAt: Date(timeIntervalSince1970: start + offset), shownTitle: title)
+        }
+        let showing = [tab("A", at: 0, showing: "OC | Fix the login test"), tab("B", at: 10, showing: "OC | Fix the router")]
+        #expect(AgentSessions.openSessions(showing, home: home) == ["opencode:ses_a": "A", "opencode:ses_b": "B"])
+        // By time alone neither: either tab could have started or written to either session.
+        let untitled = [tab("A", at: 0, showing: nil), tab("B", at: 10, showing: nil)]
+        #expect(AgentSessions.openSessions(untitled, home: home).isEmpty)
+        // A title that names no session leaves the tab to the time guess, which a session the other tab shows can't go to.
+        let home1 = [tab("A", at: 0, showing: "OpenCode"), tab("B", at: 10, showing: "OC | Fix the router")]
+        #expect(AgentSessions.openSessions(home1, home: home) == ["opencode:ses_b": "B"])
+        // Started on one session and switched inside OpenCode to another: the title's is the one open now.
+        let switched = [tab("A", at: 0, showing: "OC | Fix the router", line: "opencode -s ses_a")]
+        #expect(AgentSessions.openSessions(switched, home: home) == ["opencode:ses_b": "A"])
+        let resumed = [tab("A", at: 0, showing: "OpenCode", line: "opencode -s ses_a")]
+        #expect(AgentSessions.openSessions(resumed, home: home) == ["opencode:ses_a": "A"])
+    }
+
+    /// Tab A resumed yesterday's session by its id and nothing was typed since; tab B began a session that OpenCode
+    /// titled the same. A's line names the session A shows: B's is never marked open in A.
+    @Test func anOpencodeTabKeepsItsLinesSessionWhenAnotherHasItsTitle() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let project = "/Users/me/Code/app"
+        let start = (Date().timeIntervalSince1970 - 600).rounded()
+        func row(_ id: String, created: Double, updated: Double) -> String {
+            let times = "\(Int(created * 1000)), \(Int(updated * 1000))"
+            return "INSERT INTO session_v2 VALUES ('\(id)', 'p', NULL, NULL, 's', '\(project)', NULL, 'Fix the login test', '2.0.3', NULL, NULL, \(times), NULL, NULL);"
+        }
+        let rows = row("ses_a", created: start - 86400, updated: start - 86000) + row("ses_b", created: start + 30, updated: start + 60)
+        try database(home + "/.local/share/opencode/opencode.db", Self.opencode2Tables + rows)
+        let tabA = RunningAgent(key: "A", agent: .opencode, directory: project, commandLine: "opencode -s ses_a",
+                                startedAt: Date(timeIntervalSince1970: start), shownTitle: "OC | Fix the login test")
+        let tabB = RunningAgent(key: "B", agent: .opencode, directory: project, commandLine: "opencode",
+                                startedAt: Date(timeIntervalSince1970: start + 20), shownTitle: "OC | Fix the login test")
+        let open = AgentSessions.openSessions([tabA, tabB], home: home)
+        #expect(open["opencode:ses_a"] == "A")
+        #expect(open["opencode:ses_b"] != "A")
     }
 
     // MARK: Cursor Agent

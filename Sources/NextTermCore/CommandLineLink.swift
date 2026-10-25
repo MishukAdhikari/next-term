@@ -63,13 +63,15 @@ public enum CommandLineLink {
     /// it on PATH will do, or the password route), or anyone else's (left alone, and not shadowed by one of
     /// ours). Next Term's link to a copy that is gone is passed over, as the shell passes over it, unless it
     /// can be repointed. With none, the first command folder that `isWritable` takes it. `isOurs` tells a
-    /// link Next Term made by its target.
+    /// link Next Term made by its target. A folder inside a protected place under `home` (ProtectedPlaces: a tool's bin
+    /// in ~/Downloads) is passed over unseen: a look there at launch would set off macOS's prompt for that place.
     public static func plan(path: [String], home: String, script: String,
                             isWritable: (String) -> Bool, entry: (String) -> Entry,
                             isOurs: (String) -> Bool = CommandLineLink.isOurs) -> Plan {
         let allowed = Set(commandFolders(home: home))
+        let protected = ProtectedPlaces(home: home)
         var free: String?
-        for folder in folders(path) {
+        for folder in folders(path) where !protected.holds(folder) {
             let candidate = folder + "/" + CommandLineOpen.toolName
             // A Next Term's own bin folder, on PATH because the app was started from one of its tabs.
             if isOurs(candidate) { continue }
