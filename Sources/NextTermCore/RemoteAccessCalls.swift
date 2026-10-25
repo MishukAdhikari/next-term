@@ -157,6 +157,8 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
     private var lastID: ID = 0
     private var listChanged: Set<String> = []
     private var off = false
+    /// When each grant's control calls ran, for "At most 10 control calls a minute" (R55).
+    private var controlCalls: [String: [Date]] = [:]
 
     public init(deadline: TimeInterval = RemoteAccessCalls.deadline,
                 clock: @escaping @Sendable () -> Date = { Date() }) {
@@ -181,6 +183,21 @@ public final class RemoteAccessCalls: @unchecked Sendable { // its state lives u
         calls[lastID] = Call(grant: grant, connection: connection, slot: slot, opened: now, answer: answer)
         let changed = streamed && listChanged.remove(grant) != nil
         return .call(lastID, listChanged: changed)
+    }
+
+    /// One control call from `grant` about to run, while its "At most 10 control calls a minute" is on (R55): false when
+    /// ten ran in the last minute, and then it does not count.
+    public func takeControlCall(grant: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = clock()
+        let recent: [Date] = (controlCalls[grant] ?? []).filter { now.timeIntervalSince($0) < 60 }
+        guard recent.count < RemoteAccessLimits.controlCallsPerMinute else {
+            controlCalls[grant] = recent
+            return false
+        }
+        controlCalls[grant] = recent + [now]
+        return true
     }
 
     /// A call the door answers without running it (its options or arguments refuse it, or it is not one message

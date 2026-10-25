@@ -438,10 +438,11 @@ import Testing
         #expect(limited == ["read_tab", "wait_for_tab", "read_file", "get_diff", "host_changes"])
     }
 
-    /// Only the limited arguments change: every other field is copied, schema included.
+    /// Only the limited arguments change, and under Control send_to_tab's text, which has the remote length limit
+    /// (U14): every other field is copied, schema included.
     @Test func everyOtherFieldIsCopied() throws {
         let limited: [String: String] = ["read_tab": "lines", "wait_for_tab": "timeout_seconds", "read_file": "limit",
-                                         "get_diff": "max_chars", "host_changes": "max_bytes"]
+                                         "get_diff": "max_chars", "host_changes": "max_bytes", "send_to_tab": "text"]
         for remote in RemoteAccessTools.tools(for: .control) {
             let local = try #require(MCPServer.tool(named: remote.name))
             #expect(remote.title == local.title && remote.description == local.description, "\(remote.name)")

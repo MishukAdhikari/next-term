@@ -212,7 +212,8 @@ import Testing
         }
     }
 
-    /// The door's tool check and the catalogue agree: a call is allowed exactly when tools/list offers the tool.
+    /// The door's tool check and the catalogue agree: a call gets past the tool check exactly when tools/list offers
+    /// the tool. A control rule that needs an argument (new_tab's command, U14) may still refuse it after that check.
     @Test func thePolicyAdmitsExactlyWhatTheCatalogueOffers() {
         var sets: [RemoteAccessOptions] = [.readOnly, .control, .customStart, RemoteAccessOptions(on: [])]
         for id in ID.allCases {
@@ -224,7 +225,11 @@ import Testing
             let offered = Set(RemoteAccessTools.tools(for: options).map(\.name))
             for tool in MCPServer.tools {
                 let decision = decide(tool.name, options: options)
-                #expect((allowed(decision) != nil) == offered.contains(tool.name), "\(tool.name) \(options.on)")
+                let toolRefused: Bool = refusal(decision).map { (text: String) -> Bool in
+                    text.hasPrefix("This connection can't use") || text == RemoteAccessText.notAvailable
+                } ?? false
+                let passed: Bool = allowed(decision) != nil || (refusal(decision) != nil && !toolRefused)
+                #expect(passed == offered.contains(tool.name), "\(tool.name) \(options.on)")
                 let halves = Policy.needs(tool.name, rows: RemoteAccessOption.all)
                 let admitted = !halves.isEmpty && halves.allSatisfy { half in half.contains { options[$0] } }
                 #expect(admitted == offered.contains(tool.name), "\(tool.name) \(options.on)")

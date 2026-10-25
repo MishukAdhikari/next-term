@@ -44,7 +44,7 @@ public enum RemoteAccessTools {
                 half.contains { options[$0] }
             }
         }
-        return admitted.map(remote)
+        return admitted.map { (tool: MCPServer.Tool) -> MCPServer.Tool in remote(tool, options: options) }
     }
 
     // MARK: remote schemas
@@ -91,19 +91,65 @@ public enum RemoteAccessTools {
         return limits
     }()
 
-    /// The tool as a remote connection sees it: the remote limit in its schema, every other field as it is.
-    static func remote(_ tool: MCPServer.Tool) -> MCPServer.Tool {
-        guard let limit = schemaLimits.first(where: { $0.tool == tool.name }) else { return tool }
+    /// The keys "Arrows, Return and Escape" admits (R52), as press_keys names them.
+    public static let safeKeys: [String] = ["up", "down", "left", "right", "enter", "escape"]
+
+    /// The tool as a remote connection with these options sees it: the remote limit in its schema, and the control
+    /// tools' arguments as the options allow them (U14). send_to_tab's text has a maximum length, and without "Every
+    /// key" its submit is always true; press_keys takes only the safe keys without "Every key"; new_tab needs a command
+    /// without "Open a tab with any command, or a plain shell"; close_tab has force only with "Close busy tabs". Every
+    /// other field is as it is.
+    static func remote(_ tool: MCPServer.Tool, options: RemoteAccessOptions = .control) -> MCPServer.Tool {
         let parsed = try? JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8))
-        guard var schema = parsed as? [String: Any],
-              var properties = schema["properties"] as? [String: Any],
-              var property = properties[limit.argument] as? [String: Any] else { return tool }
-        property["maximum"] = limit.maximum
-        property["description"] = limit.description
-        properties[limit.argument] = property
+        guard var schema = parsed as? [String: Any], var properties = schema["properties"] as? [String: Any] else { return tool }
+        var changed = false
+        if let limit = schemaLimits.first(where: { $0.tool == tool.name }), var property = properties[limit.argument] as? [String: Any] {
+            property["maximum"] = limit.maximum
+            property["description"] = limit.description
+            properties[limit.argument] = property
+            changed = true
+        }
+        switch tool.name {
+        case "send_to_tab":
+            if var text = properties["text"] as? [String: Any] {
+                text["maxLength"] = RemoteAccessLimits.sendText
+                properties["text"] = text
+                changed = true
+            }
+            if !options[.everyKey], var submit = properties["submit"] as? [String: Any] {
+                submit["description"] = "Always true on this connection: the text is sent with Return."
+                properties["submit"] = submit
+                changed = true
+            }
+        case "press_keys":
+            if !options[.everyKey], var keys = properties["keys"] as? [String: Any] {
+                keys["items"] = ["type": "string", "enum": safeKeys]
+                properties["keys"] = keys
+                changed = true
+            }
+        case "new_tab":
+            if !options[.openAnyTab] {
+                var required = schema["required"] as? [String] ?? []
+                if !required.contains("command") { required.append("command") }
+                schema["required"] = required
+                if var command = properties["command"] as? [String: Any] {
+                    command["description"] = "One agent Next Term can read, by name with no arguments, such as claude."
+                    properties["command"] = command
+                }
+                changed = true
+            }
+        case "close_tab":
+            if !options[.closeBusyTabs], properties["force"] != nil {
+                properties["force"] = nil
+                changed = true
+            }
+        default:
+            break
+        }
+        guard changed else { return tool }
         schema["properties"] = properties
-        let options: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? JSONSerialization.data(withJSONObject: schema, options: options) else { return tool }
+        let writing: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? JSONSerialization.data(withJSONObject: schema, options: writing) else { return tool }
         return MCPServer.Tool(name: tool.name, title: tool.title, description: tool.description,
                               inputSchema: String(decoding: data, as: UTF8.self), readOnly: tool.readOnly,
                               destructive: tool.destructive, idempotent: tool.idempotent, timeout: tool.timeout,

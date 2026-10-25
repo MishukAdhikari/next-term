@@ -47,6 +47,59 @@ public enum RemoteAccessText {
     public static let deadline = "Next Term on the Mac did not answer in time. A dialog may be open there. Try again."
     /// send_to_tab's text over R27's limit, which holds whatever the options.
     public static let textTooLong = "Text is limited to 8,000 characters remotely."
+
+    // MARK: the control options' texts (U14)
+
+    /// "Or turn on “A” … on your Mac.": the last sentence when the text first offers another way out.
+    public static func orTurnOn(_ options: [RemoteAccessOption.ID]) -> String { "Or t" + turnOn(options).dropFirst() }
+
+    /// R50.
+    public static let shellTab = "That is a shell tab. " + turnOn([.typeShells])
+    /// R57: a mode that never asks, or a bypass flag on the command line.
+    public static let neverAsks = "That agent runs without asking you first (a bypass or auto-approve mode). " + turnOn([.typeNeverAsking])
+    /// R57: an agent not on the list.
+    public static let modeUnknown = "Next Term can't read this agent's permission mode. " + turnOn([.typeNeverAsking])
+    /// R57: a listed agent whose mode or input state Next Term can't see now.
+    public static let modeHidden = "Next Term can't see this agent's permission mode right now. Try again when its input line shows. "
+        + orTurnOn([.typeNeverAsking])
+    /// R57: a mode that asks, with "Type into agents that ask before acting" off.
+    public static let asksFirst = "That agent asks before it acts. " + turnOn([.typeAsking])
+    /// R51.
+    public static let shellAndMemoryOff = "Text that starts with ! or # is off for this connection. " + turnOn([.shellAndMemory])
+    /// R51: an allowlist word with its option off, or any other slash command.
+    public static func slashOff(_ option: RemoteAccessOption.ID) -> String { "That slash command is off for this connection. " + turnOn([option]) }
+    /// R51, R52.
+    public static let alwaysReturn = "On this connection, text is always sent with Return. " + turnOn([.everyKey])
+    /// R51: the input line holds text, or can't be found.
+    public static let inputLine = "That agent's input line has text in it, or Next Term can't see it. Clear it on your Mac. "
+        + orTurnOn([.anySlash, .shellAndMemory])
+    /// R52.
+    public static let keyOff = "That key is off for this connection. " + turnOn([.everyKey])
+    /// R52: the safe keys while a question or a screen Next Term can't classify shows.
+    public static let keysScreen = "That tab shows a question or a screen Next Term can't read. Answer a question with answer_agent. "
+        + orTurnOn([.everyKey])
+    /// R52: Return while the input line has text.
+    public static let enterWithText = "Return is off while the agent's input line has text. Clear it on your Mac. " + orTurnOn([.everyKey])
+    /// R58.
+    public static let standingChoice = "That choice isn't a one-time choice Next Term knows. " + turnOn([.answerStanding])
+    /// R54.
+    public static let commandOff = "That command is off for this connection. A new tab can run one agent name with no arguments, "
+        + "such as claude. " + turnOn([.openAnyTab])
+    /// R54, R62.
+    public static let folderOff = "That folder is not in an open project. " + turnOn([.showOnMac])
+    /// R53.
+    public static let busyTab = "That tab is busy. Close it on your Mac. " + orTurnOn([.closeBusyTabs])
+    /// R55: "Or turn off", since that option sets a limit.
+    public static let controlRate = "Too many control calls; try again in a minute. Or turn off “"
+        + RemoteAccessOption.option(.rateLimit).label + "” for this connection in Settings › Remote Access on your Mac."
+}
+
+/// The agents whose permission mode Next Term reads on their screen (R57's list): a remote new_tab may start one by
+/// name under "Open a tab that runs a listed agent" (R54), and typing reaches one in a mode that asks under "Type into
+/// agents that ask before acting". Claude Code only, until hand check H16 records Codex's, Gemini CLI's and Qwen
+/// Code's mode strings.
+public enum RemoteAccessAgents {
+    public static let listed: [String] = ["claude"]
 }
 
 /// Decides each remote tool call before it runs, and shapes its result before it goes back (the plan's U5). Pure:
@@ -91,8 +144,55 @@ public enum RemoteAccessPolicy {
             return .invalidParams(RemoteAccessText.notAnArgument(unlisted, of: name))
         }
         if let text = overLimit(name, arguments) { return .refuse(text) }
+        if let text = controlRefusal(name, arguments, options: options) { return .refuse(text) }
         return .allow(clamped(arguments, tool: name, properties: properties))
     }
+
+    // MARK: the control options' rules before the main thread (U14)
+
+    /// The control options' rules that need no screen: send_to_tab without Return needs "Every key" (R51, R52);
+    /// without it press_keys takes the safe keys alone (R52); without "Open a tab with any command, or a plain shell" a
+    /// new tab runs one listed agent by name, with no arguments and no first prompt typed after it (R54). The door's
+    /// checks on the main thread come after.
+    public static func controlRefusal(_ tool: String, _ arguments: [String: Any], options: RemoteAccessOptions) -> String? {
+        switch tool {
+        case "send_to_tab":
+            if arguments["submit"] as? Bool == false, !options[.everyKey] { return RemoteAccessText.alwaysReturn }
+        case "press_keys":
+            guard !options[.everyKey] else { return nil }
+            let keys: [String] = arguments["keys"] as? [String] ?? []
+            if keys.contains(where: { !RemoteAccessTools.safeKeys.contains($0.lowercased()) }) { return RemoteAccessText.keyOff }
+        case "new_tab":
+            guard !options[.openAnyTab] else { return nil }
+            let command: String = (arguments["command"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let prompt: String = (arguments["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !RemoteAccessAgents.listed.contains(command) || !prompt.isEmpty { return RemoteAccessText.commandOff }
+        default:
+            break
+        }
+        return nil
+    }
+
+    /// The slash commands "/ commands on the allowlist" admits (R51): an allowlist, so commands agents add later stay off.
+    public static let slashAllowlist: Set<String> = ["/clear", "/compact", "/status", "/cost", "/usage", "/context", "/help"]
+
+    /// What text sent into an agent tab may start with, after leading whitespace (R51): the door calls it on the main
+    /// thread once it knows the tab is an agent tab. `!` and `#` need "! shell lines and # memory lines"; a first word
+    /// on the allowlist, exactly, needs "/ commands on the allowlist" or "Any / command"; any other `/` needs "Any /
+    /// command". Nil when the text may go.
+    public static func textRefusal(_ text: String, options: RemoteAccessOptions) -> String? {
+        let trimmed = text.drop { $0.isWhitespace }
+        guard let first = trimmed.first else { return nil }
+        if first == "!" || first == "#" { return options[.shellAndMemory] ? nil : RemoteAccessText.shellAndMemoryOff }
+        guard first == "/", !options[.anySlash] else { return nil }
+        let word = String(trimmed.prefix { !$0.isWhitespace })
+        guard slashAllowlist.contains(word) else { return RemoteAccessText.slashOff(.anySlash) }
+        return options[.slashAllowlist] ? nil : RemoteAccessText.slashOff(.slashAllowlist)
+    }
+
+    /// A control call (R55): one to a tool tagged write, which acts on the Mac. Reading never counts: settings_get,
+    /// list_skills, get_skill and list_secrets included.
+    public static func isControlCall(_ tool: String) -> Bool { MCPServer.scopeTags[tool] == .write }
 
     // MARK: options
 
