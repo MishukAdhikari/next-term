@@ -370,7 +370,7 @@ extension SelfTest {
         pane.editingButton.performClick(nil)
         let asked = await sheet().map { _ in sheetText(window) } ?? ""
         check(asked.contains("Allow editing “agent.db”?") && asked.contains("It may belong to an app that is running now (open in “\(holder)”)")
-              && asked.contains("only if that value hasn’t changed since it was read") && asked.contains("Edit › Undo"),
+              && asked.contains("only if that value and its row haven’t changed since they were read") && asked.contains("Edit › Undo"),
               "AE5: Allow Editing… asks first, naming the file and the process holding it", asked)
         await answer(.alertSecondButtonReturn)
         check(!pane.isEditingAllowed && pane.summaryText.hasSuffix("read-only"), "AE5: Cancel leaves it read-only")
@@ -471,6 +471,12 @@ extension SelfTest {
         _ = await wait(5) { pane.lastOutcome != nil }
         _ = await settle()
         check(store.one("SELECT content FROM messages WHERE id = 8") == "while busy", "AE8: once it lets go, Save writes", String(describing: pane.lastOutcome))
+
+        await inCellUnderWritesChecks(pane: pane, store: store, hand: hand, role: role, content: content)
+        await leavingADraftChecks(pane: pane, hand: hand, role: role, content: content)
+        await rowGivenOutAgainChecks(pane: pane, store: store, hand: hand, content: content)
+        await noticeUndoChecks(pane: pane, store: store, hand: hand, role: role)
+        await wholeValueReloadChecks(pane: pane, store: store, hand: hand, content: content)
 
         // AE10, AE11: what can't be edited says why; an edit to content keeps the full-text index in step.
         hand.click(grid, row: 1, column: content)
@@ -577,6 +583,249 @@ extension SelfTest {
         await walEditChecks(c, folder: store.folder, hand: hand)
         await previewDraftChecks(c, store: store, hand: hand)
         await readOnlyFileChecks(c, store: store)
+        await closeWhileSavingChecks(c, store: store, hand: hand)
+    }
+
+    /// The sheet over `window`, once it is up, and its text ("" when none came).
+    private static func cellSheet(_ window: NSWindow) async -> String {
+        await wait(5) { window.attachedSheet != nil } ? sheetText(window) : ""
+    }
+
+    /// Answers the sheet over `window`.
+    private static func answerSheet(_ window: NSWindow, _ code: NSApplication.ModalResponse) async {
+        guard let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet, returnCode: code)
+        _ = await wait(2) { window.attachedSheet !== sheet }
+    }
+
+    /// ↩ on (row, column), and the field that opens in its cell.
+    private static func openInCell(_ pane: DatabasePane, _ hand: CellHand, row: Int, column: Int) async -> NSTextView? {
+        hand.click(pane.grid, row: row, column: column)
+        hand.window.makeFirstResponder(pane.grid)
+        hand.key(36)
+        guard await wait(2, { pane.grid.inPlaceField?.currentEditor() != nil }) else { return nil }
+        return pane.grid.inPlaceField?.currentEditor() as? NSTextView
+    }
+
+    /// What a grid cell shows.
+    private static func shown(_ grid: NSTableView, row: Int, column: Int) -> String? {
+        grid.scrollRowToVisible(row)
+        grid.layoutSubtreeIfNeeded()
+        return (grid.view(atColumn: column, row: row, makeIfNecessary: true) as? GridCellView)?.label.stringValue
+    }
+
+    /// A value typed in its cell: Esc leaves the cell as the file has it; Edit takes it to the detail pane at
+    /// once; another app's writes don't read the page again under it; a reload that comes anyway moves the
+    /// typed text and the keyboard to the detail pane, or opens an unchanged value in its cell again.
+    private static func inCellUnderWritesChecks(pane: DatabasePane, store: CellStore, hand: CellHand, role: Int, content: Int) async {
+        let window = hand.window, grid = pane.grid
+        func replace(_ field: NSTextView, _ text: String) { field.insertText(text, replacementRange: NSRange(location: 0, length: (field.string as NSString).length)) }
+        guard let escaped = await openInCell(pane, hand, row: 2, column: role) else { return check(false, "in its cell: ↩ edits row 3's role there") }
+        replace(escaped, "typed")
+        if hand.byHand { hand.key(53) } else { escaped.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
+        check(await wait(2) { grid.inPlaceField == nil && pane.edit.draft == nil } && shown(grid, row: 2, column: role) == "user",
+              "in its cell: Esc closes the field, and the cell shows the file's value, not what was typed", shown(grid, row: 2, column: role) ?? "no cell")
+
+        guard await openInCell(pane, hand, row: 2, column: role) != nil else { return check(false, "in its cell: ↩ edits it again") }
+        pane.detail.editButton.performClick(nil)
+        check(await wait(2) { pane.detail.textView.isEditable && !pane.edit.inCell && grid.inPlaceField == nil && pane.edit.draft != nil },
+              "in its cell: Edit, with nothing typed, opens the value in the detail pane at once", "in its cell \(pane.edit.inCell), editable \(pane.detail.textView.isEditable)")
+        pane.revertDraft()
+
+        guard let typing = await openInCell(pane, hand, row: 2, column: role) else { return check(false, "in its cell: ↩ edits it a third time") }
+        replace(typing, "tool")
+        let before = pane.page?.rows[safe: 49]?[safe: content]
+        store.exec("UPDATE messages SET content = 'message 50, edited' WHERE id = 50")
+        for _ in 0..<15 {
+            pane.refreshIfChanged()
+            await pause(0.1)
+        }
+        check(pane.edit.inCell && grid.inPlaceField?.currentEditor() === typing && typing.string == "tool" && window.firstResponder === typing
+              && pane.page?.rows[safe: 49]?[safe: content] == before,
+              "in its cell: another app's write doesn't read the page again under a value being typed; the field keeps it and the keyboard",
+              "in its cell \(pane.edit.inCell), responder \(String(describing: window.firstResponder))")
+        // A reload that comes anyway (an undo, another page) makes the grid's cells again.
+        pane.reloadPage()
+        check(await wait(5) { pane.isSettled && !pane.edit.inCell && pane.detail.textView.isEditable && pane.detail.textView.string == "tool"
+                              && window.firstResponder === pane.detail.textView },
+              "in its cell: a reload under a changed value moves it, and the keyboard, to the detail pane",
+              "in its cell \(pane.edit.inCell), text \(pane.detail.textView.string.prefix(20)), responder \(String(describing: window.firstResponder))")
+        check(pane.detail.editLabel.stringValue == DatabasePane.movedNote && pane.page?.rows[safe: 49]?[safe: content] == .text("message 50, edited", truncated: false),
+              "in its cell: it says why, and the page shows the other app's write", pane.detail.editLabel.stringValue)
+        check(shown(grid, row: 2, column: role) == "user", "in its cell: the cell shows the file's value meanwhile", shown(grid, row: 2, column: role) ?? "")
+        pane.revertDraft()
+        guard await openInCell(pane, hand, row: 2, column: role) != nil else { return check(false, "in its cell: ↩ edits it a fourth time") }
+        pane.reloadPage()
+        check(await wait(5) { pane.isSettled && pane.edit.inCell && grid.inPlaceField?.currentEditor() != nil },
+              "in its cell: an unchanged value open in its cell opens there again after a reload")
+        if let field = grid.inPlaceField?.currentEditor() as? NSTextView { field.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
+        _ = await wait(2) { pane.edit.draft == nil }
+    }
+
+    /// A line of the row list, and ⌘A, move the current cell as a click does: a draft is asked about first.
+    private static func leavingADraftChecks(pane: DatabasePane, hand: CellHand, role: Int, content: Int) async {
+        let window = hand.window, grid = pane.grid
+        hand.click(grid, row: 3, column: content)
+        _ = await wait(2) { pane.detail.detail?.body == "message 4" }
+        pane.beginDetailEdit()
+        pane.detail.textView.insertText("changed", replacementRange: NSRange(location: 0, length: (pane.detail.textView.string as NSString).length))
+        func pickRole() { if hand.byHand { hand.click(pane.detail.rowList, row: role, column: 1) } else { pane.detail.onSelectColumn?(role) } }
+        pickRole()
+        let asked = await cellSheet(window)
+        check(asked.contains("Save your change to “content”?"), "leaving a draft: a line of the row list asks first", asked)
+        await answerSheet(window, .alertSecondButtonReturn)
+        check(grid.currentColumn == content && pane.edit.draft?.text == "changed" && pane.detail.textView.string == "changed" && pane.detail.textView.isEditable,
+              "leaving a draft: Cancel keeps the cell and its draft in view", "column \(grid.currentColumn)")
+        grid.selectAll(nil)
+        let all = await cellSheet(window)
+        check(all.contains("Save your change to “content”?"), "leaving a draft: ⌘A asks first", all)
+        await answerSheet(window, .alertSecondButtonReturn)
+        check(grid.selectedRowIndexes == IndexSet(integer: 3) && pane.edit.draft?.text == "changed", "leaving a draft: Cancel keeps the one row")
+        pickRole()
+        _ = await cellSheet(window)
+        await answerSheet(window, .alertThirdButtonReturn)
+        check(await wait(2) { grid.currentColumn == role && pane.edit.draft == nil }, "leaving a draft: Don’t Save puts it back and moves to that column")
+    }
+
+    /// The other app deletes the last message and writes another as its id: a draft on it says so when the
+    /// page is read again, and Save refuses once before it writes to the row now there.
+    private static func rowGivenOutAgainChecks(pane: DatabasePane, store: CellStore, hand: CellHand, content: Int) async {
+        guard let created = pane.page?.columns.firstIndex(of: "created") else { return check(false, "row given out again: messages' created") }
+        hand.click(pane.grid, row: 79, column: content)
+        _ = await wait(2) { pane.detail.detail?.body == "message 80" }
+        pane.beginDetailEdit()
+        pane.detail.textView.insertText("mine", replacementRange: NSRange(location: 0, length: (pane.detail.textView.string as NSString).length))
+        store.exec("DELETE FROM messages WHERE id = 80; INSERT INTO messages (id, role, content, created) VALUES (80, 'assistant', 'message 80', 81)")
+        check(await wait(6) {
+            pane.refreshIfChanged()
+            return pane.isSettled && pane.page?.rows[safe: 79]?[safe: created] == .real(81)
+        }, "row given out again: the page is read again")
+        check(pane.detail.editLabel.stringValue.hasPrefix("Other values in this row changed since it was read") && pane.edit.draft?.text == "mine",
+              "row given out again: the draft says its row changed, before any Save", pane.detail.editLabel.stringValue)
+        pane.lastOutcome = nil
+        pane.save()
+        _ = await wait(5) { pane.lastOutcome != nil }
+        _ = await wait(5) { !pane.edit.isSaving && pane.isSettled }
+        var refused = false
+        if case .rowChanged? = pane.lastOutcome { refused = true }
+        check(refused && store.one("SELECT content FROM messages WHERE id = 80") == "message 80" && pane.edit.draft?.text == "mine",
+              "row given out again: Save refuses a key that names another row now, and writes nothing", String(describing: pane.lastOutcome))
+        pane.lastOutcome = nil
+        pane.save()
+        _ = await wait(5) { pane.lastOutcome != nil }
+        _ = await wait(5) { !pane.edit.isSaving && pane.isSettled }
+        check(store.one("SELECT content FROM messages WHERE id = 80") == "mine", "row given out again: a second Save, seeing the row, writes", String(describing: pane.lastOutcome))
+    }
+
+    /// The notice's Undo writes the change back once, with no step back left on Edit › Undo.
+    private static func noticeUndoChecks(pane: DatabasePane, store: CellStore, hand: CellHand, role: Int) async {
+        guard let field = await openInCell(pane, hand, row: 4, column: role) else { return check(false, "notice Undo: ↩ edits row 5's role in its cell") }
+        field.insertText("tool", replacementRange: NSRange(location: 0, length: (field.string as NSString).length))
+        GitToast.dismiss()
+        pane.lastOutcome = nil
+        field.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        _ = await wait(5) { pane.lastOutcome != nil }
+        _ = await wait(5) { !pane.edit.isSaving && pane.isSettled }
+        check(store.one("SELECT role FROM messages WHERE id = 5") == "tool" && GitToast.text == "Saved “role” in row 5", "notice Undo: the save's notice", GitToast.text ?? "none")
+        let steps = pane.edit.steps.count
+        pane.lastOutcome = nil
+        GitToast.pressButtonForTest()
+        _ = await wait(5) { pane.lastOutcome != nil }
+        _ = await wait(5) { !pane.edit.isSaving && pane.isSettled }
+        check(store.one("SELECT role FROM messages WHERE id = 5") == "user", "notice Undo: its Undo writes the value back", String(describing: pane.lastOutcome))
+        check(pane.edit.steps.count == steps - 1 && !pane.edit.steps.contains { $0.kind == .redo } && hand.window.undoManager?.canRedo != true,
+              "notice Undo: no step back is left on Edit › Undo to write it again", "\(pane.edit.steps.map { "\($0.kind)" })")
+    }
+
+    /// The page read again after another app's write: the whole value shown is read once again and the pane
+    /// keeps it, its selection and scroll; a whole read queued for a cell left before its turn never reads.
+    private static func wholeValueReloadChecks(pane: DatabasePane, store: CellStore, hand: CellHand, content: Int) async {
+        let grid = pane.grid
+        let fetches = pane.fetches
+        // The reading queue is busy (a slow count, a large value) while the cut cell is visited and left.
+        pane.queue.async { Thread.sleep(forTimeInterval: 0.5) }
+        hand.click(grid, row: 11, column: content)
+        await pause(0.1)
+        hand.click(grid, row: 12, column: content)
+        await pause(1)
+        check(pane.fetches == fetches && pane.detail.detail?.body == "message 13", "whole values: a read queued for a cell left before its turn never reads",
+              "\(pane.fetches - fetches) reads")
+        hand.click(grid, row: 11, column: content)
+        check(await wait(5) { pane.fetches == fetches + 1 && pane.detail.detail?.body.count == 50_000 }, "whole values: the long message is read whole",
+              "\(pane.fetches - fetches) reads")
+        let read = pane.fetches
+        pane.detail.textView.setSelectedRange(NSRange(location: 20_000, length: 7))
+        pane.detail.textView.scrollRangeToVisible(NSRange(location: 20_000, length: 7))
+        store.exec("UPDATE messages SET content = 'message 40, edited' WHERE id = 40")
+        check(await wait(6) {
+            pane.refreshIfChanged()
+            return pane.isSettled && pane.page?.rows[safe: 39]?[safe: content] == .text("message 40, edited", truncated: false)
+        }, "whole values: the page is read again")
+        _ = await wait(3) { pane.fetches > read }
+        await pause(0.3)
+        check(pane.fetches == read + 1 && pane.detail.detail?.body.count == 50_000 && pane.detail.textView.selectedRange() == NSRange(location: 20_000, length: 7),
+              "whole values: read again once, and the pane keeps the value, its selection and its scroll",
+              "\(pane.fetches - read) reads, selection \(pane.detail.textView.selectedRange())")
+    }
+
+    /// Closing the tab, or Stop Editing, during a save waits for its outcome instead of asking about it.
+    private static func closeWhileSavingChecks(_ c: TerminalWindowController, store: CellStore, hand: CellHand) async {
+        let window = hand.window, area = c.editorArea
+        area.closeAll()
+        func open() async -> DatabasePane? {
+            area.openDatabase(store.path)
+            guard let pane = area.activeDatabase, pane.path == store.path else { return nil }
+            _ = await wait(5) { pane.isSettled && pane.page != nil }
+            pane.select(table: "messages")
+            _ = await wait(5) { pane.isSettled && pane.page?.table == "messages" }
+            pane.editingButton.performClick(nil)
+            _ = await cellSheet(window)
+            await answerSheet(window, .alertFirstButtonReturn)
+            _ = await wait(2) { pane.isEditingAllowed }
+            return pane
+        }
+        func draft(_ pane: DatabasePane, row: Int, _ text: String) async {
+            guard let content = pane.page?.columns.firstIndex(of: "content") else { return }
+            hand.click(pane.grid, row: row, column: content)
+            _ = await wait(2) { pane.detail.detail?.body == "message \(row + 1)" }
+            pane.beginDetailEdit()
+            pane.detail.textView.insertText(text, replacementRange: NSRange(location: 0, length: (pane.detail.textView.string as NSString).length))
+        }
+        guard let pane = await open() else { return check(false, "closing while saving: the store opens") }
+        await draft(pane, row: 5, "while closing")
+        store.open()
+        store.exec("BEGIN IMMEDIATE")
+        pane.lastOutcome = nil
+        pane.save()
+        area.close(pane)
+        check(window.attachedSheet == nil && area.panes.contains { $0 === pane }, "closing while saving: the tab waits for the save, asking nothing yet")
+        _ = await wait(5) { pane.lastOutcome != nil }
+        let asked = await cellSheet(window)
+        check(pane.lastOutcome == .busy && asked.contains("Save your change to “content” in “agent.db”?") && asked.contains("Nothing has been written to the file."),
+              "closing while saving: refused as busy, closing then asks, and says nothing was written", asked)
+        await answerSheet(window, .alertSecondButtonReturn)
+        store.exec("ROLLBACK")
+        store.close()
+        check(area.panes.contains { $0 === pane } && pane.hasDraft, "closing while saving: Cancel keeps the tab and its change")
+        GitToast.dismiss()
+        pane.lastOutcome = nil
+        pane.save()
+        area.close(pane)
+        check(window.attachedSheet == nil, "closing while saving: a save that goes through asks nothing")
+        check(await wait(5) { !area.panes.contains { $0 === pane } }, "closing while saving: the tab closes once the value is written")
+        check(store.one("SELECT content FROM messages WHERE id = 6") == "while closing" && GitToast.text == "Saved “content” in row 6",
+              "closing while saving: the value is in the file, and its notice came up first", GitToast.text ?? "no notice")
+
+        guard let again = await open() else { return check(false, "closing while saving: the store opens again") }
+        await draft(again, row: 8, "while stopping")
+        again.lastOutcome = nil
+        again.save()
+        again.stopEditing()
+        check(window.attachedSheet == nil, "Stop Editing during a save asks nothing")
+        check(await wait(5) { !again.isEditingAllowed && again.lastOutcome != nil }, "Stop Editing during a save stops once it is written")
+        check(store.one("SELECT content FROM messages WHERE id = 9") == "while stopping" && again.edit.steps.isEmpty && window.undoManager?.undoActionName != "Edit Cell",
+              "Stop Editing during a save: the value is written, and no step is left that could only do nothing", window.undoManager?.undoActionName ?? "")
+        area.closeAll()
     }
 
     /// AE14: a WAL store with nothing beside it: after a Save and an Undo the folder lists what it did before.
@@ -607,7 +856,7 @@ extension SelfTest {
         _ = await wait(5) { pane.lastOutcome != nil && !pane.edit.isSaving }
         // Listed before the check reads the file, whose own connection leaves -wal and -shm as Apple's SQLite does.
         let after = (try? FileManager.default.contentsOfDirectory(atPath: walFolder.path))?.sorted() ?? []
-        check(pane.lastOutcome == .saved(stored: .text("dark", truncated: false)), "AE14: Save and Undo on the WAL store", String(describing: pane.lastOutcome))
+        check(pane.lastOutcome?.stored == .text("dark", truncated: false), "AE14: Save and Undo on the WAL store", String(describing: pane.lastOutcome))
         check(after == listed, "AE14: and the folder lists exactly what it did before", after.joined(separator: ", "))
         check(store.one("SELECT v FROM kv WHERE k = 'theme'") == "dark", "AE14: the file holds the value put back")
     }

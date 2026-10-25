@@ -51,7 +51,14 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// Values read whole by their row's key (a text cut at 10,000 characters on the page), until the
     /// page is read again.
     private(set) var wholeValues: [CellKey: SQLiteValue] = [:]
-    /// Moves on with every current cell, so a whole value read for a cell left behind is not shown.
+    /// Values read whole before the page was read again, whose row is still on it and starts the same way:
+    /// shown while they are read again, never edited.
+    private var earlierWholeValues: [CellKey: SQLiteValue] = [:]
+    /// The whole values asked for and not read yet, with the page read they are for.
+    private var pendingWhole: (generation: Int, cells: Set<CellKey>) = (0, [])
+    /// The whole value the detail wants now. A read queued for a cell left behind is dropped before it reads.
+    private let wantedWhole = WantedCell()
+    /// Moves on with every current cell, so a value worked out for a cell left behind is not shown.
     private var detailToken = 0
     #if DEBUG
     /// For the self-test: how many values were read whole, and what the last write did.
@@ -59,9 +66,27 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var lastOutcome: SQLiteSaveOutcome?
     #endif
 
-    struct CellKey: Hashable {
+    struct CellKey: Hashable, Sendable {
         let key: SQLiteRowKey
         let column: String
+    }
+
+    /// The one whole value wanted, set on the main thread and read on the reading queue.
+    final class WantedCell: @unchecked Sendable {
+        private let lock = NSLock()
+        private var wanted: (generation: Int, cell: CellKey)?
+
+        func set(_ generation: Int, _ cell: CellKey?) {
+            lock.lock()
+            defer { lock.unlock() }
+            wanted = cell.map { (generation, $0) }
+        }
+
+        func isWanted(_ generation: Int, _ cell: CellKey) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return wanted?.generation == generation && wanted?.cell == cell
+        }
     }
 
     /// For the self-test: nothing is being read.
@@ -159,12 +184,18 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
             self.isEditingAllowed ? self.beginEditing() : self.enterValue()
         }
         grid.shouldMoveCurrentCell = { [weak self] row, column in self?.shouldLeaveDraft(to: row, column: column) ?? true }
+        grid.shouldSelectAll = { [weak self] in self?.askToLeaveDraft { self?.grid.selectAllRows() } ?? true }
         detail.editor = self
         split.onShownChange = { [weak self] in self?.showCurrentCell() }
         detail.onSelectColumn = { [weak self] column in
             guard let self else { return }
-            self.grid.setCurrent(column: column)
-            self.grid.scrollColumnToVisible(column)
+            let move = { [weak self] in
+                guard let self else { return }
+                self.grid.setCurrent(column: column)
+                self.grid.scrollColumnToVisible(column)
+            }
+            // A line of the row list moves the current cell as a click on the grid does: a draft is asked about first.
+            if column == self.grid.currentColumn || self.askToLeaveDraft(then: move) { move() }
         }
         detail.onEscape = { [weak self] in
             guard let self else { return }
@@ -312,6 +343,8 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         isLoading = true
         showSummary()
         queue.async { [weak self] in
+            // Noted before the read, as reloadTables does: a save's own read is not taken for another app's write.
+            let stamps = Self.stamps(path)
             let result = Result { () throws -> (SQLitePage, Int) in
                 let total = try SQLiteReader.count(table, at: path)
                 let start = min(offset, max(0, (total - 1) / SQLiteReader.pageSize * SQLiteReader.pageSize))
@@ -319,6 +352,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
             }
             DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }
+                self.stamps = stamps
                 self.isLoading = false
                 switch result {
                 case let .success((page, total)): self.show(page, total: total, error: nil)
@@ -330,12 +364,25 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func show(_ page: SQLitePage?, total: Int?, error: String?) {
+        // The grid's cells are made again: a value being typed in one goes to the detail pane first.
+        let aside = moveInCellDraftAside()
         let sameColumns = page?.columns == self.page?.columns && page?.table == self.page?.table
         // The current cell's row, by its key, to find again on the page read now (rows may have come before it).
         let kept = currentCellKey
+        let earlier = wholeValues.merging(earlierWholeValues) { now, _ in now }
+        let sameTable = page?.table == self.page?.table
         self.page = page
         self.total = total
         wholeValues = [:]
+        earlierWholeValues = [:]
+        if let page, sameTable {
+            // Kept to show while they are read again, where the page still starts them the same way.
+            for (cell, value) in earlier {
+                guard let row = page.row(for: cell.key), let column = page.columns.firstIndex(of: cell.column),
+                      value.agrees(with: page.rows[row][column]) else { continue }
+                earlierWholeValues[cell] = value
+            }
+        }
         if !sameColumns { rebuildColumns() }
         grid.reloadData()
         if !sameColumns { grid.scrollRowToVisible(0) }
@@ -348,7 +395,51 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         message.stringValue = error ?? ""
         message.isHidden = error == nil
+        checkDraftRow()
         showCurrentCell()
+        switch aside {
+        case .moved?: if editingUI?.isEditing == true { detail.focusValue() }
+        case let .reopen(cell)?: if currentEditTarget?.cell == cell { beginEditing() }
+        case nil: break
+        }
+    }
+
+    /// The row a draft is in, read again: other values that changed since it opened are said now, not only
+    /// when Save finds them.
+    private func checkDraftRow() {
+        guard edit.draft != nil, let cell = edit.cell, let page, page.table == cell.table, let row = page.row(for: cell.key) else { return }
+        guard !SQLiteEdit.rowAgrees(edit.row, columns: page.columns, values: page.rows[row], except: cell.column) else { return }
+        edit.message = "Other values in this row changed since it was read: see the row below. Save checks the row again first."
+    }
+
+    /// The row at `index` as read, for a draft to check against: the page's values, those read whole in place.
+    func rowSnapshot(_ index: Int) -> [SQLiteColumnValue] {
+        guard let page, index >= 0, index < page.rows.count else { return [] }
+        let key = index < page.keys.count ? page.keys[index] : nil
+        return zip(page.columns, page.rows[index]).map { column, value in
+            SQLiteColumnValue(column: column, value: key.flatMap { wholeValues[CellKey(key: $0, column: column)] } ?? value)
+        }
+    }
+
+    /// After a save: the row as the file has it now (read back in the save's own transaction), in the page
+    /// and the grid, until the page is read again.
+    func showSaved(_ row: [SQLiteColumnValue], table: String, key: SQLiteRowKey) {
+        guard let page, page.table == table, let index = page.row(for: key) else { return }
+        var values = page.rows[index]
+        for part in row {
+            guard let column = page.columns.firstIndex(of: part.column), column < values.count else { continue }
+            values[column] = part.value
+            // A value read whole before that the row doesn't have any more (the saved cell, one a trigger set) goes.
+            let cell = CellKey(key: key, column: part.column)
+            if wholeValues[cell]?.agrees(with: part.value) == false { wholeValues[cell] = nil }
+            if earlierWholeValues[cell]?.agrees(with: part.value) == false { earlierWholeValues[cell] = nil }
+        }
+        var rows = page.rows
+        rows[index] = values
+        self.page = SQLitePage(table: page.table, columns: page.columns, rows: rows, offset: page.offset, keys: page.keys, info: page.info)
+        // Not under a value being typed in a cell (an undo from the notice): the page read next shows it.
+        guard !edit.inCell else { return }
+        grid.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integersIn: 0..<grid.numberOfColumns))
     }
 
     private func rebuildColumns() {
@@ -358,7 +449,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let charWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
         for (i, name) in page.columns.enumerated() {
             let column = NSTableColumn(identifier: .init("c\(i)"))
-            column.title = name
+            column.title = CellText.line(name, limit: 120)
             column.headerToolTip = name
             let longest = page.rows.prefix(50).map { min(40, $0[i].display.count) }.max() ?? 0
             column.width = min(320, max(60, CGFloat(max(longest, name.count)) * charWidth + 16))
@@ -373,7 +464,8 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// The file changed on disk (a migration ran, an agent wrote to it): read it again. About once a second.
     func refreshIfChanged() {
         checkIdentity()
-        guard !isLoading, !edit.isSaving else { return }
+        // Not under a value being typed in its cell: the stamps stay, so the first tick after it ends reads.
+        guard !isLoading, !edit.isSaving, !edit.inCell else { return }
         let now = Self.stamps(path)
         guard now != stamps else { return }
         if now.first == nil {
@@ -395,13 +487,19 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     @objc private func previousPage() {
-        guard let table = selectedTable, let page else { return }
-        load(table, offset: max(0, page.offset - SQLiteReader.pageSize))
+        guard let page else { return }
+        turnPage(to: max(0, page.offset - SQLiteReader.pageSize))
     }
 
     @objc private func nextPage() {
-        guard let table = selectedTable, let page else { return }
-        load(table, offset: page.offset + SQLiteReader.pageSize)
+        guard let page else { return }
+        turnPage(to: page.offset + SQLiteReader.pageSize)
+    }
+
+    /// Another page of the table, once a draft on this one is saved or put back.
+    private func turnPage(to offset: Int) {
+        guard let table = selectedTable else { return }
+        if askToLeaveDraft(then: { [weak self] in self?.load(table, offset: offset) }) { load(table, offset: offset) }
     }
 
     // MARK: copying and sending
@@ -461,6 +559,8 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard tableView === tableList else {
             let cell = grid.cell(for: tableColumn, row: row)
+            // The cell open for an edit in place keeps what is being typed in it.
+            if cell.isEditingInPlace { return cell }
             guard let page, let column = tableColumn, let index = Int(column.identifier.rawValue.dropFirst()),
                   row < page.rows.count, index < page.rows[row].count else {
                 cell.configure(text: "")
@@ -472,11 +572,14 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let id = NSUserInterfaceItemIdentifier("tableName")
         let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeTableCell(id)
         let table = tables[row]
-        cell.textField?.stringValue = table.name
+        // On one line, whatever the name holds; the tooltip has it as it is.
+        let name = CellText.line(table.name, limit: 120)
+        cell.textField?.stringValue = name
         cell.textField?.textColor = Theme.text
+        cell.toolTip = name == table.name ? nil : table.name
         cell.imageView?.image = NSImage(systemSymbolName: table.isView ? "eye" : "tablecells", accessibilityDescription: table.isView ? "View" : "Table")
         cell.imageView?.contentTintColor = Theme.textDim
-        cell.setAccessibilityLabel(table.name + (table.isView ? ", view" : ""))
+        cell.setAccessibilityLabel(name + (table.isView ? ", view" : ""))
         return cell
     }
 
@@ -484,6 +587,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private static func makeTableCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
         let cell = NSTableCellView()
         cell.identifier = id
+        if #available(macOS 14, *) { cell.clipsToBounds = true }
         let label = NSTextField(labelWithString: "")
         Typography.singleLine(label, truncation: .byTruncatingTail)
         label.font = .systemFont(ofSize: 12.5)
@@ -540,12 +644,14 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     /// The detail pane shows the current cell, from what the page read. A text cut on read is read whole
-    /// once, by its row's key; nothing else is read.
+    /// once, by its row's key; nothing else is read. After the page is read again, a value read whole before
+    /// shows while it is read again, and is replaced only if it changed.
     func showCurrentCell() {
         detailToken += 1
-        guard !detail.isHidden else { return }
+        guard !detail.isHidden else { return wantedWhole.set(generation, nil) }
         guard let page, let cell = grid.currentCell, cell.row < page.rows.count, cell.column < page.columns.count,
               cell.column < page.rows[cell.row].count else {
+            wantedWhole.set(generation, nil)
             return detail.show(nil, items: [], current: -1)
         }
         let row = page.rows[cell.row], name = page.columns[cell.column]
@@ -554,12 +660,21 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let declared = page.info?.column(named: name)?.declaredType ?? ""
         var value = row[cell.column]
         var source = CellDetail.Source.page(fetching: false, isView: currentTable?.kind == .view)
-        if let key, let whole = wholeValues[CellKey(key: key, column: name)] {
+        var read = false
+        let cellKey = key.map { CellKey(key: $0, column: name) }
+        if let cellKey, let whole = wholeValues[cellKey] {
             value = whole
             source = .whole
-        } else if value.isTruncated, key != nil {
-            source = .page(fetching: true, isView: false)
+        } else if value.isTruncated, let cellKey {
+            read = true
+            if let earlier = earlierWholeValues[cellKey] {
+                value = earlier
+                source = .whole
+            } else {
+                source = .page(fetching: true, isView: false)
+            }
         }
+        wantedWhole.set(generation, read ? cellKey : nil)
         let token = detailToken
         if case let .text(text, _) = value, text.utf8.count > 64 << 10 {
             // A long JSON value is indented off the main thread.
@@ -574,30 +689,45 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
             detail.show(CellDetail.make(column: name, declaredType: declared, value: value, source: source), items: items, current: cell.column)
         }
         detail.showEditing(editingUI)
-        if case .page(fetching: true, _) = source, let key { readWhole(page.table, column: name, declaredType: declared, key: key, items: items, current: cell.column) }
+        if read, let cellKey { readWhole(page.table, cell: cellKey) }
     }
 
-    /// Reads one value whole by its row's key, on the reading queue; shown if its cell is still current.
-    private func readWhole(_ table: String, column: String, declaredType: String, key: SQLiteRowKey, items: [DetailRowItem], current: Int) {
-        let token = detailToken, path = self.path, generation = self.generation
+    /// Reads one value whole by its row's key, on the reading queue, unless it is being read already; shown
+    /// if its cell is still current. A read whose cell was left before its turn on the queue never reads.
+    private func readWhole(_ table: String, cell: CellKey) {
+        let path = self.path, generation = self.generation
+        if pendingWhole.generation != generation { pendingWhole = (generation, []) }
+        guard pendingWhole.cells.insert(cell).inserted else { return }
+        let wanted = wantedWhole
+        queue.async { [weak self] in
+            guard wanted.isWanted(generation, cell) else {
+                DispatchQueue.main.async { self?.wholeRead(cell, generation: generation, result: nil) }
+                return
+            }
+            let read = Result { try SQLiteReader.value(table, column: cell.column, key: cell.key, at: path) }
+            DispatchQueue.main.async { self?.wholeRead(cell, generation: generation, result: read) }
+        }
+    }
+
+    /// A whole value's read came back (nil: it was dropped before it read).
+    private func wholeRead(_ cell: CellKey, generation: Int, result: Result<SQLiteValue?, Error>?) {
+        guard generation == self.generation else { return }
+        pendingWhole.cells.remove(cell)
+        guard let result else { return }
         #if DEBUG
         fetches += 1
         #endif
-        queue.async { [weak self] in
-            let read = Result { try SQLiteReader.value(table, column: column, key: key, at: path) }
-            let value = (try? read.get()) ?? nil
-            let made = value.map { CellDetail.make(column: column, declaredType: declaredType, value: $0, source: .whole) }
-            DispatchQueue.main.async {
-                guard let self, generation == self.generation else { return }
-                if let value { self.wholeValues[CellKey(key: key, column: column)] = value }
-                guard token == self.detailToken else { return }
-                if let made {
-                    self.detail.show(made, items: items, current: current)
-                    return self.detail.showEditing(self.editingUI)
-                }
-                if case .failure = read { return self.detail.showNote("The whole value could not be read.") }
-                self.detail.showNote("This row was deleted since the page was read.")
-            }
+        let current = currentCellKey?.cell == cell && !detail.isHidden
+        switch result {
+        case let .success(value?):
+            wholeValues[cell] = value
+            earlierWholeValues[cell] = nil
+            if current { showCurrentCell() }
+        case .success(nil):
+            earlierWholeValues[cell] = nil
+            if current { detail.showNote("This row was deleted since the page was read.") }
+        case .failure:
+            if current { detail.showNote("The whole value could not be read.") }
         }
     }
 

@@ -9,7 +9,8 @@ public enum SQLiteValue: Sendable, Hashable {
     /// Cut at `SQLiteReader.maxCellCharacters` in a page (at `SQLiteReader.maxDetailBytes` read alone), with
     /// `truncated` set.
     case text(String, truncated: Bool)
-    /// Its size and its first `SQLiteReader.blobHeadBytes` bytes: a blob is never read whole, shown or copied.
+    /// Its size and its first `SQLiteReader.blobHeadBytes` bytes (none when they couldn't be read on their
+    /// own): a page keeps no more of a blob, and the viewer never shows or copies one whole.
     case blob(Int, head: Data = Data())
 
     /// What a grid cell shows ("NULL" for null).
@@ -41,6 +42,49 @@ public enum SQLiteValue: Sendable, Hashable {
 
     static func format(_ d: Double) -> String {
         d.isFinite && d == d.rounded() && abs(d) < 1e15 ? String(format: "%.1f", d) : String(d)
+    }
+
+    /// The same value byte for byte: the same storage class, text with the same UTF-8 bytes (Swift's ==
+    /// takes "é" and "e\u{301}" for one string; SQLite doesn't), a real with the same bits.
+    public func isIdentical(to other: SQLiteValue) -> Bool {
+        switch (self, other) {
+        case (.null, .null): return true
+        case let (.integer(a), .integer(b)): return a == b
+        case let (.real(a), .real(b)): return a.bitPattern == b.bitPattern
+        case let (.text(a, cutA), .text(b, cutB)): return cutA == cutB && a.utf8.elementsEqual(b.utf8)
+        case let (.blob(a, headA), .blob(b, headB)): return a == b && headA == headB
+        default: return false
+        }
+    }
+
+    /// Whether two reads could be of one stored value: identical, or one cut short where the other goes
+    /// on the same way (a page's text against the value read whole, a blob's first bytes against more of
+    /// them). Text decoded with U+FFFD in it (its bytes aren't UTF-8) can't be told apart, so it agrees.
+    public func agrees(with other: SQLiteValue) -> Bool {
+        switch (self, other) {
+        case let (.text(a, cutA), .text(b, cutB)):
+            if a.unicodeScalars.contains("\u{FFFD}") || b.unicodeScalars.contains("\u{FFFD}") { return true }
+            let (short, shortCut, long, longCut) = a.utf8.count <= b.utf8.count ? (a, cutA, b, cutB) : (b, cutB, a, cutA)
+            // A whole value is all there is: the other read is the same, whole.
+            guard shortCut else { return !longCut && short.utf8.elementsEqual(long.utf8) }
+            // A cut one goes on past what was read: the other starts the same way, and is longer if whole.
+            return (longCut || long.utf8.count > short.utf8.count) && long.utf8.starts(with: short.utf8)
+        case let (.blob(a, headA), .blob(b, headB)):
+            return a == b && (headA.count <= headB.count ? headB.starts(with: headA) : headA.starts(with: headB))
+        default:
+            return isIdentical(to: other)
+        }
+    }
+}
+
+/// One column's value in a row, as read.
+public struct SQLiteColumnValue: Sendable, Hashable {
+    public let column: String
+    public let value: SQLiteValue
+
+    public init(column: String, value: SQLiteValue) {
+        self.column = column
+        self.value = value
     }
 }
 
@@ -333,22 +377,18 @@ public enum SQLiteReader {
     }
 
     /// A page of rows, each with its key: an ordinary table's rowid is read with them, a WITHOUT ROWID
-    /// table's primary key is in them.
+    /// table's primary key is in them. An ordinary table's blobs are never loaded (lightRows); elsewhere
+    /// SQLite reads each blob as its row is stepped, and only its first bytes are kept.
     public static func page(_ table: String, at path: String, offset: Int, limit: Int = pageSize) throws -> SQLitePage {
         try withDatabase(path) { db in
             let start = max(0, offset)
             let range = "LIMIT \(max(1, limit)) OFFSET \(start)"
             let info = (try? kind(of: table, db)).flatMap { tableInfo(table, kind: $0, db) }
             var columns: [String] = []
-            if let info, let rowid = info.rowidName {
-                var rows = try rows(db, "SELECT \(quote(rowid)), * FROM \(quote(table)) \(range)", columns: &columns)
-                columns.removeFirst()
-                var keys: [SQLiteRowKey?] = []
-                keys.reserveCapacity(rows.count)
-                for i in rows.indices {
-                    if case let .integer(id) = rows[i].removeFirst() { keys.append(.rowid(name: rowid, value: id)) } else { keys.append(nil) }
-                }
-                return SQLitePage(table: table, columns: columns, rows: rows, offset: start, keys: keys, info: info)
+            if let info, let rowid = info.rowidName, !info.columns.isEmpty {
+                let read = try lightRows(db, table, info: info, rowid: rowid, tail: range)
+                return SQLitePage(table: table, columns: info.columns.map(\.name), rows: read.rows, offset: start,
+                                  keys: read.ids.map { $0.map { .rowid(name: rowid, value: $0) } }, info: info)
             }
             let rows = try rows(db, "SELECT * FROM \(quote(table)) \(range)", columns: &columns)
             var keys: [SQLiteRowKey?]?
@@ -364,6 +404,100 @@ public enum SQLiteReader {
         }
     }
 
+    /// Rows of an ordinary table, each with its rowid, read the way a page keeps them but without loading
+    /// a blob: SQLite tells a blob's type and size from the row's header, and its first bytes come through
+    /// sqlite3_blob_read (substr() in a table with a generated column, which SQLite opens no blob in). A
+    /// page of large attachments then costs what its text does. `tail` follows the FROM clause (a WHERE, a
+    /// LIMIT), with `values` bound to it. One read transaction, so the first bytes are of the rows read.
+    static func lightRows(_ db: OpaquePointer, _ table: String, info: SQLiteTableInfo, rowid: String, tail: String,
+                          bind values: [SQLiteValue] = []) throws -> (ids: [Int64?], rows: [[SQLiteValue]]) {
+        let list = info.columns.map { column -> String in
+            let name = quote(column.name)
+            return "CASE typeof(\(name)) WHEN 'blob' THEN NULL ELSE \(name) END, CASE typeof(\(name)) WHEN 'blob' THEN length(\(name)) END"
+        }
+        let own = sqlite3_get_autocommit(db) != 0
+        if own { sqlite3_exec(db, "BEGIN", nil, nil, nil) }
+        defer { if own { sqlite3_exec(db, "COMMIT", nil, nil, nil) } }
+        var columns: [String] = []
+        let read = try rows(db, "SELECT \(quote(rowid)), \(list.joined(separator: ", ")) FROM \(quote(table)) \(tail)", bind: values, columns: &columns)
+        var ids: [Int64?] = []
+        var result: [[SQLiteValue]] = []
+        var blobs: [(row: Int, column: Int)] = []
+        ids.reserveCapacity(read.count)
+        result.reserveCapacity(read.count)
+        for row in read where row.count == 1 + 2 * info.columns.count {
+            if case let .integer(id) = row[0] { ids.append(id) } else { ids.append(nil) }
+            var values: [SQLiteValue] = []
+            values.reserveCapacity(info.columns.count)
+            for i in info.columns.indices {
+                if case let .integer(size) = row[2 * i + 2] {
+                    values.append(.blob(Int(size)))
+                    if size > 0 { blobs.append((result.count, i)) }
+                } else {
+                    values.append(row[2 * i + 1])
+                }
+            }
+            result.append(values)
+        }
+        // One handle a column, moved from row to row. SQLite opens no blob in a table with a generated column:
+        // there the first bytes come from substr(), which loads that blob alone.
+        var handles: [Int: OpaquePointer] = [:]
+        var statements: [Int: OpaquePointer] = [:]
+        defer {
+            handles.values.forEach { sqlite3_blob_close($0) }
+            statements.values.forEach { sqlite3_finalize($0) }
+        }
+        for blob in blobs {
+            guard let id = ids[blob.row], case let .blob(size, _) = result[blob.row][blob.column] else { continue }
+            let name = info.columns[blob.column].name
+            var head: Data?
+            if statements[blob.column] == nil {
+                if let open = handles[blob.column], sqlite3_blob_reopen(open, id) != SQLITE_OK {
+                    // A handle that failed to move is aborted: a new one.
+                    sqlite3_blob_close(open)
+                    handles[blob.column] = nil
+                }
+                if handles[blob.column] == nil {
+                    var made: OpaquePointer?
+                    if sqlite3_blob_open(db, "main", table, name, id, 0, &made) == SQLITE_OK, let made {
+                        handles[blob.column] = made
+                    } else {
+                        sqlite3_blob_close(made)
+                        var statement: OpaquePointer?
+                        let sql = "SELECT substr(\(quote(name)), 1, \(blobHeadBytes)) FROM \(quote(table)) WHERE \(quote(rowid)) = ?1"
+                        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { sqlite3_finalize(statement); continue }
+                        statements[blob.column] = statement
+                    }
+                }
+                if let handle = handles[blob.column] {
+                    var bytes = [UInt8](repeating: 0, count: min(Int(sqlite3_blob_bytes(handle)), blobHeadBytes))
+                    if sqlite3_blob_read(handle, &bytes, Int32(bytes.count), 0) == SQLITE_OK { head = Data(bytes) }
+                }
+            }
+            if let statement = statements[blob.column] {
+                sqlite3_reset(statement)
+                sqlite3_bind_int64(statement, 1, id)
+                if sqlite3_step(statement) == SQLITE_ROW, sqlite3_column_type(statement, 0) == SQLITE_BLOB, let start = sqlite3_column_blob(statement, 0) {
+                    head = Data(bytes: start, count: Int(sqlite3_column_bytes(statement, 0)))
+                }
+            }
+            if let head { result[blob.row][blob.column] = .blob(size, head: head) }
+        }
+        return (ids, result)
+    }
+
+    /// One row as a page reads it, by its key, each value with its column; nil when no row has the key.
+    static func row(_ table: String, key: SQLiteRowKey, info: SQLiteTableInfo, _ db: OpaquePointer) throws -> [SQLiteColumnValue]? {
+        let (clause, values) = keyClause(key, from: 1)
+        if info.kind == .table, let rowid = info.rowidName, !info.columns.isEmpty {
+            guard let first = try lightRows(db, table, info: info, rowid: rowid, tail: "WHERE \(clause)", bind: values).rows.first else { return nil }
+            return zip(info.columns, first).map { SQLiteColumnValue(column: $0.name, value: $1) }
+        }
+        var columns: [String] = []
+        guard let first = try rows(db, "SELECT * FROM \(quote(table)) WHERE \(clause)", bind: values, columns: &columns).first else { return nil }
+        return zip(columns, first).map { SQLiteColumnValue(column: $0, value: $1) }
+    }
+
     /// A key part that can be compared again: not cut, not a blob (only its first bytes were read).
     static func isUsableKey(_ value: SQLiteValue) -> Bool {
         switch value {
@@ -377,6 +511,8 @@ public enum SQLiteReader {
     /// Nil when no row has the key any more.
     public static func value(_ table: String, column: String, key: SQLiteRowKey, at path: String, limit: Int = maxDetailBytes) throws -> SQLiteValue? {
         try withDatabase(path) { db in
+            // Every name here is the viewer's own: a column renamed since the page was read fails to read.
+            noDoubleQuotedStrings(db)
             let (clause, values) = keyClause(key, from: 1)
             var columns: [String] = []
             return try rows(db, "SELECT \(quote(column)) FROM \(quote(table)) WHERE \(clause)", bind: values, columns: &columns, limit: .bytes(limit)).first?.first
@@ -411,7 +547,6 @@ public enum SQLiteReader {
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 500)
         sqlite3_exec(db, "PRAGMA query_only = 1", nil, nil, nil)
-        noDoubleQuotedStrings(db)
         return try body(db)
     }
 
@@ -423,7 +558,9 @@ public enum SQLiteReader {
     }
 
     /// An identifier in double quotes that names nothing is an error, never a string: `"rowid"` on a
-    /// WITHOUT ROWID table would otherwise read the word rowid.
+    /// WITHOUT ROWID table would otherwise read the word rowid. Only for a statement whose every name is
+    /// the viewer's own: a view's SELECT and a trigger's body are compiled under this setting too, and many
+    /// are written with double-quoted strings.
     static func noDoubleQuotedStrings(_ db: OpaquePointer) {
         _ = nt_sqlite3_db_config_flag(db, SQLITE_DBCONFIG_DQS_DML, 0)
         _ = nt_sqlite3_db_config_flag(db, SQLITE_DBCONFIG_DQS_DDL, 0)

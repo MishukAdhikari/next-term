@@ -510,11 +510,13 @@ final class EditorArea: NSView, TabBarViewDelegate {
     }
 
     /// Closes a database tab, asking first about an unsaved value: Save (closing once it is written), Don't
-    /// Save, or Cancel.
+    /// Save, or Cancel. A save under way is waited for: it closes once that is written (its notice first),
+    /// or asks if it wasn't.
     func requestClose(_ database: DatabasePane) {
+        if database.edit.isSaving { return database.whenSaved { [weak self, weak database] in if let database { self?.requestClose(database) } } }
         guard database.hasDraft, let window, let column = database.edit.cell?.column else { return remove(database) }
         let alert = NSAlert()
-        alert.messageText = "Save your change to “\(column)” in “\(database.name)”?"
+        alert.messageText = "Save your change to “\(CellText.line(column, limit: 80))” in “\(database.name)”?"
         alert.informativeText = "Your change is lost if you don’t save it. Nothing has been written to the file."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")

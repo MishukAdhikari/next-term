@@ -137,10 +137,48 @@ import Testing
     }
 
     @Test func reversedPutsItBack() {
+        let row = [SQLiteColumnValue(column: "k", value: .text("theme", truncated: false)), SQLiteColumnValue(column: "v", value: .text("light", truncated: false))]
         let edit = SQLiteEdit(table: "kv", column: "v", key: .primaryKey([SQLiteKeyPart(column: "k", value: .text("theme", truncated: false))]),
-                              expected: .text("dark", truncated: false), value: .text("light", truncated: false))
-        #expect(edit.reversed.expected == .text("light", truncated: false) && edit.reversed.value == .text("dark", truncated: false))
-        #expect(edit.reversed.reversed == edit && edit.reversed.key == edit.key)
+                              expected: .text("dark", truncated: false), value: .text("light", truncated: false), row: [])
+        let back = edit.reversed(row: row)
+        #expect(back.expected == .text("light", truncated: false) && back.value == .text("dark", truncated: false) && back.row == row)
+        #expect(back.reversed(row: []) == edit && back.key == edit.key)
+    }
+
+    @Test func modifiedComparesBytes() {
+        let nfc = "caf\u{E9}", nfd = "cafe\u{301}"
+        #expect(Self.draft(.text(nfc, truncated: false), typed: nfd).isModified, "the same to Swift, another value to SQLite")
+        #expect(!Self.draft(.text(nfc, truncated: false), typed: nfc).isModified)
+        #expect(!Self.draft(.real(0.1), typed: "0.1").isModified && Self.draft(.real(0.1), typed: "0.10000000000000002").isModified)
+    }
+
+    @Test func identicalAndAgreeingValues() {
+        let text = { (s: String, cut: Bool) in SQLiteValue.text(s, truncated: cut) }
+        #expect(text("é", false).isIdentical(to: text("é", false)) && !text("é", false).isIdentical(to: text("e\u{301}", false)))
+        #expect(!SQLiteValue.integer(1).isIdentical(to: .real(1)) && SQLiteValue.null.isIdentical(to: .null))
+        #expect(!SQLiteValue.real(0).isIdentical(to: .real(-0.0)))
+        // A cut read agrees with a longer one that starts the same way.
+        #expect(text("abc", true).agrees(with: text("abcdef", false)) && text("abcdef", false).agrees(with: text("abc", true)))
+        #expect(text("abc", true).agrees(with: text("abcdef", true)) && text("abc", true).agrees(with: text("abc", true)))
+        #expect(!text("abc", true).agrees(with: text("abc", false)), "cut means it went on")
+        #expect(!text("abcdef", true).agrees(with: text("abc", false)), "a whole value is all there is")
+        #expect(!text("abd", true).agrees(with: text("abcdef", false)))
+        #expect(text("a\u{FFFD}", false).agrees(with: text("ab", false)), "a lossy read can't be told apart")
+        #expect(SQLiteValue.blob(300, head: Data([1, 2])).agrees(with: .blob(300, head: Data([1, 2, 3]))))
+        #expect(SQLiteValue.blob(300).agrees(with: .blob(300, head: Data([9]))) && !SQLiteValue.blob(300).agrees(with: .blob(301)))
+        #expect(!SQLiteValue.blob(300, head: Data([1])).agrees(with: .blob(300, head: Data([2]))))
+    }
+
+    @Test func aRowAgreesWithTheOneRead() {
+        let read = [SQLiteColumnValue(column: "id", value: .integer(3)), SQLiteColumnValue(column: "role", value: .text("user", truncated: false)),
+                    SQLiteColumnValue(column: "content", value: .text("c", truncated: false))]
+        let columns = ["id", "role", "content"]
+        #expect(SQLiteEdit.rowAgrees(read, columns: columns, values: [.integer(3), .text("user", truncated: false), .text("c", truncated: false)], except: "role"))
+        #expect(SQLiteEdit.rowAgrees(read, columns: columns, values: [.integer(3), .text("typed", truncated: false), .text("c", truncated: false)], except: "role"),
+                "the edited cell is Save's to check")
+        #expect(!SQLiteEdit.rowAgrees(read, columns: columns, values: [.integer(3), .text("user", truncated: false), .text("d", truncated: false)], except: "role"))
+        #expect(!SQLiteEdit.rowAgrees(read, columns: ["id", "role"], values: [.integer(3), .text("user", truncated: false)], except: "role"), "a column gone")
+        #expect(SQLiteEdit.rowAgrees([], columns: columns, values: [.null, .null, .null], except: "role"))
     }
 
     @Test func shortValuesEditInTheirCell() {
@@ -154,5 +192,6 @@ import Testing
         #expect(!SQLiteEditRules.inCellEditable(.text(AgentStore.toolCall, truncated: false)))
         #expect(!SQLiteEditRules.inCellEditable(.text("cut", truncated: true)))
         #expect(!SQLiteEditRules.inCellEditable(.null) && !SQLiteEditRules.inCellEditable(.blob(3)))
+        #expect(!SQLiteEditRules.inCellEditable(.text("invoice\u{202E}fdp.exe", truncated: false)), "an invisible character edits where its note is")
     }
 }

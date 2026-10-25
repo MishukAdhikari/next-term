@@ -149,6 +149,67 @@ import Testing
         #expect(try SQLiteReader.value("kv", column: "v", key: AgentStore.kvKey("missing"), at: store.path) == nil)
     }
 
+    /// A view written with double-quoted strings, as many are, reads: the reader leaves SQLite's default.
+    @Test func aViewWithDoubleQuotedStringsReads() throws {
+        let project = FixtureProject()
+        let path = project.root + "/views.db"
+        var db: OpaquePointer?
+        sqlite3_open(path, &db)
+        sqlite3_exec(db, """
+            CREATE TABLE t (id INTEGER PRIMARY KEY, status TEXT, name TEXT);
+            INSERT INTO t (status, name) VALUES ('active', 'a'), ('gone', 'b'), ('active', 'c');
+            CREATE VIEW v AS SELECT name FROM t WHERE status = "active";
+            """, nil, nil, nil)
+        sqlite3_close(db)
+        #expect(try SQLiteReader.tables(at: path).map(\.name) == ["t", "v"])
+        #expect(try SQLiteReader.count("v", at: path) == 2)
+        let page = try SQLiteReader.page("v", at: path, offset: 0)
+        #expect(page.columns == ["name"] && page.rows == [[.text("a", truncated: false)], [.text("c", truncated: false)]] && page.info?.columns.count == 1)
+        // Reading one value by its key, every name is the viewer's own: one that names nothing fails.
+        #expect(throws: SQLiteReader.ReadError.self) { try SQLiteReader.value("t", column: "missing", key: .rowid(name: "rowid", value: 1), at: path) }
+        let store = AgentStore()
+        #expect(throws: SQLiteReader.ReadError.self) { try SQLiteReader.value("kv", column: "rowid", key: AgentStore.kvKey("theme"), at: store.path) }
+    }
+
+    /// A page of an ordinary table reads each blob's size and first bytes without loading it; a WITHOUT
+    /// ROWID table's and a generated column's come with the row.
+    @Test func blobsAreReadByTheirFirstBytes() throws {
+        let project = FixtureProject()
+        let path = project.root + "/blobs.db"
+        var db: OpaquePointer?
+        sqlite3_open(path, &db)
+        sqlite3_exec(db, """
+            CREATE TABLE b (id INTEGER PRIMARY KEY, data BLOB, copy BLOB GENERATED ALWAYS AS (data) VIRTUAL, note TEXT);
+            CREATE TABLE w (k TEXT PRIMARY KEY, data BLOB) WITHOUT ROWID;
+            INSERT INTO b (data, note) VALUES (randomblob(1000000), 'big'), (x'', 'empty'), (NULL, 'none'), (x'0102', 'small');
+            INSERT INTO w VALUES ('k', x'0a0b0c');
+            """, nil, nil, nil)
+        sqlite3_close(db)
+        let page = try SQLiteReader.page("b", at: path, offset: 0)
+        #expect(page.columns == ["id", "data", "copy", "note"])
+        guard case let .blob(size, head) = page.rows[0][1] else { return #expect(Bool(false), "a blob") }
+        #expect(size == 1_000_000 && head.count == 256)
+        #expect(page.rows[0][2] == .blob(1_000_000) || page.rows[0][2] == .blob(1_000_000, head: head), "a generated blob: its size, its bytes if they can be read")
+        #expect(page.rows[1][1] == .blob(0) && page.rows[2][1] == .null && page.rows[3][1] == .blob(2, head: Data([1, 2])))
+        #expect(page.rows.map { $0[3] } == ["big", "empty", "none", "small"].map { SQLiteValue.text($0, truncated: false) })
+        #expect(page.keys == (1...4).map { .rowid(name: "rowid", value: Int64($0)) })
+        let w = try SQLiteReader.page("w", at: path, offset: 0)
+        #expect(w.rows == [[.text("k", truncated: false), .blob(3, head: Data([0x0A, 0x0B, 0x0C]))]])
+    }
+
+    @Test func oneRowReadAgainByItsKey() throws {
+        let store = AgentStore()
+        let page = try SQLiteReader.page("messages", at: store.path, offset: 0)
+        try SQLiteReader.withDatabase(store.path) { db in
+            let info = try #require(page.info)
+            let row = try #require(try SQLiteReader.row("messages", key: .rowid(name: "rowid", value: 3), info: info, db))
+            #expect(row.map(\.column) == page.columns && row.map(\.value) == page.rows[2])
+            #expect(try SQLiteReader.row("messages", key: .rowid(name: "rowid", value: 99), info: info, db) == nil)
+            let kv = try #require(try SQLiteReader.page("kv", at: store.path, offset: 0).info)
+            #expect(try SQLiteReader.row("kv", key: AgentStore.kvKey("theme"), info: kv, db)?.map(\.value) == [.text("theme", truncated: false), .text("dark", truncated: false)])
+        }
+    }
+
     @Test func notADatabase() {
         let project = FixtureProject()
         project.write("notes.db", "hello")

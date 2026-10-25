@@ -5,8 +5,10 @@ import NextTermCore
 /// an app that is running now, named when one has it open) and binds the allowance to the file's device
 /// and inode; it ends on Stop Editing, on closing the tab, or when the file is replaced on disk, and is
 /// never remembered. Nothing writes until Save: then SQLiteWriter writes one checked value on its own
-/// connection, on the reading queue, and the page is read again. Each save is one step on the window's
-/// undo manager, written back the same checked way. No agent or MCP path reaches any of this.
+/// connection, on the reading queue, and the page is read again. A save checks the row as well as the
+/// cell, against the row as it was read when the draft opened. Each save is one step on the window's undo
+/// manager, written back the same checked way. While a save is under way, closing the tab, Stop Editing
+/// and leaving the draft wait for it. No agent or MCP path reaches any of this.
 extension DatabasePane {
     /// The file a tab may edit: its device and inode when editing was allowed.
     struct FileIdentity: Equatable {
@@ -33,7 +35,11 @@ extension DatabasePane {
         var allowed: FileIdentity?
         var draft: CellDraft?
         var cell: EditedCell?
+        /// The draft's row as read when the draft opened (SQLiteEdit.row).
+        var row: [SQLiteColumnValue] = []
         var isSaving = false
+        /// What waits for the save under way: closing the tab, Stop Editing, leaving the draft, another write.
+        var afterSave: [() -> Void] = []
         /// The last save's sentence, or why the typed text can't be saved.
         var message: String?
         /// The draft is in the cell's own field rather than the detail pane.
@@ -52,9 +58,23 @@ extension DatabasePane {
         var cell: EditedCell? { key.map { EditedCell(table: table.name, key: $0, column: column) } }
     }
 
+    /// What became of a value being typed in its cell when the grid is made again.
+    enum InCellAside {
+        /// Changed: it is in the detail pane now, which takes the keyboard.
+        case moved
+        /// Unchanged: closed, to open again in its cell if it is still there.
+        case reopen(EditedCell)
+    }
+
     var isEditingAllowed: Bool { edit.allowed != nil }
     /// A draft that would change its cell: the tab shows the modified dot, and File › Save is on.
     var hasDraft: Bool { edit.draft?.isModified == true }
+
+    /// Runs `action` once the save under way has its outcome (at once when there is none).
+    func whenSaved(_ action: @escaping () -> Void) {
+        guard edit.isSaving else { return action() }
+        edit.afterSave.append(action)
+    }
 
     // MARK: allowing
 
@@ -93,7 +113,7 @@ extension DatabasePane {
         alert.messageText = "Allow editing “\(name)”?"
         let open = holders.isEmpty ? "" : " (open in \(TerminalWindowController.nameList(holders)))"
         alert.informativeText = "It may belong to an app that is running now\(open). Changes are written to the file when you click Save, "
-            + "one value at a time, and only if that value hasn’t changed since it was read. Edit › Undo puts back your last saved change "
+            + "one value at a time, and only if that value and its row haven’t changed since they were read. Edit › Undo puts back your last saved change "
             + "the same way. Editing stays allowed until you close this tab or click Stop Editing."
         alert.addButton(withTitle: "Allow Editing")
         alert.addButton(withTitle: "Cancel")
@@ -108,13 +128,15 @@ extension DatabasePane {
         editingChanged()
     }
 
-    /// Back to read-only: the draft goes (asking first when there is one), and this tab's undo steps.
+    /// Back to read-only: the draft goes (asking first when there is one), and this tab's undo steps. A save
+    /// under way is waited for, so what it says (and its undo step) comes first.
     func stopEditing(asking: Bool = true) {
         guard isEditingAllowed else { return }
+        if edit.isSaving { return whenSaved { [weak self] in self?.stopEditing(asking: asking) } }
         if asking, hasDraft, let window, let cell = edit.cell {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Stop editing with an unsaved change to “\(cell.column)”?"
+            alert.messageText = "Stop editing with an unsaved change to “\(CellText.line(cell.column, limit: 80))”?"
             alert.informativeText = "Your change is lost: nothing is written to the file."
             alert.addButton(withTitle: "Stop Editing")
             alert.addButton(withTitle: "Cancel")
@@ -178,14 +200,25 @@ extension DatabasePane {
         beginDetailEdit()
     }
 
+    /// Before a new draft replaces one on another cell: a change there is saved or put back first, and
+    /// `then` runs after. True when nothing stands in the way.
+    private func mayReplaceDraft(with cell: EditedCell, then: @escaping () -> Void) -> Bool {
+        guard edit.draft != nil, edit.cell != cell else { return true }
+        return askToLeaveDraft(then: then)
+    }
+
     /// Opens a draft on the current cell (or keeps the one open there), in the detail pane.
     func beginDetailEdit() {
         guard isEditingAllowed, let target = currentEditTarget, target.reason == nil, !target.value.isTruncated,
-              let cell = target.cell, let column = page?.info?.column(named: target.column) else { return NSSound.beep() }
+              let cell = target.cell, let column = page?.info?.column(named: target.column), let current = grid.currentCell else { return NSSound.beep() }
+        guard mayReplaceDraft(with: cell, then: { [weak self] in self?.beginDetailEdit() }) else { return }
         if edit.cell != cell || edit.draft == nil {
             edit.draft = CellDraft(original: target.value, column: column)
             edit.cell = cell
+            edit.row = rowSnapshot(current.row)
         }
+        // From its cell's field: the draft has what was typed there, and the cell shows the file's value again.
+        if edit.inCell { grid.endEditInPlace() }
         edit.inCell = false
         // An indented JSON value is edited as stored.
         var json = false
@@ -199,9 +232,11 @@ extension DatabasePane {
     /// The field of the current cell takes the value, for one edit: ↩ saves, Esc cancels.
     func beginInCellEdit(row: Int, column: Int) {
         guard let target = currentEditTarget, let cell = target.cell, let info = page?.info?.column(named: target.column) else { return }
+        guard mayReplaceDraft(with: cell, then: { [weak self] in self?.beginEditing() }) else { return }
         let draft = CellDraft(original: target.value, column: info)
         edit.draft = draft
         edit.cell = cell
+        edit.row = rowSnapshot(row)
         edit.inCell = true
         edit.message = nil
         grid.editInPlace(row: row, column: column, text: draft.text) { [weak self] end in self?.inCellEnded(end) }
@@ -238,6 +273,28 @@ extension DatabasePane {
         showCurrentCell()
     }
 
+    /// The note a changed draft carries when the grid was made again under it.
+    static let movedNote = "The file changed while you typed, so your change moved here. Nothing has been written."
+
+    /// Before the grid is made again (the page was read again, or another one shown): a value being typed in
+    /// its cell can't stay in a field that goes away. A changed one moves to the detail pane, with the
+    /// keyboard and a note; an unchanged one closes, to open again in its cell.
+    func moveInCellDraftAside() -> InCellAside? {
+        guard edit.inCell else { return nil }
+        if let typed = grid.inPlaceText { edit.draft?.type(typed) }
+        grid.endEditInPlace(redraw: false)
+        edit.inCell = false
+        guard hasDraft else {
+            let cell = edit.cell
+            endDraft()
+            return cell.map { .reopen($0) }
+        }
+        edit.message = Self.movedNote
+        showDetail(true)
+        onDraftChange?()
+        return .moved
+    }
+
     /// The detail's text changed.
     func draftTyped(_ text: String) {
         guard edit.draft != nil, !edit.inCell else { return }
@@ -264,6 +321,7 @@ extension DatabasePane {
         if edit.inCell { grid.endEditInPlace() }
         edit.draft = nil
         edit.cell = nil
+        edit.row = []
         edit.inCell = false
         edit.message = nil
         if had {
@@ -301,15 +359,23 @@ extension DatabasePane {
         askToLeaveDraft { [weak self] in self?.grid.setCurrent(row: row, column: column) }
     }
 
-    /// True when there is no change to lose; else asks, and `then` runs once it is saved or put back.
+    /// True when there is no change to lose; else asks, and `then` runs once it is saved or put back. While a
+    /// save is under way it waits for the outcome, then decides again.
     func askToLeaveDraft(then: @escaping () -> Void) -> Bool {
+        if edit.isSaving {
+            whenSaved { [weak self] in
+                guard let self, self.askToLeaveDraft(then: then) else { return }
+                then()
+            }
+            return false
+        }
         guard hasDraft, let cell = edit.cell, let window else {
             if edit.draft != nil { endDraft() }
             return true
         }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Save your change to “\(cell.column)”?"
+        alert.messageText = "Save your change to “\(CellText.line(cell.column, limit: 80))”?"
         alert.informativeText = "Don’t Save puts the cell back as the file has it."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
@@ -333,7 +399,7 @@ extension DatabasePane {
 
     enum WriteKind { case save, undo, redo }
 
-    /// File › Save, the Save button, ↩ in the cell: writes the draft, one checked value.
+    /// File › Save, the Save button, ↩ in the cell: writes the draft, one checked value in its row as read.
     func save(then done: ((Bool) -> Void)? = nil) {
         guard let draft = edit.draft, let cell = edit.cell, isEditingAllowed, !edit.isSaving else {
             NSSound.beep()
@@ -352,13 +418,15 @@ extension DatabasePane {
             draftChanged()
             done?(false)
         case let .success(value):
-            write(SQLiteEdit(table: cell.table, column: cell.column, key: cell.key, expected: draft.original, value: value), as: .save, then: done)
+            write(SQLiteEdit(table: cell.table, column: cell.column, key: cell.key, expected: draft.original, value: value, row: edit.row), as: .save, then: done)
         }
     }
 
     /// Writes on the reading queue, which takes reads and writes in turn; "saving…" meanwhile. `step` is the
-    /// undo step registered for it, taken off again if the write is refused.
+    /// undo step registered for it, taken off again if the write is refused. One write at a time: another
+    /// waits for the one under way.
     func write(_ change: SQLiteEdit, as kind: WriteKind, step: CellUndoStep? = nil, then done: ((Bool) -> Void)? = nil) {
+        if edit.isSaving { return whenSaved { [weak self] in self?.write(change, as: kind, step: step, then: done) } }
         guard let allowed = edit.allowed, FileIdentity(path: path) == allowed else {
             if let step { drop(step) }
             checkIdentity()
@@ -380,7 +448,14 @@ extension DatabasePane {
         #if DEBUG
         lastOutcome = outcome
         #endif
-        guard case let .saved(stored) = outcome else {
+        defer {
+            // What waited for this save decides now, in turn.
+            let waiting = edit.afterSave
+            edit.afterSave = []
+            waiting.forEach { $0() }
+        }
+        let column = CellText.line(change.column, limit: 60)
+        guard case let .saved(stored, row) = outcome else {
             // A refused undo or redo leaves no step behind to try it again.
             if let step { drop(step) }
             if kind == .save {
@@ -392,37 +467,53 @@ extension DatabasePane {
                     again.isNull = draft.isNull
                     edit.draft = again
                 }
+                // Checked next time against the row as it is now: a second Save is a choice made seeing it.
+                if case let .rowChanged(now) = outcome, edit.draft != nil { edit.row = now }
                 moveDraftToDetail()
                 reloadPage()
             } else {
                 let what = kind == .undo ? "undone" : "redone"
-                if case .changed = outcome {
-                    GitToast.show("Changed since your save; nothing was \(what)", in: window, isError: true)
-                } else {
-                    GitToast.show(outcome.message, in: window, isError: true)
+                switch outcome {
+                case .changed: GitToast.show("Changed since your save; nothing was \(what)", in: window, isError: true)
+                case .rowChanged: GitToast.show("Its row changed since your save; nothing was \(what)", in: window, isError: true)
+                default: GitToast.show(outcome.message, in: window, isError: true)
                 }
             }
             draftChanged()
             done?(false)
             return
         }
-        let applied = SQLiteEdit(table: change.table, column: change.column, key: change.key, expected: change.expected, value: stored)
+        let applied = SQLiteEdit(table: change.table, column: change.column, key: change.key, expected: change.expected, value: stored, row: change.row)
+        // The step back from an undo or a redo checks the row as this write left it.
+        step?.change = applied.reversed(row: row)
+        // The cell's field closes before its row shows the value as stored.
+        if kind == .save, edit.inCell {
+            grid.endEditInPlace(redraw: false)
+            edit.inCell = false
+        }
+        showSaved(row, table: change.table, key: change.key)
         if kind == .save {
-            let undo = registerStep(applied.reversed, kind: .undo)
-            if edit.inCell { grid.endEditInPlace() }
+            // Editing stopped while it was saving: no step is left that could only do nothing.
+            let undo = isEditingAllowed ? registerStep(applied.reversed(row: row), kind: .undo) : nil
             edit.draft = nil
             edit.cell = nil
+            edit.row = []
             edit.inCell = false
             edit.message = nil
             if window?.firstResponder === detail.textView { window?.makeFirstResponder(grid) }
-            GitToast.show("Saved “\(change.column)” in \(change.key.label)", in: window, button: "Undo") { [weak self, weak undo] in
-                guard let self, let undo, self.edit.steps.contains(where: { $0 === undo }) else { return }
-                self.drop(undo)
-                undo.run()
+            if let undo {
+                GitToast.show("Saved “\(column)” in \(change.key.label)", in: window, button: "Undo") { [weak self, weak undo] in
+                    guard let self, let undo, self.edit.steps.contains(where: { $0 === undo }) else { return }
+                    // One checked write, with no step back: the notice's Undo and ⌘Z undo it once between them.
+                    self.drop(undo)
+                    self.write(undo.change, as: .undo)
+                }
+            } else {
+                GitToast.show("Saved “\(column)” in \(change.key.label)", in: window)
             }
         } else {
             let done = kind == .undo ? "Undone" : "Redone"
-            GitToast.show("\(done): “\(change.column)” in \(change.key.label)", in: window)
+            GitToast.show("\(done): “\(column)” in \(change.key.label)", in: window)
         }
         reloadPage()
         draftChanged()
@@ -455,7 +546,9 @@ extension DatabasePane {
 /// One undo (or redo) step of a save, its own target so a refused one can be taken off alone.
 final class CellUndoStep: NSObject {
     weak var pane: DatabasePane?
-    let change: SQLiteEdit
+    /// What the step writes. A step back registered before its write ran checks the row as that write
+    /// found it, until the write says how it left the row.
+    var change: SQLiteEdit
     let kind: DatabasePane.WriteKind
 
     init(pane: DatabasePane, change: SQLiteEdit, kind: DatabasePane.WriteKind) {
@@ -469,7 +562,7 @@ final class CellUndoStep: NSObject {
     func run() {
         guard let pane, pane.isEditingAllowed else { return }
         pane.edit.steps.removeAll { $0 === self }
-        let back = pane.registerStep(change.reversed, kind: kind == .undo ? .redo : .undo)
+        let back = pane.registerStep(change.reversed(row: change.row), kind: kind == .undo ? .redo : .undo)
         pane.write(change, as: kind, step: back)
     }
 }

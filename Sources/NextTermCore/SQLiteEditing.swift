@@ -140,10 +140,11 @@ public struct CellDraft: Sendable, Equatable {
         }
     }
 
-    /// Whether Save would change the cell: "5.0" against a stored 5.0 does not.
+    /// Whether Save would change the cell, byte for byte: "5.0" against a stored 5.0 does not; "é" typed as
+    /// e and an accent against a stored "é" does.
     public var isModified: Bool {
         guard case let .success(value) = value() else { return true }
-        return value != original || value.storageClass != original.storageClass
+        return !value.isIdentical(to: original)
     }
 
     public var error: DraftError? {
@@ -169,7 +170,7 @@ public struct CellDraft: Sendable, Equatable {
 }
 
 /// One saved change, or the one that undoes it: the cell (table, column, row key), what it must hold
-/// now, and what it becomes.
+/// now, the row it must be in, and what it becomes.
 public struct SQLiteEdit: Sendable, Equatable {
     public let table: String
     public let column: String
@@ -177,17 +178,33 @@ public struct SQLiteEdit: Sendable, Equatable {
     /// What the cell must hold for the save to go ahead.
     public let expected: SQLiteValue
     public let value: SQLiteValue
+    /// The row as it was read (a page's values, and any read whole), which its other values must still
+    /// be: a key alone can name another row once SQLite gives a rowid out again.
+    public let row: [SQLiteColumnValue]
 
-    public init(table: String, column: String, key: SQLiteRowKey, expected: SQLiteValue, value: SQLiteValue) {
+    public init(table: String, column: String, key: SQLiteRowKey, expected: SQLiteValue, value: SQLiteValue, row: [SQLiteColumnValue]) {
         self.table = table
         self.column = column
         self.key = key
         self.expected = expected
         self.value = value
+        self.row = row
     }
 
-    /// The edit that puts the cell back, checked against what this one stored.
-    public var reversed: SQLiteEdit { SQLiteEdit(table: table, column: column, key: key, expected: value, value: expected) }
+    /// The edit that puts the cell back, checked against what this one stored, in `row`: the row as this
+    /// one left it (`SQLiteSaveOutcome.saved`).
+    public func reversed(row: [SQLiteColumnValue]) -> SQLiteEdit {
+        SQLiteEdit(table: table, column: column, key: key, expected: value, value: expected, row: row)
+    }
+
+    /// The row, `snapshot`, still the one read: each value of `values` (a page's row, with `columns`) agrees
+    /// with the one read, the edited cell aside (Save checks that against `expected`).
+    public static func rowAgrees(_ snapshot: [SQLiteColumnValue], columns: [String], values: [SQLiteValue], except column: String) -> Bool {
+        let now = Dictionary(zip(columns.map { $0.lowercased() }, values), uniquingKeysWith: { first, _ in first })
+        return snapshot.allSatisfy { part in
+            part.column.lowercased() == column.lowercased() || now[part.column.lowercased()].map { part.value.agrees(with: $0) } ?? false
+        }
+    }
 }
 
 extension Character {

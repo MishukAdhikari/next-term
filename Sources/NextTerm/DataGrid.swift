@@ -30,12 +30,20 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
     /// Asked before a click or an arrow moves the current cell to (row, column): false keeps it, and the
     /// host moves it itself once it may (a draft was saved or put back).
     var shouldMoveCurrentCell: ((Int, Int) -> Bool)?
+    /// Asked before ⌘A selects every row (the current cell moves to the last): false keeps the selection,
+    /// and the host calls selectAllRows once it may.
+    var shouldSelectAll: (() -> Bool)?
     private var inPlace: (row: Int, column: Int, end: (InPlaceEnd) -> Void)?
     private var endingInPlace = false
     /// For the self-test: the field open for an edit in place.
     var inPlaceField: NSTextField? {
         guard let inPlace else { return nil }
         return gridCell(row: inPlace.row, column: inPlace.column)?.label
+    }
+    /// What the field open for an edit in place holds now, as typed.
+    var inPlaceText: String? {
+        guard let field = inPlaceField else { return nil }
+        return (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
     }
     /// The column of the current cell, or -1 before there is one.
     private(set) var currentColumn = -1
@@ -59,6 +67,14 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
     }
 
     @objc func copy(_ sender: Any?) { onCopy?() }
+
+    override func selectAll(_ sender: Any?) {
+        if let ask = shouldSelectAll, !ask() { return }
+        super.selectAll(sender)
+    }
+
+    /// ⌘A's selection, once the host has let it happen.
+    func selectAllRows() { super.selectAll(nil) }
 
     /// The current cell: the selected row at the current column (the first value's column until one is
     /// chosen), when both are there.
@@ -169,16 +185,30 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
         cell.label.currentEditor()?.selectAll(nil)
     }
 
-    /// Closes the field (the host saved, or put the value back); the grid has the keyboard again.
-    func endEditInPlace() {
+    /// Closes the field (the host saved, or put the value back, or keeps the draft elsewhere); the grid has
+    /// the keyboard again. What was typed never stays in the label: the cell is drawn again from the host,
+    /// unless `redraw` is false (the host draws it itself).
+    func endEditInPlace(redraw: Bool = true) {
         guard let open = inPlace else { return }
         endingInPlace = true
         defer { endingInPlace = false }
         inPlace = nil
         let cell = gridCell(row: open.row, column: open.column)
         let hadKeyboard = cell.map { window?.firstResponder === $0.label.currentEditor() } ?? false
+        // Ended without committing the field editor's text to the label.
+        if cell?.label.currentEditor() != nil { cell?.label.abortEditing() }
         cell?.endEditing()
         if hadKeyboard { window?.makeFirstResponder(self) }
+        if redraw { redrawCell(row: open.row, column: open.column) }
+    }
+
+    /// Whether the cell at (row, column) is the one open for an edit in place.
+    func isEditingInPlace(row: Int, column: Int) -> Bool { inPlace?.row == row && inPlace?.column == column }
+
+    /// The host configures the cell again from what the file holds.
+    private func redrawCell(row: Int, column: Int) {
+        guard row >= 0, row < numberOfRows, column >= 0, column < numberOfColumns else { return }
+        reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: column))
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -205,6 +235,9 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
         inPlace = nil
         gridCell(row: open.row, column: open.column)?.endEditing()
         open.end(.left(field.stringValue))
+        // The field editor left its text in the label; the cell shows what the file holds (the draft is
+        // the host's). Next turn, since this can come in the middle of a reload.
+        DispatchQueue.main.async { [weak self] in self?.redrawCell(row: open.row, column: open.column) }
     }
 
     /// A cell for `tableColumn` at `row`, reused when one is free, outlined when it is the current one.
