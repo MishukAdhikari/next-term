@@ -158,8 +158,11 @@ final class TerminalRail: NSView, ProjectGlowing {
 
     // MARK: layout
 
-    /// Where the marks start: under the arrow, which sits in the tab bars' strip along the top, and its key.
-    private var marksTop: CGFloat { topInset + TabBarView.height + 4 + hintRow }
+    /// The marks under the arrow, which sits in the tab bars' strip along the top, and its key: counted as the folded tab
+    /// list and the window column count theirs (MarkColumn).
+    private var column: MarkColumn {
+        MarkColumn(count: markViews.count, height: bounds.height, top: topInset + TabBarView.height + hintRow, slot: Self.slotHeight, margin: 4)
+    }
 
     /// The key shows under the arrow only if it fits across the rail and every mark shown without it still is.
     private func placeExpandHint() {
@@ -177,10 +180,7 @@ final class TerminalRail: NSView, ProjectGlowing {
     }
 
     /// How many marks fit; when some do not, the last place is the "+3".
-    private var shownCount: Int {
-        let room = Int(max(0, bounds.height - marksTop - 4) / Self.slotHeight)
-        return markViews.count <= room ? markViews.count : max(0, room - 1)
-    }
+    private var shownCount: Int { column.shownCount }
 
     override func layout() {
         super.layout()
@@ -189,12 +189,16 @@ final class TerminalRail: NSView, ProjectGlowing {
         glow.frame = bounds
         CATransaction.commit()
         placeExpandHint()
-        let shown = shownCount
+        let column = self.column
+        let shown = column.shownCount
         for (i, view) in markViews.enumerated() {
             view.isHidden = i >= shown
-            view.frame = NSRect(x: 0, y: marksTop + CGFloat(i) * Self.slotHeight, width: bounds.width, height: Self.slotHeight)
+            let place = column.place(i)
+            view.frame = NSRect(x: 0, y: place.minY, width: bounds.width, height: place.height)
         }
-        moreButton.frame = NSRect(x: 0, y: marksTop + CGFloat(shown) * Self.slotHeight, width: bounds.width, height: Self.slotHeight)
+        // With no room for even one place the count still shows, where the first mark would be.
+        let more = column.more ?? column.place(shown)
+        moreButton.frame = NSRect(x: 0, y: more.minY, width: bounds.width, height: more.height)
         updateMoreButton()
     }
 
@@ -203,7 +207,7 @@ final class TerminalRail: NSView, ProjectGlowing {
         let hidden = Array(marks.dropFirst(shownCount))
         moreButton.isHidden = hidden.isEmpty
         guard !hidden.isEmpty else { return }
-        let state = Self.urgency.first(where: hidden.map(\.state).contains) ?? .idle
+        let state = MarkColumn.moreState(hidden.map(\.state))
         let color = state == .idle || state == .working ? Theme.textDim : StatusGlyph.color(for: state)
         moreButton.attributedTitle = NSAttributedString(string: "+\(hidden.count)", attributes: [
             .foregroundColor: color, .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
