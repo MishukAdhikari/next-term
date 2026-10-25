@@ -11,14 +11,19 @@ struct RemoteTab {
     var keep: KeepMode
     /// A herdr tab's herdr session (`herdr --session`), as herdr lists it; nil for herdr's default, and for any other tab.
     var herdrSession: String?
+    /// A tmux tab that comes back to a session (a kept tab at launch, a restore, a closed tab reopened, a session picked
+    /// in the sheet or named over MCP): one that is gone is made anew, and the tab says so. Never for a brand-new tab.
+    var expectsSession: Bool
 
-    init(host: RemoteHost, directory: String? = nil, session: String? = nil, keep: KeepMode? = nil, herdrSession: String? = nil) {
+    init(host: RemoteHost, directory: String? = nil, session: String? = nil, keep: KeepMode? = nil, herdrSession: String? = nil,
+         expectsSession: Bool = false) {
         self.host = host
         let folder = directory ?? host.directory
         self.directory = folder
         self.session = session.map(RemoteShell.safeName).flatMap { $0.isEmpty ? nil : $0 } ?? RemoteShell.newSessionName(directory: folder)
         self.keep = keep ?? host.keep
         self.herdrSession = self.keep == .herdr ? herdrSession : nil
+        self.expectsSession = self.keep == .tmux && session != nil && expectsSession
     }
 
     /// Another tab on the same host, in `directory`, with its own session (a split beside this one); beside a herdr tab,
@@ -182,10 +187,12 @@ enum RemoteConnection {
         logins = logins.filter { $0.value.tab != nil && $0.value.tab !== tab }
     }
 
-    /// ssh's arguments for a tab; `token` is this connection's (see RemoteShell.tabScript).
-    static func tabArguments(_ remote: RemoteTab, path: String, tabKey: String, token: String) -> [String] {
+    /// ssh's arguments for a tab; `token` is this connection's (see RemoteShell.tabScript). `reattach`: the tab was
+    /// connected before, so its tmux session is expected to be there.
+    static func tabArguments(_ remote: RemoteTab, path: String, tabKey: String, token: String, reattach: Bool = false) -> [String] {
         let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey, token: token,
-                                           completionHook: RemoteCompletionConsent.startsHooked(remote), herdrSession: remote.herdrSession)
+                                           completionHook: RemoteCompletionConsent.startsHooked(remote), herdrSession: remote.herdrSession,
+                                           tmux: remote.host.tmuxOptions, expectsSession: remote.expectsSession || reattach)
         return SSHArguments.tab(remote.host, controlPath: path, configFile: configFile, command: RemoteShell.command(script))
     }
 
@@ -486,7 +493,7 @@ enum RemoteConnection {
             } ?? app.controllers.first
             guard let controller = target else { continue }
             let remote = RemoteTab(host: host, directory: record.directory, session: record.session, keep: record.keep,
-                                   herdrSession: record.herdrSession)
+                                   herdrSession: record.herdrSession, expectsSession: true)
             let tab = controller.addRemoteTab(remote, select: false, atEnd: true)
             if let title = record.title { tab.userTitle = title }
             controller.refresh()

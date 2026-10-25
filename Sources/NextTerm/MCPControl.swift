@@ -436,6 +436,7 @@ enum MCPControl {
             // A tab whose tmux or herdr was missing on the host is a plain shell that nothing keeps: off, not as opened.
             info["keep"] = remote.keep.shown(fellBack: tab.fellBack).rawValue
             if tab.fellBack { info["fell_back"] = true }
+            if tab.sessionCreated { info["session_created"] = true } // its tmux session was gone, so this one is new
             if tab.fellBack, remote.keep == .herdr {
                 let why = tab.fellBackReason ?? "herdr wasn’t found on the host"
                 info["herdr_missing_reason"] = "\(why). Next Term never installs it: \(RemoteShell.herdrInstallPage)"

@@ -164,8 +164,38 @@ enum RemoteMCP {
                 }
             }
         }
+        // One of Next Term's tmux sessions: while a tab on the host is connected, only one the host lists, never made by
+        // its name. With no connection nothing can list them: the tab expects it, and says so if it was gone.
+        if mode == .tmux, let named {
+            let name = RemoteShell.safeName(named)
+            guard RemoteConnection.masterAlive(found) else {
+                return open(found, directory: directory, mode: mode, session: name, herdrSession: nil, command: "",
+                            expectsSession: true, arguments: arguments, caller: caller, reply: reply)
+            }
+            return tmuxSessionListed(name, on: found) { refusal in
+                if let refusal { return reply(fail(refusal.text)) }
+                open(found, directory: directory, mode: mode, session: name, herdrSession: nil, command: "", expectsSession: true,
+                     arguments: arguments, caller: caller, reply: reply)
+            }
+        }
         open(found, directory: directory, mode: mode, session: named.map(RemoteShell.safeName), herdrSession: nil, command: command,
              arguments: arguments, caller: caller, reply: reply)
+    }
+
+    /// Whether Next Term's tmux on `host` lists the session `name` (as host_sessions does), asked on the open connection:
+    /// nil when it does, else why not.
+    private static func tmuxSessionListed(_ name: String, on host: RemoteHost, _ done: @escaping (MCPControl.MCPError?) -> Void) {
+        RemoteConnection.run(host, script: RemoteShell.sessionsScript, timeout: 25) { output in
+            guard let listed = RemoteSession.parseList(output.output) else {
+                return done(.init("Could not list the tmux sessions on \(host.name): \(output.problem)"))
+            }
+            guard listed.sessions.contains(where: { (session: RemoteSession) -> Bool in session.name == name }) else {
+                let known: String = listed.sessions.map(\.name).joined(separator: ", ")
+                let lists: String = known.isEmpty ? " (it has none)" : " (it lists \(known))"
+                return done(.init("\(host.name) has no tmux session “\(name)”\(lists); nothing was opened. Leave session out for a new one."))
+            }
+            done(nil)
+        }
     }
 
     /// The herdr session `name` names on `host`, as `herdr session list --json` lists it there: nil for herdr's default.
@@ -191,7 +221,8 @@ enum RemoteMCP {
     }
 
     private static func open(_ found: RemoteHost, directory: String, mode: KeepMode, session: String?, herdrSession: String?,
-                             command: String, arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+                             command: String, expectsSession: Bool = false, arguments: [String: Any], caller: TerminalTab?,
+                             reply: @escaping Reply) {
         let app: AppDelegate = AppDelegate.shared
         let controller = caller.flatMap(MCPControl.controller(of:)) ?? (NSApp.keyWindow?.windowController as? TerminalWindowController)
             ?? app.controllers.first ?? app.openWindow(directory: nil, forAgent: true)
@@ -199,7 +230,8 @@ enum RemoteMCP {
         // (another tab may be logging in to this host already: then that one), selected even in the window they are in.
         // It waits for their click like any tab an agent opened, so nothing they were typing goes to ssh (AgentArrival).
         let mustLogIn = !RemoteConnection.masterAlive(found)
-        let remote = RemoteTab(host: found, directory: directory, session: session, keep: mode, herdrSession: herdrSession)
+        let remote = RemoteTab(host: found, directory: directory, session: session, keep: mode, herdrSession: herdrSession,
+                               expectsSession: expectsSession)
         let tab = controller.addRemoteTab(remote, select: false, byAgent: true)
         if mustLogIn {
             let asking = RemoteConnection.loginTab(for: found) ?? tab
