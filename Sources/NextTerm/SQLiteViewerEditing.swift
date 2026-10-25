@@ -229,6 +229,15 @@ extension DatabasePane {
         }
     }
 
+    /// A draft in its cell that can't be saved goes to the detail pane, where what is wrong can be read.
+    func moveDraftToDetail() {
+        guard edit.inCell else { return }
+        grid.endEditInPlace()
+        edit.inCell = false
+        showDetail(true)
+        showCurrentCell()
+    }
+
     /// The detail's text changed.
     func draftTyped(_ text: String) {
         guard edit.draft != nil, !edit.inCell else { return }
@@ -339,6 +348,7 @@ extension DatabasePane {
         switch draft.value() {
         case let .failure(error):
             edit.message = error.message
+            moveDraftToDetail()
             draftChanged()
             done?(false)
         case let .success(value):
@@ -382,12 +392,7 @@ extension DatabasePane {
                     again.isNull = draft.isNull
                     edit.draft = again
                 }
-                if edit.inCell {
-                    // Said where it can be read: the detail pane, with the draft.
-                    grid.endEditInPlace()
-                    edit.inCell = false
-                    showDetail(true)
-                }
+                moveDraftToDetail()
                 reloadPage()
             } else {
                 let what = kind == .undo ? "undone" : "redone"
