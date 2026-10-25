@@ -11,9 +11,16 @@ extension TerminalWindowController {
     func installWindowColumn() {
         let host: WindowColumnHost = columnHost
         let split: NSSplitView = outerSplitView
-        host.sidebarWidth = { [weak self] () -> CGFloat in
+        // A minimal sidebar: a window narrowing narrows its sidebar too (the split view shares the change out).
+        host.sidebarRoom = { [weak self] () -> CGFloat in
             guard let self, self.isSidebarVisible else { return 0 }
-            return self.sidebar.frame.width + split.dividerThickness
+            return ProjectSidebarView.minimumWidth + split.dividerThickness
+        }
+        host.aroundColumnChange = { [weak self] (apply: () -> Void) in
+            guard let self, self.isSidebarVisible else { return apply() }
+            let kept: CGFloat = self.sidebar.frame.width
+            apply()
+            self.keepSidebar(width: kept)
         }
         host.onShownChange = { [weak self] (shown: WindowColumnShown) in self?.windowColumnShownChanged(shown) }
         let column: WindowColumnView = host.column
@@ -33,15 +40,20 @@ extension TerminalWindowController {
         if reshaped { placeWindowColumn() }
     }
 
-    /// The column and the split view where they go now, in this one pass: the sidebar keeps its width and the work area
-    /// takes the change, each terminal resizing once.
+    /// The column and the split view where they go now: the sidebar keeps its width and the work area takes the change,
+    /// each terminal resizing once, at the next layout.
     func placeWindowColumn() {
-        let sidebarWidth: CGFloat = sidebar.frame.width
         columnHost.place()
-        columnHost.layoutSubtreeIfNeeded()
-        // A guard, not the mechanism: the split view's holding priorities give the change to the work area.
-        guard isSidebarVisible, sidebarWidth >= 160, abs(sidebar.frame.width - sidebarWidth) > 0.5 else { return }
-        placeSidebar(width: sidebarWidth)
+    }
+
+    /// The sidebar back at `kept` after the column changed width, its divider moved before anything is laid out, so the
+    /// work area takes the whole change: never narrower than its minimum, nor the work area narrower than its.
+    private func keepSidebar(width kept: CGFloat) {
+        let split: NSSplitView = outerSplitView
+        let room: CGFloat = split.bounds.width - split.dividerThickness - WindowColumnWidth.workMinimum
+        let width: CGFloat = max(ProjectSidebarView.minimumWidth, min(kept, room))
+        guard abs(sidebar.frame.width - width) > 0.5 else { return }
+        placeSidebar(width: width, layingOut: false)
     }
 
     /// The column showed, went or changed form in this window (two windows open, the setting, the fold, or the window's

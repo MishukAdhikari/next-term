@@ -392,8 +392,8 @@ extension SelfTest {
 
     // MARK: AE5: room
 
-    /// Narrowed below the room the column, the sidebar and the work area need, a window hides its column alone and shows
-    /// it again when widened; unfolded, it folds first, and comes back unfolded.
+    /// Narrowed below the room the column, a minimal sidebar and the work area need (the sidebar narrows with the window), a
+    /// window hides its column alone and shows it again when widened; unfolded, it folds first, and comes back unfolded.
     private static func roomChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
         guard let window = c.window else { return }
         let frame: NSRect = window.frame
@@ -401,7 +401,7 @@ extension SelfTest {
             app.windowColumnExpanded = false
             window.setFrame(frame, display: true)
         }
-        let sidebar: CGFloat = c.isSidebarVisible ? c.sidebar.frame.width + c.outerSplitView.dividerThickness : 0
+        let sidebar: CGFloat = c.isSidebarVisible ? ProjectSidebarView.minimumWidth + c.outerSplitView.dividerThickness : 0
         let folded: CGFloat = sidebar + WindowColumnWidth.folded + WindowColumnWidth.hairline + WindowColumnWidth.workMinimum
         let unfolded: CGFloat = sidebar + WindowColumnWidth.expanded + WindowColumnWidth.hairline + WindowColumnWidth.workMinimum
         var steps: [String] = []
@@ -412,23 +412,23 @@ extension SelfTest {
                          + "\(Int(c.sidebar.frame.width)), work \(Int(c.workSplit.frame.width)), \(c.columnHost.shown.form)")
         }
         let others: [TerminalWindowController] = app.controllers.filter { $0 !== c && !$0.hasClosed }
-        guard folded - 30 >= window.minSize.width else {
+        guard folded - 5 >= window.minSize.width else {
             return note("window column: AE5 not checked, as the sidebar (\(sidebar)) leaves no narrower window than its minimum")
         }
-        width(folded - 30)
+        width(folded - 5)
         let hid: Bool = c.columnHost.shown.form == .hidden && c.windowColumn.isHidden && c.columnHost.shown.byRoom
         let othersKept: Bool = others.allSatisfy { $0.columnHost.shown.form == .folded }
-        width(folded + 30)
+        width(folded + 5)
         let back: Bool = c.columnHost.shown.form == .folded && !c.windowColumn.isHidden
         check(hid && othersKept && back, "window column: a window narrowed below its room hides its column alone, and gains it again when widened",
-              "at \(folded - 30): hid \(hid), others kept \(othersKept); at \(folded + 30): \(c.columnHost.shown); "
+              "at \(folded - 5): hid \(hid), others kept \(othersKept); at \(folded + 5): \(c.columnHost.shown); "
                   + steps.joined(separator: " | "))
         app.windowColumnExpanded = true
         width(unfolded + 30)
         let open: Bool = c.columnHost.shown.form == .expanded
         width(unfolded - 30)
         let foldedFirst: Bool = c.columnHost.shown.form == .folded && c.columnHost.shown.byRoom && app.windowColumnExpanded
-        width(folded - 30)
+        width(folded - 5)
         let gone: Bool = c.columnHost.shown.form == .hidden
         width(unfolded + 30)
         let reopened: Bool = c.columnHost.shown.form == .expanded

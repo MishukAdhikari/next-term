@@ -99,6 +99,8 @@ final class SidebarOutlineView: NSOutlineView {
 /// The "Project" panel: a live file tree with git status, file operations and drag and drop.
 final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate, NSTextFieldDelegate {
     static let defaultWidth: CGFloat = 280
+    /// The narrowest it is dragged to.
+    static let minimumWidth: CGFloat = 160
 
     weak var delegate: ProjectSidebarDelegate?
     /// Space reserved on the left of the header for the traffic-light buttons.
