@@ -228,7 +228,10 @@ extension SelfTest {
         check(await wait(10) { read().contains("agent focus w2:p1|") }, "herdr agents: ⇧⌘U goes to the agent that has waited longest", read())
         c.show(other)
 
-        // Answering from the notice: the second choice, through a read before the keys and one before Return.
+        // Answering from the notice: the second choice, through a read before the keys and one before Return. The answer
+        // runs on its own, the withdrawal check below passes at once (⇧⌘U withdrew the notice already), and the stand-in
+        // logs a call before it moves the screen. So this check waits for the Return, the answer's last call: the MCP
+        // part's screen, written next, is never overwritten by this answer's herdr-read-next moving in late.
         write("herdr-read-next", "  Allow rm -rf build? (y/n) n\n")
         clearCalls()
         if let request = posted.first {
@@ -236,8 +239,8 @@ extension SelfTest {
             for (key, value) in request.content.userInfo { if let key = key as? String, let value = value as? String { info[key] = value } }
             app.respond(to: request.identifier, title: request.content.title, info: info, action: "choice.2", text: nil)
         }
-        check(await wait(10) { read().contains("agent send-keys w2:p1 n|") }, "herdr notices: a choice's button answers it through herdr, after a read",
-              read())
+        check(await wait(10) { read().contains("agent send-keys w2:p1 n|") && read().contains("agent send-keys w2:p1 enter|") },
+              "herdr notices: a choice's button answers it through herdr, a read before its key and one before Return", read())
         // Once codex works again, its notice goes.
         write("herdr-agents", standInAgents(codex: "working", seq: 8))
         check(await wait(10) { !app.testNotifications.contains { $0.content.userInfo["herdr_pane"] as? String == "w2:p1" } },
