@@ -137,8 +137,11 @@ public struct KeyBindings: Equatable, Sendable {
     /// The keys outside the menus, which Settings lists with the part they belong to. The sidebar's are the items of its
     /// right-click menu, in the menu's order, the rows' own after the files'; the menu shows each one's key. Its Send to
     /// Agent, Show Changes and Show All Sessions… are the menu bar's commands, which act on the sidebar's selection.
+    /// Select Enclosing Folder, after Open, is the tree's key alone: it moves the selection, so no row's menu has it.
     public static let partCommands: [PartCommand] = [
         PartCommand(id: "sidebar.open", title: "Open", part: .sidebar, chord: KeyChord(key: "\u{F701}", command: true)),
+        PartCommand(id: "sidebar.enclosingFolder", title: "Select Enclosing Folder", part: .sidebar,
+                    chord: KeyChord(key: "\u{F700}", command: true)),
         PartCommand(id: "sidebar.openTab", title: "Open in New Tab", part: .sidebar, chord: nil),
         PartCommand(id: "sidebar.openProject", title: "Open as Project", part: .sidebar, chord: nil),
         // VS Code's; File › Rename Tab… has ⌥⌘R everywhere else (a terminal command: the two share it).

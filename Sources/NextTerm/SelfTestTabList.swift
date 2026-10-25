@@ -171,6 +171,11 @@ extension SelfTest {
             let known: Int = c.groups.firstIndex { !$0.focused.directory.isEmpty } ?? 0
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
             window.layoutIfNeeded()
+            // What the toggle did, for a failure: the setting, the menu item, the list's feed and its rows.
+            let toggledOn: Bool = app.tabListShowsFolders
+            let enabled: Bool = AppDelegate.shared.validateMenuItem(folders)
+            let fedDetail: String = list.rows.filter { !$0.isPane }[safe: known]?.detail ?? "none"
+            let state = "folders \(toggledOn), item enabled \(enabled), list shows \(c.listShowsTabs), dragging \(list.isDragging), fed \(fedDetail)"
             let detail = list.tabRowView(at: known)?.shownDetail
             let tall: Bool = abs((list.tabRowView(at: known)?.frame.height ?? 0) - TabListLayout.twoLineHeight) < 1
             tabsMenu.performActionForItem(at: tabsMenu.index(of: folders))
@@ -178,7 +183,7 @@ extension SelfTest {
             let folder: String = c.groups[safe: known]?.focused.directory ?? "no tab"
             check(detail?.isEmpty == false && tall && list.tabRowView(at: known)?.shownDetail == nil && !app.tabListShowsFolders,
                   "tab list: Show Folders gives each row its folder on a second line, and turned off one line again",
-                  "\(detail ?? "no second line"), tall \(tall), tab \(known) of \(c.groups.count) in “\(folder)”")
+                  "\(detail ?? "no second line"), tall \(tall), tab \(known) of \(c.groups.count) in “\(folder)”; \(state)")
         }
 
         // Folded: to its bar above or below the editor, the bar shows the tabs; beside it, the rail.
