@@ -64,7 +64,6 @@ final class WindowColumnView: NSView, ProjectGlowing {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
         chevron.isBordered = false
         chevron.bezelStyle = .regularSquare
         chevron.imagePosition = .imageOnly
@@ -91,6 +90,13 @@ final class WindowColumnView: NSView, ProjectGlowing {
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+
+    /// Its frame is set by hand (WindowColumnHost): a new size lays it out again, as a window resize or a new form does.
+    override func setFrameSize(_ newSize: NSSize) {
+        let resized: Bool = newSize != frame.size
+        super.setFrameSize(newSize)
+        if resized { needsLayout = true }
+    }
 
     /// "Windows, 5 open".
     static func groupLabel(_ count: Int) -> String { "Windows, \(count) open" }
@@ -358,7 +364,6 @@ final class WindowColumnButton: NSButton {
         bezelStyle = .regularSquare
         refusesFirstResponder = true
         wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
         dot.pulsesForAttention = false // a mark that stays still: the tab itself pulses
         dot.isHidden = true
         dot.setAccessibilityElement(false)
