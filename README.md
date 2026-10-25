@@ -166,7 +166,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
   found by reading them, without running project code; local or remote by host, passwords masked. SQLite
   files open in a viewer that stays read-only until you allow editing in its tab; click a cell for its
-  whole value (text wrapped, JSON indented, a blob in hex, the row beside it). Other connections open in
+  whole value, up to 4 MB (text wrapped, JSON indented, a blob's size and first bytes in hex, the row beside
+  it). Other connections open in
   TablePlus when it is installed (libSQL aside), and local and development ones (Docker, OrbStack) in
   `mysql` or `psql` in a new tab. Each provider badge (Neon, Supabase, Vercel, Herd and others) opens that
   provider's page in the browser.
@@ -462,10 +463,13 @@ Next Term's menu.
   the allowance is bound to that file in that tab, ends when the tab closes, you click Stop Editing or the
   file is replaced, and is never remembered. Nothing is written until you click Save (or ⌘S, or Return in
   the cell): then one value is written, in one transaction on a connection of its own (SQLite's defensive
-  mode on, so a full-text index's own tables and the schema stay read-only), by one UPDATE keyed by the row's
-  rowid or primary key that changes the cell only if it still holds, byte for byte and of the same type, the
-  value that was read. If it doesn't, or the file is busy, nothing is written and the viewer says why. Edit ›
-  Undo writes the old value back the same checked way. A file with no -wal beside it gets none. Views,
+  mode on, so a full-text index's own tables and the schema stay read-only), by one `UPDATE OR ABORT` keyed by
+  the row's rowid or primary key. It changes the cell only if the cell still holds, byte for byte and of the
+  same type, the value that was read, and the row's other values are still the ones read, since a key alone
+  can name another row once SQLite gives a rowid out again. OR ABORT overrides a table's own ON CONFLICT
+  REPLACE or IGNORE, so a save never deletes another row. If anything differs, or the file is busy, nothing
+  is written and the viewer says why. Edit › Undo writes the old value back the same checked way. A file
+  with no -wal beside it gets none. Views,
   virtual tables and their own tables, key and generated columns and blobs can't be edited. No agent or MCP
   tool can allow editing or write a database.
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
