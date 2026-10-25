@@ -52,8 +52,8 @@ extension MCPServer {
                     "read_file", "find_in_files", "git_status", "get_diff", "list_hosts", "check_host", "host_sessions",
                     "host_changes", "list_skills", "get_skill", "list_shortcuts", "settings_get", "list_import_sources",
                     "preview_import", "list_secrets"]
-        let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
-                     "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
+        let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab", "rename_tab",
+                     "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
                      "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
                      "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
@@ -66,7 +66,7 @@ extension MCPServer {
     private static let pathArgument = #""path": {"type": "string", "description": "The file: relative to the project, or absolute inside an open project."}"#
     private static let projectArgument = #""project": {"type": "string", "description": "An open project's folder (as list_projects gives it), its name, or a folder inside one. Default: your window's project, or the only one open."}"#
     private static let tabArgument = #""tab_id": {"type": "string", "description": "A tab's id from list_tabs (a pane of a split tab has its own)."}"#
-    private static let reasonArgument = #""reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words when they are asked."}"#
+    static let reasonArgument = #""reason": {"type": "string", "description": "Why, in a sentence; shown to the user as your words when they are asked."}"#
 
     /// The tools that edit files, commit, and control panes, the layout and settings. Each one tagged write
     /// takes an approval policy (MCPApproval) and asks the user on the Mac before it changes anything.

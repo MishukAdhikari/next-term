@@ -313,6 +313,8 @@ enum MCPControl {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         // Safe mode runs only tools that read; an update's wait refuses new work elsewhere (U13).
         if let refusal = MCPRestoredTabs.refusal(tool, arguments) { return reply(fail(refusal)) }
+        // Through a remote connection: not herdr's agents, nor the host and tab changes, until the door names them.
+        if connection != nil, let refusal = MCPRemoteReach.refusal(tool, arguments) { return reply(fail(refusal)) }
         // One of herdr's agents: its id stands where a tab's does, its tab's refusals first (HerdrMCP).
         if let raw = arguments["tab_id"] as? String, let target = HerdrTarget.parse(raw) {
             if let refusal = MCPRestoredTabs.refusal(tool, ["tab_id": target.tabID]) { return reply(fail(refusal)) }
@@ -337,10 +339,12 @@ enum MCPControl {
         case "answer_agent": answerAgent(arguments, caller: caller, reply: reply)
         case "read_file", "find_in_files", "git_status", "get_diff": projectTool(tool, arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
-        case "close_tab": closeTab(arguments, caller: caller, reply: reply)
+        case "close_tab": closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+        case "rename_tab": reply(renameTab(arguments))
         case "open_in_editor": reply(openInEditor(arguments))
-        case "list_hosts", "add_host", "remove_host", "check_host", "new_remote_tab", "host_sessions", "host_changes":
-            RemoteMCP.call(tool, arguments, caller: caller, reply: reply)
+        case "list_hosts", "add_host", "remove_host", "edit_host", "check_host", "new_remote_tab", "host_sessions", "end_session",
+             "host_changes":
+            RemoteMCP.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
         case "list_shortcuts": MainActor.assumeIsolated { reply(ShortcutsMCP.listShortcuts(arguments)) }
         case "show_settings": MainActor.assumeIsolated { reply(ShortcutsMCP.showSettings(arguments)) }
         case "list_skills", "get_skill", "install_skill", "remove_skill":
@@ -936,7 +940,8 @@ enum MCPControl {
         return ok(answer)
     }
 
-    private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+    private static func closeTab(_ arguments: [String: Any], caller: TerminalTab?, approval: MCPApproval, requester: String?,
+                                 connection: String?, reply: @escaping Reply) {
         guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
             return reply(fail("No tab with that id; list_tabs shows them."))
         }
@@ -975,19 +980,35 @@ enum MCPControl {
                 info["note"] = "The tmux session keeps running on the host: reattach with new_remote_tab (session), or end it with close_tab force."
                 return reply(close(info))
             }
-            // force: end the tmux session first; the tab closes only once it has ended.
-            RemoteConnection.endSession(remote.host, session: remote.session) { problem in
-                if let problem {
-                    return reply(fail("Could not end tmux session \(remote.session) on \(remote.host.name), so the tab stays open: \(problem)"))
+            // force: asked on the Mac first, then the tmux session ended (looked at again first); the tab closes only once
+            // it has ended.
+            return MainActor.assumeIsolated {
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: approval, requester: requester,
+                                                      connection: connection)
+                RemoteMCP.endTmuxSession(remote.host, session: remote.session, closing: [tab], context, reply: reply) {
+                    reply(close(["id": id, "closed": true, "session_ended": remote.session]))
                 }
-                reply(close(["id": id, "closed": true, "session_ended": remote.session]))
             }
-            return
         }
         if let warning = tab.closeWarning, !force {
             return reply(fail("The tab is running \(warning); pass force: true to stop it and close the tab."))
         }
         reply(close(["id": id, "closed": true]))
+    }
+
+    /// rename_tab: the title Rename Tab… sets; "" gives the tab its own back. It only changes a label, so it asks nothing,
+    /// on the caller's own tab too.
+    private static func renameTab(_ arguments: [String: Any]) -> MCPServer.CallResult {
+        guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
+            return fail("No tab with that id; list_tabs shows them.")
+        }
+        guard let raw = arguments["title"] as? String else { return fail("Give title: the new name, or \"\" for the tab's own.") }
+        switch TabRename.title(raw) {
+        case .failure(let refusal): return fail(refusal.text)
+        case .success(let title): tab.userTitle = title
+        }
+        controller.refresh()
+        return ok(["id": tab.id.uuidString.lowercased(), "title": field(tab.title), "own_title": tab.userTitle == nil])
     }
 
     private static func openInEditor(_ arguments: [String: Any]) -> MCPServer.CallResult {

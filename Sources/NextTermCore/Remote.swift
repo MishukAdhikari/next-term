@@ -646,6 +646,37 @@ public enum RemoteShell {
     public static let herdrSessionsListed = 8
 
     /// Ends one of Next Term's tmux sessions (End Session on close, MCP close_tab with force).
+    /// The clients attached to Next Term's tmux session `session` (their ttys), one per line after the marker, and
+    /// `none` when no tmux or no such session: what end_session and close_tab force show, and look at again after Approve.
+    public static func clientsScript(session: String) -> String {
+        let target = quote("=" + safeName(session))
+        return [
+            findTmux,
+            "printf '\\n%s\\n' \(quote(marker))",
+            "if [ -n \"$T\" ] && \"$T\" -L nextterm has-session -t \(target) 2>/dev/null; then",
+            "  \"$T\" -L nextterm list-clients -t \(target) -F '#{client_tty}' 2>/dev/null | tr -d '\\001-\\010\\013-\\037\\177' | head -n 50",
+            "else",
+            "  printf 'none\\n'",
+            "fi",
+        ].joined(separator: "\n")
+    }
+
+    /// clientsScript's answer.
+    public enum SessionClients: Equatable, Sendable {
+        /// The session is there, with these clients attached (none, maybe).
+        case attached([String])
+        /// No such session, or no tmux.
+        case gone
+        /// The script's answer did not come back (the connection, say).
+        case unread
+    }
+
+    public static func parseClients(_ output: String) -> SessionClients {
+        guard let lines = payload(output) else { return .unread }
+        let clients: [String] = lines.map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return clients == ["none"] ? .gone : .attached(clients)
+    }
+
     public static func killSessionScript(session: String) -> String {
         "\(findTmux)\n[ -n \"$T\" ] && \"$T\" -L nextterm kill-session -t \(quote("=" + safeName(session))) 2>/dev/null\nprintf '\\n%s\\n' \(quote(marker))"
     }

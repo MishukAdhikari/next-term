@@ -79,7 +79,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   answered. Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
   closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
-  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
+  change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. An agent can name a
+  tab with `rename_tab`, as Rename Tab… does, which asks nothing. At a zsh prompt,
   reading a tab also gives the line being typed and the cursor, and any suggestion a zsh plugin draws, which is
   left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local only: a
   private socket, no network port. Each of herdr's agents has an id of its own in `list_tabs`, which the tab
@@ -118,8 +119,11 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
-  the server except the Tab hook you allow, and no password is stored. Agents get seven MCP tools to open tabs
-  there and read the changes. To find herdr, a herdr tab uses the copy your running herdr server runs, or may
+  the server except the Tab hook you allow, and no password is stored. Next Term's tmux there shows true colour
+  and synchronized output; each server can have its own tmux prefix (⌃B, ⌃A, ⌃Space or ⌃]) and history, and a
+  tab that comes back to a session that was gone says it is a new one. Agents get nine MCP tools to save servers,
+  open tabs there, read the changes and end a tmux session; saving, changing or forgetting a server, and ending a
+  session, ask you on the Mac first, showing who is attached. To find herdr, a herdr tab uses the copy your running herdr server runs, or may
   run your login shell on the server once (no terminal, 3 seconds at most) to read its PATH; when herdr isn't
   there, the tab says where it looked and links herdr's install page. A file or folder dropped on a remote tab,
   or an image pasted into one, is copied to the server first, into a new folder only you can read there, and

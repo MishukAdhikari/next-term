@@ -226,6 +226,14 @@ extension SelfTest {
         let extra = pc.addTab(directory: root.path, select: false)
         _ = await wait(20) { extra.status.integrated }
         let extraID = extra.id.uuidString.lowercased()
+        // rename_tab asks nothing: it only changes the label, which the tab bar shows; "" gives the tab its own back.
+        let renamed = await client.call("rename_tab", ["tab_id": extraID, "title": "  API server  "])
+        let named: Bool = extra.userTitle == "API server" && extra.title == "API server" && MCPWriteControl.pending == nil
+        check(!renamed.isError && named, "MCP writes: rename_tab names the tab as Rename Tab… does, and asks nothing", renamed.text)
+        let twoLines = await client.call("rename_tab", ["tab_id": extraID, "title": "a\nb"])
+        check(twoLines.isError && extra.userTitle == "API server", "MCP writes: rename_tab refuses a title of two lines", twoLines.text)
+        let own = await client.call("rename_tab", ["tab_id": extraID, "title": ""])
+        check(!own.isError && extra.userTitle == nil, "MCP writes: rename_tab with an empty title gives the tab its own back", own.text)
         let front = pc.activeTab
         let noFocus = await client.asked("focus_tab", ["tab_id": extraID], .decline)
         check(noFocus.isError && pc.activeTab === front, "MCP writes: focus_tab asks first, and Decline leaves the keyboard where it is", noFocus.text)

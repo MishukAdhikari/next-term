@@ -450,9 +450,24 @@ extension SelfTest {
                 let backTab = c.tabs.first { $0.id.uuidString.lowercased() == (back.json?["id"] as? String ?? "") }
                 check(await wait(20) { backTab?.status.program == "sleep" }, "remote MCP: new_remote_tab with session reattaches to it",
                       backTab?.screenTail(4).joined(separator: " | ") ?? back.text)
-                let ended = await tool("close_tab", ["tab_id": backTab?.id.uuidString.lowercased() ?? "", "force": true])
+                // force asks on the Mac first: Decline leaves the session running and the tab open, Approve ends it.
+                func answerWhenAsked(_ approve: Bool) {
+                    Task { @MainActor in
+                        _ = await wait(30) { MCPWriteControl.pending?.window != nil }
+                        let window = MCPWriteControl.pending?.window
+                        if approve { window?.approveButton.performClick(nil) } else { window?.declineButton.performClick(nil) }
+                    }
+                }
+                let backID: String = backTab?.id.uuidString.lowercased() ?? ""
+                answerWhenAsked(false)
+                let declined = await tool("close_tab", ["tab_id": backID, "force": true], timeout: 60)
+                let kept: Bool = sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null").contains(session)
+                check(declined.isError && kept && backTab.map { (tab: TerminalTab) -> Bool in c.tabs.contains { $0 === tab } } == true,
+                      "remote MCP: close_tab force asks first, and Decline leaves the session running and the tab open", declined.text)
+                answerWhenAsked(true)
+                let ended = await tool("close_tab", ["tab_id": backID, "force": true], timeout: 60)
                 let gone = await wait(10) { !sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null").contains(session) }
-                check(ended.json?["session_ended"] as? String == session && gone, "remote MCP: close_tab force ends the session", ended.text)
+                check(ended.json?["session_ended"] as? String == session && gone, "remote MCP: close_tab force ends the session once approved", ended.text)
             } else {
                 flag("unreachable", false)
                 master.start()

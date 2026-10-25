@@ -115,6 +115,9 @@ enum HerdrMCP {
         case "close_tab":
             reply(fail("That is one of herdr's agents: Next Term never ends herdr's agents (stop it in herdr). close_tab with its tab's id (\(target.tabID)) closes the herdr tab, which only detaches."))
             return true
+        case "rename_tab":
+            reply(fail(TabRename.agentRefusal))
+            return true
         default:
             return false
         }
