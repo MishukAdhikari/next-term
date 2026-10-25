@@ -14,7 +14,7 @@ terminal. This file is the map of what is built and what comes next; the README 
   elsewhere; the editor talks to agents through their own protocols where they have one, and through
   Send to Agent everywhere else.
 - **Safe by default:** every local server binds 127.0.0.1 with a fresh token per launch and refuses
-  browsers; files are written atomically keeping permissions; nothing reads named pipes; git never takes
+  browsers, except the opt-in Remote access door, which pairs each connection on the Mac; files are written atomically keeping permissions; nothing reads named pipes; git never takes
   the index lock.
 - **Its own thing:** not modelled on any one IDE; we pick what works best.
 - **Not notarized:** the source is public and releases are built by CI from it. The disk image's first
@@ -48,8 +48,9 @@ Through 0.9.0, by release.
    connection, then remote git, search and the IDE link; passwords and new host keys in a native sheet
    (an askpass helper, shared with git). Research: claudedocs/research_next-term-remote-dev.
 3. **Dev Containers.**
-4. **Remote MCP access** for agents outside this Mac (ChatGPT, Claude on the web), through a tunnel with
-   an explicit security model (Streamable HTTP, OAuth, a consent sheet). On hold until it is decided.
+4. **Remote MCP access** for agents outside this Mac (ChatGPT, Claude on the web), through a tunnel the user
+   owns: each connection is Read only, Control or Custom, picked at pairing and changed later only on the Mac.
+   Built on the remote-access branch (plan 004); docs at /docs/remote-access/.
 
 Also next, in no fixed order:
 

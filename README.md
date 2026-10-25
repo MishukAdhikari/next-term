@@ -81,8 +81,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
   change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
   reading a tab also gives the line being typed and the cursor, and any suggestion a zsh plugin draws, which is
-  left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local only: a
-  private socket, no network port. Each of herdr's agents has an id of its own in `list_tabs`, which the tab
+  left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local: a
+  private socket, and no network port unless Remote access is on. Each of herdr's agents has an id of its own in `list_tabs`, which the tab
   tools take as they take a tab's: an agent reads another's pane, prompts it, presses its keys or answers its
   question through herdr, even when another pane has herdr's keyboard, and only that agent counts as driven.
   Text sent to one is herdr's argument on the server while it runs, so text holding a stored key is refused.
@@ -124,6 +124,11 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   there, the tab says where it looked and links herdr's install page. A file or folder dropped on a remote tab,
   or an image pasted into one, is copied to the server first, into a new folder only you can read there, and
   its path there is what gets pasted.
+- **Remote access** (off until you turn it on in Settings › Remote Access). Claude on the web or phone, and
+  ChatGPT, reach Next Term's MCP tools through a tunnel you own: Cloudflare, Tailscale Funnel, or your own server
+  over ssh. Each connection pairs on the Mac with a typed code and Touch ID, as Read only, Control or Custom,
+  and its options change only there; typing into agents, answers, new tabs and the write tools each follow their
+  own option. See https://nxtrm.mishuk.me/docs/remote-access/.
 - **herdr's agents, one by one.** A herdr tab follows each of herdr's agents, with herdr's own state, name and
   title: a row each under the tab in the tab list, with how long it has waited and, with Show Folders, the
   question it asks; past six agents the idle ones fold into one row. Click a row and herdr shows that agent's
@@ -443,7 +448,9 @@ Next Term's menu.
   executable, including behind a symlink or a Finder alias (cloned repos carry no quarantine flag, so
   Gatekeeper would not ask). Links other than http, https, mailto and local files are refused.
 - **The MCP server** listens on a Unix socket only you can open (0600, and each connection is checked to
-  be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves.
+  be yours), never on the network. Agents reach it through `nxtrm mcp`, which they start themselves. Remote
+  access, off unless you turn it on, adds a door on 127.0.0.1 that only a tunnel you own reaches; each
+  connection pairs on the Mac and gets only the options you tick there.
   Tabs refuse input from their own agent, and a tab running something closes only when told to force it.
 - **Suggestions while typing** come from Next Term's record of the commands you ran in its zsh tabs, kept on
   this Mac only, in `~/Library/Application Support/Next Term/History.noindex` (a folder only you can open, which

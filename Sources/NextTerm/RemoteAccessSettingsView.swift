@@ -83,7 +83,7 @@ final class RemoteAccessSettingsView: NSView {
     // MARK: the status
 
     let statusLine = NSTextField(wrappingLabelWithString: "")
-    let keychainButton = NSButton(title: "Allow Keychain Access", target: nil, action: nil)
+    let keychainButton = NSButton(title: "Allow Keychain access", target: nil, action: nil)
     let dismissButton = NSButton(title: "Dismiss", target: nil, action: nil)
     let otherHostButton = NSButton(title: "", target: nil, action: nil)
     let testButton = NSButton(title: "Test Connection", target: nil, action: nil)

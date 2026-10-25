@@ -41,7 +41,8 @@ public enum RemoteAccessTunnelConfig {
                 return "TLS ends at Cloudflare, so Cloudflare can read the traffic. Whoever holds the Cloudflare "
                     + "account can also re-route it."
             case .ownServer:
-                return "TLS ends on your server, so only you can read the traffic. It reaches this Mac over ssh."
+                return "TLS ends on your server, so your server can read the traffic, and so can the chat app's vendor, "
+                    + "which sends every call. It reaches this Mac over ssh."
             case .advanced:
                 return "Whoever ends TLS for your tunnel can read the traffic."
             }
