@@ -99,7 +99,7 @@ public enum RemoteAccessText {
 /// agents that ask before acting". Claude Code only, until hand check H16 records Codex's, Gemini CLI's and Qwen
 /// Code's mode strings.
 public enum RemoteAccessAgents {
-    public static let listed: [String] = ["claude"]
+    public static var listed: [String] { RemoteAccessAgentRules.listed.keys.sorted() }
 }
 
 /// Decides each remote tool call before it runs, and shapes its result before it goes back (the plan's U5). Pure:
