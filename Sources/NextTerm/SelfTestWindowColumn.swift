@@ -325,7 +325,8 @@ extension SelfTest {
             let its: WindowColumnButton? = column.button(for: id)
             let others: [WindowColumnButton] = column.shownButtons.filter { $0.id != id }
             let otherWork: Int = others.reduce(0) { $0 + $1.drawCount + $1.configureCount }
-            let ok: Bool = its?.configureCount == 1 && (1...2).contains(its?.drawCount ?? 0) && otherWork == 0 && column.layoutCount == 0
+            // Drawn when its window next displays: a window covered by others may not have yet.
+            let ok: Bool = its?.configureCount == 1 && (its?.drawCount ?? 3) <= 2 && otherWork == 0 && column.layoutCount == 0
             kept = kept && ok
             budget.append("its button \(its?.configureCount ?? -1) configures, \(its?.drawCount ?? -1) draws; others \(otherWork); "
                           + "\(column.layoutCount) layouts")
