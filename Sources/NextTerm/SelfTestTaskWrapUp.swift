@@ -221,6 +221,13 @@ extension SelfTest {
     /// A key the user presses in the tab between the request and its Return: the Return is held back, nothing is sent,
     /// no handoff is written, and the row says why. The prompt is cleared afterwards for the checks after.
     private static func wrapUpTypedOverChecks(_ c: TerminalWindowController, ready: TerminalTab, project: String) async {
+        // Post Update's Send left its text in this tab's prompt with no Return: clear it so the tab is ready again.
+        ready.view.send(txt: "\u{15}")
+        let readyAgain: Bool = await wait(3) { AgentReadiness.shared.check(ready) == .ready }
+        guard readyAgain else {
+            return check(false, "wrap up: the tab is ready again for the typed-over check",
+                         "\(AgentReadiness.shared.check(ready))")
+        }
         let menu = NSApp.mainMenu?.items.first { $0.title == "Tasks" }?.submenu
         guard let item = menu?.items.first(where: { $0.action == #selector(TasksMenu.wrapUp(_:)) }) else { return }
         c.window?.makeKeyAndOrderFront(nil)
@@ -242,7 +249,8 @@ extension SelfTest {
         let after: Int = (try? FileManager.default.contentsOfDirectory(atPath: handoffs).count) ?? 0
         check(skipped && after == before && ready.status.commandsStarted == commands,
               "wrap up: a key typed before the Return holds it back, and the row says the request wasn’t sent",
-              sheet.model?.rows.compactMap(\.phaseText).joined(separator: ", ") ?? "no sheet")
+              (sheet.model?.rows.map { $0.title + ": " + ($0.phaseText ?? $0.reason ?? "untouched") }
+                .joined(separator: ", ") ?? "no sheet"))
         ready.view.send(txt: "\u{15}")
     }
 
