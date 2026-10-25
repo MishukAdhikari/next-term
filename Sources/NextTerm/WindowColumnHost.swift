@@ -9,8 +9,10 @@ import NextTermCore
 /// terminal resizes once. The column and the split view move in the same pass, with implicit animations off.
 ///
 /// How the column shows in this window is decided here, on every resize of the window and when what it is measured by
-/// changes (WindowColumnWidth.shown): unfolded while the editor and terminal keep their minimum beside a minimal sidebar,
-/// folded when they would not, hidden when even folded they would not. The user's choice is kept meanwhile.
+/// changes (WindowColumnWidth.shown): unfolded while the editor and terminal keep their minimum beside the sidebar as it
+/// is, folded when they would not but do beside a minimal sidebar, hidden when even folded they would not. The user's
+/// choice is kept meanwhile. A resize of the window is shared out first, as the split view shares any; only then does the
+/// column change width, so the window puts the sidebar back where the resize alone left it.
 final class WindowColumnHost: NSView {
     let column = WindowColumnView()
     let content: NSView
@@ -27,9 +29,10 @@ final class WindowColumnHost: NSView {
             place(force: true)
         }
     }
-    /// The room the sidebar takes in the measure, with its divider: a minimal sidebar's, as a narrowing window narrows
-    /// the sidebar toward it; 0 while it is hidden.
-    var sidebarRoom: () -> CGFloat = { 0 }
+    /// The room the sidebar takes in the measure, with its divider, 0 while it is hidden: as it is, which the unfolded
+    /// column is measured beside, and a minimal sidebar's, which the folded one is, as a narrowing window narrows the
+    /// sidebar toward it.
+    var sidebarRoom: () -> (shown: CGFloat, minimal: CGFloat) = { (0, 0) }
     /// Wraps a change of the column's width (not the window's): the window notes the sidebar's width, the frames change,
     /// and it puts the sidebar back.
     var aroundColumnChange: ((_ apply: () -> Void) -> Void)?
@@ -61,12 +64,17 @@ final class WindowColumnHost: NSView {
     /// How the column shows at the window's width now.
     func decide() -> WindowColumnShown {
         guard visible else { return .hidden }
-        return WindowColumnWidth.shown(contentWidth: bounds.width, sidebarWidth: sidebarRoom(), expanded: expanded)
+        let sidebar = sidebarRoom()
+        return WindowColumnWidth.shown(contentWidth: bounds.width, sidebarWidth: sidebar.shown, minimalSidebar: sidebar.minimal,
+                                       expanded: expanded)
     }
 
     /// The column and the split view where they go now; nothing moves when nothing changed. `force`: the window's size or
     /// the column's side changed, so the frames are set even with the same form.
     func place(force: Bool = false) {
+        // The window's own change first, beside the column as it is: the split view shares it out, as it does any resize.
+        let (_, resized) = frames(for: shown.width)
+        if content.frame != resized { setContentFrame(resized) }
         let decided: WindowColumnShown = decide()
         let width: CGFloat = decided.width
         let (columnFrame, contentFrame) = frames(for: width)
@@ -85,6 +93,13 @@ final class WindowColumnHost: NSView {
         guard decided != shown else { return }
         shown = decided
         onShownChange?(decided)
+    }
+
+    private func setContentFrame(_ frame: NSRect) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        content.frame = frame
+        CATransaction.commit()
     }
 
     /// The column's frame (none while it is hidden) and the split view's, for a column `width` across.

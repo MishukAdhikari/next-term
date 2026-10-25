@@ -12,9 +12,10 @@ import NextTermCore
 /// tab as it was; a click on a window's own badge does nothing. A narrow window hides its column alone, an unfolded one
 /// folds first; the traffic lights keep their room; ⌘B leaves the column; ⌃⌘S folds and unfolds every window's. VoiceOver
 /// reads each badge's window and marks, and the column agrees with ⌘O's rows. Unfolded, a row whose marks change draws
-/// again. A restore lists its windows in the order they opened, whichever was used last, and each pane starts at its
-/// real size. The budget: idle, nothing; a bell, one badge; focus and titles, no draw; a window opening or closing, one
-/// layout per column and one rebuild.
+/// again. Unfolding beside a sidebar of its usual width leaves the sidebar as it is, and the width new windows take. A
+/// restore lists its windows in the order they opened, whichever was used last, and each pane starts at its real size.
+/// The budget: idle, nothing; a bell, one badge; focus and titles, no draw; a window opening or closing, one layout per
+/// column and one rebuild.
 /// NEXTTERM_SELFTEST_ONLY=windowColumn runs it alone.
 extension SelfTest {
     static func windowColumnChecks() async {
@@ -105,6 +106,7 @@ extension SelfTest {
         await unfoldedMarksChecks(app, worktree: worktree)
         await overflowChecks(app, project)
         await roomChecks(app, project)
+        await sidebarKeepsItsWidthChecks(app, project)
         await insetChecks(app, project)
         await foldKeyChecks(app, project)
         await focusBudget(app, [project, main, plain])
@@ -443,7 +445,8 @@ extension SelfTest {
     // MARK: AE5: room
 
     /// Narrowed below the room the column, a minimal sidebar and the work area need (the sidebar narrows with the window), a
-    /// window hides its column alone and shows it again when widened; unfolded, it folds first, and comes back unfolded.
+    /// window hides its column alone and shows it again when widened, the column's room going to the work area and never
+    /// to the sidebar; unfolded, it folds first, and comes back unfolded.
     private static func roomChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
         guard let window = c.window else { return }
         let frame: NSRect = window.frame
@@ -454,6 +457,7 @@ extension SelfTest {
         let sidebar: CGFloat = c.isSidebarVisible ? ProjectSidebarView.minimumWidth + c.outerSplitView.dividerThickness : 0
         let folded: CGFloat = sidebar + WindowColumnWidth.folded + WindowColumnWidth.hairline + WindowColumnWidth.workMinimum
         let unfolded: CGFloat = sidebar + WindowColumnWidth.expanded + WindowColumnWidth.hairline + WindowColumnWidth.workMinimum
+        let room: CGFloat = window.screen?.visibleFrame.width ?? 1440
         var steps: [String] = []
         func width(_ w: CGFloat) {
             window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: max(window.minSize.width, w), height: frame.height), display: true)
@@ -473,18 +477,68 @@ extension SelfTest {
         check(hid && othersKept && back, "window column: a window narrowed below its room hides its column alone, and gains it again when widened",
               "at \(folded - 5): hid \(hid), others kept \(othersKept); at \(folded + 5): \(c.columnHost.shown); "
                   + steps.joined(separator: " | "))
+        // Narrowed past it again, with the sidebar as narrow as the window's resize left it (under its minimum, this
+        // narrow): the column's room goes to the work area, and the sidebar is never made wider than that.
+        let before = (sidebar: c.sidebar.frame.width, work: c.workSplit.frame.width)
+        width(folded - 5)
+        let after = (sidebar: c.sidebar.frame.width, work: c.workSplit.frame.width)
+        check(c.columnHost.shown.form == .hidden && after.sidebar <= before.sidebar + 0.5 && after.work > before.work,
+              "window column: a window narrowed past its room gives the column's room to the work area, never widening the sidebar",
+              "sidebar \(before.sidebar) → \(after.sidebar), work \(before.work) → \(after.work)")
+        // Unfolded, it is measured beside the sidebar as the window's resize leaves it: room to spare, then none.
         app.windowColumnExpanded = true
-        width(unfolded + 30)
+        let wide: CGFloat = min(room, max(frame.width, unfolded + 300))
+        width(wide)
         let open: Bool = c.columnHost.shown.form == .expanded
-        width(unfolded - 30)
+        width(folded + 5)
         let foldedFirst: Bool = c.columnHost.shown.form == .folded && c.columnHost.shown.byRoom && app.windowColumnExpanded
         width(folded - 5)
         let gone: Bool = c.columnHost.shown.form == .hidden
-        width(unfolded + 30)
+        width(wide)
         let reopened: Bool = c.columnHost.shown.form == .expanded
         check(open && foldedFirst && gone && reopened,
               "window column: unfolded, a narrowed window folds its column first, then hides it, and has it unfolded again when widened",
               "open \(open), folded first \(foldedFirst), gone \(gone), reopened \(reopened); " + steps.joined(separator: " | "))
+    }
+
+    /// A sidebar of its usual width, 280, unfolding: in a 680-point window the work area would keep too little beside it,
+    /// so the column stays folded; in a 760-point one it unfolds and the work area gives it the room, past the drag's
+    /// limit. Either way, and folded again, the sidebar keeps its width, and so does the width new windows take.
+    private static func sidebarKeepsItsWidthChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
+        guard let window = c.window else { return }
+        let frame: NSRect = window.frame
+        let defaults = UserDefaults.standard
+        let savedWidth: Any? = defaults.object(forKey: "sidebarWidth")
+        defer {
+            app.windowColumnExpanded = false
+            window.setFrame(frame, display: true)
+            restoreDefault(savedWidth, "sidebarWidth")
+        }
+        if !c.isSidebarVisible { c.toggleProjectSidebar(nil) }
+        app.windowColumnExpanded = false
+        var found: [String] = []
+        var kept = true
+        for (across, unfolds) in [(CGFloat(680), false), (CGFloat(760), true)] {
+            window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: across, height: frame.height), display: true)
+            window.layoutIfNeeded()
+            c.placeSidebar(width: 280)
+            window.layoutIfNeeded()
+            let width: CGFloat = c.sidebar.frame.width
+            let saved: CGFloat = app.sidebarWidth
+            app.windowColumnExpanded = true
+            window.layoutIfNeeded()
+            let form: WindowColumnShown.Form = c.columnHost.shown.form
+            let open = (width: c.sidebar.frame.width, saved: app.sidebarWidth)
+            app.windowColumnExpanded = false
+            window.layoutIfNeeded()
+            let shut = (width: c.sidebar.frame.width, saved: app.sidebarWidth)
+            let same: Bool = abs(open.width - width) < 0.5 && abs(shut.width - width) < 0.5 && open.saved == saved && shut.saved == saved
+            kept = kept && same && abs(width - 280) < 0.5 && form == (unfolds ? .expanded : .folded) && c.columnHost.shown.form == .folded
+            found.append("\(Int(across)): sidebar \(width), unfolded \(form) \(open.width), folded \(shut.width); "
+                         + "new windows' \(saved) → \(open.saved) → \(shut.saved)")
+        }
+        check(kept, "window column: unfolding beside a sidebar of its usual width keeps it as it is (folded where there is no room), "
+              + "and folding again too, with the width new windows take unchanged", found.joined(separator: " | "))
     }
 
     // MARK: R8 and R9: the traffic lights and ⌘B

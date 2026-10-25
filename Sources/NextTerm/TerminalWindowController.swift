@@ -211,6 +211,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var outerSplitView: ThemedSplitView { splitView }
     /// The window's content: the window column at its outer edge, beside the split view (TerminalWindowColumn.swift).
     private(set) lazy var columnHost = WindowColumnHost(content: splitView)
+    /// Set while the window column changes width and the window puts the sidebar back where it was: the column's own rule
+    /// places it, not a drag's limits, and the width it passes through is not saved as the sidebar's.
+    var columnMovesSidebar = false
     private let mainPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     /// [ open files ] over [ terminal tabs ], like an IDE. The editor part is hidden while no file is open.
     let workSplit = WorkSplitView()
@@ -1656,6 +1659,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         if splitView === workSplit { return terminalFirst ? terminalMinimum : workMinimum }
+        if columnMovesSidebar { return proposed } // put back as it was (keepSidebar)
         // The sidebar is 160–640 wide, on either side.
         return sidebarOnRight ? max(320, splitView.bounds.width - 640) : 160
     }
@@ -1664,6 +1668,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if splitView === workSplit {
             return (workSplit.isVertical ? splitView.bounds.width : splitView.bounds.height) - (terminalFirst ? workMinimum : terminalMinimum)
         }
+        if columnMovesSidebar { return proposed }
         return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
     }
 
@@ -1726,7 +1731,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             return
         }
-        if isSidebarVisible, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
+        // Not a width the window column's change passes the sidebar through: it goes back to the one it had.
+        if isSidebarVisible, !columnMovesSidebar, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, insert text: String) {

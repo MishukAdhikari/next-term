@@ -15,14 +15,17 @@ extension TerminalWindowController {
         let app: AppDelegate = AppDelegate.shared
         host.visible = app.windowColumns.visibleForNewWindow()
         host.expanded = app.windowColumnExpanded
-        // A minimal sidebar: a window narrowing narrows its sidebar too (the split view shares the change out).
-        host.sidebarRoom = { [weak self] () -> CGFloat in
-            guard let self, self.isSidebarVisible else { return 0 }
-            return ProjectSidebarView.minimumWidth + split.dividerThickness
+        // Unfolded beside the sidebar as it is, so unfolding never narrows it; folded beside a minimal one, as a window
+        // narrowing narrows its sidebar too (the split view shares the change out).
+        host.sidebarRoom = { [weak self] () -> (shown: CGFloat, minimal: CGFloat) in
+            guard let self, self.isSidebarVisible else { return (0, 0) }
+            return (self.sidebar.frame.width + split.dividerThickness, ProjectSidebarView.minimumWidth + split.dividerThickness)
         }
         host.aroundColumnChange = { [weak self] (apply: () -> Void) in
             guard let self, self.isSidebarVisible else { return apply() }
             let kept: CGFloat = self.sidebar.frame.width
+            self.columnMovesSidebar = true
+            defer { self.columnMovesSidebar = false }
             apply()
             self.keepSidebar(width: kept)
         }
@@ -51,11 +54,13 @@ extension TerminalWindowController {
     }
 
     /// The sidebar back at `kept` after the column changed width, its divider moved before anything is laid out, so the
-    /// work area takes the whole change: never narrower than its minimum, nor the work area narrower than its.
+    /// work area takes the whole change. Never wider than it was; narrower only to leave the work area its minimum, and
+    /// then not below the sidebar's own, unless a resize of the window had it there already. This rule alone places it:
+    /// the drag's limits are not applied (`columnMovesSidebar`).
     private func keepSidebar(width kept: CGFloat) {
         let split: NSSplitView = outerSplitView
         let room: CGFloat = split.bounds.width - split.dividerThickness - WindowColumnWidth.workMinimum
-        let width: CGFloat = max(ProjectSidebarView.minimumWidth, min(kept, room))
+        let width: CGFloat = max(min(kept, ProjectSidebarView.minimumWidth), min(kept, room))
         guard abs(sidebar.frame.width - width) > 0.5 else { return }
         placeSidebar(width: width, layingOut: false)
     }

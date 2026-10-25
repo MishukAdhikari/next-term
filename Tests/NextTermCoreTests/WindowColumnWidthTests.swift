@@ -4,8 +4,9 @@ import Testing
 
 /// The room a window needs for its column, and the two settings every window shares.
 @Suite struct WindowColumnWidthTests {
-    private func shown(_ content: CGFloat, sidebar: CGFloat, expanded: Bool = false) -> WindowColumnShown {
-        WindowColumnWidth.shown(contentWidth: content, sidebarWidth: sidebar, expanded: expanded)
+    /// `minimal`: the minimal sidebar the folded column is measured beside; the sidebar as it is unless said.
+    private func shown(_ content: CGFloat, sidebar: CGFloat, minimal: CGFloat? = nil, expanded: Bool = false) -> WindowColumnShown {
+        WindowColumnWidth.shown(contentWidth: content, sidebarWidth: sidebar, minimalSidebar: minimal ?? sidebar, expanded: expanded)
     }
 
     @Test func foldedItShowsWhileTheWorkAreaKeeps240() {
@@ -29,6 +30,21 @@ import Testing
         // A 300-point sidebar: 722.
         #expect(shown(722, sidebar: 301, expanded: true).form == .expanded)
         #expect(shown(721, sidebar: 301, expanded: true).form == .folded)
+    }
+
+    @Test func unfoldedItIsMeasuredBesideTheSidebarAsItIsFoldedBesideAMinimalOne() {
+        // A 280-point sidebar in a 680-point window: unfolded, the work area would keep 218, so the column stays folded
+        // for want of room, and the sidebar keeps its width.
+        #expect(shown(680, sidebar: 281, minimal: 161, expanded: true) == WindowColumnShown(form: .folded, width: 29, byRoom: true))
+        // 281 + 181 + 240 = 702.
+        #expect(shown(702, sidebar: 281, minimal: 161, expanded: true).form == .expanded)
+        #expect(shown(701, sidebar: 281, minimal: 161, expanded: true).form == .folded)
+        // Folded, beside a minimal sidebar: a narrowing window narrows the sidebar toward it.
+        #expect(shown(430, sidebar: 281, minimal: 161).form == .folded)
+        #expect(shown(429, sidebar: 281, minimal: 161).form == .hidden)
+        // A sidebar a window's resize narrowed below its minimum: unfolded beside it as it is, 108 + 181 + 240 = 529.
+        #expect(shown(529, sidebar: 108, minimal: 161, expanded: true).form == .expanded)
+        #expect(shown(528, sidebar: 108, minimal: 161, expanded: true).form == .folded)
     }
 
     @Test func withTheSidebarHiddenOnlyTheWorkAreaCounts() {

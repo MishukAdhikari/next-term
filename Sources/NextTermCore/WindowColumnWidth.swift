@@ -57,22 +57,24 @@ public enum WindowColumnWidth {
     /// The narrowest the editor and terminal beside it get, as beside the tab list.
     public static let workMinimum: CGFloat = TabListWidth.terminalMinimum
 
-    /// The column in a window whose content is `contentWidth` across, beside a sidebar `sidebarWidth` across with its
-    /// divider (0 while it is hidden), unfolded or not as the user has it: unfolded while the work area keeps
-    /// `workMinimum`, else folded while that still leaves it, else hidden in this window only. Folded or hidden for want
-    /// of room is `byRoom`, so the user's choice is kept. A width not measured yet (0) decides nothing.
-    public static func shown(contentWidth: CGFloat, sidebarWidth: CGFloat, expanded wantsExpanded: Bool) -> WindowColumnShown {
+    /// The column in a window whose content is `contentWidth` across, unfolded or not as the user has it: unfolded while
+    /// the work area keeps `workMinimum` beside the sidebar as it is (`sidebarWidth`, with its divider), so unfolding never
+    /// narrows the sidebar; else folded while the work area keeps it beside a minimal sidebar (`minimalSidebar`, with its
+    /// divider), as a narrowing window narrows the sidebar toward it; else hidden in this window only. Both are 0 while
+    /// the sidebar is hidden. Folded or hidden for want of room is `byRoom`, so the user's choice is kept. A width not
+    /// measured yet (0) decides nothing.
+    public static func shown(contentWidth: CGFloat, sidebarWidth: CGFloat, minimalSidebar: CGFloat,
+                             expanded wantsExpanded: Bool) -> WindowColumnShown {
         let foldedWidth: CGFloat = folded + hairline
         let expandedWidth: CGFloat = expanded + hairline
         guard contentWidth > 0 else {
             return wantsExpanded ? WindowColumnShown(form: .expanded, width: expandedWidth, byRoom: false)
                 : WindowColumnShown(form: .folded, width: foldedWidth, byRoom: false)
         }
-        let sidebar: CGFloat = max(0, sidebarWidth)
-        if wantsExpanded, contentWidth - expandedWidth - sidebar >= workMinimum {
+        if wantsExpanded, contentWidth - expandedWidth - max(0, sidebarWidth) >= workMinimum {
             return WindowColumnShown(form: .expanded, width: expandedWidth, byRoom: false)
         }
-        if contentWidth - foldedWidth - sidebar >= workMinimum {
+        if contentWidth - foldedWidth - max(0, minimalSidebar) >= workMinimum {
             return WindowColumnShown(form: .folded, width: foldedWidth, byRoom: wantsExpanded)
         }
         return WindowColumnShown(form: .hidden, width: 0, byRoom: true)
