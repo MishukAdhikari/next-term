@@ -27,7 +27,10 @@ extension SelfTest {
         sh("init", "-q", "-b", "main")
         sh("config", "user.email", "selftest@example.com")
         sh("config", "user.name", "Self Test")
-        sh("commit", "-q", "--allow-empty", "-m", "Add the cart total")
+        // gitOutput sets its own user.email for every command; a later -c wins, so the commit is the user's own, the
+        // address Post Update matches.
+        sh("-c", "user.email=selftest@example.com", "-c", "user.name=Self Test", "commit", "-q", "--allow-empty", "-m",
+           "Add the cart total")
         // A stored key the handoff holds: everything shown or sent holds it as •••.
         let savedMask = SecretMask.current
         let value = "sk-ant-wrapup-" + UUID().uuidString.prefix(12)
@@ -53,8 +56,8 @@ extension SelfTest {
         let tabs = await fakeAgents(c, project: project, bin: bin, value: value)
         guard tabs.count == 3 else { return check(false, "wrap up: three fake agent tabs start") }
         await wrapUpSheetChecks(c, ready: tabs[0], project: project, value: value)
-        await wrapUpTypedOverChecks(c, ready: tabs[0], project: project)
         await postUpdateChecks(c, ready: tabs[0], project: project, value: value)
+        await wrapUpTypedOverChecks(c, ready: tabs[0], project: project)
         check(TaskOpen.opened.isEmpty, "wrap up: nothing opened outside Next Term",
               TaskOpen.opened.map(\.absoluteString).joined(separator: ", "))
         check(NSPasteboard.general.changeCount == general, "wrap up: the user's clipboard is untouched")
@@ -275,8 +278,10 @@ extension SelfTest {
         let text = sheet.textView.string
         let parts = ["- Wired the cart total into checkout", "- Add a test for an empty cart", "- Add the cart total",
                      "token=•••"]
+        let found: String = "commits \(sheet.draft?.commits ?? -1), notes \(sheet.draft?.notes ?? [])"
         check(parts.allSatisfy { text.contains($0) } && !text.contains(value),
-              "post update: the draft holds the handoff's Done and Next items and today's commit, the key as •••", text)
+              "post update: the draft holds the handoff's Done and Next items and today's commit, the key as •••",
+              found + "\n" + text)
         sheet.savePressed()
         let day = TaskDay(Date(), calendar: .current).description
         let saved = readText(project + "/docs/updates/\(day).md")
@@ -290,7 +295,8 @@ extension SelfTest {
         sheet.sendStepPressed()
         sheet.sendPressed()
         let typed = await wait(5) { ready.screenTail(12).joined().contains("Post this update to the team channel") }
-        check(typed, "post update: Send types the update into the ready tab", ready.screenTail(6).joined())
+        let sendSaid: String = "\(AgentReadiness.shared.check(ready)), status “\(sheet.status.stringValue)”"
+        check(typed, "post update: Send types the update into the ready tab", sendSaid + " " + ready.screenTail(6).joined())
         // A Return would have sent the line to the agent and emptied its prompt; the update still sits there.
         check(AgentReadiness.shared.check(ready) == .notReady(.hasText), "post update: no Return goes in with it")
     }

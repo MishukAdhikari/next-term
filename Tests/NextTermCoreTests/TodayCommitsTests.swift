@@ -136,4 +136,41 @@ import Testing
         let outcome = TodayCommits.read(project: folder, git: git, now: Date(), calendar: .current, mask: { $0 })
         #expect(outcome == .notRepository)
     }
+
+    /// "Today" is the user's own day: a commit half an hour after local midnight counts, one the evening before
+    /// doesn't, in a zone far from UTC, where that midnight is the previous day in UTC.
+    @Test func aCommitJustAfterLocalMidnightIsTodaysInAZoneFarFromUTC() throws {
+        guard let git = GitRunner.locateGit(), let zone = TimeZone(identifier: "Asia/Dhaka") else { return }
+        let base = canonicalPath(FileManager.default.temporaryDirectory.path) + "/nt-today-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let repo = base + "/shop"
+        try FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
+        func sh(_ args: String..., at date: String? = nil) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: git)
+            let settings: [String] = ["-c", "user.name=Dev", "-c", "user.email=dev@example.com",
+                                      "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"]
+            process.arguments = ["-C", repo] + settings + args
+            var env: [String: String] = ProcessInfo.processInfo.environment
+            if let date {
+                env["GIT_AUTHOR_DATE"] = date
+                env["GIT_COMMITTER_DATE"] = date
+            }
+            process.environment = env
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+        }
+        sh("init", "-q")
+        sh("config", "user.email", "dev@example.com")
+        sh("commit", "-q", "--allow-empty", "-m", "Last evening", at: "2026-10-24T23:30:00+06:00")
+        sh("commit", "-q", "--allow-empty", "-m", "Just after midnight", at: "2026-10-25T00:30:00+06:00")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let parts = DateComponents(year: 2026, month: 10, day: 25, hour: 3, minute: 19)
+        let now: Date = try #require(calendar.date(from: parts))
+        let outcome = TodayCommits.read(project: repo, git: git, now: now, calendar: calendar, mask: { $0 })
+        #expect(outcome.subjects == ["Just after midnight"])
+    }
 }
