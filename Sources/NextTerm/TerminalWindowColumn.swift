@@ -38,10 +38,10 @@ extension TerminalWindowController {
     func placeWindowColumn() {
         let sidebarWidth: CGFloat = sidebar.frame.width
         columnHost.place()
-        guard isSidebarVisible, sidebarWidth >= 160 else { return }
+        columnHost.layoutSubtreeIfNeeded()
         // A guard, not the mechanism: the split view's holding priorities give the change to the work area.
-        outerSplitView.layoutSubtreeIfNeeded()
-        if abs(sidebar.frame.width - sidebarWidth) > 0.5 { placeSidebar(width: sidebarWidth) }
+        guard isSidebarVisible, sidebarWidth >= 160, abs(sidebar.frame.width - sidebarWidth) > 0.5 else { return }
+        placeSidebar(width: sidebarWidth)
     }
 
     /// The column showed, went or changed form in this window (two windows open, the setting, the fold, or the window's

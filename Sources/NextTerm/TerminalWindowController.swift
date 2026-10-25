@@ -1403,7 +1403,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func placeSidebar(width: CGFloat) { placeSidebarDivider(width: width) }
 
     private func placeSidebarDivider(width: CGFloat) {
-        splitView.layoutSubtreeIfNeeded()
+        columnHost.layoutSubtreeIfNeeded() // the split view's frame comes from its host's constraints
         let position = sidebarOnRight ? splitView.bounds.width - width - splitView.dividerThickness : width
         splitView.setPosition(position, ofDividerAt: 0)
     }
@@ -1435,7 +1435,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             splitView.adjustSubviews()
         }
         // The column stays where it is; only the room it is measured by changed.
-        columnHost.needsLayout = true
+        columnHost.place()
         updateInsets()
     }
 
@@ -1727,7 +1727,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         if isSidebarVisible, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
         // The sidebar's width is what the window column's room is measured beside.
-        if (notification.object as? NSSplitView) === splitView { columnHost.needsLayout = true }
+        if (notification.object as? NSSplitView) === splitView { columnHost.place() }
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, insert text: String) {

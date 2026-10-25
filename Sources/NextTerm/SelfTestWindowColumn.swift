@@ -144,9 +144,10 @@ extension SelfTest {
               both.map { "\($0.columnHost.shown.form) \($0.windowColumn.list.count) \($0.windowColumn.frame)" }.joined(separator: "; "))
         let narrower: CGFloat = work - first.workSplit.frame.width
         let frontOnce: Bool = front.map { resizes.count($0) == 1 } ?? false
+        let sizes: String = terminals.map { resizes.sizes($0) }.joined(separator: "; ")
         check(abs(narrower - 29) < 0.5 && abs(first.sidebar.frame.width - sidebar) < 0.5 && frontOnce && resizes.most == 1,
               "window column: the work area gives it 28 points and the hairline, the sidebar keeps its width, and each terminal resizes once",
-              "work \(work) → \(first.workSplit.frame.width), sidebar \(sidebar) → \(first.sidebar.frame.width), resized at most \(resizes.most)")
+              "work \(work) → \(first.workSplit.frame.width), sidebar \(sidebar) → \(first.sidebar.frame.width), resized at most \(resizes.most): \(sizes)")
         resizes = TerminalResizes(terminals)
         second.window?.close()
         _ = await wait(5) { !app.controllers.contains { $0 === second } }
@@ -156,7 +157,8 @@ extension SelfTest {
         check(first.columnHost.shown.form == .hidden && first.windowColumn.isHidden && abs(first.workSplit.frame.width - work) < 0.5
               && abs(first.sidebar.frame.width - sidebar) < 0.5 && resizes.most == 1,
               "window column: the second closed, the column goes and the work area widens back by exactly as much",
-              "\(first.columnHost.shown.form), work \(first.workSplit.frame.width) of \(work), resized at most \(resizes.most)")
+              "\(first.columnHost.shown.form), work \(first.workSplit.frame.width) of \(work), resized at most \(resizes.most): "
+                  + terminals.map { resizes.sizes($0) }.joined(separator: "; "))
     }
 
     // MARK: AE2: the sidebar on the right
@@ -399,9 +401,12 @@ extension SelfTest {
         let sidebar: CGFloat = c.isSidebarVisible ? c.sidebar.frame.width + c.outerSplitView.dividerThickness : 0
         let folded: CGFloat = sidebar + WindowColumnWidth.folded + WindowColumnWidth.hairline + WindowColumnWidth.workMinimum
         let unfolded: CGFloat = sidebar + WindowColumnWidth.expanded + WindowColumnWidth.hairline + WindowColumnWidth.workMinimum
+        var steps: [String] = []
         func width(_ w: CGFloat) {
             window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: max(window.minSize.width, w), height: frame.height), display: true)
             window.layoutIfNeeded()
+            steps.append("asked \(Int(w)): window \(Int(window.frame.width)), host \(Int(c.columnHost.bounds.width)), sidebar "
+                         + "\(Int(c.sidebar.frame.width)), work \(Int(c.workSplit.frame.width)), \(c.columnHost.shown.form)")
         }
         let others: [TerminalWindowController] = app.controllers.filter { $0 !== c && !$0.hasClosed }
         guard folded - 30 >= window.minSize.width else {
@@ -413,7 +418,8 @@ extension SelfTest {
         width(folded + 30)
         let back: Bool = c.columnHost.shown.form == .folded && !c.windowColumn.isHidden
         check(hid && othersKept && back, "window column: a window narrowed below its room hides its column alone, and gains it again when widened",
-              "at \(folded - 30): hid \(hid), others kept \(othersKept); at \(folded + 30): \(c.columnHost.shown)")
+              "at \(folded - 30): hid \(hid), others kept \(othersKept); at \(folded + 30): \(c.columnHost.shown); "
+                  + steps.joined(separator: " | "))
         app.windowColumnExpanded = true
         width(unfolded + 30)
         let open: Bool = c.columnHost.shown.form == .expanded
@@ -425,7 +431,7 @@ extension SelfTest {
         let reopened: Bool = c.columnHost.shown.form == .expanded
         check(open && foldedFirst && gone && reopened,
               "window column: unfolded, a narrowed window folds its column first, then hides it, and has it unfolded again when widened",
-              "open \(open), folded first \(foldedFirst), gone \(gone), reopened \(reopened)")
+              "open \(open), folded first \(foldedFirst), gone \(gone), reopened \(reopened); " + steps.joined(separator: " | "))
     }
 
     // MARK: R8 and R9: the traffic lights and ⌘B
