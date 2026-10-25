@@ -391,6 +391,7 @@ extension SelfTest {
             let repoint = await tool("add_host", ["name": "selftest", "destination": "nt@elsewhere.invalid"])
             check(repoint.isError && RemoteHosts.all.first { $0.id == host.id }?.destination == host.destination,
                   "remote MCP: add_host does not re-point a saved host", repoint.text)
+            await askingHostChecks(tool)
             let listed = await tool("list_tabs")
             check(listed.text.contains("\"host\" : \"selftest\""), "remote MCP: list_tabs names a remote tab's host", String(listed.text.prefix(400)))
             let probe = await tool("check_host", ["host": "selftest"])
@@ -529,6 +530,37 @@ extension SelfTest {
         }
         await endSessionChecks(host: host, slow: { flag("slow", $0) }, sessions: { sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null") })
         _ = sh("tmux -L nextterm kill-server") // the test's own server (TMUX_TMPDIR)
+    }
+
+    /// add_host, edit_host and remove_host ask on the Mac first (plan 010a U6a): Approve saves, changes or forgets a made-up
+    /// host; Decline leaves it as it was; a call that would fail opens no window.
+    static func askingHostChecks(_ tool: (String, [String: Any], Double) async -> (json: [String: Any]?, text: String, isError: Bool)) async {
+        func answerWhenAsked(_ approve: Bool) {
+            Task { @MainActor in
+                _ = await wait(30) { MCPWriteControl.pending?.window != nil }
+                let window = MCPWriteControl.pending?.window
+                if approve { window?.approveButton.performClick(nil) } else { window?.declineButton.performClick(nil) }
+            }
+        }
+        func saved() -> RemoteHost? { RemoteHosts.all.first { $0.name.hasPrefix("selftest-asks") } }
+        defer { if let left = saved() { RemoteHosts.remove(id: left.id) } }
+        answerWhenAsked(true)
+        let added = await tool("add_host", ["name": "selftest-asks", "destination": "nt@asks.invalid", "reason": "To test asking."], 60)
+        check(!added.isError && added.json?["approved"] as? String == "on this Mac" && saved()?.destination == "nt@asks.invalid",
+              "remote MCP: add_host saves a server once the user approves on the Mac", added.text)
+        let both = await tool("edit_host", ["host": "selftest-asks", "port": 22, "clear_port": true], 30)
+        check(both.isError && MCPWriteControl.pending == nil, "remote MCP: edit_host refuses port with clear_port before asking", both.text)
+        answerWhenAsked(true)
+        let edited = await tool("edit_host", ["host": "selftest-asks", "name": "selftest-asks-2", "tmux_history": 9000], 60)
+        let host = saved()
+        check(!edited.isError && host?.name == "selftest-asks-2" && host?.tmuxHistory == 9000 && edited.json?["repointed"] == nil,
+              "remote MCP: edit_host changes only what it names, once approved", edited.text)
+        answerWhenAsked(false)
+        let kept = await tool("remove_host", ["host": "selftest-asks-2"], 60)
+        check(kept.isError && saved() != nil, "remote MCP: remove_host declined on the Mac forgets nothing", kept.text)
+        answerWhenAsked(true)
+        let removed = await tool("remove_host", ["host": "selftest-asks-2"], 60)
+        check(!removed.isError && saved() == nil, "remote MCP: remove_host forgets the server once approved", removed.text)
     }
     #endif
 }
