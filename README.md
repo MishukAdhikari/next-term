@@ -154,8 +154,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   sidebar says "No project open" and lists your recent projects, Open Folder…, Connect to Server… and
   Browse Home Folder, and no files; `cd` into a project and its tree appears, with Open as Project
   Window. Browse Home Folder shows your home folder's files in that window, each folder read only when
-  you open it. Start an agent in your home folder and Next Term offers once to open a project for it
-  instead (Don't Ask Again turns that off); the agent runs either way.
+  you open it. While you browse it, a bar over the tree shows where you are; Back, or ⌘↑ from the home
+  folder, returns to No project open. Start an agent in your home folder and Next Term offers once to
+  open a project for it instead (Don't Ask Again turns that off); the agent runs either way.
 - **Project sidebar with git.** The project as a live file tree: changed files and folders coloured, with
   `+12 −3` line counts like a pull request, and the branch and total changes at the top, with a **Pull 152**
   button when the upstream has commits you don't (Next Term fetches every 10 minutes, so it appears
@@ -378,7 +379,8 @@ One window per project, and a few keys to move between them:
 | Keyboard Shortcuts (change any menu shortcut) | ⌘, |
 
 In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens (or one click, which also opens
-and closes folders: Settings › Editor › Open files and folders with a single click, on for new installs).
+and closes folders: Settings › Editor › Open files and folders with a single click, on for new installs), and
+⌘↑ selects the enclosing folder.
 Right-click for Open in New Tab, Open as Project, Reveal in Finder,
 Insert Path in Terminal, Copy Path and Copy Relative Path. Tabs can be dragged to reorder; middle-click
 closes; tabs that don't fit go behind the » button.
