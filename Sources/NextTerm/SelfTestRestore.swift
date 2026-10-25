@@ -731,6 +731,28 @@ enum SelfTestRestore {
         try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
     }
 
+    /// The user's own state as this step finds it, for a later step to compare (`realStateChecks`).
+    static func recordRealState(_ harness: Harness) {
+        try? JSONEncoder().encode(realState()).write(to: harness.realState)
+    }
+
+    /// Nothing outside the harness's folder changed since `recordRealState`: what only the harness could have put there
+    /// (`leakChecks`), and the rest as that step found it, unless the user's own Next Term ran meanwhile.
+    static func realStateChecks(_ harness: Harness, step: String) {
+        leakChecks(harness)
+        let before = (try? Data(contentsOf: harness.realState)).flatMap { try? JSONDecoder().decode(RealState.self, from: $0) }
+        let after = realState()
+        guard let before else { return check(false, "the first step recorded the user's own state") }
+        let names = Set(before.items.keys).union(after.items.keys)
+        let changed: [String] = names.sorted().filter { before.items[$0] != after.items[$0] }
+        if !before.running, !after.running {
+            check(changed.isEmpty, "the user's own defaults, MCP socket and folder in Application Support are as they were",
+                  "changed: \(changed)")
+        } else if !changed.isEmpty {
+            record("NOTE [\(step)] your own Next Term ran meanwhile, so these changes may be its own: \(changed)")
+        }
+    }
+
     /// What the harness must leave as it is outside its folder, as one step found it.
     private struct RealState: Codable {
         /// Whether the user's own Next Term ran, which changes some of it itself.

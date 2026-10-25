@@ -80,6 +80,8 @@ enum SelfTestKeepProbe {
     static func start(_ harness: Harness) async {
         SelfTestRestore.record("STEP keep-probe-start, version \(Updater.shared.current?.description ?? "none")")
         SelfTestRestore.isolationChecks(harness)
+        // The user's own defaults and Application Support as they are now, for the last step to compare.
+        SelfTestRestore.recordRealState(harness)
         guard let probe = Probe(harness) else {
             check(false, "the driver named the probe's session, scratch root and tools")
             return SelfTestRestore.finish()
@@ -131,6 +133,7 @@ enum SelfTestKeepProbe {
     static func afterUpdate(_ harness: Harness) async {
         SelfTestRestore.record("STEP keep-probe-after-update, version \(Updater.shared.current?.description ?? "none")")
         SelfTestRestore.isolationChecks(harness)
+        SelfTestRestore.leakChecks(harness)
         let updateVersion = Bundle(url: harness.update)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         check(Updater.shared.current?.description == updateVersion, "keep probe: the install put the update in place",
               "\(Updater.shared.current?.description ?? "none"), update \(updateVersion ?? "none")")
@@ -158,6 +161,8 @@ enum SelfTestKeepProbe {
     static func afterQuit(_ harness: Harness) async {
         SelfTestRestore.record("STEP keep-probe-after-quit")
         SelfTestRestore.isolationChecks(harness)
+        // Nothing of the user's own changed across the three launches.
+        SelfTestRestore.realStateChecks(harness, step: "keep-probe-after-quit")
         guard let probe = Probe(harness) else {
             check(false, "the driver named the probe's session, scratch root and tools")
             return SelfTestRestore.finish()
