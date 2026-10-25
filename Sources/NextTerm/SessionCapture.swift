@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 /// The session as the snapshot records it (SessionSnapshot), read from the open windows on the main thread: each window,
-/// the one used last first, with its frame, screen, project and tabs in order; each tab's splits, focus and zoom; and
-/// each pane's folder, the title the user gave it, its command line, its state, its agent and its server.
+/// the one used last first, with its frame, screen, project, its place in the order the windows opened and its tabs in
+/// order; each tab's splits, focus and zoom; and each pane's folder, the title the user gave it, its command line, its
+/// state, its agent and its server.
 ///
 /// A command line is kept only when the secret check passes on what was typed and on what it expanded to; the expanded
 /// line itself is never kept. Only the user's title is kept, never a program's. A pane restored at launch whose action
@@ -21,14 +22,33 @@ enum SessionCapture {
                                          b: (offset: Int, element: TerminalWindowController)) -> Bool in
             a.element.lastKey != b.element.lastKey ? a.element.lastKey > b.element.lastKey : a.offset < b.offset
         }
+        let opened: [ObjectIdentifier: Int] = openingOrder(controllers)
         let windows = ordered.map { (entry: (offset: Int, element: TerminalWindowController)) -> SessionSnapshot.Window in
-            window(entry.element, scrollback: scrollback)
+            var saved = window(entry.element, scrollback: scrollback)
+            saved.opened = opened[ObjectIdentifier(entry.element)]
+            return saved
         }
         let open = Set(controllers.flatMap(\.tabs).map(\.id))
         verdicts = verdicts.filter { (entry: (key: UUID, value: (typed: String, expanded: String, secret: Bool))) -> Bool in
             open.contains(entry.key)
         }
         return windows
+    }
+
+    /// Each window's place in the order the windows opened, among these: as the index of every window holds them, which
+    /// every window's column and ⌘O read, so a restore lists them the same way (RestoreLayout.openingOrder).
+    private static func openingOrder(_ controllers: [TerminalWindowController]) -> [ObjectIdentifier: Int] {
+        let index: [Int] = AppDelegate.shared.windowIndex.windows.map(\.id)
+        var places: [(controller: TerminalWindowController, place: Int)] = []
+        for controller in controllers {
+            if let place = index.firstIndex(of: controller.indexID) { places.append((controller, place)) }
+        }
+        places.sort { (a: (controller: TerminalWindowController, place: Int), b: (controller: TerminalWindowController, place: Int)) -> Bool in
+            a.place < b.place
+        }
+        var order: [ObjectIdentifier: Int] = [:]
+        for (rank, entry) in places.enumerated() { order[ObjectIdentifier(entry.controller)] = rank }
+        return order
     }
 
     static func window(_ controller: TerminalWindowController, scrollback: [UUID: UUID]) -> SessionSnapshot.Window {

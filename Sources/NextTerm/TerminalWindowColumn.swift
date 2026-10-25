@@ -7,10 +7,14 @@ import NextTermCore
 extension TerminalWindowController {
     var windowColumn: WindowColumnView { columnHost.column }
 
-    /// Wires the column's clicks and the room it is measured by. Once, as the window is made.
+    /// Wires the column's clicks and the room it is measured by. Once, as the window is made, before its first tab: it
+    /// shows from the start when it will once the window opens, so no shell starts at a width the column then narrows.
     func installWindowColumn() {
         let host: WindowColumnHost = columnHost
         let split: NSSplitView = outerSplitView
+        let app: AppDelegate = AppDelegate.shared
+        host.visible = app.windowColumns.visibleForNewWindow()
+        host.expanded = app.windowColumnExpanded
         // A minimal sidebar: a window narrowing narrows its sidebar too (the split view shares the change out).
         host.sidebarRoom = { [weak self] () -> CGFloat in
             guard let self, self.isSidebarVisible else { return 0 }

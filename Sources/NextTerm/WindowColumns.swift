@@ -15,8 +15,8 @@ final class WindowColumns: NSObject {
     private(set) var list = WindowColumnList()
     /// Whether every window shows the column now.
     private(set) var visible = false
-    /// Windows a restore built and is about to open, one at a time (SessionRestoreBuild): counted, so each has the column
-    /// from its first frame rather than a moment after it shows.
+    /// Windows a restore is building and about to open, one at a time (SessionRestoreBuild): counted, so each is laid out
+    /// with the column from the start rather than narrowed a moment after.
     var expecting = 0
 
     #if DEBUG
@@ -63,8 +63,14 @@ final class WindowColumns: NSObject {
     }
 
     /// The setting on and two or more terminal windows open (or about to): every window shows the column.
-    private func decideVisible(count: Int) -> Bool {
-        WindowColumnSettings.visible(shown: app.showsWindowColumn && !Self.suppressed, windows: count, expecting: expecting)
+    private func decideVisible(count: Int, expecting: Int? = nil) -> Bool {
+        WindowColumnSettings.visible(shown: app.showsWindowColumn && !Self.suppressed, windows: count, expecting: expecting ?? self.expecting)
+    }
+
+    /// Whether a window being made shows the column from the start, before it is in the index: with the windows open and
+    /// itself, or every window a restore is making, itself among them (a restore of one window shows none).
+    func visibleForNewWindow() -> Bool {
+        decideVisible(count: app.windowIndex.windows.count, expecting: max(1, expecting))
     }
 
     /// A window opened or closed, or a setting changed: the whole list made again and every window told.

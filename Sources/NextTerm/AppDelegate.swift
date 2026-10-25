@@ -1093,14 +1093,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return controller
     }
 
-    /// A window the restore built, placed and filled (SessionRestore): shown as it is, with no cascade and no first tab.
-    func openWindow(restored controller: TerminalWindowController) {
+    /// A window the restore built, placed and filled (SessionRestore), taken in: listed in every window's column and ⌘O
+    /// in the order the restore takes them, the order they opened before, and not shown yet (`presentRestored`).
+    func adoptRestored(_ controller: TerminalWindowController) {
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         welcome?.close()
         controllers.append(controller)
         indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
+    }
+
+    /// A restored window taken in (`adoptRestored`), shown as it is, with no cascade and no first tab, in front.
+    func presentRestored(_ controller: TerminalWindowController) {
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
     }

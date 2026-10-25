@@ -11,7 +11,8 @@ import NextTermCore
 /// bell in the worktree's tab behind puts a dot on its badge alone, and a click on it brings that window forward with its
 /// tab as it was; a click on a window's own badge does nothing. A narrow window hides its column alone, an unfolded one
 /// folds first; the traffic lights keep their room; ⌘B leaves the column; ⌃⌘S folds and unfolds every window's. VoiceOver
-/// reads each badge's window and marks, and the column agrees with ⌘O's rows. The budget: idle, nothing; a bell, one
+/// reads each badge's window and marks, and the column agrees with ⌘O's rows. A restore lists its windows in the order
+/// they opened, whichever was used last, and each pane starts at its real size. The budget: idle, nothing; a bell, one
 /// badge; focus and titles, no draw; a window opening or closing, one layout per column and one rebuild.
 /// NEXTTERM_SELFTEST_ONLY=windowColumn runs it alone.
 extension SelfTest {
@@ -106,6 +107,7 @@ extension SelfTest {
         await foldKeyChecks(app, project)
         await focusBudget(app, [project, main, plain])
         await openCloseBudget(app, open: { await open(loose) }, close: closeWindow)
+        await restoreChecks(app, [project, main, plain], close: closeWindow)
     }
 
     // MARK: AE1: one window, then two
@@ -588,6 +590,67 @@ extension SelfTest {
         check(opened.layouts.allSatisfy { $0 == 1 } && opened.rebuilds == 1 && opened.resized <= 1
               && closed.layouts.allSatisfy { $0 == 1 } && closed.rebuilds == 1 && closed.resized <= 1,
               "window column budget: a window opening or closing lays out each other column once and makes the list once", numbers)
+    }
+
+    // MARK: R11 and R7 across a restore
+
+    /// Three windows saved as a quit saves them (SessionCapture), after they were used in another order than they opened,
+    /// and built back as a launch builds them (RestoreBuild), planned with nothing read of the user's: they are listed in
+    /// the order the originals opened, as every window's column and ⌘O read the index, with the one used last in front;
+    /// and every restored pane starts its shell at the size it keeps, the column there from the start.
+    private static func restoreChecks(_ app: AppDelegate, _ three: [TerminalWindowController],
+                                      close: (TerminalWindowController) async -> Void) async {
+        // Used last to first: the middle one, the first, the last.
+        for c in [three[2], three[0], three[1]] {
+            guard let window = c.window, await bringToFront(window) else {
+                return note("window column: the restore not checked, as " + notFrontmost(c.window ?? NSWindow()))
+            }
+            await pause(0.3)
+        }
+        let saved: [SessionSnapshot.Window] = SessionCapture.windows(three)
+        let used: [TerminalWindowController] = three.sorted { $0.lastKey > $1.lastKey }
+        let header = SessionSnapshot.Header(launchID: UUID(), generation: 1, clean: true, savedAt: Date())
+        let snapshot = SessionSnapshot(header: header, windows: saved)
+        let nothing = SessionLookup(read: { (_: AgentKind, _: String, _: Date) -> [AgentSession] in [] },
+                                    newest: { (_: AgentKind, _: String, _: Date, _: Set<String>) -> AgentSession? in nil })
+        let world = RestorePlanner.World(home: NSHomeDirectory(), checkFolder: { (_: String) -> FolderCheck in .found },
+                                         resumeFacts: { (_: SessionSnapshot.Evidence, _: String?, _: [String]) -> ResumeFacts in
+                                             ResumeFacts()
+                                         }, sessions: nothing)
+        let plans: [PanePlan] = RestorePlanner.plan(snapshot, kind: .quit, quitConsent: true, world: world)
+        let built: RestoreBuild.Built = RestoreBuild.build(snapshot, planned: RestorePlanning.Planned(plans: plans, folders: [:]),
+                                                           scrollback: [:], savedAt: nil)
+        guard built.windows.count == 3 else {
+            for c in built.windows { await close(c) }
+            return check(false, "window column: the restore builds the three windows", "\(built.windows.count)")
+        }
+        for c in built.windows { c.window?.layoutIfNeeded() }
+        await pause(1)
+        // The built windows are front to back, as saved: each is the copy of the one used at its place.
+        let index: [Int] = app.windowIndex.windows.map(\.id)
+        let originals: [Int] = three.map(\.indexID).sorted { (index.firstIndex(of: $0) ?? 0) < (index.firstIndex(of: $1) ?? 0) }
+        let copies: [Int] = built.windows.map(\.indexID).sorted { (index.firstIndex(of: $0) ?? 0) < (index.firstIndex(of: $1) ?? 0) }
+        let copiedFrom: [Int] = copies.compactMap { (id: Int) -> Int? in
+            built.windows.firstIndex { $0.indexID == id }.map { used[$0].indexID }
+        }
+        let front: Bool = built.windows.first?.window?.isKeyWindow == true
+        check(copiedFrom == originals && front && saved.map(\.opened) == used.map { three.firstIndex(of: $0) },
+              "window column: a restore lists its windows in the order they opened, whichever was used last, that one in front",
+              "copies of \(copiedFrom), opened \(originals); saved places \(saved.map { $0.opened.map(String.init) ?? "none" }); "
+                  + "front \(NSApp.keyWindow?.title ?? "none")")
+        let panes: [TerminalTab] = built.panes.map(\.tab).filter { $0.remote == nil }
+        let sizes: [String] = panes.map { (tab: TerminalTab) -> String in
+            let start: String = tab.sizeAtStart.map { "\(Int($0.width))×\(Int($0.height))" } ?? "not started"
+            return "\(start) → \(Int(tab.view.frame.width))×\(Int(tab.view.frame.height))"
+        }
+        let once: Bool = !panes.isEmpty && panes.allSatisfy { (tab: TerminalTab) -> Bool in
+            guard let start = tab.sizeAtStart else { return false }
+            return abs(start.width - tab.view.frame.width) < 0.5 && abs(start.height - tab.view.frame.height) < 0.5
+        }
+        let columns: Bool = built.windows.allSatisfy { $0.columnHost.shown.form == .folded && !$0.windowColumn.isHidden }
+        check(once && columns, "window column: each restored pane starts its shell at the size it keeps, the column there from the start",
+              sizes.joined(separator: "; "))
+        for c in built.windows { await close(c) }
     }
 
     // MARK: helpers
