@@ -493,8 +493,9 @@ final class WindowColumnButton: NSButton {
             NSBezierPath(ovalIn: frame).fill()
         }
         guard expanded else { return }
+        // Cut in the middle: a window with no project is named by its folder's path, whose end is the folder.
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
+        paragraph.lineBreakMode = .byTruncatingMiddle
         let name = NSAttributedString(string: row.name, attributes: [
             .foregroundColor: Theme.text, .font: NSFont.systemFont(ofSize: 12), .paragraphStyle: paragraph,
         ])
@@ -502,7 +503,7 @@ final class WindowColumnButton: NSButton {
         let end: CGFloat = marks.isHidden ? bounds.width - 8 : marks.frame.minX - 6
         let height: CGFloat = ceil(name.size().height)
         name.draw(with: NSRect(x: start, y: ((bounds.height - height) / 2).rounded(), width: max(0, end - start), height: height),
-                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                  options: [.usesLineFragmentOrigin])
     }
 
     override func updateTrackingAreas() {
