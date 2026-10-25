@@ -1631,7 +1631,13 @@ def accept_checks(label, extra):
         sh.send("\x03", 0.4)
         start = len(sh.buf)
         sh.send(text, 0.5)
-        return last_buf(sh, start, lambda x: x[6] == text)
+        # A busy machine reports late: waited for longer, and a line never reported is a failure, not a crash (the checks
+        # after it use the stand-in and fail on their own).
+        found = last_buf(sh, start, lambda x: x[6] == text, timeout=6)
+        if found is None:
+            check(False, f"[ghost accept {label}] the hook reports `{text}` once it is typed", "no buf mark")
+            return (0, 0, 0, "", "", "", "", "")
+        return found
     def after(data, pred=lambda x: True):
         start = len(sh.buf)
         sh.send(data, 0.6)

@@ -385,6 +385,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onSummaryClick = { [weak self] in self?.showUncommittedChanges() }
         sidebar.onHeadChange = { [weak self] in self?.editorArea.headMoved() }
         sidebar.onBrowseHome = { [weak self] in self?.browseHomeFolder() }
+        sidebar.onLeaveBrowsing = { [weak self] in self?.stopBrowsingHome() }
         // A right-click on the top row, whichever bar is there: View › Project Color's choices for this window.
         let colorMenu: () -> NSMenu? = { [weak self] in self?.projectColorMenu() }
         for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
@@ -1060,7 +1061,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             sidebar.offerProjectWindow(sidebar.root?.path ?? root)
         } else if browsesHome {
             sidebar.offerProjectWindow(nil)
-            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true, breadcrumbs: true)
         } else {
             sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
         }
@@ -1077,10 +1078,40 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // The next local tab is placed afresh: in the home folder it keeps this tree, in a project it shows that one.
         if activeTab?.remote != nil {
             sidebar.offerProjectWindow(nil)
-            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true)
+            sidebar.setRoot(ProtectedPlaces.current.home, browsing: true, breadcrumbs: true)
             return
         }
         updateProjectRoot()
+    }
+
+    /// The breadcrumb bar's Back, or ⌘↑ from the home folder's row: "No project open" again, with its recent projects.
+    /// The tree is put away as it was (Browse Home Folder brings it back) and nothing more is read. A keyboard the tree
+    /// had goes to the tab in front, or with the terminal folded to the editor's pane in front, so no hidden row keeps it.
+    func stopBrowsingHome() {
+        // Before the tree goes: hidden with the keyboard, it would hand it to the next key view, a folded terminal too,
+        // which unfolds when it takes it.
+        if isSidebarFocused { keyboardToWorkArea() }
+        browsesHome = false
+        projectKey = nil
+        // With a remote tab in front updateProjectRoot leaves the sidebar alone: "No project open" goes in directly, as
+        // Browse Home Folder's tree did.
+        if activeTab?.remote != nil {
+            sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
+        } else {
+            updateProjectRoot()
+        }
+    }
+
+    /// The keyboard to what shows of the work area. Folded, nothing of the terminal shows to type into: whatever the
+    /// editor has in front takes it, as collapseTerminal gives it (folded, an editor pane always shows). Unfolded, the tab
+    /// in front takes it. If neither does, no view keeps it in the sidebar.
+    private func keyboardToWorkArea() {
+        if terminalCollapsed {
+            editorArea.select(editorArea.activeIndex)
+        } else if let tab = activeTab {
+            window?.makeFirstResponder(tab.view)
+        }
+        if (window?.firstResponder as? NSView)?.isDescendant(of: sidebar) == true { window?.makeFirstResponder(nil) }
     }
 
     // MARK: find and replace in files
