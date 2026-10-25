@@ -77,6 +77,10 @@ import Testing
         #expect(["branchPopup.fetch", "branchPopup.copyName", "branchPopup.delete", "branchPopup.newBranch"].compactMap { chord($0)?.display }
             == ["⌘R", "⌘C", "⌘⌫", "⌘↩"])
         #expect(KeyBindings.scope(of: "sidebar.trash") == .part(.sidebar) && KeyBindings.scope(of: "duplicateLine:") == .part(.editor))
+        // ⌘↑ selects the enclosing folder in the tree, Open's ⌘↓ reversed; the loop below finds no other command on it.
+        #expect(chord("sidebar.enclosingFolder") == KeyChord(key: "\u{F700}", command: true) && chord("sidebar.enclosingFolder")?.display == "⌘↑")
+        #expect(KeyBindings.scope(of: "sidebar.enclosingFolder") == .part(.sidebar))
+        #expect(ids.firstIndex(of: "sidebar.enclosingFolder") == ids.firstIndex(of: "sidebar.open").map { $0 + 1 })
         #expect(KeyBindings.scope(of: "splitRight:") == .terminal && KeyBindings.scope(of: "newTab:") == .everywhere)
         // No two commands of one part start on one key, and no default clashes with another.
         let defaults = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0.chord) })
