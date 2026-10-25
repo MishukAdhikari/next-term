@@ -97,6 +97,7 @@ extension SelfTest {
         for controller in app.controllers { controller.refresh() }
         let five: [TerminalWindowController] = [project, main, worktree, home, plain]
         badgeChecks(app, five)
+        await screenshot(plain, suffix: "-column-folded")
         await idleBudget(app)
         await bellChecks(app, five, worktree: worktree, tree: tree)
         await overflowChecks(app, project)
@@ -185,6 +186,7 @@ extension SelfTest {
             right = right && outside && c.windowColumn.onRight && !c.windowColumn.chevronPointsRight && !c.windowColumn.isHidden
             found.append("column \(column), files \(files), work \(work), on right \(c.windowColumn.onRight)")
         }
+        await screenshot(second, suffix: "-column-right")
         check(right, "window column: with the sidebar on the right, the column is at each window's right edge, outside the project files, "
               + "its hairline on its left and its chevron pointing into the window", found.joined(separator: "; "))
         app.toggleSidebarSide(nil)
@@ -333,6 +335,7 @@ extension SelfTest {
             budget.append("its button \(its?.configureCount ?? -1) configures, \(its?.drawCount ?? -1) draws; others \(otherWork); "
                           + "\(column.layoutCount) layouts")
         }
+        await screenshot(five[0], suffix: "-column-bell")
         check(rang && onlyIt, "window column: a bell in the worktree's tab behind puts a dot on that badge only, in every window",
               "rang \(rang); marked \(dots.joined(separator: " "))")
         note("window column budget: a bell, in each column: " + budget.joined(separator: " | "))
@@ -497,6 +500,7 @@ extension SelfTest {
         _ = fold.map(app.validateMenuItem)
         let title: String = fold?.title ?? ""
         let chevron: Bool = !c.windowColumn.chevronPointsRight // unfolded on the left, it points the way it folds
+        await screenshot(c, suffix: "-column-expanded")
         controlCommandS()
         for each in all { each.window?.layoutIfNeeded() }
         let refolded: Bool = all.allSatisfy { $0.columnHost.shown.form == .folded } && defaultsValue(WindowColumnSettings.expandedKey) == false
