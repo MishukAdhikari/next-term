@@ -26,8 +26,11 @@ public struct ContextItem: Equatable, Sendable {
 
 /// How an agent wants files referenced. Kept as data: agents change their syntax between releases.
 public enum AgentDialect: String, Sendable {
-    /// Claude Code: `@src/a.ts#L42-58 ` (and opencode). Contents are attached by the agent.
+    /// Claude Code: `@src/a.ts#L42-58 `. Contents are attached by the agent.
     case atHash
+    /// OpenCode: `@src/a.ts#42-58` (`@src/a.ts#42` for one line), the form its @ autocomplete writes, digits only. A path
+    /// with spaces is quoted, with its lines in prose, as for Claude Code.
+    case atRange
     /// `@src/a.ts` with the lines in prose: Gemini / Qwen Code, which read the whole file for `@path` and
     /// drop any line suffix before the model sees it. Folders stay plain paths: `@folder` reads everything
     /// in it, recursively.
@@ -42,7 +45,8 @@ public enum AgentDialect: String, Sendable {
 
     public static func forProgram(_ name: String) -> AgentDialect {
         switch name {
-        case "claude", "claude-code", "claude.exe", "opencode": return .atHash
+        case "claude", "claude-code", "claude.exe": return .atHash
+        case "opencode": return .atRange
         case "copilot": return .atColon
         case "gemini", "gemini-cli", "qwen", "qwen-code": return .atProse
         default: return .plain
@@ -50,7 +54,7 @@ public enum AgentDialect: String, Sendable {
     }
 
     /// Claude collapses a paste longer than this into "[Pasted text]" and treats it as data, so the
-    /// instruction part stays within it.
+    /// instruction part stays within it. OpenCode expands what it collapses, so it has no limit.
     var inlineLimit: (lines: Int, characters: Int)? {
         self == .atHash ? (3, 800) : nil
     }
@@ -67,12 +71,13 @@ public enum AgentPrompt {
         let quoted = item.path.contains(" ") ? "\"\(item.path)\"" : item.path
         var ref: String
         switch dialect {
-        case .atHash:
+        case .atHash, .atRange:
             ref = "@" + quoted + (item.isFolder && !item.path.hasSuffix("/") ? "/" : "")
             if let lines = item.lines {
-                // `#L` inside quotes is unverified for Claude: say the lines in prose instead.
-                ref += item.path.contains(" ") ? " (lines \(lines.lowerBound)-\(lines.upperBound))"
-                    : (lines.count == 1 ? "#L\(lines.lowerBound)" : "#L\(lines.lowerBound)-\(lines.upperBound)")
+                // A line mark inside quotes is unverified for either: say the lines in prose instead.
+                let mark = dialect == .atHash ? "#L" : "#"
+                let span = lines.count == 1 ? "\(lines.lowerBound)" : "\(lines.lowerBound)-\(lines.upperBound)"
+                ref += item.path.contains(" ") ? " (lines \(lines.lowerBound)-\(lines.upperBound))" : mark + span
             }
         case .atProse:
             if item.isFolder {
@@ -106,7 +111,7 @@ public enum AgentPrompt {
         var head = sanitize(instruction).trimmingCharacters(in: .whitespacesAndNewlines)
         let refs = items.map { reference($0, dialect: dialect) }
         switch dialect {
-        case .atHash, .atProse, .atColon:
+        case .atHash, .atRange, .atProse, .atColon:
             // One line, mentions separated by spaces, and a space after the last mention so a completion
             // popup does not take the developer's Enter.
             let joined = refs.joined(separator: " ")

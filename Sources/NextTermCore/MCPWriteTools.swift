@@ -56,7 +56,7 @@ extension MCPServer {
                      "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
                      "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
-                     "request_secret", "store_secret", "run_with_secrets"]
+                     "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
         for name in write { tags[name] = .write }

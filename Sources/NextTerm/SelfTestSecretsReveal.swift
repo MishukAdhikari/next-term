@@ -4,7 +4,7 @@ import NextTermCore
 #if DEBUG
 /// Reveal's end: a revealed key goes with its window, whichever window holds the list, and a Touch ID still up when the
 /// list goes is cancelled, or, given after it went, shows nothing. On a Settings window of the self-test's own and on
-/// Window › Secrets, with the stand-in presence check held as a sheet left up would be.
+/// the Secrets window, with the stand-in presence check held as a sheet left up would be.
 extension SelfTest {
     static func secretsRevealEndChecks(presence: StandInPresence, shownValue: String) async {
         let settings = SettingsWindowController()
@@ -187,12 +187,12 @@ extension SelfTest {
               "secrets: a Touch ID approved after Settings › Secrets was left reveals nothing when the tab comes back")
     }
 
-    /// Window › Secrets closes while Touch ID is up for Reveal: an approval after it closed shows nothing, then or when
+    /// The Secrets window closes while Touch ID is up for Reveal: an approval after it closed shows nothing, then or when
     /// the window opens again. The window is left open, as the Settings checks had it.
     static func secretsRevealWindowChecks(presence: StandInPresence, reveals: () -> Int) async {
         AppDelegate.shared.showSecrets(nil)
         guard let controller = SecretsWindowController.shared, let window = controller.window, window.isVisible else {
-            return check(false, "secrets: Window › Secrets opens again")
+            return check(false, "secrets: the Secrets window opens again")
         }
         let view = controller.secretsView
         let before = reveals()
@@ -213,11 +213,11 @@ extension SelfTest {
         AppDelegate.shared.showSecrets(nil)
         _ = await wait(5) { window.isVisible }
         check(asked && approved && hidden && view.revealField == nil && view.revealPopover == nil,
-              "secrets: a Touch ID approved after Window › Secrets closed reveals nothing, then or when it opens again")
+              "secrets: a Touch ID approved after the Secrets window closed reveals nothing, then or when it opens again")
         await secretsRevealOffScreenChecks(window, view: view, presence: presence, reveals: reveals)
     }
 
-    /// Window › Secrets minimized, or Next Term hidden: a value shown goes, and a Touch ID up for Reveal is cancelled,
+    /// The Secrets window minimized, or Next Term hidden: a value shown goes, and a Touch ID up for Reveal is cancelled,
     /// quietly, so it can't be approved for a value nobody would see. The window is left open.
     static func secretsRevealOffScreenChecks(_ window: NSWindow, view: SecretsView, presence: StandInPresence,
                                              reveals: () -> Int) async {
@@ -236,7 +236,7 @@ extension SelfTest {
         window.deminiaturize(nil)
         _ = await wait(5) { !window.isMiniaturized && window.isVisible }
         check(shown && gone && field?.stringValue == "" && view.revealField == nil,
-              "secrets: a key revealed in Window › Secrets is hidden and wiped when the window is minimized")
+              "secrets: a key revealed in the Secrets window is hidden and wiped when the window is minimized")
 
         // Touch ID up for Reveal, then the window is minimized: cancelled, quietly, and nothing is revealed.
         let beforeMinimized = reveals()
@@ -251,7 +251,7 @@ extension SelfTest {
         window.deminiaturize(nil)
         _ = await wait(5) { !window.isMiniaturized && window.isVisible }
         check(asked && ended && reveals() == beforeMinimized && view.revealField == nil && view.actionLabel.stringValue.isEmpty,
-              "secrets: minimizing Window › Secrets while Touch ID is up for Reveal cancels it, quietly, and no key is revealed",
+              "secrets: minimizing the Secrets window while Touch ID is up for Reveal cancels it, quietly, and no key is revealed",
               "asked \(asked), cancelled \(ended), said “\(view.actionLabel.stringValue)”")
 
         // The same with Next Term hidden.

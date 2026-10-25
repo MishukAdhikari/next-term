@@ -2,7 +2,7 @@
 
 **The missing IDE for the terminal.**
 
-A native macOS terminal and editor for the AI era. Run Claude Code, Codex,
+A native macOS terminal and editor for the AI era. Run Claude Code, Codex, OpenCode,
 Command Code, Junie, a test suite and a dev server side by side, one per tab, and see at a glance which
 agents are working, which are done, and which are waiting on your decision.
 
@@ -10,15 +10,19 @@ agents are working, which are done, and which are waiting on your decision.
 website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 
 - **Agent status, in step with the agent.** A spinner shows while an agent is working, read from the
-  agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, so it stops
-  the moment they stop; other agents go by output timing. A green check means done and waiting for your
-  next prompt, an amber "!" means it is asking you something. Plain commands show no spinner and end
-  with a check or a red cross. Marks clear when you look at the tab.
+  agent's own screen ("esc to interrupt") for Claude Code, Codex, Command Code and Gemini CLI, and from
+  OpenCode's own footer ("esc interrupt") for OpenCode, so it stops the moment they stop; other agents go
+  by output timing. A green check means done and waiting for your next prompt, an amber "!" means it is
+  asking you something. Plain commands show no spinner and end with a check or a red cross. Marks clear
+  when you look at the tab.
 - **Decisions come to you.** When an agent asks for permission ("Do you want to make this edit…?"),
-  a notification says so with the question; click it to land on that tab. Works however you start the
-  agent: directly, through an alias or a shell function, `npx`, or `cd app && claude`.
-- **Code editor.** Double-click a file (or click once, with a setting), pick a Find in Files result, or
-  ⌘-click `src/app.ts:42:7` in any output: the file opens above the terminal at that line, coloured by
+  a notification says so with the question; click it to land on that tab. OpenCode's "Permission required"
+  prompt and its questions count too, and the notification quotes the request, such as "Permission required:
+  Shell command ($ npm test)". Works however you start the agent: directly, through an alias or a shell
+  function, `npx` or `bunx`, or `cd app && claude`.
+- **Code editor.** Click a file once in the sidebar (Settings › Editor › Open files and folders with a single
+  click, on for new installs; off, double-click), pick a Find in Files result, or ⌘-click `src/app.ts:42:7` in
+  any output: the file opens above the terminal at that line, coloured by
   112 TextMate grammars, the kind VS Code uses: PHP and Blade (Laravel, WordPress), Ruby and ERB (Rails),
   Python and Jinja (Django, Flask), JS/TS/TSX (React, Next.js), Vue, Svelte, Astro, Angular, Liquid, Twig,
   Go and templ, Rust, Elixir, YAML, SQL and more. Line numbers, adjustable line height, soft wrap, auto-indent, ⌘/ to comment, ⌘L to go to a line, find, undo. Files keep
@@ -34,31 +38,45 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
   Logs and other text files over 32 MB open there too.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
-  them to the agent in your tab: Next Term types the reference in that agent's own syntax (`@app/User.php#L10-20`
-  for Claude, `app/User.php:10-20` for Codex and others) and hands you the prompt to add your instruction. It
-  never presses Enter for you.
+  them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
+  for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
+  the prompt to add your instruction. It never presses Enter for you.
 - **Tasks for tomorrow's agent.** Tasks › Add Task… (⌃⌘T) turns a prompt into a task, filled from what you
   selected: the first line is what to do, list lines its steps, the rest notes, planned for tomorrow unless you
   pick another day. Each task is one Markdown file in the project's `todo/` folder (the main checkout's, in a
   worktree), with `- [ ]` boxes and where you were (branch, tab, agent and the command that resumes its session),
   so an agent there tomorrow reads it with its own tools. Agents add tasks too, with the MCP tool `add_task`,
   which asks you on the Mac first and shows the exact file. Stored keys show as •••, Undo takes a task back, and
-  Settings › Tasks chooses another folder. See [the todo file format](docs/todo-files.md).
-- **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and opencode in a Next
+  Settings › Tasks chooses another folder. Tasks go where each project says (Settings › Tasks or Tasks › Send
+  Tasks To): the todo folder, Reminders, Things, a Shortcut, Todoist or OmniFocus Quick Add, a prefilled GitHub,
+  GitLab, Linear, Trello or Azure Boards page, or typed to your agent for its tracker. Next Term makes no request
+  for any of this: an app gets the task on this Mac, a page opens in your browser for you to submit, and an
+  agent's request is typed for you to send. Tasks › Connect a Tracker to Your Agents… types each agent's own line
+  to add a tracker's MCP server into a new tab, and never runs it. Tasks › Wrap Up… (⌃⌘W) asks your idle agent
+  tabs for a handoff in `docs/handoffs/` and turns their next steps into tomorrow's tasks after you review them;
+  Tasks › Post Update… drafts Done, Next and Blocked from today's handoffs, tasks and commits for you to copy, save
+  or hand to an agent. Next Term sends neither anywhere. See [the todo file format](docs/todo-files.md), [where
+  tasks go](docs/task-destinations.md) and [Wrap Up and Post Update](docs/wrap-up.md).
+- **Agents see your editor.** Claude Code, Gemini CLI, Qwen Code, GitHub Copilot CLI and OpenCode in a Next
   Term tab connect to Next Term as their IDE, the way they connect to VS Code: the lines you select go with
-  your next prompt ("⧉ 10 lines selected"), and ⌥⌘K puts `@file#L10-20` into Claude's prompt (`@file:10-20`
-  into Copilot's). When Claude, Gemini, Qwen or Copilot wants to edit a file, its change opens as a diff to
-  Accept (⌘↩) or Reject, as in VS Code; answering in the terminal works too. Nothing to set up: Next Term turns
-  Gemini's and Qwen's IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are never
-  shared; Settings turns it off.
+  your next prompt (“⧉ 10 lines selected”), and ⌥⌘K puts `@file#L10-20` into Claude’s prompt (`@file:10-20`
+  into Copilot’s, and the same lines into OpenCode’s, counted from 1 as OpenCode counts them). When Claude,
+  Gemini, Qwen or Copilot wants to edit a file, its change opens as a diff to Accept (⌘↩) or Reject, as in VS
+  Code; answering in the terminal works too. OpenCode’s link shares your selection only: its edits don’t
+  open as diffs, and it links from a local tab, not from tmux or a remote tab. Nothing to set up: Next Term
+  turns Gemini’s and Qwen’s IDE mode on for you. Local only, with a fresh secret per launch; `.env` files are
+  never shared; Settings turns it off.
 - **Orchestrate agents across projects (MCP).** Next Term is an MCP server for any agent: Claude Code and
-  the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor, opencode,
+  the Claude desktop app, Codex and the ChatGPT desktop app, Gemini CLI, Qwen Code, Cursor, OpenCode,
   Copilot CLI, Amp, Junie and Command Code. One agent can run the others. It sees every project and tab
   with each agent's state (working, done, waiting for a decision and the question), opens projects, starts
   an agent in a new tab, gives it a prompt, waits until it stops, reads its screen, answers its questions
   (only the question it saw, never a newer one), reads the projects' files, searches them and sees their
   git status and diffs (secrets files refused, secret-looking values masked), and uses the editor (the
-  selection, open files, opening a file at a line). Next Term adds itself to the agents it finds, with
+  selection, open files, opening a file at a line). It answers OpenCode too: Allow once, Allow always or
+  Reject, and a question’s option by its number. It presses Return on an OpenCode button only once
+  OpenCode’s screen shows that button selected, so in a theme that doesn’t show it, only Reject can be
+  answered. Next Term adds itself to the agents it finds, with
   nothing to run; Settings turns it off and removes it again (from the Claude desktop app once Claude is
   closed). The tools are marked honestly, so agents ask you before they type into a tab, and the ones that
   change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
@@ -69,9 +87,16 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   question through herdr, even when another pane has herdr's keyboard, and only that agent counts as driven.
   Text sent to one is herdr's argument on the server while it runs, so text holding a stored key is refused.
 - **Secrets.** API and MCP keys sealed on your Mac, used by agents by name after you approve with Touch ID or
-  your password. See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
+  your password. **Secrets › Import From** copies keys in from .env, JSON, TOML, YAML and CSV files and
+  password-manager exports, moves them out of your MCP configs, or takes them from your own 1Password,
+  Bitwarden or Bitwarden Secrets Manager CLI in a tab you can see; it brings in only the rows you tick, with
+  Undo. Rotate… opens a key’s page from its link and takes the new key in the same sheet; it keeps the old key
+  masked for 30 days and can remind you when a key gets old (**Secrets › Keys Due to Rotate**). Each key asks
+  for Touch ID every time it’s used until you untick that, and a key set to “Never show this key” is never
+  shown or copied, even to you.
+  See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
-  conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode, Cursor Agent and Copilot
+  conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot
   CLI kept for it is there, newest first, with its title, branch and model, including the ones started in
   its subfolders. Resume runs it again in a new tab, in the folder it was started in; Fork continues a copy;
   a session open in a tab offers Go to Tab instead; type to search them by title, agent, branch or model.
@@ -88,8 +113,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   secret, and nothing while View › Private Mode is on; until that record has your commands, zsh's own history
   in the shell fills in. Right after a command, the empty prompt shows the one that usually follows it, when that
   is clear. Where zsh-autosuggestions (or Atuin through it) shows its own, Next Term shows none and asks once
-  which you want, without touching your `.zshrc`. Settings › Terminal › While typing turns it off, says how many
-  commands are kept and clears them.
+  which you want, without touching your `.zshrc`. View › Suggestions While Typing turns it off or on, and
+  Settings › Terminal › While typing does too, says how many commands are kept and clears them.
 - **Remote tabs on your servers.** File › New Remote Tab… (⌥⌘T) opens a tab on your VPS over your own ssh
   and `~/.ssh/config`. With tmux or herdr on the server, agents keep working while the Mac sleeps or is off,
   and the tab reattaches when it reconnects. Host keys are never accepted silently, nothing is installed on
@@ -230,8 +255,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Kiro, Antigravity, Positron, Qoder…), a JetBrains IDE, Zed, iTerm2, Ghostty, cmux, kitty, Alacritty,
   WezTerm, Kaku or Terminal? Next Term > Import Settings and Shortcuts… (also offered on first launch) brings
   the matching shortcut set, the keys you changed yourself, font size, line height, wrap, clean-up on
-  save, hidden files, fonts, the terminal's colours, cursor, scrollback and start folder, and recent
-  projects. Nothing changes unless you choose it: the preview shows every item as a
+  save, hidden files, how a click in the sidebar opens files and folders, fonts, the terminal's colours,
+  cursor, scrollback and start folder, and recent projects. Nothing changes unless you choose it: the preview shows every item as a
   checkbox, and what it leaves out and why; Undo Import puts it all back. It only reads, on this Mac, and
   never opens files that can hold secrets. Your agent can run it too, through Next Term's import tools:
   the import window opens with its choices ticked, and only your Apply changes anything. See
@@ -241,9 +266,11 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   at the top right brings it back. It downloads and is checked against its checksum signed with the Next
   Term release key; the update sheet then says what happens to each tab before anything quits. After the
   update, or after a quit, your windows, tabs, splits and scrollback come back, Claude Code, Codex and Qwen
-  Code resume their conversations as you started them, and other agents' resume commands wait on the
-  line for Return.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 28 MB to download, 61 MB
+  Code resume their conversations as you started them, and other agents’ resume commands wait on the
+  line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
+  matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
+  resumes the session you were in.
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 31 MB to download, 67 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -298,12 +325,15 @@ How it knows, most reliable first:
    never written into it; one is put on your line only through that hook, while the line is still the one it
    showed on.
 2. **Agents.** `claude`, `codex`, `commandcode`, `gemini` and other agents stay in the foreground, so
-   Next Term reads the agent's own screen, the way you would: "esc to interrupt" means working, a question
+   Next Term reads the agent’s own screen, the way you would: “esc to interrupt” means working, a question
    with choices means it is waiting on you, anything else means idle. These hints are checked against
-   Claude Code, Codex, Command Code and Gemini CLI. Other agents (Junie, opencode, Qwen Code and the rest)
-   go by output timing until their screen shows one of them: printing means working, 2.5 s of silence
-   means done. When a command looks plain (a shell function), Next Term also asks the kernel what is
-   really running.
+   Claude Code, Codex, Command Code and Gemini CLI. OpenCode has hints of its own, read only in its tab:
+   “esc interrupt” in its footer means working, its footer’s keys (“ctrl+p commands”) or “Ask anything…”
+   mean idle, and its “Permission required” prompt or a question with numbered options means it is waiting
+   on you; until its working hint first shows, output timing drives the spinner. Other agents (Junie, Qwen
+   Code and the rest) go by output timing until their screen shows one of them: printing means working,
+   2.5 s of silence means done. When a command looks plain (a shell function), Next Term also asks the
+   kernel what is really running.
 3. **Other shells.** For bash and fish, or after `exec bash`, Next Term asks the kernel for the terminal's
    foreground process and working directory twice a second.
 
@@ -372,13 +402,14 @@ One window per project, and a few keys to move between them:
 | Git Log (the commit graph) | ⌥⌘L |
 | Fetch / Update Project / Commit… / Push… / New Branch… | ⌘R / ⌥⌘U / ⇧⌘C / ⌥⌘P / ⇧⌘B |
 | Send to Agent | ⌥⌘K |
-| Add a task (to the project's todo folder) | ⌃⌘T |
+| Add a task (to the project's destination) | ⌃⌘T |
 | Indent / Outdent | ⌘] / ⌘[ (Tab / ⇧Tab on selected lines) |
 | Between editor and terminal | ⌃` |
 | Keyboard Shortcuts (change any menu shortcut) | ⌘, |
 
-In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens (or one click: Settings ›
-Editor › Open files with a single click). Right-click for Open in New Tab, Open as Project, Reveal in Finder,
+In the sidebar: Return renames, ⌘⌫ moves to the Trash, ⌘↓ or double-click opens (or one click, which also opens
+and closes folders: Settings › Editor › Open files and folders with a single click, on for new installs).
+Right-click for Open in New Tab, Open as Project, Reveal in Finder,
 Insert Path in Terminal, Copy Path and Copy Relative Path. Tabs can be dragged to reorder; middle-click
 closes; tabs that don't fit go behind the » button.
 
@@ -420,14 +451,38 @@ Next Term's menu.
   while suggestions are off or View › Private Mode is on (which lasts until you turn it off or quit). zsh's
   history file is never read or changed. Edit › Forget This Suggestion removes one, and Settings › Terminal ›
   While typing › Clear History… removes them all. Agents never see Next Term's suggestion.
-- **Secrets** (Settings › Secrets, Window › Secrets) keeps API and MCP keys in a vault on your Mac, each
-  value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one,
-  by the login keychain, which Settings calls less protected); the names and what each key is for are not
-  encrypted. Agents use a key by name, after Next Term's own panel shows who asks, which keys and the
-  command, and you approve with Touch ID or your password; no MCP tool returns a value. Stored keys are
-  masked, best effort, in what agents read through Next Term. A command you approve gets the key and can
-  send it on, and Secrets can't stop malware already running as you.
+- **Secrets** (the Secrets menu, and Settings › Secrets) keeps API and MCP keys in a vault on your Mac, each
+  value sealed on disk, with the key that opens them guarded by the Secure Enclave (on a Mac without one, by
+  the login keychain, which Settings calls less protected); the names, what each key is for, who added it, the
+  link to its page, its settings and its dates are not encrypted. Agents use a key by name, after Next Term’s
+  own panel shows who asks, which keys and the command, and you approve with Touch ID or your password; no MCP
+  tool returns a value. A key’s “Ask for Touch ID every time it’s used” is ticked by default (untick it in its
+  Edit… sheet), and while it is, a request that uses the key offers only Allow once. A key set to “Never show
+  this key” is never shown or copied, even to you, and that can’t be undone; commands you allow still get it.
+  The New keys group in Settings › Secrets sets how both start for the keys you add, an agent asks you for, or
+  import. Stored keys are masked, best effort, in what agents read through Next Term. A command you approve
+  gets the key in its environment, and for as long as it runs, any program running as you can read it there
+  (`ps -E` shows it), an agent’s own shell tool included, which Next Term’s masks never see. The command can
+  also send the key on, and Secrets can’t stop malware already running as you. **Secrets › Import From**
+  leaves a file it copies keys from as it was, and changes an MCP config only once you choose the keys to move
+  out of it. For 1Password, Bitwarden and Bitwarden Secrets Manager, Next Term types the CLI’s line into a new
+  tab and never presses Return: you unlock 1Password or Bitwarden at its CLI’s own prompt (`bws` reads its
+  access token from the tab’s environment), and the keys go by pipe, never onto the screen. After a 1Password
+  import, close that tab to end 1Password’s authorization for it. While `bw list items` runs, Bitwarden’s
+  session key is in that command’s environment, where `ps -E` can read it, and the line’s `bw lock` ends the
+  session right after. Next Term doesn’t rotate keys through providers’ APIs: you make the new key, and delete
+  or deactivate the old one, on the provider’s page.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
+- **Tasks** leave the Mac only where you send them, and Next Term makes no request for them and holds no account
+  or token: an app (Reminders, Things, a Shortcut, Todoist, OmniFocus) gets the task on this Mac, a tracker's
+  page opens in your browser filled in and saves nothing until you submit it there, and a request to your agent
+  is typed into its tab with no Return. What leaves is shown in the Add Task sheet, or in the approval window
+  for an agent's `add_task`, before anything is sent, with stored keys as •••; team pages get the branch only,
+  never the tab, agent or resume command. Reminders asks macOS for access only when you first choose it. A
+  short record of what went where (masked titles, 30 days) stays in Application Support for the duplicate
+  warning and Undo, and task text is never logged. Wrap Up and Post Update make no request either: handoffs and
+  updates are files in your project, and today's commits are read only for your own `user.email`. See [where tasks
+  go](docs/task-destinations.md) and [Wrap Up and Post Update](docs/wrap-up.md).
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
   while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That

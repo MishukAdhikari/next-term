@@ -5,7 +5,7 @@ import Foundation
 /// it is a sub-agent (it turns transcript saving off), hand every shell another program's secret
 /// (CLAUDE_CODE_MESSAGING_TOKEN), point git at an editor's password helper that is gone once the
 /// editor quits, or make tools believe they run inside VS Code or a JetBrains IDE. Those go; settings a
-/// user gives on purpose (ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR, CODEX_HOME…) stay.
+/// user gives on purpose (ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR, CODEX_HOME, OPENCODE_CONFIG…) stay.
 public enum TerminalEnvironment {
     /// Exact names to drop.
     static let markers: Set<String> = [
@@ -20,6 +20,9 @@ public enum TerminalEnvironment {
         "CLAUDE_CODE_SSE_PORT", "ENABLE_IDE_INTEGRATION", "CLAUDE_CODE_AUTO_CONNECT_IDE",
         "GEMINI_CLI_IDE_SERVER_PORT", "GEMINI_CLI_IDE_WORKSPACE_PATH", "GEMINI_CLI_IDE_AUTH_TOKEN", "GEMINI_CLI_IDE_PID",
         "QWEN_CODE_IDE_SERVER_PORT", "QWEN_CODE_IDE_WORKSPACE_PATH",
+        "OPENCODE_EDITOR_SSE_PORT", "OPENCODE_CALLER", "_EXTENSION_OPENCODE_PORT",
+        // OpenCode's marks on its own children (its shell tool and the programs it starts).
+        "OPENCODE", "OPENCODE_PID",
         // Codex's and Gemini's sandboxed shells.
         "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "GEMINI_CLI",
     ]

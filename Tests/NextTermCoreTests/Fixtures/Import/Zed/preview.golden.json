@@ -1,6 +1,6 @@
 {
   "Zed" : {
-    "changes_if_applied" : 10,
+    "changes_if_applied" : 11,
     "not_brought_over" : [
       {
         "item" : "Zed's own shortcuts",
@@ -75,6 +75,13 @@
         "note" : null,
         "ticked" : true,
         "title" : "currentLineBlame title"
+      },
+      {
+        "from" : "Zed's project panel",
+        "id" : "set:sidebarSingleClickOpens",
+        "note" : "Zed opens files and folders with a single click; no setting changes that",
+        "ticked" : true,
+        "title" : "sidebarSingleClickOpens title"
       }
     ],
     "shortcut_set" : {

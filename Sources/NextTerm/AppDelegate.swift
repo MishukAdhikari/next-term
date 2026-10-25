@@ -22,6 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var noticeCategories: [String: UNNotificationCategory] = [:]
     var noticeCategoryOrder: [String] = []
     var noticeActions: [String: [NoticeActions.Action]] = [:]
+    /// When Next Term last posted its own notice for each tab (system uptime): a program's notice for the tab soon
+    /// after it is dropped (ProgramNotice.repeatWindow). The self-test clears it between its checks.
+    var ownNoticeAt: [UUID: TimeInterval] = [:]
+    #if DEBUG
+    /// Stands in for whether Next Term is in front, for the self-test's notices that come from a tab's own output.
+    var appActiveStandIn: Bool?
+    #endif
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
 
@@ -316,13 +323,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// One click on a file in the project sidebar opens it, in a preview tab (off: a double-click does, as
-    /// in Finder). Read at each click, so it applies to every window at once. Turning it off keeps every
-    /// preview as an ordinary tab.
+    /// One click in the project sidebar opens a file, in a preview tab, and opens or closes a folder (off: a click
+    /// selects, and a double-click does those). Read at each click, so it applies to every window at once. Turning it
+    /// off keeps every preview as an ordinary tab. A new install has it on, stored at its first launch
+    /// (`SidebarClick.settleDefault`); an install used before that never chose keeps it off, and a key never written
+    /// reads off.
     var sidebarSingleClickOpens: Bool {
-        get { UserDefaults.standard.bool(forKey: "sidebarSingleClickOpens") }
+        get { UserDefaults.standard.bool(forKey: SidebarClick.settingKey) }
         set {
-            UserDefaults.standard.set(newValue, forKey: "sidebarSingleClickOpens")
+            UserDefaults.standard.set(newValue, forKey: SidebarClick.settingKey)
             if !newValue { controllers.forEach { $0.editorArea.keepPreview() } }
         }
     }
@@ -335,6 +344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var softWrap: Bool {
         get { UserDefaults.standard.object(forKey: "softWrap") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "softWrap") }
+    }
+
+    /// View › Suggestions While Typing: on or off for every tab, as Settings › Terminal › While typing sets it (stored).
+    @objc func toggleSuggestionsWhileTyping(_ sender: Any?) {
+        GhostPreferences.set(!GhostPreferences.isOn)
     }
 
     /// View › Private Mode (suggestions while typing): none show and nothing is recorded, for every tab, until it is
@@ -468,9 +482,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single clicks in the sidebar: on for a new install, kept as it was for one used before. First, before this
+        // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
+        // whose defaults look new at every run: its clicks part sets the setting itself.
+        if !SelfTest.isRequested { SidebarClick.settleDefault(in: .standard) }
         // Secrets' marks first, with no crypto, so the first MCP answer and IDE message are already masked; then the
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
+        MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -1490,6 +1509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
+        if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
         if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
         if item.action == #selector(toggleBlameAnnotations(_:)) { item.state = blameAnnotations ? .on : .off }
         if item.action == #selector(toggleCurrentLineBlame(_:)) { item.state = currentLineBlame ? .on : .off }
@@ -1661,9 +1681,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// is in front, for the self-test.
     func post(_ notice: TabNotice, tab: TerminalTab, in controller: TerminalWindowController, appActive: Bool? = nil) {
         let settings = NotificationSettings(defaults: .standard)
+        #if DEBUG
+        let active = appActive ?? appActiveStandIn ?? NSApp.isActive
+        #else
         let active = appActive ?? NSApp.isActive
+        #endif
         let visible = controller.isOnScreen(tab)
         guard settings.shouldNotify(notice, appActive: active, tabVisible: visible, drivenByAgent: MCPControl.isDriven(tab)) else { return }
+        // A program's notice straight after Next Term's own for the tab says less: the decision, or the finish, stays.
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if notice.fromProgram, ProgramNotice.isRepeat(lastOwnNoticeAt: ownNoticeAt[tab.id], now: uptime) { return }
         let program = Typography.shortened(notice.program, to: 60)
         let title = Typography.shortened(tab.title, to: 80)
         // Which project the tab is in (or its folder), unless its title says it already.
@@ -1675,6 +1702,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             content.title = "\(program.isEmpty ? "The agent" : program) needs your decision"
             content.subtitle = [title, shownPlace].compactMap { $0 }.joined(separator: " — ")
             content.body = question
+        } else if let message = notice.message {
+            // A program's own words, under its name, as a decision's question is: an agent's that came as its turn ended
+            // ride on its finish, which then reads as they would alone (the same notification is not posted twice).
+            content.title = program.isEmpty ? title : program
+            let under = program.isEmpty ? [shownPlace] : [title, shownPlace]
+            content.subtitle = under.compactMap { $0 }.joined(separator: " — ")
+            content.body = message
         } else {
             content.title = title
             content.subtitle = shownPlace ?? ""
@@ -1695,6 +1729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let key = content.title + "\u{0}" + content.body
         if let last = lastNotified[tab.id], Date().timeIntervalSince(last.at) < 10, last.key == key { return }
         lastNotified[tab.id] = (Date(), key)
+        if !notice.fromProgram { ownNoticeAt[tab.id] = uptime }
         let audible = settings.sound && Date().timeIntervalSince(lastSoundAt) >= 3
         content.sound = audible ? .default : nil
         if audible { lastSoundAt = Date() }
@@ -1892,7 +1927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// would be shown, and shows you nothing.
     var testNotifications: [UNNotificationRequest] = []
 
-    private func deliver(_ request: UNNotificationRequest) {
+    func deliver(_ request: UNNotificationRequest) {
         // A tab's title, a question or a command can hold a stored key's value: masked, in a copy.
         var request = request
         let mask = SecretMask.current
@@ -1983,8 +2018,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 completionHandler()
             }
         }
+        let reminder = SecretReminder(userInfo: response.notification.request.content.userInfo)
         DispatchQueue.main.async { [self] in
             NSApp.activate(ignoringOtherApps: true)
+            if let reminder { // a key rotation reminder: Rotate… for its key
+                SecretReminders.open(reminder)
+                return completionHandler()
+            }
             if let host, let pane {
                 HerdrAgentMenu.go(to: .host(id: host, pane: pane))
                 return completionHandler()
@@ -2164,6 +2204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Hide .env Values", #selector(TerminalWindowController.toggleEnvValues(_:)), "") // checked: the file in front
         // ⇧⌘V, the Markdown preview's key in VS Code. Checked for the file in front; off for any other file.
         item(view, "Markdown Live Preview", #selector(TerminalWindowController.toggleMarkdownPreview(_:)), "v", [.command, .shift])
+        item(view, "Suggestions While Typing", #selector(toggleSuggestionsWhileTyping(_:)), "", target: self).toolTip =
+            "A command you ran before, dimmed after the cursor at a zsh prompt. Off, none shows and no command is recorded."
         item(view, "Private Mode", #selector(togglePrivateMode(_:)), "", target: self).toolTip =
             "No suggestions while typing, and no command of yours recorded, until you turn it off or quit Next Term."
         let heights = NSMenu(title: "Line Height")
@@ -2209,6 +2251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // Prompts as tasks in the project's todo folder, for tomorrow's agent.
         MainActor.assumeIsolated { TasksMenu.shared.fill(submenu(main, "Tasks")) }
+        // Secrets, after Tasks, whose servers and commands use its keys. Show Secrets keeps Window › Secrets' action, so its key stays.
+        MainActor.assumeIsolated { SecretsMenu.shared.fill(submenu(main, "Secrets")) }
 
         let git = submenu(main, "Git")
         item(git, "Branches…", #selector(TerminalWindowController.showBranches(_:)), "b", [.command, .option])
@@ -2263,7 +2307,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         item(window, "Welcome to Next Term", #selector(showWelcome(_:)), "", target: self)
         item(window, "Skills", #selector(showSkills(_:)), "", target: self)
-        item(window, "Secrets", #selector(showSecrets(_:)), "", target: self)
         NSApp.windowsMenu = window
 
         return main

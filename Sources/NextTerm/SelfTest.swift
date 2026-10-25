@@ -658,7 +658,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -679,12 +679,14 @@ enum SelfTest {
             return agentSpinnerChecks()
         case "services": return await serviceChecks(c)
         case "secrets": return await secretsChecks(c, proj: proj)
+        case "opencode": return await opencodeScreenChecks(c) // its screen, answers and own notices
         case "tasks": return await tasksChecks(c, proj: proj) // the Tasks menu, Add Task…, the todo file's bytes and add_task
         case "welcome": return await welcomePartChecks() // the Welcome window (SelfTestWelcomeSwitcher)
         case "tabList": return await tabListChecks(c, proj: proj) // the terminal's tabs in a list, its import and its smoothness
         case "terminalPosition": return await terminalPositionChecks(c, proj: proj) // a position chosen again, folds, shares
         case "completion": return await completionChecks(c) // Tab completion here and on servers, and Suggest a Command
         case "ghostText": return await ghostTextChecks(c) // what read_tab says is typed, and suggestions while typing
+        case "clicks": return await singleClickChecks(c, proj: proj, tab: inProject) // the sidebar's clicks, previews and viewers
         case "gitRefresh": return await gitRefreshChecks(c) // the sidebar's git refresh and Databases scan, in a repository of its own
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
@@ -1040,6 +1042,7 @@ enum SelfTest {
         await mouseReportChecks(c)
         await cellSnapChecks(c)
         await notificationChecks(c)
+        await opencodeScreenChecks(c)
         notificationsMenuChecks()
         await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
@@ -4953,6 +4956,10 @@ enum SelfTest {
         guard await wait(5, { worker.status.running }) else {
             return check(false, "MCP: send_to_tab runs `sleep 29`", worker.screenTail(6).joined(separator: " | "))
         }
+        // While it runs zsh takes no bracketed paste, so a Return in the text, a lone "\r" too, would run as typed-ahead.
+        let returnInText = await tool("send_to_tab", ["tab_id": workerID, "text": "echo cr-line\r", "submit": false])
+        check(returnInText.isError && returnInText.text.contains("one line at a time"),
+              "MCP: send_to_tab refuses a Return in its text where the program takes no paste", returnInText.text)
         let refused = await tool("close_tab", ["tab_id": workerID])
         check(refused.isError && refused.text.contains("force"), "MCP: close_tab will not stop a running command unless forced", refused.text)
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["ctrl+c"]])
@@ -4966,7 +4973,9 @@ enum SelfTest {
         // `sleep 29`, and text sent with no Return that press_keys' Return then submits. A line typed as the user types it
         // goes in. The worker's zsh reads the self-test's own config, so its history is the test's, never the user's; that
         // history is shared with the test's other tabs, where `sleep 30` is typed by hand, so the agent sleeps 29.
+        MCPControl.typedByUser(worker)
         _ = await tool("send_to_tab", ["tab_id": workerID, "text": "echo tied-line", "submit": false])
+        check(MCPControl.isDriven(worker), "MCP: text sent with no Return makes the tab the agent's until you type in it")
         _ = await tool("press_keys", ["tab_id": workerID, "keys": ["enter"]])
         _ = await wait(5) { worker.screenTail(10).contains { (line: String) -> Bool in line.hasPrefix("tied-line") } }
         worker.view.send(txt: "\u{15}echo typed-by-hand\r")

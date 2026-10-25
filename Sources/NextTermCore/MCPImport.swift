@@ -497,6 +497,7 @@ public enum MCPImport {
                 }
             }
             plan.skipped += result.skipped
+            if let folders = result.folderClick { plan.noteFolderClick(folders.single, source: folders.source) }
         case .vsCodeKeybindings:
             guard let rules = ImportVSCode.rules(text) else {
                 return .failure(MCPToolError("\(name) couldn't be read as a VS Code keybindings file (a JSON list with comments)."))

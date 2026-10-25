@@ -70,8 +70,7 @@ extension ProjectSidebarView {
             return true
         }
         guard item is ServicesGroup else { return false }
-        let group = servicesGroup
-        if outline.isItemExpanded(group) { outline.collapseItem(group) } else { outline.expandItem(group) }
+        toggle(servicesGroup)
         return true
     }
 

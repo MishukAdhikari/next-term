@@ -15,7 +15,9 @@ import Testing
         #expect(schema["type"] as? String == "object" && schema["required"] as? [String] == ["title"])
         #expect(schema["additionalProperties"] as? Bool == false)
         let properties = try #require(schema["properties"] as? [String: Any])
-        #expect(Set(properties.keys) == MCPServer.taskArguments && Set(properties.keys) == ["title", "notes", "when", "project", "reason"])
+        #expect(Set(properties.keys) == MCPServer.taskArguments && Set(properties.keys) == ["title", "notes", "when", "project", "reason", "destination"])
+        let destination = try #require(properties["destination"] as? [String: Any])
+        #expect(destination["type"] as? String == "string" && destination["enum"] as? [String] == ["project", "todo_folder"])
         let title = try #require(properties["title"] as? [String: Any])
         #expect(title["minLength"] as? Int == 1 && title["maxLength"] as? Int == MCPServer.taskTitleLength)
         #expect((properties["notes"] as? [String: Any])?["maxLength"] as? Int == MCPServer.taskNotesLength)
@@ -37,11 +39,14 @@ import Testing
         #expect(tool.description.contains("asked on the Mac first") && tool.description.contains("todo/") && tool.description.contains("- [ ]"))
         // Its only names are Next Term's: every capitalised word is one of these.
         let capitalised = Set(tool.description.split { !$0.isLetter }.filter { $0.first?.isUppercase == true }.map(String.init))
-        #expect(capitalised == ["Adds", "Markdown", "The", "Mac", "Next", "Term", "Each", "Answers"], "\(capitalised.sorted())")
-        // After the import tools, before Secrets' four, which end the list.
+        #expect(capitalised == ["Adds", "Markdown", "With", "The", "Mac", "Next", "Term", "Each", "Answers"], "\(capitalised.sorted())")
+        #expect(tool.description.contains("With destination project (the default) the task goes where the user sends this project's tasks; "
+            + "todo_folder always writes the Markdown file."))
+        // After the import tools, before Secrets' five, which end the list.
         let names = MCPServer.tools.map(\.name)
         #expect(names.firstIndex(of: "add_task") == names.firstIndex(of: "undo_import").map { $0 + 1 })
-        #expect(Array(names.suffix(5)) == ["add_task", "list_secrets", "request_secret", "store_secret", "run_with_secrets"])
+        let last: [String] = Array(names.suffix(6))
+        #expect(last == ["add_task", "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets"])
         #expect(names.filter { $0 == "add_task" }.count == 1)
         // The instructions name it among the tools that ask, and still fit.
         #expect(MCPServer.instructions.contains("apply_import, undo_import and add_task ask the user on the Mac first"))
@@ -61,7 +66,7 @@ import Testing
         #expect(refusal(["title": "x", "when": 3]) != nil && refusal([:]) != nil && refusal(["title": "  "]) != nil && refusal(["title": "- [ ]"]) != nil)
         #expect(refusal(["title": String(repeating: "a", count: 301)]) != nil && refusal(["title": "x", "notes": 4]) != nil)
         #expect(refusal(["title": "x", "notes": String(repeating: "n", count: 20_001)]) != nil)
-        #expect(refusal(["title": "x", "destination": "todo_folder"])?.contains("destination") == true)
+        #expect(refusal(["title": "x", "colour": "red"])?.contains("only title, notes, when, project, reason and destination") == true)
         #expect(refusal(["title": "x", "reason": ["no"]]) != nil)
         // Tomorrow by default; the project as given, for the app to find.
         let made = try MCPServer.taskDraft(["title": "Finish the login fix:", "notes": "- write test\n\nSee PR 512.", "project": "api"],
@@ -69,13 +74,30 @@ import Testing
         #expect(made.draft.title == "Finish the login fix" && made.draft.steps.map(\.text) == ["write test"] && made.draft.notes == "See PR 512.")
         #expect(made.draft.scheduled == .day(TaskDay("2026-10-16")!) && made.project as? String == "api")
         let today = try MCPServer.taskDraft(["title": "x", "when": "today"], now: now, calendar: calendar).get()
-        #expect(today.draft.scheduled == .day(TaskDay("2026-10-15")!) && today.project == nil)
+        #expect(today.draft.scheduled == .day(TaskDay("2026-10-15")!) && today.project == nil && today.target == .project)
         // A stored key in the title or notes is masked before anything sees it.
         let key = "sk-live-7f3c2a9b4d1e"
         let masked = try MCPServer.taskDraft(["title": "Rotate \(key)", "notes": key], now: now, calendar: calendar) {
             $0.replacingOccurrences(of: key, with: "•••")
         }.get()
         #expect(masked.draft.title == "Rotate •••" && masked.draft.notes == "•••" && masked.draft.masked)
+    }
+
+    @Test func destinationTakesProjectOrTodoFolderOnly() throws {
+        let project = try MCPServer.taskDraft(["title": "x", "destination": "project"]).get()
+        let folder = try MCPServer.taskDraft(["title": "x", "destination": "todo_folder"]).get()
+        #expect(project.target == .project && folder.target == .todoFolder)
+        // Anything else is refused with the one sentence, before the rest is looked at (no title here at all).
+        let others: [Any] = ["things", "through_agent", "", 3, NSNull(), "Project", ["todo_folder"]]
+        for other in others {
+            guard case .failure(let error) = MCPServer.taskDraft(["destination": other]) else {
+                Issue.record("\(other) was taken")
+                continue
+            }
+            #expect(error.text == MCPServer.taskTargetRefusal, "\(other)")
+        }
+        #expect(MCPServer.taskTargetRefusal == "destination takes project or todo_folder; where the project’s tasks go is the "
+            + "user’s choice. Nothing was added.")
     }
 
     @Test func theAnswerSaysWhereTheTaskWent() throws {

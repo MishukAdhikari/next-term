@@ -48,6 +48,10 @@ extension SelfTest {
         await secretsFailedFirstAddRecordChecks(base)
         await secretsReplacedVaultUseChecks(base)
         await secretsReplacedVaultRemarkChecks(base)
+        #if DEBUG
+        await secretsOtherCopyChecks(base)
+        await secretsTooLargeChecks(base)
+        #endif
         secretsPinnedKeychainChecks()
     }
 

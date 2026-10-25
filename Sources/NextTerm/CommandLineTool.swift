@@ -11,9 +11,11 @@ enum CommandLineTool {
         if arguments == ["mcp"] { MCPBridge.run() }
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
-        // `nxtrm secret run …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still opens a file named secret.
+        // `nxtrm secret run …`, `nxtrm secret import …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still
+        // opens a file named secret.
         if arguments.count >= 2, arguments[0] == "secret" {
             if arguments[1] == "run" { SecretWrapper.run(Array(arguments.dropFirst(2))) }
+            if arguments[1] == "import" { SecretPipe.run(Array(arguments.dropFirst(2))) }
             if ["help", "-h", "--help"].contains(arguments[1]) {
                 print(SecretRun.help)
                 exit(0)
@@ -377,6 +379,13 @@ enum MCPBridge {
         let offering = UserDefaults.standard.object(forKey: "agentsOfferTabs") as? Bool ?? true
         let instructions = MCPServer.instructions(inTab: MCPServer.runsUnder(executable: Bundle.main.executablePath ?? ""), offeringTabs: offering)
         let calls = DispatchGroup()
+        #if DEBUG
+        // The self-test's shorter progress interval (SelfTestOpencodeProgress).
+        let progressEvery = MCPProgress.interval(testSeconds: environment["NEXTTERM_TEST_MCP_PROGRESS_SECONDS"])
+        #else
+        let progressEvery = MCPProgress.interval
+        #endif
+        let progress = MCPProgress.Tickers(every: progressEvery, send: send)
         while let line = readLine(strippingNewline: true) {
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
@@ -385,12 +394,12 @@ enum MCPBridge {
             }
             let messages = (object as? [[String: Any]]) ?? [(object as? [String: Any]) ?? [:]]
             for message in messages {
+                progress.cancel(message) // notifications/cancelled: that call's progress stops
                 if message["method"] as? String == "tools/call" {
-                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile.
-                    DispatchQueue.global().async(group: calls) {
-                        if let response = MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) }) {
-                            send(response)
-                        }
+                    // Calls can take long (wait_for_tab): answer pings and other calls meanwhile. One that carries a
+                    // progress token gets progress until its answer is sent (MCPProgress).
+                    progress.answer(message, in: calls) {
+                        MCPServer.respond(to: message, version: version, call: { forward($0, $1, socket: socket) })
                     }
                 } else if let response = MCPServer.respond(to: message, version: version, instructions: instructions,
                                                            call: { _, _ in MCPServer.CallResult(text: "") }) {
@@ -398,6 +407,7 @@ enum MCPBridge {
                 }
             }
         }
+        progress.stopAll() // stdin closed: the calls in flight send no more progress
         calls.wait() // stdin closed: finish the answers in flight (a caller may still read them), then go
         exit(0)
     }

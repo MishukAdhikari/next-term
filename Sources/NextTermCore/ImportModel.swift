@@ -103,6 +103,17 @@ public enum ImportSourceKind: String, CaseIterable, Codable, Sendable {
 
     /// Whether its reader looks for the app itself, so an app not found was removed. Terminal comes with macOS.
     public var looksForApp: Bool { self != .terminalApp }
+
+    /// What a click in its file tree does when its settings say nothing, which is what its import sets the sidebar's
+    /// click to then: true opens a file (and a folder) with one click, false with two. Nil for an app with no file
+    /// tree, whose import leaves the setting as it is. Every new kind of app must say.
+    public var singleClickDefault: Bool? {
+        switch self {
+        case .vsCode, .vsCodeInsiders, .vsCodium, .cursor, .devinDesktop, .vsCodeFork, .sublimeText, .zed: return true
+        case .jetBrains: return false
+        case .iTerm2, .ghostty, .warp, .terminalApp, .kitty, .alacritty, .wezTerm, .kaku, .cmux: return nil
+        }
+    }
 }
 
 /// The groups the import window lists apps in, in its order. Files (a theme or settings file picked by hand) come
@@ -195,7 +206,7 @@ public enum ImportedSetting: Equatable, Sendable {
     case trimTrailingWhitespace(Bool)     // on save
     case insertFinalNewline(Bool)         // on save
     case hiddenFiles([String])            // FileHiding patterns, added to the user's own
-    case sidebarSingleClick(Bool)         // a click on a file in the project sidebar opens it, in a preview tab
+    case sidebarSingleClick(Bool)         // a click in the project sidebar opens a file (in a preview tab) or a folder
     case backgroundFetch(String)          // a FetchFrequency: 5, 10, 30, popup or off
     case diffLayout(String)               // sideBySide or unified
     case currentLineBlame(Bool)           // the caret line's last commit, after its text
@@ -451,6 +462,32 @@ public struct ImportPlan: Equatable, Sendable {
         self.shortcuts = shortcuts
         self.recentProjects = recentProjects
         self.skipped = skipped
+    }
+
+    /// The sidebar's click the plan sets, if it sets one: true for a single click.
+    public var singleClick: Bool? {
+        settings.lazy.compactMap { row -> Bool? in
+            if case .sidebarSingleClick(let on) = row.setting { return on }
+            return nil
+        }.last
+    }
+
+    /// The other app's own click, its default (`ImportSourceKind.singleClickDefault`), when the plan has no click row:
+    /// its settings say nothing about it. Only for a settings file that was read, or that isn't there (the app's
+    /// defaults apply to it all): one that couldn't be read may say otherwise. An app with no file tree adds nothing.
+    mutating func addSingleClickDefault(for kind: ImportSourceKind, source: String, note: String) {
+        guard let value = kind.singleClickDefault, singleClick == nil else { return }
+        settings.append(PlannedSetting(.sidebarSingleClick(value), source: source, note: note))
+    }
+
+    /// Why a folder key is left out: Next Term has one switch for files and folders, which the file key sets.
+    static let sameClickForFolders = "Next Term opens folders with the same click as files"
+
+    /// The other app's click for folders (`folders`, true for a single click), when it differs from the one the plan
+    /// sets for files: listed as skipped, under `source`.
+    mutating func noteFolderClick(_ folders: Bool?, source: String) {
+        guard let folders, let files = singleClick, folders != files else { return }
+        skipped.append(SkippedItem(source, Self.sameClickForFolders))
     }
 }
 

@@ -2,7 +2,8 @@
 
 Tasks › Add Task… (⌃⌘T) and the MCP tool `add_task` turn a prompt into a task: one Markdown file in the project's
 todo folder, so tomorrow's agent session in that project can read it with its own file tools. This is the format of
-those files. It is open: any program, agent or person can read and write it.
+those files. It is open: any program, agent or person can read and write it. A project can send its tasks to an app,
+a tracker's page or your agent instead: see [where tasks go](task-destinations.md).
 
 ## Where
 

@@ -71,6 +71,144 @@ import Testing
     }
 }
 
+/// OpenCode however it starts: its npm package with or without a version, run by any package runner, OpenCode 2's
+/// `opencode2` and `@opencode/cli`, and npm's native `opencode.exe`, each named "opencode". Its servers are commands.
+@Suite struct OpencodeRecognitionTests {
+    static let starts = [
+        "opencode", "opencode2", "npx opencode-ai", "npx opencode-ai@latest", "bunx opencode-ai@1.19.0", "npx @opencode/cli",
+        "npx -y @opencode/cli@2.0.26", "pnpm dlx opencode-ai", "yarn dlx opencode-ai@latest", "pnpx opencode-ai",
+        "/usr/local/lib/node_modules/opencode-ai/bin/opencode.exe", "cd ~/app && npx opencode-ai -c", "opencode ./web",
+        "opencode attach http://localhost:4096", "opencode -c", "opencode serve & opencode attach http://localhost:4096",
+    ]
+
+    @Test func everyStartIsOpencode() {
+        for line in Self.starts {
+            #expect(CommandClassifier.agentName(line) == "opencode", "\(line)")
+            #expect(CommandClassifier.kind(of: line) == .agent, "\(line)")
+            #expect(CommandClassifier.programName(line) == "opencode", "\(line)")
+        }
+        #expect(CommandClassifier.programLine("npx opencode-ai@latest -c") == "opencode -c")
+        #expect(CommandClassifier.parse("pnpm dlx opencode-ai -s ses_1").args == ["-s", "ses_1"])
+    }
+
+    /// A package runner's version is dropped for every agent, and only a runner's word is read as a package.
+    @Test func aRunnersVersionIsDroppedForEveryAgent() {
+        #expect(CommandClassifier.agentName("npx @anthropic-ai/claude-code@latest") == "claude-code")
+        #expect(CommandClassifier.programLine("npx @anthropic-ai/claude-code@2.1.280 --resume") == "claude-code --resume")
+        #expect(CommandClassifier.kind(of: "bunx @google/gemini-cli@latest") == .agent)
+        #expect(CommandClassifier.programName("/opt/tools@2/bin/make test") == "make")
+        #expect(CommandClassifier.programName("pnpm dlx create-vite@latest app") == "create-vite")
+        #expect(CommandClassifier.programName("pnpm install") == "pnpm" && CommandClassifier.kind(of: "yarn dlx cowsay@1 hi") == .command)
+        #expect(CommandClassifier.programName("npm exec opencode-ai") == "npm") // npm's exec is not read as a runner
+        // bun's `x` is bunx, and npx's `-p` names the package, not the program.
+        #expect(CommandClassifier.agentName("bun x opencode-ai@latest") == "opencode")
+        #expect(CommandClassifier.programName("bun x.ts") == "bun" && CommandClassifier.kind(of: "bun run dev") == .command)
+        #expect(CommandClassifier.programLine("npx -p opencode-ai opencode -c") == "opencode -c")
+        #expect(CommandClassifier.programLine("npx --package opencode-ai opencode serve") == "opencode serve")
+    }
+
+    /// Only an `@` after the package's last `/` starts a version: one before it is a URL's, whose credential never
+    /// becomes the program's name.
+    @Test func aPackageURLsCredentialIsNeverTheProgram() {
+        #expect(CommandClassifier.programName("npx https://user:TOKEN@example.com/org/tool") == "tool")
+        #expect(CommandClassifier.programLine("npx git+https://user:TOKEN@example.com/org/tool.git --help") == "tool.git --help")
+        #expect(CommandClassifier.programName("bunx https://user:TOKEN@example.com/org/tool@1.0") == "tool")
+        #expect(CommandClassifier.programName("npx @opencode/cli@2.0.26") == "opencode")
+        #expect(CommandClassifier.programName("npx @scope") == "@scope")
+    }
+
+    @Test func itsServersAreCommands() {
+        let servers = ["opencode serve", "opencode web --port 4096", "opencode acp", "npx opencode-ai@latest serve --port 4096",
+                       "opencode --log-level DEBUG serve", "opencode2 web", "cd ~/app && opencode acp"]
+        for line in servers {
+            #expect(CommandClassifier.kind(of: line) == .command, "\(line)")
+            #expect(CommandClassifier.agentName(line) == nil, "\(line)")
+            #expect(CommandClassifier.programName(line) == "opencode", "\(line)")
+        }
+        #expect(CommandClassifier.kind(of: "node /usr/local/lib/node_modules/opencode-ai/bin/opencode serve") == .command)
+        // Another agent's word for a subcommand is that agent's own.
+        #expect(CommandClassifier.kind(of: "claude web") == .agent)
+    }
+
+    /// Any option the table says takes a value takes the next word, as OpenCode's parser does, so a server started
+    /// with an option before its subcommand is still a command, and a value named like a subcommand starts none.
+    @Test func aServerAfterAnOptionsValueIsACommand() {
+        let servers = [
+            "opencode --port 4096 serve", "opencode --hostname 0.0.0.0 web", "opencode -m x/y serve", "opencode --model x/y acp",
+            "opencode --agent build web", "opencode -s ses_1 serve", "opencode --session ses_1 web", "opencode --prompt hi serve",
+            "opencode --cors http://localhost:5173 web", "opencode --mdns-domain opencode.local serve", "opencode --replay-limit 200 web",
+            "opencode --mini --port=4096 serve", "npx opencode-ai@latest --port 4096 serve", "npx -p opencode-ai opencode serve",
+        ]
+        for line in servers {
+            #expect(CommandClassifier.kind(of: line) == .command, "\(line)")
+            #expect(CommandClassifier.agentName(line) == nil, "\(line)")
+        }
+        let tuis = ["opencode -m serve", "opencode --agent web", "opencode --port 4096", "opencode run serve", "opencode -m --port 4096"]
+        for line in tuis {
+            #expect(CommandClassifier.kind(of: line) == .agent, "\(line)")
+        }
+        let argv = ["opencode", "--port", "4096", "serve"]
+        #expect(CommandClassifier.kind(of: ForegroundProcess(isShell: false, name: "opencode", arguments: argv)) == .command)
+        #expect(CommandClassifier.runsServer(executable: "/opt/homebrew/bin/opencode", arguments: argv))
+        let node = ["node", "/usr/local/lib/node_modules/opencode-ai/bin/opencode", "--hostname", "0.0.0.0", "web"]
+        #expect(CommandClassifier.runsServer(executable: "/usr/local/bin/node", arguments: node))
+        #expect(!CommandClassifier.runsServer(executable: "/opt/homebrew/bin/opencode", arguments: ["opencode", "-m", "serve"]))
+    }
+
+    @Test func itsProcessesAreNamedOpencode() {
+        let npm = "/usr/local/lib/node_modules/opencode-ai/bin/opencode.exe"
+        let native = ForegroundProcess(isShell: false, name: "opencode.exe", arguments: [npm, "-c"], executablePath: npm)
+        #expect(CommandClassifier.kind(of: native) == .agent)
+        #expect(CommandClassifier.programName(of: native) == "opencode")
+        #expect(CommandClassifier.agentName(executable: npm, arguments: [npm, "-c"]) == "opencode")
+        let two = ForegroundProcess(isShell: false, name: "opencode2", arguments: ["opencode2"], executablePath: "/opt/homebrew/bin/opencode2")
+        #expect(CommandClassifier.kind(of: two) == .agent && CommandClassifier.programName(of: two) == "opencode")
+        let script = "/opt/homebrew/lib/node_modules/@opencode/cli/dist/index.js"
+        #expect(CommandClassifier.agentName(executable: "/opt/homebrew/bin/node", arguments: ["node", script]) == "opencode")
+        let node = ForegroundProcess(isShell: false, name: "node", arguments: ["node", script], executablePath: "/opt/homebrew/bin/node")
+        #expect(CommandClassifier.kind(of: node) == .agent && CommandClassifier.programName(of: node) == "opencode")
+    }
+
+    @Test func itsServerProcessesAreCommands() {
+        let serve = ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "serve"])
+        #expect(CommandClassifier.kind(of: serve) == .command)
+        #expect(CommandClassifier.programName(of: serve) == "opencode")
+        let wrapper = ForegroundProcess(isShell: false, name: "node", arguments: ["node", "/usr/local/bin/opencode", "web", "--port", "4096"],
+                                        executablePath: "/usr/local/bin/node")
+        #expect(CommandClassifier.kind(of: wrapper) == .command)
+        #expect(CommandClassifier.runsServer(executable: "/usr/local/bin/node", arguments: wrapper.arguments))
+        let acp = ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "--print-logs", "acp"])
+        #expect(CommandClassifier.kind(of: acp) == .command)
+        for tui in [["opencode"], ["opencode", "-c"], ["opencode", "attach", "http://localhost:4096"]] {
+            let process = ForegroundProcess(isShell: false, name: "opencode", arguments: tui)
+            #expect(CommandClassifier.kind(of: process) == .agent, "\(tui)")
+            #expect(!CommandClassifier.runsServer(executable: "", arguments: tui), "\(tui)")
+        }
+        // A server's tools still call as OpenCode, so the process is named for whoever asks which agent calls.
+        #expect(CommandClassifier.agentName(executable: "/usr/local/bin/opencode", arguments: ["opencode", "acp"]) == "opencode")
+    }
+
+    /// With the shell integration, polling upgrades a command to an agent only for an agent's TUI, never for a server.
+    @Test func anIntegratedServerTabStaysACommand() {
+        var server = TabStatus()
+        server.commandStarted("opencode serve", at: 0)
+        #expect(server.kind == .command && server.program == "opencode")
+        server.observe(ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "serve"]), at: 1)
+        #expect(server.kind == .command)
+        var function = TabStatus()
+        function.commandStarted("ocs", at: 0)
+        function.observe(ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode", "web"]), at: 1)
+        #expect(function.kind == .command)
+        var tui = TabStatus()
+        tui.commandStarted("oc", at: 0)
+        tui.observe(ForegroundProcess(isShell: false, name: "opencode", arguments: ["opencode"]), at: 1)
+        #expect(tui.kind == .agent && tui.program == "opencode")
+        var npx = TabStatus()
+        npx.commandStarted("npx opencode-ai@latest", at: 0)
+        #expect(npx.kind == .agent && npx.program == "opencode")
+    }
+}
+
 @Suite struct TabStatusTests {
     @Test func startupCommandsAreNotCommandsRun() {
         var s = TabStatus()
@@ -122,7 +260,7 @@ import Testing
         s.setVisible(true)
         s.commandStarted("make", at: 0)
         s.commandFinished(exitCode: 2, at: 60)
-        s.bell()
+        s.bell(at: 60)
         #expect(s.state == .idle)
         #expect(s.takeNotice() == nil)
     }
@@ -185,7 +323,7 @@ import Testing
     @Test func attentionOutranksAndSurvivesDone() {
         var s = TabStatus()
         s.commandStarted("make", at: 0)
-        s.bell()
+        s.bell(at: 0.5)
         #expect(s.state == .attention)
         s.commandFinished(exitCode: 0, at: 1)
         #expect(s.state == .attention)
@@ -295,14 +433,14 @@ import Testing
 
     @Test func bellLoopNotifiesOnce() {
         var s = TabStatus()
-        s.bell()
+        s.bell(at: 0)
         let notice = s.takeNotice()
         #expect(notice?.state == .attention && notice?.fromProgram == true && notice?.topic == .programAlert)
-        for _ in 0..<500 { s.bell() }
+        for _ in 0..<500 { s.bell(at: 0) }
         #expect(s.takeNotice() == nil)
         s.setVisible(true)
         s.setVisible(false)
-        s.bell()
+        s.bell(at: 0)
         #expect(s.takeNotice()?.state == .attention)
     }
 
@@ -317,6 +455,299 @@ import Testing
         s.commandStarted("make", at: 0)
         s.observe(ForegroundProcess(isShell: true, name: "zsh"), at: 1)
         #expect(s.running)
+    }
+
+    /// An agent whose own footer says it waits (OpenCode): its startup drawing is not a turn.
+    @Test func theFirstReadyEndsStartupWithoutANotice() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        for t in stride(from: 0.0, through: 6, by: 0.25) {
+            s.output(at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .working && !s.screenSynced) // output timing, until the screen speaks
+        s.observe(agentScreen: .ready, at: 6.25)
+        #expect(s.state == .idle)
+        for t in stride(from: 6.5, through: 14, by: 0.25) {
+            s.output(at: t) // it goes on drawing: output timing may call it working, but no turn of its own ends
+            s.observe(agentScreen: .ready, at: t)
+            s.tick(at: t)
+        }
+        s.tick(at: 17)
+        #expect(s.state == .idle && s.unseen == nil && s.takeNotice() == nil)
+    }
+
+    /// A release whose working hint the table lacks draws its footer while it works too (OpenCode 2.x's prompt footer
+    /// is the same busy or not): until its working hint has shown, output timing says when it works, and no done.
+    @Test func beforeItsWorkingHintTheFooterLeavesOutputTimingOn() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .ready, at: 1)
+        for t in stride(from: 5.0, through: 30, by: 0.25) {
+            s.output(at: t)
+            s.observe(agentScreen: .ready, at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .working && !s.screenSynced)
+        for t in stride(from: 30.25, through: 34, by: 0.25) {
+            s.observe(agentScreen: .ready, at: t)
+            s.tick(at: t)
+        }
+        #expect(s.state == .idle && s.unseen == nil && s.takeNotice() == nil)
+        // A question syncs the tab with its screen, and the footer while it works after the answer unsyncs it.
+        s.observe(agentScreen: .asking("Permission required: $ npm test"), at: 40)
+        #expect(s.state == .attention && s.screenSynced)
+        s.observe(agentScreen: .ready, at: 42)
+        s.output(at: 42.5)
+        #expect(s.question == nil && s.state == .working && !s.screenSynced)
+        // Its working hint, once: from then on the footer alone is a finish.
+        s.observe(agentScreen: .working, at: 50)
+        s.observe(agentScreen: .ready, at: 70)
+        s.tick(at: 71)
+        #expect(s.state == .done && s.takeNotice()?.topic == .agentFinished)
+    }
+
+    /// OpenCode showing none of its shapes once its footer has been seen (a sub-agent's session, which has a footer of
+    /// its own): nothing to go by, so the tab stays as it was, never "done" while OpenCode may still work.
+    @Test func noneOfItsShapesKeepsTheState() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .ready, at: 1)
+        s.observe(agentScreen: .working, at: 2)
+        s.observe(agentScreen: .idle, at: 10)
+        s.tick(at: 20)
+        #expect(s.state == .working && s.takeNotice() == nil)
+        s.observe(agentScreen: .ready, at: 30)
+        s.tick(at: 31)
+        #expect(s.state == .done && s.takeNotice()?.duration == 28)
+        // Every other agent: no hint is a stop, as before.
+        var claude = TabStatus()
+        claude.commandStarted("claude", at: 0)
+        claude.observe(agentScreen: .working, at: 1)
+        claude.observe(agentScreen: .idle, at: 10)
+        claude.tick(at: 11)
+        #expect(claude.state == .done)
+    }
+
+    /// Every new reading of OpenCode's question is a new question with a new number, so an id held for one request never
+    /// answers another, even when OpenCode swaps requests under the same prompt. OpenCode 2.x replaces a shell request's
+    /// command with what "Always allow" saves while that button is selected: a new question too, with no second notice.
+    @Test func everyRequestReadIsItsOwnQuestion() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        s.observe(agentScreen: .asking("Permission required: $ npm test"), at: 10)
+        let serial = s.questionSerial
+        #expect(s.takeNotice()?.question == "Permission required: $ npm test")
+        // The selection moved onto "Always allow": its words and number change, and no new notice.
+        s.observe(agentScreen: .asking("Permission required: This will always allow shell for this project."), at: 11)
+        #expect(s.question == "Permission required: This will always allow shell for this project.")
+        #expect(s.questionSerial == serial + 1 && s.takeNotice() == nil)
+        // Back off it, the command shown may be another request's: a new question, with its notice.
+        s.observe(agentScreen: .asking("Permission required: $ rm -rf build"), at: 12)
+        #expect(s.question == "Permission required: $ rm -rf build" && s.questionSerial == serial + 2)
+        #expect(s.takeNotice()?.question == "Permission required: $ rm -rf build")
+        // The header alone is another question, never the one read before.
+        s.observe(agentScreen: .asking("Permission required: Edit src/a.ts"), at: 13)
+        s.observe(agentScreen: .asking("Permission required"), at: 14)
+        #expect(s.question == "Permission required" && s.questionSerial == serial + 4)
+        #expect(s.takeNotice()?.question == "Permission required")
+    }
+
+    @Test func workThenReadyIsAFinish() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .ready, at: 1)
+        s.observe(agentScreen: .working, at: 2)
+        #expect(s.state == .working)
+        s.observe(agentScreen: .ready, at: 42)
+        s.tick(at: 42)
+        #expect(s.state == .done && s.takeNotice() == nil) // held for a second
+        s.observe(agentScreen: .ready, at: 43)
+        s.tick(at: 43)
+        let notice = s.takeNotice()
+        #expect(notice?.duration == 40 && notice?.stillRunning == true && notice?.topic == .agentFinished)
+        // Back to work before the second is up: the same turn.
+        s.observe(agentScreen: .working, at: 50)
+        s.observe(agentScreen: .ready, at: 60)
+        s.observe(agentScreen: .working, at: 60.5)
+        s.tick(at: 62)
+        #expect(s.takeNotice() == nil && s.state == .working)
+    }
+
+    @Test func aQuestionAfterWorkAndItsAnswer() {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10)
+        #expect(s.state == .attention)
+        let notice = s.takeNotice()
+        #expect(notice?.question == "Permission required: Shell command ($ npm test)" && notice?.topic == .decision)
+        s.observe(agentScreen: .working, at: 12) // answered
+        #expect(s.question == nil && s.state == .working)
+        // Answered and done at once: the question goes, and the stop notifies as any.
+        s.observe(agentScreen: .asking("Always allow: This will allow bash until OpenCode is restarted."), at: 20)
+        _ = s.takeNotice()
+        s.observe(agentScreen: .ready, at: 21)
+        #expect(s.question == nil && s.state == .idle)
+    }
+
+    @Test func aProgramsNoticeCarriesItsWords() {
+        var s = TabStatus()
+        s.bell(notice: ProgramNotice(title: "Fix the login test", body: "Session error"), at: 0)
+        let notice = s.takeNotice()
+        #expect(notice?.message == "Session error" && notice?.fromProgram == true && notice?.topic == .programAlert)
+        s.setVisible(true)
+        s.setVisible(false)
+        s.bell(at: 1)
+        let bare = s.takeNotice()
+        #expect(bare?.state == .attention && bare?.message == nil)
+    }
+
+    @Test func aProgramsNoticeAfterADecisionAddsNothing() {
+        // The decision's amber mark is attention already: the program's vaguer notice never replaces it.
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10)
+        #expect(s.takeNotice()?.topic == .decision)
+        s.bell(notice: ProgramNotice(title: nil, body: "Permission needs input"), at: 11)
+        #expect(s.takeNotice() == nil && s.question == "Permission required: Shell command ($ npm test)")
+        s.tick(at: 14)
+        #expect(s.takeNotice() == nil)
+    }
+
+    /// An OpenCode tab whose screen Next Term reads: started at 0, working from 1.
+    private func readOpencode() -> TabStatus {
+        var s = TabStatus()
+        s.commandStarted("opencode", at: 0)
+        s.observe(agentScreen: .working, at: 1)
+        return s
+    }
+
+    @Test func anAgentsWordsBeforeItsQuestionGiveWayToTheDecision() {
+        // OpenCode sends "Permission needs input" as it asks, before Next Term's next look at its screen: one notice.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Permission needs input"), at: 10)
+        #expect(s.takeNotice() == nil && s.state == .working) // the screen gives the mark
+        s.observe(agentScreen: .asking("Permission required: Shell command ($ npm test)"), at: 10.4)
+        #expect(s.takeNotice()?.topic == .decision)
+        for now: TimeInterval in [11, 12.5, 15, 25] { s.tick(at: now) }
+        #expect(s.takeNotice() == nil && s.state == .attention)
+    }
+
+    @Test func anAgentsWordsBeforeItsFinishAreTheFinishs() {
+        // "Session error" as the turn ends: one notice, the finish's, in the agent's words. The mark is done, not amber.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: "Fix the login test", body: "Session error"), at: 20)
+        s.tick(at: 20.25)
+        #expect(s.takeNotice() == nil && s.state == .working)
+        s.observe(agentScreen: .ready, at: 20.5)
+        s.tick(at: 21)
+        #expect(s.takeNotice() == nil)
+        s.tick(at: 21.5)
+        let finish = s.takeNotice()
+        #expect(finish?.topic == .agentFinished && finish?.message == "Session error" && finish?.duration == 19.5)
+        s.tick(at: 23)
+        #expect(s.takeNotice() == nil && s.state == .done && s.question == nil)
+        // A late look at the screen: the words wait for the stop that is settling.
+        var late = readOpencode()
+        late.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 20)
+        late.observe(agentScreen: .ready, at: 21.9)
+        late.tick(at: 22.25)
+        #expect(late.takeNotice() == nil)
+        late.tick(at: 23)
+        #expect(late.takeNotice()?.message == "Session error" && late.state == .done)
+    }
+
+    @Test func aShortTurnsWordsGoOutOnTheirOwn() {
+        // A turn too short for a finish notice: the agent's own notice goes out once the stop has settled. Still no amber.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 3)
+        s.observe(agentScreen: .ready, at: 3.3)
+        s.tick(at: 4.5)
+        let words = s.takeNotice()
+        #expect(words?.topic == .programAlert && words?.message == "Session error" && s.state == .done)
+    }
+
+    @Test func wordsTheScreenIsLateForStayWithTheTurn() {
+        // The screen still shows work when the wait is over: the words go out alone, and the finish that follows takes them
+        // too (the app drops it, the same words again). The next turn's finish has none.
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 20)
+        s.tick(at: 21.75)
+        #expect(s.takeNotice() == nil)
+        s.tick(at: 22)
+        #expect(s.takeNotice()?.message == "Session error")
+        s.observe(agentScreen: .ready, at: 23)
+        s.tick(at: 24)
+        #expect(s.takeNotice()?.message == "Session error")
+        s.observe(agentScreen: .working, at: 30)
+        s.observe(agentScreen: .ready, at: 50)
+        s.tick(at: 51)
+        let next = s.takeNotice()
+        #expect(next?.topic == .agentFinished && next?.message == nil)
+    }
+
+    @Test func wordsAsTheStopSettlesOrAfterItAreNoAmber() {
+        // The screen showed the stop first: the words still go with its notice while it settles.
+        var s = readOpencode()
+        s.observe(agentScreen: .ready, at: 20)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 20.3)
+        s.tick(at: 21)
+        let finish = s.takeNotice()
+        #expect(finish?.topic == .agentFinished && finish?.message == "Session done" && s.state == .done)
+        // After a finish that went out, the words go out alone (the app drops them, so soon after its own), and the mark
+        // stays done.
+        s.observe(agentScreen: .working, at: 30)
+        s.observe(agentScreen: .ready, at: 40)
+        s.tick(at: 41)
+        #expect(s.takeNotice()?.topic == .agentFinished)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 41.2)
+        s.tick(at: 43.25)
+        #expect(s.takeNotice()?.topic == .programAlert && s.state == .done)
+    }
+
+    @Test func anAgentsWordsNotifyOnceUntilSeenOrItWorksAgain() {
+        var s = readOpencode()
+        s.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 10)
+        s.bell(notice: ProgramNotice(title: nil, body: "Model stopped responding"), at: 10.1)
+        s.tick(at: 12)
+        #expect(s.takeNotice()?.message == "Session error")
+        for now in stride(from: 12.25, to: 20, by: 0.25) {
+            s.bell(notice: ProgramNotice(title: nil, body: "again"), at: now)
+            s.tick(at: now)
+        }
+        #expect(s.takeNotice() == nil)
+        s.setVisible(true)
+        s.setVisible(false)
+        s.bell(notice: ProgramNotice(title: nil, body: "again"), at: 30)
+        s.tick(at: 32)
+        #expect(s.takeNotice()?.message == "again")
+    }
+
+    @Test func anAgentsWordsWhileSeenOrBeforeItsScreenIsRead() {
+        // Seen: nothing, and words held when the tab is looked at go too.
+        var s = readOpencode()
+        s.setVisible(true)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 5)
+        s.tick(at: 8)
+        #expect(s.takeNotice() == nil)
+        s.setVisible(false)
+        s.bell(notice: ProgramNotice(title: nil, body: "Session done"), at: 10)
+        s.setVisible(true)
+        s.setVisible(false)
+        s.tick(at: 13)
+        #expect(s.takeNotice() == nil)
+        // Before its screen has shown a hint, the agent's words are a program's notice as before: at once, and amber.
+        var early = TabStatus()
+        early.commandStarted("opencode", at: 0)
+        early.bell(notice: ProgramNotice(title: nil, body: "Session error"), at: 1)
+        #expect(early.takeNotice()?.message == "Session error" && early.state == .attention)
+        // A bell with no words keeps its way in a tab whose screen is read (AgentScreenTests): at once, and amber.
+        var rang = readOpencode()
+        rang.bell(at: 10)
+        #expect(rang.takeNotice()?.topic == .programAlert && rang.state == .attention)
     }
 }
 

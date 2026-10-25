@@ -655,7 +655,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// Set by the user (double-click a tab). Wins over everything else.
     var userTitle: String?
     /// Set by the running program via OSC 0/2. Cleared at each command boundary.
-    private var programTitle: String?
+    private(set) var programTitle: String?
+    /// The session OpenCode's title names, looked up when the title changes (matchShownSession).
+    var shownSession = OpencodeShownSession()
     private(set) var directory: String {
         didSet { if !leftStartFolder, remote == nil, canonicalPath(directory) != canonicalPath(oldValue) { leftStartFolder = true } }
     }
@@ -711,6 +713,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         view.onWrite = { [weak self] data in
             self?.history.input(data)
             self?.ghost.written(data)
+            self.map { AgentReadiness.shared.written(data, tab: $0) }
         }
         view.linkBaseDirectory = { [weak self] in self?.liveDirectory ?? NSHomeDirectory() }
         view.opensFiles = remote == nil
@@ -747,14 +750,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(clean, forType: .string)
         }
-        // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me".
-        // OSC 9;4 is a progress report, not a notification.
-        terminal.registerOscHandler(code: 9) { [weak self] payload in
-            if payload.starts(with: Array("4;".utf8)) { return }
-            self?.attention()
-        }
-        terminal.registerOscHandler(code: 777) { [weak self] payload in
-            if payload.starts(with: Array("notify;".utf8)) { self?.attention() }
+        // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me", in the program's own
+        // words when it gives some. OSC 9;4 is a progress report, not a notification.
+        for code in [9, 777] {
+            terminal.registerOscHandler(code: code) { [weak self] payload in
+                guard ProgramNotice.isNotification(code: code, payload: payload) else { return }
+                self?.attention(ProgramNotice.parse(code: code, payload: payload))
+            }
         }
     }
 
@@ -1044,6 +1046,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         watchLocalHerdr()
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
+        let wasAgent = status.running && status.kind == .agent
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
                                                      shellPid: view.process.shellPid, shellName: shellName)
         status.observe(foreground, at: Self.now)
@@ -1057,6 +1060,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                 changed = true
             }
         }
+        // OpenCode found behind a plain-looking command (a function that runs it) may have titled the tab already.
+        if !wasAgent, status.kind == .agent { matchShownSession() }
         if changed { delegate?.tabDidChange(self) }
     }
 
@@ -1404,20 +1409,21 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         guard status.program != "herdr" else { return }
         let before = (status.state, status.question)
-        status.observe(agentScreen: agentActivity(liveTail()), at: Self.now)
+        status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
     }
 
     /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
     /// (most of them, most of the time) is not parsed again 4 times a second. AgentScreen.activity is a function of the
-    /// lines and the masks alone, and TabStatus takes the same activity again as it did.
-    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, activity: AgentActivity)?
+    /// lines and the masks alone (and whether they are OpenCode's), and TabStatus takes the same activity again as it did.
+    private var lastAgentRead: (lines: [String], mask: ObjectIdentifier, opencode: Bool, activity: AgentActivity)?
 
     private func agentActivity(_ lines: [String]) -> AgentActivity {
         let mask = ObjectIdentifier(SecretMask.current)
-        if let last = lastAgentRead, last.mask == mask, last.lines == lines { return last.activity }
-        let activity = AgentScreen.activity(screenLines: lines)
-        lastAgentRead = (lines, mask, activity)
+        let opencode = isOpencodeScreen
+        if let last = lastAgentRead, last.mask == mask, last.opencode == opencode, last.lines == lines { return last.activity }
+        let activity = AgentScreen.activity(screenLines: lines, opencode: opencode)
+        lastAgentRead = (lines, mask, opencode, activity)
         return activity
     }
 
@@ -1660,8 +1666,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         delegate?.tabDidChange(self)
     }
 
-    private func attention() {
-        status.bell()
+    private func attention(_ notice: ProgramNotice? = nil) {
+        status.bell(notice: notice, at: Self.now)
         delegate?.tabDidChange(self)
     }
 
@@ -1678,6 +1684,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         programTitle = title
+        matchShownSession()
         delegate?.tabDidChange(self)
     }
 
@@ -2107,6 +2114,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NextTerm"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        // OpenTUI programs (OpenCode) send their notifications as OSC 777, which a tab reads, unless the user chose.
+        ProgramNotice.prepare(&env)
         // Claude Code connects to Next Term as its IDE (and never to another editor's leftover port).
         ClaudeIDEServer.shared.prepare(&env)
         // Its project, or its own folder where it has none (the home folder: ProjectRoot.project).

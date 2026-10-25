@@ -108,11 +108,16 @@ final class MCPControlServer: @unchecked Sendable {
         // and one the quit answered first gets nothing written: the wrapper reads the closed connection. A wrapper the quit
         // found before its line came is no MCP caller either: no MCP answer goes to it. Its connection closes as the call
         // ends, as every other one does.
-        let route = calls.route(call, read: request, selfAnswering: request?.tool == SecretSocket.tool) {
+        // `nxtrm secret import`'s header answers itself the same way; its keys come after, raw, never through this reader.
+        let selfAnswering = request?.tool == SecretSocket.tool || request?.tool == SecretPipeSocket.tool
+        let route = calls.route(call, read: request, selfAnswering: selfAnswering) {
             SecretSocket.isWrapper(pid: peer)
         }
         switch route {
         case .answerItself:
+            if request?.tool == SecretPipeSocket.tool {
+                return SecretPipeSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
+            }
             return SecretSocket.handle(fd: fd, arguments: request?.arguments ?? [:], peer: peer, auditToken: token)
         case .nothing: return
         case .drained(let answer): return send(answer, on: fd)
@@ -216,7 +221,7 @@ enum MCPControl {
         unsubmitted[tab.id] = nil
     }
 
-    private static func isBusy(_ tab: TerminalTab) -> Bool {
+    static func isBusy(_ tab: TerminalTab) -> Bool {
         !tab.exited && (tab.status.state == .working || (tab.status.running && tab.status.kind != .agent))
     }
 
@@ -238,7 +243,7 @@ enum MCPControl {
     }
 
     /// Input sent in the last 5 s that has not visibly started anything yet (agents show work within a second or two).
-    private static func isStarting(_ tab: TerminalTab) -> Bool {
+    static func isStarting(_ tab: TerminalTab) -> Bool {
         guard let sent = lastSent[tab.id], !sent.sawWork, TerminalTab.now - sent.at < 5 else { return false }
         return !(isBusy(tab) || tab.status.commandsStarted > sent.commands)
     }
@@ -279,7 +284,13 @@ enum MCPControl {
     /// The menu under the tab's question, for an agent to read: matched on the screen as the question was read from it,
     /// its choices from `fieldTail`'s rows (`AgentScreen.menu(asking:screenLines:shown:)`).
     static func fieldMenu(_ tab: TerminalTab, question: String) -> AgentMenu? {
-        AgentScreen.menu(asking: question, screenLines: tab.screenTail(), shown: fieldTail(tab))
+        // OpenCode marks its selected button only by its background: its menu is read from its rows with their colours,
+        // and its options' words from the same rows masked over whole lines, as every other tab's choices are.
+        if tab.isOpencodeScreen {
+            let count: Int = tab.agentScreenLines
+            return AgentScreen.menu(asking: question, screenRows: tab.liveRows(count), shown: fieldTail(tab, count))
+        }
+        return AgentScreen.menu(asking: question, screenLines: tab.screenTail(), shown: fieldTail(tab))
     }
     /// A tab's restored details (MCPRestoredTabs), masked: their note can quote a command line or a resume's screen, saved
     /// before a key in it was stored.
@@ -337,7 +348,7 @@ enum MCPControl {
                 SkillsMCP.call(tool, arguments, caller: caller, callerPID: pid, approval: approval, connection: connection,
                                requester: requester, reply: reply)
             }
-        case "list_secrets", "request_secret", "store_secret", "run_with_secrets":
+        case "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets":
             MainActor.assumeIsolated {
                 SecretsMCP.call(tool, arguments, caller: caller, pid: pid, approval: approval, requester: requester, connection: connection,
                                 reply: reply)
@@ -712,10 +723,19 @@ enum MCPControl {
         let text = arguments["text"] as? String ?? ""
         let submit = arguments["submit"] as? Bool ?? true
         guard !text.isEmpty || submit else { return reply(fail("Nothing to type.")) }
-        if text.contains("\n") && !tab.view.getTerminal().bracketedPasteMode {
+        // By scalars: "\r\n" is one Character, and a lone "\r" is a Return too.
+        let breaksLine: Bool = text.unicodeScalars.contains { $0 == "\n" || $0 == "\r" }
+        if breaksLine && !tab.view.getTerminal().bracketedPasteMode {
             return reply(fail("The program in that tab takes one line at a time (no bracketed paste); send lines one by one."))
         }
         type(text, into: tab, submit: submit)
+        if !submit {
+            // An agent's text with no Return is its input too (type leaves it unmarked, as Next Term's own line for a
+            // password manager's CLI is the user's): whatever later runs it, the tab stays driven until you type in it
+            // yourself, its run_with_secrets grants end, and the command it starts is the agent's.
+            SecretRequests.tabGotInput(tab.id)
+            driven.insert(tab.id)
+        }
         reply(ok(["id": tab.id.uuidString.lowercased(), "typed": text.count, "submitted": submit]))
     }
 
@@ -777,6 +797,7 @@ enum MCPControl {
 
     /// Picks one of the choices of the question on screen, if it is still the one the caller saw:
     /// the arrows to it, a look that the cursor landed there and the question is unchanged, then Return.
+    /// A key that answers by itself (a digit, or Esc for the choice Esc picks) is sent once the question is seen unchanged.
     private static func answerAgent(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
         let tab: TerminalTab
         switch target(arguments, caller: caller) {
@@ -798,6 +819,7 @@ enum MCPControl {
             return reply(fail("That question is gone; nothing was typed. The tab now asks “\(field(question))” (question_id \(current)): answer that one only if you mean to."))
         }
         guard let menu = fieldMenu(tab, question: question) else {
+            if let why = tab.menuRefusal() { return reply(fail(field(why))) }
             return reply(fail("The choices for “\(field(question))” cannot be read on that screen; nothing was typed. read_tab shows it, and press_keys can answer."))
         }
         let index: Int
@@ -805,41 +827,53 @@ enum MCPControl {
         case .failure(let error): return reply(fail(error.text + " Nothing was typed."))
         case .success(let found): index = found
         }
-        guard let keys = menu.keys(toPick: index) else {
-            return reply(fail("That screen does not show which choice is selected, so the way to “\(field(menu.choices[index]))” is unknown; nothing was typed. press_keys can answer."))
-        }
+        guard let keys = menu.keys(toPick: index) else { return reply(fail(field(menu.refusal(toPick: index)))) }
+        let alone = keys.count == 1 && keys[0] != "enter"
+        let last = keys[keys.count - 1]
         let id = tab.id.uuidString.lowercased()
         let label = field(menu.choices[index])
-        // Still the same question, and (in a list) the cursor on the choice.
+        // The question this answer is for: OpenCode 2.x's arrows onto "Always allow" change its words (and so its id),
+        // the request the same (AgentScreen.selectionMoved).
+        var expected = current
+        // Still the same question, and (in a list, or a row of buttons) the cursor on the choice; for an Esc that first
+        // shrank a fullscreen prompt, the prompt shown shrunk, so the next Esc picks.
         func ready() -> Bool {
             tab.pollAgentScreen()
-            guard canType(tab), questionID(tab) == current else { return false }
-            guard menu.style == .list else { return true }
-            return AgentScreen.menu(screenLines: tab.screenTail())?.highlighted == index
+            guard canType(tab), let now = questionID(tab) else { return false }
+            if now != expected, menu.style == .row, !alone, let asked = tab.status.question,
+               AgentScreen.selectionMoved(from: question, to: asked) { expected = now }
+            guard now == expected else { return false }
+            guard menu.style == .list || menu.style == .row, !alone else { return true }
+            if last == "escape" { return tab.agentMenu()?.keys(toPick: index) == ["escape"] }
+            return tab.agentMenu()?.highlighted == index
         }
         func confirm(_ tries: Int) {
-            if ready() {
+            if ready(), let bytes = MCPServer.keyBytes(last) {
                 sent(to: tab)
-                tab.view.send(txt: "\r")
+                tab.view.send(txt: bytes)
                 return settle(0)
             }
             // A y/n prompt that took the letter by itself has its answer already.
-            if menu.style == .yesNo, questionID(tab) != current { return settle(15) }
-            if tries < 10, canType(tab), questionID(tab) == current {
+            if menu.style == .yesNo, questionID(tab) != expected { return settle(15) }
+            if tries < 10, canType(tab), questionID(tab) == expected {
                 return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { confirm(tries + 1) }
             }
-            let why = questionID(tab) == current ? "the cursor did not reach “\(label)”" : "the question changed meanwhile"
+            if last == "escape" {
+                let why = questionID(tab) == expected ? "the prompt still shows fullscreen" : "the question changed meanwhile"
+                return reply(fail("Esc was pressed once, which only shrinks the fullscreen prompt, and not again: \(why). read_tab shows the screen."))
+            }
+            let why = questionID(tab) == expected ? "the cursor did not reach “\(label)”" : "the question changed meanwhile"
             reply(fail("Return was not pressed: \(why). read_tab shows the screen."))
         }
         // The agent takes the answer and moves on: report where it went (a new question, or work).
         func settle(_ tries: Int) {
             tab.pollAgentScreen()
-            if tries < 15, questionID(tab) == current {
+            if tries < 15, questionID(tab) == expected {
                 return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { settle(tries + 1) }
             }
             var info: [String: Any] = ["id": id, "answered": label, "choice": index + 1, "state_after": state(tab)]
             if let after = questionID(tab) {
-                if after == current {
+                if after == expected {
                     info["note"] = "The question is still on screen; read_tab shows what the agent did with the answer."
                 } else {
                     info["question_after"] = tab.status.question.map(field)
@@ -859,7 +893,16 @@ enum MCPControl {
             tab.view.send(txt: bytes)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { press(position + 1) }
         }
-        press(0)
+        // The key alone answers: no Return after it, which would land on whatever the agent shows next.
+        func answerAlone() {
+            guard ready(), let bytes = MCPServer.keyBytes(keys[0]) else {
+                return reply(fail("Nothing was typed: the question changed meanwhile, or the tab can no longer take input. read_tab shows the screen."))
+            }
+            sent(to: tab)
+            tab.view.send(txt: bytes)
+            settle(0)
+        }
+        if alone { answerAlone() } else { press(0) }
     }
 
     // MARK: project files and git

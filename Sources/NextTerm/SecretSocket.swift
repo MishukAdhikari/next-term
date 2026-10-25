@@ -66,10 +66,11 @@ enum SecretSocket {
         return arguments[5] == "secret" && arguments[6] == "run"
     }
 
-    /// Whether the process at a connection is a wrapper, by its whole argv as the kernel has it.
+    /// Whether the process at a connection is a wrapper or `nxtrm secret import`, by its whole argv as the kernel has
+    /// it: no MCP answer goes to either.
     static func isWrapper(pid: pid_t?) -> Bool {
         guard let pid, let full = ProcessInspector.fullCommandLine(of: pid) else { return false }
-        return isWrapper(full.arguments, selfTest: SelfTest.isRequested)
+        return isWrapper(full.arguments, selfTest: SelfTest.isRequested) || SecretImportPipe.isImporter(full.arguments)
     }
 
     // MARK: asking, on the main thread
@@ -132,6 +133,9 @@ enum SecretSocket {
     private static func ask(_ request: SecretRun.Request, pid: pid_t, full: (path: String, arguments: [String]), agent: Agent?,
                             envDigest: String, warnings: [String], waiter: Waiter) {
         let store = SecretsStore.shared
+        // vault.json as it is now: a key another copy of Next Term deleted is unknown here too, and grants holding a key
+        // it replaced end before one answers.
+        store.reloadIfChanged()
         if request.argv.contains(where: { SecretMask.current.masked($0).count > 0 }) {
             return waiter.set(SecretRun.Answer(status: .valueInCommand, names: request.names))
         }
@@ -212,7 +216,7 @@ enum SecretSocket {
             return SecretRun.Answer(status: .expired, names: request.names)
         case .usedAlready:
             return SecretRun.Answer(status: .usedAlready, names: request.names)
-        case .saved, .unanswered:
+        case .saved, .unanswered, .answered:
             return SecretRun.Answer(status: .refused, names: request.names)
         }
     }

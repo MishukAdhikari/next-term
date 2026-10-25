@@ -1,27 +1,31 @@
 import Foundation
 
 extension NamedValueBytes {
-    /// A value `quotedValue` or `bareValue` masks for its name, in UTF-8 offsets: where the match starts (the name; a bare
-    /// value's line start), the value alone, and where the text the pattern needs to mask it ends: past a quoted value's
-    /// closing quote; past the line's end after a bare value and its spaces, or at the text's end. Text kept up to the
-    /// value's end or into its spaces, with read_file's "…" after it, has no line's end there.
+    /// A value `quotedValue`, `bareValue` or an indented value (`indentedValue`, `removedIndentedValue`) masks for its
+    /// name, in UTF-8 offsets: where the match starts (the name; a bare value's line start; an indented value's key's line
+    /// start, lines before the value's), the value alone, and where the text the pattern needs to mask it ends: past a
+    /// quoted value's closing quote; past the line's end after a bare or an indented value and its spaces (and an indented
+    /// value's comment), or at the text's end. Text kept up to the value's end or into its spaces, with read_file's "…"
+    /// after it, has no line's end there.
     struct Found: Equatable {
         let start: Int
         let value: Range<Int>
         let end: Int
     }
 
-    /// Every value the two patterns mask for its name, and maybe a few more, never fewer: each place a match could start
-    /// is tried on its own (the patterns, taking matches left to right, skip one that starts inside another), a name of
-    /// any length counts (they read 256 characters at most), and a placeholder counts as a value (`isValue`).
+    /// Every value the patterns (`quotedValue`, `bareValue`, `indentedValue`, `removedIndentedValue`) mask for its name,
+    /// and maybe a few more, never fewer: each place a match could start is tried on its own (the patterns, taking matches
+    /// left to right, skip one that starts inside another), a name of any length counts (they read 256 characters at
+    /// most), and a placeholder counts as a value (`isValue`).
     func namedValues() -> [Found] {
-        // Both patterns need an `=` or a `:` before the value: most lines have neither.
+        // The patterns need an `=` or a `:` before the value: most lines have neither.
         guard bytes.contains(where: { $0 == 0x3D || $0 == 0x3A }) else { return [] }
-        return quotedValues() + bareValues()
+        return quotedValues() + bareValues() + indentedValues()
     }
 
     /// `quotedValue`: a name, maybe its closing quote, `=`, `:`, `=>` or `:=` with spaces around, and a value in quotes
-    /// of one kind, 4 characters at least, on one line.
+    /// of one kind, 4 characters at least, on one line. On a line under the `=` or `:`, one with its own `:` or `=` after
+    /// it is a key, not the value.
     func quotedValues() -> [Found] {
         var found: [Found] = []
         var next = NextByte()
@@ -47,16 +51,22 @@ extension NamedValueBytes {
         case 0x3A: at += at + 1 < count && bytes[at + 1] == 0x3D ? 2 : 1 // : or :=
         default: return nil
         }
+        // The spaces on the operator's line stop before a line's end: past it, the value is on a line under it.
+        let lineUnder = skipBlanks(at) < skipSpaces(at)
         at = skipSpaces(at)
         guard at < count, bytes[at] == 0x22 || bytes[at] == 0x27 || bytes[at] == 0x60 else { return nil }
         let first = at + 1
         guard let close = next.position(of: bytes[at], from: first, in: bytes) else { return nil }
         if let feed = next.position(of: 0x0A, from: first, in: bytes), feed < close { return nil }
+        if lineUnder, case let after = skipBlanks(close + 1), after < count, bytes[after] == 0x3A || bytes[after] == 0x3D {
+            return nil
+        }
         return holds(first..<close, atLeast: 4) ? first..<close : nil
     }
 
     /// `bareValue`: at a line's start, maybe a diff's + or -, spaces, `export`, then a name, `=` or `:` with spaces
-    /// around, and a value of 6 characters at least with no space, quote or `#` in it, and only spaces after it.
+    /// around on the name's line, and a value of 6 characters at least with no space, quote or `#` in it, and only
+    /// spaces after it.
     func bareValues() -> [Found] {
         var found: [Found] = []
         var lineStart = 0
@@ -97,9 +107,9 @@ extension NamedValueBytes {
         while case let length = foldedName(at), length > 0 { at += length }
         guard at > start else { return nil }
         let name = start..<at
-        at = skipSpaces(at)
+        at = skipBlanks(at)
         guard at < count, bytes[at] == 0x3D || bytes[at] == 0x3A else { return nil }
-        let first = skipSpaces(at + 1)
+        let first = skipBlanks(at + 1)
         var end = first
         while end < count, space(end) == 0, !Self.endsABareValue(bytes[end]) { end += 1 }
         guard holds(first..<end, atLeast: 6) else { return nil }
@@ -109,8 +119,15 @@ extension NamedValueBytes {
         return (first..<end, rest)
     }
 
+    /// Past the spaces at `index` that are not a line's end (`\h*+`: a tab and the space separators).
+    func skipBlanks(_ index: Int) -> Int {
+        var at = index
+        while lineEnd(at) == 0, case let length = space(at), length > 0 { at += length }
+        return at
+    }
+
     /// A quote or a `#`, which a bare value cannot hold.
-    private static func endsABareValue(_ byte: UInt8) -> Bool {
+    static func endsABareValue(_ byte: UInt8) -> Bool {
         byte == 0x22 || byte == 0x27 || byte == 0x60 || byte == 0x23
     }
 }

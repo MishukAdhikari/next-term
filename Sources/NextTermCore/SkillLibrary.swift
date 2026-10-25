@@ -1,17 +1,19 @@
 import Foundation
 
 /// Next Term's skill library over MCP (list_skills, get_skill): any agent in a tab, whatever it reads itself (Claude
-/// Code, Codex, Gemini CLI, opencode, Command Code…), can use the skills of its project, the user's, and Next Term's
+/// Code, Codex, Gemini CLI, OpenCode, Command Code…), can use the skills of its project, the user's, and Next Term's
 /// own. Nothing is written anywhere: the library only reads, and Next Term's own skills live in the app.
 ///
 /// It finds them as the agents do (their docs, October 2026):
 /// - The project's: the skill folders in the agent's folder and each one above it up to the repository's top, at most
 ///   ten, never the home folder (Codex walks to the repository's top, Command Code ten folders up; Claude Code reads
 ///   its folder's and, in a monorepo, the nested ones).
-/// - The user's: the same folders in the home folder. Then Next Term's own (BuiltInSkill).
+/// - The user's: the same folders in the home folder, and OpenCode's in its config folder too
+///   (`~/.config/opencode/skills`). Then Next Term's own (BuiltInSkill).
 /// - A name in more than one place: the agent's own rule picks the copy (Claude Code takes the user's over the
-///   project's; Command Code the project's, `.commandcode` before `.agents`; Codex shows both, and the nearer comes
-///   first here), and every other copy is named, so nothing is hidden.
+///   project's; Command Code the project's, `.commandcode` before `.agents`; OpenCode its own folders' first, the
+///   user's `~/.opencode`, the project's, then its config folder's, and never a copy whose SKILL.md gives no name;
+///   Codex shows both, and the nearer comes first here), and every other copy is named, so nothing is hidden.
 /// - Each skill says whether the asking agent loads it itself (`native`): it needs get_skill only for the others.
 public enum SkillLibrary {
     public enum Scope: String, Sendable, CaseIterable {
@@ -35,6 +37,8 @@ public enum SkillLibrary {
         public let place: String
         /// The skill folder it is in (".claude/skills"); nil for Next Term's own.
         public let kind: String?
+        /// Its SKILL.md's front matter gives a name: OpenCode skips one that doesn't.
+        public var hasName = true
     }
 
     /// A skill as the asking agent gets it: the copy its rule picks, whether it loads that name itself, and where
@@ -46,9 +50,12 @@ public enum SkillLibrary {
         public var name: String { copy.name }
     }
 
-    /// The folders agents read, in a project or the home folder: the shared one (Codex, Gemini CLI, opencode, Copilot
-    /// CLI, Command Code…), Claude Code's, Codex's older one and Command Code's.
-    static let folders = [".agents/skills", ".claude/skills", ".codex/skills", ".commandcode/skills"]
+    /// The folders agents read, in a project or the home folder: the shared one (Codex, Gemini CLI, OpenCode, Copilot
+    /// CLI, Command Code…), Claude Code's, Codex's older one, Command Code's, and OpenCode's own (`skills`, and the
+    /// older `skill`), which among the user's are in its config folder too (`personalFolders`).
+    static let folders = [".agents/skills", ".claude/skills", ".codex/skills", ".commandcode/skills", ".opencode/skills", ".opencode/skill"]
+    /// OpenCode's own folders: in a project's `.opencode`, and among the user's in its config folder.
+    static let opencodeFolders = [".opencode/skills", ".opencode/skill"]
     /// How far up the project's folders are looked for, as Command Code does.
     static let levels = 10
 
@@ -61,6 +68,14 @@ public enum SkillLibrary {
         let personal: [String]
         /// Its copy of a name in both is the user's (Claude Code).
         let personalFirst: Bool
+        /// Folders whose copies come before every other, the project's and then the user's: OpenCode keeps the copy it
+        /// reads last, and reads its own folders after the shared and Claude Code's, the project's included.
+        var preferred: [String] = []
+        /// Places among the user's that come before even those, as said (`~/.opencode/skills`): OpenCode reads
+        /// `.opencode` in the home folder after the project's (ConfigPaths.directories, 1.19).
+        var readLast: [String] = []
+        /// It skips a copy whose SKILL.md gives no name (OpenCode).
+        var needsName = false
 
         public init(program: String?) {
             self.program = program
@@ -72,7 +87,12 @@ public enum SkillLibrary {
             case "commandcode", "command-code", "cmd":
                 let own = [".commandcode/skills", ".agents/skills"]
                 (project, personal, personalFirst) = (own, own, false)
-            case "opencode", "amp", "cursor-agent", "goose": // SkillReaders.claude: they read Claude Code's too
+            case "opencode":
+                let own = SkillLibrary.opencodeFolders + [".agents/skills", ".claude/skills"]
+                (project, personal, personalFirst, preferred) = (own, own, false, SkillLibrary.opencodeFolders)
+                readLast = SkillLibrary.opencodeFolders.map { "~/" + $0 }
+                needsName = true
+            case "amp", "cursor-agent", "goose": // SkillReaders.claude: they read Claude Code's too
                 let own = [".agents/skills", ".claude/skills"]
                 (project, personal, personalFirst) = (own, own, false)
             case "gemini", "gemini-cli", "qwen", "qwen-code", "copilot", "junie": // SkillReaders.shared
@@ -87,7 +107,7 @@ public enum SkillLibrary {
 
         /// It reads that copy's folder itself.
         public func reads(_ copy: Copy) -> Bool {
-            guard let kind = copy.kind else { return false }
+            guard let kind = copy.kind, copy.hasName || !needsName else { return false }
             return (copy.scope == .project ? project : personal).contains(kind)
         }
     }
@@ -114,6 +134,19 @@ public enum SkillLibrary {
         let own: [Copy]
     }
 
+    /// Where one of `folders` is among the user's, and how it is said: in the home folder, and OpenCode's in its config
+    /// folder too (`~/.config/opencode`, or where the login shell's XDG_CONFIG_HOME puts it for the user's own home, as
+    /// SkillRoot.personal finds them; `environment`: those variables instead). The home folder's `.opencode` comes first:
+    /// OpenCode reads it last.
+    static func personalFolders(_ kind: String, home: String, environment: [String: String]? = nil) -> [(path: String, place: String)] {
+        let inHome: (path: String, place: String) = (home + "/" + kind, "~/" + kind)
+        guard opencodeFolders.contains(kind) else { return [inHome] }
+        let config = OpencodePaths.configFolder(home: home, environment: environment ?? OpencodePaths.environment(home: home))
+        let path = config + "/" + (kind as NSString).lastPathComponent
+        let place: String = path.hasPrefix(home + "/") ? "~/" + String(path.dropFirst(home.count + 1)) : path
+        return [inHome, (path, place)]
+    }
+
     public static func gather(from start: String?, home: String, nextTerm: [BuiltInSkill]) -> Found {
         let chain = start.map { projectFolders(from: $0, home: home) } ?? []
         let top = chain.last
@@ -121,7 +154,9 @@ public enum SkillLibrary {
             let relative = folder == top ? "" : String(folder.dropFirst((top?.count ?? 0) + 1)) + "/"
             return folders.flatMap { kind in read(folder + "/" + kind, scope: .project, kind: kind, place: relative + kind) }
         }
-        let personal = folders.flatMap { kind in read(home + "/" + kind, scope: .personal, kind: kind, place: "~/" + kind) }
+        let personal = folders.flatMap { (kind: String) -> [Copy] in
+            personalFolders(kind, home: home).flatMap { read($0.path, scope: .personal, kind: kind, place: $0.place) }
+        }
         let own = nextTerm.map { Copy(name: $0.name, description: $0.description, scope: .nextTerm, folder: nil, place: "Next Term", kind: nil) }
         return Found(levels: levels, personal: personal, own: own)
     }
@@ -143,7 +178,13 @@ public enum SkillLibrary {
         }
         let project = found.levels.flatMap { ordered($0, reader.project) }
         let personal = ordered(found.personal, reader.personal)
-        let ranked = (reader.personalFirst ? personal + project : project + personal) + found.own
+        let both: [Copy] = reader.personalFirst ? personal + project : project + personal
+        let isLast = { (copy: Copy) -> Bool in copy.scope == .personal && reader.readLast.contains(copy.place) }
+        let isPreferred = { (copy: Copy) -> Bool in !isLast(copy) && reader.preferred.contains(copy.kind ?? "") }
+        var ranked: [Copy] = both.filter(isLast)
+        ranked += both.filter(isPreferred)
+        ranked += both.filter { (copy: Copy) -> Bool in !isLast(copy) && !isPreferred(copy) }
+        ranked += found.own
         var byName: [String: [Copy]] = [:], names: [String] = []
         for copy in ranked {
             if byName[copy.name] == nil { names.append(copy.name) }
@@ -219,8 +260,9 @@ public enum SkillLibrary {
         return names.prefix(500).compactMap { name in
             let folder = root + "/" + name
             guard let file = skillFile(in: folder), let text = readText(file, in: folder) else { return nil }
-            let description = SkillFrontMatter.parse(text)?.description ?? ""
-            return Copy(name: name, description: description, scope: scope, folder: folder, place: place, kind: kind)
+            let front = SkillFrontMatter.parse(text)
+            let named = front?.name?.isEmpty == false
+            return Copy(name: name, description: front?.description ?? "", scope: scope, folder: folder, place: place, kind: kind, hasName: named)
         }
     }
 

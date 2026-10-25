@@ -59,6 +59,8 @@ public struct AgentCLI: Sendable {
     public struct ValuePattern: Equatable, Sendable {
         public var extra: String
         public var most: Int
+        /// Digits only, with no letter and nothing of `extra`.
+        public var digitsOnly = false
 
         /// A model: `opus`, `opus[1m]`, `gpt-5.1-codex`, `anthropic/claude-sonnet-4`.
         public static let model = ValuePattern(extra: "._:/-[]", most: 64)
@@ -66,9 +68,16 @@ public struct AgentCLI: Sendable {
         public static let mode = ValuePattern(extra: "_-", most: 32)
         /// Tool names and rules: `Edit`, `Bash(git *)`, `mcp__github__get_issue`.
         public static let tools = ValuePattern(extra: "_-.:*(),/ ", most: 256)
+        /// A port or a count: `4096`, `200`.
+        public static let number = ValuePattern(extra: "", most: 10, digitsOnly: true)
+        /// A host name or an address: `localhost`, `0.0.0.0`, `opencode.local`.
+        public static let host = ValuePattern(extra: ".-:", most: 253)
+        /// A web origin: `http://localhost:5173`, `https://app.example.com`.
+        public static let origin = ValuePattern(extra: "._-:/", most: 256)
 
         public func matches(_ value: String) -> Bool {
-            value.utf8.count <= most && AgentCLI.isToken(value.utf8, extra: extra)
+            guard value.utf8.count <= most, AgentCLI.isToken(value.utf8, extra: extra) else { return false }
+            return !digitsOnly || value.utf8.allSatisfy { (0x30...0x39).contains($0) }
         }
     }
 
@@ -513,7 +522,7 @@ extension AgentCLI {
 
     static let opencode = AgentCLI(
         programs: ["opencode"],
-        pathHints: ["/node_modules/opencode-ai/"],
+        pathHints: ["/node_modules/opencode-ai/", "/node_modules/@opencode/cli/"],
         idPattern: .token(prefix: "ses_", extra: ""),
         resume: ["-s", .id],
         options: [
@@ -523,6 +532,13 @@ extension AgentCLI {
             .oneShot("--prompt", values: .one),
             .plain("-m", "--model", value: .model),
             .plain("--agent", value: .mode),
+            .plain("--mini", "--no-replay", "--print-logs", "--pure"),
+            .plain("--replay-limit", "--port", value: .number),
+            .plain("--hostname", "--mdns-domain", value: .host),
+            .plain("--mdns"),
+            .plain("--log-level", value: .mode),
+            // One origin each time it is given, so a project folder after it stays a word.
+            .plain("--cors", value: .origin),
             .permission("--auto", "--yolo", "--dangerously-skip-permissions"),
         ],
         hidden: ["--yolo", "--dangerously-skip-permissions"],

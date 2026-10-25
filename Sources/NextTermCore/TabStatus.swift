@@ -19,9 +19,12 @@ public struct TabNotice: Equatable, Sendable {
     public var duration: TimeInterval = 0
     /// The attention came from the program itself (a bell, OSC 9 or OSC 777), not from Next Term.
     public var fromProgram = false
+    /// A program's own notification's words (OSC 9 or OSC 777), shown as they are. On an agent's finish, the words it
+    /// sent as its turn ended.
+    public var message: String? = nil
 
     public init(state: TabState, command: String, program: String, kind: CommandKind, stillRunning: Bool,
-                question: String? = nil, duration: TimeInterval = 0, fromProgram: Bool = false) {
+                question: String? = nil, duration: TimeInterval = 0, fromProgram: Bool = false, message: String? = nil) {
         self.state = state
         self.command = command
         self.program = program
@@ -30,6 +33,7 @@ public struct TabNotice: Equatable, Sendable {
         self.question = question
         self.duration = duration
         self.fromProgram = fromProgram
+        self.message = message
     }
 }
 
@@ -46,6 +50,10 @@ public struct TabStatus {
     /// An agent's screen must say it stopped for this long before its notice goes out: one frame without
     /// the working hint (drawn halfway between two chunks, or the hint cut short in a narrow pane) is not a stop.
     public static let stopSettles: TimeInterval = 1
+    /// An agent whose screen is read sends its own notice ("Permission needs input", "Session error") as it asks or
+    /// stops, before Next Term's next look at its screen (every 0.25 to 0.5 s). Its words wait this long for that look:
+    /// a question then posts its decision notice alone, and a stop carries them on its finish notice.
+    public static let wordsWait: TimeInterval = 2
 
     /// The user is looking at this tab (active tab of the key window).
     public private(set) var visible = false
@@ -72,8 +80,14 @@ public struct TabStatus {
     /// number, so an answer meant for one never lands on the next (see MCPServer.questionID).
     public private(set) var questionSerial = 0
     /// The agent's own screen has shown its working or question hint during this run, so the screen is
-    /// trusted over output timing (an idle agent may keep redrawing a status line).
+    /// trusted over output timing (an idle agent may keep redrawing a status line). An agent with a footer of its own
+    /// (`AgentActivity.ready`) is synced by its question only until its footer shows again, unless its working hint
+    /// has shown too.
     public private(set) var screenSynced = false
+    /// The agent's own footer (`AgentActivity.ready`, OpenCode's) has been on screen this run.
+    private var footerSeen = false
+    /// Its working hint has been on screen this run: from then on its footer alone means it stopped.
+    private var workingSeen = false
     /// Jobs the shell holds (suspended or in the background), reported by the zsh integration.
     public private(set) var jobs = 0
     public private(set) var jobSummary = ""
@@ -109,6 +123,11 @@ public struct TabStatus {
     /// The agent's screen said it stopped: when, since when it had worked, and the notice that waits for
     /// `stopSettles` (see tick()). Working again before then is the same turn.
     private var lastStop: (at: TimeInterval, since: TimeInterval, notice: TabNotice?)?
+    /// An agent's own words that wait for its screen (`wordsWait`), and when they came.
+    private var heldWords: (text: String, at: TimeInterval)?
+    /// The words this turn sent, alone or on its finish: a finish that follows carries them, and no more go out until
+    /// the tab is seen or the agent works again.
+    private var turnWords: String?
 
     public init() {}
 
@@ -237,9 +256,11 @@ public struct TabStatus {
         switch activity {
         case .working:
             screenSynced = true
+            workingSeen = true
             answered()
             if !busy {
                 busy = true
+                if lastStop == nil { turnWords = nil } // a new turn
                 // Within a second of a stop: one frame without the hint, and the same turn goes on.
                 busySince = lastStop?.since ?? now
                 if unseen == .done { unseen = nil }
@@ -249,20 +270,52 @@ public struct TabStatus {
             screenSynced = true
             if busy { busy = false }
             lastStop = nil // a decision, not a finish
+            heldWords = nil // its notice says it
             guard question != asked else { return }
+            // Other words are another question with another number, so an id held for one never answers the next. When
+            // only the request's own selection moved (OpenCode 2.x, AgentScreen.selectionMoved), no second notification.
+            let moved = question.map { (shown: String) -> Bool in AgentScreen.selectionMoved(from: shown, to: asked) } ?? false
             question = asked
             questionSerial += 1
             askedAt = now
-            markQuestion(asked)
+            if !moved { markQuestion(asked) }
+        case .ready:
+            // The agent's own footer, without its working hint.
+            let first = !footerSeen
+            footerSeen = true
+            answered()
+            guard workingSeen else {
+                // Its working hint has not shown this run, so the footer may be there while it works (a release whose
+                // hint the table lacks): output timing says when it works, and nothing it times ends a turn (tick()).
+                // Its first frame ends what output timing called work so far: that was the agent drawing itself.
+                screenSynced = false
+                if first {
+                    busy = false
+                    lastStop = nil
+                }
+                return
+            }
+            screenSynced = true
+            stopped(at: now)
         case .idle:
+            // An agent with a footer of its own that shows none of its shapes (OpenCode in a sub-agent's session,
+            // which draws a footer of its own): no sign either way, so it stays as it was. Its question has gone.
+            if footerSeen {
+                answered()
+                return
+            }
             // Before the screen has shown its hints this run, the output timing decides (see tick()).
             guard screenSynced else { return }
             answered()
-            if busy {
-                busy = false
-                lastStop = (now, busySince, marked(.done, duration: now - busySince))
-            }
+            stopped(at: now)
         }
+    }
+
+    /// The screen says the agent stopped: a finish, whose notice waits for `stopSettles`.
+    private mutating func stopped(at now: TimeInterval) {
+        guard busy else { return }
+        busy = false
+        lastStop = (now, busySince, marked(.done, duration: now - busySince))
     }
 
     private var askedAt: TimeInterval = 0
@@ -301,9 +354,34 @@ public struct TabStatus {
         }
     }
 
-    /// BEL, or an OSC 9 / OSC 777 notification from the program.
-    public mutating func bell() {
-        mark(.attention, duration: .infinity, fromProgram: true)
+    /// BEL, or an OSC 9 / OSC 777 notification from the program, with its words when it gave some. An agent whose screen
+    /// is read says with its words what its screen will show: they wait for it (`wordsWait`) and give no amber mark.
+    public mutating func bell(notice words: ProgramNotice? = nil, at now: TimeInterval) {
+        if let words, running, kind == .agent, screenSynced {
+            // While it asks, its decision notice says more; one notice of its words until seen or it works again.
+            guard !visible, question == nil, heldWords == nil, turnWords == nil else { return }
+            heldWords = (words.body, now)
+            return
+        }
+        guard var notice = marked(.attention, duration: .infinity, fromProgram: true) else { return }
+        notice.message = words?.body
+        pendingNotice = notice
+    }
+
+    /// Held words go out on their own once their wait is over, unless a stop is settling (they ride on its notice) or
+    /// another notice waits to be taken (they go on the next tick).
+    private mutating func releaseWords(at now: TimeInterval) {
+        guard let held = heldWords, now - held.at >= Self.wordsWait, lastStop == nil, pendingNotice == nil else { return }
+        sendWords()
+    }
+
+    /// The held words as a notice of their own: the program's, with no mark (its screen gives the mark).
+    private mutating func sendWords() {
+        guard let held = heldWords else { return }
+        heldWords = nil
+        turnWords = held.text
+        pendingNotice = TabNotice(state: .attention, command: command, program: program, kind: kind, stillRunning: running,
+                                  duration: .infinity, fromProgram: true, message: held.text)
     }
 
     /// Next Term's own call to the tab, such as ssh asking for a password: attention like a bell, but not
@@ -315,9 +393,13 @@ public struct TabStatus {
     /// Call a few times a second.
     public mutating func tick(at now: TimeInterval) {
         settleStop(at: now)
+        releaseWords(at: now)
         guard busy, !screenSynced, now - lastOutputAt >= Self.quietAfter else { return }
         busy = false
-        if running && kind == .agent { mark(.done, duration: lastOutputAt - busySince) }
+        // An agent whose own footer has shown this run, and not yet its working hint: what output timing saw was no
+        // turn of its own (its startup, a redraw), or one whose end its screen cannot tell. No done, no notice.
+        let ownTurn = workingSeen || !footerSeen
+        if running && kind == .agent && ownTurn { mark(.done, duration: lastOutputAt - busySince) }
     }
 
     /// The screen has said the agent stopped for `stopSettles`: the stop is real, and its notice goes out
@@ -325,12 +407,27 @@ public struct TabStatus {
     private mutating func settleStop(at now: TimeInterval) {
         guard let stop = lastStop, now - stop.at >= Self.stopSettles else { return }
         lastStop = nil
-        if let notice = stop.notice, !visible { pendingNotice = notice }
+        guard !visible else { return }
+        guard var notice = stop.notice else {
+            // Too short a turn for a notice: its words go alone (releaseWords, if another notice waits).
+            if pendingNotice == nil { sendWords() }
+            return
+        }
+        // The agent's words of this turn (held for this stop, or sent while its screen was late) are the finish's.
+        if let held = heldWords {
+            heldWords = nil
+            turnWords = held.text
+        }
+        notice.message = turnWords
+        pendingNotice = notice
     }
 
     public mutating func setVisible(_ isVisible: Bool) {
         visible = isVisible
-        if isVisible { unseen = nil }
+        guard isVisible else { return }
+        unseen = nil
+        heldWords = nil // seen, with what it says on screen
+        turnWords = nil
     }
 
     /// The tab's own notices are off: a herdr tab whose agents are followed one by one posts theirs instead, so none
@@ -361,8 +458,12 @@ public struct TabStatus {
         startedAt = now
         busy = false
         lastStop = nil
+        heldWords = nil
+        turnWords = nil
         question = nil
         screenSynced = false
+        footerSeen = false
+        workingSeen = false
         exitCode = nil
         if unseen == .done || unseen == .failed { unseen = nil }
     }

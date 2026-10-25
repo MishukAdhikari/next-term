@@ -34,8 +34,10 @@ enum SessionStore {
             // web), and by its process Claude Code and Copilot CLI say which session it has open.
             let pgid = tcgetpgrp(tab.view.process.childfd)
             let folder = (pgid > 0 ? ProcessInspector.currentDirectory(of: pgid) : nil) ?? tab.currentDirectory()
+            // OpenCode's title names the session it shows ("OC | <title>"), matched off the main thread.
+            let shown = agent == .opencode ? tab.programTitle : nil
             return RunningAgent(key: tab.id.uuidString, agent: agent, directory: folder, commandLine: line,
-                                startedAt: startDate(of: tab, since: since), pid: pgid > 0 ? pgid : nil)
+                                startedAt: startDate(of: tab, since: since), pid: pgid > 0 ? pgid : nil, shownTitle: shown)
         }
     }
 

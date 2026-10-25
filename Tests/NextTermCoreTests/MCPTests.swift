@@ -33,6 +33,22 @@ import Testing
         }
     }
 
+    /// OpenCode is named beside Claude Code and Codex wherever the server gives agents as examples.
+    @Test func theAgentExamplesNameOpencode() throws {
+        #expect(MCPServer.instructions.contains(#"a command such as "claude", "codex" or "opencode""#))
+        for name in ["new_tab", "check_host", "new_remote_tab"] {
+            let tool = try #require(MCPServer.tools.first { $0.name == name })
+            #expect(tool.description.contains("opencode"), "\(name)")
+        }
+    }
+
+    /// list_skills names the folders it reads and the agents it says load each skill: OpenCode's among them.
+    @Test func listSkillsNamesOpencodesFolders() throws {
+        let tool = try #require(MCPServer.tools.first { $0.name == "list_skills" })
+        #expect(tool.description.contains(".opencode/skills") && tool.description.contains("~/.config/opencode/skills"))
+        #expect(tool.description.contains("Claude Code, Codex, Command Code and OpenCode"))
+    }
+
     /// A 2026-07-28 client first asks `server/discover` (Claude Code 2.1.295 does); "method not found" sends it
     /// back to the 2025 handshake at once.
     @Test func discoverIsNotFoundSoTheClientShakesHandsThe2025Way() {
@@ -101,12 +117,28 @@ import Testing
         #expect(!kept.contains(false))
     }
 
-    /// Secrets' four tools: names in, status out.
+    @Test func answerAgentSaysHowItAnswers() throws {
+        let tool = try #require(MCPServer.tools.first { $0.name == "answer_agent" })
+        // A list, a row of buttons, a y/n prompt, the choice Esc picks, and a numbered question's digit.
+        #expect(tool.description.contains("up or down in a list, left or right in a row of buttons, then Return"))
+        #expect(tool.description.contains("y or n and Return for a y/n prompt"))
+        #expect(tool.description.contains("Esc alone for the choice Esc picks (OpenCode's Reject or Cancel"))
+        // OpenCode 2.x's fullscreen prompt: Esc shrinks it first, and the second Esc waits for the look.
+        #expect(tool.description.contains("a second Esc once it shows shrunk"))
+        #expect(tool.description.contains("the digit alone for a numbered question that takes it (OpenCode's, options 1 to 9)"))
+        // Return only on a choice seen selected, in a list or a row (a y/n prompt has no selection to see); a form with
+        // several questions is left to press_keys.
+        #expect(tool.description.contains("In a list or a row of buttons, Return is pressed only once the screen shows the choice selected"))
+        #expect(!tool.description.contains(". Return is pressed only once"))
+        #expect(tool.description.contains("several questions"))
+    }
+
+    /// Secrets' five tools: names in, status out.
     @Test func secretToolsAreListedAndNoneReturnsAValue() throws {
-        let names = ["list_secrets", "request_secret", "store_secret", "run_with_secrets"]
+        let names = ["list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         #expect(MCPServer.secretTools.map(\.name) == names)
         #expect(MCPServer.controlTools.allSatisfy { !names.contains($0.name) })
-        #expect(Array(MCPServer.tools.suffix(4)).map(\.name) == names)
+        #expect(Array(MCPServer.tools.suffix(5)).map(\.name) == names)
         #expect(MCPServer.tools.allSatisfy { !$0.name.hasPrefix("get_secret") && !$0.name.contains("secret_value") })
         let reply = answer(["jsonrpc": "2.0", "id": "s", "method": "tools/list"])
         let tools = try #require((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
@@ -137,12 +169,22 @@ import Testing
         #expect(secrets["minItems"] as? Int == 1 && secrets["maxItems"] as? Int == 20)
         #expect((secrets["items"] as? [String: Any])?["pattern"] as? String == "^[A-Z][A-Z0-9_]{0,63}(=[A-Z][A-Z0-9_]{0,63})?$")
         #expect((properties("run_with_secrets")["command"] as? [String: Any])?["maxLength"] as? Int == 2000)
-        for name in ["request_secret", "store_secret", "run_with_secrets"] {
+        for name in ["request_secret", "store_secret", "run_with_secrets", "import_secrets"] {
             #expect(properties(name)["request_id"] != nil && properties(name)["reason"] != nil, "\(name)")
         }
-        // The instructions say so too.
+        // import_secrets: a path or a password manager, never a value; its schema leaves the "one of them" to the app.
+        let path = try #require(properties("import_secrets")["path"] as? [String: Any])
+        #expect(path["type"] as? String == "string" && path["maxLength"] as? Int == 4096)
+        let source = try #require(properties("import_secrets")["source"] as? [String: Any])
+        #expect(source["enum"] as? [String] == ["1password", "bitwarden", "bws"])
+        #expect(Set(properties("import_secrets").keys) == ["path", "source", "reason", "request_id"])
+        // No secret tool takes a key's page: a link is set by the user's hands alone.
+        for name in names {
+            for word in ["link", "url", "page"] { #expect(properties(name)[word] == nil, "\(name) \(word)") }
+        }
+        // The instructions say so too; import_secrets is left to its description, as they have no room for more.
         #expect(MCPServer.instructions.contains("no tool returns a key's value"))
-        for name in names { #expect(MCPServer.instructions.contains(name), "\(name)") }
+        for name in names.dropLast() { #expect(MCPServer.instructions.contains(name), "\(name)") }
     }
 
     /// `secret_run` is the wrapper's socket request, never a tool: a bridge answers a call by that name itself, as it
@@ -175,6 +217,66 @@ import Testing
         #expect(answer(["jsonrpc": "2.0", "method": "notifications/initialized"]) == nil)
     }
 
+    /// The bridge's path for a call (MCPProgress.Tickers.answer): with a progress token, progress while the call waits
+    /// and nothing after its answer, a failed call's included; without one, only the answer, however long the call takes.
+    @Test func aCallWithAProgressTokenGetsProgressBeforeItsAnswerAndNoneAfter() {
+        func call(_ name: String, token: Any?) -> [String: Any] {
+            var params: [String: Any] = ["name": name, "arguments": ["tab_id": "t"]]
+            if let token { params["_meta"] = ["progressToken": token] }
+            return ["jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": params]
+        }
+        func run(_ message: [String: Any], _ sent: SentLines, call body: @escaping () -> MCPServer.CallResult) {
+            let calls = DispatchGroup()
+            MCPProgress.Tickers(every: 0.05, send: sent.send).answer(message, in: calls) {
+                MCPServer.respond(to: message, version: "1.2.3") { _, _ in body() }
+            }
+            #expect(calls.wait(timeout: .now() + 10) == .success)
+            Thread.sleep(forTimeInterval: 0.3) // six intervals more: nothing may follow the answer
+        }
+        func isAnswer(_ line: [String: Any]?) -> Bool { line?["id"] as? Int == 8 && line?["method"] == nil }
+        func result(_ line: [String: Any]?) -> [String: Any]? { line?["result"] as? [String: Any] }
+        func text(_ line: [String: Any]?) -> String? {
+            ((result(line)?["content"] as? [[String: Any]])?.first)?["text"] as? String
+        }
+
+        let waited = SentLines()
+        run(call("wait_for_tab", token: "p1"), waited) { // answers once progress was sent
+            _ = waited.next(within: 5)
+            return MCPServer.CallResult(text: "done")
+        }
+        let lines = waited.all
+        let progress = lines.dropLast()
+        #expect(progress.count >= 1 && isAnswer(lines.last), "\(lines)")
+        #expect(progress.allSatisfy { SentLines.token($0) == AnyHashable("p1") })
+        #expect(progress.compactMap(SentLines.step) == (0..<progress.count).map { $0 + 1 })
+        #expect(text(lines.last) == "done")
+
+        let failedLate = SentLines()
+        run(call("wait_for_tab", token: 3), failedLate) { // fails after progress, as when Next Term quits mid-wait
+            _ = failedLate.next(within: 5)
+            return MCPServer.CallResult(text: "Next Term is not running", isError: true)
+        }
+        let failedLines = failedLate.all
+        #expect(failedLines.count >= 2 && isAnswer(failedLines.last), "\(failedLines)")
+        #expect(failedLines.dropLast().allSatisfy { SentLines.token($0) == AnyHashable(3) })
+        #expect(result(failedLines.last)?["isError"] as? Bool == true)
+
+        let failed = SentLines()
+        run(call("rm_rf", token: 3), failed) { MCPServer.CallResult(text: "") }
+        #expect(failed.all.count == 1 && isAnswer(failed.all.first) && failed.all.first?["error"] != nil)
+
+        let plain = SentLines()
+        run(call("wait_for_tab", token: nil), plain) {
+            Thread.sleep(forTimeInterval: 0.25)
+            return MCPServer.CallResult(text: "done")
+        }
+        #expect(plain.all.count == 1 && isAnswer(plain.all.first), "\(plain.all)")
+        // wait_for_tab says a long wait holds for a client that sends a token and resets its timeout on progress.
+        let wait = MCPServer.tools.first { $0.name == "wait_for_tab" }
+        let kept = "unless they send a progress token and reset their timeout on progress"
+        #expect(wait?.inputSchema.contains(kept) == true)
+    }
+
     @Test func socketLinesRoundTrip() throws {
         let request = try #require(MCPServer.request(tool: "send_to_tab", arguments: ["tab_id": "t", "text": "hi\nthere"]))
         #expect(request.last == 0x0A && request.dropLast().contains(0x0A) == false) // one line, newlines escaped
@@ -191,6 +293,69 @@ import Testing
         #expect(MCPServer.keyBytes("1") == "1")
         #expect(MCPServer.keyBytes("\u{1b}") == nil) // no raw control characters
         #expect(MCPServer.keyBytes("rm") == nil)
+    }
+
+    /// OpenCode reads a word after its options as the project folder: new_tab gives it the prompt joined to --prompt=, as
+    /// one word, unless the command takes a prompt already (--prompt, or `run` and its message). Every other agent's line
+    /// is as before.
+    @Test func newTabGivesOpencodeItsPromptWithPromptOption() throws {
+        let prompt = "Fix the login test"
+        let given = "--prompt='Fix the login test'"
+        #expect(MCPServer.commandLine("opencode", prompt: prompt) == "opencode " + given)
+        #expect(MCPServer.commandLine("opencode2", prompt: prompt) == "opencode2 " + given)
+        #expect(MCPServer.commandLine("opencode-ai", prompt: prompt) == "opencode-ai " + given)
+        #expect(MCPServer.commandLine("opencode.exe", prompt: prompt) == "opencode.exe " + given)
+        #expect(MCPServer.commandLine("/opt/homebrew/bin/opencode", prompt: prompt) == "/opt/homebrew/bin/opencode " + given)
+        #expect(MCPServer.commandLine("opencode -m anthropic/claude-sonnet-4 --agent plan", prompt: prompt)
+            == "opencode -m anthropic/claude-sonnet-4 --agent plan " + given)
+        #expect(MCPServer.commandLine("opencode -c", prompt: prompt) == "opencode -c " + given)
+        // OpenCode found as CommandClassifier finds it: past assignments, env, package runners and set-up commands.
+        let launches: [String] = [
+            "OPENCODE_CONFIG=~/oc.json opencode", "env X=1 opencode", "env -u OPENAI_API_KEY opencode", "npx opencode-ai",
+            "npx -y opencode-ai@latest", "bunx opencode-ai@latest", "pnpm dlx opencode-ai", "bun x opencode-ai",
+            "npx @opencode/cli", "npx -p opencode-ai opencode", "cd ~/code/shop && opencode -m x",
+        ]
+        for command in launches {
+            #expect(MCPServer.commandLine(command, prompt: prompt) == command + " " + given, "\(command)")
+        }
+        // A prompt that starts with "-" is --prompt's value only joined to it: after a space OpenCode's parser takes it
+        // for an option (a list's "- fix login" is lost, `-v` prints the version and exits).
+        #expect(MCPServer.commandLine("opencode", prompt: "- fix login\n- rerun the tests")
+            == #"opencode --prompt=$'- fix login\x0A- rerun the tests'"#)
+        #expect(MCPServer.commandLine("opencode", prompt: "- fix login") == "opencode --prompt='- fix login'")
+        #expect(MCPServer.commandLine("opencode", prompt: "-v") == "opencode --prompt=-v")
+        #expect(MCPServer.commandLine("npx opencode-ai@latest", prompt: "--help") == "npx opencode-ai@latest --prompt=--help")
+        // Quoted as every prompt is: a single quote, `$(…)` and backticks stay words.
+        #expect(MCPServer.commandLine("opencode", prompt: "Don't run $(rm -rf ~) or `id`")
+            == #"opencode --prompt='Don'\''t run $(rm -rf ~) or `id`'"#)
+        // A prompt option already there with no value: the prompt joins it. One with its value: the prompt follows.
+        #expect(MCPServer.commandLine("opencode --prompt", prompt: prompt) == "opencode " + given)
+        #expect(MCPServer.commandLine("opencode -m x --prompt", prompt: "- fix login") == "opencode -m x --prompt='- fix login'")
+        #expect(MCPServer.commandLine("opencode --prompt=", prompt: prompt) == "opencode " + given)
+        #expect(MCPServer.commandLine("env X=1 opencode --prompt ", prompt: prompt) == "env X=1 opencode " + given)
+        #expect(MCPServer.commandLine("opencode --prompt=hi", prompt: prompt) == "opencode --prompt=hi 'Fix the login test'")
+        // `run` takes its message as words, after its options too; one that starts with "-" after `--`.
+        #expect(MCPServer.commandLine("opencode run", prompt: prompt) == "opencode run 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode -m x run", prompt: prompt) == "opencode -m x run 'Fix the login test'")
+        #expect(MCPServer.commandLine("npx opencode-ai run", prompt: prompt) == "npx opencode-ai run 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencode run", prompt: "- fix login") == "opencode run -- '- fix login'")
+        #expect(MCPServer.commandLine("opencode run", prompt: "-v") == "opencode run -- -v")
+        #expect(MCPServer.commandLine("opencode run --", prompt: "-v") == "opencode run -- -v")
+        // No prompt, nothing added; other agents, and words that only start like OpenCode's, unchanged.
+        #expect(MCPServer.commandLine("opencode", prompt: nil) == "opencode" && MCPServer.commandLine("opencode", prompt: "") == "opencode")
+        #expect(MCPServer.commandLine("claude", prompt: prompt) == "claude 'Fix the login test'")
+        #expect(MCPServer.commandLine("codex", prompt: prompt) == "codex 'Fix the login test'")
+        #expect(MCPServer.commandLine("claude", prompt: "- fix login") == "claude '- fix login'")
+        #expect(MCPServer.commandLine("codex", prompt: "Don't stop") == #"codex 'Don'\''t stop'"#)
+        #expect(MCPServer.commandLine("npx @anthropic-ai/claude-code", prompt: prompt) == "npx @anthropic-ai/claude-code 'Fix the login test'")
+        #expect(MCPServer.commandLine("env X=1 codex", prompt: prompt) == "env X=1 codex 'Fix the login test'")
+        #expect(MCPServer.commandLine("opencoder", prompt: prompt) == "opencoder 'Fix the login test'")
+        #expect(MCPServer.commandLine("claude --model opus", prompt: prompt) == "claude --model opus 'Fix the login test'")
+        // What new_tab and the skills tell agents.
+        let tool = try #require(MCPServer.tools.first { (tool: MCPServer.Tool) -> Bool in tool.name == "new_tab" })
+        #expect(tool.inputSchema.contains("opencode --prompt='Fix the login test'"))
+        #expect(BuiltInSkill.tabs.text.contains("`opencode`") && BuiltInSkill.worktrees.text.contains("`opencode`"))
+        #expect(BuiltInSkill.tabs.text.contains("`--prompt`") && BuiltInSkill.worktrees.text.contains("`--prompt`"))
     }
 }
 
@@ -289,10 +454,105 @@ import Testing
             #expect(MCPRegistrar.unregister(target) == .removed, "\(target.id)")
             #expect(json(target.file)?[target.container] == nil, "\(target.id)")
         }
-        // opencode's command is one array; Qwen's file is versioned.
+        // OpenCode's command is one array; Qwen's file is versioned.
         let opencode = try target("opencode", home: home)
         #expect(MCPRegistrar.isOurs(command: MCPRegistrar.command(of: opencode.entry(command))))
         #expect(try read(try target("qwen", home: home).file).contains("\"$version\": 4"))
+    }
+
+    /// OpenCode reads its config folder by XDG (`$XDG_CONFIG_HOME/opencode`), opencode.json then opencode.jsonc there,
+    /// the later winning: Next Term's entry goes in the one that exists, the .jsonc when both or neither do.
+    @Test func opencodeIsRegisteredInTheConfigFolderXDGMoves() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let folder = home + "/xdg/opencode"
+        let moved = ["XDG_CONFIG_HOME": home + "/xdg"]
+        func opencode(_ environment: [String: String]) throws -> MCPRegistrar.Target {
+            try #require(MCPRegistrar.targets(home: home, environment: environment).first { $0.id == "opencode" })
+        }
+        #expect(try opencode(moved).file == folder + "/opencode.jsonc")
+        try write("{}\n", folder + "/opencode.json")
+        #expect(try opencode(moved).file == folder + "/opencode.json")
+        try write("{\n  // mine\n}\n", folder + "/opencode.jsonc")
+        #expect(try opencode(moved).file == folder + "/opencode.jsonc")
+        // No variable: ~/.config/opencode, as before.
+        #expect(try opencode([:]).file == home + "/.config/opencode/opencode.jsonc")
+        // Registered in the moved folder, and nothing written under ~/.config.
+        let inFolder = try opencode(moved)
+        #expect(MCPRegistrar.register(inFolder, command: command, programInstalled: true) == .registered)
+        let servers = json(folder + "/opencode.jsonc")?["mcp"] as? [String: Any]
+        #expect(MCPRegistrar.command(of: servers?["next-term"]) == command)
+        #expect(!FileManager.default.fileExists(atPath: home + "/.config"))
+    }
+
+    /// With no environment given, the login shell's variables decide for the user's own home, and none for another.
+    /// Only paths are worked out here: nothing is written for the user's own home.
+    @Test func theUsersOwnHomeTakesTheLoginShellsConfigFolder() throws {
+        let other = try home()
+        defer { try? FileManager.default.removeItem(atPath: other) }
+        let (defaults, name) = try TestDefaults.make("mcp-opencode-shell")
+        defer { TestDefaults.remove(defaults, name) }
+        let shell = OpencodePaths.Shell()
+        shell.probed(["XDG_CONFIG_HOME": other + "/xdg\n"], keepIn: defaults)
+        func opencode(home: String) throws -> MCPRegistrar.Target {
+            try #require(MCPRegistrar.targets(home: home, shell: shell).first { $0.id == "opencode" })
+        }
+        #expect(try opencode(home: NSHomeDirectory()).file == other + "/xdg/opencode/opencode.jsonc")
+        // A home that is not the user's own never takes them (a test's or the self-test's made-up home).
+        #expect(try opencode(home: other).file == other + "/.config/opencode/opencode.jsonc")
+        #expect(try opencode(home: other).formerFiles.isEmpty)
+    }
+
+    /// Once XDG_CONFIG_HOME moves OpenCode's folder, ours leaves ~/.config/opencode, where an earlier release (or a
+    /// pass before the login shell's probe answered) put it and OpenCode no longer reads: on the next pass, and when
+    /// the setting is turned off. The rest of that file stays byte for byte, and a `next-term` that is not ours stays.
+    @Test func aMovedConfigFolderTakesOursOutOfTheOldOne() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let moved = ["XDG_CONFIG_HOME": home + "/xdg"]
+        func opencode(_ environment: [String: String]) throws -> MCPRegistrar.Target {
+            try #require(MCPRegistrar.targets(home: home, environment: environment).first { $0.id == "opencode" })
+        }
+        let old = home + "/.config/opencode/opencode.jsonc"
+        let theirs = "{\n  // mine\n  \"theme\": \"dark\"\n}\n"
+        try write(theirs, old)
+        #expect(MCPRegistrar.register(try opencode([:]), command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.command(of: (json(old)?["mcp"] as? [String: Any])?["next-term"]) == command)
+        let inFolder = try opencode(moved)
+        #expect(inFolder.formerFiles == [old, home + "/.config/opencode/opencode.json"])
+        #expect(MCPRegistrar.register(inFolder, command: command, programInstalled: true) == .registered)
+        #expect(try read(old) == theirs)
+        let file = home + "/xdg/opencode/opencode.jsonc"
+        #expect(MCPRegistrar.command(of: (json(file)?["mcp"] as? [String: Any])?["next-term"]) == command)
+        // Turned off: ours goes from both, though the old one has it again (a pass before the probe answered).
+        #expect(MCPRegistrar.register(try opencode([:]), command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.unregister(inFolder) == .removed)
+        #expect(try read(old) == theirs)
+        #expect((json(file)?["mcp"] as? [String: Any])?["next-term"] == nil)
+        // Someone else's next-term in the old folder is never touched.
+        let other = "{\n  \"mcp\": {\"next-term\": {\"type\": \"local\", \"command\": [\"/opt/other/next-term\"]}}\n}\n"
+        try write(other, old)
+        #expect(MCPRegistrar.register(inFolder, command: command, programInstalled: true) == .registered)
+        #expect(try read(old) == other)
+    }
+
+    /// XDG_CONFIG_HOME set to ~/.config, or to a link to it, is OpenCode's own folder: the entry just written stays.
+    @Test func aConfigFolderThatIsTheOldOneKeepsOurs() throws {
+        let home = try home()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let old = home + "/.config/opencode/opencode.jsonc"
+        try write("{}\n", old)
+        func opencode(_ base: String) throws -> MCPRegistrar.Target {
+            let environment = ["XDG_CONFIG_HOME": base]
+            return try #require(MCPRegistrar.targets(home: home, environment: environment).first { $0.id == "opencode" })
+        }
+        #expect(try opencode(home + "/.config/").formerFiles.isEmpty)
+        try FileManager.default.createSymbolicLink(atPath: home + "/link", withDestinationPath: home + "/.config")
+        let linked = try opencode(home + "/link")
+        #expect(linked.file == home + "/link/opencode/opencode.jsonc")
+        #expect(!linked.formerFiles.isEmpty)
+        #expect(MCPRegistrar.register(linked, command: command, programInstalled: true) == .registered)
+        #expect(MCPRegistrar.command(of: (json(old)?["mcp"] as? [String: Any])?["next-term"]) == command)
     }
 
     @Test func commentsAndOtherServersSurvive() throws {
@@ -613,7 +873,7 @@ import Testing
         try write(original, app.file)
         #expect(MCPRegistrar.register(app, command: command, programInstalled: true) == .registered)
         #expect(try read(app.file) == original.replacingOccurrences(of: moved, with: command))
-        // opencode's command is an array: its first word changes.
+        // OpenCode's command is an array: its first word changes.
         let opencode = try target("opencode", home: home)
         let theirs = "{\n  \"mcp\": {\n    \"next-term\": {\"type\": \"local\", \"command\": [\"\(moved)\", \"mcp\"], \"enabled\": false}\n  }\n}\n"
         try write(theirs, opencode.file)
