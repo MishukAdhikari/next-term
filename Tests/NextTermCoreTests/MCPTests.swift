@@ -89,7 +89,8 @@ import Testing
         let answer = try #require(tools.first { $0["name"] as? String == "answer_agent" }?["inputSchema"] as? [String: Any])
         #expect(answer["required"] as? [String] == ["tab_id", "question_id"])
         // Only the tools that reach a server over ssh, or GitHub for a skill, go beyond this Mac.
-        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "end_session", "host_changes", "install_skill"]
+        let remote: Set<String> = ["check_host", "new_remote_tab", "host_sessions", "end_session", "host_changes", "install_skill",
+                                   "start_agent"]
         #expect(tools.allSatisfy { (($0["annotations"] as? [String: Any])?["openWorldHint"] as? Bool) == remote.contains($0["name"] as? String ?? "") })
         // Saving hosts, opening remote tabs and running anything on a host: clients ask first.
         for name in ["add_host", "remove_host", "edit_host", "check_host", "new_remote_tab", "host_sessions", "end_session", "host_changes"] {
@@ -1718,8 +1719,8 @@ struct SplitMix: RandomNumberGenerator {
 
     @Test func toolCountAndTheInstructionsOnlyNameThem() {
         // 31 + 12 + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task, as many as without herdr's agents'
-        // ids; then edit_host and end_session (plan 010a U6a), and rename_tab (U5a).
-        #expect(MCPServer.tools.count == 55 + MCPServer.taskTools.count)
+        // ids; then edit_host and end_session (plan 010a U6a), rename_tab (U5a) and start_agent (U5b).
+        #expect(MCPServer.tools.count == 56 + MCPServer.taskTools.count)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.
         #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))

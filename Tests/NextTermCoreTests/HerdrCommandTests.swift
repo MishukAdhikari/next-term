@@ -10,7 +10,8 @@ import Testing
         .list, .tabs, .sessions, .read(pane: "w1:p1", source: .visible, lines: nil), .read(pane: "w1:p1", source: .recent, lines: 80),
         .prompt(pane: "w1:p1"), .text(pane: "w1:p1"), .keys(pane: "w1:p1", ["escape", "down", "enter", "y"]),
         .focus(pane: "w2:p1", tab: "w2:t1"), .focus(pane: "w2:p1", tab: nil), .version, .explain(pane: "w1:p1"), .machines,
-        .closePane(pane: "w1:p2"),
+        .closePane(pane: "w1:p2"), .startKinds, .newTab(directory: "/srv/app", label: "fixer"),
+        .startAgent(name: "fixer", kind: "codex", pane: "w1:p2", words: ["--model", "o3"]),
     ]
 
     /// The words of each herdr call in a script (`nt_call LABEL WORDS…`), unquoted as sh reads them.
@@ -98,8 +99,8 @@ import Testing
         let flat = HerdrCommand.allowed.map { $0.joined(separator: " ") }
         #expect(flat.contains("pane close"))
         #expect(!HerdrCommand.allowedOnMachine.contains(["pane", "close"]) && !HerdrCommand.closePane(pane: "w1:p1").goesToMachines)
-        for never in ["server", "session stop", "session delete", "session attach", "agent start", "agent rename", "pane run",
-                      "tab create", "tab close", "workspace create", "update", "integration", "plugin", "worktree",
+        for never in ["server", "session stop", "session delete", "session attach", "agent rename", "pane run",
+                      "tab close", "workspace create", "update", "integration", "plugin", "worktree",
                       "machine add", "machine remove", "machine rename", "machine enable", "machine disable", "machine status",
                       "machine reconnect"] {
             #expect(!flat.contains { $0.hasPrefix(never) }, "\(never)")
@@ -424,5 +425,34 @@ import Testing
         #expect(HerdrTarget.isAgentName("reviewer") && HerdrTarget.isAgentName("a1_b-c") && HerdrTarget.isAgentName(String(repeating: "a", count: 32)))
         #expect(!HerdrTarget.isAgentName("Reviewer") && !HerdrTarget.isAgentName("1a") && !HerdrTarget.isAgentName(String(repeating: "a", count: 33)))
         #expect(HerdrTarget.isSession("review") && !HerdrTarget.isSession("a b"))
+    }
+
+    /// Starting one of herdr's agents (010a U5b): herdr's own list of kinds, checked words and folder, the new tab's pane
+    /// read from herdr's answer, and the exact calls.
+    @Test func anAgentIsStartedOnlyAsHerdrsKindsAndPlainWordsAllow() throws {
+        let help = "Options:\n      --kind <KIND>\n          [possible values: pi, claude, codex, opencode, qodercli, Bad Kind]\n      --pane <ID>\n"
+        #expect(HerdrCommand.kinds(fromHelp: help) == ["pi", "claude", "codex", "opencode", "qodercli"])
+        #expect(HerdrCommand.kinds(fromHelp: "no list here").isEmpty)
+        #expect(HerdrCommand.isKind("claude") && !HerdrCommand.isKind("Claude") && !HerdrCommand.isKind("-x") && !HerdrCommand.isKind(""))
+        #expect(HerdrCommand.wordsRefusal(["--model", "o3", "--dir=/srv/app"]) == nil)
+        for bad in [["a b"], ["x;rm"], ["$(id)"], ["it's"], [String(repeating: "a", count: 201)], ["--session"]] {
+            #expect(HerdrCommand.wordsRefusal(bad) != nil, "\(bad)")
+        }
+        #expect(HerdrCommand.wordsRefusal(Array(repeating: "w", count: 17)) != nil)
+        #expect(HerdrCommand.newTab(directory: "~/app", label: "fixer").refusal(session: nil) != nil)
+        #expect(HerdrCommand.newTab(directory: nil, label: "Fixer").refusal(session: nil) != nil)
+        #expect(HerdrCommand.startAgent(name: "fixer", kind: "codex", pane: "w1:p2", words: []).refusal(session: nil) == nil)
+        let argv = try #require(HerdrCommand.startAgent(name: "fixer", kind: "codex", pane: "w1:p2", words: ["--model", "o3"])
+            .argv(executable: "h", session: nil, text: nil))
+        #expect(argv == [[["h", "agent", "start", "fixer", "--kind", "codex", "--pane", "w1:p2", "--timeout", "20000", "--", "--model", "o3"]]])
+        let tab = try #require(HerdrCommand.newTab(directory: "/srv/app", label: "fixer").argv(executable: "h", session: "review", text: nil))
+        #expect(tab == [[["h", "--session", "review", "tab", "create", "--cwd", "/srv/app", "--label", "fixer", "--no-focus"]]])
+        // herdr 0.9.1's own answer to tab create.
+        let made = #"{"id":"cli:tab:create","result":{"root_pane":{"agent_status":"unknown","pane_id":"w1:p2","tab_id":"w1:t2"},"tab":{"label":"fixer","tab_id":"w1:t2"},"type":"tab_created"}}"#
+        let created = try #require(HerdrCommand.createdPane(made))
+        #expect(created.tab == "w1:t2" && created.pane == "w1:p2")
+        #expect(HerdrCommand.createdPane(#"{"result":{"root_pane":{"pane_id":"w1 p2"}}}"#) == nil)
+        // Never to one of herdr's machines.
+        #expect(HerdrCommand.startAgent(name: "fixer", kind: "codex", pane: "w1:p2", words: []).refusal(session: nil, machine: "m1") != nil)
     }
 }

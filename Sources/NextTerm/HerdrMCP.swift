@@ -123,6 +123,81 @@ enum HerdrMCP {
         }
     }
 
+    /// start_agent (plan 010a U5b): one of herdr's agent kinds started in a new herdr tab of a tab that shows herdr, on that
+    /// tab's own connection, once the user approves on the Mac, seeing herdr's commands. Every refusal comes first: the
+    /// tab, the name, the kind (as herdr's own help lists its kinds there), the folder and the words. A tab herdr made for
+    /// an agent that did not start stays, and the answer names it: Next Term never closes it by itself.
+    @MainActor
+    static func startAgent(_ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        guard let raw = arguments["tab_id"] as? String, HerdrTarget.parse(raw) == nil, let tab = MCPControl.tab(withID: raw) else {
+            return reply(fail("Give the id of a tab that shows herdr, from list_tabs (not one of its agents' ids)."))
+        }
+        guard tab.followsHerdr else {
+            let why = tab.herdrWatch.note.map { " (\($0))" } ?? ""
+            return reply(fail("That tab does not show herdr now\(why); new_remote_tab with keep herdr opens one on a server."))
+        }
+        guard let kind = (arguments["kind"] as? String)?.trimmingCharacters(in: .whitespaces), !kind.isEmpty else {
+            return reply(fail("Give kind: one of herdr's agent kinds, such as claude or codex."))
+        }
+        let name: String = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespaces) ?? kind
+        let directory: String? = (arguments["directory"] as? String).map { $0.trimmingCharacters(in: .whitespaces) }
+        let given: Any? = arguments["words"]
+        guard given == nil || given is [String] else { return reply(fail("words is a list of words, such as [\"--model\", \"opus\"].")) }
+        let words: [String] = given as? [String] ?? []
+        // Every check that can refuse, before anything runs: the pane id stands in until herdr makes the tab.
+        let newTab = HerdrCommand.newTab(directory: directory?.isEmpty == true ? nil : directory, label: name)
+        let start = HerdrCommand.startAgent(name: name, kind: kind, pane: "w1:p1", words: words)
+        if let refusal = newTab.refusal(session: nil) ?? start.refusal(session: nil) { return reply(fail(refusal + " Nothing was started.")) }
+        HerdrRunner.run(.startKinds, for: tab) { result in
+            MainActor.assumeIsolated {
+                if let problem = problem(result, pane: "", sent: false) { return reply(fail(problem)) }
+                guard case .text(let help) = result else { return reply(fail("herdr did not list its agent kinds there. Nothing was started.")) }
+                let kinds: [String] = HerdrCommand.kinds(fromHelp: help)
+                guard kinds.contains(kind) else {
+                    let listed = kinds.isEmpty ? "none" : kinds.joined(separator: ", ")
+                    return reply(fail("herdr there starts these kinds: \(listed). Nothing was started."))
+                }
+                askToStart(tab, name: name, kind: kind, directory: directory, words: words, newTab: newTab, arguments, caller: caller, reply: reply)
+            }
+        }
+    }
+
+    @MainActor
+    private static func askToStart(_ tab: TerminalTab, name: String, kind: String, directory: String?, words: [String],
+                                   newTab: HerdrCommand, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+        let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
+        let session: String = tab.remote?.herdrSession ?? tab.localHerdr?.session ?? "its default session"
+        let folder: String = directory.map { " --cwd \($0)" } ?? ""
+        let rest: String = words.isEmpty ? "" : " -- " + words.joined(separator: " ")
+        let commands = "herdr tab create\(folder) --label \(name) --no-focus, then herdr agent start \(name) --kind \(kind) --pane <its pane>\(rest)"
+        let ask = MCPWriteControl.Ask(title: "An agent asks to start an agent in herdr",
+                                      details: "\(kind), named “\(name)”, in a new herdr tab of herdr \(place) (\(session)): it runs there until it ends. Next Term runs: \(commands)")
+        let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
+        MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+            window?.finish()
+            guard tab.followsHerdr else { return reply(fail("That tab stopped showing herdr while you were asked. Nothing was started.")) }
+            HerdrRunner.run(newTab, for: tab) { made in
+                MainActor.assumeIsolated {
+                    if let problem = problem(made, pane: "", sent: false) { return reply(fail(problem + " Nothing was started.")) }
+                    guard case .json(let json) = made, let created = HerdrCommand.createdPane(json) else {
+                        return reply(fail("herdr made no tab there that Next Term could read; read_tab on the herdr tab shows what happened."))
+                    }
+                    let start = HerdrCommand.startAgent(name: name, kind: kind, pane: created.pane, words: words)
+                    HerdrRunner.run(start, for: tab, timeout: Double(HerdrCommand.startWait) / 1000 + 10) { started in
+                        MainActor.assumeIsolated {
+                            let id = tab.id.uuidString.lowercased() + "/" + created.pane
+                            if let problem = problem(started, pane: created.pane) {
+                                return reply(fail("herdr made tab \(created.tab) (pane \(created.pane)), but \(kind) did not start in it: \(problem) The tab stays: close_tab with \(id) ends it."))
+                            }
+                            driven.insert(id)
+                            reply(ok(["id": id, "pane": created.pane, "herdr_tab": created.tab, "kind": kind, "name": name, "approved": approved]))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// close_tab with an agent's id (plan 010a U6b): herdr closes that agent's pane, and what runs there stops, once the
     /// user approves on the Mac, seeing the exact command. Every refusal comes first: the caller's own pane, an agent on
     /// one of herdr's machines, a working agent without force. After Approve the agent is read again: one that began

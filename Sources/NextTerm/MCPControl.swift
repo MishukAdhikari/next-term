@@ -341,6 +341,7 @@ enum MCPControl {
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
         case "close_tab": closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
         case "rename_tab": reply(renameTab(arguments))
+        case "start_agent": MainActor.assumeIsolated { HerdrMCP.startAgent(arguments, caller: caller, reply: reply) }
         case "open_in_editor": reply(openInEditor(arguments))
         case "list_hosts", "add_host", "remove_host", "edit_host", "check_host", "new_remote_tab", "host_sessions", "end_session",
              "host_changes":

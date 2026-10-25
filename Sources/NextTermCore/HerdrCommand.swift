@@ -4,9 +4,9 @@ import Foundation
 /// fixed text and quoted values, sent base64) or as argument lists for herdr on this Mac, which no shell reads. Each one
 /// tries herdr's current verb first and, when herdr answers that it lacks it (HerdrResult.saysUnsupported), the verb an
 /// older herdr has, in the same run: never by herdr's version string. Next Term never starts, stops, updates or installs
-/// herdr, never stops or deletes one of its sessions, and never makes a workspace, tab, pane or session. It ends one of
-/// herdr's agents (`pane close`) only once the user approves that on the Mac (plan 010a U6b), and never on one of herdr's
-/// saved machines.
+/// herdr, never stops or deletes one of its sessions, and never makes a workspace, pane or session. Only once the user
+/// approves on the Mac (plan 010a U5b, U6b) does it start one of herdr's agents in a new herdr tab (`tab create`, then
+/// `agent start`) or end one (`pane close`), and never on one of herdr's saved machines.
 ///
 /// Text for an agent never sits on this Mac's command lines: the script reads it from its stdin (`T=$(cat)`), and the
 /// argument lists take it as one element. On the host it is herdr's argument while herdr runs.
@@ -46,6 +46,14 @@ public enum HerdrCommand: Equatable, Sendable {
     /// Ends one agent: `pane close` of its pane, after Approve on the Mac. Nothing older is tried, and it never goes to one
     /// of herdr's machines.
     case closePane(pane: String)
+    /// The agent kinds `agent start` takes, as herdr's own help lists them ("possible values"), read before a start so a
+    /// kind herdr adds is there with no change here (010a K3).
+    case startKinds
+    /// A new herdr tab for an agent, not focused, in `directory` (herdr's own folder when nil), after Approve on the Mac.
+    case newTab(directory: String?, label: String)
+    /// One of herdr's kinds started in `pane`, at its shell prompt, after Approve on the Mac: herdr types the kind's
+    /// command there and waits up to `startWait` for the agent.
+    case startAgent(name: String, kind: String, pane: String, words: [String])
 
     /// What `read` reads, in herdr's words.
     public enum ReadSource: String, Sendable {
@@ -61,13 +69,18 @@ public enum HerdrCommand: Equatable, Sendable {
     public static let maxLines = 2000
     /// The most text one prompt carries.
     public static let maxTextBytes = 64 * 1024
+    /// How long `agent start` waits for the agent, in milliseconds (herdr takes more than 3,000).
+    public static let startWait = 20_000
+    /// An agent's start words: at most 16, each one argument of letters, digits and `. _ = : / @ + , -`.
+    public static let maxWords = 16
 
     /// The verbs herdr is ever asked, besides showing its own screen in a tab (bare, or with `--session`). A test walks
     /// every command's rendering against this list.
     public static let allowed: [[String]] = [
         ["--version"], ["agent", "list"], ["agent", "read"], ["agent", "prompt"], ["agent", "send-keys"], ["agent", "focus"],
         ["agent", "explain"], ["pane", "list"], ["pane", "read"], ["pane", "send-text"], ["pane", "send-keys"],
-        ["tab", "list"], ["tab", "focus"], ["session", "list"], ["machine", "list"], ["pane", "close"],
+        ["tab", "list"], ["tab", "focus"], ["session", "list"], ["machine", "list"], ["pane", "close"], ["agent", "start"],
+        ["tab", "create"],
     ]
 
     /// The verbs that may go to one of herdr's saved machines (`--machine`): its agent commands, and no other.
@@ -114,7 +127,7 @@ public enum HerdrCommand: Equatable, Sendable {
     /// herdr answers it with text, not JSON: a pane's, or its version.
     public var readsText: Bool {
         switch self {
-        case .read, .version: return true
+        case .read, .version, .startKinds: return true
         default: return false
         }
     }
@@ -130,8 +143,8 @@ public enum HerdrCommand: Equatable, Sendable {
     /// It changes what herdr shows (a prompt, keys, its view), so the tab checks again soon after.
     public var changesHerdr: Bool {
         switch self {
-        case .prompt, .text, .keys, .focus, .closePane: return true
-        case .list, .tabs, .sessions, .read, .version, .explain, .machines: return false
+        case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent: return true
+        case .list, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds: return false
         }
     }
 
@@ -139,7 +152,7 @@ public enum HerdrCommand: Equatable, Sendable {
     public var goesToMachines: Bool {
         switch self {
         case .list, .read, .prompt, .keys, .focus, .explain: return true
-        case .tabs, .sessions, .text, .version, .machines, .closePane: return false
+        case .tabs, .sessions, .text, .version, .machines, .closePane, .startKinds, .newTab, .startAgent: return false
         }
     }
 
@@ -185,6 +198,14 @@ public enum HerdrCommand: Equatable, Sendable {
             return [[["machine", "list", "--json"]]]
         case .closePane(let pane):
             return [[["pane", "close", pane]]]
+        case .startKinds:
+            return [[["agent", "start", "--help"]]]
+        case let .newTab(directory, label):
+            let folder: [String] = directory.map { ["--cwd", $0] } ?? []
+            return [[["tab", "create"] + folder + ["--label", label, "--no-focus"]]]
+        case let .startAgent(name, kind, pane, words):
+            let rest: [String] = words.isEmpty ? [] : ["--"] + words
+            return [[["agent", "start", name, "--kind", kind, "--pane", pane, "--timeout", String(Self.startWait)] + rest]]
         }
     }
 
@@ -207,6 +228,16 @@ public enum HerdrCommand: Equatable, Sendable {
             return session == nil ? nil : "herdr's machines are not a session's: ask without one."
         case .read(let pane, _, _), .prompt(let pane), .text(let pane), .explain(let pane), .closePane(let pane):
             return Self.paneRefusal(pane)
+        case .startKinds:
+            return nil
+        case let .newTab(directory, label):
+            if let directory, let refusal = Self.folderRefusal(directory) { return refusal }
+            return HerdrTarget.isAgentName(label) ? nil : "“\(label)” is not a name herdr takes for an agent."
+        case let .startAgent(name, kind, pane, words):
+            if let refusal = Self.paneRefusal(pane) { return refusal }
+            if !HerdrTarget.isAgentName(name) { return "“\(name)” is not a name herdr takes for an agent." }
+            if !Self.isKind(kind) { return "“\(kind)” is not one of herdr's agent kinds." }
+            return Self.wordsRefusal(words)
         case let .keys(pane, names):
             if let refusal = Self.paneRefusal(pane) { return refusal }
             guard !names.isEmpty else { return "Give at least one key." }
@@ -217,6 +248,53 @@ public enum HerdrCommand: Equatable, Sendable {
             if let tab, !HerdrTarget.isTab(tab) { return "“\(tab)” is not a herdr tab id." }
             return nil
         }
+    }
+
+    /// A kind as herdr names one ("claude", "qodercli"): lowercase letters and digits, and `-`, 32 at most.
+    public static func isKind(_ kind: String) -> Bool {
+        guard let first = kind.unicodeScalars.first, kind.unicodeScalars.count <= 32, ("a"..."z").contains(first) else { return false }
+        return kind.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
+    }
+
+    /// The kinds in herdr's `agent start --help`: its "[possible values: pi, claude, codex, …]", each checked as a kind.
+    public static func kinds(fromHelp help: String) -> [String] {
+        guard let start = help.range(of: "[possible values:") else { return [] }
+        let rest = help[start.upperBound...]
+        guard let end = rest.firstIndex(of: "]") else { return [] }
+        return rest[..<end].split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(isKind)
+    }
+
+    /// Why an agent's start words cannot go, or nil: more than 16, or one that is not a plain argument (spaces, `;`, `|`,
+    /// `$(`, quotes and line breaks are never one), or holds a stored key.
+    public static func wordsRefusal(_ words: [String], mask: SecretMask = .current) -> String? {
+        if words.count > maxWords { return "At most \(maxWords) words go to the agent." }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._=:/@+,-")
+        for word in words {
+            guard !word.isEmpty, word.count <= 200, word.unicodeScalars.allSatisfy(allowed.contains) else {
+                return "“\(String(word.prefix(40)))” is not a plain word: letters, digits and . _ = : / @ + , - only, 200 at most."
+            }
+            // herdr's own options (--session…) wherever they stand, and stored keys, as for text.
+            if let refusal = textRefusal(word, mask: mask) { return refusal }
+        }
+        return nil
+    }
+
+    /// `tab create`'s answer: the new tab's id and its pane's (`"result": {"root_pane": {"pane_id", "tab_id"}}`); nil when
+    /// it names no pane herdr's rule takes.
+    public static func createdPane(_ json: String) -> (tab: String, pane: String)? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let result = object["result"] as? [String: Any], let root = result["root_pane"] as? [String: Any],
+              let pane = root["pane_id"] as? String, HerdrTarget.isPane(pane) else { return nil }
+        let named: String? = root["tab_id"] as? String ?? (result["tab"] as? [String: Any])?["tab_id"] as? String
+        return (named ?? "", pane)
+    }
+
+    /// A folder for a new herdr tab: absolute (herdr reads it as it is, with no shell to expand `~`), one line.
+    static func folderRefusal(_ folder: String) -> String? {
+        guard folder.hasPrefix("/"), folder.count <= 1024, !folder.unicodeScalars.contains(where: ShellQuote.isControl) else {
+            return "The folder must be an absolute path, such as /srv/app."
+        }
+        return nil
     }
 
     private static func paneRefusal(_ pane: String) -> String? {

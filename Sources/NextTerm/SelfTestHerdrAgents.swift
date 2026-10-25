@@ -55,6 +55,8 @@ extension SelfTest {
               'agent read'|'pane read') cat \(file("herdr-read")) ;;
               'agent send-keys') [ -e \(file("herdr-read-next")) ] && mv -f \(file("herdr-read-next")) \(file("herdr-read")) ;;
               'agent focus') echo '{"id":"cli:agent:focus","result":{"type":"agent_info"}}' ;;
+              'agent start') if [ "$3" = --help ]; then echo '          [possible values: claude, codex, opencode]'; else echo '{"id":"cli:agent:start","result":{"type":"ok"}}'; fi ;;
+              'tab create') echo '{"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w2:p9","tab_id":"w2:t9"},"tab":{"tab_id":"w2:t9"},"type":"tab_created"}}' ;;
             esac
             exit 0
             """
@@ -335,6 +337,29 @@ extension SelfTest {
         }
         let split = await herdrTool("split_pane", ["tab_id": id])
         check(split.isError && c.tabs.contains { $0 === tab }, "herdr MCP: split_pane refuses an agent's id, and the herdr tab stays", split.text)
+        // start_agent (010a U5b): a kind herdr does not list is refused before asking; asked on the Mac, naming herdr's
+        // commands, Decline runs neither, and Approve runs tab create, then agent start in the pane herdr made.
+        let herdrTabID: String = tab.id.uuidString.lowercased()
+        let unknownKind = await herdrTool("start_agent", ["tab_id": herdrTabID, "kind": "nope"])
+        check(unknownKind.isError && unknownKind.text.contains("claude, codex, opencode") && MCPWriteControl.pending == nil,
+              "herdr MCP: start_agent refuses a kind herdr does not list, before asking", unknownKind.text)
+        for approve in [false, true] {
+            clearCalls()
+            let call = Task { await herdrTool("start_agent", ["tab_id": herdrTabID, "kind": "codex", "name": "fixer", "words": ["--model", "o3"]]) }
+            _ = await wait(20) { MCPWriteControl.pending?.window != nil }
+            let window = MCPWriteControl.pending?.window
+            let shown = SelfTest.texts(window?.window?.contentView)
+            check(window != nil && shown.contains("herdr agent start fixer --kind codex"), "herdr MCP: start_agent asks on the Mac first, naming herdr's commands", shown)
+            if approve { window?.approveButton.performClick(nil) } else { window?.declineButton.performClick(nil) }
+            let result = await call.value
+            let log = read()
+            let made = log.contains("tab create --label fixer --no-focus|")
+                && log.contains("agent start fixer --kind codex --pane w2:p9 --timeout 20000 -- --model o3|")
+            let started = !result.isError && made && result.json?["id"] as? String == herdrTabID + "/w2:p9"
+            check(approve ? started : (result.isError && !log.contains("tab create")),
+                  approve ? "herdr MCP: start_agent, approved, makes a herdr tab and starts the agent in its pane" : "herdr MCP: start_agent, declined, runs nothing",
+                  result.text)
+        }
         c.show(other)
         let waiting = Task { await herdrTool("wait_for_tab", ["tab_id": id, "timeout_seconds": 20]) }
         await pause(1)

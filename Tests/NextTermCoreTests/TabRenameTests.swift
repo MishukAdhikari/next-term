@@ -24,7 +24,7 @@ import Testing
 
     /// The tools plan 010a adds say what they do in two short sentences at most, and add nothing to the instructions.
     @Test func theNewToolsAreTwoSentencesAtMost() throws {
-        for name in ["edit_host", "end_session", "rename_tab"] {
+        for name in ["edit_host", "end_session", "rename_tab", "start_agent"] {
             let said = try #require(MCPServer.tool(named: name)).description
             let sentences = said.components(separatedBy: ". ").count
             #expect(sentences <= 2 && said.count <= 300, "\(name): \(said)")
