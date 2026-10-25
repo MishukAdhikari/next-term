@@ -1088,7 +1088,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The tree is put away as it was (Browse Home Folder brings it back) and nothing more is read. A keyboard the tree
     /// had goes to the tab in front, or with the terminal folded to the editor's pane in front, so no hidden row keeps it.
     func stopBrowsingHome() {
-        let hadKeyboard = isSidebarFocused
+        // Before the tree goes: hidden with the keyboard, it would hand it to the next key view, a folded terminal too,
+        // which unfolds when it takes it.
+        if isSidebarFocused { keyboardToWorkArea() }
         browsesHome = false
         projectKey = nil
         // With a remote tab in front updateProjectRoot leaves the sidebar alone: "No project open" goes in directly, as
@@ -1098,15 +1100,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         } else {
             updateProjectRoot()
         }
-        guard hadKeyboard else { return }
-        // Folded, nothing of the terminal shows to type into: whatever the editor has in front takes the keyboard, as
-        // collapseTerminal gives it (folded, an editor pane always shows). Unfolded, the tab in front takes it.
+    }
+
+    /// The keyboard to what shows of the work area. Folded, nothing of the terminal shows to type into: whatever the
+    /// editor has in front takes it, as collapseTerminal gives it (folded, an editor pane always shows). Unfolded, the tab
+    /// in front takes it. If neither does, no view keeps it in the sidebar.
+    private func keyboardToWorkArea() {
         if terminalCollapsed {
             editorArea.select(editorArea.activeIndex)
         } else if let tab = activeTab {
             window?.makeFirstResponder(tab.view)
         }
-        // None took it: not the tree put away either.
         if (window?.firstResponder as? NSView)?.isDescendant(of: sidebar) == true { window?.makeFirstResponder(nil) }
     }
 
