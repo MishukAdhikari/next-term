@@ -242,3 +242,64 @@ final class BreadcrumbButton: FillButton {
         label.frame = NSRect(x: x, y: ((bounds.height - height) / 2).rounded(.down), width: max(0, bounds.width - x - Self.padding), height: height)
     }
 }
+
+// MARK: - the sidebar's side
+
+extension ProjectSidebarView {
+    /// Shows or hides the bar over the tree; `refreshBreadcrumbs` gives it its path.
+    func showBreadcrumbs(_ shown: Bool) {
+        guard breadcrumbs.isHidden == shown else { return }
+        breadcrumbs.isHidden = !shown
+        needsLayout = true
+    }
+
+    /// The bar follows the selection: the path from the root (the home folder) to the folder of the selected row.
+    func refreshBreadcrumbs() {
+        guard !breadcrumbs.isHidden, let root else { return }
+        breadcrumbs.show(Breadcrumbs.segments(to: selectedFolder(in: root).path, home: root.path))
+    }
+
+    /// The folder of the row selected last: a folder itself, the folder a file or any other row is in, the root with none.
+    private func selectedFolder(in root: FileNode) -> FileNode {
+        let row = outline.selectedRow
+        guard row >= 0, let item = outline.item(atRow: row) else { return root }
+        if let node = item as? FileNode, node.isDirectory { return node }
+        return enclosingFolder(of: item) ?? root
+    }
+
+    /// The folder row a row is under: the nearest folder above it (a Databases or Agent Sessions row's is the root).
+    private func enclosingFolder(of item: Any) -> FileNode? {
+        var above: Any? = outline.parent(forItem: item)
+        while let item = above, !(item is FileNode) { above = outline.parent(forItem: item) }
+        return above as? FileNode
+    }
+
+    /// ⌘↑, Select Enclosing Folder: the row of the folder the selected row is in, among the rows the tree shows (the root's
+    /// with none selected). From the root's row it goes back to "No project open" while the bar shows, and elsewhere does
+    /// nothing. Nothing is opened, closed or read.
+    func selectEnclosingFolder() {
+        guard let root else { return }
+        let row = outline.selectedRow
+        guard row >= 0, let item = outline.item(atRow: row) else { return selectRow(of: root) }
+        guard item as AnyObject !== root else {
+            if !breadcrumbs.isHidden { onLeaveBrowsing?() }
+            return
+        }
+        selectRow(of: enclosingFolder(of: item) ?? root)
+    }
+
+    /// A folder of the bar, clicked: its row selected and scrolled into view, and the tree given the keyboard, so ⌘↑ goes on
+    /// from there. Its row is always there, above the selected one; it is never opened, closed or read (reveal could).
+    func selectFolder(_ path: String) {
+        window?.makeFirstResponder(outline) // a name being edited is done first, as a click elsewhere would end it
+        guard let node = root?.node(at: path) else { return }
+        selectRow(of: node)
+    }
+
+    private func selectRow(of node: FileNode) {
+        let row = outline.row(forItem: node)
+        guard row >= 0 else { return }
+        outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outline.scrollRowToVisible(row)
+    }
+}

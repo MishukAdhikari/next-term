@@ -35,12 +35,13 @@ enum DatabaseAction { case open, tablePlus, terminal, vercel }
 enum SessionAction: Equatable { case resume, fork, continueLatest(AgentKind), showAll }
 
 /// Outline view with the keys a file tree needs: Return renames (as in Finder), ⌘⌫ moves to the Trash,
-/// ⌘↓ opens, and the right-click menu's other commands have theirs (by default: Settings can change them). It notes
-/// how each click began, for "Open files and folders with a single click".
+/// ⌘↓ opens, ⌘↑ selects the enclosing folder, and the right-click menu's other commands have theirs (by default: Settings
+/// can change them). It notes how each click began, for "Open files and folders with a single click".
 final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     var onOpen: (() -> Void)?
+    var onEnclosingFolder: (() -> Void)?
     /// The right-click menu's other commands (Copy Path, New File…), by their ids in KeyBindings.partCommands.
     var onCommand: ((String) -> Void)?
     /// The row the last click went down on (a click released over another row dragged across rows).
@@ -82,14 +83,15 @@ final class SidebarOutlineView: NSOutlineView {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// Rename, Move to Trash and Open on their keys: ↩ (or Enter), ⌘⌫ and ⌘↓, or what Settings › Keyboard Shortcuts says;
-    /// the menu's other commands on theirs (⌥⌘C Copy Path, ⌥⌘N New File…).
+    /// Rename, Move to Trash, Open and Select Enclosing Folder on their keys: ↩ (or Enter), ⌘⌫, ⌘↓ and ⌘↑, or what
+    /// Settings › Keyboard Shortcuts says; the menu's other commands on theirs (⌥⌘C Copy Path, ⌥⌘N New File…).
     private func perform(_ event: NSEvent) -> Bool {
         guard let id = KeyboardShortcuts.shared.partCommand(for: event, in: .sidebar) else { return false }
         switch id {
         case "sidebar.rename": onRename?()
         case "sidebar.trash": onTrash?()
         case "sidebar.open": onOpen?()
+        case "sidebar.enclosingFolder": onEnclosingFolder?()
         default: onCommand?(id)
         }
         return true
@@ -117,6 +119,11 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     let projectOffer = ProjectOfferNote()
     /// "No project open"'s Browse Home Folder was clicked: the window shows the home folder's tree (`setRoot(browsing:)`).
     var onBrowseHome: (() -> Void)?
+    /// Over the home folder's tree, while a window with no project browses it (`setRoot(breadcrumbs:)`): Back, and the path
+    /// to the selected row's folder (SidebarBreadcrumbs.swift).
+    let breadcrumbs = BreadcrumbBar()
+    /// The bar's Back, or ⌘↑ from the home folder's row: the window shows "No project open" again.
+    var onLeaveBrowsing: (() -> Void)?
     /// The tree shows a folder that is no project (the home folder, after Browse Home Folder): its files only, each folder
     /// read as the user opens it, with no git, Databases, Services or Agent Sessions, so nothing reads the protected
     /// places in it until the user opens one.
@@ -215,6 +222,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         outline.onRename = { [weak self] in self?.renameSelected() }
         outline.onTrash = { [weak self] in self?.trashSelected() }
         outline.onOpen = { [weak self] in self?.openSelected() }
+        outline.onEnclosingFolder = { [weak self] in self?.selectEnclosingFolder() }
         outline.onCommand = { [weak self] id in self?.perform(command: id) }
         let menu = NSMenu()
         menu.delegate = self
@@ -235,6 +243,10 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             self.delegate?.sidebar(self, openProject: folder)
         }
         addSubview(projectOffer)
+        breadcrumbs.isHidden = true
+        breadcrumbs.onBack = { [weak self] in self?.onLeaveBrowsing?() }
+        breadcrumbs.onSelect = { [weak self] path in self?.selectFolder(path) }
+        addSubview(breadcrumbs)
         addSubview(scrollView)
         noProject.isHidden = true
         noProject.onOpen = { [weak self] folder in
@@ -286,6 +298,8 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         if !remoteNote.isHidden { top += RemoteFilesNote.height }
         projectOffer.frame = NSRect(x: 0, y: top, width: bounds.width, height: ProjectOfferNote.height)
         if !projectOffer.isHidden { top += ProjectOfferNote.height }
+        breadcrumbs.frame = NSRect(x: 0, y: top, width: bounds.width, height: BreadcrumbBar.height)
+        if !breadcrumbs.isHidden { top += BreadcrumbBar.height }
         scrollView.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
         noProject.frame = scrollView.frame
         updateToolTips()
@@ -340,6 +354,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     func showNoProject(recent: [String]) {
         noProject.show(recent: recent)
         offerProjectWindow(nil)
+        showBreadcrumbs(false)
         guard !closed, root != nil || noProject.isHidden else { return }
         if isRenaming { window?.makeFirstResponder(outline) }
         runHeld()
@@ -366,11 +381,14 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     /// Shows `path`'s tree (a no-op if it is already the root). Folders are read in the background. `browsing`: a folder
-    /// that is no project (`browsingOnly`), its files and nothing more.
-    func setRoot(_ path: String, browsing: Bool = false) {
+    /// that is no project (`browsingOnly`), its files and nothing more. `breadcrumbs`: with the bar over it (a window with
+    /// no project browsing the home folder); any other tree has none.
+    func setRoot(_ path: String, browsing: Bool = false, breadcrumbs showsBar: Bool = false) {
         let canonical = canonicalPath(path)
         noProject.isHidden = true
         scrollView.isHidden = false
+        showBreadcrumbs(browsing && showsBar)
+        defer { refreshBreadcrumbs() } // the same root's selection, or the new one's
         guard canonical != root?.path, !closed else { return }
         browsingOnly = browsing
         // git's own files, read without running git.
@@ -1039,6 +1057,9 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     }
 
     // MARK: delegate
+
+    /// The breadcrumb bar follows the selection.
+    func outlineViewSelectionDidChange(_ notification: Notification) { refreshBreadcrumbs() }
 
     // Folder icons open and close with the folder.
     func outlineViewItemDidExpand(_ notification: Notification) { refreshIcon(of: notification) }
