@@ -60,11 +60,13 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
 
     @objc func copy(_ sender: Any?) { onCopy?() }
 
-    /// The current cell: the selected row at the current column, when both are there.
+    /// The current cell: the selected row at the current column (the first value's column until one is
+    /// chosen), when both are there.
     var currentCell: (row: Int, column: Int)? {
         let row = selectedRow
-        guard row >= 0, row < numberOfRows, currentColumn >= firstValueColumn, currentColumn < numberOfColumns else { return nil }
-        return (row, currentColumn)
+        let column = max(currentColumn, firstValueColumn)
+        guard row >= 0, row < numberOfRows, column < numberOfColumns else { return nil }
+        return (row, column)
     }
 
     /// Makes `column` current (and `row`, when given), as a click would.
@@ -80,15 +82,16 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        let column = column(at: point)
-        if let ask = shouldMoveCurrentCell, row(at: point) >= 0, column >= firstValueColumn,
-           row(at: point) != selectedRow || column != currentColumn, !ask(row(at: point), column) { return }
-        if column >= firstValueColumn, row(at: point) >= 0, column != currentColumn {
+        let row = row(at: point), clicked = column(at: point)
+        // A click on the line number keeps the column the current cell is in.
+        let column = clicked >= firstValueColumn ? clicked : max(currentColumn, firstValueColumn)
+        if let ask = shouldMoveCurrentCell, row >= 0, clicked >= 0, row != selectedRow || column != currentColumn, !ask(row, column) { return }
+        if row >= 0, clicked >= 0, column != currentColumn {
             currentColumn = column
             cellMoved()
         }
         super.mouseDown(with: event)
-        if column >= firstValueColumn, row(at: point) >= 0 { onClickCell?(event.clickCount) }
+        if row >= 0, clicked >= 0 { onClickCell?(event.clickCount) }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -101,7 +104,7 @@ final class DatabaseGridView: NSTableView, NSTextFieldDelegate {
         case 123 where plain, 124 where plain: // ← →
             guard numberOfColumns > 0, numberOfRows > 0 else { return super.keyDown(with: event) }
             if selectedRow < 0 { selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
-            let start = currentColumn < firstValueColumn ? firstValueColumn : currentColumn + (event.keyCode == 123 ? -1 : 1)
+            let start = max(currentColumn, firstValueColumn) + (event.keyCode == 123 ? -1 : 1)
             let next = min(max(start, firstValueColumn), numberOfColumns - 1)
             if let ask = shouldMoveCurrentCell, next != currentColumn, !ask(selectedRow, next) { return }
             if next != currentColumn {
