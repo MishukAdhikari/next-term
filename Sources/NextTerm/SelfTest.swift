@@ -690,6 +690,7 @@ enum SelfTest {
         case "gitRefresh": return await gitRefreshChecks(c) // the sidebar's git refresh and Databases scan, in a repository of its own
         case "mouse": return await mouseReportChecks(c) // right and middle clicks for a program that reads the mouse
         case "remote": return await remoteChecks(c) // servers on the stand-in ssh: tabs, tmux and herdr
+        case "remoteAccess": return await remoteAccessChecks(c, proj: proj) // Remote access's door: pairing, the options, the tunnel
         case "mcp": return await mcpChecks(c, proj: proj) // the MCP tools that drive tabs, read files and git
         case "newTerminal": return await newTerminalChecks() // a window with no project: "No project open", no protected place read
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
@@ -4755,6 +4756,7 @@ enum SelfTest {
         await opencodeLinkChecks(c, proj: proj)
         await mcpChecks(c, proj: proj)
         await remoteChecks(c)
+        await remoteAccessChecks(c, proj: proj)
         if ProcessInfo.processInfo.environment["NEXTTERM_REAL_CLAUDE"] == "1" { await realClaudeCheck(c, proj: proj) }
 
         // Claude's proposed edits: shown as a diff to accept or reject; the file is never written by Next Term.
