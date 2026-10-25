@@ -149,6 +149,25 @@ import Testing
         #expect(added && !same && marked && renamed)
     }
 
+    /// A linked worktree's window keeps its repository's main checkout, which the window column nests it under. An entry
+    /// changed only in when it last had the keyboard is still a change to the index, as before; the column draws
+    /// nothing for it.
+    @Test func aWorktreesRepositoryIsKeptAndTheColumnIgnoresLastKey() {
+        var index = WindowIndex()
+        let tree = WindowIndex.Window(id: 2, kind: .worktree, project: "/Users/sam/Code/xCloud-wt-7027-sso", name: "xCloud ▸ 7027-sso",
+                                      title: "xCloud ▸ 7027-sso", lastKey: .distantPast, tabs: [terminal(2, .idle)],
+                                      repository: "/Users/sam/Code/xCloud")
+        index.update(tree)
+        #expect(index.window(2)?.repository == "/Users/sam/Code/xCloud")
+        #expect(window(1, []).repository == nil)
+        let column = WindowColumnList.build(windows: index.windows, colors: [:], showsWorking: true)
+        let used = WindowIndex.Window(id: 2, kind: .worktree, project: tree.project, name: tree.name, title: tree.title,
+                                      lastKey: Date(timeIntervalSince1970: 100), tabs: tree.tabs, repository: tree.repository)
+        let changed: Bool = index.update(used)
+        #expect(changed)
+        #expect(column.updating(used, color: nil, showsWorking: true).change == .none)
+    }
+
     // MARK: stale entries
 
     @Test func aClosedWindowLeavesWithItsTerminals() {

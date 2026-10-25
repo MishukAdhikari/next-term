@@ -69,6 +69,27 @@ import Testing
         }
     }
 
+    /// The window column's badges: two letters in Theme.text read on every colour's badge and the neutral one (4.5:1), each
+    /// badge shows against the bar it sits on, and the nine are told apart there too.
+    @Test func theBadgesLettersReadOnEveryColour() {
+        let badges: [UInt32] = ProjectColor.allCases.map(\.badge) + [ProjectColor.neutralBadge]
+        for badge in badges {
+            let text: Double = ProjectColor.contrast(Self.text, badge)
+            #expect(text >= 4.5, "text \(text):1 on #\(String(badge, radix: 16))")
+            #expect(OKLab(rgb: badge).l - OKLab(rgb: Self.bar).l > 0.1, "#\(String(badge, radix: 16)) on the bar")
+        }
+        for color in ProjectColor.allCases {
+            #expect(OKLab(lightness: ProjectColor.badgeLightness, chroma: ProjectColor.badgeChroma, hue: color.hue).inGamut, "\(color.name)")
+        }
+        let tiles: [OKLab] = ProjectColor.allCases.map { OKLab(rgb: $0.badge) }
+        for i in tiles.indices {
+            for j in tiles.indices where j > i {
+                let dl: Double = tiles[i].l - tiles[j].l, da: Double = tiles[i].a - tiles[j].a, db: Double = tiles[i].b - tiles[j].b
+                #expect((dl * dl + da * da + db * db).squareRoot() > 0.03, "\(ProjectColor.allCases[i].name) and \(ProjectColor.allCases[j].name)")
+            }
+        }
+    }
+
     @Test func oklabRoundTrips() {
         for rgb: UInt32 in [0x000000, 0xFFFFFF, 0x2B2D30, 0x3574F0, 0xE55765, 0x5FB865] {
             #expect(OKLab(rgb: rgb).rgb == rgb, "#\(String(rgb, radix: 16))")

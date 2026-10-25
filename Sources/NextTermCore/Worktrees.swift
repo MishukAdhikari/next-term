@@ -274,12 +274,15 @@ public enum WorktreeWindow {
         }
     }
 
+    /// Between the repository's name and the worktree's own in a worktree window's title.
+    public static let separator = " ▸ "
+
     /// "xCloud ▸ 7027-sso": the repository's name and the folder's, without the "<repo>-wt-" it starts with
     /// (in any case: his own folders are xcloud-wt-aichat).
     public static func title(repository: String, folder: String) -> String {
         let prefix = repository + "-wt-"
         let short = folder.count > prefix.count && folder.lowercased().hasPrefix(prefix.lowercased()) ? String(folder.dropFirst(prefix.count)) : folder
-        return repository + " ▸ " + short
+        return repository + separator + short
     }
 
     /// The repository of the linked worktree whose top folder is `path`; nil for a main checkout or a folder

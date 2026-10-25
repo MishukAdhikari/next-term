@@ -237,6 +237,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let repository = project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
             projectTitle = Self.title(ofProject: project, repository: repository)
             isWorktree = repository != nil
+            repositoryCheckout = repository?.mainCheckout
             projectColorKey = ProjectColors.key(forProject: project, repository: repository)
             takeProjectColor()
         }
@@ -246,6 +247,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private(set) var projectTitle = ""
     /// The project is a linked worktree, read with its title.
     private(set) var isWorktree = false
+    /// For a linked worktree, its repository's main checkout, read with its title: the window column nests the window
+    /// under its repository's.
+    private(set) var repositoryCheckout: String?
     /// The window's id in the index of every window (AppDelegate.windowIndex): its own, the same while it is open.
     let indexID: Int
     private static var lastIndexID = 0
@@ -299,6 +303,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let repository = self.project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
         projectTitle = Self.title(ofProject: self.project, repository: repository)
         isWorktree = repository != nil
+        repositoryCheckout = repository?.mainCheckout
         projectColorKey = ProjectColors.key(forProject: self.project, repository: repository)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -1014,7 +1019,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
         return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,
-                                  lastKey: lastKey, tabs: terminals, destination: destination)
+                                  lastKey: lastKey, tabs: terminals, destination: destination, repository: repositoryCheckout)
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are

@@ -135,9 +135,12 @@ public struct WindowIndex: Sendable {
         public let tabs: [Tab]
         /// For a server window, what ssh connects to there: "deploy@203.0.113.5".
         public let destination: String?
+        /// For a linked worktree's window, its repository's main checkout (WorktreeWindow.Repository.mainCheckout), which
+        /// the window column nests it under; nil for any other window.
+        public let repository: String?
 
         public init(id: Int, kind: WindowKind, project: String?, name: String, title: String, lastKey: Date,
-                    tabs: [Tab], destination: String? = nil) {
+                    tabs: [Tab], destination: String? = nil, repository: String? = nil) {
             self.id = id
             self.kind = kind
             self.project = project
@@ -146,6 +149,7 @@ public struct WindowIndex: Sendable {
             self.lastKey = lastKey
             self.tabs = tabs
             self.destination = destination
+            self.repository = repository
         }
 
         /// Its terminals' marks; an idle one whose connection dropped shows that instead.
