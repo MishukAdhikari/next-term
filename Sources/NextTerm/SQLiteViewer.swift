@@ -1,10 +1,11 @@
 import AppKit
 import NextTermCore
 
-/// A SQLite file in an editor tab, read-only: its tables on the left, a page of 1,000 rows on the right.
-/// Everything is read off the main thread through SQLiteReader, which never writes. Rows copy as CSV,
-/// JSON or Markdown, and go to the agent the way files do (⌥⌘K).
-final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate {
+/// A SQLite file in an editor tab, read-only: its tables on the left, a page of 1,000 rows in the middle,
+/// and the current cell's whole value on the right (CellDetailView). Everything is read off the main
+/// thread through SQLiteReader, which never writes. Rows copy as CSV, JSON or Markdown, and go to the
+/// agent the way files do (⌥⌘K).
+final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private(set) var url: URL
     var path: String { url.path }
     var name: String { url.lastPathComponent }
@@ -18,11 +19,13 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     private let copyAs = NSPopUpButton(frame: .zero, pullsDown: true)
     private let sendButton = NSButton(title: "Send to Agent", target: nil, action: nil)
     private var sendTip: ShortcutToolTip?
-    private let split = NSSplitView()
     let tableList = NSTableView()
     let grid = DatabaseGridView()
+    let detail = CellDetailView()
     private let listScroll = NSScrollView()
     private let gridScroll = NSScrollView()
+    private let right = NSView()
+    private lazy var split = DataSplitView(list: listScroll, grid: right, detail: detail)
     private let pageLabel = NSTextField(labelWithString: "")
     private let previous = NSButton()
     private let next = NSButton()
@@ -38,7 +41,20 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     private let queue = DispatchQueue(label: "me.mishuk.nextterm.sqlite-viewer", qos: .userInitiated)
     private var generation = 0
     private var stamps: [FileStamp?] = []
-    private var didPlaceDivider = false
+    /// Values read whole by their row's key (a text cut at 10,000 characters on the page), until the
+    /// page is read again.
+    private var wholeValues: [CellKey: SQLiteValue] = [:]
+    /// Moves on with every current cell, so a whole value read for a cell left behind is not shown.
+    private var detailToken = 0
+    #if DEBUG
+    /// For the self-test: how many values were read whole.
+    private(set) var fetches = 0
+    #endif
+
+    struct CellKey: Hashable {
+        let key: SQLiteRowKey
+        let column: String
+    }
 
     /// For the self-test: nothing is being read.
     var isSettled: Bool { !isLoading }
@@ -82,7 +98,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         sendButton.target = self
         sendButton.action = #selector(sendClicked)
         sendTip = ShortcutToolTip(sendButton, "Send the selected rows to the agent in this window", #selector(TerminalWindowController.sendToAgent(_:)))
-        header.setViews([titleLabel, summary, NSView(), copyAs, sendButton], in: .leading)
+        header.setViews([titleLabel, summary, NSView(), split.toggle, copyAs, sendButton], in: .leading)
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
@@ -117,6 +133,20 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         grid.columnAutoresizingStyle = .noColumnAutoresizing
         grid.setAccessibilityLabel("Rows")
         grid.onCopy = { [weak self] in self?.copy(TableExport.csv) }
+        grid.onCurrentCellChange = { [weak self] in self?.showCurrentCell() }
+        grid.onClickCell = { [weak self] _ in self?.showDetail(true) }
+        grid.onSpace = { [weak self] in self?.toggleDetail() }
+        grid.onEnter = { [weak self] in self?.enterValue() }
+        split.onShownChange = { [weak self] in self?.showCurrentCell() }
+        detail.onSelectColumn = { [weak self] column in
+            guard let self else { return }
+            self.grid.setCurrent(column: column)
+            self.grid.scrollColumnToVisible(column)
+        }
+        detail.onEscape = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.grid)
+        }
         gridScroll.documentView = grid
         gridScroll.hasVerticalScroller = true
         gridScroll.hasHorizontalScroller = true
@@ -141,7 +171,6 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         footer.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 8)
         footer.wantsLayer = true
         footer.layer?.backgroundColor = Theme.bar.cgColor
-        let right = NSView()
         for view in [gridScroll, footer] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             right.addSubview(view)
@@ -156,11 +185,6 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
             footer.bottomAnchor.constraint(equalTo: right.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: 26),
         ])
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.delegate = self
-        split.addArrangedSubview(listScroll)
-        split.addArrangedSubview(right)
 
         message.textColor = Theme.textDim
         message.alignment = .center
@@ -183,20 +207,6 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
             message.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
         ])
     }
-
-    override func layout() {
-        super.layout()
-        if !didPlaceDivider, split.bounds.width > 400 {
-            didPlaceDivider = true
-            split.setPosition(190, ofDividerAt: 0)
-        }
-    }
-
-    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { 120 }
-    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
-        max(120, splitView.bounds.width - 240)
-    }
-    func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool { view !== listScroll }
 
     private func showTitle() {
         let text = NSMutableAttributedString(string: name, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .semibold), .foregroundColor: Theme.text])
@@ -294,13 +304,24 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
 
     private func show(_ page: SQLitePage?, total: Int?, error: String?) {
         let sameColumns = page?.columns == self.page?.columns && page?.table == self.page?.table
+        // The current cell's row, by its key, to find again on the page read now (rows may have come before it).
+        let kept = currentCellKey
         self.page = page
         self.total = total
+        wholeValues = [:]
         if !sameColumns { rebuildColumns() }
         grid.reloadData()
         if !sameColumns { grid.scrollRowToVisible(0) }
+        if let kept, let page, page.table == kept.table {
+            if let row = page.row(for: kept.cell.key) {
+                grid.setCurrent(row: row, column: page.columns.firstIndex(of: kept.cell.column) ?? grid.currentColumn)
+            } else {
+                grid.deselectAll(nil)
+            }
+        }
         message.stringValue = error ?? ""
         message.isHidden = error == nil
+        showCurrentCell()
     }
 
     private func rebuildColumns() {
@@ -462,6 +483,97 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         guard tables.indices.contains(row), tables[row].name != selectedTable || page == nil else { return }
         grid.deselectAll(nil)
         load(tables[row].name, offset: 0)
+    }
+
+    // MARK: the current cell
+
+    /// The table the page is of.
+    var currentTable: SQLiteTable? { page.flatMap { page in tables.first { $0.name == page.table } } }
+
+    /// The current cell's row key and column, with its table.
+    private var currentCellKey: (table: String, cell: CellKey)? {
+        guard let page, let cell = grid.currentCell, cell.row < page.keys.count, cell.column < page.columns.count,
+              let key = page.keys[cell.row] else { return nil }
+        return (page.table, CellKey(key: key, column: page.columns[cell.column]))
+    }
+
+    /// The current cell's value: the one read whole when it was, else the page's.
+    var currentValue: SQLiteValue? {
+        guard let page, let cell = grid.currentCell, cell.row < page.rows.count, cell.column < page.rows[cell.row].count else { return nil }
+        if let kept = currentCellKey, let whole = wholeValues[kept.cell] { return whole }
+        return page.rows[cell.row][cell.column]
+    }
+
+    /// The detail pane shows the current cell, from what the page read. A text cut on read is read whole
+    /// once, by its row's key; nothing else is read.
+    func showCurrentCell() {
+        detailToken += 1
+        guard !detail.isHidden else { return }
+        guard let page, let cell = grid.currentCell, cell.row < page.rows.count, cell.column < page.columns.count,
+              cell.column < page.rows[cell.row].count else {
+            return detail.show(nil, items: [], current: -1)
+        }
+        let row = page.rows[cell.row], name = page.columns[cell.column]
+        let items = zip(page.columns, row).map { DetailRowItem(name: $0, value: $1) }
+        let key = cell.row < page.keys.count ? page.keys[cell.row] : nil
+        let declared = page.info?.column(named: name)?.declaredType ?? ""
+        var value = row[cell.column]
+        var source = CellDetail.Source.page(fetching: false, isView: currentTable?.kind == .view)
+        if let key, let whole = wholeValues[CellKey(key: key, column: name)] {
+            value = whole
+            source = .whole
+        } else if value.isTruncated, key != nil {
+            source = .page(fetching: true, isView: false)
+        }
+        let token = detailToken
+        if case let .text(text, _) = value, text.utf8.count > 64 << 10 {
+            // A long JSON value is indented off the main thread.
+            queue.async { [weak self] in
+                let made = CellDetail.make(column: name, declaredType: declared, value: value, source: source)
+                DispatchQueue.main.async {
+                    guard let self, token == self.detailToken else { return }
+                    self.detail.show(made, items: items, current: cell.column)
+                }
+            }
+        } else {
+            detail.show(CellDetail.make(column: name, declaredType: declared, value: value, source: source), items: items, current: cell.column)
+        }
+        if case .page(fetching: true, _) = source, let key { readWhole(page.table, column: name, declaredType: declared, key: key, items: items, current: cell.column) }
+    }
+
+    /// Reads one value whole by its row's key, on the reading queue; shown if its cell is still current.
+    private func readWhole(_ table: String, column: String, declaredType: String, key: SQLiteRowKey, items: [DetailRowItem], current: Int) {
+        let token = detailToken, path = self.path, generation = self.generation
+        #if DEBUG
+        fetches += 1
+        #endif
+        queue.async { [weak self] in
+            let read = Result { try SQLiteReader.value(table, column: column, key: key, at: path) }
+            let value = (try? read.get()) ?? nil
+            let made = value.map { CellDetail.make(column: column, declaredType: declaredType, value: $0, source: .whole) }
+            DispatchQueue.main.async {
+                guard let self, generation == self.generation else { return }
+                if let value { self.wholeValues[CellKey(key: key, column: column)] = value }
+                guard token == self.detailToken else { return }
+                if let made { return self.detail.show(made, items: items, current: current) }
+                if case .failure = read { return self.detail.showNote("The whole value could not be read.") }
+                self.detail.showNote("This row was deleted since the page was read.")
+            }
+        }
+    }
+
+    var isDetailShown: Bool { split.isDetailShown }
+
+    /// Shows or hides the value pane (Space, the header's button); a click on a cell shows it.
+    func showDetail(_ shown: Bool) { split.setDetailShown(shown) }
+
+    func toggleDetail() { showDetail(!split.isDetailShown) }
+
+    /// ↩ in the grid: the keyboard goes into the value.
+    func enterValue() {
+        guard grid.currentCell != nil else { return NSSound.beep() }
+        showDetail(true)
+        detail.focusValue()
     }
 
     /// Shows a table by name (for the self-test).

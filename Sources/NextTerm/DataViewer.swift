@@ -4,7 +4,7 @@ import NextTermCore
 /// A large data file in an editor tab, read-only: its first 1,000 records as a table (or as lines), and
 /// 1,000 more at a time. Everything is read off the main thread through DataHead, which never writes, so
 /// a 2 GB log opens as fast as a small one. A JSON Lines file gets a column per top-level key, a CSV
-/// its header row.
+/// its header row. The current cell's whole value shows beside the grid (CellDetailView), view-only.
 final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private(set) var url: URL
     var path: String { url.path }
@@ -21,7 +21,9 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     let mode = NSSegmentedControl(labels: ["Table", "Lines"], trackingMode: .selectOne, target: nil, action: nil)
     private let copyAs = NSPopUpButton(frame: .zero, pullsDown: true)
     let grid = DatabaseGridView()
+    let detail = CellDetailView()
     private let gridScroll = NSScrollView()
+    private lazy var split = DataSplitView(list: nil, grid: gridScroll, detail: detail)
     private let rowsLabel = NSTextField(labelWithString: "")
     let headerBox = NSButton(checkboxWithTitle: "First row is a header", target: nil, action: nil)
     let loadMoreButton = NSButton(title: "Load More", target: nil, action: nil)
@@ -63,6 +65,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     private var searchGeneration = 0
     private var isSearching = false
     private var counting: DataCancellation?
+    /// Moves on with every current cell, so a value indented off the main thread for a cell left behind is not shown.
+    private var detailToken = 0
 
     /// For the self-test: nothing is being read.
     var isSettled: Bool { !isLoading && !isSearching }
@@ -120,7 +124,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         copyAs.toolTip = "Copy the selected rows"
         copyAs.addItem(withTitle: "Copy As")
         for item in copyItems() { copyAs.menu?.addItem(item) }
-        header.setViews([titleLabel, summary, NSView(), search, mode, copyAs], in: .leading)
+        header.setViews([titleLabel, summary, NSView(), search, mode, split.toggle, copyAs], in: .leading)
         header.spacing = 10
         header.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
         header.wantsLayer = true
@@ -140,6 +144,20 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         grid.setAccessibilityLabel("Rows")
         grid.firstValueColumn = 1 // the line number is not a value
         grid.onCopy = { [weak self] in self?.copy(self?.exportLines() ?? "") }
+        grid.onCurrentCellChange = { [weak self] in self?.showCurrentCell() }
+        grid.onClickCell = { [weak self] _ in self?.split.setDetailShown(true) }
+        grid.onSpace = { [weak self] in self?.toggleDetail() }
+        grid.onEnter = { [weak self] in self?.enterValue() }
+        split.onShownChange = { [weak self] in self?.showCurrentCell() }
+        detail.onSelectColumn = { [weak self] item in
+            guard let self else { return }
+            self.grid.setCurrent(column: item + 1)
+            self.grid.scrollColumnToVisible(item + 1)
+        }
+        detail.onEscape = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.grid)
+        }
         let menu = NSMenu()
         let copyLine = NSMenuItem(title: "Copy", action: #selector(copyLines), keyEquivalent: "")
         copyLine.target = self
@@ -186,7 +204,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         message.textColor = Theme.textDim
         message.alignment = .center
         message.isHidden = true
-        for view in [header, gridScroll, footer, message] as [NSView] {
+        for view in [header, split, footer, message] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -195,15 +213,15 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor),
             header.heightAnchor.constraint(equalToConstant: 34),
-            gridScroll.topAnchor.constraint(equalTo: header.bottomAnchor),
-            gridScroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            gridScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            gridScroll.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            split.topAnchor.constraint(equalTo: header.bottomAnchor),
+            split.leadingAnchor.constraint(equalTo: leadingAnchor),
+            split.trailingAnchor.constraint(equalTo: trailingAnchor),
+            split.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footer.leadingAnchor.constraint(equalTo: leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: 30),
-            message.centerYAnchor.constraint(equalTo: gridScroll.centerYAnchor),
+            message.centerYAnchor.constraint(equalTo: split.centerYAnchor),
             message.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
             message.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
         ])
@@ -534,6 +552,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         if let matches, !search.stringValue.isEmpty { shown = shown.filter { matches.contains($0) } }
         visible = shown
         grid.reloadData()
+        showCurrentCell()
         message.stringValue = loadError ?? (records.isEmpty && !isLoading ? "This file has no rows." : "")
         message.isHidden = message.stringValue.isEmpty
         rowsLabel.stringValue = rowsText
@@ -603,6 +622,75 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
             if columns[column] == "(value)", record.keys.isEmpty { return record.fields.first ?? "" }
             let value = values == nil ? record.value(for: columns[column]) : values?[column]
             return value.map(DataHead.displayValue) ?? ""
+        }
+    }
+
+    // MARK: the current cell
+
+    var isDetailShown: Bool { split.isDetailShown }
+
+    func toggleDetail() { split.setDetailShown(!split.isDetailShown) }
+
+    /// ↩ in the grid: the keyboard goes into the value.
+    func enterValue() {
+        guard grid.currentCell != nil else { return NSSound.beep() }
+        split.setDetailShown(true)
+        detail.focusValue()
+    }
+
+    /// The current cell's whole value, from what was read: a CSV field, a JSON Lines value (indented when
+    /// it is an object or array) or, in the Lines view, the whole line.
+    func showCurrentCell() {
+        detailToken += 1
+        guard !detail.isHidden else { return }
+        guard let cell = grid.currentCell, let index = visible[safe: cell.row], index < records.count, cell.column < grid.tableColumns.count else {
+            return detail.show(nil, items: [], current: -1)
+        }
+        let record = records[index]
+        let id = grid.tableColumns[cell.column].identifier.rawValue
+        let items: [DetailRowItem]
+        let make: () -> CellDetail
+        let size: Int
+        if id == "raw" {
+            items = [DetailRowItem(name: "Text", text: record.raw, cut: record.isTruncated)]
+            size = record.raw.utf8.count
+            make = { CellDetail.make(column: "Line \(record.line.formatted())", text: record.raw, cut: record.isTruncated) }
+        } else {
+            let column = Int(id.dropFirst()) ?? 0
+            let name = columns[safe: column] ?? id
+            items = columns.indices.map { DetailRowItem(name: columns[$0], text: cellText(record, column: $0), cut: record.isTruncated) }
+            let kind = self.kind
+            if kind == .jsonLines, record.error == nil {
+                let written = name == "(value)" && record.keys.isEmpty ? record.fields.first : record.value(for: name)
+                size = written?.utf8.count ?? 0
+                make = {
+                    guard let written else {
+                        var missing = CellDetail(title: name, kind: "No value", body: "")
+                        missing.note = "This line has no “\(name)”."
+                        return missing
+                    }
+                    return CellDetail.make(column: name, json: written)
+                }
+            } else {
+                let text = kind == .jsonLines ? record.raw : cellText(record, column: column)
+                size = text.utf8.count
+                make = {
+                    var made = CellDetail.make(column: name, text: text, cut: record.isTruncated)
+                    if let error = record.error { made.note = error }
+                    return made
+                }
+            }
+        }
+        let current = cell.column - 1
+        guard size > 64 << 10 else { return detail.show(make(), items: items, current: current) }
+        // A long JSON value is indented off the main thread.
+        let token = detailToken
+        queue.async { [weak self] in
+            let made = make()
+            DispatchQueue.main.async {
+                guard let self, token == self.detailToken else { return }
+                self.detail.show(made, items: items, current: current)
+            }
         }
     }
 
