@@ -277,14 +277,15 @@ extension ProjectSidebarView {
     }
 
     /// ⌘↑, Select Enclosing Folder: the row of the folder the selected row is in, among the rows the tree shows (the root's
-    /// with none selected). From the root's row it goes back to "No project open" while the bar shows, and elsewhere does
-    /// nothing. Nothing is opened, closed or read.
-    func selectEnclosingFolder() {
+    /// with none selected). From the root's row a fresh press goes back to "No project open" while the bar shows, and
+    /// elsewhere does nothing. A key held down (`isRepeat`) climbs to the root's row and stops there: the tree going, and
+    /// the keyboard with it, takes a press of its own. Nothing is opened, closed or read.
+    func selectEnclosingFolder(isRepeat: Bool = false) {
         guard let root else { return }
         let row = outline.selectedRow
         guard row >= 0, let item = outline.item(atRow: row) else { return selectRow(of: root) }
         guard item as AnyObject !== root else {
-            if !breadcrumbs.isHidden { onLeaveBrowsing?() }
+            if !isRepeat, !breadcrumbs.isHidden { onLeaveBrowsing?() }
             return
         }
         selectRow(of: enclosingFolder(of: item) ?? root)

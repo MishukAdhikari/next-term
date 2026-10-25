@@ -41,7 +41,8 @@ final class SidebarOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     var onOpen: (() -> Void)?
-    var onEnclosingFolder: (() -> Void)?
+    /// ⌘↑, and whether it is the key held down repeating (only a fresh press steps out of the tree).
+    var onEnclosingFolder: ((_ isRepeat: Bool) -> Void)?
     /// The right-click menu's other commands (Copy Path, New File…), by their ids in KeyBindings.partCommands.
     var onCommand: ((String) -> Void)?
     /// The row the last click went down on (a click released over another row dragged across rows).
@@ -91,7 +92,7 @@ final class SidebarOutlineView: NSOutlineView {
         case "sidebar.rename": onRename?()
         case "sidebar.trash": onTrash?()
         case "sidebar.open": onOpen?()
-        case "sidebar.enclosingFolder": onEnclosingFolder?()
+        case "sidebar.enclosingFolder": onEnclosingFolder?(event.isARepeat)
         default: onCommand?(id)
         }
         return true
@@ -222,7 +223,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         outline.onRename = { [weak self] in self?.renameSelected() }
         outline.onTrash = { [weak self] in self?.trashSelected() }
         outline.onOpen = { [weak self] in self?.openSelected() }
-        outline.onEnclosingFolder = { [weak self] in self?.selectEnclosingFolder() }
+        outline.onEnclosingFolder = { [weak self] isRepeat in self?.selectEnclosingFolder(isRepeat: isRepeat) }
         outline.onCommand = { [weak self] id in self?.perform(command: id) }
         let menu = NSMenu()
         menu.delegate = self
