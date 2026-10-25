@@ -37,9 +37,9 @@ dsymutil "$BIN" -o "$DIST/NextTerm.dSYM"
 UNSTRIPPED=$(stat -f%z "$BIN")
 strip -x "$BIN"
 echo "    strip -x: $((UNSTRIPPED / 1024)) KB -> $(($(stat -f%z "$BIN") / 1024)) KB"
-# The relaunch harness (SelfTestRestore.swift) and its staged-update stand-in are debug-only: a release binary that held
-# them would take its folders and its update from the command line.
-for HARNESS in --relaunch-harness SelfTestRestore stageStandIn; do
+# The relaunch harness (SelfTestRestore.swift), its staged-update stand-in and the keep probe (SelfTestKeepProbe.swift) are
+# debug-only: a release binary that held them would take its folders and its update from the command line.
+for HARNESS in --relaunch-harness SelfTestRestore stageStandIn keep-probe SelfTestKeepProbe; do
   if LC_ALL=C grep -qaF -- "$HARNESS" "$BIN"; then echo "error: the release binary holds the relaunch harness ($HARNESS)" >&2; exit 1; fi
 done
 # The dSYM is this binary's only while their UUIDs match (strip and the signature leave the UUID alone).

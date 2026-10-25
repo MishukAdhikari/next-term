@@ -53,6 +53,11 @@ enum SelfTestRestore {
             case setAside = "set-aside"
             /// Safe mode again, answered "Keep As Is". The last step.
             case safeModeKeep = "safe-mode-keep"
+            /// The keep probe's own run (`--keep-probe`, SelfTestKeepProbe): herdr and tmux started in tabs, then the update
+            /// quit; after it, a look and a quit as the user's; after that, a last look.
+            case keepProbeStart = "keep-probe-start"
+            case keepProbeAfterUpdate = "keep-probe-after-update"
+            case keepProbeAfterQuit = "keep-probe-after-quit"
         }
 
         let folder: URL
@@ -192,6 +197,9 @@ enum SelfTestRestore {
             case .safeModeTryAgain: await afterTryAgain(harness, restore: restore, runs: runs)
             case .setAside: await afterSetAside(harness, restore: restore)
             case .safeModeKeep: await afterKeepAsIs(harness, restore: restore, runs: runs)
+            case .keepProbeStart: await SelfTestKeepProbe.start(harness)
+            case .keepProbeAfterUpdate: await SelfTestKeepProbe.afterUpdate(harness)
+            case .keepProbeAfterQuit: await SelfTestKeepProbe.afterQuit(harness)
             case .failOnce, .failAgain: break
             }
         }
@@ -643,7 +651,8 @@ enum SelfTestRestore {
         case .afterWelcomeQuit: checkedQuitSaved(harness)
         case .afterQuitChecked: unaskedQuitSaved(harness)
         case .afterQuitUnasked: logoutQuitSaved(harness)
-        case .openRequest, .afterCrash, .failOnce, .failAgain, .safeModeTryAgain, .setAside, .safeModeKeep:
+        case .keepProbeStart, .keepProbeAfterUpdate: SelfTestKeepProbe.quitSaved()
+        case .openRequest, .afterCrash, .failOnce, .failAgain, .safeModeTryAgain, .setAside, .safeModeKeep, .keepProbeAfterQuit:
             check(false, "this step ends without a quit")
             recordStepEnd()
         }
