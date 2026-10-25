@@ -223,8 +223,47 @@ public enum RemoteAccessTools {
         if !offered.isEmpty, offered.allSatisfy({ $0.scope == .read }) {
             sentences.append("Its tools only read: nothing it does types into a tab.")
         }
+        sentences += controlSentences(options: options, offered: names)
         sentences.append("The user picked what it may do, and can change that only on the Mac, in Settings › Remote Access.")
         return sentences.joined(separator: " ")
+    }
+
+    /// The sentences for the control options that are on (U14), after the first 512 characters: which agents typing
+    /// reaches, which text and keys go, that a Yes on a permission prompt runs what the agent asked to run, that the
+    /// chat app may ask before a destructive tool, how keys are used, and that a refusal names the option to turn on.
+    static func controlSentences(options: RemoteAccessOptions, offered names: Set<String>) -> [String] {
+        var sentences: [String] = []
+        if names.contains("send_to_tab") {
+            let agents = RemoteAccessAgents.listed.joined(separator: ", ")
+            if options[.typeAsking] && !options[.typeNeverAsking] {
+                sentences.append("Typing reaches an agent only while its screen shows a mode that asks before it runs a command (\(agents)).")
+            }
+            if !options[.everyKey] {
+                sentences.append("send_to_tab always sends Return, and goes only into an empty input line unless the user allowed more.")
+                if names.contains("press_keys") { sentences.append("press_keys takes up, down, left, right, enter and escape.") }
+            }
+            if !options[.anySlash] {
+                let list = RemoteAccessPolicy.slashAllowlist.sorted().joined(separator: ", ")
+                sentences.append(options[.slashAllowlist] ? "Of slash commands, only \(list) go." : "No slash command goes.")
+            }
+            if !options[.shellAndMemory] { sentences.append("Text that starts with ! or # does not go.") }
+        }
+        if names.contains("answer_agent") {
+            sentences.append("Answer a permission prompt with answer_agent: a Yes runs what the agent asked to run.")
+        }
+        if names.contains("new_tab"), !options[.openAnyTab] {
+            sentences.append("new_tab starts one listed agent by name, with no arguments, in an open project.")
+        }
+        if names.contains("run_with_secrets") {
+            sentences.append("Each use of a stored key waits for the user's Touch ID on the Mac, and no tool returns a key's value.")
+        }
+        let acting = names.contains { (name: String) -> Bool in RemoteAccessPolicy.isControlCall(name) }
+        if acting {
+            if options[.askOnMac] { sentences.append("Each change waits for Allow on the Mac.") }
+            sentences.append("The chat app may ask before a tool marked destructive, unless the user turned on always allow there.")
+            sentences.append("A refusal names the option the user can turn on at the Mac.")
+        }
+        return sentences
     }
 
     /// "a", "a; and b", "a; b; and c": the phrases hold commas of their own.

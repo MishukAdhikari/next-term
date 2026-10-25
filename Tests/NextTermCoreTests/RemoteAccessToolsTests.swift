@@ -505,7 +505,9 @@ import Testing
             for part in parts {
                 #expect(lead.contains(part), "\(part) is not in: \(lead)")
             }
-            #expect(!text.contains("send_to_tab") && !text.contains("answer_agent"), "\(text)")
+            // The control options' sentences (U14) come after the lead, and only while those options are on.
+            let controls = options[.typeAsking] || options[.answerOnce]
+            #expect(text.contains("answer_agent") == controls && !lead.contains("answer_agent"), "\(text)")
             // A git read can run a program a project's own git config names, so nothing says the Mac is untouched.
             #expect(!text.contains("changes the Mac") && !text.contains("never run"), "\(text)")
         }
