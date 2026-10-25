@@ -260,11 +260,12 @@ extension SelfTest {
     }
 
     /// A key as AppKit hands one with ⌘ over: to the window's views (the one with the keyboard first), then to the menu
-    /// bar. `code` is the key's on a US layout (C is 8, L 37, N 45, R 15), which the menus read it by.
-    static func pressKey(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags, in window: NSWindow) {
+    /// bar. `code` is the key's on a US layout (C is 8, L 37, N 45, R 15), which the menus read it by. `isARepeat`: the key
+    /// held down, repeating.
+    static func pressKey(_ characters: String, code: UInt16, _ flags: NSEvent.ModifierFlags, in window: NSWindow, isARepeat: Bool = false) {
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                      windowNumber: window.windowNumber, context: nil, characters: characters,
-                                     charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
+                                     charactersIgnoringModifiers: characters, isARepeat: isARepeat, keyCode: code)
         guard let event, !window.performKeyEquivalent(with: event) else { return }
         _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
     }
