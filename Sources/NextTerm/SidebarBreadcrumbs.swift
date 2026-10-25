@@ -66,7 +66,9 @@ final class BreadcrumbBar: NSView {
             chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: 8, weight: .regular))
             chevron.contentTintColor = Theme.textDim
+            // Silent to VoiceOver, its cell too: the view opting out leaves the cell heard, as the symbol's "Forward".
             chevron.setAccessibilityElement(false)
+            chevron.cell?.setAccessibilityElement(false)
             addSubview(chevron)
             separators.append(chevron)
         }
