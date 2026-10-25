@@ -82,6 +82,8 @@ import Testing
             .servers: "Servers: add, remove and open tabs",
             .skills: "Skills",
             .writeTools: "Next Term's write tools",
+            .listSecrets: "List secret names",
+            .useSecrets: "Use secrets",
             .askOnMac: "Ask on this Mac before changes",
             .notify: "Notify on this Mac",
             .rateLimit: "At most 10 control calls a minute",
@@ -89,24 +91,28 @@ import Testing
         #expect(labels.count == ID.allCases.count)
         for (id, label) in labels { #expect(RemoteAccessOption.option(id).label == label, "\(id)") }
         let titles = RemoteAccessOption.Group.allCases.map(\.title)
-        #expect(titles == ["See", "Agents", "Text", "Keys", "Shells", "Tabs", "More tools", "Checks"])
+        #expect(titles == ["See", "Agents", "Text", "Keys", "Shells", "Tabs", "More tools", "Secrets", "Checks"])
     }
 
-    /// Allow by name (R21): only the See options name tools until the control options do (U14). Nothing names
-    /// the import tools, and no option names a secret tool: the Secrets group waits for plan 007's tools.
-    @Test func onlyTheSeeOptionsNameToolsAndEveryNameIsATool() {
+    /// Allow by name (R21): every option names tools as the plan's table does (U14), each a Next Term tool. Text and
+    /// Keys name none. Nothing names the import tools, add_task, request_secret, store_secret or import_secrets, which
+    /// stay local; the Secrets options name list_secrets and run_with_secrets (R63).
+    @Test func everyOptionNamesItsTableToolsAndNoneNamesALocalOne() {
         let known = Set(MCPServer.tools.map(\.name))
         for option in RemoteAccessOption.all {
             for name in option.tools { #expect(known.contains(name), "\(option.id) names \(name)") }
-            if option.group != .see { #expect(option.tools.isEmpty, "\(option.id)") }
+            if [.text, .keys, .checks].contains(option.group) { #expect(option.tools.isEmpty, "\(option.id)") }
         }
         let named = Set(RemoteAccessOption.all.flatMap(\.tools))
         for tool in MCPServer.importTools { #expect(!named.contains(tool.name), "\(tool.name)") }
-        for name in ["list_secrets", "run_with_secrets", "request_secret", "store_secret"] {
+        for name in ["add_task", "request_secret", "store_secret", "import_secrets"] {
             #expect(!named.contains(name), "\(name)")
         }
         let seeNames = RemoteAccessOption.all.filter { $0.group == .see }.flatMap(\.tools)
         #expect(Set(seeNames) == Set(readOnlyNames + serverReadNames))
+        #expect(RemoteAccessOption.option(.listSecrets).tools == ["list_secrets"])
+        #expect(RemoteAccessOption.option(.useSecrets).tools == ["run_with_secrets"])
+        #expect(RemoteAccessOption.option(.writeTools).tools.count == 12)
     }
 
     // MARK: presets
@@ -229,17 +235,16 @@ import Testing
         #expect(decoded == options && decoded[.rateLimit] && !decoded[.everyKey])
     }
 
-    /// The Secrets group waits for plan 007's tools (decided 2026-10-11): no option, preset or stored set holds
-    /// it. A grant file that holds U1's old stub keys still reads, and those keys are dropped: they turn nothing
-    /// on and are never written back, so no saved connection gains a secret tool until the user ticks one on the
-    /// Mac. Any other key this release doesn't know goes the same way.
+    /// The Secrets options (U14, R63) have keys of their own, never U1's stub keys: a grant file that holds those
+    /// still reads, and they are dropped, so they turn nothing on and are never written back. No saved connection
+    /// gains a secret tool until the user ticks one on the Mac; Custom starts with both off. Any other key this
+    /// release doesn't know goes the same way.
     @Test func theSecretsKeysAreGoneAndAnOldFileStillReads() throws {
         let keys = Set(ID.allCases.map(\.rawValue))
-        #expect(!keys.contains { $0.hasPrefix("secrets.") })
-        #expect(!RemoteAccessOption.Group.allCases.map(\.title).contains("Secrets"))
-        for preset in RemoteAccessPreset.allCases {
-            #expect(!preset.options.stored.keys.contains { $0.hasPrefix("secrets.") }, "\(preset)")
-        }
+        #expect(!keys.contains("secrets.list") && !keys.contains("secrets.use"))
+        #expect(keys.contains("secrets.list_names") && keys.contains("secrets.use_keys"))
+        #expect(!RemoteAccessOptions.customStart[.listSecrets] && !RemoteAccessOptions.customStart[.useSecrets])
+        #expect(!RemoteAccessOptions.readOnly[.listSecrets] && !RemoteAccessOptions.readOnly[.useSecrets])
 
         let old = #"{"see.tabs": true, "keys.every": false, "secrets.list": true, "secrets.use": true, "later.key": true}"#
         let decoded = try JSONDecoder().decode(RemoteAccessOptions.self, from: Data(old.utf8))
@@ -311,11 +316,25 @@ import Testing
         #expect(!control.contains("made_up"))
     }
 
-    /// Until the control options name their tools (U14), Control lists what the See options name.
+    /// Control lists every tool an option names, in MCPServer's order; Custom's starting values what theirs name, with
+    /// press_keys, since "Arrows, Return and Escape" starts on. A typing option with no Keys option lists send_to_tab
+    /// alone (R20).
     @Test func controlListsWhatItsOptionsName() {
-        let expected = MCPServer.tools.map(\.name).filter { Set(readOnlyNames + serverReadNames).contains($0) }
-        #expect(names(.control) == expected)
-        #expect(names(.customStart) == readOnlyNames)
+        let named = Set(RemoteAccessOption.all.flatMap(\.tools))
+        #expect(names(.control) == MCPServer.tools.map(\.name).filter { named.contains($0) })
+        let custom: [String] = names(.customStart)
+        for name in ["send_to_tab", "press_keys", "answer_agent", "new_tab", "close_tab", "write_file", "commit", "settings_get"] {
+            #expect(custom.contains(name), "\(name)")
+        }
+        for name in ["open_project", "add_host", "install_skill", "list_secrets", "run_with_secrets", "list_hosts"] {
+            #expect(!custom.contains(name), "\(name)")
+        }
+        var noKeys = RemoteAccessOptions.customStart
+        noKeys[.safeKeys] = false
+        #expect(names(noKeys).contains("send_to_tab") && !names(noKeys).contains("press_keys"))
+        var keysOnly = RemoteAccessOptions.readOnly
+        keysOnly[.everyKey] = true
+        #expect(!names(keysOnly).contains("press_keys") && !names(keysOnly).contains("send_to_tab"))
     }
 
     /// AE20: Custom with "Tabs and their output" off lists no tab tools, and its instructions drop the wait.
@@ -327,7 +346,9 @@ import Testing
         #expect(options.preset == .custom)
         let listed = names(options)
         for name in ["list_tabs", "read_tab", "wait_for_tab"] { #expect(!listed.contains(name), "\(name)") }
-        #expect(listed == readOnlyNames.filter { !["list_tabs", "read_tab", "wait_for_tab"].contains($0) })
+        for name in readOnlyNames where !["list_tabs", "read_tab", "wait_for_tab"].contains(name) {
+            #expect(listed.contains(name), "\(name)")
+        }
         let text = RemoteAccessTools.instructions(for: options)
         #expect(!text.contains("wait_for_tab") && !text.contains("50 seconds"), "\(text)")
         #expect(!text.contains("see tabs"), "\(text)")

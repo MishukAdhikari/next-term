@@ -5,9 +5,11 @@ import Foundation
 /// admits. A tool no option names is never offered remotely, whatever its annotations or scope tag say (allow by
 /// name), so a tool a later release adds stays local until an option names it.
 ///
-/// For now only the See options name tools; the others admit none until the control options are built. Nothing
-/// names the import tools (list_import_sources, preview_import, apply_import, undo_import), which stay local. The
-/// Secrets group joins the table only once plan 007's secret tools are in the base (decided 2026-10-11).
+/// The control options (U14) name their tools as the table does. Text and Keys options name none: they widen what the
+/// typing tools take, and press_keys is listed only with a Keys option too (R20). Nothing names the import tools
+/// (list_import_sources, preview_import, apply_import, undo_import), add_task, request_secret, store_secret or
+/// import_secrets, which stay local. The Secrets group's two options name list_secrets and run_with_secrets (R63);
+/// their keys are new, so the U1 stub keys an early grant file may hold ("secrets.list", "secrets.use") turn nothing on.
 public struct RemoteAccessOption: Sendable {
     /// The option's stable key, as a grant file stores it. Never renamed: a grant saved with it keeps its value.
     public enum ID: String, CaseIterable, Codable, Sendable {
@@ -33,6 +35,8 @@ public struct RemoteAccessOption: Sendable {
         case servers = "more.servers"
         case skills = "more.skills"
         case writeTools = "more.write_tools"
+        case listSecrets = "secrets.list_names"
+        case useSecrets = "secrets.use_keys"
         case askOnMac = "checks.ask_on_mac"
         case notify = "checks.notify"
         case rateLimit = "checks.rate_limit"
@@ -40,7 +44,7 @@ public struct RemoteAccessOption: Sendable {
 
     /// The groups, in the order the pairing window and Edit… show them.
     public enum Group: String, CaseIterable, Sendable {
-        case see, agents, text, keys, shells, tabs, moreTools, checks
+        case see, agents, text, keys, shells, tabs, moreTools, secrets, checks
 
         public var title: String {
             switch self {
@@ -51,6 +55,7 @@ public struct RemoteAccessOption: Sendable {
             case .shells: return "Shells"
             case .tabs: return "Tabs"
             case .moreTools: return "More tools"
+            case .secrets: return "Secrets"
             case .checks: return "Checks"
             }
         }
@@ -81,24 +86,34 @@ public struct RemoteAccessOption: Sendable {
             tools: ["get_editor_selection", "get_open_files"])
         add(.serversRead, .see, "Servers: list, check and read changes", control: true, custom: false,
             tools: ["list_hosts", "check_host", "host_sessions", "host_changes"])
-        add(.typeAsking, .agents, "Type into agents that ask before acting", control: true, custom: true)
-        add(.typeNeverAsking, .agents, "Type into agents that never ask, or whose mode can't be read", control: true, custom: false)
-        add(.answerOnce, .agents, "Answer with a one-time choice", control: true, custom: true)
-        add(.answerStanding, .agents, "Answer with standing choices, such as always or don't ask again", control: true, custom: false)
+        let typing: [String] = ["send_to_tab", "press_keys"]
+        add(.typeAsking, .agents, "Type into agents that ask before acting", control: true, custom: true, tools: typing)
+        add(.typeNeverAsking, .agents, "Type into agents that never ask, or whose mode can't be read", control: true, custom: false,
+            tools: typing)
+        add(.answerOnce, .agents, "Answer with a one-time choice", control: true, custom: true, tools: ["answer_agent"])
+        add(.answerStanding, .agents, "Answer with standing choices, such as always or don't ask again", control: true, custom: false,
+            tools: ["answer_agent"])
         add(.slashAllowlist, .text, "/ commands on the allowlist", control: true, custom: true)
         add(.anySlash, .text, "Any / command", control: true, custom: false)
         add(.shellAndMemory, .text, "! shell lines and # memory lines", control: true, custom: false)
         add(.safeKeys, .keys, "Arrows, Return and Escape", control: true, custom: true)
         add(.everyKey, .keys, "Every key", control: true, custom: false)
-        add(.typeShells, .shells, "Type into shell tabs", control: true, custom: false)
-        add(.openAgentTab, .tabs, "Open a tab that runs a listed agent", control: true, custom: true)
-        add(.openAnyTab, .tabs, "Open a tab with any command, or a plain shell", control: true, custom: false)
-        add(.closeIdleTabs, .tabs, "Close tabs where nothing runs", control: true, custom: true)
-        add(.closeBusyTabs, .tabs, "Close busy tabs", control: true, custom: false)
-        add(.showOnMac, .moreTools, "Open projects and show things on the Mac", control: true, custom: false)
-        add(.servers, .moreTools, "Servers: add, remove and open tabs", control: true, custom: false)
-        add(.skills, .moreTools, "Skills", control: true, custom: false)
-        add(.writeTools, .moreTools, "Next Term's write tools", control: true, custom: true)
+        add(.typeShells, .shells, "Type into shell tabs", control: true, custom: false, tools: typing)
+        add(.openAgentTab, .tabs, "Open a tab that runs a listed agent", control: true, custom: true, tools: ["new_tab"])
+        add(.openAnyTab, .tabs, "Open a tab with any command, or a plain shell", control: true, custom: false, tools: ["new_tab"])
+        add(.closeIdleTabs, .tabs, "Close tabs where nothing runs", control: true, custom: true, tools: ["close_tab"])
+        add(.closeBusyTabs, .tabs, "Close busy tabs", control: true, custom: false, tools: ["close_tab"])
+        add(.showOnMac, .moreTools, "Open projects and show things on the Mac", control: true, custom: false,
+            tools: ["open_project", "show_tab", "open_in_editor"])
+        add(.servers, .moreTools, "Servers: add, remove and open tabs", control: true, custom: false,
+            tools: ["add_host", "remove_host", "new_remote_tab"])
+        add(.skills, .moreTools, "Skills", control: true, custom: false,
+            tools: ["list_skills", "get_skill", "install_skill", "remove_skill"])
+        add(.writeTools, .moreTools, "Next Term's write tools", control: true, custom: true,
+            tools: ["propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane", "close_pane",
+                    "zoom_pane", "set_layout", "settings_set", "settings_get"])
+        add(.listSecrets, .secrets, "List secret names", control: true, custom: false, tools: ["list_secrets"])
+        add(.useSecrets, .secrets, "Use secrets", control: true, custom: false, tools: ["run_with_secrets"])
         add(.askOnMac, .checks, "Ask on this Mac before changes", control: false, custom: true)
         add(.notify, .checks, "Notify on this Mac", control: true, custom: true)
         add(.rateLimit, .checks, "At most 10 control calls a minute", control: false, custom: true)

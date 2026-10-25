@@ -37,7 +37,13 @@ public enum RemoteAccessTools {
                              from table: [MCPServer.Tool] = MCPServer.tools) -> [MCPServer.Tool] {
         let admitting = RemoteAccessOption.all.filter { options[$0.id] }
         let names = Set(admitting.flatMap(\.tools))
-        let admitted = table.filter { names.contains($0.name) }
+        // press_keys also needs a Keys option (R20): each half of what a tool needs has an option on.
+        let admitted = table.filter { (tool: MCPServer.Tool) -> Bool in
+            guard names.contains(tool.name) else { return false }
+            return RemoteAccessPolicy.needs(tool.name).allSatisfy { (half: [RemoteAccessOption.ID]) -> Bool in
+                half.contains { options[$0] }
+            }
+        }
         return admitted.map(remote)
     }
 

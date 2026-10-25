@@ -147,9 +147,11 @@ import Testing
         let grant = try #require(loaded.grants.first)
         #expect(grant.options == .control)
         #expect(grant.preset == .control)
-        #expect(!grant.options.stored.keys.contains { $0.hasPrefix("secrets.") })
+        // U1's stub keys are dropped; the Secrets options keep their own keys (U14), which a control grant holds.
+        #expect(grant.options.stored["secrets.list"] == nil && grant.options.stored["secrets.use"] == nil)
         try store.save(clients: loaded.clients, grants: loaded.grants, now: Self.start)
-        #expect(!(try String(contentsOf: store.url, encoding: .utf8)).contains("secrets."))
+        let written = try String(contentsOf: store.url, encoding: .utf8)
+        #expect(!written.contains(#""secrets.list""#) && !written.contains(#""secrets.use""#))
     }
 
     @Test func theFileIs0600InA0700Folder() throws {

@@ -350,6 +350,11 @@ final class RemoteAccessOptionsView: NSView {
         case .writeTools:
             return "Propose edits, write and create files, stage, commit, arrange panes and change settings. "
                 + RemoteAccessOptions.writeToolsSentence
+        case .listSecrets:
+            return "See the names of your stored keys and what each is for. Values never leave this Mac."
+        case .useSecrets:
+            return "Run a command with stored keys in its environment. Each use shows Next Term's secret panel and asks "
+                + "for Touch ID on this Mac, every time."
         case .askOnMac:
             return "Each change waits for Allow on this Mac. With it off, nothing asks on this Mac: typing, "
                 + "answers, the write tools and skill installs run without a window, and only the chat app's "
