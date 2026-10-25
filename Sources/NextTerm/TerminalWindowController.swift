@@ -1091,7 +1091,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let hadKeyboard = isSidebarFocused
         browsesHome = false
         projectKey = nil
-        // With a remote tab in front the tree stays as it was (updateProjectRoot), as Browse Home Folder set it directly.
+        // With a remote tab in front updateProjectRoot leaves the sidebar alone: "No project open" goes in directly, as
+        // Browse Home Folder's tree did.
         if activeTab?.remote != nil {
             sidebar.showNoProject(recent: AppDelegate.shared.recentProjects)
         } else {
