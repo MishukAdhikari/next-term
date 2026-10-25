@@ -901,9 +901,39 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             project.path == path
         }
         guard let project, !project.isOpen else { return }
-        guard ProjectHistoryRecorder.shared.forget(project.path) != nil else { return }
+        forget(project.path, title: project.title)
+    }
+
+    /// Forgets the project, with Edit › Undo (⌘Z) to put it back: “Undo Forget “docs””. Redo forgets it again.
+    private func forget(_ path: String, title: String) {
+        guard let forgotten = ProjectHistoryRecorder.shared.forget(path) else { return }
+        // Its own Undo: typing in the search coalesces into an open group, which the forget must not join.
+        searchEditor.breakUndoCoalescing()
+        if let undo = window?.undoManager {
+            undo.registerUndo(withTarget: self) { (target: WelcomeWindowController) in
+                target.unforget(forgotten, title: title)
+            }
+            undo.setActionName(SwitcherText.forgetAction(title))
+        }
         // While the window shows, the recorder and Recent Projects tell it as they change.
         if window?.isVisible != true { reloadProjects() }
+    }
+
+    /// Undo of a forget: the project back in this list at its last use and in File › Open Recent where it stood, and
+    /// selected, as before the forget.
+    private func unforget(_ forgotten: ProjectHistory.Forgotten, title: String) {
+        ProjectHistoryRecorder.shared.restore(forgotten)
+        searchEditor.breakUndoCoalescing()
+        if let undo = window?.undoManager {
+            undo.registerUndo(withTarget: self) { (target: WelcomeWindowController) in
+                target.forget(forgotten.path, title: title)
+            }
+            undo.setActionName(SwitcherText.forgetAction(title))
+        }
+        guard window?.isVisible == true else { return reloadProjects() }
+        // Told as it changed; read here when it was not, so the project is there to select.
+        if switcher.shown.index(of: .project(forgotten.path)) == nil { reloadProjects() }
+        select(project: forgotten.path)
     }
 
     // MARK: the switcher's keys
@@ -1079,6 +1109,19 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Back in front, the list is read again: windows may have opened, closed or come forward behind it. Not in a show,
     /// which read it a moment ago.
+    /// The projects search's editor. AppKit's own field editor keeps an undo manager of its own, which Edit › Undo asks
+    /// while the search has the keyboard: the forget's “Undo Forget …” (in the window's) would be out of its reach.
+    private lazy var searchEditor: SharedUndoFieldEditor = {
+        let editor = SharedUndoFieldEditor()
+        editor.isFieldEditor = true
+        return editor
+    }()
+
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        guard let field = client as? NSSearchField, field === search else { return nil }
+        return searchEditor
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         if !showing { reloadProjects() }
         // A quit's resume question can have set it since.
@@ -1480,4 +1523,10 @@ final class WelcomeWindow: NSWindow {
         if cancelHandler?() == true { return }
         super.cancelOperation(sender)
     }
+}
+
+/// A field editor whose undo is the window's, so typing in the search and the window's own actions (a forget) share one
+/// Edit › Undo.
+final class SharedUndoFieldEditor: NSTextView {
+    override var undoManager: UndoManager? { window?.undoManager }
 }
