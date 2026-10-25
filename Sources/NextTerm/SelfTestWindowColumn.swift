@@ -11,9 +11,10 @@ import NextTermCore
 /// bell in the worktree's tab behind puts a dot on its badge alone, and a click on it brings that window forward with its
 /// tab as it was; a click on a window's own badge does nothing. A narrow window hides its column alone, an unfolded one
 /// folds first; the traffic lights keep their room; ⌘B leaves the column; ⌃⌘S folds and unfolds every window's. VoiceOver
-/// reads each badge's window and marks, and the column agrees with ⌘O's rows. A restore lists its windows in the order
-/// they opened, whichever was used last, and each pane starts at its real size. The budget: idle, nothing; a bell, one
-/// badge; focus and titles, no draw; a window opening or closing, one layout per column and one rebuild.
+/// reads each badge's window and marks, and the column agrees with ⌘O's rows. Unfolded, a row whose marks change draws
+/// again. A restore lists its windows in the order they opened, whichever was used last, and each pane starts at its
+/// real size. The budget: idle, nothing; a bell, one badge; focus and titles, no draw; a window opening or closing, one
+/// layout per column and one rebuild.
 /// NEXTTERM_SELFTEST_ONLY=windowColumn runs it alone.
 extension SelfTest {
     static func windowColumnChecks() async {
@@ -101,6 +102,7 @@ extension SelfTest {
         await screenshot(plain, suffix: "-column-folded")
         await idleBudget(app)
         await bellChecks(app, five, worktree: worktree, tree: tree)
+        await unfoldedMarksChecks(app, worktree: worktree)
         await overflowChecks(app, project)
         await roomChecks(app, project)
         await insetChecks(app, project)
@@ -369,6 +371,52 @@ extension SelfTest {
         await pause(0.3)
         check(worktree.window?.isKeyWindow == true && worktree.activeIndex == selected && behind.status.state == .attention,
               "window column: a click on the window's own badge changes nothing")
+    }
+
+    /// Unfolded, a change of a row's marks alone draws that row again, as its name's room ends where its marks start: the
+    /// bell in the worktree's tab behind seen, its mark gone, then a bell again. In every column only that row is
+    /// configured, once, and drawn (or due to be, in a window not displayed yet); nothing else is drawn or laid out.
+    private static func unfoldedMarksChecks(_ app: AppDelegate, worktree: TerminalWindowController) async {
+        guard let behind = worktree.tabs.last, worktree.tabs.count > 1 else { return check(false, "window column: the worktree's tab behind is there") }
+        app.windowColumnExpanded = true
+        defer { app.windowColumnExpanded = false }
+        let all: [TerminalWindowController] = app.controllers.filter { !$0.hasClosed }
+        for c in all { c.window?.layoutIfNeeded() }
+        guard all.allSatisfy({ $0.columnHost.shown.form == .expanded }) else {
+            return note("window column: unfolded marks not checked, as a window had no room to unfold its column")
+        }
+        await pause(1)
+        let id: Int = worktree.indexID
+        var found: [String] = []
+        var drawn = true
+        for step in ["seen", "rang again"] {
+            let columns: [WindowColumnView] = all.map(\.windowColumn)
+            columns.forEach { $0.resetCounters() }
+            if step == "seen" {
+                behind.status.setVisible(true)
+                worktree.refresh()
+                await pause(0.5)
+            } else {
+                behind.view.send(txt: "printf '\\a'\r")
+                _ = await wait(5) { behind.status.state == .attention }
+                await pause(1.5) // every window's refresh, a hidden one's once a second
+            }
+            var marks: [String] = []
+            for column in columns {
+                guard let its = column.button(for: id) else {
+                    drawn = false
+                    continue
+                }
+                let others: Int = column.shownButtons.filter { $0.id != id }.reduce(0) { $0 + $1.drawCount + $1.configureCount }
+                let redrawn: Bool = its.drawCount >= 1 || its.needsDisplay
+                drawn = drawn && its.configureCount == 1 && redrawn && others == 0 && column.layoutCount == 0
+                marks.append("\(its.row?.marks.count ?? -1) marks, \(its.configureCount) configures, drawn \(redrawn), others \(others), "
+                             + "\(column.layoutCount) layouts")
+            }
+            found.append(step + ": " + marks.joined(separator: "; "))
+        }
+        check(drawn, "window column: unfolded, a row whose marks alone change draws again, that row only, in every column",
+              found.joined(separator: " | "))
     }
 
     /// Room for fewer badges than windows: the last place says how many more, in the colour of the most urgent of them,

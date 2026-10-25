@@ -424,10 +424,11 @@ final class WindowColumnButton: NSButton {
     }
 
     /// What each form draws of its row: folded, the badge (letters, colour, dot); unfolded, the badge and the name, at its
-    /// depth. The unfolded marks are a view of their own.
+    /// depth, up to the marks. The marks are a view of their own, but the room the name has ends where they start, so a
+    /// change of them draws the row again.
     private static func drawsDifferently(_ old: WindowColumnRow, _ new: WindowColumnRow, expanded: Bool) -> Bool {
         if old.letters != new.letters || old.color != new.color { return true }
-        if expanded { return old.name != new.name || old.depth != new.depth }
+        if expanded { return old.name != new.name || old.depth != new.depth || old.marks != new.marks }
         return old.urgent != new.urgent
     }
 
