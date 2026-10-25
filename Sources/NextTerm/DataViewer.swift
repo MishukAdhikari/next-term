@@ -138,6 +138,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         grid.intercellSpacing = NSSize(width: 6, height: 2)
         grid.columnAutoresizingStyle = .noColumnAutoresizing
         grid.setAccessibilityLabel("Rows")
+        grid.firstValueColumn = 1 // the line number is not a value
         grid.onCopy = { [weak self] in self?.copy(self?.exportLines() ?? "") }
         let menu = NSMenu()
         let copyLine = NSMenuItem(title: "Copy", action: #selector(copyLines), keyEquivalent: "")
@@ -503,6 +504,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
         }
         let digits = max(3, String(records.last?.line ?? 1).count)
         if let number = grid.tableColumns.first { number.width = max(number.width, CGFloat(digits) * Self.charWidth + 14) }
+        grid.columnsChanged()
         refreshRows()
     }
 
@@ -696,11 +698,12 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     func numberOfRows(in tableView: NSTableView) -> Int { visible.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let id = NSUserInterfaceItemIdentifier("dataValue")
-        let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeCell(id)
-        guard let column = tableColumn, let index = visible[safe: row], index < records.count else { return cell }
+        let cell = grid.cell(for: tableColumn, row: row)
+        guard let column = tableColumn, let index = visible[safe: row], index < records.count else {
+            cell.configure(text: "")
+            return cell
+        }
         let record = records[index]
-        let font = Theme.monoFont(size: 12)
         var color = Theme.terminalForeground
         var text: String
         switch column.identifier.rawValue {
@@ -718,30 +721,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
                 color = Theme.textDim
             }
         }
-        let long = text.utf8.count > 600 && text.count > 300
-        var shown = long ? String(text.prefix(300)) + "…" : text
-        if !long, record.isTruncated, column.identifier.rawValue == "raw" { shown += "…" }
-        cell.textField?.stringValue = shown.replacingOccurrences(of: "\r\n", with: " ⏎ ").replacingOccurrences(of: "\n", with: " ⏎ ")
-        cell.textField?.textColor = color
-        cell.textField?.font = font
-        cell.textField?.toolTip = column.identifier.rawValue == "line" ? record.error : (text.utf8.count > 40 ? String(text.prefix(2000)) : nil)
-        return cell
-    }
-
-    private static func makeCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-        let cell = NSTableCellView()
-        cell.identifier = id
-        let label = NSTextField(labelWithString: "")
-        Typography.singleLine(label, truncation: .byTruncatingTail)
-        label.font = Theme.monoFont(size: 12)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(label)
-        cell.textField = label
-        NSLayoutConstraint.activate([
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -2),
-        ])
+        cell.configure(text: text, color: color, cut: record.isTruncated && column.identifier.rawValue == "raw")
+        cell.label.toolTip = column.identifier.rawValue == "line" ? record.error : (text.utf8.count > 40 ? String(text.prefix(2000)) : nil)
         return cell
     }
 }

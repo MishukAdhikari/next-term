@@ -317,6 +317,7 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
             column.minWidth = 40
             grid.addTableColumn(column)
         }
+        grid.columnsChanged()
     }
 
     private static func stamps(_ path: String) -> [FileStamp?] { [FileStamp(path: path), FileStamp(path: path + "-wal")] }
@@ -409,50 +410,49 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let id = NSUserInterfaceItemIdentifier(tableView === tableList ? "tableName" : "value")
-        let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeCell(id, icon: tableView === tableList)
-        if tableView === tableList {
-            let table = tables[row]
-            cell.textField?.stringValue = table.name
-            cell.textField?.textColor = Theme.text
-            cell.imageView?.image = NSImage(systemSymbolName: table.isView ? "eye" : "tablecells", accessibilityDescription: table.isView ? "View" : "Table")
-            cell.imageView?.contentTintColor = Theme.textDim
-            cell.setAccessibilityLabel(table.name + (table.isView ? ", view" : ""))
+        guard tableView === tableList else {
+            let cell = grid.cell(for: tableColumn, row: row)
+            guard let page, let column = tableColumn, let index = Int(column.identifier.rawValue.dropFirst()),
+                  row < page.rows.count, index < page.rows[row].count else {
+                cell.configure(text: "")
+                return cell
+            }
+            cell.configure(page.rows[row][index])
             return cell
         }
-        guard let page, let column = tableColumn, let index = Int(column.identifier.rawValue.dropFirst()),
-              row < page.rows.count, index < page.rows[row].count else { return cell }
-        let value = page.rows[row][index]
-        let dim: Bool
-        switch value { case .null, .blob: dim = true; default: dim = false }
-        let text = value.display
-        cell.textField?.stringValue = text.count > 300 ? String(text.prefix(300)) + "…" : text.replacingOccurrences(of: "\n", with: " ⏎ ")
-        cell.textField?.textColor = dim ? Theme.textDim : Theme.terminalForeground
-        cell.textField?.font = dim ? NSFontManager.shared.convert(Theme.monoFont(size: 12), toHaveTrait: .italicFontMask) : Theme.monoFont(size: 12)
+        let id = NSUserInterfaceItemIdentifier("tableName")
+        let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? Self.makeTableCell(id)
+        let table = tables[row]
+        cell.textField?.stringValue = table.name
+        cell.textField?.textColor = Theme.text
+        cell.imageView?.image = NSImage(systemSymbolName: table.isView ? "eye" : "tablecells", accessibilityDescription: table.isView ? "View" : "Table")
+        cell.imageView?.contentTintColor = Theme.textDim
+        cell.setAccessibilityLabel(table.name + (table.isView ? ", view" : ""))
         return cell
     }
 
-    private static func makeCell(_ id: NSUserInterfaceItemIdentifier, icon: Bool) -> NSTableCellView {
+    /// A row of the table list: an icon and the table's name.
+    private static func makeTableCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
         let cell = NSTableCellView()
         cell.identifier = id
         let label = NSTextField(labelWithString: "")
         Typography.singleLine(label, truncation: .byTruncatingTail)
-        label.font = icon ? .systemFont(ofSize: 12.5) : Theme.monoFont(size: 12)
+        label.font = .systemFont(ofSize: 12.5)
         label.translatesAutoresizingMaskIntoConstraints = false
+        let image = NSImageView()
+        image.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(image)
         cell.addSubview(label)
         cell.textField = label
-        var constraints = [label.centerYAnchor.constraint(equalTo: cell.centerYAnchor), label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -2)]
-        if icon {
-            let image = NSImageView()
-            image.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(image)
-            cell.imageView = image
-            constraints += [image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                            image.widthAnchor.constraint(equalToConstant: 14), label.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6)]
-        } else {
-            constraints.append(label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2))
-        }
-        NSLayoutConstraint.activate(constraints)
+        cell.imageView = image
+        NSLayoutConstraint.activate([
+            image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            image.widthAnchor.constraint(equalToConstant: 14),
+            label.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
+            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -2),
+        ])
         return cell
     }
 
@@ -476,10 +476,4 @@ extension DatabasePane {
     static func opens(_ path: String) -> Bool { Databases.opensInViewer(path) }
 
     static func isEmptyFile(_ path: String) -> Bool { Databases.isEmptyFile(path) }
-}
-
-/// The rows: ⌘C copies the selected ones as CSV.
-final class DatabaseGridView: NSTableView {
-    var onCopy: (() -> Void)?
-    @objc func copy(_ sender: Any?) { onCopy?() }
 }
