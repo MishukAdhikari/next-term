@@ -357,8 +357,9 @@ final class RemoteAccessOptionsView: NSView {
                 + "for Touch ID on this Mac, every time."
         case .askOnMac:
             return "Each change waits for Allow on this Mac. With it off, nothing asks on this Mac: typing, "
-                + "answers, the write tools and skill installs run without a window, and only the chat app's "
-                + "confirmation is left, which “always allow” there removes. propose_edit still opens its diff."
+                + "answers, the write tools and skill installs run without a window. The chat app may confirm a tool "
+                + "it marks destructive, unless “always allow” is on there; some write tools aren't marked so. "
+                + "propose_edit still opens its diff."
         case .notify:
             return "Show a notification on this Mac for each change a remote makes, with the first line of what it sent."
         case .rateLimit:
