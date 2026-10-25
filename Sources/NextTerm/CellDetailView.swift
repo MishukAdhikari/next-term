@@ -355,7 +355,8 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
         nullButton.isEnabled = on && editing?.canSetNull == true && editing?.isNull == false && editing?.isSaving == false
         revertButton.isEnabled = on && editing?.isSaving == false
         saveButton.isEnabled = on && editing?.isModified == true && editing?.isSaving == false
-        let line = on && editing?.isNull == true && editing?.message == nil ? "Set to NULL when you save. Type to give it a value instead." : editing?.message ?? editing?.reason
+        let nulled = on && editing?.isNull == true && editing?.isModified == true && editing?.message == nil
+        let line = nulled ? "Set to NULL when you save. Type to give it a value instead." : editing?.message ?? editing?.reason
         editLabel.stringValue = line ?? ""
         editLabel.isHidden = line == nil
         editLabel.textColor = editing?.reason != nil && editing?.message == nil ? Theme.textDim : Theme.attention

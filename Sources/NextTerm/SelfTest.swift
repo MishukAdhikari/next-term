@@ -658,7 +658,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -695,6 +695,11 @@ enum SelfTest {
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
+        case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file
+            await databaseChecks(c, proj: proj)
+            await databaseCellChecks(c, proj: proj)
+            await dataChecks(c, proj: proj)
+            return await dataCellChecks(c, proj: proj)
         default: break
         }
         #endif
@@ -832,9 +837,13 @@ enum SelfTest {
         await notebookChecks(c, proj: proj)
         await databaseChecks(c, proj: proj)
         #if DEBUG
+        await databaseCellChecks(c, proj: proj)
         await serviceChecks(c)
         #endif
         await dataChecks(c, proj: proj)
+        #if DEBUG
+        await dataCellChecks(c, proj: proj)
+        #endif
         await updateChecks(c)
         await updateSheetChecks(c)
         await updateSignatureChecks()
