@@ -150,7 +150,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   the app loses the focus, so herdr keeps a finish you have not seen. It runs only herdr's own commands (its
   agent list, read, prompt, keys, focus and explain, its sessions and its list of machines): it never installs,
   starts, stops or updates herdr, never stops a herdr session, and never changes its machines. An agent over MCP
-  can end one of herdr's agents (`close_tab` on its id, herdr's `pane close`) only after you approve it on the Mac.
+  can start one of herdr's agents in a new herdr tab (`start_agent`, with herdr's own kinds) or end one (`close_tab`
+  on its id, herdr's `pane close`), each only after you approve it on the Mac, which shows herdr's commands.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
   first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,
