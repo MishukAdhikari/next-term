@@ -1015,6 +1015,9 @@ extension SelfTest {
         check(cleared && kept, "Welcome: ⌘⌫ with text typed forgets no project, and the search deletes to the line's start",
               "“\(search.stringValue)”, history kept \(recorder.history.paths == historyBefore), recents kept \(app.recentProjects == recentsBefore)")
 
+        // Each key a hand presses is an event of its own, and the window's undo closes its step at the end of each: the
+        // run loop turns here as it would between keys, so the search's deletion and the forget are two steps, not one.
+        await pause(0.2)
         let docs: String = fixtures.path("docs")
         welcome.select(project: docs)
         guard welcome.selectedProject == docs else { return check(false, "Welcome: the closed project docs is listed, for ⌘⌫") }
@@ -1026,6 +1029,7 @@ extension SelfTest {
         }
         check(forgot, "Welcome: ⌘⌫ on the empty search forgets the selected closed project, here and in File › Open Recent",
               "listed \(welcome.shownProjects.contains(docs)), in Open Recent \(app.recentProjects.contains(docs))")
+        await pause(0.2)
         if forgot { await undoForgetChecks(app, welcome, docs, usedBefore: usedBefore, recentAt: recentAt) }
 
         welcome.select(project: shop)
