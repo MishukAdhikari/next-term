@@ -86,6 +86,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "tabListShowsFolders") }
     }
 
+    // MARK: the window column
+
+    /// Settings › General's checkbox follows the View menu, and the menu Settings.
+    static let windowColumnChanged = Notification.Name(WindowColumnSettings.changedName)
+
+    /// "Show the window column when two or more windows are open" (Settings › General, View › Hide Window Column): on
+    /// unless turned off, for every window.
+    var showsWindowColumn: Bool {
+        get { WindowColumnSettings.shown(UserDefaults.standard.object(forKey: WindowColumnSettings.shownKey)) }
+        set {
+            guard newValue != showsWindowColumn else { return }
+            UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.shownKey)
+            NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
+        }
+    }
+
+    /// Unfolded in every window (⌃⌘S, View › Expand Window Column, the column's chevron); folded by default.
+    var windowColumnExpanded: Bool {
+        get { WindowColumnSettings.expanded(UserDefaults.standard.object(forKey: WindowColumnSettings.expandedKey)) }
+        set {
+            guard newValue != windowColumnExpanded else { return }
+            UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.expandedKey)
+            NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
+        }
+    }
+
+    /// View › Hide Window Column, or Show Window Column while it is off.
+    @objc func toggleWindowColumn(_ sender: Any?) { showsWindowColumn.toggle() }
+
+    /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
+    @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
+
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
         moveTerminal(to: position, announce: true)
