@@ -149,6 +149,15 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Right-click the top row, or View › Project Color, for nine named colours, Automatic or None for This
   Project; Show Project Colors there, or in Settings › General, turns them all off. Nothing is written
   into the project.
+- **The window column.** With two or more windows open, every window shows a thin column at its outer
+  edge, on the project sidebar's side (the far left, or the far right with the sidebar on the right): a
+  badge for each open window in the order they opened, in its project's colour with two letters of its
+  name, a worktree's under its repository's, and a dot when an agent there needs you, failed or finished.
+  The count of windows is at its top, and your own window's badge is outlined. A click on a badge brings
+  that window forward as it was. ⌃⌘S, or the chevron, unfolds it in every window to show each window's
+  name and marks, as ⌘O does; a window too narrow for it folds it, then hides it, until it is wider. When
+  it appears, the editor and terminal give it the room and the sidebar keeps its width. View › Hide Window
+  Column, or Settings › General, turns it off.
 - **A new terminal stays out of your files.** New Terminal (⌘N) opens a shell where new tabs open
   (Settings › Terminal › New tabs: your home folder unless you chose a folder). With no project, its
   sidebar says "No project open" and lists your recent projects, Open Folder…, Connect to Server… and
@@ -324,7 +333,8 @@ One window per project, and a few keys to move between them:
 3. Press ⇧⌘U until nothing needs you. The Dock badge counts what you have not looked at yet; a question
    you looked at but did not answer keeps its amber mark in ⌘O.
 4. ⌘O then ↩ goes back to the window you used last; ⌘O and a few letters goes anywhere, and shows every
-   window's agents. ⌘` moves between windows.
+   window's agents. ⌘` moves between windows. The window column at each window's edge shows them all at
+   once, with a dot on the one that needs you: a click on its badge goes there.
 5. View › Terminal Tabs › Left keeps tab names and marks readable; View › Project Color gives each
    repository its colour.
 6. When a worktree's branch is merged, close its window with Close and Remove Worktree.
@@ -349,6 +359,7 @@ One window per project, and a few keys to move between them:
 | Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar (in a Markdown file, ⌘B is Bold) | ⌘B |
 | Fold the terminal away (and back) | ⌘J |
+| Unfold the window column in every window (and fold it) | ⌃⌘S |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |

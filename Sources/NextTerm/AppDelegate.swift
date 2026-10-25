@@ -1544,6 +1544,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
+        if item.action == #selector(toggleWindowColumn(_:)) { item.title = showsWindowColumn ? "Hide Window Column" : "Show Window Column" }
+        if item.action == #selector(toggleWindowColumnExpanded(_:)) {
+            item.title = windowColumnExpanded ? "Collapse Window Column" : "Expand Window Column"
+            return windowColumns.visible // only while the column shows: the setting on and two or more windows open
+        }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
         if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
@@ -1974,6 +1979,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
+        // The window column at the window's outer edge, while two or more windows are open; also Settings › General.
+        item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "", target: self) // title follows the setting
+        item(view, "Collapse Window Column", #selector(toggleWindowColumnExpanded(_:)), "s", [.command, .control], target: self) // and the fold
         item(view, "Show File in Project Sidebar", #selector(TerminalWindowController.revealInSidebar(_:)), "")
         view.addItem(.separator())
         let positions = NSMenu(title: "Terminal Position")

@@ -49,6 +49,8 @@ public enum ImportShortcuts {
             "toggleProjectSidebar:": "Hide or Show Project Sidebar",
             "toggleEditorFocus:": "Focus Editor or Terminal",
             "toggleTerminalCollapsed:": "Collapse Terminal",
+            "toggleWindowColumn:": "Hide or Show Window Column",
+            "toggleWindowColumnExpanded:": "Expand or Collapse Window Column",
             "revealInSidebar:": "Show File in Project Sidebar",
             "showChanges:": "Show Changes",
             "toggleSoftWrap:": "Soft Wrap",
