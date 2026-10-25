@@ -1717,8 +1717,9 @@ struct SplitMix: RandomNumberGenerator {
     func description(_ name: String) -> String { MCPServer.tool(named: name)?.description ?? "" }
 
     @Test func noNewToolAndTheInstructionsOnlyNameThem() {
-        // 31 + 12 + 4 + 4, and add_task: as many as without herdr's agents' ids.
-        #expect(MCPServer.tools.count == 51 + MCPServer.taskTools.count)
+        // 31 + 12 + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task: as many as without herdr's agents'
+        // ids.
+        #expect(MCPServer.tools.count == 52 + MCPServer.taskTools.count)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.
         #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))
