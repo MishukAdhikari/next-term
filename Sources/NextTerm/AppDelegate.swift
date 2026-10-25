@@ -88,6 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: the window column
 
+    /// Every window's column (WindowColumns): its rows, whether it shows, and what changed.
+    let windowColumns = WindowColumns()
     /// Settings › General's checkbox follows the View menu, and the menu Settings.
     static let windowColumnChanged = Notification.Name(WindowColumnSettings.changedName)
 
@@ -98,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             guard newValue != showsWindowColumn else { return }
             UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.shownKey)
+            windowColumns.settingsChanged()
             NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
         }
     }
@@ -108,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             guard newValue != windowColumnExpanded else { return }
             UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.expandedKey)
+            windowColumns.settingsChanged()
             NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
         }
     }
@@ -1080,6 +1084,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             controller.window?.center()
         }
         controllers.append(controller)
+        indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         if forAgent { return controller }
@@ -1093,6 +1098,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         welcome?.close()
         controllers.append(controller)
+        indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         controller.showWindow(nil)
@@ -1103,6 +1109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
         // Out of the index at once: Go to Next Agent Needing You and the Welcome window never go to a closed window.
         windowIndex.remove(window: closed.indexID)
+        windowColumns.rebuild()
         self.welcome?.windowsChanged()
         // Defer: the window is still mid-close in this call.
         DispatchQueue.main.async { [self] in
@@ -1617,13 +1624,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A window being made is told once it is listed; one closing, never again.
         guard !controller.hasClosed, controllers.contains(where: { $0 === controller }) else { return }
         guard windowIndex.update(controller.indexEntry) else { return }
+        windowColumns.windowChanged(controller.indexID)
         welcome?.windowsChanged()
     }
 
     /// Every window's entry as it is this moment, not at its last refresh (a window no one can see refreshes once a
     /// second): before a key or a menu reads the index.
     func refreshWindowIndex() {
-        for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
+        for controller in controllers where !controller.hasClosed {
+            if windowIndex.update(controller.indexEntry) { windowColumns.windowChanged(controller.indexID) }
+        }
     }
 
     /// Agents › Go to Next Agent Needing You: the terminal that has waited longest for you (a decision, then a failure,

@@ -189,11 +189,15 @@ enum RestoreBuild {
             guard let controller = build(window, screens: screens, gone: planned.isGone, maker: &maker) else { continue }
             shown.append((controller, window))
         }
-        // Back to front, so the window used last ends in front, with the keyboard.
+        // Back to front, so the window used last ends in front, with the keyboard. Every window is counted for the window
+        // column before the first opens: each has it from its first frame, not a moment after it shows.
+        app.windowColumns.expecting = shown.count
         for entry in shown.reversed() {
+            app.windowColumns.expecting -= 1 // this one is in the index once it opens
             app.openWindow(restored: entry.controller)
             if entry.window.minimized { entry.controller.window?.miniaturize(nil) }
         }
+        app.windowColumns.expecting = 0
         for entry in shown where entry.window.fullScreen && !entry.window.minimized {
             entry.controller.window?.toggleFullScreen(nil)
         }
