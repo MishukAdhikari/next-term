@@ -10,6 +10,7 @@ import Testing
         .list, .tabs, .sessions, .read(pane: "w1:p1", source: .visible, lines: nil), .read(pane: "w1:p1", source: .recent, lines: 80),
         .prompt(pane: "w1:p1"), .text(pane: "w1:p1"), .keys(pane: "w1:p1", ["escape", "down", "enter", "y"]),
         .focus(pane: "w2:p1", tab: "w2:t1"), .focus(pane: "w2:p1", tab: nil), .version, .explain(pane: "w1:p1"), .machines,
+        .closePane(pane: "w1:p2"),
     ]
 
     /// The words of each herdr call in a script (`nt_call LABEL WORDS…`), unquoted as sh reads them.
@@ -92,10 +93,13 @@ import Testing
                 }
             }
         }
-        // Nothing that makes, ends or changes herdr's own things is in the list, and of herdr's machines only the list.
+        // Nothing that makes or changes herdr's own things is in the list, nor anything that stops a session or a server, and
+        // of herdr's machines only the list. One agent is ended (pane close) only after Approve on the Mac (010a U6b).
         let flat = HerdrCommand.allowed.map { $0.joined(separator: " ") }
+        #expect(flat.contains("pane close"))
+        #expect(!HerdrCommand.allowedOnMachine.contains(["pane", "close"]) && !HerdrCommand.closePane(pane: "w1:p1").goesToMachines)
         for never in ["server", "session stop", "session delete", "session attach", "agent start", "agent rename", "pane run",
-                      "pane close", "tab create", "tab close", "workspace create", "update", "integration", "plugin", "worktree",
+                      "tab create", "tab close", "workspace create", "update", "integration", "plugin", "worktree",
                       "machine add", "machine remove", "machine rename", "machine enable", "machine disable", "machine status",
                       "machine reconnect"] {
             #expect(!flat.contains { $0.hasPrefix(never) }, "\(never)")

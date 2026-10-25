@@ -312,10 +312,29 @@ extension SelfTest {
         clearCalls()
         let shown = await herdrTool("show_tab", ["tab_id": id])
         check(!shown.isError && !read().contains("focus"), "herdr MCP: show_tab shows the herdr tab and leaves herdr's view", shown.text)
-        let closed = await herdrTool("close_tab", ["tab_id": id])
+        // close_tab on an agent ends that agent only, once approved on the Mac, seeing herdr's command (010a U6b); a
+        // working one needs force, refused before any window. split_pane still refuses an agent's id.
+        clearCalls()
+        let working: Bool = tab.herdrTracker.agents.first { $0.paneID == "w2:p1" }?.status == .working
+        let unforced = await herdrTool("close_tab", ["tab_id": id])
+        check(!working || (unforced.isError && unforced.text.contains("force") && MCPWriteControl.pending == nil),
+              "herdr MCP: close_tab on a working agent without force is refused before asking", unforced.text)
+        for approve in [false, true] {
+            clearCalls()
+            let call = Task { await herdrTool("close_tab", ["tab_id": id, "force": true]) }
+            _ = await wait(20) { MCPWriteControl.pending?.window != nil }
+            let window = MCPWriteControl.pending?.window
+            let shown = SelfTest.texts(window?.window?.contentView)
+            check(window != nil && shown.contains("herdr pane close w2:p1"), "herdr MCP: close_tab on an agent asks on the Mac first, naming herdr's command", shown)
+            if approve { window?.approveButton.performClick(nil) } else { window?.declineButton.performClick(nil) }
+            let result = await call.value
+            let ran = read().contains("pane close w2:p1|")
+            check(approve ? (!result.isError && ran) : (result.isError && !ran),
+                  approve ? "herdr MCP: close_tab, approved, ends the agent with herdr's pane close" : "herdr MCP: close_tab, declined, sends herdr nothing",
+                  result.text)
+        }
         let split = await herdrTool("split_pane", ["tab_id": id])
-        check(closed.isError && split.isError && c.tabs.contains { $0 === tab }, "herdr MCP: close_tab and split_pane refuse an agent's id",
-              closed.text + " | " + split.text)
+        check(split.isError && c.tabs.contains { $0 === tab }, "herdr MCP: split_pane refuses an agent's id, and the herdr tab stays", split.text)
         c.show(other)
         let waiting = Task { await herdrTool("wait_for_tab", ["tab_id": id, "timeout_seconds": 20]) }
         await pause(1)

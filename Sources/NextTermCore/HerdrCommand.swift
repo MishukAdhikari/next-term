@@ -4,7 +4,9 @@ import Foundation
 /// fixed text and quoted values, sent base64) or as argument lists for herdr on this Mac, which no shell reads. Each one
 /// tries herdr's current verb first and, when herdr answers that it lacks it (HerdrResult.saysUnsupported), the verb an
 /// older herdr has, in the same run: never by herdr's version string. Next Term never starts, stops, updates or installs
-/// herdr, never ends one of its agents, and never makes a workspace, tab, pane or session.
+/// herdr, never stops or deletes one of its sessions, and never makes a workspace, tab, pane or session. It ends one of
+/// herdr's agents (`pane close`) only once the user approves that on the Mac (plan 010a U6b), and never on one of herdr's
+/// saved machines.
 ///
 /// Text for an agent never sits on this Mac's command lines: the script reads it from its stdin (`T=$(cat)`), and the
 /// argument lists take it as one element. On the host it is herdr's argument while herdr runs.
@@ -41,6 +43,9 @@ public enum HerdrCommand: Equatable, Sendable {
     /// The machines saved in herdr (`machine list --json`, herdr 0.9.0 and later), read only. Not a session's: it never
     /// takes `--session`.
     case machines
+    /// Ends one agent: `pane close` of its pane, after Approve on the Mac. Nothing older is tried, and it never goes to one
+    /// of herdr's machines.
+    case closePane(pane: String)
 
     /// What `read` reads, in herdr's words.
     public enum ReadSource: String, Sendable {
@@ -62,7 +67,7 @@ public enum HerdrCommand: Equatable, Sendable {
     public static let allowed: [[String]] = [
         ["--version"], ["agent", "list"], ["agent", "read"], ["agent", "prompt"], ["agent", "send-keys"], ["agent", "focus"],
         ["agent", "explain"], ["pane", "list"], ["pane", "read"], ["pane", "send-text"], ["pane", "send-keys"],
-        ["tab", "list"], ["tab", "focus"], ["session", "list"], ["machine", "list"],
+        ["tab", "list"], ["tab", "focus"], ["session", "list"], ["machine", "list"], ["pane", "close"],
     ]
 
     /// The verbs that may go to one of herdr's saved machines (`--machine`): its agent commands, and no other.
@@ -125,7 +130,7 @@ public enum HerdrCommand: Equatable, Sendable {
     /// It changes what herdr shows (a prompt, keys, its view), so the tab checks again soon after.
     public var changesHerdr: Bool {
         switch self {
-        case .prompt, .text, .keys, .focus: return true
+        case .prompt, .text, .keys, .focus, .closePane: return true
         case .list, .tabs, .sessions, .read, .version, .explain, .machines: return false
         }
     }
@@ -134,7 +139,7 @@ public enum HerdrCommand: Equatable, Sendable {
     public var goesToMachines: Bool {
         switch self {
         case .list, .read, .prompt, .keys, .focus, .explain: return true
-        case .tabs, .sessions, .text, .version, .machines: return false
+        case .tabs, .sessions, .text, .version, .machines, .closePane: return false
         }
     }
 
@@ -178,6 +183,8 @@ public enum HerdrCommand: Equatable, Sendable {
             return [[["agent", "explain", pane, "--json"]]]
         case .machines:
             return [[["machine", "list", "--json"]]]
+        case .closePane(let pane):
+            return [[["pane", "close", pane]]]
         }
     }
 
@@ -198,7 +205,7 @@ public enum HerdrCommand: Equatable, Sendable {
             return nil
         case .machines:
             return session == nil ? nil : "herdr's machines are not a session's: ask without one."
-        case .read(let pane, _, _), .prompt(let pane), .text(let pane), .explain(let pane):
+        case .read(let pane, _, _), .prompt(let pane), .text(let pane), .explain(let pane), .closePane(let pane):
             return Self.paneRefusal(pane)
         case let .keys(pane, names):
             if let refusal = Self.paneRefusal(pane) { return refusal }

@@ -113,13 +113,53 @@ enum HerdrMCP {
             }
             return true
         case "close_tab":
-            reply(fail("That is one of herdr's agents: Next Term never ends herdr's agents (stop it in herdr). close_tab with its tab's id (\(target.tabID)) closes the herdr tab, which only detaches."))
+            MainActor.assumeIsolated { closeAgent(target, arguments, caller: caller, herdrCaller: herdrCaller, reply: reply) }
             return true
         case "rename_tab":
             reply(fail(TabRename.agentRefusal))
             return true
         default:
             return false
+        }
+    }
+
+    /// close_tab with an agent's id (plan 010a U6b): herdr closes that agent's pane, and what runs there stops, once the
+    /// user approves on the Mac, seeing the exact command. Every refusal comes first: the caller's own pane, an agent on
+    /// one of herdr's machines, a working agent without force. After Approve the agent is read again: one that began
+    /// working meanwhile is not ended without force. Only the agent: never its herdr tab, session or server.
+    @MainActor
+    private static func closeAgent(_ target: HerdrTarget, _ arguments: [String: Any], caller: TerminalTab?,
+                                   herdrCaller: [String: String], reply: @escaping Reply) {
+        if target.machine != nil {
+            return reply(fail("That agent runs on one of herdr's own machines: Next Term never ends those; stop it in herdr. Nothing was closed."))
+        }
+        let found: (ref: HerdrAgentRef, agent: HerdrAgent)
+        switch agent(target, caller: caller, herdrCaller: herdrCaller, typing: true) {
+        case .failure(let error): return reply(fail(error.text))
+        case .success(let pair): found = pair
+        }
+        let force: Bool = arguments["force"] as? Bool ?? false
+        let name: String = MCPControl.field(found.agent.name)
+        if found.agent.status == .working, !force {
+            return reply(fail("“\(name)” is working: pass force: true to end it anyway. Nothing was closed."))
+        }
+        let tab = found.ref.tab
+        let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
+        let ask = MCPWriteControl.Ask(title: "An agent asks to end a herdr agent",
+                                      details: "“\(name)” (\(found.agent.paneID), \(found.agent.status.rawValue)) in herdr \(place): herdr closes its pane, and what runs there stops. Its herdr tab, session and server stay. Next Term runs: herdr pane close \(found.agent.paneID)")
+        let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
+        MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+            window?.finish()
+            guard let now = found.ref.agent else {
+                return reply(ok(["id": found.ref.id, "closed": true, "note": "herdr no longer listed it, so nothing was run."]))
+            }
+            if now.status == .working, !force {
+                return reply(fail("“\(name)” began working while you were asked: pass force: true to end it anyway. Nothing was closed."))
+            }
+            found.ref.run(.closePane(pane: now.paneID)) { result in
+                if let problem = problem(result, pane: now.paneID) { return reply(fail(problem)) }
+                reply(ok(["id": found.ref.id, "closed": true, "approved": approved]))
+            }
         }
     }
 
