@@ -20,6 +20,8 @@ final class TaskDestinationsView: NSView, NSTextFieldDelegate {
     /// Why a saved value can't be used, under its popup.
     let defaultProblem = TaskDestinationsView.problemLabel()
     let projectProblem = TaskDestinationsView.problemLabel()
+    /// Where Wrap Up's handoffs go in the project in front.
+    let handoffRow = TaskHandoffFolderRow()
     /// "Details for the default:" or "Details for “next-term”:".
     let detailsTitle = NSTextField(labelWithString: "")
     /// The rows of the kind being edited, rebuilt when it changes.
@@ -126,6 +128,8 @@ final class TaskDestinationsView: NSView, NSTextFieldDelegate {
             Self.row("", [defaultProblem]),
             Self.row("This project:", [projectPopup, projectName]),
             Self.row("", [projectProblem]),
+            Self.row("Handoff folder:", [handoffRow.value, handoffRow.choose, handoffRow.useDefault]),
+            Self.row("", [handoffRow.problem]),
             Self.row("", [detailsTitle]),
             details,
             Self.row("", [formLine]),
@@ -265,6 +269,7 @@ extension TaskDestinationsView {
         let own = saved(.project)
         fill(projectPopup, selecting: own?.kind, useDefault: useDefault)
         projectPopup.isEnabled = projectKey != nil
+        handoffRow.update(project: projectPath, key: projectKey)
         show(defaultProblem, settings.defaultDestinationProblem)
         let ownProblem = projectKey.flatMap { settings.projects[$0]?.problem } ?? settings.projectsProblem
         show(projectProblem, projectKey == nil || own != nil ? nil : ownProblem)

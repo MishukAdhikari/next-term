@@ -118,6 +118,23 @@ public struct TaskSettings: Equatable, Sendable {
     /// stays as saved. Nil when the saved choices can't be read, so one change never wipes them, or when
     /// `destination` fails its check.
     public static func json(saved: String?, setting destination: TaskDestination?, for key: String) -> String? {
+        var value: Any?
+        if let destination {
+            guard let one = TaskDestination.json(destination),
+                  let read = try? JSONSerialization.jsonObject(with: Data(one.utf8)) else { return nil }
+            value = read
+        }
+        return json(saved: saved, field: "destination", value: value, for: key)
+    }
+
+    /// The saved JSON of every project's choices with only this project's handoff folder changed (nil: back on
+    /// `docs/handoffs`). Everything else stays as saved; nil when the saved choices can't be read.
+    public static func json(saved: String?, handoffFolder: String?, for key: String) -> String? {
+        json(saved: saved, field: "handoffFolder", value: handoffFolder, for: key)
+    }
+
+    /// The saved JSON with one field of one project's entry set (nil: removed); an entry left empty goes.
+    private static func json(saved: String?, field: String, value: Any?, for key: String) -> String? {
         var all: [String: Any] = [:]
         if let saved {
             guard let read = try? JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any] else {
@@ -126,17 +143,62 @@ public struct TaskSettings: Equatable, Sendable {
             all = read
         }
         var entry: [String: Any] = all[key] as? [String: Any] ?? [:]
-        if let destination {
-            guard let one = TaskDestination.json(destination),
-                  let value = try? JSONSerialization.jsonObject(with: Data(one.utf8)) else { return nil }
-            entry["destination"] = value
-        } else {
-            entry["destination"] = nil
-        }
+        entry[field] = value
         all[key] = entry.isEmpty ? nil : entry
         let options: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? JSONSerialization.data(withJSONObject: all, options: options) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// A folder picked in Settings (an absolute path) as the project's handoff setting, relative to `project`; nil
+    /// when it is not a plain folder inside the project, under the same rule `handoffFolder(_:in:)` reads it by: no
+    /// `..`, no linked folder on its way, not git's own folder, not the project itself.
+    public static func handoffSetting(picked: String, in project: String) -> String? {
+        guard picked.hasPrefix("/"), let path = TodoFolder.lexical("/", picked) else { return nil }
+        // The panel gives the real path; the window may name the project through a link to it.
+        let named: String = TodoFolder.lexical("/", project) ?? project
+        for root in [named, canonicalPath(project)] where path.hasPrefix(root + "/") {
+            return handoffFolder(String(path.dropFirst(root.count + 1)), in: project)
+        }
+        return nil
+    }
+
+
+    /// Where Wrap Up asks agents to write handoffs when the project names no folder of its own.
+    public static let defaultHandoffFolder = "docs/handoffs"
+
+    /// The handoff folder for `project`, relative to it: the project's own setting when it can be used, else
+    /// `docs/handoffs` when that can. A setting that can't is ignored, never followed, so an agent is never asked to
+    /// write outside its working folder. nil when neither can (a repository whose `docs/handoffs` is a link): no
+    /// handoff is asked for in that project.
+    public func handoffFolder(for project: String) -> String? {
+        let own = projects[Self.projectKey(project)]?.handoffFolder
+        if let usable = own.flatMap({ Self.handoffFolder($0, in: project) }) { return usable }
+        return Self.handoffFolder(Self.defaultHandoffFolder, in: project)
+    }
+
+    /// `setting` as a handoff folder in `project`, written plainly (`notes/handoffs`), or nil when it can't be one:
+    /// empty, absolute, leaving the project with `..`, in git's own folder, a file, passing through a linked folder
+    /// anywhere on its way, even one that points back inside, since the agent writes where the path says, or holding
+    /// a line break or control character, since the path is typed into the agent's tab.
+    public static func handoffFolder(_ setting: String, in project: String) -> String? {
+        let folder = setting.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !folder.isEmpty, !isAbsolute(folder), !HandoffRequest.hasControl(folder) else { return nil }
+        guard TodoFolder.problem(with: folder) == nil else { return nil }
+        let root = canonicalPath(project)
+        guard FileManager.default.fileExists(atPath: root),
+              let path = TodoFolder.lexical(root, folder), path.hasPrefix(root + "/") else { return nil }
+        let relative = String(path.dropFirst(root.count + 1))
+        var walked = root
+        for part in relative.split(separator: "/") {
+            walked += "/" + part
+            let attributes = try? FileManager.default.attributesOfItem(atPath: walked)
+            guard let kind = attributes?[.type] as? FileAttributeType else {
+                break // Not there yet: the agent makes it.
+            }
+            guard kind == .typeDirectory else { return nil }
+        }
+        return relative
     }
 
     /// One folder for every project (`/…` or `~/…`), not a path in each.

@@ -9,17 +9,17 @@ import Testing
 /// matcher reads names, not meaning: a call it has no rule for passes, so a new way to reach out gets a rule here.
 @Suite struct TaskSourcesTests {
     static let core = [
-        "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "MCPTaskDestinations",
-        "MCPTaskTools", "PromptLine", "RemindersAccess", "RepositoryAddress", "ShortcutList", "TaskDestination",
-        "TaskDraft", "TaskLink", "TaskPayload", "TaskRecord", "TaskRecordFile", "TaskSettings", "TodoFile", "TodoFolder",
-        "TrackerLines", "TrackerLinesCatalog",
+        "AgentReadiness", "DestinationChoices", "DestinationForm", "DestinationPlan", "Handoff", "HandoffRequest",
+        "MCPTaskDestinations", "MCPTaskTools", "PromptLine", "RemindersAccess", "RepositoryAddress", "ShortcutList",
+        "TaskDestination", "TaskDraft", "TaskLink", "TaskPayload", "TaskRecord", "TaskRecordFile", "TaskSettings",
+        "TodayCommits", "TodoFile", "TodoFolder", "TrackerLines", "TrackerLinesCatalog", "UpdateDraft", "WrapUpModel",
     ]
     static let app = [
         "AddTaskDestinationViews", "AddTaskOffer", "AddTaskSheet", "AgentReadinessTab", "ConnectTrackerSheet",
-        "ConnectTrackerSheetActions", "ConnectTrackerSheetBuild", "RemindersSheets", "TaskAgentRequest",
-        "TaskDestinations", "TaskDestinationsView", "TaskOpen", "TaskRecordStore", "TaskReminders", "TaskRemindersFlow",
-        "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow", "TasksMCP", "TasksMenu", "TasksMenuDestinations",
-        "TaskWriter",
+        "ConnectTrackerSheetActions", "ConnectTrackerSheetBuild", "PostUpdate", "PostUpdateSheet", "RemindersSheets",
+        "TaskAgentRequest", "TaskDestinations", "TaskDestinationsView", "TaskHandoffFolderRow", "TaskOpen",
+        "TaskRecordStore", "TaskReminders", "TaskRemindersFlow", "TaskSettingsView", "TaskShortcut", "TaskShortcutFlow",
+        "TasksMCP", "TasksMenu", "TasksMenuDestinations", "TaskWriter", "WrapUp", "WrapUpSheet",
     ]
 
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -84,6 +84,25 @@ import Testing
         // Showing a file in Finder opens nothing of the task's.
         let reveal = "NSWorkspace.shared.activateFileViewerSelecting([url])"
         #expect(SourceScan.hits(file: "TasksMenu.swift", text: reveal).isEmpty)
+    }
+
+    /// Wrap Up runs no git and opens nothing itself; Post Update runs git only to read today's commits, and shows a
+    /// saved update through TaskOpen like every other file.
+    @Test func gitRunsOnlyWherePostUpdateReadsCommitsAndNothingElseOpens() {
+        let git = "let git = GitRunner.locateGit()"
+        #expect(SourceScan.hits(file: "PostUpdate.swift", text: git).isEmpty)
+        #expect(SourceScan.hits(file: "TodayCommits.swift", text: git).isEmpty)
+        #expect(SourceScan.hits(file: "WrapUp.swift", text: git) == ["WrapUp.swift:1: GitRunner"])
+        #expect(SourceScan.hits(file: "WrapUpSheet.swift", text: git) == ["WrapUpSheet.swift:1: GitRunner"])
+        #expect(SourceScan.hits(file: "PostUpdateSheet.swift", text: git) == ["PostUpdateSheet.swift:1: GitRunner"])
+        let open = "NSWorkspace.shared.open(url)"
+        #expect(SourceScan.hits(file: "PostUpdate.swift", text: open) == ["PostUpdate.swift:1: NSWorkspace"])
+        #expect(SourceScan.hits(file: "WrapUp.swift", text: open) == ["WrapUp.swift:1: NSWorkspace"])
+        #expect(SourceScan.hits(file: "PostUpdate.swift", text: "let p = Process()") == ["PostUpdate.swift:1: Process("])
+        // Every slice 3 file is in the list the scan reads.
+        let slice3 = ["Handoff", "HandoffRequest", "WrapUpModel", "UpdateDraft", "TodayCommits"]
+        let slice3App = ["WrapUp", "WrapUpSheet", "PostUpdate", "PostUpdateSheet"]
+        #expect(slice3.allSatisfy(Self.core.contains) && slice3App.allSatisfy(Self.app.contains))
     }
 
     @Test func everyOtherWayToStartACommandIsAllowedOnlyWhereProcessIs() {
@@ -151,6 +170,26 @@ import Testing
         let files = [("TaskShortcut.swift", here), ("TaskOpen.swift", folder.appendingPathComponent("TaskOpen.swift"))]
         #expect(SourceScan.missing(files) == ["TaskOpen.swift is missing from the Tasks sources list"])
     }
+    /// Wrap Up's request, the one line in Tasks typed with its Return, starts only from its own sheet: the user ticks
+    /// the tabs and presses Ask. No MCP source names Wrap Up or its request, and the only call that starts the asking
+    /// is the sheet's button, so no tool and no agent can reach it.
+    @Test func wrapUpAsksOnlyFromItsSheetAndNoToolReachesIt() throws {
+        let sources = Self.root.appendingPathComponent("Sources")
+        let files = try FileManager.default.subpathsOfDirectory(atPath: sources.path).filter { $0.hasSuffix(".swift") }
+        var askers: [String] = []
+        var tools: [String] = []
+        for file in files {
+            let name = (file as NSString).lastPathComponent
+            guard !name.hasPrefix("SelfTest") else { continue }
+            let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+            if text.contains("wrapUp.ask(") || text.contains("WrapUp.ask(") { askers.append(name) }
+            let isTool: Bool = name.hasPrefix("MCP") || name.hasSuffix("MCP.swift") || name.contains("MCPImport")
+            if isTool, text.contains("WrapUp") || text.contains("HandoffRequest") { tools.append(name) }
+        }
+        #expect(askers == ["WrapUpSheet.swift"], "\(askers)")
+        #expect(tools.isEmpty, "\(tools)")
+    }
+
 }
 
 /// The matcher: comments out, string literals kept, then each rule by regular expression.
@@ -160,6 +199,8 @@ enum SourceScan {
         let pattern: String
         /// The one file the call is allowed in, or nil: none.
         let onlyIn: String?
+        /// Other files it is allowed in too.
+        var alsoIn: [String] = []
     }
 
     static let wordStart = "(?<![A-Za-z0-9_])"
@@ -182,8 +223,13 @@ enum SourceScan {
                  pattern: wordStart + "(?:fatalError|preconditionFailure|assertionFailure)\\([^\\n]*\\\\\\(",
                  onlyIn: nil),
         ]
-        return network + logging + opening + commands
+        return network + logging + opening + commands + [git]
     }()
+
+    /// Running git: only where today's commits are read (read-only, with an argument array) and where a
+    /// destination's repository is read from the project's remote. Wrap Up and the sheets run none.
+    static let git = Rule(name: "GitRunner", pattern: wordStart + "GitRunner" + wordEnd, onlyIn: "PostUpdate.swift",
+                          alsoIn: ["TodayCommits.swift", "TaskDestinationsView.swift", "DestinationForm.swift"])
 
     /// Opening a link or an app: in TaskOpen.swift only.
     static let opening: [Rule] = [
@@ -225,7 +271,7 @@ enum SourceScan {
         let code = stripComments(text).replacingOccurrences(of: allowed, with: "")
         let lineStarts = starts(code)
         var found: [(line: Int, name: String)] = []
-        for rule in rules where rule.onlyIn != file {
+        for rule in rules where rule.onlyIn != file && !rule.alsoIn.contains(file) {
             guard let regex = try? NSRegularExpression(pattern: rule.pattern) else { continue }
             let range = NSRange(code.startIndex..., in: code)
             for match in regex.matches(in: code, range: range) {
