@@ -133,7 +133,8 @@ extension TerminalWindowController: TabListViewDelegate {
         sources.reserveCapacity(groups.count)
         for (group, item) in zip(groups, items) { sources.append(tabListSource(group, item, folders: folders)) }
         let workingShown: Bool = AgentSpinner.current != .off
-        let rows: [TabListRow] = TabListRows.make(tabs: sources, showsFolders: folders, home: NSHomeDirectory(), workingShown: workingShown)
+        let rows: [TabListRow] = TabListRows.make(tabs: sources, showsFolders: folders, home: NSHomeDirectory(), workingShown: workingShown,
+                                                  now: TerminalTab.now)
         tabListPlace.rows = rows
         let collapsed: Bool = tabListPlace.shown.collapsed && !tabListPlace.renaming
         tabList.update(rows: rows, selectedIndex: activeIndex, density: TabListDensity(showsFolders: folders), collapsed: collapsed)
@@ -149,7 +150,8 @@ extension TerminalWindowController: TabListViewDelegate {
             let pane = TabListRows.Pane(key: "pane \(tab.id.uuidString)", title: item.title, truncatesTail: item.truncation == .byTruncatingTail,
                                         shorterTitles: item.shorterTitles, editableTitle: item.editableTitle, state: item.state,
                                         tooltip: item.tooltip, spokenStatus: item.accessibilityStatus, folder: folders ? tab.directory : "",
-                                        question: folders ? tab.status.question : nil, remote: item.remote, focused: true)
+                                        question: folders ? tab.status.question : nil, remote: item.remote, focused: true,
+                                        herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
             return TabListRows.Source(key: key, panes: [pane], shortcut: item.shortcut, place: item.place)
         }
         let focused: TerminalTab = group.focused
@@ -167,7 +169,8 @@ extension TerminalWindowController: TabListViewDelegate {
                                 truncatesTail: tab.titleTruncation == .byTruncatingTail, shorterTitles: shorter,
                                 editableTitle: tab.editableTitle, state: tab.status.state, tooltip: tab.tooltip,
                                 spokenStatus: tab.ownStateDescription ?? "", folder: folders ? tab.directory : "",
-                                question: folders ? tab.status.question : nil, remote: tab.remoteMark, focused: focused)
+                                question: folders ? tab.status.question : nil, remote: tab.remoteMark, focused: focused,
+                                herdrAgents: tab.herdrRows, herdrIdleOpen: tab.herdrIdleOpen)
     }
 
     /// The list given its rows again as last made, in the form it shows now: when only its width or its collapse
@@ -282,6 +285,50 @@ extension TerminalWindowController: TabListViewDelegate {
     func tabList(_ list: TabListView, didSelectPane pane: Int, of index: Int) {
         guard let tab = groups[safe: index]?.panes[safe: pane] else { return }
         show(tab)
+    }
+
+    /// A herdr agent's row: its tab comes forward and herdr's view moves to the agent's pane (HerdrAgentMenu.show).
+    func tabList(_ list: TabListView, didSelectAgent pane: String, rowKey: String, of index: Int) {
+        guard let tab = herdrTab(row: rowKey, in: index) else { return }
+        HerdrAgentMenu.show(tab: tab, pane: pane)
+    }
+
+    /// A herdr agent's row's menu.
+    func tabList(_ list: TabListView, menuForAgent pane: String, rowKey: String, of index: Int) -> NSMenu? {
+        herdrTab(row: rowKey, in: index).map { HerdrAgentMenu.rowMenu(tab: $0, pane: pane) }
+    }
+
+    /// The folded row of a pane's idle herdr agents: open, or closed (`open` nil: the other way).
+    func tabList(_ list: TabListView, foldIdleAgentsOf index: Int, rowKey: String, open: Bool?) {
+        guard let tab = herdrTab(row: rowKey, in: index) else { return }
+        let next = open ?? !tab.herdrIdleOpen
+        guard next != tab.herdrIdleOpen else { return }
+        tab.herdrIdleOpen = next
+        refresh()
+    }
+
+    /// Peek at an agent's row (a beep when its herdr no longer lists it), or at a tab row whose tab runs an agent; any
+    /// other tab's row is not taken, so it selects and drags.
+    func tabList(_ list: TabListView, peekAt pane: String?, rowKey: String, of index: Int, row: NSView) -> Bool {
+        if let pane {
+            if let tab = herdrTab(row: rowKey, in: index), tab.herdrRows.contains(where: { $0.pane == pane }) {
+                AgentPeek.show(tab, pane: pane, relativeTo: row.bounds, of: row)
+            } else {
+                NSSound.beep()
+            }
+            return true
+        }
+        guard let tab = groups[safe: index]?.focused, tab.status.running, tab.status.kind == .agent, !tab.followsHerdr else {
+            return false
+        }
+        AgentPeek.show(tab, pane: nil, relativeTo: row.bounds, of: row)
+        return true
+    }
+
+    /// The pane of tab `index` whose herdr row `key` is (`pane <its id>/herdr/…`, TabListRows): herdr's pane ids are each
+    /// server's own, so two herdr servers in one split tab share ids such as w1:p1, and the row's key says which.
+    private func herdrTab(row key: String, in index: Int) -> TerminalTab? {
+        groups[safe: index]?.panes.first { key.hasPrefix("pane \($0.id.uuidString)/herdr/") }
     }
 
     func tabList(_ list: TabListView, didClose index: Int) { tabBar(tabBar, didClose: index) }

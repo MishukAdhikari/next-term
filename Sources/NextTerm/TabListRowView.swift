@@ -293,7 +293,8 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
         let h = bounds.height
         let pane = row.isPane
         let indent: CGFloat = pane ? Self.paneIndent : 0
-        let twoLines = density == .twoLines && !pane
+        // A herdr agent's row has its second line too (its question, or where it works); a pane's has none.
+        let twoLines = density == .twoLines && (!pane || row.isAgent)
         // One line sits in the middle of the row, as on the bar; with two the title's baseline is 17 down. The
         // marks, the × and the key sit on the title's line, not the row's middle.
         let titleHeight: CGFloat = Self.titleMetrics.height
@@ -345,9 +346,10 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
             // The second line, under the title: a remote tab's server mark first, then its host and folder.
             let detailHeight: CGFloat = Self.detailMetrics.height
             let detailY: CGFloat = Self.titleBaseline + Self.detailLeading - Self.detailMetrics.baseline
-            let detailX: CGFloat = remote ? Self.titleX + markSize.width + 3 : Self.titleX
+            let detailX: CGFloat = (remote ? Self.titleX + markSize.width + 3 : Self.titleX) + indent
             detail.frame = NSRect(x: detailX, y: detailY, width: max(0, hintEnd - detailX), height: detailHeight)
-            remoteMark.frame = NSRect(x: Self.titleX, y: detailY + detailHeight / 2 - 8, width: markSize.width, height: markSize.height)
+            let markY: CGFloat = detailY + detailHeight / 2 - 8
+            remoteMark.frame = NSRect(x: Self.titleX + indent, y: markY, width: markSize.width, height: markSize.height)
         } else {
             remoteMark.frame = NSRect(x: columnX, y: lineMid - 8, width: markSize.width, height: markSize.height)
         }
@@ -409,6 +411,18 @@ final class TabListRowView: NSView, NSTextFieldDelegate {
 
     override func accessibilityPerformPress() -> Bool {
         list?.rowPressed(self) ?? false
+    }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        guard row?.isFolded == true else { return false }
+        list?.rowFolds(self, open: true)
+        return true
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        guard row?.isFolded == true else { return false }
+        list?.rowFolds(self, open: false)
+        return true
     }
 
     // MARK: rename

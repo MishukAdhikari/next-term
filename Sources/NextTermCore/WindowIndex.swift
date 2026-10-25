@@ -1,9 +1,10 @@
 import Foundation
 
 // Every terminal window and its agents, in one place. Each window tells it what its tabs show as it refreshes them, from
-// their own status (nothing is polled for it), and that it closed. Three things read it: Agents › Go to Next Agent Needing
-// You, which goes through the terminals that wait for you, the Welcome window's switcher, which gives each window a row
-// with its marks, and the Dock menu, which lists the windows waiting for you.
+// their own status (nothing is polled for it), with herdr's agents one by one, and that it closed. Three things read it:
+// Agents › Go to Next Agent Needing You, which goes through the terminals and herdr's agents that wait for you, the
+// Welcome window's switcher, which gives each window a row with its marks, and the Dock menu, which lists the windows
+// waiting for you.
 
 /// What a terminal window is for, which says how it is named.
 public enum WindowKind: String, Sendable {
@@ -20,8 +21,8 @@ public enum WindowKind: String, Sendable {
     public var hasProject: Bool { self == .project || self == .worktree }
 }
 
-/// How many of a window's terminals, tab by tab and pane by pane, show each mark: what its row in the Welcome window and
-/// its item in the Dock menu show of its agents.
+/// How many of a window's terminals, tab by tab and pane by pane, and of herdr's agents it leads to, show each mark: what
+/// its row in the Welcome window and its item in the Dock menu show of its agents.
 public struct AgentMarks: Equatable, Sendable {
     /// A decision an agent waits on, or a bell: the amber mark.
     public var attention = 0
@@ -49,7 +50,7 @@ public struct AgentMarks: Equatable, Sendable {
         }
     }
 
-    /// The terminals that need you: the ones Go to Next Agent Needing You goes to.
+    /// The terminals and herdr's agents that need you: the ones Go to Next Agent Needing You goes to.
     public var needingYou: Int { attention + failed + done }
 
     /// One mark, and how many terminals show it.
@@ -109,12 +110,39 @@ public struct WindowIndex: Sendable {
         public let state: TabState
         /// On a server, and its connection dropped: its status was cleared with it, so an idle `state` says nothing.
         public let disconnected: Bool
+        /// It shows herdr and follows its agents one by one, each in its window's `agents`: they wait and count there, and
+        /// its own mark, which stands for them, does neither.
+        public let showsAgents: Bool
 
-        public init(id: UUID, title: String, state: TabState, disconnected: Bool = false) {
+        public init(id: UUID, title: String, state: TabState, disconnected: Bool = false, showsAgents: Bool = false) {
             self.id = id
             self.title = title
             self.state = state
             self.disconnected = disconnected
+            self.showsAgents = showsAgents
+        }
+    }
+
+    /// One of herdr's agents a window leads to: one a herdr tab of it shows, one on a machine saved in a herdr run in a tab
+    /// of it, or one on a connected server with no herdr tab, whose tabs are in this window (a herdr tab there opens in
+    /// it). Each waits on its own, as a terminal does, and is gone to as Window › Go to Agent… goes to it.
+    public struct Agent: Equatable, Sendable {
+        /// One per agent however many tabs show it (AgentQueue.Item's key).
+        public let key: String
+        /// Where going to it leads (AgentQueue.Item's target).
+        public let target: AgentQueue.Item.Target
+        /// The tab it is reached from: the one that shows its herdr, or a tab on its server.
+        public let tab: UUID
+        public let state: TabState
+        /// herdr's view in that tab shows it, as herdr said: in front when the tab is.
+        public let inView: Bool
+
+        public init(key: String, target: AgentQueue.Item.Target, tab: UUID, state: TabState, inView: Bool = false) {
+            self.key = key
+            self.target = target
+            self.tab = tab
+            self.state = state
+            self.inView = inView
         }
     }
 
@@ -135,9 +163,11 @@ public struct WindowIndex: Sendable {
         public let tabs: [Tab]
         /// For a server window, what ssh connects to there: "deploy@203.0.113.5".
         public let destination: String?
+        /// herdr's agents it leads to, in its tabs' order, then those of servers with no herdr tab.
+        public let agents: [Agent]
 
         public init(id: Int, kind: WindowKind, project: String?, name: String, title: String, lastKey: Date,
-                    tabs: [Tab], destination: String? = nil) {
+                    tabs: [Tab], destination: String? = nil, agents: [Agent] = []) {
             self.id = id
             self.kind = kind
             self.project = project
@@ -146,22 +176,40 @@ public struct WindowIndex: Sendable {
             self.lastKey = lastKey
             self.tabs = tabs
             self.destination = destination
+            self.agents = agents
         }
 
-        /// Its terminals' marks; an idle one whose connection dropped shows that instead.
+        /// Its terminals' marks, with herdr's agents in place of the tabs that show them, each agent once; an idle
+        /// terminal whose connection dropped shows that instead.
         public var marks: AgentMarks {
-            var marks = AgentMarks(tabs.map { (tab: Tab) -> TabState in tab.state })
-            let lost: [Tab] = tabs.filter { (tab: Tab) -> Bool in tab.disconnected && tab.state == .idle }
+            let own: [Tab] = tabs.filter { (tab: Tab) -> Bool in !tab.showsAgents }
+            var seen: Set<String> = []
+            let agentStates: [TabState] = agents.compactMap { (agent: Agent) -> TabState? in
+                seen.insert(agent.key).inserted ? agent.state : nil
+            }
+            var marks = AgentMarks(own.map { (tab: Tab) -> TabState in tab.state } + agentStates)
+            let lost: [Tab] = own.filter { (tab: Tab) -> Bool in tab.disconnected && tab.state == .idle }
             marks.disconnected = lost.count
             return marks
         }
+
+        /// What the index knows its entries by: each terminal's id, and each of herdr's agents' key.
+        var keys: [String] {
+            tabs.map { (tab: Tab) -> String in tab.id.uuidString } + agents.map { (agent: Agent) -> String in agent.key }
+        }
     }
 
-    /// A terminal that needs you, and the window it is in.
+    /// A terminal or one of herdr's agents that needs you, and the window it is in.
     public struct Waiting: Equatable, Sendable {
         public let window: Int
+        /// The terminal: the one that needs you, or the tab one of herdr's agents is reached from.
         public let tab: UUID
         public let state: TabState
+        /// One of herdr's agents: where going to it leads (AgentQueue.Item's target); nil for the terminal itself.
+        public let agent: AgentQueue.Item.Target?
+        /// One of herdr's agents that herdr's view in its tab shows.
+        let inView: Bool
+        let key: String
         /// When the index first saw it needing you this way, as a count: the lower, the longer it has waited. No two are
         /// the same, so the order is total.
         let since: Int
@@ -169,9 +217,9 @@ public struct WindowIndex: Sendable {
 
     /// The windows, in the order the index first heard of them.
     public private(set) var windows: [Window] = []
-    /// When each terminal that needs you was first seen needing you, and how: one that goes from done to a decision has
-    /// waited since the decision.
-    private var noticed: [UUID: Noticed] = [:]
+    /// When each terminal and agent that needs you was first seen needing you, and how, by its key (Window.keys): one that
+    /// goes from done to a decision has waited since the decision.
+    private var noticed: [String: Noticed] = [:]
     private var count = 0
     /// The terminal Go to Next Agent Needing You went to last.
     private var last: Waiting?
@@ -187,57 +235,73 @@ public struct WindowIndex: Sendable {
     /// the window's entry changed, for a list that shows it to follow.
     @discardableResult
     public mutating func update(_ window: Window) -> Bool {
-        var gone: [UUID] = []
+        var gone: [String] = []
         let changed: Bool
         if let index = windows.firstIndex(where: { (known: Window) -> Bool in known.id == window.id }) {
             changed = windows[index] != window
-            let kept: Set<UUID> = Set(window.tabs.map(\.id))
-            gone = windows[index].tabs.map(\.id).filter { (id: UUID) -> Bool in !kept.contains(id) }
+            let kept: Set<String> = Set(window.keys)
+            gone = windows[index].keys.filter { (key: String) -> Bool in !kept.contains(key) }
             windows[index] = window
         } else {
             windows.append(window)
             changed = true
         }
         for tab in window.tabs {
-            guard Self.needsYou(tab.state) else {
-                noticed[tab.id] = nil
-                continue
-            }
-            if noticed[tab.id]?.state == tab.state { continue }
-            count += 1
-            noticed[tab.id] = Noticed(state: tab.state, at: count)
+            notice(tab.id.uuidString, tab.showsAgents ? .idle : tab.state)
         }
+        for agent in window.agents { notice(agent.key, agent.state) }
         forget(gone)
         return changed
     }
 
-    /// A window closed: it and its terminals leave the index.
-    public mutating func remove(window id: Int) {
-        guard let index = windows.firstIndex(where: { (known: Window) -> Bool in known.id == id }) else { return }
-        let tabs: [UUID] = windows[index].tabs.map(\.id)
-        windows.remove(at: index)
-        forget(tabs)
+    /// A terminal or agent as it shows now: needing you, it waits from when it began to need you this way.
+    private mutating func notice(_ key: String, _ state: TabState) {
+        guard Self.needsYou(state) else {
+            noticed[key] = nil
+            return
+        }
+        if noticed[key]?.state == state { return }
+        count += 1
+        noticed[key] = Noticed(state: state, at: count)
     }
 
-    /// Terminals gone from a window: forgotten, unless another window has them now (a tab moved there).
-    private mutating func forget(_ tabs: [UUID]) {
-        guard !tabs.isEmpty else { return }
-        let held: Set<UUID> = Set(windows.flatMap { (window: Window) -> [UUID] in window.tabs.map(\.id) })
-        for id in tabs where !held.contains(id) { noticed[id] = nil }
+    /// A window closed: it, its terminals and its agents leave the index.
+    public mutating func remove(window id: Int) {
+        guard let index = windows.firstIndex(where: { (known: Window) -> Bool in known.id == id }) else { return }
+        let keys: [String] = windows[index].keys
+        windows.remove(at: index)
+        forget(keys)
+    }
+
+    /// Terminals and agents gone from a window: forgotten, unless another window has them now (a tab moved there, or
+    /// another tab of the same herdr session shows the agent).
+    private mutating func forget(_ keys: [String]) {
+        guard !keys.isEmpty else { return }
+        let held: Set<String> = Set(windows.flatMap { (window: Window) -> [String] in window.keys })
+        for key in keys where !held.contains(key) { noticed[key] = nil }
     }
 
     public func window(_ id: Int) -> Window? {
         windows.first { (window: Window) -> Bool in window.id == id }
     }
 
-    /// Every terminal that needs you: decisions (and bells) first, then failures, then finished agents and commands; in
-    /// each, the one waiting longest first.
+    /// Every terminal and agent of herdr's that needs you, each once: decisions (and bells) first, then failures, then
+    /// finished agents and commands; in each, the one waiting longest first. A tab that shows herdr's agents waits through
+    /// them, not itself.
     public var waiting: [Waiting] {
         var found: [Waiting] = []
+        var listed: Set<String> = []
         for window in windows {
-            for tab in window.tabs where Self.needsYou(tab.state) {
-                let since: Int = noticed[tab.id]?.at ?? Int.max
-                found.append(Waiting(window: window.id, tab: tab.id, state: tab.state, since: since))
+            for tab in window.tabs where !tab.showsAgents && Self.needsYou(tab.state) {
+                let key: String = tab.id.uuidString
+                guard listed.insert(key).inserted else { continue }
+                found.append(Waiting(window: window.id, tab: tab.id, state: tab.state, agent: nil, inView: false, key: key,
+                                     since: noticed[key]?.at ?? Int.max))
+            }
+            for agent in window.agents where Self.needsYou(agent.state) {
+                guard listed.insert(agent.key).inserted else { continue }
+                found.append(Waiting(window: window.id, tab: agent.tab, state: agent.state, agent: agent.target,
+                                     inView: agent.inView, key: agent.key, since: noticed[agent.key]?.at ?? Int.max))
             }
         }
         return found.sorted(by: Self.goesBefore)
@@ -245,32 +309,34 @@ public struct WindowIndex: Sendable {
 
     /// Where Go to Next Agent Needing You goes, `front` being the terminal in front now (the key window's): the one after
     /// it while it needs you, so pressing again goes on; after the one gone to last when that is still in front, though it
-    /// needs you no more (a finished agent, seen now); from anywhere else, the one waiting longest. Round to the first after
-    /// the last. Nil when nothing needs you.
+    /// needs you no more (a finished agent, seen now); after the agent of herdr's that its view shows, in a herdr tab in
+    /// front; from anywhere else, the one waiting longest. Round to the first after the last. Nil when nothing needs you.
     public mutating func next(from front: UUID?) -> Waiting? {
         let list: [Waiting] = waiting
         guard !list.isEmpty else { return nil }
         var chosen: Waiting = list[0]
-        if let front, let index = list.firstIndex(where: { (waiting: Waiting) -> Bool in waiting.tab == front }) {
+        if let front, let index = list.firstIndex(where: { (waiting: Waiting) -> Bool in waiting.tab == front && waiting.agent == nil }) {
             chosen = list[(index + 1) % list.count]
         } else if let last, front == last.tab {
             let after: Waiting? = list.first { (waiting: Waiting) -> Bool in Self.goesBefore(last, waiting) }
             chosen = after ?? list[0]
+        } else if let front, let index = list.firstIndex(where: { (waiting: Waiting) -> Bool in waiting.tab == front && waiting.inView }) {
+            chosen = list[(index + 1) % list.count]
         }
         last = chosen
         return chosen
     }
 
-    /// The windows with terminals that need you, the one with the terminal Go to Next Agent Needing You goes to first at
-    /// the top: what the Dock menu lists.
+    /// The windows with terminals or herdr's agents that need you, the one with what Go to Next Agent Needing You goes to
+    /// first at the top: what the Dock menu lists.
     public var windowsWaiting: [Window] {
         var order: [Int] = []
         for waiting in waiting where !order.contains(waiting.window) { order.append(waiting.window) }
         return order.compactMap { (id: Int) -> Window? in window(id) }
     }
 
-    /// The terminal in window `id` that needs you most, in the order Go to Next Agent Needing You goes: where the Dock
-    /// menu's item for the window goes, and the mark it shows. Nil when nothing in it needs you.
+    /// The terminal or agent in window `id` that needs you most, in the order Go to Next Agent Needing You goes: where the
+    /// Dock menu's item for the window goes, and the mark it shows. Nil when nothing in it needs you.
     public func firstWaiting(in id: Int) -> Waiting? {
         waiting.first { (waiting: Waiting) -> Bool in waiting.window == id }
     }

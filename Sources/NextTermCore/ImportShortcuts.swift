@@ -66,6 +66,7 @@ public enum ImportShortcuts {
             "selectPaneBelow:": "Select Pane Below",
             "selectNextPane:": "Select Next Pane",
             "selectPreviousPane:": "Select Previous Pane",
+            "goToAgent:": "Go to Agent…",
             "selectTabByNumber:#9": "Select Last Tab",
             "closeOtherTabs:": "Close Other Tabs",
             "closeTabsToTheRight:": "Close Tabs to the Right",

@@ -463,7 +463,8 @@ enum MCPBridge {
         let waitSeconds = tool == "wait_for_tab" ? Double(min(300, arguments["timeout_seconds"] as? Int ?? 50)) : (MCPServer.tool(named: tool)?.timeout ?? 30)
         var timeout = timeval(tv_sec: Int(min(1900, waitSeconds + 30)), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        guard let request = MCPServer.request(tool: tool, arguments: arguments) else {
+        let caller = MCPServer.herdrCaller(ProcessInfo.processInfo.environment) // the herdr pane this agent runs in, if any
+        guard let request = MCPServer.request(tool: tool, arguments: arguments, caller: caller) else {
             return .success(MCPServer.CallResult(text: "The arguments are not valid JSON.", isError: true))
         }
         let sent = request.withUnsafeBytes { raw -> Bool in

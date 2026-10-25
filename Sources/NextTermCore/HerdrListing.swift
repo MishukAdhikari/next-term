@@ -30,19 +30,26 @@ public struct HerdrReport: Equatable, Sendable {
     /// PATH), known (an install folder), or cache (where a tab found it, without saying how).
     public var how: String?
     public var listing: HerdrListing
+    /// The herdr session asked; nil for herdr's default.
+    public var session: String?
+    /// The herdr tab its focus is in, as `herdr tab list` said, when the check asked (no agent had the focus).
+    public var focusedTab: String?
 
-    public init(path: String? = nil, how: String? = nil, listing: HerdrListing) {
+    public init(path: String? = nil, how: String? = nil, listing: HerdrListing, session: String? = nil, focusedTab: String? = nil) {
         self.path = path
         self.how = how
         self.listing = listing
+        self.session = session
+        self.focusedTab = focusedTab
     }
 
     /// The most the check keeps of herdr's answer (`head -c`): one that long was cut.
     static let outputCap = 1_000_000
 
-    /// The section after `RemoteShell.herdrMarker`: `missing<TAB>…`, or `where<TAB>path<TAB>how`, `exit<TAB>status<TAB>command`
-    /// and `out<TAB>what herdr said`, then the end marker. Returns the report and how many lines it took, the end
-    /// marker's included. No end marker: the answer was cut.
+    /// The section after `RemoteShell.herdrMarker`: `session<TAB>name` for a named session, `missing<TAB>…`, or
+    /// `where<TAB>path<TAB>how`, `exit<TAB>status<TAB>command`, `out<TAB>what herdr said` and maybe `tabs<TAB>what herdr's
+    /// tab list said`, then the end marker. Returns the report and how many lines it took, the end marker's included. No
+    /// end marker: the answer was cut.
     public static func parse(section lines: ArraySlice<Substring>) -> (report: HerdrReport, consumed: Int) {
         var report = HerdrReport(listing: .cut)
         var missing = false, ended = false
@@ -60,6 +67,10 @@ public struct HerdrReport: Equatable, Sendable {
             switch fields[0] {
             case "missing":
                 missing = true
+            case "session" where fields.count >= 2:
+                report.session = fields[1].isEmpty ? nil : fields[1]
+            case "tabs":
+                report.focusedTab = HerdrTabs.focusedTab(String(line.dropFirst(min(5, line.count))))
             case "where" where fields.count >= 2:
                 report.path = fields[1].isEmpty ? nil : fields[1]
                 report.how = fields.count > 2 && !fields[2].isEmpty ? fields[2] : nil
@@ -103,10 +114,56 @@ public struct HerdrAgent: Equatable, Sendable {
         case idle, working, blocked, done, unknown
     }
     public var paneID: String
-    public var name: String
+    /// The name the user gave it in herdr (`name`), nil when it has none.
+    public var customName: String?
+    /// What runs in the pane, as herdr names it (`agent`; a pane's `label` before herdr had it): "claude", "codex". The
+    /// rules for one kind of agent (its question's reader, Codex's `unknown` at rest) key on it.
+    public var kind: String?
+    /// The name herdr shows for it (`display_agent`), which naming plugins set through herdr's metadata ("Claude:
+    /// auth"); nil when herdr gives none, or only the kind again.
+    public var displayName: String?
     public var status: Status
+    /// herdr's title for it: its presentation `title` (what naming plugins write), else its terminal's title without
+    /// the spinner herdr strips (`terminal_title_stripped`). A `title` that is only the terminal's own is shown stripped.
     public var title: String?
     public var directory: String?
+    /// herdr's workspace and tab ids for the pane (`w1`, `w1:t1`), when its list gives them.
+    public var workspaceID: String?
+    public var tabID: String?
+    /// The pane has herdr's focus.
+    public var focused: Bool
+    /// herdr's count of the agent's state changes (`state_change_seq`), and of its finished turns (`completion_seq`,
+    /// herdr 0.9.4 and later): nil when its list has none.
+    public var stateSeq: Int?
+    public var completionSeq: Int?
+    /// herdr is still starting the agent.
+    public var launchPending: Bool
+    /// The agent's own session herdr keeps a reference to (`agent_session`, herdr 0.6.5 and later), the one place its
+    /// transcript is looked for; nil when herdr names none.
+    public var session: AgentSessionRef?
+
+    public init(paneID: String, customName: String? = nil, kind: String? = nil, displayName: String? = nil, status: Status,
+                title: String? = nil, directory: String? = nil, workspaceID: String? = nil, tabID: String? = nil,
+                focused: Bool = false, stateSeq: Int? = nil, completionSeq: Int? = nil, launchPending: Bool = false,
+                session: AgentSessionRef? = nil) {
+        self.paneID = paneID
+        self.customName = customName
+        self.kind = kind
+        self.displayName = displayName
+        self.status = status
+        self.title = title
+        self.directory = directory
+        self.workspaceID = workspaceID
+        self.tabID = tabID
+        self.focused = focused
+        self.stateSeq = stateSeq
+        self.completionSeq = completionSeq
+        self.launchPending = launchPending
+        self.session = session
+    }
+
+    /// What the agent is called, as herdr shows it: its display name, else the name it was given, else what runs.
+    public var name: String { displayName ?? customName ?? kind ?? "agent" }
 
     /// The most agents one list gives.
     static let maxAgents = 500
@@ -122,25 +179,7 @@ public struct HerdrAgent: Equatable, Sendable {
     /// together, and its exit status.
     public static func listing(output: String, exit: Int32? = nil, command: String = "agent") -> HerdrListing {
         let text = plain(output)
-        let bytes = Array(text.utf8)
-        // The whole of it, then from each `{` or `[` (8 at most) to its matching end: herdr's answer after or before noise.
-        // A bare array counts only as the whole answer: inside a cut one, an array is never the list.
-        if let value = json(bytes[...]), let listing = read(value, panes: command == "pane", whole: true) { return listing }
-        var from = 0
-        var tries = 0
-        while tries < 8, let open = bytes[from...].firstIndex(where: { $0 == UInt8(ascii: "{") || $0 == UInt8(ascii: "[") }) {
-            tries += 1
-            guard let end = matchingEnd(bytes, from: open) else {
-                from = open + 1
-                continue
-            }
-            if let value = json(bytes[open...end]) {
-                if let listing = read(value, panes: command == "pane", whole: false) { return listing }
-                from = end + 1 // JSON, but not herdr's (a tool's own log line): past it
-            } else {
-                from = open + 1
-            }
-        }
+        if let listing = scan(text, { value, whole in read(value, panes: command == "pane", whole: whole) }) { return listing }
         let said = text.trimmingCharacters(in: .whitespaces)
         let status = exit.map { $0 == 0 ? "" : " (exit \($0))" } ?? ""
         if said.isEmpty { return .failed("herdr printed nothing" + status) }
@@ -154,6 +193,30 @@ public struct HerdrAgent: Equatable, Sendable {
                     "connection refused", "server_not_running"]
         if gone.contains(where: { lower.contains($0) }) { return .notRunning(shown(said)) }
         return .failed(shown(said))
+    }
+
+    /// The first of herdr's answers `read` takes in `text` (`plain` already): the whole of it, then from each `{` or `[`
+    /// (8 at most) to its matching end, herdr's answer after or before noise. `read` is told whether the value is the
+    /// whole text: a bare array counts only as the whole answer, since inside a cut one an array is never the list.
+    static func scan<T>(_ text: String, _ read: (Any, Bool) -> T?) -> T? {
+        let bytes = Array(text.utf8)
+        if let value = json(bytes[...]), let found = read(value, true) { return found }
+        var from = 0
+        var tries = 0
+        while tries < 8, let open = bytes[from...].firstIndex(where: { $0 == UInt8(ascii: "{") || $0 == UInt8(ascii: "[") }) {
+            tries += 1
+            guard let end = matchingEnd(bytes, from: open) else {
+                from = open + 1
+                continue
+            }
+            if let value = json(bytes[open...end]) {
+                if let found = read(value, false) { return found }
+                from = end + 1 // JSON, but not herdr's (a tool's own log line): past it
+            } else {
+                from = open + 1
+            }
+        }
+        return nil
     }
 
     /// herdr's answer as one line of text: a byte order mark, colours and other escape sequences, and control
@@ -192,7 +255,7 @@ public struct HerdrAgent: Equatable, Sendable {
     }
 
     /// A JSON object or array, or nil.
-    private static func json(_ bytes: ArraySlice<UInt8>) -> Any? {
+    static func json(_ bytes: ArraySlice<UInt8>) -> Any? {
         guard let first = bytes.first(where: { $0 != 0x20 }), first == UInt8(ascii: "{") || first == UInt8(ascii: "[") else { return nil }
         return try? JSONSerialization.jsonObject(with: Data(bytes))
     }
@@ -267,24 +330,54 @@ public struct HerdrAgent: Equatable, Sendable {
     }
 
     /// One item, whatever herdr version wrote it: `agent_status` (0.4.5 and later), `agent_state` (0.4.0), or a plain
-    /// `status` or `state`; a pane id as text or a number, else the terminal's.
+    /// `status` or `state`; a pane id as text or a number, else the terminal's. Booleans are read as booleans only (a
+    /// `"focused": "yes"` is not focus), and the counters as whole numbers.
     private static func agent(_ item: [String: Any]) -> HerdrAgent {
         func first(_ keys: [String], max: Int) -> String? {
             keys.lazy.compactMap { string(item[$0], max: max) }.first { !$0.isEmpty }
         }
         let said = first(["agent_status", "agent_state", "status", "state"], max: 40) ?? ""
         let status = Status(rawValue: said.trimmingCharacters(in: .whitespaces).lowercased()) ?? .unknown
+        let kind = first(["agent", "label"], max: 80)
+        let shown = first(["display_agent"], max: 80)
+        // herdr's presentation title, unless it is only the terminal's raw title, which herdr gives stripped too.
+        let presented = first(["title"], max: 80)
+        let terminal = first(["terminal_title"], max: 80)
+        let title = presented.flatMap { $0 == terminal ? nil : $0 } ?? first(["terminal_title_stripped"], max: 80) ?? presented
         return HerdrAgent(
             paneID: first(["pane_id", "terminal_id"], max: 80) ?? "",
-            name: first(["name", "display_agent", "agent", "label"], max: 80) ?? "agent",
+            customName: first(["name"], max: 80),
+            kind: kind,
+            displayName: shown.flatMap { $0 == kind ? nil : $0 },
             status: status,
-            title: first(["terminal_title_stripped", "title"], max: 80),
-            directory: first(["foreground_cwd", "cwd"], max: 1024)
+            title: title,
+            directory: first(["foreground_cwd", "cwd"], max: 1024),
+            workspaceID: first(["workspace_id"], max: 80),
+            tabID: first(["tab_id"], max: 80),
+            focused: boolean(item["focused"]),
+            stateSeq: count(item["state_change_seq"]),
+            completionSeq: count(item["completion_seq"]),
+            launchPending: boolean(item["launch_pending"]),
+            session: AgentSessionRef(item["agent_session"])
         )
     }
 
+    /// A JSON boolean; anything else is false.
+    static func boolean(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+        return number.boolValue
+    }
+
+    /// A JSON whole number of 0 or more (never a boolean), or nil.
+    static func count(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let whole = number.int64Value
+        guard whole >= 0, Double(whole) == number.doubleValue else { return nil }
+        return Int(clamping: whole)
+    }
+
     /// A JSON value as text without control characters, cut at `max`: a string, or a number (never a boolean).
-    private static func string(_ value: Any?, max: Int) -> String? {
+    static func string(_ value: Any?, max: Int) -> String? {
         let text: String
         if let value = value as? String {
             text = value
@@ -298,20 +391,10 @@ public struct HerdrAgent: Equatable, Sendable {
     }
 
     /// What herdr said, for a tooltip or MCP: stored keys masked, then cut at 200 characters.
-    private static func shown(_ said: String) -> String {
-        let masked = SecretMask.current.mask(String(said.prefix(1000)))
+    static func shown(_ said: String, mask: SecretMask = .current) -> String {
+        let masked = mask.mask(String(said.prefix(1000)))
         let cut = masked.prefix(200)
         return cut.count < masked.count ? String(cut) + "…" : String(cut)
-    }
-
-    /// What a tab showing herdr reports for all its agents together: a decision first, then work.
-    public static func activity(_ agents: [HerdrAgent]) -> AgentActivity {
-        if let blocked = agents.first(where: { $0.status == .blocked }) {
-            let others = agents.filter { $0.status == .blocked }.count - 1
-            return .asking("\(blocked.name) (\(blocked.paneID)) needs a decision" + (others > 0 ? ", and \(others) more" : ""))
-        }
-        if agents.contains(where: { $0.status == .working }) { return .working }
-        return .idle
     }
 }
 
@@ -327,6 +410,10 @@ public struct HerdrWatch: Equatable, Sendable {
     public private(set) var failures = 0
 
     public init() {}
+
+    /// A check or two in a row failed, and herdr is not taken as not answering yet: its agents are as last known (none
+    /// while it has not listed them since the watch began).
+    public var isRetrying: Bool { (1..<Self.failuresBeforeNote).contains(failures) }
 
     /// Takes one check's report. `showsHerdr`: the tab shows herdr (it did not fall back to a plain shell). Returns the
     /// agents to show when herdr listed them.
@@ -369,5 +456,66 @@ public struct HerdrWatch: Equatable, Sendable {
         case .missing: return "herdr not answering: the status check didn’t find herdr on the host"
         case .agents, .needsRestart: return "herdr not answering"
         }
+    }
+}
+
+/// The agent's own session, as herdr keeps a reference to it (`agent_session`): whose store it is in (`source`, `agent`)
+/// and an id or a path in it (`kind` "id" or "path", `value`). herdr's words, kept as given.
+public struct AgentSessionRef: Equatable, Sendable {
+    public var source: String
+    public var agent: String
+    public var kind: String
+    public var value: String
+
+    public init(source: String, agent: String, kind: String, value: String) {
+        self.source = source
+        self.agent = agent
+        self.kind = kind
+        self.value = value
+    }
+
+    /// herdr's object, or nil without a value in it.
+    init?(_ value: Any?) {
+        guard let object = value as? [String: Any] else { return nil }
+        let text = { (key: String, max: Int) in HerdrAgent.string(object[key], max: max) ?? "" }
+        let found = text("value", 1024)
+        guard !found.isEmpty else { return nil }
+        self.init(source: text("source", 80), agent: text("agent", 80), kind: text("kind", 20), value: found)
+    }
+}
+
+/// One herdr session a host's status check asks for its agents: nil for herdr's default. `wantsFocus`: one of its tabs is
+/// on screen, so the check also asks which herdr tab has the focus when no agent has it. `overview`: asked for a
+/// connection that has no herdr tab, on a host kept with herdr, only where herdr already runs or a tab once found it
+/// (the finder's cache), so a check never runs a herdr no tab has used.
+public struct HerdrPollSession: Equatable, Sendable {
+    public var name: String?
+    public var wantsFocus: Bool
+    public var overview: Bool
+
+    public init(name: String?, wantsFocus: Bool = false, overview: Bool = false) {
+        self.name = name
+        self.wantsFocus = wantsFocus
+        self.overview = overview
+    }
+
+    /// The most sessions one check asks: more take turns, check by check.
+    public static let perPoll = 4
+
+    /// The sessions a check asks, from the host's herdr tabs (each one's session, and whether it is on screen): each
+    /// once, in the tabs' order, wanting the focus when any of its tabs is on screen. Of more than `perPoll`, check
+    /// `round` asks the next `perPoll` in turn.
+    public static func plan(_ tabs: [(session: String?, onScreen: Bool)], round: Int) -> [HerdrPollSession] {
+        var sessions: [HerdrPollSession] = []
+        for tab in tabs {
+            if let index = sessions.firstIndex(where: { $0.name == tab.session }) {
+                if tab.onScreen { sessions[index].wantsFocus = true }
+            } else {
+                sessions.append(HerdrPollSession(name: tab.session, wantsFocus: tab.onScreen))
+            }
+        }
+        guard sessions.count > perPoll else { return sessions }
+        let start = (max(0, round) * perPoll) % sessions.count
+        return (0..<perPoll).map { sessions[(start + $0) % sessions.count] }
     }
 }

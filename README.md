@@ -82,7 +82,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   change files, git, settings or your tasks (`add_task`) wait for your Approve on the Mac. At a zsh prompt,
   reading a tab also gives the line being typed and the cursor, and any suggestion a zsh plugin draws, which is
   left out of the screen once Next Term finds it where zsh drew it, so it isn't read as typed. Local only: a
-  private socket, no network port.
+  private socket, no network port. Each of herdr's agents has an id of its own in `list_tabs`, which the tab
+  tools take as they take a tab's: an agent reads another's pane, prompts it, presses its keys or answers its
+  question through herdr, even when another pane has herdr's keyboard, and only that agent counts as driven.
+  Text sent to one is herdr's argument on the server while it runs, so text holding a stored key is refused.
 - **Secrets.** API and MCP keys sealed on your Mac, used by agents by name after you approve with Touch ID or
   your password. **Secrets › Import From** copies keys in from .env, JSON, TOML, YAML and CSV files and
   password-manager exports, moves them out of your MCP configs, or takes them from your own 1Password,
@@ -118,7 +121,31 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   the server except the Tab hook you allow, and no password is stored. Agents get seven MCP tools to open tabs
   there and read the changes. To find herdr, a herdr tab uses the copy your running herdr server runs, or may
   run your login shell on the server once (no terminal, 3 seconds at most) to read its PATH; when herdr isn't
-  there, the tab says where it looked and links herdr's install page.
+  there, the tab says where it looked and links herdr's install page. A file or folder dropped on a remote tab,
+  or an image pasted into one, is copied to the server first, into a new folder only you can read there, and
+  its path there is what gets pasted.
+- **herdr's agents, one by one.** A herdr tab follows each of herdr's agents, with herdr's own state, name and
+  title: a row each under the tab in the tab list, with how long it has waited and, with Show Folders, the
+  question it asks; past six agents the idle ones fold into one row. Click a row and herdr shows that agent's
+  pane; ⌥-click peeks. Window › Go to Agent… (⌃⌘A) lists every agent in every window, herdr's and your agent
+  tabs alike, what needs you first, oldest first. Agents › Go to Next Agent Needing You (⇧⌘U) counts each of
+  herdr's agents as it counts a tab, so it goes straight to that agent's pane, and the Dock menu lists its
+  window. Each agent gets its own notice, one however many tabs show its session, with the question read
+  from its own pane once herdr has read it blocked twice in a row, its choices as buttons and Reply on a finished
+  one, each checked against the screen first; a notice goes away once the agent no longer needs you. An agent of a
+  connected herdr server with no herdr tab gets herdr's own words and no buttons: a click opens a herdr tab there,
+  on its pane. Mute Notices and Keep as Unread are on a row's menu, and the Dock badge counts the agents waiting on
+  you once, however many tabs show them. Peek reads an
+  agent, answers its question or sends it a line (kept as a draft) without moving herdr's view; ⌘E there shows
+  why herdr gives its state, and ⌘2 its conversation, from the transcript herdr names (Claude Code and Codex).
+  A tab can open one of herdr's named sessions, picked in New Remote Tab; a connected herdr server with no herdr
+  tab still shows its agents in Go to Agent, and a saved herdr server is one choice away. herdr run in a tab on
+  this Mac gets the same, the machines saved in it included, read through that herdr; that tab is only read,
+  never kept or reopened. Keep herdr's `ui.toast.delivery` at its default when Next Term follows herdr on this
+  Mac, or herdr posts its own notices too. Next Term tells programs that ask (herdr, vim, tmux) when its window or
+  the app loses the focus, so herdr keeps a finish you have not seen. It runs only herdr's own commands (its
+  agent list, read, prompt, keys, focus and explain, its sessions and its list of machines): it never installs,
+  starts, stops or updates herdr, never changes its machines, and never ends one of its agents.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
   first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,
@@ -220,8 +247,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Dock badge and notifications** for agents that finished, in another app or in a tab you are not
   looking at, and for commands that finished while you were in another app. Settings > Notifications
   chooses which ones notify, after how long, and with or without a sound. Agents › Go to Next Agent
-  Needing You (⇧⌘U) goes to the one that has waited longest, in any window: a decision first, then a
-  failure, then a finished agent; press it again for the next. The Dock menu lists the windows waiting.
+  Needing You (⇧⌘U) goes to the one that has waited longest, in any window, herdr's agents one by one: a
+  decision first, then a failure, then a finished agent; press it again for the next. The Dock menu lists the
+  windows waiting.
 - **Every menu shortcut is yours.** Next Term > Settings (⌘,) > Keyboard Shortcuts lists every menu
   command; click one and press new keys. The shortcuts below are the defaults.
 - **Bring your settings over.** Coming from VS Code or an editor built on it (Cursor, Devin Desktop, Trae,
@@ -344,6 +372,8 @@ One window per project, and a few keys to move between them:
 | Close tab (or the focused pane in a split tab) | ⌘W |
 | Split right / split down (in the editor, ⌘D duplicates the line) | ⌘D / ⌘⇧D |
 | Move between panes | ⌥⌘← ⌥⌘→ ⌥⌘↑ ⌥⌘↓, or ⌥⌘] / ⌥⌘[ in turn |
+| Go to an agent, herdr's or a tab's (in any window; type its name, or 1–9) | ⌃⌘A |
+| Peek at an agent (in Go to Agent, or on its row) | ⌥ |
 | Maximize the pane (and back) | ⌘⇧↩ |
 | Select tab 1–8 / last tab | ⌘1…⌘8 / ⌘9 |
 | Next / previous tab | ⌘⇧] / ⌘⇧[, Ctrl-Tab / Ctrl-Shift-Tab |

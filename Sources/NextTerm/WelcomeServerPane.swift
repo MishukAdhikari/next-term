@@ -2,12 +2,15 @@ import AppKit
 import NextTermCore
 
 /// The Welcome window's right pane while a saved server is selected: its name, where it points and the folder its tabs
-/// open in, how it is kept, and Connect, which Return presses; Go to Window in its place while a window is open on it.
+/// open in, how it is kept, while it is connected what its herdr agents need ("herdr: 1 needs you, 3 working"), and
+/// Connect, which Return presses; Go to Window in its place while a window is open on it.
 final class WelcomeServerPane: NSView {
     let connectButton = NSButton(title: "Connect", target: nil, action: nil)
     private let name = NSTextField(labelWithString: "")
     private let place = NSTextField(labelWithString: "")
     private let kept = NSTextField(labelWithString: "")
+    /// What herdr's agents there need, while Next Term follows them (HerdrAgentMenu.summary); hidden otherwise.
+    private let herdr = NSTextField(labelWithString: "")
     private let note = NSTextField(wrappingLabelWithString: "")
     private(set) var host: RemoteHost?
 
@@ -20,10 +23,14 @@ final class WelcomeServerPane: NSView {
         kept.font = .systemFont(ofSize: 12)
         kept.textColor = Theme.textDim
         Typography.singleLine(kept, truncation: .byTruncatingTail)
+        herdr.font = .systemFont(ofSize: 12)
+        herdr.textColor = Theme.textDim
+        herdr.isHidden = true
+        Typography.singleLine(herdr, truncation: .byTruncatingTail)
         note.font = .systemFont(ofSize: 12)
         note.textColor = Theme.textDim
         connectButton.bezelStyle = .rounded
-        for view in [name, place, kept, note, connectButton] as [NSView] {
+        for view in [name, place, kept, herdr, note, connectButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -39,7 +46,10 @@ final class WelcomeServerPane: NSView {
             kept.topAnchor.constraint(equalTo: place.bottomAnchor, constant: 3),
             kept.leadingAnchor.constraint(equalTo: name.leadingAnchor),
             kept.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
-            note.topAnchor.constraint(equalTo: kept.bottomAnchor, constant: 28),
+            herdr.topAnchor.constraint(equalTo: kept.bottomAnchor, constant: 3),
+            herdr.leadingAnchor.constraint(equalTo: name.leadingAnchor),
+            herdr.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
+            note.topAnchor.constraint(equalTo: herdr.bottomAnchor, constant: 25),
             note.leadingAnchor.constraint(equalTo: name.leadingAnchor),
             note.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
             note.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
@@ -65,6 +75,9 @@ final class WelcomeServerPane: NSView {
         place.setAccessibilityLabel("\(host.destination), in \(host.directory)")
         kept.stringValue = Self.keptText(host.keep)
         kept.toolTip = Self.keptHelp(host.keep)
+        let agents = host.keep == .herdr ? HerdrAgentMenu.summary(host: host) : nil
+        herdr.stringValue = agents ?? ""
+        herdr.isHidden = agents == nil
         connectButton.title = windowOpen ? "Go to Window" : "Connect"
         connectButton.toolTip = windowOpen ? "Bring its window to the front, the one you were in last"
             : "Open a window with a tab on this server, over ssh"
@@ -94,5 +107,5 @@ final class WelcomeServerPane: NSView {
     }
 
     /// For the self-test: what the pane says, line by line.
-    var shownLines: [String] { [name.stringValue, place.stringValue, kept.stringValue] }
+    var shownLines: [String] { [name.stringValue, place.stringValue, kept.stringValue] + (herdr.isHidden ? [] : [herdr.stringValue]) }
 }

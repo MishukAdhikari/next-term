@@ -70,6 +70,9 @@ extension SelfTest {
               'agent list')
                 if [ -e \(RemoteShell.quote(failure.path)) ]; then cat \(RemoteShell.quote(failure.path)) >&2; exit 1; fi
                 cat \(RemoteShell.quote(list.path)); exit 0 ;;
+              # herdr's other verbs (a blocked agent's pane read, its tab list) answer nothing here: only herdr itself
+              # keeps what it is sent.
+              'agent '*|'pane '*|'tab '*|'session '*|'machine '*) exit 0 ;;
             esac
             printf '\\033[?1000h\\033[?1003h\\033[?1006h'
             printf 'herdr stand-in\\r\\n'

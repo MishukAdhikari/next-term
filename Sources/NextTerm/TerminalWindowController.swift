@@ -819,7 +819,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     static func stopText(_ lead: String, _ busy: [TerminalTab], otherwise: String = "") -> String {
         CloseText.text(lead: lead, notes: busy.compactMap(\.closeNote), otherwise: otherwise)
     }
-    var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil }.count }
+    /// Tabs marked for you. A tab that follows herdr's agents counts them instead (AppDelegate.updateBadge).
+    var unseenTabCount: Int { tabs.filter { $0.status.unseen != nil && !$0.followsHerdr }.count }
+
+    /// Window › Go to Agent… (⌃⌘A): a menu of every agent in every window, herdr's and the agent tabs', what needs you
+    /// first.
+    @objc func goToAgent(_ sender: Any?) {
+        HerdrAgentMenu.popUp(in: self)
+    }
 
     // MARK: status
 
@@ -837,6 +844,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 let isVisible = isOnScreen(tab)
                 tab.status.setVisible(isVisible)
                 tab.view.beepAllowed = isVisible && tab === group.focused
+                tab.reportFocus(seen: isVisible)
             }
         }
     }
@@ -868,6 +876,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             // The agent in sight every 0.25 s; the others every 0.5 s, half of them on each tick.
             if isOnScreen(tab) || (tickCount + index) % 2 == 0 { tab.pollAgentScreen() }
             tab.status.tick(at: now)
+            tab.noteNeed(at: now)
             if let notice = tab.status.takeNotice() {
                 AppDelegate.shared.post(notice, tab: tab, in: self)
             }
@@ -1005,17 +1014,19 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// What the index of every window holds for this one (AppDelegate.windowIndex): its name and title, and its
-    /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status.
+    /// terminals' marks, tab by tab and pane by pane, as its tab bar shows them, read from their own status, with herdr's
+    /// agents one by one, as the tab list shows them (HerdrAgentMenu.indexAgents).
     var indexEntry: WindowIndex.Window {
         let terminals: [WindowIndex.Tab] = tabs.map { (tab: TerminalTab) -> WindowIndex.Tab in
             let title: String = AgentTitle.withoutSpinnerFrame(tab.title)
             // A lost connection cleared the tab's status: what an agent asked there may still wait on the host.
             let lost: Bool = tab.remoteLink == .disconnected
-            return WindowIndex.Tab(id: tab.id, title: title, state: tab.status.state, disconnected: lost)
+            return WindowIndex.Tab(id: tab.id, title: title, state: tab.status.state, disconnected: lost, showsAgents: tab.followsHerdr)
         }
         let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
         return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,
-                                  lastKey: lastKey, tabs: terminals, destination: destination)
+                                  lastKey: lastKey, tabs: terminals, destination: destination,
+                                  agents: HerdrAgentMenu.indexAgents(of: self))
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
@@ -1301,6 +1312,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(showGitLog(_:)) { return gitLogRoot != nil }
         if item.action == #selector(showGitDiff(_:)) { return gitDiffRoot != nil }
         if item.action == #selector(closeProject(_:)) { return project != nil }
+        if item.action == #selector(goToAgent(_:)) { return HerdrAgentMenu.hasAgents }
         if item.action == #selector(setProjectColor(_:)) { return validateProjectColor(item) }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
         if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }

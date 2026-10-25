@@ -39,7 +39,8 @@ enum ClosedTabs {
         if remote.keep == .tmux, !shown {
             return RemoteTab(host: host, directory: remote.directory, session: remote.session, keep: remote.keep)
         }
-        return RemoteTab(host: host, directory: directory, keep: remote.keep)
+        // A herdr tab opens its herdr session again.
+        return RemoteTab(host: host, directory: directory, keep: remote.keep, herdrSession: remote.herdrSession)
     }
 }
 
