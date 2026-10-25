@@ -1086,7 +1086,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The breadcrumb bar's Back, or ⌘↑ from the home folder's row: "No project open" again, with its recent projects.
     /// The tree is put away as it was (Browse Home Folder brings it back) and nothing more is read. A keyboard the tree
-    /// had goes to the tab in front, so no hidden row keeps it.
+    /// had goes to the tab in front, or with the terminal folded to the editor's pane in front, so no hidden row keeps it.
     func stopBrowsingHome() {
         let hadKeyboard = isSidebarFocused
         browsesHome = false
@@ -1099,8 +1099,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             updateProjectRoot()
         }
         guard hadKeyboard else { return }
-        // A terminal taking the keyboard unfolds it: folded, the keyboard goes nowhere until a click.
-        if terminalCollapsed { window?.makeFirstResponder(nil) } else if let tab = activeTab { window?.makeFirstResponder(tab.view) }
+        // Folded, nothing of the terminal shows to type into: whatever the editor has in front takes the keyboard, as
+        // collapseTerminal gives it (folded, an editor pane always shows). Unfolded, the tab in front takes it.
+        if terminalCollapsed {
+            editorArea.select(editorArea.activeIndex)
+        } else if let tab = activeTab {
+            window?.makeFirstResponder(tab.view)
+        }
+        // None took it: not the tree put away either.
+        if (window?.firstResponder as? NSView)?.isDescendant(of: sidebar) == true { window?.makeFirstResponder(nil) }
     }
 
     // MARK: find and replace in files
