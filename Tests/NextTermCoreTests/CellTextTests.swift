@@ -23,6 +23,22 @@ import Testing
         #expect(CellText.line("\u{9F}x") == "\u{FFFD}x")
     }
 
+    /// Characters that draw as nothing, or reorder the text around them, show as one mark each.
+    @Test func invisibleCharactersShowAsAMark() {
+        for scalar in ["\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}", "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}",
+                       "\u{200B}", "\u{2060}", "\u{FEFF}", "\u{00AD}"] {
+            #expect(CellText.line("a" + scalar + "b") == "a▯b", "\(scalar.unicodeScalars.map { String($0.value, radix: 16) })")
+        }
+        #expect(CellText.line("invoice\u{202E}fdp.exe") == "invoice▯fdp.exe")
+        // ZWJ and ZWNJ join emoji and letters; the bidi marks are what RTL text is written with.
+        for kept in ["👨‍👩‍👧", "می\u{200C}خواهم", "क्\u{200D}ष", "abc\u{200E}", "\u{200F}שלום", "\u{061C}١٢"] {
+            #expect(CellText.line(kept) == kept)
+        }
+        let revealed = CellText.revealingInvisibles("a\u{200B}b\u{2066}c\u{2069}")
+        #expect(revealed.text == "a▯b▯c▯" && revealed.count == 3)
+        #expect(CellText.revealingInvisibles("plain").count == 0)
+    }
+
     @Test func plainTextIsUnchanged() {
         for text in ["", "hello", "Grace Hopper, “Amazing Grace”", "naïve café", "日本語のテキスト", "👨‍👩‍👧 family", String(repeating: "x", count: 300)] {
             #expect(CellText.line(text) == text)

@@ -493,7 +493,8 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
     private func rebuildColumns() {
         let names = showsLines ? [] : tableColumns()
         let ids = ["line"] + (showsLines ? ["raw"] : names.indices.map { "c\($0)" })
-        let titles = ["#"] + (showsLines ? ["Text"] : names)
+        // On one line, whatever a header holds; the tooltip has it as it is.
+        let titles = ["#"] + (showsLines ? ["Text"] : names.map { CellText.line($0, limit: 120) })
         columns = names
         if grid.tableColumns.map(\.identifier.rawValue) != ids || grid.tableColumns.map(\.title) != titles {
             grid.tableColumns.forEach(grid.removeTableColumn)
@@ -512,7 +513,7 @@ final class DataPane: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenu
             let found = kind == .jsonLines ? DataHead.values(of: sample, columns: names) : []
             for (i, name) in names.enumerated() {
                 let column = NSTableColumn(identifier: .init("c\(i)"))
-                column.title = name
+                column.title = titles[i + 1]
                 column.headerToolTip = name
                 let longest = sample.indices.map { cellText(sample[$0], column: i, values: found[safe: $0]).prefix(41).count }.max() ?? 0
                 column.width = min(320, max(60, CGFloat(max(longest, name.count)) * Self.charWidth + 16))

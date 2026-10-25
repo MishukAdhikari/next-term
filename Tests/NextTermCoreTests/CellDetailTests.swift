@@ -111,14 +111,31 @@ import Testing
         let cut = SQLiteValue.text(String(repeating: "a", count: 10_000), truncated: true)
         let fetching = CellDetail.make(column: "content", value: cut, source: .page(fetching: true, isView: false))
         #expect(fetching.note == "Reading the whole value…" && fetching.kind.hasPrefix("TEXT · more than"))
+        #expect(fetching.copyText == nil && !fetching.copiesPart, "Copy waits for the whole value")
         let view = CellDetail.make(column: "content", value: cut, source: .page(fetching: false, isView: true))
         #expect(view.note?.hasPrefix("A view’s rows have no key") == true)
-        let unkeyed = CellDetail.make(column: "content", value: cut)
-        #expect(unkeyed.note?.hasPrefix("This row has no key") == true)
         let huge = CellDetail.make(column: "content", value: cut, source: .whole)
-        #expect(huge.note == "Over 4 MB: only its first 4 MB are shown.")
+        #expect(huge.note == "Over 4 MB: only its first 4 MB are shown. Copy copies that part.")
+        let unkeyed = CellDetail.make(column: "content", value: cut)
+        #expect(unkeyed.note?.hasPrefix("This row has no key") == true && unkeyed.note?.hasSuffix("Copy copies that part.") == true)
+        #expect(view.copiesPart && unkeyed.copiesPart && huge.copiesPart && unkeyed.copyText?.count == 10_000)
+        #expect(!CellDetail.make(column: "content", value: .text("whole", truncated: false)).copiesPart)
         #expect(CellDetail.make(column: "content", value: .text("whole", truncated: false), source: .whole).note == nil)
         #expect(!CellDetail.make(column: "c", value: .text("{\"a\":1", truncated: true)).isJSON, "a cut value is never taken for JSON")
+    }
+
+    /// Invisible characters show as marks in the pane, which would otherwise draw them as nothing and
+    /// reorder the text around a bidi control; Copy keeps them.
+    @Test func invisibleCharactersAreShownAndSaid() {
+        let spoofed = CellDetail.make(column: "file", value: .text("invoice\u{202E}fdp.exe", truncated: false))
+        #expect(spoofed.body == "invoice▯fdp.exe" && spoofed.copyText == "invoice\u{202E}fdp.exe" && spoofed.invisibles == 1)
+        #expect(spoofed.note == "It has 1 invisible character (bidi controls, zero-width spaces), shown as ▯. Copy and Edit keep them as stored.")
+        let json = CellDetail.make(column: "meta", value: .text("{\"a\":\"x\u{200B}y\u{200B}\"}", truncated: false))
+        #expect(json.isJSON && json.body == "{\n  \"a\": \"x▯y▯\"\n}" && json.invisibles == 2 && json.note?.hasPrefix("It has 2 invisible characters") == true)
+        let cut = CellDetail.make(column: "c", value: .text("\u{FEFF}" + String(repeating: "a", count: 9_999), truncated: true), source: .whole)
+        #expect(cut.note?.hasPrefix("Over 4 MB") == true && cut.note?.hasSuffix("Copy and Edit keep them as stored.") == true, "both notes, the cut first")
+        #expect(CellDetail.make(column: "x", json: "{\"k\":\"\u{2066}v\"}").body == "{\n  \"k\": \"▯v\"\n}")
+        #expect(CellDetail.make(column: "c", value: .text("emoji 👨‍👩‍👧", truncated: false)).note == nil)
     }
 
     @Test func dataHeadValues() {
@@ -133,6 +150,6 @@ import Testing
         let field = CellDetail.make(column: "question", text: "What is \"RAG\"?\nTwo lines.", cut: false)
         #expect(field.body == "What is \"RAG\"?\nTwo lines." && field.note == nil)
         let line = CellDetail.make(column: "Text", text: "2026-10-07 INFO served", cut: true)
-        #expect(line.note == "Only the first 1 MB of this record were read: it is longer." && !line.isJSON)
+        #expect(line.note == "Only the first 1 MB of this record were read: it is longer. Copy copies that part." && !line.isJSON && line.copiesPart)
     }
 }

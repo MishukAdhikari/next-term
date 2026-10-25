@@ -43,9 +43,9 @@ protocol CellDetailEditor: AnyObject {
 }
 
 /// The whole value of the grid's current cell, beside the grid: the column and what kind of value it is,
-/// the value in a text view (wrapped, selectable, its control characters shown, ⌘F to find in it), and
-/// below a thin divider the selected row as a list of column: value lines. Copy copies the value as
-/// stored. The SQLite viewer and the data head view both show their cells here. With an editor, the
+/// the value in a text view (wrapped, selectable, its control characters shown and its invisible ones as
+/// marks, ⌘F to find in it), and below a thin divider the selected row as a list of column: value lines.
+/// Copy copies the value as stored (off while the rest of a cut value is read). The SQLite viewer and the data head view both show their cells here. With an editor, the
 /// footer also has Edit, then Set NULL, Revert and Save, and says why a cell can't be edited.
 final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate, NSTextViewDelegate {
     /// What the edit controls show.
@@ -276,12 +276,15 @@ final class CellDetailView: NSView, NSTableViewDataSource, NSTableViewDelegate, 
             setItems(items, current: current)
             return
         }
-        titleLabel.stringValue = detail.title
+        // On one line, whatever the column's name holds; the tooltip has it as it is.
+        let title = CellText.line(detail.title, limit: 120)
+        titleLabel.stringValue = title
         titleLabel.toolTip = detail.declaredType.isEmpty ? detail.title : "\(detail.title) (declared \(detail.declaredType))"
         kindLabel.stringValue = detail.kind
         if !sameValue { setBody(detail.body, dim: detail.isNull || detail.isBlob) }
-        textView.setAccessibilityLabel("Value of \(detail.title)")
+        textView.setAccessibilityLabel("Value of \(title)")
         copyButton.isEnabled = detail.copyText != nil
+        copyButton.toolTip = detail.copiesPart ? "Copy the part shown: the value is longer than what was read" : "Copy the value as it is stored"
         showNote(detail.note)
         setItems(items, current: current)
     }

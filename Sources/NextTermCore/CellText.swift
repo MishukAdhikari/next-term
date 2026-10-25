@@ -8,12 +8,16 @@ public enum CellText {
     public static let lineBreak = " ⏎ "
     public static let tab = "⇥"
     public static let ellipsis = "…"
+    /// A character that draws as nothing yet is there: a bidi embedding, override or isolate (which would
+    /// reorder the text around it), a zero-width space or word joiner, a byte order mark, a soft hyphen.
+    public static let invisible = "▯"
 
     /// `text` on one line: line breaks as " ⏎ ", a tab as "⇥", the other C0 controls as their Control
-    /// Pictures (␀ to ␟), DEL as ␡ and the C1 controls as U+FFFD. It stops after `limit` characters
-    /// with "…", and ends in "…" when `cut` says the value was cut short on read. The work is bounded by
-    /// `limit`, never by the length of `text`; a character (an emoji, a letter and its accents) is never
-    /// split.
+    /// Pictures (␀ to ␟), DEL as ␡, the C1 controls as U+FFFD, and the invisible characters that hide or
+    /// reorder text as "▯" (ZWJ and ZWNJ, which emoji and many scripts need, and the bidi marks RTL text
+    /// uses show as themselves). It stops after `limit` characters with "…", and ends in "…" when `cut`
+    /// says the value was cut short on read. The work is bounded by `limit`, never by the length of
+    /// `text`; a character (an emoji, a letter and its accents) is never split.
     public static func line(_ text: String, limit: Int = 300, cut: Bool = false) -> String {
         let limit = max(1, limit)
         var out = ""
@@ -43,8 +47,9 @@ public enum CellText {
         return out
     }
 
-    /// The mark a character shows as, or nil when it shows as itself. Grapheme breaking keeps every control
-    /// and line break a character of its own ("\r\n" is one), so only single scalars need a look.
+    /// The mark a character shows as, or nil when it shows as itself. Grapheme breaking keeps every control,
+    /// line break and invisible format character a character of its own ("\r\n" is one), so only single
+    /// scalars need a look.
     static func mark(for character: Character) -> String? {
         let scalars = character.unicodeScalars
         if character == "\r\n" { return lineBreak }
@@ -59,7 +64,34 @@ public enum CellText {
         case 0x00...0x1F: return Unicode.Scalar(0x2400 + scalar.value).map { String($0) }
         case 0x7F: return "\u{2421}"
         case 0x80...0x9F: return "\u{FFFD}"
-        default: return nil
+        default: return isInvisible(scalar) ? invisible : nil
         }
+    }
+
+    /// The bidi embeddings, overrides and isolates (U+202A–U+202E, U+2066–U+2069) and the invisible spacers
+    /// (U+200B, U+2060, U+FEFF, U+00AD).
+    public static func isInvisible(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x202A...0x202E, 0x2066...0x2069, 0x200B, 0x2060, 0xFEFF, 0x00AD: return true
+        default: return false
+        }
+    }
+
+    /// `text` with each invisible character (`isInvisible`) as "▯", and how many there were; the text
+    /// itself when it has none. For the detail pane, which shows a value whole and would otherwise draw them
+    /// as nothing, and reorder the text around a bidi control.
+    public static func revealingInvisibles(_ text: String) -> (text: String, count: Int) {
+        guard text.unicodeScalars.contains(where: isInvisible) else { return (text, 0) }
+        var out = String.UnicodeScalarView()
+        var count = 0
+        for scalar in text.unicodeScalars {
+            if isInvisible(scalar) {
+                out.append(contentsOf: invisible.unicodeScalars)
+                count += 1
+            } else {
+                out.append(scalar)
+            }
+        }
+        return (String(out), count)
     }
 }

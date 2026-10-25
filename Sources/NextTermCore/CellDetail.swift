@@ -1,9 +1,11 @@
 import Foundation
 
 /// What the detail pane shows for one cell: its column, what kind of value it is, and the value whole.
-/// Text is shown exactly as stored (the text view marks its control characters); a JSON object or array
-/// is indented without being parsed and written again, so its key order and numbers stay as stored; a
-/// blob is its size and the first bytes in hex. Copy copies the value as stored, never the indented view.
+/// Text is shown as stored (the text view marks its control characters), except that the invisible
+/// characters that hide or reorder text show as "▯" (CellText.isInvisible) with a note that says so; a
+/// JSON object or array is indented without being parsed and written again, so its key order and numbers
+/// stay as stored; a blob is its size and the first bytes in hex. Copy copies the value as stored, never
+/// the indented or marked view, and is off while the rest of a cut value is still being read.
 public struct CellDetail: Sendable, Equatable {
     /// The column's name.
     public var title: String
@@ -16,9 +18,15 @@ public struct CellDetail: Sendable, Equatable {
     public var isBlob = false
     /// The column's declared type, for the header's tooltip ("" when it has none).
     public var declaredType = ""
-    /// What Copy puts on the clipboard: the value as stored. Nil for NULL and a blob.
+    /// What Copy puts on the clipboard: the value as stored. Nil for NULL, a blob, and a cut value whose
+    /// rest is being read.
     public var copyText: String?
-    /// What the pane says under the value: it was cut on read, it is being read whole, it is too large.
+    /// Copy gives only the part shown: the value was cut on read and can't be read whole.
+    public var copiesPart = false
+    /// How many invisible characters (CellText.isInvisible) the body shows as "▯".
+    public var invisibles = 0
+    /// What the pane says under the value: it was cut on read, it is being read whole, it is too large, it
+    /// has invisible characters.
     public var note: String?
 
     /// Where a SQLite value came from, which says what a cut text means.
@@ -52,7 +60,14 @@ public struct CellDetail: Sendable, Equatable {
             detail.copyText = detail.body
         case let .text(text, truncated):
             detail = textDetail(column: column, text: text, cut: truncated)
-            if truncated { detail.note = cutNote(source) }
+            if truncated {
+                if case .page(fetching: true, _) = source {
+                    detail.copyText = nil
+                } else {
+                    detail.copiesPart = true
+                }
+                detail.addNote(cutNote(source), first: true)
+            }
         case let .blob(size, head):
             detail = CellDetail(title: column, kind: "BLOB · " + bytes(size), body: hex(head, total: size))
             detail.isBlob = true
@@ -68,6 +83,7 @@ public struct CellDetail: Sendable, Equatable {
             var detail = CellDetail(title: column, kind: "JSON", body: pretty)
             detail.isJSON = true
             detail.copyText = json
+            detail.revealInvisibles()
             return detail
         }
         switch trimmed {
@@ -93,32 +109,52 @@ public struct CellDetail: Sendable, Equatable {
     /// A CSV field, or a line of a text file. `cut`: the record was longer than `DataHead.maxRecordBytes`.
     public static func make(column: String, text: String, cut: Bool) -> CellDetail {
         var detail = textDetail(column: column, text: text, cut: cut)
-        if cut { detail.note = "Only the first \(megabytes(DataHead.maxRecordBytes)) of this record were read: it is longer." }
+        if cut {
+            detail.copiesPart = true
+            detail.addNote("Only the first \(megabytes(DataHead.maxRecordBytes)) of this record were read: it is longer. Copy copies that part.", first: true)
+        }
         return detail
     }
 
-    /// Text, or JSON when it is a whole object or array.
+    /// Text, or JSON when it is a whole object or array; its invisible characters shown as marks.
     static func textDetail(column: String, text: String, cut: Bool, json: Bool = true) -> CellDetail {
+        var detail: CellDetail
         if json, !cut, let pretty = JSONIndent.pretty(text) {
-            var detail = CellDetail(title: column, kind: "JSON", body: pretty)
+            detail = CellDetail(title: column, kind: "JSON", body: pretty)
             detail.isJSON = true
-            detail.copyText = text
-            return detail
+        } else {
+            let count = text.count
+            let length = cut ? "more than \(count.formatted()) characters" : count == 1 ? "1 character" : "\(count.formatted()) characters"
+            detail = CellDetail(title: column, kind: "TEXT · " + length, body: text)
         }
-        let count = text.count
-        let length = cut ? "more than \(count.formatted()) characters" : count == 1 ? "1 character" : "\(count.formatted()) characters"
-        var detail = CellDetail(title: column, kind: "TEXT · " + length, body: text)
         detail.copyText = text
+        detail.revealInvisibles()
         return detail
+    }
+
+    /// The body's invisible characters as marks, and a note that says so.
+    mutating func revealInvisibles() {
+        let revealed = CellText.revealingInvisibles(body)
+        guard revealed.count > 0 else { return }
+        body = revealed.text
+        invisibles = revealed.count
+        let what = revealed.count == 1 ? "1 invisible character" : "\(revealed.count.formatted()) invisible characters"
+        addNote("It has \(what) (bidi controls, zero-width spaces), shown as \(CellText.invisible). Copy and Edit keep them as stored.")
+    }
+
+    mutating func addNote(_ line: String, first: Bool = false) {
+        guard let note else { return self.note = line }
+        self.note = first ? line + " " + note : note + " " + line
     }
 
     static func cutNote(_ source: Source) -> String {
         let shown = "\(SQLiteReader.maxCellCharacters.formatted()) characters"
+        let part = "Copy copies that part."
         switch source {
         case .page(fetching: true, _): return "Reading the whole value…"
-        case .page(_, isView: true): return "A view’s rows have no key to read them by again, so only its first \(shown) can be shown."
-        case .page: return "This row has no key to read it by again, so only its first \(shown) can be shown."
-        case .whole: return "Over \(megabytes(SQLiteReader.maxDetailBytes)): only its first \(megabytes(SQLiteReader.maxDetailBytes)) are shown."
+        case .page(_, isView: true): return "A view’s rows have no key to read them by again, so only its first \(shown) can be shown. \(part)"
+        case .page: return "This row has no key to read it by again, so only its first \(shown) can be shown. \(part)"
+        case .whole: return "Over \(megabytes(SQLiteReader.maxDetailBytes)): only its first \(megabytes(SQLiteReader.maxDetailBytes)) are shown. \(part)"
         }
     }
 
