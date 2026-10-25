@@ -17,9 +17,11 @@ let package = Package(
         .package(url: "https://github.com/swhitty/SwiftDraw.git", exact: "0.24.0"),
     ],
     targets: [
+        // sqlite3_db_config, which takes variable arguments that Swift can't pass, behind one plain C function.
+        .target(name: "SQLiteConfig", linkerSettings: [.linkedLibrary("sqlite3")]),
         // Platform-neutral logic (tab status, command classification). No AppKit, but not ready for iOS as it
         // is: iOS has no Process (how Git.swift runs git) and no homeDirectoryForCurrentUser.
-        .target(name: "NextTermCore", linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "NextTermCore", dependencies: ["SQLiteConfig"], linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(
             name: "NextTerm",
             dependencies: [
