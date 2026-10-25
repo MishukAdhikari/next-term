@@ -194,8 +194,9 @@ final class DatabasePane: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 self.grid.setCurrent(column: column)
                 self.grid.scrollColumnToVisible(column)
             }
-            // A line of the row list moves the current cell as a click on the grid does: a draft is asked about first.
-            if column == self.grid.currentColumn || self.askToLeaveDraft(then: move) { move() }
+            // A line of the row list moves the current cell as a click on the grid does: a draft is asked about
+            // first, and meanwhile the list shows the current cell's line again.
+            if column == self.grid.currentColumn || self.askToLeaveDraft(then: move) { move() } else { self.showCurrentCell() }
         }
         detail.onEscape = { [weak self] in
             guard let self else { return }
