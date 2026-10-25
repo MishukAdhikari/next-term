@@ -240,6 +240,14 @@ final class WindowColumnView: NSView, ProjectGlowing {
     /// For the self-test: which way the chevron points.
     private(set) var chevronPointsRight = true
 
+    /// The hairline down its inner edge. Folded under the traffic lights, from the strip's bottom line down: the strip and
+    /// the bar beside it read as one title bar, with no line between the lights.
+    var hairlineRect: NSRect {
+        let top: CGFloat = topInset > 0 ? Self.header - 1 : 0
+        return NSRect(x: onRight ? 0 : bounds.width - WindowColumnWidth.hairline, y: top, width: WindowColumnWidth.hairline,
+                      height: max(0, bounds.height - top))
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         #if DEBUG
         drawCount += 1
@@ -250,7 +258,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
         // The tab bars' bottom line runs on across the top row, and the hairline down the window's side.
         Theme.border.setFill()
         NSRect(x: 0, y: Self.header - 1, width: bounds.width, height: 1).fill()
-        NSRect(x: onRight ? 0 : bounds.width - WindowColumnWidth.hairline, y: 0, width: WindowColumnWidth.hairline, height: bounds.height).fill()
+        hairlineRect.fill()
         let count = "\(list.count)"
         let digits: [NSAttributedString.Key: Any] = [
             .foregroundColor: Theme.textDim, .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),

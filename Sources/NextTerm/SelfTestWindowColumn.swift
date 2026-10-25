@@ -457,7 +457,9 @@ extension SelfTest {
         window.layoutIfNeeded()
         let column: WindowColumnView = c.windowColumn
         let width: CGFloat = WindowColumnWidth.folded + WindowColumnWidth.hairline
+        // Its hairline starts at the strip's bottom line, so none runs between the lights.
         let foldedLights: Bool = column.topInset == TabBarView.height && c.sidebar.headerInset == max(8, 70 - width)
+            && column.hairlineRect.minY == TabBarView.height - 1
         let where1: NSRect = column.frame
         c.toggleProjectSidebar(nil) // ⌘B
         window.layoutIfNeeded()
@@ -466,11 +468,12 @@ extension SelfTest {
         check(foldedLights && corner == max(8, 78 - width) && stays,
               "window column: folded on the left, its top is title bar for the traffic lights, the sidebar header's inset and the corner bar's "
                   + "make room for the column, and ⌘B leaves the column in place",
-              "top \(column.topInset), sidebar header \(c.sidebar.headerInset), corner \(corner), column \(where1) → \(column.frame)")
+              "top \(column.topInset), hairline from \(column.hairlineRect.minY), sidebar header \(c.sidebar.headerInset), corner \(corner), "
+                  + "column \(where1) → \(column.frame)")
         c.toggleProjectSidebar(nil)
         app.windowColumnExpanded = true
         window.layoutIfNeeded()
-        let header: Bool = column.topInset == 0 && column.headerLeading == 78 && c.sidebar.headerInset == 8
+        let header: Bool = column.topInset == 0 && column.headerLeading == 78 && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0
         c.toggleProjectSidebar(nil)
         window.layoutIfNeeded()
         let cornerOpen: CGFloat = c.editorArea.isHidden ? c.tabBar.leadingInset : c.editorArea.tabBar.leadingInset
@@ -481,7 +484,7 @@ extension SelfTest {
         window.layoutIfNeeded()
         c.isFullScreen = true
         c.updateInsets()
-        check(column.topInset == 0 && column.headerLeading == 8 && c.sidebar.headerInset == 8,
+        check(column.topInset == 0 && column.headerLeading == 8 && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0,
               "window column: in full screen it starts at the top, with no room kept for the traffic lights",
               "top \(column.topInset), header from \(column.headerLeading), sidebar header \(c.sidebar.headerInset)")
     }
