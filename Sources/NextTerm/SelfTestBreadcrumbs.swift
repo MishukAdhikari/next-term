@@ -104,12 +104,15 @@ extension SelfTest {
         w.collapseTerminal()
         window.makeFirstResponder(outline)
         outline.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let foldedBefore: Bool = w.terminalCollapsed, treeHadKeyboard: Bool = window.firstResponder === outline
         pressKey("\u{F700}", code: 126, commandUp, in: window)
         let leftFolded = await wait(3) { !w.browsesHome && sidebar.showsNoProject }
         let editor: NSTextView? = w.editorArea.activeTextView
-        check(browsing && opened && w.terminalCollapsed && leftFolded && editor != nil && window.firstResponder === editor,
-              "breadcrumbs: with the terminal folded, ⌘↑ out of the tree gives the keyboard to the file in front",
-              "browsing \(browsing), opened \(opened), folded \(w.terminalCollapsed), left \(leftFolded), keyboard \(String(describing: window.firstResponder))")
+        check(browsing && opened && foldedBefore && treeHadKeyboard && leftFolded && w.terminalCollapsed && editor != nil
+                && window.firstResponder === editor,
+              "breadcrumbs: with the terminal folded, ⌘↑ out of the tree gives the keyboard to the file in front, the terminal kept folded",
+              "browsing \(browsing), opened \(opened), folded before \(foldedBefore) and after \(w.terminalCollapsed), tree had the keyboard "
+                + "\(treeHadKeyboard), left \(leftFolded), keyboard \(String(describing: window.firstResponder))")
         w.expandTerminal()
 
         breadcrumbsHeardChecks(home: home)
@@ -123,8 +126,11 @@ extension SelfTest {
         probe.layoutSubtreeIfNeeded()
         let heard: [Any] = probe.accessibilityChildren() ?? []
         let parts: [String] = heard.map { "\(type(of: $0))" }
-        let labels: [String] = heard.compactMap { ($0 as? NSButton)?.accessibilityLabel() }
-        check(probe.shownTitles.contains("…") && !heard.isEmpty && heard.allSatisfy { $0 is NSButton } && labels.contains("More folders"),
+        // A button is heard as its cell; a chevron would be heard as an image view or an image cell.
+        let controls: [NSView] = heard.compactMap { ($0 as? NSView) ?? ($0 as? NSCell)?.controlView }
+        let labels: [String] = controls.compactMap { $0.accessibilityLabel() }
+        check(probe.shownTitles.contains("…") && !heard.isEmpty && controls.count == heard.count && controls.allSatisfy { $0 is NSButton }
+                && labels.contains("Back") && labels.contains("More folders"),
               "breadcrumbs: VoiceOver hears the bar's buttons, with the path folded too, and no chevron between them",
               "\(probe.shownTitles) / parts: \(parts) / \(labels)")
     }
