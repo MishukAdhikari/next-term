@@ -8,8 +8,8 @@ import NextTermCore
 /// tree the window shows, no walk it starts on its own (the Databases scan, Go to File) lists a protected place, by the
 /// walks' own record of what they list (ProtectedPlaces.listed, debug builds only), while it does list the home's other
 /// folders. Back home, Browse Home Folder shows the home folder's tree, with Desktop and Documents as rows that are read
-/// only when opened, and nothing else there: no git, no scan, never a project. NEXTTERM_SELFTEST_ONLY=newTerminal runs it
-/// alone.
+/// only when opened, and nothing else there: no git, no scan, never a project; its breadcrumb bar leads back
+/// (breadcrumbChecks). NEXTTERM_SELFTEST_ONLY=newTerminal runs it alone.
 extension SelfTest {
     static func newTerminalChecks() async {
         #if DEBUG
@@ -73,8 +73,8 @@ extension SelfTest {
             return sidebar.root?.path == project
         }
         _ = await wait(4) { sidebar.root?.children?.map(\.name) == ["src"] }
-        check(followed && !sidebar.showsNoProject && sidebar.root?.children?.map(\.name) == ["src"],
-              "new terminal: cd into a repository shows its tree", sidebar.root?.path ?? "no root")
+        check(followed && !sidebar.showsNoProject && sidebar.root?.children?.map(\.name) == ["src"] && sidebar.breadcrumbs.isHidden,
+              "new terminal: cd into a repository shows its tree, with no breadcrumb bar", sidebar.root?.path ?? "no root")
         check(!sidebar.projectOffer.isHidden && sidebar.projectOffer.folder == project
                 && sidebar.projectOffer.button.title == "Open as Project Window",
               "new terminal: and offers Open as Project Window for it", sidebar.projectOffer.folder ?? "none")
@@ -153,6 +153,7 @@ extension SelfTest {
         let read: [String] = ProtectedPlaces.listed.stop()
         check(opened && read.contains(desktop.path) && !desktop.accessDenied,
               "browse home folder: opening Desktop reads it then, and lists its files", "\(desktop.children?.map(\.name) ?? [])")
+        await breadcrumbChecks(w, home: home)
     }
     #endif
 }
