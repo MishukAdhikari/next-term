@@ -324,6 +324,33 @@ extension SelfTest {
         check(asked && tabsMoved && tabsAtOnce && refused,
               "MCP writes: set_layout terminal_tabs asks with its line, moves the tabs in every window and says so; again it asks nothing, and a word that is no place is refused",
               toList.text + " / " + noPlace.text)
+        // window_column: asked with its line, a decline keeping it; approved, hidden in every window and said so; the same
+        // again asks nothing; folding it while no window shows it (this part runs without it) is refused before asking.
+        let columnWas: Bool = app.showsWindowColumn
+        let offersWere: [Any?] = WindowColumnOffer.keys.map { UserDefaults.standard.object(forKey: $0) }
+        if !columnWas { app.showsWindowColumn = true }
+        let columnKey: String? = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display
+        let keptColumn = await client.asked("set_layout", ["window_column": "hidden", "project": proj.path], .decline)
+        let stillShown: Bool = keptColumn.isError && app.showsWindowColumn
+        let hidColumn = await client.asked("set_layout", ["window_column": "hidden", "project": proj.path], .approve)
+        let columnLine: Bool = hidColumn.shown.contains(WindowColumnSettings.approvalLine(shown: false, key: columnKey))
+        let columnSaid: Bool = hidColumn.json?["window_column"] as? String == "hidden" && (hidColumn.json?["changed"] as? [String]) == ["window_column"]
+            && hidColumn.json?["window_column_here"] as? String == "hidden"
+        let columnHidden: Bool = !app.showsWindowColumn && defaultsValue(WindowColumnSettings.shownKey) == false
+        let sameColumn = await client.call("set_layout", ["window_column": "hidden", "project": proj.path])
+        let columnAtOnce: Bool = (json(sameColumn.text)?["changed"] as? [String])?.isEmpty == true && MCPWriteControl.pending == nil
+        let foldUnseen = await client.call("set_layout", ["window_column_folded": false, "project": proj.path])
+        let foldRefused: Bool = foldUnseen.isError && foldUnseen.text.contains("isn’t showing") && MCPWriteControl.pending == nil
+        let viaSettings = await client.call("settings_set", ["values": ["window_column": "shown"]])
+        let pointed: Bool = viaSettings.isError && viaSettings.text.contains("set_layout changes") && !app.showsWindowColumn
+        let layoutReply = await client.call("settings_get")
+        let layoutRead: Bool = (json(layoutReply.text)?["layout"] as? [String: Any])?["window_column"] as? String == "hidden"
+        app.showsWindowColumn = columnWas
+        for (key, value) in zip(WindowColumnOffer.keys, offersWere) { restoreDefault(value, key) }
+        check(stillShown && hidColumn.approvedOnMac && columnLine && columnSaid && columnHidden && columnAtOnce && foldRefused && pointed && layoutRead,
+              "MCP writes: set_layout window_column asks with its line, a decline keeping it, hides it in every window once approved and says so; again it asks nothing, folding it unseen is refused, settings_set points to set_layout, and settings_get reads it",
+              "declined kept \(stillShown), line \(columnLine), said \(columnSaid), hidden \(columnHidden), at once \(columnAtOnce), fold refused \(foldRefused), pointed \(pointed), read \(layoutRead): " + hidColumn.text)
+
         if let editor { pc.editorArea.close(editor) }
         if pc.isSidebarVisible != sidebarWasShown { pc.setSidebarVisible(sidebarWasShown) }
 

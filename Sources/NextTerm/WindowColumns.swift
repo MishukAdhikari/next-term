@@ -11,6 +11,14 @@ import NextTermCore
 final class WindowColumns: NSObject {
     /// Off while the self-test's other parts run: their geometry was written without the column (PC14).
     static var suppressed = false
+    /// No offer to show or hide it (WindowColumnOffer) while the self-test runs, but in its own checks.
+    static var offersSuppressed = false
+    /// No offer while the launch reopens the last session's projects: only a window the user opens offers it.
+    var holdsOffers = false
+    /// One notice about the column a launch, at most.
+    private var offeredThisLaunch = false
+    /// The notice's number (GitToast.count) while it shows, so a change of the setting takes it away and nothing else.
+    private var offerNotice: Int?
 
     private(set) var list = WindowColumnList()
     /// Whether every window shows the column now.
@@ -62,10 +70,14 @@ final class WindowColumns: NSObject {
         return windows.first { $0.indexID == id }?.projectColor
     }
 
-    /// The setting on and two or more terminal windows open (or about to): every window shows the column.
-    private func decideVisible(count: Int, expecting: Int? = nil) -> Bool {
-        WindowColumnSettings.visible(shown: app.showsWindowColumn && !Self.suppressed, windows: count, expecting: expecting ?? self.expecting)
+    /// The setting on (or `shown`) and two or more terminal windows open (or about to): every window shows the column.
+    private func decideVisible(count: Int, expecting: Int? = nil, shown: Bool? = nil) -> Bool {
+        WindowColumnSettings.visible(shown: (shown ?? app.showsWindowColumn) && !Self.suppressed, windows: count,
+                                     expecting: expecting ?? self.expecting)
     }
+
+    /// Whether every window would show the column with the setting `shown`: what folding it needs (set_layout).
+    func wouldShow(ifShown shown: Bool) -> Bool { decideVisible(count: app.windowIndex.windows.count, shown: shown) }
 
     /// Whether a window being made shows the column from the start, before it is in the index: with the windows open and
     /// itself, or every window a restore is making, itself among them (a restore of one window shows none).
@@ -114,6 +126,58 @@ final class WindowColumns: NSObject {
         visible = decideVisible(count: app.windowIndex.windows.count)
         tell(.none)
     }
+
+    // MARK: the offer to show or hide it
+
+    /// A window the user opened (AppDelegate.openWindow; not a restore, the launch's reopening or an agent's window):
+    /// the notice about the column, if one is due, once the window is in front.
+    func windowOpened() {
+        guard !holdsOffers, expecting == 0, !Self.suppressed, !Self.offersSuppressed, !offeredThisLaunch else { return }
+        DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.offerIfDue() } }
+    }
+
+    /// The notice, if one is due and nothing is in the way: Next Term in front, no notice up (an Undo stays), no
+    /// decision waiting (an agent's approval or proposal), no sheet or modal window. Kept for the next window otherwise.
+    @MainActor private func offerIfDue() {
+        guard !offeredThisLaunch, NSApp.isActive, !GitToast.isShowing, UpdateHolds.shared.openDecisions.isEmpty,
+              let window = CommandLineTool.offerWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow),
+              let controller = window.windowController as? TerminalWindowController else { return }
+        let defaults = UserDefaults.standard
+        let windows: Int = app.windowIndex.windows.count
+        guard let kind = WindowColumnOffer.offer(shown: app.showsWindowColumn, windows: windows,
+                                                 record: WindowColumnOffer.Record(defaults), now: Date()) else { return }
+        // A narrow window hiding the column has nothing to point at.
+        if kind == .hide, controller.columnHost.shown.form == .hidden { return }
+        offeredThisLaunch = true
+        WindowColumnOffer.noteShown(kind, defaults)
+        let key: String? = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display
+        let (button, other) = WindowColumnOffer.buttons(kind)
+        let before: Int = GitToast.count
+        GitToast.show(WindowColumnOffer.text(kind, windows: windows, key: key), in: window, button: button, action: { [weak self] in
+            self?.offerNotice = nil
+            self?.app.showsWindowColumn = kind == .show
+            if kind == .hide { WindowColumnOffer.finish(defaults) }
+        }, other: other, otherAction: { [weak self] in
+            self?.offerNotice = nil
+            if kind == .show { WindowColumnOffer.finish(defaults) }
+        })
+        offerNotice = GitToast.count > before ? GitToast.count : nil
+    }
+
+    /// The setting changed some other way while the notice shows: the notice goes, and nothing else does.
+    func dismissOffer() {
+        guard let notice = offerNotice else { return }
+        offerNotice = nil
+        if GitToast.isShowing, GitToast.count == notice { GitToast.dismiss() }
+    }
+
+    #if DEBUG
+    /// The self-test's own checks of the offer: each starts as a fresh launch would.
+    func resetOffersForTest() {
+        offeredThisLaunch = false
+        offerNotice = nil
+    }
+    #endif
 
     private func tell(_ change: WindowColumnList.Change) {
         #if DEBUG

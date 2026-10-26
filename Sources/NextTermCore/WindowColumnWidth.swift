@@ -19,6 +19,37 @@ public enum WindowColumnSettings {
     public static func visible(shown: Bool, windows: Int, expecting: Int = 0) -> Bool {
         shown && windows + max(0, expecting) >= 2
     }
+
+    /// set_layout's line in the window that asks the user, for showing or hiding it in every window. `key`: the key that
+    /// brings it back (View › Show Window Column's, as the user has it), or nil when it has none.
+    public static func approvalLine(shown: Bool, key: String?) -> String {
+        if shown { return "The window column shows at the outer edge of every window while two or more are open: a badge for each window." }
+        return "The window column is hidden in every window; View › Show Window Column\(keyNote(key)) or Settings › General brings it back."
+    }
+
+    /// set_layout's line for folding or unfolding it in every window.
+    public static func approvalLine(folded: Bool) -> String {
+        folded ? "The window column folds to a badge for each window, in every window."
+            : "The window column unfolds in every window: a row for each window, with its name and its agents’ marks."
+    }
+
+    /// A notice when the key or the menu changes the setting while fewer than two windows are open, where nothing on
+    /// the screen changes.
+    public static func unseenLine(shown: Bool) -> String {
+        shown ? "Window column on: it shows from two windows on." : "Window column off: no window will show it."
+    }
+
+    /// A notice when an agent changed it through a remote door's grant, which asks nothing on the Mac.
+    public static func grantedLine(shown: Bool, key: String?) -> String {
+        shown ? "An agent showed the window column\(keyNote(key, "; ", " hides it"))."
+            : "An agent hid the window column\(keyNote(key, "; ", " brings it back"))."
+    }
+
+    /// " (⌃⇧⌘S)", or with `before` and `after`: "; ⌃⇧⌘S brings it back". Nothing without a key.
+    static func keyNote(_ key: String?, _ before: String = " (", _ after: String = ")") -> String {
+        guard let key, !key.isEmpty else { return "" }
+        return before + key + after
+    }
 }
 
 /// How the column shows in one window: hidden, folded to its badges or unfolded to its rows; how wide, with its hairline;

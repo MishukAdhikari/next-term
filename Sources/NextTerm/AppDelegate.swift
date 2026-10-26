@@ -111,6 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set {
             guard newValue != showsWindowColumn else { return }
             UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.shownKey)
+            WindowColumnOffer.columnSet(shown: newValue, windows: windowIndex.windows.count, now: Date(), .standard)
+            windowColumns.dismissOffer()
             windowColumns.settingsChanged()
             NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
         }
@@ -127,8 +129,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// View › Hide Window Column, or Show Window Column while it is off.
-    @objc func toggleWindowColumn(_ sender: Any?) { showsWindowColumn.toggle() }
+    /// View › Hide Window Column, or Show Window Column while it is off (⌃⇧⌘S). With fewer than two windows open nothing
+    /// on the screen changes, so a notice says what did.
+    @objc func toggleWindowColumn(_ sender: Any?) {
+        showsWindowColumn.toggle()
+        guard windowIndex.windows.count < 2, !GitToast.isShowing,
+              let window = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window else { return }
+        GitToast.show(WindowColumnSettings.unseenLine(shown: showsWindowColumn), in: window)
+    }
 
     /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
     @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
@@ -647,7 +655,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                 sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
         switch LaunchDecision.opening(input, exists: isFolder) {
         case .nothing: break
-        case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
+        case .reopen(let paths):
+            windowColumns.holdsOffers = true // the last session's projects, not windows the user opens now
+            defer { windowColumns.holdsOffers = false }
+            for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
         case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
@@ -1124,6 +1135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if forAgent { return controller }
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
+        windowColumns.windowOpened() // a window the user opened: a notice about the column, if one is due
         return controller
     }
 
@@ -2268,7 +2280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
         // The window column at the window's outer edge, while two or more windows are open; also Settings › General.
-        item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "", target: self) // title follows the setting
+        // ⌃⇧⌘S hides it and brings it back, ⌃⌘S folds it.
+        item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "s", [.command, .shift, .control], target: self) // title follows the setting
         item(view, "Collapse Window Column", #selector(toggleWindowColumnExpanded(_:)), "s", [.command, .control], target: self) // and the fold
         item(view, "Show File in Project Sidebar", #selector(TerminalWindowController.revealInSidebar(_:)), "")
         view.addItem(.separator())

@@ -146,8 +146,8 @@ public struct BuiltInSkill: Sendable, Equatable {
 
         ## What you can change
 
-        - `settings_get` lists the settings agents may change, with their values and what each takes. Change several with one `settings_set`: the user approves on the Mac, once, seeing each change.
-        - `set_layout`: where the terminal sits (bottom, right, left or top), where its tabs show (top, or a list down its left or right), the sidebar shown or hidden, on the left or the right, and the terminal folded.
+        - `settings_get` lists the settings agents may change, with their values and what each takes, and the layout as `set_layout` answers it. Change several with one `settings_set`: the user approves on the Mac, once, seeing each change.
+        - `set_layout`: where the terminal sits (bottom, right, left or top), where its tabs show (top, or a list down its left or right), the sidebar shown or hidden, on the left or the right, the terminal folded, and the window column (a badge for every open window, at each window's edge) shown or hidden, folded or unfolded. With many windows open and the column hidden, offer to show it.
         - `split_pane`, `zoom_pane`, `close_pane` and `focus_tab` arrange panes and give one the keyboard; each asks the user first.
         - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window.
         - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where.

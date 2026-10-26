@@ -15,6 +15,7 @@ import NextTermCore
 /// reads each badge's window and marks, and the column agrees with ⌘O's rows. Unfolded, a row whose marks change draws
 /// again. Unfolding beside a sidebar of its usual width leaves the sidebar as it is, and the width new windows take. A
 /// restore lists its windows in the order they opened, whichever was used last, and each pane starts at its real size.
+/// ⌃⇧⌘S hides it and brings it back, set_layout changes it, and the notice offers it (SelfTestWindowColumnToggle).
 /// The budget: idle, nothing; a bell, one badge; focus and titles, no draw; a window opening or closing, one layout per
 /// column and one rebuild.
 /// NEXTTERM_SELFTEST_ONLY=windowColumn runs it alone.
@@ -24,7 +25,8 @@ extension SelfTest {
         let defaults = UserDefaults.standard
         let saved = (shown: defaults.object(forKey: WindowColumnSettings.shownKey), expanded: defaults.object(forKey: WindowColumnSettings.expandedKey),
                      colors: defaults.object(forKey: ProjectColors.key), next: defaults.object(forKey: ProjectColors.nextKey),
-                     colorsShown: defaults.object(forKey: ProjectColors.shownKey), side: app.sidebarSide, sidebar: app.sidebarVisible)
+                     colorsShown: defaults.object(forKey: ProjectColors.shownKey), side: app.sidebarSide, sidebar: app.sidebarVisible,
+                     offers: WindowColumnOffer.keys.map { defaults.object(forKey: $0) })
         let fm = FileManager.default
         let base = canonicalPath(NSTemporaryDirectory()) + "/nt-wincol-\(getpid())"
         try? fm.removeItem(atPath: base)
@@ -51,6 +53,7 @@ extension SelfTest {
             if app.sidebarSide != saved.side { app.toggleSidebarSide(nil) }
             restoreDefault(saved.shown, WindowColumnSettings.shownKey)
             restoreDefault(saved.expanded, WindowColumnSettings.expandedKey)
+            for (key, value) in zip(WindowColumnOffer.keys, saved.offers) { restoreDefault(value, key) }
             restoreDefault(saved.colors, ProjectColors.key)
             restoreDefault(saved.next, ProjectColors.nextKey)
             restoreDefault(saved.colorsShown, ProjectColors.shownKey)
@@ -110,9 +113,12 @@ extension SelfTest {
         await sidebarKeepsItsWidthChecks(app, project)
         await insetChecks(app, project)
         await foldKeyChecks(app, project)
+        await hideKeyChecks(app, project)
+        await layoutToolChecks(app, project)
         await tabKeyChecks(app, project)
         await focusBudget(app, [project, main, plain])
         await openCloseBudget(app, open: { await open(loose) }, close: closeWindow)
+        await offerChecks(app, project, open: { await open(loose) }, close: closeWindow)
         await restoreChecks(app, [project, main, plain], close: closeWindow)
     }
 
@@ -854,13 +860,13 @@ extension SelfTest {
     // MARK: helpers
 
     /// Every item of the View menu, its submenus' too.
-    private static func viewMenuItems() -> [NSMenuItem] {
+    static func viewMenuItems() -> [NSMenuItem] {
         guard let view = NSApp.mainMenu?.items.first(where: { $0.title == "View" })?.submenu else { return [] }
         func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(all) ?? []) } }
         return all(view)
     }
 
-    private static func defaultsValue(_ key: String) -> Bool? { UserDefaults.standard.object(forKey: key) as? Bool }
+    static func defaultsValue(_ key: String) -> Bool? { UserDefaults.standard.object(forKey: key) as? Bool }
 
     /// A right-click at `point` in `view`'s own coordinates.
     private static func rightClick(at point: NSPoint, in view: NSView) -> NSEvent? {

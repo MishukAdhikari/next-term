@@ -29,7 +29,7 @@ public enum MenuKeys {
             "forgetSuggestion:": shiftCmd("\u{8}"),
             // View
             "toggleProjectSidebar:": cmd("b"), "toggleEditorFocus:": KeyChord(key: "`", control: true), "toggleTerminalCollapsed:": cmd("j"),
-            "toggleWindowColumnExpanded:": ctrlCmd("s"),
+            "toggleWindowColumnExpanded:": ctrlCmd("s"), "toggleWindowColumn:": KeyChord(key: "s", command: true, shift: true, control: true),
             "showChanges:": optCmd("g"), "toggleSoftWrap:": optCmd("w"), "toggleUnifiedDiffs:": ctrlCmd("u"),
             "toggleBlameAnnotations:": KeyChord(key: "a", command: true, shift: true, control: true),
             "toggleCurrentLineBlame:": KeyChord(key: "l", command: true, shift: true, control: true),

@@ -117,7 +117,7 @@ struct MenuKeysTests {
     @Test func expandWindowColumnIsControlCommandSInEverySet() {
         let chord = KeyChord(key: "s", command: true, control: true)
         #expect(MenuKeys.defaults["toggleWindowColumnExpanded:"] == chord)
-        #expect(MenuKeys.defaults["toggleWindowColumn:"] == nil) // Hide Window Column has no key
+        #expect(MenuKeys.defaults["toggleWindowColumn:"] == KeyChord(key: "s", command: true, shift: true, control: true))
         #expect(MenuKeys.defaults["saveDocument:"] == KeyChord(key: "s", command: true))
         #expect(MenuKeys.defaults["saveAllDocuments:"] == KeyChord(key: "s", command: true, option: true))
         #expect(ImportShortcuts.macOSKeys[chord] == nil && !ImportShortcuts.isShellKey(chord))
@@ -129,6 +129,22 @@ struct MenuKeysTests {
             #expect(KeyBindings().sharers(of: chord, defaults: keys, except: "toggleWindowColumnExpanded:").isEmpty, "\(preset.name)")
         }
         #expect(chord.display == "⌃⌘S")
+    }
+
+    /// View › Hide Window Column has ⌃⇧⌘S, the fold's key with ⇧, in every set: no set, no key outside the menus, nothing
+    /// macOS keeps and no shell key holds it.
+    @Test func hideWindowColumnIsControlShiftCommandSInEverySet() {
+        let chord = KeyChord(key: "s", command: true, shift: true, control: true)
+        #expect(MenuKeys.defaults["toggleWindowColumn:"] == chord)
+        #expect(ImportShortcuts.macOSKeys[chord] == nil && !ImportShortcuts.isShellKey(chord))
+        #expect(MenuKeys.aliases[chord] == nil)
+        for preset in KeymapPreset.allCases {
+            let keys = Self.defaults(under: preset)
+            #expect(keys["toggleWindowColumn:"] == .some(chord), "\(preset.name)")
+            #expect(KeyBindings().owners(of: chord, defaults: keys, except: "toggleWindowColumn:").isEmpty, "\(preset.name)")
+            #expect(KeyBindings().sharers(of: chord, defaults: keys, except: "toggleWindowColumn:").isEmpty, "\(preset.name)")
+        }
+        #expect(chord.display == "⌃⇧⌘S")
     }
 
     @Test func fetchSharesCommandRWithTheBranchPopupsFetch() {

@@ -185,7 +185,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   that window forward as it was. ⌃⌘S, or the chevron, unfolds it in every window to show each window's
   name and marks, as ⌘O does; a window too narrow for it folds it, then hides it, until it is wider. When
   it appears, the editor and terminal give it the room and the sidebar keeps its width. View › Hide Window
-  Column, or Settings › General, turns it off.
+  Column (⌃⇧⌘S), or Settings › General, turns it off, and the same key brings it back. With it off and more
+  windows open than when you hid it (five at least), Next Term offers it once, two weeks on at the soonest;
+  with it on and five windows open, it says once how to hide it. An agent can show, hide, fold or unfold it
+  with `set_layout`, once you approve on the Mac.
 - **A new terminal stays out of your files.** New Terminal (⌘N) opens a shell where new tabs open
   (Settings › Terminal › New tabs: your home folder unless you chose a folder). With no project, its
   sidebar says "No project open" and lists your recent projects, Open Folder…, Connect to Server… and
@@ -367,7 +370,8 @@ One window per project, and a few keys to move between them:
    you looked at but did not answer keeps its amber mark in ⌘O.
 4. ⌘O then ↩ goes back to the window you used last; ⌘O and a few letters goes anywhere, and shows every
    window's agents. ⌘` moves between windows. The window column at each window's edge shows them all at
-   once, with a dot on the one that needs you: a click on its badge goes there.
+   once, with a dot on the one that needs you: a click on its badge goes there. If you turned it off,
+   ⌃⇧⌘S brings it back.
 5. View › Terminal Tabs › Left keeps tab names and marks readable; View › Project Color gives each
    repository its colour.
 6. When a worktree's branch is merged, close its window with Close and Remove Worktree.
@@ -395,6 +399,7 @@ One window per project, and a few keys to move between them:
 | Project sidebar (in a Markdown file, ⌘B is Bold) | ⌘B |
 | Fold the terminal away (and back) | ⌘J |
 | Unfold the window column in every window (and fold it) | ⌃⌘S |
+| Hide the window column in every window (and show it) | ⌃⇧⌘S |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |

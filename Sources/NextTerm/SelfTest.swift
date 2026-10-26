@@ -97,6 +97,7 @@ enum SelfTest {
         GhostPreferences.testIsOn = false
         // The window column only in its own part (windowColumn): the other parts' geometry was written without it.
         WindowColumns.suppressed = true
+        WindowColumns.offersSuppressed = true // and no offer to show or hide it, but in its own checks
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()

@@ -108,11 +108,11 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "zoomed": {"type": "boolean", "description": "Default true."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "set_layout", title: "Set the layout",
-             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right) and terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
-             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
+             description: "Changes the layout as the View menu does. terminal_position (bottom, right, left or top), sidebar_side (left or right), terminal_tabs (top, or left or right for a list of the tabs down that side of the terminal), window_column (shown or hidden: a badge for each open window at every window's outer edge, while two or more are open) and window_column_folded (false unfolds it to a row per window with its name and marks) apply to every window. sidebar (shown or hidden) and terminal_folded (true folds the terminal to its tab bar, or to a rail beside the editor) apply to one window: your window, or the one with project open. The user is asked on the Mac first; a call that changes nothing answers at once with the layout.",
+             inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
-             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner, agents_offer_tabs and agents_bring_tabs_forward. Other settings are not listed.",
+             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner, agents_offer_tabs and agents_bring_tabs_forward. Other settings are not listed. Also layout: the layout as set_layout answers it, for your window or the front one.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "settings_set", title: "Change settings",
@@ -696,6 +696,9 @@ public enum MCPSettings {
         }
         let names = allowlist.map(\.name).joined(separator: ", ")
         for name in values.keys.sorted() where setting(name) == nil {
+            if MCPLayoutChange.arguments.contains(name) || name.contains("window_column") {
+                return .failure(MCPToolError("set_layout changes “\(name)”, after the user approves it on the Mac; nothing was changed."))
+            }
             return .failure(MCPToolError("“\(name)” is not a setting agents may change; nothing was changed. These are: \(names)."))
         }
         var result: [(Setting, Value)] = []
@@ -734,18 +737,29 @@ public struct MCPLayoutChange: Equatable, Sendable {
     public var terminalTabs: String?
     public var sidebarShown: Bool?
     public var terminalFolded: Bool?
+    /// The window column shown or hidden, in every window.
+    public var windowColumnShown: Bool?
+    /// The window column folded to its badges or unfolded to its rows, in every window.
+    public var windowColumnFolded: Bool?
+
+    /// set_layout's arguments that change something.
+    public static let arguments: [String] = ["terminal_position", "sidebar_side", "terminal_tabs", "window_column", "window_column_folded",
+                                              "sidebar", "terminal_folded"]
 
     public init(terminalPosition: String? = nil, sidebarSide: String? = nil, terminalTabs: String? = nil, sidebarShown: Bool? = nil,
-                terminalFolded: Bool? = nil) {
+                terminalFolded: Bool? = nil, windowColumnShown: Bool? = nil, windowColumnFolded: Bool? = nil) {
         self.terminalPosition = terminalPosition
         self.sidebarSide = sidebarSide
         self.terminalTabs = terminalTabs
         self.sidebarShown = sidebarShown
         self.terminalFolded = terminalFolded
+        self.windowColumnShown = windowColumnShown
+        self.windowColumnFolded = windowColumnFolded
     }
 
     public var isEmpty: Bool {
-        let everyWindow: Bool = terminalPosition == nil && sidebarSide == nil && terminalTabs == nil
+        let everyWindow: Bool = terminalPosition == nil && sidebarSide == nil && terminalTabs == nil && windowColumnShown == nil
+            && windowColumnFolded == nil
         return everyWindow && sidebarShown == nil && terminalFolded == nil
     }
 
@@ -768,10 +782,14 @@ public struct MCPLayoutChange: Equatable, Sendable {
                 let sides: [String] = TerminalTabsSetting.allCases.map(\.rawValue)
                 change.terminalTabs = try args.choice("terminal_tabs", of: sides, default: TerminalTabsSetting.top.rawValue)
             }
+            if arguments["window_column"] != nil {
+                change.windowColumnShown = try args.choice("window_column", of: ["shown", "hidden"], default: "shown") == "shown"
+            }
+            if arguments["window_column_folded"] != nil { change.windowColumnFolded = try args.bool("window_column_folded", default: true) }
             if arguments["sidebar"] != nil { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
             if arguments["terminal_folded"] != nil { change.terminalFolded = try args.bool("terminal_folded", default: false) }
             guard !change.isEmpty else {
-                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, sidebar and terminal_folded.")
+                throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, window_column, window_column_folded, sidebar and terminal_folded.")
             }
             return change
         }

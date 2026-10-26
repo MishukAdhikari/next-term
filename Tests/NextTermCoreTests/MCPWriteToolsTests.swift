@@ -142,11 +142,45 @@ import Testing
         // With the others in one call.
         let both = try MCPLayoutChange.parse(["terminal_tabs": "right", "terminal_position": "bottom", "terminal_folded": true]).get()
         #expect(both == MCPLayoutChange(terminalPosition: "bottom", terminalTabs: "right", terminalFolded: true))
-        // An empty call names all five.
+        // An empty call names all seven.
         let empty = try #require(MCPLayoutChange.parse([:]).failureText)
-        for name in ["terminal_position", "sidebar_side", "terminal_tabs", "sidebar", "terminal_folded"] {
+        for name in MCPLayoutChange.arguments {
             #expect(empty.contains(name), "\(name)")
         }
+        #expect(MCPLayoutChange.arguments.count == 7)
+    }
+
+    @Test func theWindowColumnIsShownHiddenFoldedOrUnfolded() throws {
+        #expect(try MCPLayoutChange.parse(["window_column": "hidden"]).get() == MCPLayoutChange(windowColumnShown: false))
+        #expect(try MCPLayoutChange.parse(["window_column": "shown"]).get() == MCPLayoutChange(windowColumnShown: true))
+        #expect(try MCPLayoutChange.parse(["window_column_folded": false]).get() == MCPLayoutChange(windowColumnFolded: false))
+        #expect(!MCPLayoutChange(windowColumnShown: true).isEmpty && !MCPLayoutChange(windowColumnFolded: true).isEmpty)
+        #expect(MCPLayoutChange.parse(["window_column": true]).isFailure)
+        #expect(MCPLayoutChange.parse(["window_column": "on"]).isFailure)
+        #expect(MCPLayoutChange.parse(["window_column_folded": "no"]).isFailure)
+        // In one call with the others.
+        let both = try MCPLayoutChange.parse(["window_column": "shown", "window_column_folded": false, "sidebar": "hidden"]).get()
+        #expect(both == MCPLayoutChange(sidebarShown: false, windowColumnShown: true, windowColumnFolded: false))
+    }
+
+    @Test func setLayoutListsTheWindowColumn() throws {
+        let tool = try #require(MCPServer.tool(named: "set_layout"))
+        let schema = try #require(try JSONSerialization.jsonObject(with: Data(tool.inputSchema.utf8)) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let column = try #require(properties["window_column"] as? [String: Any])
+        #expect(column["enum"] as? [String] == ["shown", "hidden"])
+        let folded = try #require(properties["window_column_folded"] as? [String: Any])
+        #expect(folded["type"] as? String == "boolean")
+        #expect(tool.description.contains("window_column (shown or hidden"))
+        // Both every window's, named before it says so.
+        let everyWindow = try #require(tool.description.range(of: "apply to every window"))
+        #expect(try #require(tool.description.range(of: "window_column_folded")).lowerBound < everyWindow.lowerBound)
+        // settings_get reads the layout too, and settings_set never changes it: it says set_layout does.
+        #expect(try #require(MCPServer.tool(named: "settings_get")).description.contains("layout"))
+        #expect(MCPSettings.setting("window_column") == nil)
+        #expect(MCPSettings.changes(["window_column": "hidden"]).failureText?.contains("set_layout changes") == true)
+        #expect(MCPSettings.changes(["show_window_column": false]).failureText?.contains("set_layout changes") == true)
+        #expect(MCPSettings.changes(["no_such_thing": 1]).failureText?.contains("is not a setting agents may change") == true)
     }
 
     @Test func setLayoutListsTerminalTabs() throws {

@@ -180,9 +180,20 @@ extension MCPWriteControl {
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
             "terminal_tabs": app.terminalTabs.rawValue,
             "sidebar": controller.isSidebarVisible ? "shown" : "hidden", "terminal_folded": controller.terminalCollapsed,
+            "window_column": app.showsWindowColumn ? "shown" : "hidden", "window_column_folded": !app.windowColumnExpanded,
+            "window_column_here": columnHere(controller),
         ]
         if let project = controller.project { layout["project"] = project }
         return layout
+    }
+
+    /// How the column shows in that window: hidden (the setting off, one window open, or no room), folded or unfolded.
+    private static func columnHere(_ controller: TerminalWindowController) -> String {
+        switch controller.columnHost.shown.form {
+        case .hidden: return "hidden"
+        case .folded: return "folded"
+        case .expanded: return "unfolded"
+        }
     }
 
     static func setLayout(_ arguments: [String: Any], _ context: Context, reply: @escaping Reply) {
@@ -210,6 +221,18 @@ extension MCPWriteControl {
         if let tabs = wanted.terminalTabs, tabs != app.terminalTabs.rawValue {
             change.terminalTabs = tabs
             lines.append(TerminalTabsSetting(stored: tabs).approvalLine)
+        }
+        let columnKey: String? = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display
+        if let shown = wanted.windowColumnShown, shown != app.showsWindowColumn {
+            change.windowColumnShown = shown
+            lines.append(WindowColumnSettings.approvalLine(shown: shown, key: columnKey))
+        }
+        if let folded = wanted.windowColumnFolded, folded != !app.windowColumnExpanded {
+            guard app.windowColumns.wouldShow(ifShown: wanted.windowColumnShown ?? app.showsWindowColumn) else {
+                return reply(MCPControl.fail("The window column isn’t showing (it needs window_column shown and two or more windows open), so it can’t fold or unfold; nothing changed."))
+            }
+            change.windowColumnFolded = folded
+            lines.append(WindowColumnSettings.approvalLine(folded: folded))
         }
         if let shown = wanted.sidebarShown, shown != controller.isSidebarVisible {
             change.sidebarShown = shown
@@ -245,6 +268,19 @@ extension MCPWriteControl {
             if let tabs = change.terminalTabs {
                 app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
                 changed.append("terminal_tabs")
+            }
+            // The window column: every window, as the View menu and Settings › General change it.
+            if let shown = change.windowColumnShown {
+                app.showsWindowColumn = shown
+                changed.append("window_column")
+                // A remote door's grant asks nothing on the Mac: say what changed, and how to put it back.
+                if window == nil, let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller.window {
+                    GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
+                }
+            }
+            if let folded = change.windowColumnFolded {
+                app.windowColumnExpanded = !folded
+                changed.append("window_column_folded")
             }
             let open = AppDelegate.shared.controllers.contains { $0 === controller }
             if open, let shown = change.sidebarShown {
@@ -325,11 +361,17 @@ extension MCPWriteControl {
         return a == b
     }
 
-    static func settingsList() -> [String: Any] {
+    /// settings_get: the settings agents may change, and the layout as set_layout answers it (none with no window open).
+    static func settingsList(_ context: Context) -> [String: Any] {
         let settings: [[String: Any]] = MCPSettings.allowlist.map { setting in
             ["name": setting.name, "title": setting.title, "value": value(of: setting).json, "takes": setting.takes]
         }
-        return ["settings": settings, "note": "settings_set changes these, and nothing else. set_layout shows or hides the project sidebar and folds the terminal."]
+        var list: [String: Any] = [
+            "settings": settings,
+            "note": "settings_set changes these, and nothing else. set_layout changes the layout: the project sidebar, the window column, and the terminal's place, tabs and fold.",
+        ]
+        if case .success(let controller) = layoutWindow([:], context) { list["layout"] = layout(of: controller) }
+        return list
     }
 
     static func setSettings(_ arguments: [String: Any], _ context: Context, reply: @escaping Reply) {

@@ -302,6 +302,9 @@ final class WindowColumnView: NSView, ProjectGlowing {
         let fold = menu.addItem(withTitle: "Collapse Window Column", action: #selector(AppDelegate.toggleWindowColumnExpanded(_:)),
                                 keyEquivalent: "")
         fold.target = AppDelegate.shared
+        // Their keys as the user has them, as the View menu shows them.
+        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:"), on: hide)
+        KeyboardShortcuts.set(KeyboardShortcuts.shared.chord(for: "toggleWindowColumnExpanded:"), on: fold)
         return menu
     }
 

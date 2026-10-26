@@ -381,6 +381,8 @@ final class GitToast {
     /// How many notices have come up. Work whose notice comes late (after the branches are read again) notes it as it
     /// begins, and passes it as `begun`: an Undo that came up meanwhile stays (GitNotice.replaces).
     private(set) static var count = 0
+    /// A notice is up: an offer waits rather than push an Undo away.
+    static var isShowing: Bool { current != nil }
 
     static func show(_ text: String, in window: NSWindow?, button: String? = nil, isError: Bool = false, begun: Int? = nil,
                      action: (() -> Void)? = nil) {
