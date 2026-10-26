@@ -1273,7 +1273,7 @@ public enum RemoteAccessTunnelConfig {
     }
 }
 
+// isASCIIDigit is the module's (SQLiteEditing.swift).
 private extension Character {
-    var isASCIIDigit: Bool { ("0"..."9").contains(self) }
     var isASCIILetter: Bool { ("a"..."z").contains(self) || ("A"..."Z").contains(self) }
 }
