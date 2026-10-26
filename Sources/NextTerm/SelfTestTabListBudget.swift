@@ -189,8 +189,13 @@ extension SelfTest {
                     if w.activeIndex == target && stripSelected { taken.append(shown - began) } else { wrong += 1 }
                     await pause(0.05) // each key from a quiet window
                 }
-                if held && holds() { round = (taken, wrong) } else {
-                    lost.append("\(name): \(NSApp.isActive ? "another window" : "another app") took the keyboard after \(taken.count + wrong) keys")
+                if held && holds() { round = (taken, wrong) } else if NSApp.isActive {
+                    // The app in front and its window not key: one of Next Term's own windows took the keyboard, which is the
+                    // app's fault (as bringToFront has it), never a reason to measure again.
+                    return check(false, "tab list budget: the window keeps the keyboard while ⌘1 and ⌘2 are pressed with the \(name)",
+                                 "another of Next Term's windows took it after \(taken.count + wrong) keys: \(NSApp.keyWindow?.title ?? "none")")
+                } else {
+                    lost.append("\(name): another app took the keyboard after \(taken.count + wrong) keys")
                 }
             }
             guard let round else {

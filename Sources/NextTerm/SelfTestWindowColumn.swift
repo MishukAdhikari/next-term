@@ -661,16 +661,16 @@ extension SelfTest {
                     return check(false, "window column: the window's own badge shows, to click",
                                  "\(c.windowColumn.shownButtons.map(\.id)), own \(c.indexID)")
                 }
-                let select: ((Int) -> Void)? = c.windowColumn.onSelect
-                var reached: Int?
-                c.windowColumn.onSelect = { (id: Int) in
-                    reached = id
-                    select?(id)
-                }
+                // The badge's own action proves the click arrived; a click on the window's own badge does nothing more (R18),
+                // so it never reaches onSelect: the window stays key, on its first tab, with the keyboard in the terminal.
+                let recorder = ClickRecorder(target: own.target, action: own.action)
+                own.target = recorder
+                own.action = #selector(ClickRecorder.fire(_:))
                 clickThroughWindow(own)
                 await pause(0.3)
-                c.windowColumn.onSelect = select
-                clicked = reached == c.indexID && window.firstResponder === c.activeTab?.view && c.activeIndex == 0
+                own.target = recorder.target
+                own.action = recorder.action
+                clicked = recorder.hits == 1 && window.isKeyWindow && window.firstResponder === c.activeTab?.view && c.activeIndex == 0
             }
             let held: Bool = NSApp.isActive && window.isKeyWindow
             let (tabs, keyboard) = pressAll()
@@ -686,9 +686,27 @@ extension SelfTest {
         app.windowColumnExpanded = false
         await checkKeys(.folded, "folded, after a click on its own badge", click: true)
         for tab in added { c.requestClose(tab) }
-        _ = await wait(5) { added.allSatisfy { (tab: TerminalTab) -> Bool in !c.tabs.contains { $0 === tab } } }
+        let closed: Bool = await wait(5) { added.allSatisfy { (tab: TerminalTab) -> Bool in !c.tabs.contains { $0 === tab } } }
         _ = await endSheets(over: window)
+        check(closed, "window column: the tabs added for ⌘1 to ⌘9 close again", "\(c.groups.count) tabs left")
         c.select(0)
+    }
+
+    /// Stands in for a button's target while a check clicks it: counts the clicks that arrive, then sends the button's own action.
+    private final class ClickRecorder: NSObject {
+        let target: AnyObject?
+        let action: Selector?
+        private(set) var hits = 0
+
+        init(target: AnyObject?, action: Selector?) {
+            self.target = target
+            self.action = action
+        }
+
+        @objc func fire(_ sender: Any?) {
+            hits += 1
+            if let action { NSApp.sendAction(action, to: target, from: sender) }
+        }
     }
 
     // MARK: the budget
