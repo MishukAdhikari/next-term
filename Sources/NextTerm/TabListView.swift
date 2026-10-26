@@ -274,7 +274,7 @@ final class TabListView: NSView {
     private func updateChevron() {
         let symbol = side.expandPointsLeft ? "chevron.left" : "chevron.right"
         chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Expand Tab List")?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
     }
 
     // MARK: layout
@@ -358,9 +358,8 @@ final class TabListView: NSView {
         guard !moreButton.isHidden else { return }
         let hidden: [Int] = Array(tabRows.dropFirst(columnShown))
         let state: TabState = TabListCollapsed.moreState(hidden.map { rows[$0].state })
-        let color: NSColor = state == .idle || state == .working ? Theme.textDim : StatusGlyph.color(for: state)
         moreButton.attributedTitle = NSAttributedString(string: "+\(hidden.count)", attributes: [
-            .foregroundColor: color, .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: StatusGlyph.moreColor(for: state), .font: Theme.countFont,
         ])
         let names: [String] = hidden.map { rows[$0].accessibilityLabel }
         let tip = "\(hidden.count) more tab\(hidden.count == 1 ? "" : "s"): " + names.joined(separator: "; ")

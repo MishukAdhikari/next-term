@@ -104,13 +104,13 @@ final class TerminalRail: NSView, ProjectGlowing {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    /// Called several times a second: only a change touches the views. A tab that turns done, failed or
-    /// needs-you while the rail shows makes it pulse a few times, once for each state; then it stays still
-    /// with the mark.
+    /// Called several times a second: only a change touches the views. A tab that fails or needs you while the rail
+    /// shows makes it pulse a few times, once for each state; then it stays still with the mark. A tab that finishes
+    /// only gets its quiet mark: nothing needs you yet, so nothing moves.
     func update(marks newMarks: [Mark]) {
         guard newMarks != marks else { return }
         let before = Dictionary(marks.map { ($0.id, $0.state) }, uniquingKeysWith: { first, _ in first })
-        let urgent: [TabState] = [.done, .failed, .attention]
+        let urgent: [TabState] = [.failed, .attention]
         let news = newMarks.filter {
             urgent.contains($0.state) && $0.state != (before[$0.id] ?? .idle) && pulsedFor[$0.id]?.contains($0.state) != true
         }
@@ -208,9 +208,8 @@ final class TerminalRail: NSView, ProjectGlowing {
         moreButton.isHidden = hidden.isEmpty
         guard !hidden.isEmpty else { return }
         let state = MarkColumn.moreState(hidden.map(\.state))
-        let color = state == .idle || state == .working ? Theme.textDim : StatusGlyph.color(for: state)
         moreButton.attributedTitle = NSAttributedString(string: "+\(hidden.count)", attributes: [
-            .foregroundColor: color, .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: StatusGlyph.moreColor(for: state), .font: Theme.countFont,
         ])
         let tip = "\(hidden.count) more tab\(hidden.count == 1 ? "" : "s"): " + hidden.map(\.label).joined(separator: "; ")
         if moreButton.toolTip != tip { moreButton.toolTip = tip }
@@ -225,7 +224,7 @@ final class TerminalRail: NSView, ProjectGlowing {
         // The tab bars' bottom line runs on across the rail.
         Theme.border.setFill()
         NSRect(x: 0, y: TabBarView.height - 1, width: bounds.width, height: 1).fill()
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
             .applying(.init(paletteColors: [hovering ? Theme.text : Theme.textDim]))
         guard let chevron = NSImage(systemSymbolName: pointsLeft ? "chevron.left" : "chevron.right", accessibilityDescription: nil)?
             .withSymbolConfiguration(config) else { return }

@@ -3457,10 +3457,11 @@ enum SelfTest {
         // With Reduce Motion the mark just appears.
         TerminalRail.reducesMotion = { true }
         let noticedBefore = rail.changesNoticed
-        back.view.send(txt: "sleep 0.3\r")
-        check(await wait(5) { rail.marks[safe: backIndex]?.state == .done } && rail.changesNoticed > noticedBefore && !rail.isPulsing,
+        back.view.send(txt: "sleep 0.3; false\r")
+        check(await wait(5) { rail.marks[safe: backIndex]?.state == .failed } && rail.changesNoticed > noticedBefore && !rail.isPulsing,
               "with Reduce Motion the mark appears and nothing moves", "pulsing \(rail.isPulsing)")
-        // Done, busy, done again (an agent pausing in its output): the rail pulsed for it once, and stays still.
+        // Done, busy, done again (an agent pausing in its output): a tab that finishes gets its quiet mark, and the rail
+        // never pulses for it.
         let started = front.status.commandsStarted
         front.view.send(txt: "sleep 0.3\r")
         _ = await wait(5) { front.status.commandsStarted > started && rail.marks[safe: frontIndex]?.state == .done }
@@ -3468,7 +3469,7 @@ enum SelfTest {
         front.view.send(txt: "sleep 1\r")
         let busy = await wait(3) { rail.marks[safe: frontIndex]?.state != .done } // running, the mark clears
         let doneAgain = await wait(5) { rail.marks[safe: frontIndex]?.state == .done }
-        check(busy && doneAgain && rail.changesNoticed == noticedDone, "a tab done again behind the rail does not pulse again",
+        check(busy && doneAgain && rail.changesNoticed == noticedDone, "a tab done behind the rail, and done again, does not pulse it",
               "busy \(busy), done \(doneAgain), noticed \(rail.changesNoticed - noticedDone) more")
         TerminalRail.reducesMotion = reducesMotion
 

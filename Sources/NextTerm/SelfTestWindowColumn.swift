@@ -107,6 +107,7 @@ extension SelfTest {
         await screenshot(plain, suffix: "-column-folded")
         await idleBudget(app)
         await bellChecks(app, five, worktree: worktree, tree: tree)
+        calmChecks(app, five, worktree: worktree)
         await unfoldedMarksChecks(app, worktree: worktree)
         await overflowChecks(app, project)
         await roomChecks(app, project)
@@ -267,7 +268,7 @@ extension SelfTest {
 
     /// Five windows of every kind, after the window the run started with: a badge each, in the order they opened, the
     /// worktree under its repository with its own part, each with its two letters, the worktree in its repository's colour
-    /// and the windows with no project in none; the same in every window's column, each outlining its own; the same
+    /// and the windows with no project in none; the same in every window's column, each marking its own; the same
     /// windows as ⌘O lists, with the same marks.
     private static func badgeChecks(_ app: AppDelegate, _ five: [TerminalWindowController]) {
         let ids: [Int] = five.map(\.indexID)
@@ -294,7 +295,7 @@ extension SelfTest {
             let outlined: [Int] = column.shownButtons.filter(\.isCurrent).map(\.id)
             return column.list == reference && outlined == [c.indexID] && column.shownButtons.count == reference.count
         }
-        check(everywhere, "window column: every window's column lists the same badges, each outlining its own window's")
+        check(everywhere, "window column: every window's column lists the same badges, each marking its own window's")
         // ⌘O lists the same windows, from the same index, with the same marks.
         app.refreshWindowIndex()
         let index: [WindowIndex.Window] = app.windowIndex.windows

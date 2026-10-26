@@ -386,6 +386,7 @@ final class SwitcherMarksView: NSStackView {
     private func dot(_ state: TabState) -> StatusDotView {
         let dot = StatusDotView()
         dot.pulsesForAttention = false
+        dot.turnsWhileWorking = false // the list is looked at, not watched
         dot.state = state
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.widthAnchor.constraint(equalToConstant: 10).isActive = true

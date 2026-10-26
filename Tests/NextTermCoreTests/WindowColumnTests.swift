@@ -197,4 +197,22 @@ import Testing
         let closed: WindowColumnList = list(Array(windows.dropLast()), colors: [1: .sky, 2: .amber])
         #expect(WindowColumnList.change(from: before, to: closed) == .structure)
     }
+
+    @Test func capitalsAndFiguresAreSetApartMixedCaseNot() {
+        for letters in ["XC", "7S", "73", "MV"] { #expect(WindowColumnBadge.tracks(letters), "\(letters)") }
+        for letters in ["Ai", "Sh", "Ag", "~", "X", ""] { #expect(!WindowColumnBadge.tracks(letters), "\(letters)") }
+    }
+
+    /// Done's quiet green (Theme.doneQuiet in the app, kept here as its hex) still reads as a mark, 3:1 at least, against
+    /// the bar, the selected tab and a hovered one, and its dark ✓ (the bar's colour) against it.
+    @Test func theQuietDoneMarkStillReads() {
+        let quiet: UInt32 = 0x529558
+        for back: UInt32 in [0x2B2D30, 0x1E1F22, 0x393B40] {
+            #expect(ProjectColor.contrast(quiet, back) >= 3, "\(String(back, radix: 16))")
+        }
+        #expect(ProjectColor.contrast(0x2B2D30, quiet) >= 3)
+        // Plain green, with Increase Contrast, under the same dark ✓.
+        #expect(ProjectColor.contrast(0x2B2D30, 0x5FB865) >= 5)
+    }
 }
+

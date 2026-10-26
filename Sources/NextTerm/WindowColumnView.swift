@@ -213,9 +213,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
         let hidden: [WindowColumnRow] = Array(list.rows.dropFirst(shownCount))
         guard !hidden.isEmpty else { return }
         let state: TabState = MarkColumn.moreState(hidden.map { $0.urgent ?? .idle })
-        let color: NSColor = state == .idle || state == .working ? Theme.textDim : StatusGlyph.color(for: state)
         let title = NSAttributedString(string: "+\(hidden.count)", attributes: [
-            .foregroundColor: color, .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: StatusGlyph.moreColor(for: state), .font: Theme.countFont,
         ])
         if moreButton.attributedTitle != title { moreButton.attributedTitle = title }
         let tip = "\(hidden.count) more window\(hidden.count == 1 ? "" : "s"): " + hidden.map(\.label).joined(separator: "; ")
@@ -230,7 +229,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
         let symbol: String = pointsRight ? "chevron.right" : "chevron.left"
         let words: String = expanded ? "Collapse Window Column" : "Expand Window Column"
         chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: words)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
         chevron.setAccessibilityLabel(words)
         let tip: String = expanded ? "Collapse the window column" : "Expand the window column"
         chevronTip = ShortcutToolTip(chevron, tip, #selector(AppDelegate.toggleWindowColumnExpanded(_:)))
@@ -260,22 +259,22 @@ final class WindowColumnView: NSView, ProjectGlowing {
         NSRect(x: 0, y: Self.header - 1, width: bounds.width, height: 1).fill()
         hairlineRect.fill()
         let count = "\(list.count)"
-        let digits: [NSAttributedString.Key: Any] = [
-            .foregroundColor: Theme.textDim, .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
-        ]
         if expanded {
-            let words: [NSAttributedString.Key: Any] = [.foregroundColor: Theme.textDim, .font: NSFont.systemFont(ofSize: 11, weight: .semibold)]
-            let title = NSAttributedString(string: "Windows", attributes: words)
-            let number = NSAttributedString(string: count, attributes: digits)
+            // As ⌘O heads its windows: small capitals set apart, and the count in figures that never shift.
+            let title: NSAttributedString = WelcomeWindowController.headingText("Windows")
+            let number = NSAttributedString(string: count, attributes: [
+                .foregroundColor: Theme.textDim, .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+            ])
             let leading: CGFloat = onRight ? stripX + Self.slot + 4 : headerLeading
             let titleSize: NSSize = title.size()
             title.draw(at: NSPoint(x: leading, y: ((Self.header - titleSize.height) / 2).rounded()))
             let numberSize: NSSize = number.size()
             number.draw(at: NSPoint(x: leading + titleSize.width + 6, y: ((Self.header - numberSize.height) / 2).rounded()))
         } else {
-            let number = NSAttributedString(string: count, attributes: digits)
+            // Close under the chevron, the two one group, apart from the badges below.
+            let number = NSAttributedString(string: count, attributes: [.foregroundColor: Theme.textDim, .font: Theme.countFont])
             let size: NSSize = number.size()
-            number.draw(at: NSPoint(x: stripX + ((stripWidth - size.width) / 2).rounded(), y: headerTop + 22))
+            number.draw(at: NSPoint(x: stripX + ((stripWidth - size.width) / 2).rounded(), y: headerTop + 21))
         }
     }
 
@@ -346,9 +345,10 @@ final class WindowColumnView: NSView, ProjectGlowing {
     #endif
 }
 
-/// One window in the column: folded, its badge (its colour, two letters, the dot of its most urgent mark, a ring when it
-/// is this window); unfolded, its row (the badge, its name, and its marks with counts). It draws itself, and only when
-/// what its form shows changed: a tooltip or a VoiceOver label is set without a draw.
+/// One window in the column: folded, its badge (its colour, two letters, the dot of its most urgent mark, in a darker
+/// well when it is this window, as the tab you are in sits darker than the others); unfolded, its row (the badge, its
+/// name, and its marks with counts). It draws itself, and only when what its form shows changed: a tooltip or a VoiceOver
+/// label is set without a draw. Quiet on purpose: only a decision or a failure in a window should draw the eye.
 final class WindowColumnButton: NSButton {
     let id: Int
     private(set) var row: WindowColumnRow?
@@ -365,7 +365,7 @@ final class WindowColumnButton: NSButton {
     private static let badge: CGFloat = WindowColumnWidth.badge
     /// A nested worktree's row is this much further in.
     private static let indent: CGFloat = 14
-    private static let dotSize: CGFloat = 8
+    private static let dotSize: CGFloat = 6
 
     init(id: Int) {
         self.id = id
@@ -376,6 +376,7 @@ final class WindowColumnButton: NSButton {
         refusesFirstResponder = true
         wantsLayer = true
         dot.pulsesForAttention = false // a mark that stays still: the tab itself pulses
+        dot.turnsWhileWorking = false
         dot.isHidden = true
         dot.setAccessibilityElement(false)
         addSubview(dot)
@@ -394,8 +395,11 @@ final class WindowColumnButton: NSButton {
         let y: CGFloat = ((bounds.height - Self.badge) / 2).rounded()
         guard expanded else { return NSRect(x: ((bounds.width - Self.badge) / 2).rounded(), y: y, width: Self.badge, height: Self.badge) }
         let depth: CGFloat = CGFloat(row?.depth ?? 0)
-        return NSRect(x: 3 + depth * Self.indent, y: y, width: Self.badge, height: Self.badge)
+        return NSRect(x: 5 + depth * Self.indent, y: y, width: Self.badge, height: Self.badge)
     }
+
+    /// The well behind this window's badge or row: folded, 2 points round the badge; unfolded, the row.
+    private var plateRect: NSRect { expanded ? bounds.insetBy(dx: 3, dy: 1) : badgeRect.insetBy(dx: -2, dy: -2) }
 
     /// `row` as it is now: drawn again only if what this form shows of it changed.
     func configure(_ newRow: WindowColumnRow, current: Bool, expanded newExpanded: Bool) {
@@ -447,7 +451,7 @@ final class WindowColumnButton: NSButton {
         if dot.isHidden == shows { dot.isHidden = !shows }
         guard shows else { return }
         let badge: NSRect = badgeRect
-        let frame = NSRect(x: badge.maxX - Self.dotSize + 2, y: badge.minY - 2, width: Self.dotSize, height: Self.dotSize)
+        let frame = NSRect(x: badge.maxX - 5, y: badge.minY - 1, width: Self.dotSize, height: Self.dotSize)
         if dot.frame != frame { dot.frame = frame }
     }
 
@@ -467,16 +471,22 @@ final class WindowColumnButton: NSButton {
         drawCount += 1
         #endif
         guard let row else { return }
-        if expanded {
-            let place = NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 1), xRadius: 5, yRadius: 5)
-            if isCurrent {
-                Theme.background.setFill()
-                place.fill()
+        let plate: NSRect = plateRect
+        let place = NSBezierPath(roundedRect: plate, xRadius: 7, yRadius: 7)
+        if isCurrent {
+            // This window: a darker well, as the tab you are in. Increase Contrast edges it.
+            Theme.background.setFill()
+            place.fill()
+            if DisplayOptions.increasesContrast {
+                Theme.textDim.setStroke()
+                let edge = NSBezierPath(roundedRect: plate.insetBy(dx: 0.5, dy: 0.5), xRadius: 6.5, yRadius: 6.5)
+                edge.lineWidth = 1
+                edge.stroke()
             }
-            if hovering || isHighlighted {
-                NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
-                place.fill()
-            }
+        }
+        if expanded, hovering || isHighlighted {
+            NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
+            place.fill()
         }
         let badge: NSRect = badgeRect
         let tile = NSBezierPath(roundedRect: badge, xRadius: 5, yRadius: 5)
@@ -484,25 +494,16 @@ final class WindowColumnButton: NSButton {
         fill.setFill()
         tile.fill()
         if !expanded && (hovering || isHighlighted) {
-            NSColor.white.withAlphaComponent(isHighlighted ? 0.16 : 0.1).setFill()
+            NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
             tile.fill()
         }
-        if !expanded && isCurrent {
-            Theme.text.withAlphaComponent(0.85).setStroke()
-            let ring = NSBezierPath(roundedRect: badge.insetBy(dx: -2, dy: -2), xRadius: 7, yRadius: 7)
-            ring.lineWidth = 1.5
-            ring.stroke()
-        }
-        let letters = NSAttributedString(string: row.letters, attributes: [
-            .foregroundColor: Theme.text, .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-        ])
+        let letters: NSAttributedString = Self.lettersText(row.letters)
         let size: NSSize = letters.size()
         letters.draw(at: NSPoint(x: badge.minX + ((badge.width - size.width) / 2).rounded(), y: badge.minY + ((badge.height - size.height) / 2).rounded()))
         if !expanded, row.urgent != nil {
             // The dot sits in a cut of the bar's colour, so it reads against any badge.
             Theme.bar.setFill()
-            let frame: NSRect = dot.frame.insetBy(dx: -1.5, dy: -1.5)
-            NSBezierPath(ovalIn: frame).fill()
+            NSBezierPath(ovalIn: dot.frame.insetBy(dx: -2, dy: -2)).fill()
         }
         guard expanded else { return }
         // Cut in the middle: a window with no project is named by its folder's path, whose end is the folder.
@@ -517,6 +518,16 @@ final class WindowColumnButton: NSButton {
         name.draw(with: NSRect(x: start, y: ((bounds.height - height) / 2).rounded(), width: max(0, end - start), height: height),
                   options: [.usesLineFragmentOrigin])
     }
+
+    /// A badge's two letters: medium, lighter than bold as light text on dark reads heavier; two capitals or figures
+    /// ("XC", "73") set a little apart, as short capitals read best, mixed case ("Ag") as the font sets it.
+    static func lettersText(_ letters: String) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        return Typography.capitals(letters, font: font, color: Theme.text, tracking: WindowColumnBadge.tracks(letters) ? 0.7 : 0)
+    }
+
+    /// Increase Contrast changed: the well's edge is drawn again (the dot follows by itself).
+    func contrastChanged() { if isCurrent { needsDisplay = true } }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -551,5 +562,10 @@ final class WindowColumnButton: NSButton {
         drawCount = 0
         configureCount = 0
     }
+
+    /// For the self-test: where the badge, the well and the dot are.
+    var badgeForTest: NSRect { badgeRect }
+    var plateForTest: NSRect { plateRect }
+    var dotFrameForTest: NSRect? { dot.isHidden ? nil : dot.frame }
     #endif
 }

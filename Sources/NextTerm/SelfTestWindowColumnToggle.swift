@@ -8,6 +8,55 @@ import NextTermCore
 /// showing it everywhere, Don't Ask Again ending it, a change of the setting taking it away, the launch's reopening and
 /// a second window in one launch offering nothing. Part of NEXTTERM_SELFTEST_ONLY=windowColumn.
 extension SelfTest {
+    /// Quiet on purpose: this window's badge sits in a darker well 2 points round it, with no ring, edged only with
+    /// Increase Contrast, which draws that badge alone again; the worktree's dot is 6 points at the badge's corner, its cut
+    /// inside the button; two capitals are set 0.7 points apart and mixed case not; a working mark in the column or ⌘O
+    /// never turns, while a tab's does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
+    static func calmChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController) {
+        let column: WindowColumnView = five[0].windowColumn
+        guard let own = column.button(for: five[0].indexID), let marked = column.button(for: worktree.indexID) else {
+            return check(false, "window column: the calm look's badges to check")
+        }
+        let badge: NSRect = own.badgeForTest
+        let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -2, dy: -2)
+        let corner: NSRect = marked.badgeForTest
+        let dot: NSRect? = marked.dotFrameForTest
+        let dotPlaced: Bool = dot == NSRect(x: corner.maxX - 5, y: corner.minY - 1, width: 6, height: 6)
+            && dot.map { marked.bounds.contains($0.insetBy(dx: -2, dy: -2)) } == true
+        check(well && dotPlaced, "window column: this window's badge sits in a darker well, and a dot is 6 points at a badge's corner, its cut inside",
+              "well \(own.plateForTest) round \(badge), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
+
+        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        func width(_ text: String) -> CGFloat { NSAttributedString(string: text, attributes: [.font: font]).size().width }
+        let spread: CGFloat = WindowColumnButton.lettersText("XC").size().width - width("XC")
+        let mixed: CGFloat = WindowColumnButton.lettersText("Ag").size().width - width("Ag")
+        check(abs(spread - 0.7) < 0.05 && abs(mixed) < 0.01, "window column: two capitals are set a little apart, mixed case as the font sets it",
+              "XC +\(spread), Ag +\(mixed)")
+
+        // As View › Agent Spinner has it: a tab's mark turns with Spinning, a listed one never.
+        let watched = StatusDotView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        watched.state = .working
+        let listed = StatusDotView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        listed.turnsWhileWorking = false
+        listed.state = .working
+        check(watched.ringTurns == AgentSpinner.turns && listed.ringShows == watched.ringShows && !listed.ringTurns,
+              "window column: a working mark in the column or ⌘O stays still while a tab's turns",
+              "spinner \(AgentSpinner.current.rawValue), tab turns \(watched.ringTurns), listed turns \(listed.ringTurns)")
+
+        let contrast: Bool? = DisplayOptions.increasesContrastOverride
+        DisplayOptions.increasesContrastOverride = false
+        let quiet: NSImage? = StatusGlyph.image(for: .done)
+        column.shownButtons.forEach { $0.resetCounters() }
+        DisplayOptions.increasesContrastOverride = true
+        let plain: NSImage? = StatusGlyph.image(for: .done)
+        column.displayIfNeeded()
+        let redrawn: [Int] = column.shownButtons.filter { $0.drawCount > 0 }.map(\.id)
+        DisplayOptions.increasesContrastOverride = contrast
+        check(quiet != nil && plain != nil && quiet?.tiffRepresentation != plain?.tiffRepresentation && redrawn == [five[0].indexID],
+              "window column: Increase Contrast makes done plain green and draws this window's badge alone again, for its edge",
+              "redrawn \(redrawn) of \(column.shownButtons.map(\.id))")
+    }
+
     /// ⌃⇧⌘S, as the keyboard sends it: hidden in every window, View says Show Window Column, the setting off and the
     /// windows open kept for the offer; again, folded in every window and Hide Window Column.
     static func hideKeyChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {

@@ -49,7 +49,17 @@ final class WindowColumns: NSObject {
         DispatchQueue.main.async { [weak self] in self?.remade() }
     }
 
-    @objc private func spinnerChanged() { remade() }
+    /// Agent Spinner, Reduce Motion or Increase Contrast changed (AgentSpinner.changed): the rows, and the well's edge
+    /// when Increase Contrast is what changed.
+    @objc private func spinnerChanged() {
+        remade()
+        let contrast: Bool = DisplayOptions.increasesContrast
+        guard contrast != contrastDrawn else { return }
+        contrastDrawn = contrast
+        for controller in windows { controller.windowColumn.buttons.forEach { $0.contrastChanged() } }
+    }
+
+    private var contrastDrawn: Bool = DisplayOptions.increasesContrast
 
     private var app: AppDelegate { AppDelegate.shared }
     private var showsWorking: Bool { AgentSpinner.current != .off }
