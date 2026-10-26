@@ -552,20 +552,27 @@ extension SelfTest {
         _ = await settle()
         check(store.one("SELECT v FROM kv WHERE k = 'theme'") == "theirs" && GitToast.text == "Changed since your save; nothing was undone",
               "AE12: ⌘Z after another app changed the cell writes nothing and says so", GitToast.text ?? "no notice")
-        // Stop Editing takes the tab's steps away.
-        hand.click(grid, row: theme, column: 1)
-        hand.key(36)
-        if await wait(2, { grid.inPlaceField?.currentEditor() != nil }), let again = grid.inPlaceField?.currentEditor() as? NSTextView {
+        check(pane.page?.rows[safe: theme]?[safe: 1] == .text("theirs", truncated: false) && shown(grid, row: theme, column: 1) == "theirs",
+              "AE12: and the page is read again, so the cell shows the value it was refused for", shown(grid, row: theme, column: 1) ?? "no cell")
+        // Stop Editing takes the tab's steps away. The save before it is of the value the page was read again
+        // for: one of the value from before would be refused, and leave a draft for Stop Editing to ask about.
+        let steps = pane.edit.steps.count
+        pane.lastOutcome = nil
+        if let again = await openInCell(pane, hand, row: theme, column: 1) {
             again.insertText("blue", replacementRange: NSRange(location: 0, length: (again.string as NSString).length))
-            pane.lastOutcome = nil
             again.doCommand(by: #selector(NSResponder.insertNewline(_:)))
             _ = await wait(5) { pane.lastOutcome != nil }
             _ = await settle()
         }
-        check(!pane.edit.steps.isEmpty, "AE12: a save leaves an undo step")
+        check(store.one("SELECT v FROM kv WHERE k = 'theme'") == "blue" && pane.edit.steps.count == steps + 1 && !pane.hasDraft
+              && window.undoManager?.undoActionName == "Edit Cell", "AE12: a save leaves an undo step",
+              "\(String(describing: pane.lastOutcome)), \(pane.edit.steps.count - steps) new steps, Undo \(window.undoManager?.undoActionName ?? "")")
         pane.stopEditing()
-        check(pane.edit.steps.isEmpty && window.undoManager?.undoActionName != "Edit Cell" && !pane.isEditingAllowed && pane.summaryText.hasSuffix("read-only"),
-              "AE12: Stop Editing makes it read-only and takes its undo steps away", window.undoManager?.undoActionName ?? "")
+        check(window.attachedSheet == nil && pane.edit.steps.isEmpty && window.undoManager?.undoActionName != "Edit Cell" && !pane.isEditingAllowed
+              && pane.summaryText.hasSuffix("read-only"), "AE12: Stop Editing makes it read-only and takes its undo steps away",
+              window.attachedSheet.map { _ in sheetText(window) } ?? window.undoManager?.undoActionName ?? "")
+        // A question left up would be taken by the checks after these for their own.
+        await endStrayQuestions(after: "AE12's Stop Editing")
 
         // AE13: no agent path writes it.
         let root = canonicalPath(store.folder.deletingLastPathComponent().path)

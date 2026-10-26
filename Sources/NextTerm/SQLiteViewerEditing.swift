@@ -470,7 +470,6 @@ extension DatabasePane {
                 // Checked next time against the row as it is now: a second Save is a choice made seeing it.
                 if case let .rowChanged(now) = outcome, edit.draft != nil { edit.row = now }
                 moveDraftToDetail()
-                reloadPage()
             } else {
                 let what = kind == .undo ? "undone" : "redone"
                 switch outcome {
@@ -479,6 +478,9 @@ extension DatabasePane {
                 default: GitToast.show(outcome.message, in: window, isError: true)
                 }
             }
+            // Read again, so the cell shows the value it was refused for, not the one the page still has from
+            // before: an edit opened on that one would only be refused in turn.
+            reloadPage()
             draftChanged()
             done?(false)
             return
