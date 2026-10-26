@@ -711,6 +711,11 @@ import Testing
         #expect(serverSaid == "staging, deploy@staging.example.com")
     }
 
+    @Test func undoNamesTheProjectForgotten() {
+        #expect(SwitcherText.forgetAction("docs") == "Forget “docs”")
+        #expect(SwitcherText.forgetAction("xCloud ▸ 7027-sso") == "Forget “xCloud ▸ 7027-sso”")
+    }
+
     // MARK: the sessions read
 
     @Test func theSessionsKeptAreTheProjectsReadLast() {

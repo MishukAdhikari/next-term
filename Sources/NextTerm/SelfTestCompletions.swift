@@ -459,10 +459,11 @@ extension SelfTest {
             check(await wait(2) { !popup.isVisible }, "Tab completion: a drop closes the list")
             await clearLine(tab)
         }
-        // A paste closes it too, though ⌘V is a key. The clipboard is put back after.
-        let clipboard = NSPasteboard.general.string(forType: .string)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("Tes", forType: .string)
+        // A paste closes it too, though ⌘V is a key. From a pasteboard of the self-test's own: the user's is never touched.
+        let board = NSPasteboard(name: NSPasteboard.Name("nt-selftest-completion-\(getpid())"))
+        NextTermView.pasteboard = board
+        board.clearContents()
+        board.setString("Tes", forType: .string)
         if await open("cd ") {
             // ⌘V as the keyboard sends it, through the app: Edit › Paste.
             pressAppKey(window, "v", code: 9, flags: .command)
@@ -477,8 +478,8 @@ extension SelfTest {
                   promptLine(tab))
             await clearLine(tab)
         }
-        NSPasteboard.general.clearContents()
-        if let clipboard { NSPasteboard.general.setString(clipboard, forType: .string) }
+        NextTermView.pasteboard = .general
+        board.releaseGlobally()
         // The job prints on the test's signal, sent once the list shows (open() returns after the first line report has
         // set the caret's row), so no clock decides which comes first.
         let go = dir.appendingPathComponent("bg-go")

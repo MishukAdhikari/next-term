@@ -207,6 +207,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     let tabListPlace = TabListPlacement()
     let sidebar = ProjectSidebarView(frame: NSRect(x: 0, y: 0, width: ProjectSidebarView.defaultWidth, height: 600))
     private let splitView = ThemedSplitView()
+    /// The window's split view, [sidebar | work area] or mirrored: the window column's host holds it beside the column.
+    var outerSplitView: ThemedSplitView { splitView }
+    /// The window's content: the window column at its outer edge, beside the split view (TerminalWindowColumn.swift).
+    private(set) lazy var columnHost = WindowColumnHost(content: splitView)
+    /// Set while the window column changes width and the window puts the sidebar back where it was: the column's own rule
+    /// places it, not a drag's limits, and the width it passes through is not saved as the sidebar's.
+    var columnMovesSidebar = false
     private let mainPane = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     /// [ open files ] over [ terminal tabs ], like an IDE. The editor part is hidden while no file is open.
     let workSplit = WorkSplitView()
@@ -215,7 +222,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     let container = NSView()
     /// Unsaved files were dealt with (saved or discarded) for this close.
     private var editorsConfirmed = false
-    private var isFullScreen = false
+    /// Close Anyway was chosen for the database values not saved yet, for this close.
+    private var valuesConfirmed = false
+    /// In full screen (or about to be): no traffic lights in the way. Set by the window's full-screen notifications, and
+    /// by the self-test, which checks the insets without a real transition.
+    var isFullScreen = false
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
@@ -237,6 +248,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             let repository = project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
             projectTitle = Self.title(ofProject: project, repository: repository)
             isWorktree = repository != nil
+            repositoryCheckout = repository?.mainCheckout
             projectColorKey = ProjectColors.key(forProject: project, repository: repository)
             takeProjectColor()
         }
@@ -246,6 +258,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private(set) var projectTitle = ""
     /// The project is a linked worktree, read with its title.
     private(set) var isWorktree = false
+    /// For a linked worktree, its repository's main checkout, read with its title: the window column nests the window
+    /// under its repository's.
+    private(set) var repositoryCheckout: String?
     /// The window's id in the index of every window (AppDelegate.windowIndex): its own, the same while it is open.
     let indexID: Int
     private static var lastIndexID = 0
@@ -272,10 +287,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var opensWelcome = false
     /// The sheet asking to save before the last tab takes the window is up: it alone decides.
     private var askingToSave = false
-    /// Save or Don't Save was answered for closing this tab, then End Session: until its tmux session has
-    /// ended, the tab closes without asking again, unless a file was edited since (`edits`: the unsaved
-    /// files then, and their text).
-    private var saveAnswered: (tab: TerminalTab, edits: [(EditorDocument, String)])?
+    /// Save or Don't Save (and Close Anyway) was answered for closing this tab, then End Session: until its tmux
+    /// session has ended, the tab closes without asking again, unless a file was edited since (`edits`: the
+    /// unsaved files then, and their text) or a database value typed since (`values`: the drafts then).
+    private var saveAnswered: (tab: TerminalTab, edits: [(EditorDocument, String)], values: [(DatabasePane, CellDraft?)])?
     /// When this window last had the keyboard, so a Dock click brings back the one used last.
     private(set) var lastKey = Date.distantPast
     private(set) lazy var finder: FindInFilesController = {
@@ -299,6 +314,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let repository = self.project.flatMap(WorktreeWindow.repository(ofLinkedWorktree:))
         projectTitle = Self.title(ofProject: self.project, repository: repository)
         isWorktree = repository != nil
+        repositoryCheckout = repository?.mainCheckout
         projectColorKey = ProjectColors.key(forProject: self.project, repository: repository)
         let window = TerminalWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
@@ -336,13 +352,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             self.paneFocused(tab)
         }
 
-        // [ Project sidebar | tab bar over terminals ], both reaching up into the title bar.
+        // [ Project sidebar | tab bar over terminals ], both reaching up into the title bar, with the window column at the
+        // outer edge while two or more windows are open.
         splitView.isVertical = true
         splitView.dividerStyle = .thin
         splitView.delegate = self
         splitView.addArrangedSubview(sidebar)
         splitView.addArrangedSubview(mainPane)
-        window.contentView = splitView
+        window.contentView = columnHost
+        installWindowColumn()
         sidebar.delegate = self
 
         tabBar.delegate = self
@@ -391,6 +409,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         for bar in [tabBar, editorArea.tabBar] { bar.onTopRowMenu = colorMenu }
         sidebar.header.onTopRowMenu = colorMenu
         terminalRail.onTopRowMenu = colorMenu
+        windowColumn.onTopRowMenu = colorMenu
         NotificationCenter.default.addObserver(self, selector: #selector(projectColorsChanged), name: ProjectColorStore.changed, object: nil)
         for split in [splitView, workSplit] as [HairlineSplitView] { split.onPanesPlaced = { [weak self] in self?.projectGlowMoved() } }
         // The collapse button's tooltip names ⌘J, or the key Settings gives it instead.
@@ -662,7 +681,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// End Session on a kept tmux tab: the tab closes once the session has ended on the host. That can take
     /// up to 15 s, and the editor is in use meanwhile: a file edited after Save or Don't Save is asked about.
     private func endSession(closing tab: TerminalTab, remote: RemoteTab, saveAsked: Bool) {
-        if saveAsked { saveAnswered = (tab, editorArea.dirtyDocuments.map { ($0, $0.text) }) }
+        if saveAsked { saveAnswered = (tab, editorArea.dirtyDocuments.map { ($0, $0.text) }, editorArea.draftDatabases.map { ($0, $0.edit.draft) }) }
         RemoteConnection.endSession(remote.host, session: remote.session) { [weak self] problem in
             guard let self else { return }
             defer { if self.saveAnswered?.tab === tab { self.saveAnswered = nil } }
@@ -677,8 +696,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     /// Closes a tab without asking (callers have asked, or were told to force it). The exception is the
-    /// window's last tab while its editor has unsaved files: the window closes with it, so the user is
-    /// asked first, unless `saveAsked` says they were.
+    /// window's last tab while its editor has unsaved files or a database value not saved yet: the window
+    /// closes with it, so the user is asked first, unless `saveAsked` says they were.
     func remove(_ tab: TerminalTab, saveAsked: Bool = false) {
         guard let index = groups.firstIndex(where: { $0.contains(tab) }) else { return }
         // The sheet asking to save is up: it decides whether the window goes (its Save and Don't Save close
@@ -727,22 +746,27 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         groups.count == 1 && groups[0].panes.allSatisfy { pane in closing.contains { $0 === pane } }
     }
 
-    /// Closing `tab` would close the window while files in its editor are unsaved: the user is asked first
-    /// (or is being asked now).
+    /// Closing `tab` would close the window while files in its editor are unsaved, or a database tab holds a
+    /// value not saved yet: the user is asked first (or is being asked now).
     func asksToSave(closing tab: TerminalTab) -> Bool {
         guard closesWindow([tab]) else { return false }
         if askingToSave { return true }
         let dirty = editorArea.dirtyDocuments
-        guard !dirty.isEmpty else { return false }
-        // Answered before End Session: asked again only about a file edited since.
+        let drafts = editorArea.draftDatabases
+        guard !dirty.isEmpty || !drafts.isEmpty else { return false }
+        // Answered before End Session: asked again only about a file edited since, or a value typed since.
         guard let answered = saveAnswered, answered.tab === tab else { return true }
-        return !dirty.allSatisfy { doc in answered.edits.contains { $0.0 === doc && $0.1 == doc.text } }
+        let files = dirty.allSatisfy { doc in answered.edits.contains { $0.0 === doc && $0.1 == doc.text } }
+        let values = drafts.allSatisfy { pane in answered.values.contains { $0.0 === pane && $0.1 == pane.edit.draft } }
+        return !(files && values)
     }
 
     /// The window's last tab is closing, and the window with it, while files in its editor are unsaved:
-    /// Save, Don't Save or Cancel, as closing the window asks, and what closing stops is said too. `close`
-    /// runs on Save or Don't Save. Cancel keeps the window and a shell in it: a fresh one in place of a
-    /// tab whose shell ended by itself (`exit`, Ctrl-D). One that failed stays as it was, with its reason.
+    /// Save, Don't Save or Cancel, as closing the window asks, and what closing stops is said too. A database
+    /// value not saved yet is warned about after that, or alone with what closing stops: Cancel or Close
+    /// Anyway, with no Save. `close` runs once each question let it go on. Cancel keeps the window and a shell
+    /// in it: a fresh one in place of a tab whose shell ended by itself (`exit`, Ctrl-D). One that failed stays
+    /// as it was, with its reason.
     private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
         guard let window, !askingToSave else { return }
         let busy = closing.filter { $0.closeNote != nil }
@@ -752,24 +776,49 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         } else if !busy.isEmpty {
             note = Self.stopText("Closing the window’s last tab closes the window and stops", busy, otherwise: note)
         }
-        let alert = saveAlert(editorArea.dirtyDocuments, note: note)
-        if !kept.isEmpty { alert.informativeText += "\n\n" + kept }
+        let dirty = editorArea.dirtyDocuments
         askingToSave = true
         // Asked from elsewhere (an agent's close_tab, a shell ending in a window behind): the window comes
         // forward so the question is seen, without taking the keyboard from the window in use.
         if window.isMiniaturized { window.deminiaturize(nil) } else if !window.isKeyWindow { window.orderFront(nil) }
         if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
-            self.askingToSave = false
-            // The window went meanwhile (Quit): nothing is left to decide.
-            guard closing.contains(where: { tab in self.tabs.contains { $0 === tab } }) else { return }
-            let saved = response == .alertFirstButtonReturn && self.editorArea.saveAll()
-            if saved || response == .alertThirdButtonReturn { return close() }
+        // The window went meanwhile (Quit): nothing is left to decide.
+        let gone = { [weak self] in !closing.contains { tab in self?.tabs.contains { $0 === tab } == true } }
+        let cancelled = { [weak self] in
             // Cancel, or a file that could not be saved.
-            guard let last = closing.first, closing.allSatisfy(\.endedByItself) else { return }
+            guard let self, let last = closing.first, closing.allSatisfy(\.endedByItself) else { return }
             self.addTab(directory: self.project ?? (last.remote == nil ? last.directory : nil))
             for tab in closing { self.remove(tab) }
+        }
+        // The values last, read when they are asked about: the files' question may have taken a while.
+        let warned = { [weak self] (note: String) in
+            guard let self else { return }
+            let drafts = self.editorArea.draftDatabases
+            guard !drafts.isEmpty else {
+                self.askingToSave = false
+                return close()
+            }
+            let alert = UnsavedValueAlert.make(drafts, .close, note: note)
+            if !note.isEmpty, !kept.isEmpty { alert.informativeText += "\n\n" + kept }
+            UnsavedValueAlert.begin(alert, over: window) { closes in
+                self.askingToSave = false
+                guard !gone() else { return }
+                closes ? close() : cancelled()
+            }
+        }
+        if dirty.isEmpty { return warned(note) }
+        let alert = saveAlert(dirty, note: note)
+        if !kept.isEmpty { alert.informativeText += "\n\n" + kept }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            guard !gone() else {
+                self.askingToSave = false
+                return
+            }
+            let saved = response == .alertFirstButtonReturn && self.editorArea.saveAll()
+            if saved || response == .alertThirdButtonReturn { return warned("") }
+            self.askingToSave = false
+            cancelled()
         }
     }
 
@@ -1026,7 +1075,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let destination: String? = project == nil ? activeTab?.remote?.host.destination : nil
         return WindowIndex.Window(id: indexID, kind: windowKind, project: project, name: windowName, title: windowTitle,
                                   lastKey: lastKey, tabs: terminals, destination: destination,
-                                  agents: HerdrAgentMenu.indexAgents(of: self))
+                                  agents: HerdrAgentMenu.indexAgents(of: self), repository: repositoryCheckout)
     }
 
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
@@ -1232,7 +1281,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The bars of the top row, each with its slice of the glow.
     private var projectGlows: [ProjectGlow] {
-        [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow]
+        [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow, windowColumn.projectGlow]
     }
 
     private func paintProjectColor() {
@@ -1315,7 +1364,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if item.action == #selector(goToAgent(_:)) { return HerdrAgentMenu.hasAgents }
         if item.action == #selector(setProjectColor(_:)) { return validateProjectColor(item) }
         if item.action == #selector(openServedURL(_:)) { return activeTab?.servedURL != nil }
-        if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil }
+        if item.action == #selector(saveDocument(_:)) { return editorArea.activeEditor != nil || editorArea.activeDatabase?.hasDraft == true }
         if item.action == #selector(saveAllDocuments(_:)) { return !editorArea.dirtyDocuments.isEmpty }
         if item.action == #selector(goToLine(_:)) { return editorArea.activeEditor != nil }
         if item.action == #selector(goToHeading(_:)) { return editorArea.activeEditor?.markdown != nil }
@@ -1422,11 +1471,18 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         applyTerminalTabs()
         updateCollapseButton()
+        // The window column follows the sidebar's side: the far right with it, the order mirrored.
+        columnHost.columnOnRight = sidebarOnRight
+        placeWindowColumn()
         updateInsets()
     }
 
-    private func placeSidebarDivider(width: CGFloat) {
-        splitView.layoutSubtreeIfNeeded()
+    /// The sidebar at `width`, wherever it is. `layingOut` false: the split view's panes are moved as their frames are now,
+    /// before the next layout, so what is in them is laid out once.
+    func placeSidebar(width: CGFloat, layingOut: Bool = true) { placeSidebarDivider(width: width, layingOut: layingOut) }
+
+    private func placeSidebarDivider(width: CGFloat, layingOut: Bool = true) {
+        if layingOut { splitView.layoutSubtreeIfNeeded() }
         let position = sidebarOnRight ? splitView.bounds.width - width - splitView.dividerThickness : width
         splitView.setPosition(position, ofDividerAt: 0)
     }
@@ -1457,6 +1513,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         } else {
             splitView.adjustSubviews()
         }
+        // The column stays where it is; only the room it is measured by changed.
+        columnHost.place(force: true)
         updateInsets()
     }
 
@@ -1469,10 +1527,13 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The traffic lights sit over whichever pane is top-left; full screen has none. Tab bars along the
     /// top of the window drag it, like a title bar, and have the project's glow; one lower down has neither.
-    private func updateInsets() {
-        let lights: CGFloat = isFullScreen ? 8 : 78
+    /// The window column on the left takes its width off their room in the pane after it.
+    func updateInsets() {
+        let column: CGFloat = windowColumnUnderLights
+        let lights: CGFloat = isFullScreen ? 8 : max(8, 78 - column)
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
-        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? 70 : 8
+        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? max(8, 70 - column) : 8
+        updateWindowColumnInsets()
         let corner = sidebarTopLeft ? 8 : lights
         let editorShown = !editorArea.isHidden
         // Folded to its rail on the left, the terminal has no bar: the editor's, just after the rail, has the corner.
@@ -1673,6 +1734,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
         if splitView === workSplit { return terminalFirst ? terminalMinimum : workMinimum }
+        if columnMovesSidebar { return proposed } // put back as it was (keepSidebar)
         // The sidebar is 160–640 wide, on either side.
         return sidebarOnRight ? max(320, splitView.bounds.width - 640) : 160
     }
@@ -1681,6 +1743,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         if splitView === workSplit {
             return (workSplit.isVertical ? splitView.bounds.width : splitView.bounds.height) - (terminalFirst ? workMinimum : terminalMinimum)
         }
+        if columnMovesSidebar { return proposed }
         return sidebarOnRight ? splitView.bounds.width - 160 : min(640, splitView.bounds.width - 320)
     }
 
@@ -1743,7 +1806,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             return
         }
-        if isSidebarVisible, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
+        // Not a width the window column's change passes the sidebar through: it goes back to the one it had.
+        if isSidebarVisible, !columnMovesSidebar, sidebar.frame.width >= 160 { AppDelegate.shared.sidebarWidth = sidebar.frame.width }
     }
 
     func sidebar(_ sidebar: ProjectSidebarView, insert text: String) {
@@ -2615,7 +2679,30 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             return false
         }
+        // A save under way finishes first, then the window asks again as things stand.
+        let saving: [DatabasePane] = editorArea.savingDatabases
+        if !saving.isEmpty {
+            EditorArea.afterSaving(saving) { DispatchQueue.main.async { sender.performClose(nil) } }
+            return false
+        }
+        // A database value not saved yet, after the files: Cancel or Close Anyway, with no Save (R22).
+        let drafts = editorArea.draftDatabases
+        if !drafts.isEmpty && !valuesConfirmed {
+            UnsavedValueAlert.begin(UnsavedValueAlert.make(drafts, .close), over: sender) { [weak self] closes in
+                guard let self else { return }
+                guard closes else {
+                    // Asked about the files again next time, as about the values.
+                    self.editorsConfirmed = false
+                    self.opensWelcome = false
+                    return
+                }
+                self.valuesConfirmed = true
+                DispatchQueue.main.async { sender.performClose(nil) }
+            }
+            return false
+        }
         editorsConfirmed = false
+        valuesConfirmed = false
         let busy = busyTabs
         let kept = Self.keptList(tabs)
         guard !busy.isEmpty || !kept.isEmpty else { return true }
@@ -2725,10 +2812,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         guard let group = groups[safe: index] else { return }
         guard group.isSplit else { return requestClose(group.focused) }
         // The tab's × closes all its panes, asking once if that stops anything (or, as the window's last
-        // tab with files unsaved, whether to save them: the window closes too).
+        // tab with files or a database value unsaved, about those: the window closes too).
         let busy = group.panes.filter { $0.closeNote != nil }
         let kept = Self.keptList(group.panes)
-        if closesWindow(group.panes), !editorArea.dirtyDocuments.isEmpty {
+        if closesWindow(group.panes), !editorArea.dirtyDocuments.isEmpty || !editorArea.draftDatabases.isEmpty {
             return askToSave(closing: group.panes, kept: kept) { [weak self] in group.panes.forEach { self?.remove($0, saveAsked: true) } }
         }
         guard !busy.isEmpty || !kept.isEmpty, let window else { return group.panes.forEach { remove($0) } }

@@ -890,12 +890,23 @@ enum StatusGlyph {
         }
     }
 
+    /// The colour of a "+N" over marks that don't fit: only a decision or a failure colours it, as only those need you.
+    static func moreColor(for state: TabState) -> NSColor {
+        state == .attention || state == .failed ? color(for: state) : Theme.textDim
+    }
+
     /// A tinted image, for menus.
     static func image(for state: TabState, size: CGFloat = 12) -> NSImage? {
         guard let name = symbolName(for: state) else { return nil }
         // Palette mode paints each layer: the mark (✓ ✕ !) white, the circle in the state's colour.
-        // With a single colour the mark would vanish into the circle.
-        let colors: [NSColor] = state == .working ? [color(for: state)] : [.white, color(for: state)]
+        // With a single colour the mark would vanish into the circle. Done is quiet, nothing needing you yet: a dark ✓
+        // on a softer green, plain green with Increase Contrast.
+        let colors: [NSColor]
+        switch state {
+        case .working: colors = [color(for: state)]
+        case .done: colors = [Theme.bar, DisplayOptions.increasesContrast ? Theme.done : Theme.doneQuiet]
+        default: colors = [.white, color(for: state)]
+        }
         let config = NSImage.SymbolConfiguration(pointSize: size, weight: .bold)
             .applying(.init(paletteColors: colors))
         return NSImage(systemSymbolName: name, accessibilityDescription: state.rawValue)?.withSymbolConfiguration(config)
@@ -929,6 +940,11 @@ final class StatusDotView: NSView {
     }
     /// The amber mark pulses until it is seen. The terminal rail's does not: the rail pulsed already.
     var pulsesForAttention = true
+    /// The working ring turns with View › Agent Spinner's Spinning. Lists looked at rather than watched (⌘O, the window
+    /// column) keep it still.
+    var turnsWhileWorking = true {
+        didSet { if turnsWhileWorking != oldValue { apply() } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -950,6 +966,7 @@ final class StatusDotView: NSView {
     // For the self-test.
     var ringShows: Bool { !ring.isHidden }
     var ringTurns: Bool { ring.animation(forKey: "spin") != nil }
+    var glyphImage: NSImage? { glyph.isHidden ? nil : glyph.image }
 
     /// Whether a mark shows for `state`: none at the prompt, and none while working with Agent Spinner off.
     static func shows(_ state: TabState) -> Bool {
@@ -978,7 +995,7 @@ final class StatusDotView: NSView {
             ring.strokeStart = 0
             ring.strokeEnd = 0.7
             // Spinning turns it, unless Reduce Motion is on; Still keeps it put; Off hides it (above).
-            if AgentSpinner.turns {
+            if AgentSpinner.turns, turnsWhileWorking {
                 let spin = CABasicAnimation(keyPath: "transform.rotation.z")
                 spin.fromValue = 0
                 spin.toValue = -2 * Double.pi

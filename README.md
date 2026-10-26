@@ -35,8 +35,17 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   kernel's language, and the outputs saved in the file (text, tables as text, images and errors). Nothing
   runs (there is no kernel); Open as JSON shows the file itself.
 - **Large data files.** A JSON Lines, CSV or TSV file over 2 MB opens in a read-only head view: its first
-  1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
-  Logs and other text files over 32 MB open there too.
+  1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As;
+  click a cell for its whole value (a JSON object indented, as written). Logs and other text files over
+  32 MB open there too.
+- **⌘V pastes an image into your agent.** With a screenshot or another image alone on the clipboard, ⌘V in a tab
+  running Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent or Command Code sends that agent ⌃V, its
+  own key for an image, and it reads the image from the clipboard itself. At a shell, in Copilot CLI or any other
+  program on this Mac, the image is kept as a PNG in a new folder only you can read, for a day, and its quoted path is
+  pasted; in a tab logged in to another machine by hand (ssh) nothing is pasted. A file copied in Finder pastes as
+  its full path, as dropping it does (its name in a tab on a server or logged in elsewhere: a paste never copies a
+  file there). Text on the clipboard always pastes as text. A pasted image is removed a day later, at the next paste
+  or launch.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
   for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
@@ -182,6 +191,19 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Right-click the top row, or View › Project Color, for nine named colours, Automatic or None for This
   Project; Show Project Colors there, or in Settings › General, turns them all off. Nothing is written
   into the project.
+- **The window column.** With two or more windows open, every window shows a thin column at its outer
+  edge, on the project sidebar's side (the far left, or the far right with the sidebar on the right): a
+  badge for each open window in the order they opened, in its project's colour with two letters of its
+  name, a worktree's under its repository's, and a dot when an agent there needs you, failed or finished.
+  The count of windows is at its top, and your own window's badge sits in a darker well, as the tab you are
+  in does. It stays quiet on purpose: only a decision or a failure stands out. A click on a badge brings
+  that window forward as it was. ⌃⌘S, or the chevron, unfolds it in every window to show each window's
+  name and marks, as ⌘O does; a window too narrow for it folds it, then hides it, until it is wider. When
+  it appears, the editor and terminal give it the room and the sidebar keeps its width. View › Hide Window
+  Column (⌃⇧⌘S), or Settings › General, turns it off, and the same key brings it back. With it off and at least
+  two more windows open than when you hid it (five at least), Next Term offers it once, two weeks on at the soonest;
+  with it on and five windows open, it says once how to hide it. An agent can show, hide, fold or unfold it
+  with `set_layout`, once you approve on the Mac.
 - **A new terminal stays out of your files.** New Terminal (⌘N) opens a shell where new tabs open
   (Settings › Terminal › New tabs: your home folder unless you chose a folder). With no project, its
   sidebar says "No project open" and lists your recent projects, Open Folder…, Connect to Server… and
@@ -198,9 +220,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Databases.** A Databases group in the sidebar lists the databases a project's own files name (Laravel
   and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
   found by reading them, without running project code; local or remote by host, passwords masked. SQLite
-  files open in a read-only viewer; other connections open in TablePlus when it is installed (libSQL
-  aside), and local and development ones (Docker, OrbStack) in `mysql` or `psql` in a new tab. Each
-  provider badge (Neon, Supabase, Vercel, Herd and others) opens that provider's page in the browser.
+  files open in a viewer that stays read-only until you allow editing in its tab; click a cell for its
+  whole value, up to 4 MB (text wrapped, JSON indented, a blob's size and first bytes in hex, the row beside
+  it). Other connections open in
+  TablePlus when it is installed (libSQL aside), and local and development ones (Docker, OrbStack) in
+  `mysql` or `psql` in a new tab. Each provider badge (Neon, Supabase, Vercel, Herd and others) opens that
+  provider's page in the browser.
 - **Services.** Below Databases, a Services group lists what else a project's files name: AI model
   providers, vector stores, tracing and evals, agent frameworks, local dev servers, backends and hosting.
   Each row's badge opens its page: a local server on the port the project sets, or the most specific
@@ -277,7 +302,7 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   line for Return. A local OpenCode tab’s line names the session OpenCode was showing when its title
   matches exactly one of the folder’s sessions, so after `opencode -c` or a switch inside OpenCode, Return
   resumes the session you were in.
-- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 32 MB to download, 70 MB
+- **Native.** Swift and AppKit, universal (Apple Silicon and Intel): about 33 MB to download, 71 MB
   installed. macOS 13 or later.
 
 ## Install
@@ -313,8 +338,8 @@ NextTerm-x.y.z.dmg.sha256` before allowing it.
 | Mark | Meaning |
 |---|---|
 | none | At the prompt, a plain command running, or an agent working with View › Agent Spinner set to Off |
-| spinner | An AI agent is working (View › Agent Spinner: Spinning, Still or Off) |
-| green ✓ | An agent stopped and is waiting for your next prompt, or a command finished |
+| spinner | An AI agent is working (View › Agent Spinner: Spinning, Still or Off; still in ⌘O and the window column) |
+| green ✓ | An agent stopped and is waiting for your next prompt, or a command finished: a dark ✓ on a soft green, quiet as nothing needs you yet (plain green with Increase Contrast) |
 | amber ! | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
 | red ✕ | A command exited with an error (the exit code is in the tooltip) |
 
@@ -359,7 +384,9 @@ One window per project, and a few keys to move between them:
 3. Press ⇧⌘U until nothing needs you. The Dock badge counts what you have not looked at yet; a question
    you looked at but did not answer keeps its amber mark in ⌘O.
 4. ⌘O then ↩ goes back to the window you used last; ⌘O and a few letters goes anywhere, and shows every
-   window's agents. ⌘` moves between windows.
+   window's agents. ⌘` moves between windows. The window column at each window's edge shows them all at
+   once, with a dot on the one that needs you: a click on its badge goes there. If you turned it off,
+   ⌃⇧⌘S brings it back.
 5. View › Terminal Tabs › Left keeps tab names and marks readable; View › Project Color gives each
    repository its colour.
 6. When a worktree's branch is merged, close its window with Close and Remove Worktree.
@@ -386,6 +413,8 @@ One window per project, and a few keys to move between them:
 | Rename tab | ⌥⌘R, or double-click the tab |
 | Project sidebar (in a Markdown file, ⌘B is Bold) | ⌘B |
 | Fold the terminal away (and back) | ⌘J |
+| Unfold the window column in every window (and fold it) | ⌃⌘S |
+| Hide the window column in every window (and show it) | ⌃⇧⌘S |
 | Find / next / previous | ⌘F / ⌘G / ⌘⇧G |
 | Use the selection for Find | ⌘E |
 | Replace in the open file | ⌥⌘F |
@@ -443,7 +472,7 @@ Next Term's menu.
 - **Screen contents** cannot be read back through terminal queries (DECRQCRA answers are blanked).
 - **Status marks** from the shell carry a random per-tab secret that programs never see, so output (a
   `cat` of a log, a remote host) cannot fake "command finished" and skip the close confirmation.
-- **Paths you drop or insert** are quoted so that no file name can run a command, even one containing
+- **Paths you drop, paste or insert** are quoted so that no file name can run a command, even one containing
   control characters, and are sent as a bracketed paste.
 - **Opening files** from the sidebar or with ⌘-click asks first when the file is an app, a script or an
   executable, including behind a symlink or a Finder alias (cloned repos carry no quarantine flag, so
@@ -491,6 +520,22 @@ Next Term's menu.
   warning and Undo, and task text is never logged. Wrap Up and Post Update make no request either: handoffs and
   updates are files in your project, and today's commits are read only for your own `user.email`. See [where tasks
   go](docs/task-destinations.md) and [Wrap Up and Post Update](docs/wrap-up.md).
+- **SQLite editing:** the SQLite viewer opens every file read-only (SQLite's read-only mode, `query_only`, and
+  immutable when nothing is in its write-ahead log). Editing is opt-in per tab: Allow Editing… asks first,
+  saying the file may belong to an app that is running now and naming the processes that have it open, and
+  the allowance is bound to that file in that tab, ends when the tab closes, you click Stop Editing or the
+  file is replaced, and is never remembered. Nothing is written until you click Save (or ⌘S, or Return in
+  the cell): then one value is written, in one transaction on a connection of its own (SQLite's defensive
+  mode on, so a full-text index's own tables and the schema stay read-only), by one `UPDATE OR ABORT` keyed by
+  the row's rowid or primary key. It changes the cell only if the cell still holds, byte for byte and of the
+  same type, the value that was read, and the row's other values are still the ones read, since a key alone
+  can name another row once SQLite gives a rowid out again. OR ABORT overrides a table's own ON CONFLICT
+  REPLACE or IGNORE, so a save never deletes another row. If anything differs, or the file is busy, nothing
+  is written and the viewer says why. Edit › Undo writes the old value back the same checked way. A file
+  with no -wal beside it gets none. A value typed and not saved is asked about before its tab closes;
+  closing it with other tabs, closing its window or quitting warns first and writes nothing. Views,
+  virtual tables and their own tables, key and generated columns and blobs can't be edited. No agent or MCP
+  tool can allow editing or write a database.
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
   while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That

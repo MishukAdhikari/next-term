@@ -165,9 +165,12 @@ public struct WindowIndex: Sendable {
         public let destination: String?
         /// herdr's agents it leads to, in its tabs' order, then those of servers with no herdr tab.
         public let agents: [Agent]
+        /// For a linked worktree's window, its repository's main checkout (WorktreeWindow.Repository.mainCheckout), which
+        /// the window column nests it under; nil for any other window.
+        public let repository: String?
 
         public init(id: Int, kind: WindowKind, project: String?, name: String, title: String, lastKey: Date,
-                    tabs: [Tab], destination: String? = nil, agents: [Agent] = []) {
+                    tabs: [Tab], destination: String? = nil, agents: [Agent] = [], repository: String? = nil) {
             self.id = id
             self.kind = kind
             self.project = project
@@ -177,6 +180,7 @@ public struct WindowIndex: Sendable {
             self.tabs = tabs
             self.destination = destination
             self.agents = agents
+            self.repository = repository
         }
 
         /// Its terminals' marks, with herdr's agents in place of the tabs that show them, each agent once; an idle

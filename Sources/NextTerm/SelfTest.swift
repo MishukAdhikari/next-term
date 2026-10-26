@@ -95,6 +95,9 @@ enum SelfTest {
         #endif
         // Suggestions while typing only in their own part (ghostText): elsewhere → and End move the cursor, as before.
         GhostPreferences.testIsOn = false
+        // The window column only in its own part (windowColumn): the other parts' geometry was written without it.
+        WindowColumns.suppressed = true
+        WindowColumns.offersSuppressed = true // and no offer to show or hide it, but in its own checks
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()
@@ -502,20 +505,22 @@ enum SelfTest {
         let checksumReply = (try? String(contentsOf: checksum, encoding: .isoLatin1)) ?? ""
         check(checksumReply.contains("!~0000"), "screen checksum requests are answered with 0000", checksumReply.debugDescription)
 
-        // ⌘V drops escape characters (the user's clipboard is put back afterwards).
-        let savedClipboard = NSPasteboard.general.string(forType: .string)
+        // ⌘V drops escape characters, from a pasteboard of the self-test's own (the user's clipboard is never touched).
+        let escapeBoard = NSPasteboard(name: NSPasteboard.Name("nt-selftest-escape-\(getpid())"))
+        NextTermView.pasteboard = escapeBoard
         let pasted = dir.appendingPathComponent("pasted")
         second.view.send(txt: "cat > \(pasted.path)\r")
         _ = await wait(3) { second.status.running }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("a\u{1b}[201~b\n", forType: .string)
+        escapeBoard.clearContents()
+        escapeBoard.setString("a\u{1b}[201~b\n", forType: .string)
         second.view.paste(self)
         second.view.send(txt: "\u{04}")
         _ = await wait(4) { !second.status.running }
-        NSPasteboard.general.clearContents()
-        if let savedClipboard { NSPasteboard.general.setString(savedClipboard, forType: .string) }
+        NextTermView.pasteboard = .general
+        escapeBoard.releaseGlobally()
         let pastedText = (try? String(contentsOf: pasted, encoding: .utf8)) ?? "missing"
         check(pastedText == "a[201~b\n", "pasted text loses its escape characters", pastedText.debugDescription)
+        await imagePasteChecks(second, dir: dir)
 
         // `exec bash`: the kernel reports the exec, and polling takes over: commands, cd, exit status.
         let fallback = c.addTab(directory: nil)
@@ -658,7 +663,7 @@ enum SelfTest {
               "a self-test's tabs read its own zsh config, never the user's", "test config \(ownConfig): " + zdotTab.screenTail(4).joined(separator: " | "))
         c.remove(zdotTab)
         #if DEBUG
-        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor or windowNav), for its own failures
+        // One part on the project set up so far (NEXTTERM_SELFTEST_ONLY=gitAndViewKeys, import, rollback, held, closeWorktree, worktrees, markdown, mcpWrite, parallel (with scrollback), skills, notifications, services, secrets, opencode, tasks, welcome, tabList, terminalPosition, completion, ghostText, gitRefresh, clicks, mouse, remote, mcp, newTerminal, cellSnap, projectColor, windowNav, windowColumn or database), for its own failures
         // without the whole run's 25 minutes.
         switch ProcessInfo.processInfo.environment["NEXTTERM_SELFTEST_ONLY"] {
         case "gitAndViewKeys": return await gitAndViewKeyChecks(c, proj: proj)
@@ -695,6 +700,12 @@ enum SelfTest {
         case "cellSnap": return await cellSnapChecks(c) // a terminal's cells follow its window's display (two displays)
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
+        case "windowColumn": return await windowColumnChecks() // the window column in every window, on either side, and its budget
+        case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file
+            await databaseChecks(c, proj: proj)
+            await databaseCellChecks(c, proj: proj)
+            await dataChecks(c, proj: proj)
+            return await dataCellChecks(c, proj: proj)
         default: break
         }
         #endif
@@ -832,9 +843,13 @@ enum SelfTest {
         await notebookChecks(c, proj: proj)
         await databaseChecks(c, proj: proj)
         #if DEBUG
+        await databaseCellChecks(c, proj: proj)
         await serviceChecks(c)
         #endif
         await dataChecks(c, proj: proj)
+        #if DEBUG
+        await dataCellChecks(c, proj: proj)
+        #endif
         await updateChecks(c)
         await updateSheetChecks(c)
         await updateSignatureChecks()
@@ -853,6 +868,9 @@ enum SelfTest {
         await projectColorChecks()
         await newTerminalChecks()
         await windowNavChecks()
+        #if DEBUG
+        await windowColumnChecks()
+        #endif
         await parallelTabsChecks(c, proj: proj)
         await arrivalChecks(c, proj: proj)
         await branchCompareChecks(c)
@@ -3345,7 +3363,8 @@ enum SelfTest {
     }
 
     /// Beside the editor, ⌘J folds the terminal to a rail at the window's edge: the arrow back, each tab's
-    /// mark, a few pulses when one finishes (none with Reduce Motion), a click on a mark opening its tab.
+    /// mark, a few pulses when one fails or needs you (none with Reduce Motion) and none when one finishes, a click on a mark
+    /// opening its tab.
     private static func railChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let window = c.window, let app = AppDelegate.shared, let pane = c.tabBar.superview else { return }
         let file = proj.appendingPathComponent("rail.txt")
@@ -3441,18 +3460,19 @@ enum SelfTest {
         // With Reduce Motion the mark just appears.
         TerminalRail.reducesMotion = { true }
         let noticedBefore = rail.changesNoticed
-        back.view.send(txt: "sleep 0.3\r")
-        check(await wait(5) { rail.marks[safe: backIndex]?.state == .done } && rail.changesNoticed > noticedBefore && !rail.isPulsing,
+        back.view.send(txt: "sleep 0.3; false\r")
+        check(await wait(5) { rail.marks[safe: backIndex]?.state == .failed } && rail.changesNoticed > noticedBefore && !rail.isPulsing,
               "with Reduce Motion the mark appears and nothing moves", "pulsing \(rail.isPulsing)")
-        // Done, busy, done again (an agent pausing in its output): the rail pulsed for it once, and stays still.
+        // Done, busy, done again (an agent pausing in its output): a tab that finishes gets its quiet mark, and the rail
+        // never pulses for it.
         let started = front.status.commandsStarted
+        let noticedDone = rail.changesNoticed
         front.view.send(txt: "sleep 0.3\r")
         _ = await wait(5) { front.status.commandsStarted > started && rail.marks[safe: frontIndex]?.state == .done }
-        let noticedDone = rail.changesNoticed
         front.view.send(txt: "sleep 1\r")
         let busy = await wait(3) { rail.marks[safe: frontIndex]?.state != .done } // running, the mark clears
         let doneAgain = await wait(5) { rail.marks[safe: frontIndex]?.state == .done }
-        check(busy && doneAgain && rail.changesNoticed == noticedDone, "a tab done again behind the rail does not pulse again",
+        check(busy && doneAgain && rail.changesNoticed == noticedDone, "a tab done behind the rail, and done again, does not pulse it",
               "busy \(busy), done \(doneAgain), noticed \(rail.changesNoticed - noticedDone) more")
         TerminalRail.reducesMotion = reducesMotion
 
@@ -3538,8 +3558,10 @@ enum SelfTest {
     /// the sidebar and the terminal, and saved its width as the editor's share. Real mouse events, as a hand
     /// makes them.
     private static func emptyEditorChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
-        guard let window = c.window, let work = c.editorArea.superview as? NSSplitView, let terminalPane = c.tabBar.superview,
-              let outer = window.contentView as? NSSplitView else { return check(false, "the work area is a split view") }
+        guard let window = c.window, let work = c.editorArea.superview as? NSSplitView, let terminalPane = c.tabBar.superview else {
+            return check(false, "the work area is a split view")
+        }
+        let outer: NSSplitView = c.outerSplitView
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard

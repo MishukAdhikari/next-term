@@ -97,6 +97,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "tabListShowsFolders") }
     }
 
+    // MARK: the window column
+
+    /// Every window's column (WindowColumns): its rows, whether it shows, and what changed.
+    let windowColumns = WindowColumns()
+    /// Settings › General's checkbox follows the View menu, and the menu Settings.
+    static let windowColumnChanged = Notification.Name(WindowColumnSettings.changedName)
+
+    /// "Show the window column when two or more windows are open" (Settings › General, View › Hide Window Column): on
+    /// unless turned off, for every window.
+    var showsWindowColumn: Bool {
+        get { WindowColumnSettings.shown(UserDefaults.standard.object(forKey: WindowColumnSettings.shownKey)) }
+        set {
+            guard newValue != showsWindowColumn else { return }
+            UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.shownKey)
+            WindowColumnOffer.columnSet(shown: newValue, windows: windowIndex.windows.count, now: Date(), .standard)
+            windowColumns.dismissOffer()
+            windowColumns.settingsChanged()
+            NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
+        }
+    }
+
+    /// Unfolded in every window (⌃⌘S, View › Expand Window Column, the column's chevron); folded by default.
+    var windowColumnExpanded: Bool {
+        get { WindowColumnSettings.expanded(UserDefaults.standard.object(forKey: WindowColumnSettings.expandedKey)) }
+        set {
+            guard newValue != windowColumnExpanded else { return }
+            UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.expandedKey)
+            windowColumns.settingsChanged()
+            NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
+        }
+    }
+
+    /// View › Hide Window Column, or Show Window Column while it is off (⌃⇧⌘S). With fewer than two windows open nothing
+    /// on the screen changes, so a notice says what did.
+    @objc func toggleWindowColumn(_ sender: Any?) {
+        showsWindowColumn.toggle()
+        guard windowIndex.windows.count < 2, !GitToast.isShowing,
+              let window = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window else { return }
+        GitToast.show(WindowColumnSettings.unseenLine(shown: showsWindowColumn), in: window)
+    }
+
+    /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
+    @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
+
+    /// A click on a window's badge or row: that window in front, with its tab as it is. Nothing it shows changes.
+    func bringForward(_ id: Int) {
+        guard let controller = controllers.first(where: { $0.indexID == id && !$0.hasClosed }), let window = controller.window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
         moveTerminal(to: position, announce: true)
@@ -567,6 +619,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { Updater.shared.start() }
         // An update's disk image and folder that a quit or a crash left mid-staging.
         Updater.removeLeftovers()
+        // Images pasted as a path a day ago or more.
+        DispatchQueue.global(qos: .utility).async { ImagePaste.removeOld(in: ImagePaste.parent, now: Date()) }
+        // The window column hidden before its time was kept: the two weeks before it is offered again start now.
+        WindowColumnOffer.stampHidden(shown: showsWindowColumn, now: Date(), .standard)
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }
@@ -603,7 +659,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                 sessionProjects: sessionProjects, recentProjects: recent.paths, mayOfferImport: mayOfferImport)
         switch LaunchDecision.opening(input, exists: isFolder) {
         case .nothing: break
-        case .reopen(let paths): for path in paths { openWindow(directory: path, project: path) }
+        case .reopen(let paths):
+            windowColumns.holdsOffers = true // the last session's projects, not windows the user opens now
+            defer { windowColumns.holdsOffers = false }
+            for path in paths { openWindow(directory: path, project: path) }
         case .welcome: showWelcome(nil)
         case .importThenWelcome: offerImportThenWelcome()
         case .newTerminal: openWindow(directory: newWindowDirectory) // where Settings › Terminal › New tabs says, as ⌘N
@@ -816,6 +875,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A second quit while the first asks: cancelled, and the first's answers, its quit consent among them, stay its own.
         guard !askingToQuit else { return .terminateCancel }
+        // A database save under way finishes first, then the quit starts again and asks as things stand.
+        let saving: [DatabasePane] = controllers.flatMap(\.editorArea.savingDatabases)
+        if !saving.isEmpty {
+            EditorArea.afterSaving(saving) { DispatchQueue.main.async { NSApp.terminate(nil) } }
+            return .terminateCancel
+        }
         askingToQuit = true
         defer { askingToQuit = false }
         // The quit consent comes only from a press in this quit's questions (R30): none is left from a quit cancelled
@@ -846,13 +911,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return .terminateNow
     }
 
-    /// The quit's questions (QuitPolicy), one at a time: the save-changes and "Quitting stops…" alerts whenever they
-    /// apply, as always, with the resume question on one of them, or else the plain quit dialog on its own. Under an
-    /// update consent: the unsaved-files question alone, with no checkbox, and when the plan got worse than the one the
-    /// consent covers, no question at all but the update sheet again (R16). Nil when the quit is cancelled. The answer is
-    /// saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
-    private func askBeforeQuitting(update consent: UpdateConsent?, reason: QuitReason) -> QuitAsking? {
+    /// The quit's questions (QuitPolicy), one at a time: the save-changes, unsaved-values and "Quitting stops…" alerts
+    /// whenever they apply, as always, with the resume question on one of them, or else the plain quit dialog on its
+    /// own. Under an update consent: the unsaved-files and unsaved-values questions alone, with no checkbox, and when the
+    /// plan got worse than the one the consent covers, no question at all but the update sheet again (R16). Nil when the
+    /// quit is cancelled. The answer is saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
+    /// `standIn`, for the self-test: answers each question in place of the user, its alert built as it would show.
+    func askBeforeQuitting(update consent: UpdateConsent?, reason: QuitReason,
+                           standIn: ((QuitQuestion, NSAlert) -> QuitPress)? = nil) -> QuitAsking? {
         let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
+        let drafts = controllers.flatMap(\.editorArea.draftDatabases)
         let projects = openProjects
         let settings = LaunchSettings(defaults: launchDefaults)
         let sheetAttached = NSApp.windows.contains { $0.attachedSheet != nil }
@@ -861,7 +929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let update: UpdateQuit? = consent.map { (consent: UpdateConsent) -> UpdateQuit in
             UpdateQuit(consent: consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
         }
-        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, terminalWindows: controllers.count,
+        let input = QuitInput(unsavedFiles: dirty.count, unsavedValues: drafts.count, busyTabs: busyCount, terminalWindows: controllers.count,
                               sheetAttached: sheetAttached, reason: reason, settings: settings, update: update)
         let questions: [QuitQuestion] = QuitPolicy.questions(input)
         var asking = QuitAsking()
@@ -872,7 +940,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return nil
         }
         // A quit from the Dock while Next Term is behind another app: its first question shows in front.
-        NSApp.activate(ignoringOtherApps: true)
+        if standIn == nil { NSApp.activate(ignoringOtherApps: true) }
+        // Each question on its alert, or answered by the stand-in.
+        func dialog(_ question: QuitQuestion, _ shown: QuitAlertDialog) -> any QuitDialog {
+            guard let standIn else { return shown }
+            return StandInQuitDialog(shown) { standIn(question, shown.alert) }
+        }
         var plannedBusy: QuitQuestion?
         for question in questions {
             switch question {
@@ -880,8 +953,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
                 let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
                 // Save, Cancel, Don’t Save, as they were added. The box is read once a button is pressed (QuitAsking.ask).
-                let dialog = QuitAlertDialog(alert, presses: [.save, .cancel, .goOn], box: box)
-                switch asking.ask(question, on: dialog) {
+                let shown = dialog(question, QuitAlertDialog(alert, presses: [.save, .cancel, .goOn], box: box))
+                switch asking.ask(question, on: shown) {
                 case .save:
                     guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return nil }
                 case .goOn:
@@ -889,10 +962,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 case .cancel:
                     return nil
                 }
+            case .unsavedValues(let checkbox):
+                // No Save: a database's save is asynchronous and one value at a time, so its tab saves it (R22).
+                // Cancel, Quit Anyway, as they were added; Cancel holds Return and ⎋.
+                let alert = UnsavedValueAlert.make(drafts, .quit)
+                let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                let shown = dialog(question, QuitAlertDialog(alert, presses: [.cancel, .goOn], box: box))
+                guard asking.ask(question, on: shown) == .goOn else { return nil }
             case .busy:
                 plannedBusy = question // asked below, once the busy tabs are read again
             case .quit(let checkbox):
-                guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
+                guard askPlain(checked: checkbox, projects: projects, into: &asking, dialog: dialog) else { return nil }
             case .updateSheet:
                 return nil
             }
@@ -915,11 +995,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .busy(let checkbox):
             let alert = Self.quitStopsAlert(busy)
             let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-            let dialog = QuitAlertDialog(alert, presses: [.goOn, .cancel], box: box)
-            guard asking.ask(.busy(resumeCheckbox: checkbox), on: dialog) == .goOn else { return nil }
+            let question: QuitQuestion = .busy(resumeCheckbox: checkbox)
+            guard asking.ask(question, on: dialog(question, QuitAlertDialog(alert, presses: [.goOn, .cancel], box: box))) == .goOn else { return nil }
         case .quit(let checkbox):
-            guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
-        case .saveChanges, .updateSheet, nil:
+            guard askPlain(checked: checkbox, projects: projects, into: &asking, dialog: dialog) else { return nil }
+        case .saveChanges, .unsavedValues, .updateSheet, nil:
             break
         }
         asking.settings(from: settings)?.save(to: launchDefaults)
@@ -927,9 +1007,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// The plain quit dialog, "Quit Next Term?", its answer put into `asking`. False when it was cancelled.
-    private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking) -> Bool {
+    private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking,
+                          dialog: (QuitQuestion, QuitAlertDialog) -> any QuitDialog) -> Bool {
         let prompt = QuitReopenPrompt(projects: projects, checked: checked)
-        return asking.ask(.quit(resumeCheckbox: checked), on: prompt.dialog) == .goOn
+        let question: QuitQuestion = .quit(resumeCheckbox: checked)
+        return asking.ask(question, on: dialog(question, prompt.dialog)) == .goOn
     }
 
     /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, a valid update consent (the update
@@ -1051,21 +1133,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             controller.window?.center()
         }
         controllers.append(controller)
+        indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         if forAgent { return controller }
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
+        windowColumns.windowOpened() // a window the user opened: a notice about the column, if one is due
         return controller
     }
 
-    /// A window the restore built, placed and filled (SessionRestore): shown as it is, with no cascade and no first tab.
-    func openWindow(restored controller: TerminalWindowController) {
+    /// A window the restore built, placed and filled (SessionRestore), taken in: listed in every window's column and ⌘O
+    /// in the order the restore takes them, the order they opened before, and not shown yet (`presentRestored`).
+    func adoptRestored(_ controller: TerminalWindowController) {
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         welcome?.close()
         controllers.append(controller)
+        indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
+    }
+
+    /// A restored window taken in (`adoptRestored`), shown as it is, with no cascade and no first tab, in front.
+    func presentRestored(_ controller: TerminalWindowController) {
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
     }
@@ -1074,6 +1164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
         // Out of the index at once: Go to Next Agent Needing You and the Welcome window never go to a closed window.
         windowIndex.remove(window: closed.indexID)
+        windowColumns.rebuild()
         self.welcome?.windowsChanged()
         // Defer: the window is still mid-close in this call.
         DispatchQueue.main.async { [self] in
@@ -1508,6 +1599,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
+        if item.action == #selector(toggleWindowColumn(_:)) { item.title = showsWindowColumn ? "Hide Window Column" : "Show Window Column" }
+        if item.action == #selector(toggleWindowColumnExpanded(_:)) {
+            item.title = windowColumnExpanded ? "Collapse Window Column" : "Expand Window Column"
+            return windowColumns.visible // only while the column shows: the setting on and two or more windows open
+        }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
         if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
@@ -1588,13 +1684,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A window being made is told once it is listed; one closing, never again.
         guard !controller.hasClosed, controllers.contains(where: { $0 === controller }) else { return }
         guard windowIndex.update(controller.indexEntry) else { return }
+        windowColumns.windowChanged(controller.indexID)
         welcome?.windowsChanged()
     }
 
     /// Every window's entry as it is this moment, not at its last refresh (a window no one can see refreshes once a
     /// second): before a key or a menu reads the index.
     func refreshWindowIndex() {
-        for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
+        for controller in controllers where !controller.hasClosed {
+            if windowIndex.update(controller.indexEntry) { windowColumns.windowChanged(controller.indexID) }
+        }
     }
 
     /// Agents › Go to Next Agent Needing You: the terminal or herdr agent that has waited longest for you (a decision, then
@@ -2184,6 +2283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
+        // The window column at the window's outer edge, while two or more windows are open; also Settings › General.
+        // ⌃⇧⌘S hides it and brings it back, ⌃⌘S folds it.
+        item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "s", [.command, .shift, .control], target: self) // title follows the setting
+        item(view, "Collapse Window Column", #selector(toggleWindowColumnExpanded(_:)), "s", [.command, .control], target: self) // and the fold
         item(view, "Show File in Project Sidebar", #selector(TerminalWindowController.revealInSidebar(_:)), "")
         view.addItem(.separator())
         let positions = NSMenu(title: "Terminal Position")

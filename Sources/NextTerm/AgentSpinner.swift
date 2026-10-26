@@ -2,14 +2,16 @@ import AppKit
 import NextTermCore
 
 /// View › Agent Spinner (and Settings › Notifications): how a terminal tab shows that its agent is working. The blue
-/// ring turning (Spinning, as before), the same ring still, or no ring. Only the tab's own mark: in the tab bar, a
-/// split tab's pane headers, the » button and the terminal rail. Off never hides the state: hovering the tab and
+/// ring turning (Spinning, as before), the same ring still, or no ring. Only the tab's own mark turns: in the tab bar,
+/// the tab list, a split tab's pane headers, the » button and the terminal rail; ⌘O and the window column, lists looked
+/// at rather than watched, keep it still. Off never hides the state: hovering the tab and
 /// VoiceOver still say Working, and agents read it over MCP as before.
 enum AgentSpinner: String, CaseIterable {
     case spinning, still, off
 
     static let key = "agentSpinner"
-    /// Posted when the choice changes, or macOS's Reduce Motion does: every mark draws itself again.
+    /// Posted when the choice changes, or macOS's Reduce Motion or Increase Contrast does (DisplayOptions): every mark
+    /// draws itself again.
     static let changed = Notification.Name("NextTermAgentSpinnerChanged")
 
     static var current: AgentSpinner {

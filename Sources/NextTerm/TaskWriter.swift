@@ -117,11 +117,7 @@ enum TaskWriter {
     }
 
     /// The agent running in a local tab, by its kind.
-    static func agent(of tab: TerminalTab) -> AgentKind? {
-        let status = tab.status
-        guard tab.remote == nil, status.running, status.kind == .agent else { return nil }
-        return AgentKind(program: status.program) ?? AgentKind(program: CommandClassifier.programName(status.expandedCommand))
-    }
+    static func agent(of tab: TerminalTab) -> AgentKind? { tab.localAgent }
 
     /// The line that resumes the agent's session in the tab, when its session's id can be read (as a restore reads it).
     private static func resumeCommand(_ tab: TerminalTab, _ agent: AgentKind) -> String? {

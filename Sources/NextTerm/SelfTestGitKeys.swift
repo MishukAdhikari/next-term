@@ -10,6 +10,7 @@ extension SelfTest {
     static let gitAndViewKeys: [(id: String, key: String)] = [
         ("gitFetch:", "⌘R"), ("gitUpdate:", "⌥⌘U"), ("gitCommit:", "⇧⌘C"), ("gitPush:", "⌥⌘P"), ("gitNewBranch:", "⇧⌘B"),
         ("toggleUnifiedDiffs:", "⌃⌘U"), ("toggleBlameAnnotations:", "⌃⇧⌘A"), ("toggleCurrentLineBlame:", "⌃⇧⌘L"),
+        ("toggleWindowColumn:", "⌃⇧⌘S"), ("toggleWindowColumnExpanded:", "⌃⌘S"),
     ]
 
     static func gitAndViewKeyChecks(_ c: TerminalWindowController, proj: URL) async {

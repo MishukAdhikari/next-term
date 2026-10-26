@@ -52,6 +52,8 @@ public struct UpdateQuit: Sendable {
 public struct QuitInput: Sendable {
     /// Editor files with unsaved changes.
     public var unsavedFiles: Int
+    /// Database tabs holding a value not saved yet (R22).
+    public var unsavedValues: Int
     /// Tabs running something that quitting stops.
     public var busyTabs: Int
     /// Terminal windows, with a project or not.
@@ -63,9 +65,10 @@ public struct QuitInput: Sendable {
     /// The valid update consent this quit goes ahead under, and the plan now; nil with none.
     public var update: UpdateQuit?
 
-    public init(unsavedFiles: Int, busyTabs: Int, terminalWindows: Int, sheetAttached: Bool, reason: QuitReason,
-                settings: LaunchSettings, update: UpdateQuit? = nil) {
+    public init(unsavedFiles: Int, unsavedValues: Int = 0, busyTabs: Int, terminalWindows: Int, sheetAttached: Bool,
+                reason: QuitReason, settings: LaunchSettings, update: UpdateQuit? = nil) {
         self.unsavedFiles = unsavedFiles
+        self.unsavedValues = unsavedValues
         self.busyTabs = busyTabs
         self.terminalWindows = terminalWindows
         self.sheetAttached = sheetAttached
@@ -80,6 +83,8 @@ public struct QuitInput: Sendable {
 public enum QuitQuestion: Equatable, Sendable {
     /// "Save changes to … before quitting?"
     case saveChanges(resumeCheckbox: Bool?)
+    /// "“agent.db” has a value you haven’t saved." (UnsavedValueWarning): Cancel or Quit Anyway, with no Save.
+    case unsavedValues(resumeCheckbox: Bool?)
     /// "Quit Next Term?", "Quitting stops …".
     case busy(resumeCheckbox: Bool?)
     /// "Quit Next Term?" alone, the plain quit dialog: the checkbox, "Don’t ask again", Quit and Cancel.
@@ -91,7 +96,7 @@ public enum QuitQuestion: Equatable, Sendable {
     /// Where its resume checkbox starts; nil when it carries none.
     public var resumeCheckbox: Bool? {
         switch self {
-        case .saveChanges(let checkbox), .busy(let checkbox): return checkbox
+        case .saveChanges(let checkbox), .unsavedValues(let checkbox), .busy(let checkbox): return checkbox
         case .quit(let checkbox): return checkbox
         case .updateSheet: return nil
         }
@@ -110,7 +115,7 @@ public enum QuitEnding: Equatable, Sendable {
 public enum QuitAnswer: Equatable, Sendable {
     /// The plain dialog's "Quit": its box, and "Don’t ask again".
     case quit(resume: Bool, dontAskAgain: Bool)
-    /// The box on the save-changes or "Quitting stops…" alert, as it was when the quit went ahead.
+    /// The box on the save-changes, unsaved-values or "Quitting stops…" alert, as it was when the quit went ahead.
     case checkbox(checked: Bool)
 
     /// The box was checked.
@@ -122,10 +127,11 @@ public enum QuitAnswer: Equatable, Sendable {
     }
 }
 
-/// The one table that says what a quit asks (R29). The save-changes and "Quitting stops…" alerts show whenever they
-/// apply, as they always have. A quit asks about resuming in one of them at most: "Quitting stops…" when it shows, else
-/// the save-changes alert, else the plain quit dialog alone. An update quit with a valid consent asks only about unsaved
-/// files, with no checkbox, or shows the update sheet again when its plan got worse (R16).
+/// The one table that says what a quit asks (R29). The save-changes, unsaved-values and "Quitting stops…" alerts show
+/// whenever they apply, in that order. A quit asks about resuming on the last of them at most: "Quitting stops…" when it
+/// shows, else the unsaved-values warning, else the save-changes alert, else the plain quit dialog alone. An update quit
+/// with a valid consent asks only about unsaved files and unsaved values, with no checkbox, or shows the update sheet
+/// again when its plan got worse (R16).
 public enum QuitPolicy {
     /// Whether this quit asks about resuming: a user's quit, with Ask on, a terminal window open and no sheet up.
     public static func asksAboutResuming(_ input: QuitInput) -> Bool {
@@ -144,14 +150,20 @@ public enum QuitPolicy {
         // The update path: the sheet showed what stops, and its box answered about resuming.
         if input.update != nil || input.reason == .updateRelaunch {
             if let update = input.update, UpdateFlow.worse(update.current, than: update.consent) != nil { return [.updateSheet] }
-            return input.unsavedFiles > 0 ? [.saveChanges(resumeCheckbox: nil)] : []
+            var unsaved: [QuitQuestion] = []
+            if input.unsavedFiles > 0 { unsaved.append(.saveChanges(resumeCheckbox: nil)) }
+            // A database's value has no Save here: the warning is passed, or the update waits (R22).
+            if input.unsavedValues > 0 { unsaved.append(.unsavedValues(resumeCheckbox: nil)) }
+            return unsaved
         }
         let asks = asksAboutResuming(input)
         let checkbox: Bool? = asks ? resumeCheckbox(input.settings) : nil
         let busy = input.busyTabs > 0
+        let values = input.unsavedValues > 0
         var questions: [QuitQuestion] = []
-        // When "Quitting stops…" follows, it carries the checkbox, so the question is asked once.
-        if input.unsavedFiles > 0 { questions.append(.saveChanges(resumeCheckbox: busy ? nil : checkbox)) }
+        // The last alert carries the checkbox, so the question is asked once, after what could still cancel the quit.
+        if input.unsavedFiles > 0 { questions.append(.saveChanges(resumeCheckbox: busy || values ? nil : checkbox)) }
+        if values { questions.append(.unsavedValues(resumeCheckbox: busy ? nil : checkbox)) }
         if busy { questions.append(.busy(resumeCheckbox: checkbox)) }
         if questions.isEmpty, let checkbox { questions.append(.quit(resumeCheckbox: checkbox)) }
         return questions
@@ -202,8 +214,8 @@ public enum QuitPolicy {
 public struct QuitAsking: Equatable, Sendable {
     /// A press on a question's dialog.
     public enum Reply: Equatable, Sendable {
-        /// A button that lets the quit go on ("Quit", "Save", "Don’t Save"), with the box as it was (nil when the dialog
-        /// had none) and "Don’t ask again".
+        /// A button that lets the quit go on ("Quit", "Save", "Don’t Save", "Quit Anyway"), with the box as it was (nil
+        /// when the dialog had none) and "Don’t ask again".
         case goOn(resume: Bool?, dontAskAgain: Bool)
         /// "Cancel", ⎋ or ⌘., or a Save All that failed.
         case cancel
@@ -224,7 +236,7 @@ public struct QuitAsking: Equatable, Sendable {
             guard !cancelled, let resume else { return }
             switch question {
             case .quit: answer = .quit(resume: resume, dontAskAgain: dontAskAgain)
-            case .saveChanges, .busy: answer = .checkbox(checked: resume)
+            case .saveChanges, .unsavedValues, .busy: answer = .checkbox(checked: resume)
             case .updateSheet: break
             }
         }
@@ -243,7 +255,7 @@ public struct QuitAsking: Equatable, Sendable {
 /// A button pressed on a quit question's dialog.
 public enum QuitPress: Equatable, Sendable {
     /// A button that lets the quit go on: "Quit" on the plain dialog or the busy alert, "Don’t Save" on the save-changes
-    /// alert.
+    /// alert, "Quit Anyway" on the unsaved-values warning.
     case goOn
     /// "Save" (or "Save All") on the save-changes alert: the quit goes on once every file is saved.
     case save
@@ -319,7 +331,7 @@ extension QuitPolicy {
     /// The plain dialog's title. It has no informative text.
     public static let promptTitle = "Quit Next Term?"
 
-    /// The checkbox on the plain dialog and on the save-changes and "Quitting stops…" alerts.
+    /// The checkbox on the plain dialog and on the save-changes, unsaved-values and "Quitting stops…" alerts.
     public static let checkboxTitle = "Reopen windows and resume sessions when Next Term opens"
 
     /// The checkbox's tooltip, naming the open projects.

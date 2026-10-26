@@ -84,8 +84,11 @@ final class QuitAlertDialog: QuitDialog {
         self.box = box
     }
 
-    /// Shows the alert and waits: the press of the button that ended it, Cancel for any other way it ended.
+    /// Shows the alert and waits: the press of the button that ended it, Cancel for any other way it ended. On an alert
+    /// whose Cancel holds Return (the unsaved-values warning), ⎋ presses it too.
     func run() -> QuitPress {
+        let escape: Any? = alert.escapePressesCancel()
+        defer { if let escape { NSEvent.removeMonitor(escape) } }
         let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         return presses.indices.contains(index) ? presses[index] : .cancel
     }
@@ -93,4 +96,20 @@ final class QuitAlertDialog: QuitDialog {
     var resumeBox: Bool? { box.map { (box: NSButton) -> Bool in box.state == .on } }
 
     var dontAskAgain: Bool { alert.showsSuppressionButton && alert.suppressionButton?.state == .on }
+}
+
+/// A quit question answered in place of the user (the self-test's stand-in, `AppDelegate.askBeforeQuitting`): its
+/// alert is built as it would show, never run, and its boxes are read from it as they are.
+final class StandInQuitDialog: QuitDialog {
+    private let shown: QuitAlertDialog
+    private let press: () -> QuitPress
+
+    init(_ shown: QuitAlertDialog, press: @escaping () -> QuitPress) {
+        self.shown = shown
+        self.press = press
+    }
+
+    func run() -> QuitPress { press() }
+    var resumeBox: Bool? { shown.resumeBox }
+    var dontAskAgain: Bool { shown.dontAskAgain }
 }
