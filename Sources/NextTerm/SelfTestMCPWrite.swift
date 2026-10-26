@@ -339,7 +339,8 @@ extension SelfTest {
         let columnHidden: Bool = !app.showsWindowColumn && defaultsValue(WindowColumnSettings.shownKey) == false
         let sameColumn = await client.call("set_layout", ["window_column": "hidden", "project": proj.path])
         let columnAtOnce: Bool = (json(sameColumn.text)?["changed"] as? [String])?.isEmpty == true && MCPWriteControl.pending == nil
-        let foldUnseen = await client.call("set_layout", ["window_column_folded": false, "project": proj.path])
+        // Asked the other way from the saved fold, so it is a change whichever way it was left.
+        let foldUnseen = await client.call("set_layout", ["window_column_folded": app.windowColumnExpanded, "project": proj.path])
         let foldRefused: Bool = foldUnseen.isError && foldUnseen.text.contains("isn’t showing") && MCPWriteControl.pending == nil
         let viaSettings = await client.call("settings_set", ["values": ["window_column": "shown"]])
         let pointed: Bool = viaSettings.isError && viaSettings.text.contains("set_layout changes") && !app.showsWindowColumn

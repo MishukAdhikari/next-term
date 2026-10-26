@@ -376,7 +376,6 @@ final class WindowColumnButton: NSButton {
         refusesFirstResponder = true
         wantsLayer = true
         dot.pulsesForAttention = false // a mark that stays still: the tab itself pulses
-        dot.turnsWhileWorking = false
         dot.isHidden = true
         dot.setAccessibilityElement(false)
         addSubview(dot)

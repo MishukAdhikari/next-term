@@ -274,8 +274,11 @@ extension MCPWriteControl {
                 app.showsWindowColumn = shown
                 changed.append("window_column")
                 // A remote door's grant asks nothing on the Mac: say what changed, and how to put it back.
-                if window == nil, let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller.window {
-                    GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
+                if window == nil {
+                    GitToast.whenFree {
+                        guard let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller.window else { return }
+                        GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
+                    }
                 }
             }
             if let folded = change.windowColumnFolded {

@@ -43,7 +43,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   own key for an image, and it reads the image from the clipboard itself. At a shell, in Copilot CLI or any other
   program on this Mac, the image is kept as a PNG in a new folder only you can read, for a day, and its quoted path is
   pasted; in a tab logged in to another machine by hand (ssh) nothing is pasted. A file copied in Finder pastes as
-  its full path, as dropping it does. Text on the clipboard always pastes as text.
+  its full path, as dropping it does (its name in a tab on a server or logged in elsewhere: a paste never copies a
+  file there). Text on the clipboard always pastes as text. A pasted image is removed a day later, at the next paste
+  or launch.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
   for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
@@ -192,8 +194,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   that window forward as it was. ⌃⌘S, or the chevron, unfolds it in every window to show each window's
   name and marks, as ⌘O does; a window too narrow for it folds it, then hides it, until it is wider. When
   it appears, the editor and terminal give it the room and the sidebar keeps its width. View › Hide Window
-  Column (⌃⇧⌘S), or Settings › General, turns it off, and the same key brings it back. With it off and more
-  windows open than when you hid it (five at least), Next Term offers it once, two weeks on at the soonest;
+  Column (⌃⇧⌘S), or Settings › General, turns it off, and the same key brings it back. With it off and at least
+  two more windows open than when you hid it (five at least), Next Term offers it once, two weeks on at the soonest;
   with it on and five windows open, it says once how to hide it. An agent can show, hide, fold or unfold it
   with `set_layout`, once you approve on the Mac.
 - **A new terminal stays out of your files.** New Terminal (⌘N) opens a shell where new tabs open

@@ -505,18 +505,19 @@ enum SelfTest {
         let checksumReply = (try? String(contentsOf: checksum, encoding: .isoLatin1)) ?? ""
         check(checksumReply.contains("!~0000"), "screen checksum requests are answered with 0000", checksumReply.debugDescription)
 
-        // ⌘V drops escape characters (the user's clipboard is put back afterwards).
-        let savedClipboard = NSPasteboard.general.string(forType: .string)
+        // ⌘V drops escape characters, from a pasteboard of the self-test's own (the user's clipboard is never touched).
+        let escapeBoard = NSPasteboard(name: NSPasteboard.Name("nt-selftest-escape-\(getpid())"))
+        NextTermView.pasteboard = escapeBoard
         let pasted = dir.appendingPathComponent("pasted")
         second.view.send(txt: "cat > \(pasted.path)\r")
         _ = await wait(3) { second.status.running }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("a\u{1b}[201~b\n", forType: .string)
+        escapeBoard.clearContents()
+        escapeBoard.setString("a\u{1b}[201~b\n", forType: .string)
         second.view.paste(self)
         second.view.send(txt: "\u{04}")
         _ = await wait(4) { !second.status.running }
-        NSPasteboard.general.clearContents()
-        if let savedClipboard { NSPasteboard.general.setString(savedClipboard, forType: .string) }
+        NextTermView.pasteboard = .general
+        escapeBoard.releaseGlobally()
         let pastedText = (try? String(contentsOf: pasted, encoding: .utf8)) ?? "missing"
         check(pastedText == "a[201~b\n", "pasted text loses its escape characters", pastedText.debugDescription)
         await imagePasteChecks(second, dir: dir)
@@ -3362,7 +3363,8 @@ enum SelfTest {
     }
 
     /// Beside the editor, ⌘J folds the terminal to a rail at the window's edge: the arrow back, each tab's
-    /// mark, a few pulses when one finishes (none with Reduce Motion), a click on a mark opening its tab.
+    /// mark, a few pulses when one fails or needs you (none with Reduce Motion) and none when one finishes, a click on a mark
+    /// opening its tab.
     private static func railChecks(_ c: TerminalWindowController, proj: URL) async {
         guard let window = c.window, let app = AppDelegate.shared, let pane = c.tabBar.superview else { return }
         let file = proj.appendingPathComponent("rail.txt")
@@ -3464,9 +3466,9 @@ enum SelfTest {
         // Done, busy, done again (an agent pausing in its output): a tab that finishes gets its quiet mark, and the rail
         // never pulses for it.
         let started = front.status.commandsStarted
+        let noticedDone = rail.changesNoticed
         front.view.send(txt: "sleep 0.3\r")
         _ = await wait(5) { front.status.commandsStarted > started && rail.marks[safe: frontIndex]?.state == .done }
-        let noticedDone = rail.changesNoticed
         front.view.send(txt: "sleep 1\r")
         let busy = await wait(3) { rail.marks[safe: frontIndex]?.state != .done } // running, the mark clears
         let doneAgain = await wait(5) { rail.marks[safe: frontIndex]?.state == .done }

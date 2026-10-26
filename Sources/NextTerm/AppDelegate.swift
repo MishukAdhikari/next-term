@@ -621,6 +621,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Updater.removeLeftovers()
         // Images pasted as a path a day ago or more.
         DispatchQueue.global(qos: .utility).async { ImagePaste.removeOld(in: ImagePaste.parent, now: Date()) }
+        // The window column hidden before its time was kept: the two weeks before it is offered again start now.
+        WindowColumnOffer.stampHidden(shown: showsWindowColumn, now: Date(), .standard)
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }

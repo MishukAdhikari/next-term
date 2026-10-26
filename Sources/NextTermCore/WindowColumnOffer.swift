@@ -4,8 +4,8 @@ import Foundation
 /// window the user just opened, with a button that does it. It never changes the setting by itself, never takes the
 /// keyboard, and stops for good once the user has switched the column either way (they know where it is).
 ///
-/// - The column off: once, when more windows are open than when it was hidden (five at least), and two weeks or more
-///   after hiding it. "6 windows open. Show the window column (⌃⇧⌘S)?" Show, or Don't Ask Again.
+/// - The column off: once, with at least two more windows open than when it was hidden (five at least), and two weeks
+///   or more after hiding it. "6 windows open. Show the window column (⌃⇧⌘S)?" Show, or Don't Ask Again.
 /// - The column on: once, with five windows or more, how to hide it. "6 windows open. Hide the window column (⌃⇧⌘S)?"
 ///   Hide, or Keep It.
 public enum WindowColumnOffer {
@@ -83,6 +83,12 @@ public enum WindowColumnOffer {
     public static func finish(_ defaults: UserDefaults) {
         defaults.set(true, forKey: showOfferedKey)
         defaults.set(true, forKey: hideTipKey)
+    }
+
+    /// Hidden before the time was kept (0.11.26): the wait starts now, so nobody who just hid it is asked at once.
+    public static func stampHidden(shown: Bool, now: Date, _ defaults: UserDefaults) {
+        guard !shown, defaults.object(forKey: hiddenAtKey) == nil else { return }
+        defaults.set(now.timeIntervalSince1970, forKey: hiddenAtKey)
     }
 
     /// The setting changed, by the menu, the key, Settings, a notice or an agent: whoever switched it knows how, so

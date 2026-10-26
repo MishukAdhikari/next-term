@@ -90,11 +90,22 @@ extension SelfTest {
         check(titles(plain) == ["Copy", "Paste", "Select All", "Clear", "Find…", "Split Right", "Split Down"],
               "menus: the terminal's menu", titles(plain).joined(separator: ", "))
         check(plain.items.first { $0.title == "Copy" }?.isEnabled == false, "menus: Copy is off with nothing selected")
-        NSPasteboard.general.clearContents()
-        let empty = w.terminalMenu(for: tab, link: nil).items.first { $0.title == "Paste" }
-        NSPasteboard.general.setString("paste me", forType: .string)
-        let full = w.terminalMenu(for: tab, link: nil).items.first { $0.title == "Paste" }
-        check(empty?.isEnabled == false && full?.isEnabled == true, "menus: Paste is on only with text on the clipboard")
+        // Paste follows what is on the clipboard, read from a pasteboard of the self-test's own.
+        let board = NSPasteboard(name: NSPasteboard.Name("nt-selftest-menus-\(getpid())"))
+        NextTermView.pasteboard = board
+        func pasteOn(_ fill: () -> Void) -> Bool {
+            board.clearContents()
+            fill()
+            return w.terminalMenu(for: tab, link: nil).items.first { $0.title == "Paste" }?.isEnabled == true
+        }
+        let empty: Bool = pasteOn {}
+        let text: Bool = pasteOn { board.setString("paste me", forType: .string) }
+        let image: Bool = pasteOn { board.setData(Data([0x89, 0x50, 0x4E, 0x47]), forType: .png) }
+        let fileOn: Bool = pasteOn { board.writeObjects([folder.appendingPathComponent("a.txt") as NSURL]) }
+        NextTermView.pasteboard = .general
+        board.releaseGlobally()
+        check(!empty && text && image && fileOn, "menus: Paste is on with text, an image or a file on the clipboard, off with nothing",
+              "empty \(empty), text \(text), image \(image), file \(fileOn)")
         commandsMatchTheMenuBar(plain, "the terminal")
 
         // Two lines of output, the second selected: Copy copies it.

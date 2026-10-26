@@ -3,9 +3,9 @@ import NextTermCore
 
 #if DEBUG
 /// ⌘V with an image, on a pasteboard of the self-test's own (the user's clipboard is never read or changed): a stand-in
-/// claude gets the ⌃V its own key sends and nothing else; at a shell (cat) the image is kept 0600 in a private folder and
+/// claude gets the ⌃V its own key sends; at a shell (cat) the image is kept 0600 in a private folder and
 /// its path typed; text beside an image pastes the text; a file Finder copied pastes as its full path; a stand-in ssh
-/// gets nothing, the image being on this Mac.
+/// gets no image, the image being on this Mac, and a copied file's name rather than its path.
 extension SelfTest {
     static func imagePasteChecks(_ tab: TerminalTab, dir: URL) async {
         let board = NSPasteboard(name: NSPasteboard.Name("nt-selftest-paste-\(getpid())"))
@@ -43,16 +43,17 @@ extension SelfTest {
         }
 
         // An agent that reads the clipboard on ⌃V: exactly that byte.
-        standIn("claude", #"stty raw -echo; dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' > "$OUT"; stty sane"#)
+        standIn("claude", #"stty raw -echo; : > "$OUT.ready"; dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' > "$OUT"; stty sane"#)
         let key = dir.appendingPathComponent("agent-key")
         tab.view.send(txt: "PATH=\(bin.path):$PATH OUT=\(key.path) claude\r")
         let running: Bool = await wait(6) { tab.status.running && tab.localAgent == .claude }
-        await pause(0.5) // its terminal raw
+        // Its terminal raw before the paste: in the line discipline's own mode ⌃V would be eaten as "next literally".
+        let raw: Bool = await wait(6) { FileManager.default.fileExists(atPath: key.path + ".ready") }
         image()
         tab.view.paste(self)
-        _ = await wait(4) { !read(key).isEmpty }
-        check(running && read(key) == "16", "image paste: ⌘V with an image alone sends an agent that reads the clipboard the ⌃V its own key sends",
-              "agent \(running), read \(read(key).debugDescription)")
+        if !(await wait(4) { !read(key).isEmpty }) { tab.view.send(txt: "\u{03}") } // a plain byte in raw mode: it ends
+        check(running && raw && read(key) == "16", "image paste: ⌘V with an image alone sends an agent that reads the clipboard the ⌃V its own key sends",
+              "agent \(running), raw \(raw), read \(read(key).debugDescription)")
         _ = await wait(4) { !tab.status.running }
 
         // At a shell: kept 0600 in a private folder, its quoted path typed.
@@ -64,7 +65,10 @@ extension SelfTest {
         check(path.contains("/\(ImagePaste.parentName)/\(ImagePaste.prefix)") && path.hasSuffix(".png") && header && mode == 0o600
               && PrivateFolder.isPrivate(folder),
               "image paste: at a shell the image is kept 0600 in a private folder and its path typed", typed.debugDescription)
-        try? FileManager.default.removeItem(atPath: folder)
+        // Only ever the folder the paste made: never whatever another path typed there might name.
+        if folder.hasPrefix(ImagePaste.parent.path + "/" + ImagePaste.prefix), PrivateFolder.isPrivate(folder) {
+            try? FileManager.default.removeItem(atPath: folder)
+        }
 
         // Text beside an image: the text.
         let text: String = await catting("image-text", paste: {
@@ -94,9 +98,19 @@ extension SelfTest {
         image()
         tab.view.paste(self)
         await pause(1)
-        tab.view.send(txt: "\u{04}")
+        let nothing: Bool = read(elsewhere).isEmpty && !tab.screenTail(3).joined().contains("pasted-")
+        // There, a file Finder copied pastes as its name: this Mac's path means nothing on the other machine.
+        board.clearContents()
+        board.writeObjects([file as NSURL])
+        board.setString(file.lastPathComponent, forType: .string)
+        tab.view.paste(self)
+        _ = await wait(4) { tab.screenTail(3).joined().contains("shot.png") }
+        tab.view.send(txt: "\u{04}\u{04}")
         _ = await wait(4) { !tab.status.running }
-        check(logged && read(elsewhere).isEmpty, "image paste: a tab logged in to another machine by hand gets nothing", read(elsewhere).debugDescription)
+        let name: String = read(elsewhere).trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+        check(logged && nothing && name == "shot.png",
+              "image paste: a tab logged in to another machine by hand gets no image, and a copied file's name rather than its path",
+              "logged \(logged), nothing \(nothing), file \(read(elsewhere).debugDescription)")
     }
 }
 #endif

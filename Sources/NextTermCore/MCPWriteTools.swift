@@ -774,20 +774,22 @@ public struct MCPLayoutChange: Equatable, Sendable {
         MCPFileTools.catching {
             let args = MCPArguments(arguments)
             var change = MCPLayoutChange()
-            if arguments["terminal_position"] != nil {
+            // An argument sent as null is one not given: a client that names every argument changes only the rest.
+            func given(_ name: String) -> Bool { arguments[name].map { !($0 is NSNull) } ?? false }
+            if given("terminal_position") {
                 change.terminalPosition = try args.choice("terminal_position", of: ["bottom", "right", "left", "top"], default: "bottom")
             }
-            if arguments["sidebar_side"] != nil { change.sidebarSide = try args.choice("sidebar_side", of: ["left", "right"], default: "left") }
-            if arguments["terminal_tabs"] != nil {
+            if given("sidebar_side") { change.sidebarSide = try args.choice("sidebar_side", of: ["left", "right"], default: "left") }
+            if given("terminal_tabs") {
                 let sides: [String] = TerminalTabsSetting.allCases.map(\.rawValue)
                 change.terminalTabs = try args.choice("terminal_tabs", of: sides, default: TerminalTabsSetting.top.rawValue)
             }
-            if arguments["window_column"] != nil {
+            if given("window_column") {
                 change.windowColumnShown = try args.choice("window_column", of: ["shown", "hidden"], default: "shown") == "shown"
             }
-            if arguments["window_column_folded"] != nil { change.windowColumnFolded = try args.bool("window_column_folded", default: true) }
-            if arguments["sidebar"] != nil { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
-            if arguments["terminal_folded"] != nil { change.terminalFolded = try args.bool("terminal_folded", default: false) }
+            if given("window_column_folded") { change.windowColumnFolded = try args.bool("window_column_folded", default: true) }
+            if given("sidebar") { change.sidebarShown = try args.choice("sidebar", of: ["shown", "hidden"], default: "shown") == "shown" }
+            if given("terminal_folded") { change.terminalFolded = try args.bool("terminal_folded", default: false) }
             guard !change.isEmpty else {
                 throw MCPToolError("Give at least one of terminal_position, sidebar_side, terminal_tabs, window_column, window_column_folded, sidebar and terminal_folded.")
             }

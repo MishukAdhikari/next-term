@@ -158,6 +158,11 @@ import Testing
         #expect(MCPLayoutChange.parse(["window_column": true]).isFailure)
         #expect(MCPLayoutChange.parse(["window_column": "on"]).isFailure)
         #expect(MCPLayoutChange.parse(["window_column_folded": "no"]).isFailure)
+        // A client that names every argument, the rest as null: only what it gave.
+        let nulls: [String: Any] = ["terminal_position": "left", "sidebar_side": NSNull(), "terminal_tabs": NSNull(), "window_column": NSNull(),
+                                    "window_column_folded": NSNull(), "sidebar": NSNull(), "terminal_folded": NSNull()]
+        #expect(try MCPLayoutChange.parse(nulls).get() == MCPLayoutChange(terminalPosition: "left"))
+        #expect(MCPLayoutChange.parse(["window_column": NSNull()]).failureText?.contains("at least one") == true)
         // In one call with the others.
         let both = try MCPLayoutChange.parse(["window_column": "shown", "window_column_folded": false, "sidebar": "hidden"]).get()
         #expect(both == MCPLayoutChange(sidebarShown: false, windowColumnShown: true, windowColumnFolded: false))

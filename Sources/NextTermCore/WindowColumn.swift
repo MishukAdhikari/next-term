@@ -64,16 +64,16 @@ public struct WindowColumnRow: Equatable, Sendable {
 
 /// What a badge shows of its window.
 public enum WindowColumnBadge {
-    /// Two letters of the window's name: the first letters of its first two words, with words split at spaces,
-    /// punctuation and lower-to-upper changes ("next-term" NT, "xCloud" XC, "7027-sso" 7S, "web-1" W1); a single word's
-    /// first two letters, the first capitalised ("shop" Sh). A worktree's own part is its name ("xCloud ▸ 7027-sso" 7S),
-    /// and a window with no project goes by its folder's name ("~/Downloads" Do); the home folder is "~".
     /// Whether the letters are set a little apart: two characters or more with no lowercase ("XC", "73", "7S"), as short
     /// capitals and figures read best that way; mixed case ("Ag") and one character ("~") as the font sets them.
     public static func tracks(_ letters: String) -> Bool {
         letters.count >= 2 && !letters.contains { (character: Character) -> Bool in character.isLowercase }
     }
 
+    /// Two letters of the window's name: the first letters of its first two words, with words split at spaces,
+    /// punctuation and lower-to-upper changes ("next-term" NT, "xCloud" XC, "7027-sso" 7S, "web-1" W1); a single word's
+    /// first two letters, the first capitalised ("shop" Sh). A worktree's own part is its name ("xCloud ▸ 7027-sso" 7S),
+    /// and a window with no project goes by its folder's name ("~/Downloads" Do); the home folder is "~".
     public static func letters(name: String, kind: WindowKind) -> String {
         var source: String = name
         switch kind {

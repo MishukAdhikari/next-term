@@ -18,13 +18,16 @@ extension SelfTest {
             return check(false, "window column: the calm look's badges to check")
         }
         let badge: NSRect = own.badgeForTest
+        // As drawn: just outside the badge, in the well, the darker colour of the tab you are in, not a light ring.
+        let wellColor: NSColor? = color(of: own, at: NSPoint(x: badge.minX - 1, y: badge.midY))
         let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -2, dy: -2)
+            && wellColor.map { close($0, Theme.background) } == true
         let corner: NSRect = marked.badgeForTest
         let dot: NSRect? = marked.dotFrameForTest
         let dotPlaced: Bool = dot == NSRect(x: corner.maxX - 5, y: corner.minY - 1, width: 6, height: 6)
             && dot.map { marked.bounds.contains($0.insetBy(dx: -2, dy: -2)) } == true
         check(well && dotPlaced, "window column: this window's badge sits in a darker well, and a dot is 6 points at a badge's corner, its cut inside",
-              "well \(own.plateForTest) round \(badge), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
+              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none"), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
 
         let font = NSFont.systemFont(ofSize: 10, weight: .medium)
         func width(_ text: String) -> CGFloat { NSAttributedString(string: text, attributes: [.font: font]).size().width }
@@ -33,15 +36,16 @@ extension SelfTest {
         check(abs(spread - 0.7) < 0.05 && abs(mixed) < 0.01, "window column: two capitals are set a little apart, mixed case as the font sets it",
               "XC +\(spread), Ag +\(mixed)")
 
-        // As View › Agent Spinner has it: a tab's mark turns with Spinning, a listed one never.
+        // As View › Agent Spinner has it: a tab's mark turns with Spinning; the marks ⌘O's rows and the unfolded column's
+        // rows show (SwitcherMarksView, the same view in both) never.
         let watched = StatusDotView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
         watched.state = .working
-        let listed = StatusDotView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
-        listed.turnsWhileWorking = false
-        listed.state = .working
-        check(watched.ringTurns == AgentSpinner.turns && listed.ringShows == watched.ringShows && !listed.ringTurns,
+        let listed = SwitcherMarksView()
+        listed.show([AgentMarks.Mark(state: .working, count: 1)], color: Theme.textDim)
+        let listedDot: StatusDotView? = listed.dotsForTest.first
+        check(watched.ringTurns == AgentSpinner.turns && listedDot?.ringShows == watched.ringShows && listedDot?.ringTurns == false,
               "window column: a working mark in the column or ⌘O stays still while a tab's turns",
-              "spinner \(AgentSpinner.current.rawValue), tab turns \(watched.ringTurns), listed turns \(listed.ringTurns)")
+              "spinner \(AgentSpinner.current.rawValue), tab turns \(watched.ringTurns), listed \(listedDot.map { "turns \($0.ringTurns)" } ?? "none")")
 
         let contrast: Bool? = DisplayOptions.increasesContrastOverride
         DisplayOptions.increasesContrastOverride = false
@@ -55,6 +59,23 @@ extension SelfTest {
         check(quiet != nil && plain != nil && quiet?.tiffRepresentation != plain?.tiffRepresentation && redrawn == [five[0].indexID],
               "window column: Increase Contrast makes done plain green and draws this window's badge alone again, for its edge",
               "redrawn \(redrawn) of \(column.shownButtons.map(\.id))")
+    }
+
+    /// The colour `view` draws at `point` (its own coordinates), read from a drawing of it.
+    private static func color(of view: NSView, at point: NSPoint) -> NSColor? {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let scale: CGFloat = CGFloat(rep.pixelsWide) / max(1, view.bounds.width)
+        // The drawing's rows run from the top, as the flipped view's do.
+        let y: CGFloat = view.isFlipped ? point.y : view.bounds.height - point.y
+        return rep.colorAt(x: Int(point.x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
+    }
+
+    /// Two colours the same to within a step of each channel.
+    private static func close(_ a: NSColor, _ b: NSColor) -> Bool {
+        guard let a = a.usingColorSpace(.sRGB), let b = b.usingColorSpace(.sRGB) else { return false }
+        return abs(a.redComponent - b.redComponent) < 0.03 && abs(a.greenComponent - b.greenComponent) < 0.03
+            && abs(a.blueComponent - b.blueComponent) < 0.03
     }
 
     /// ⌃⇧⌘S, as the keyboard sends it: hidden in every window, View says Show Window Column, the setting off and the
@@ -146,6 +167,8 @@ extension SelfTest {
         }
         /// A window opened, the notice it brings (nil for none after a moment), and the window to close after.
         func opening() async -> (TerminalWindowController?, String?) {
+            // The offer comes only with Next Term in front, as it would for the user.
+            if !NSApp.isActive { _ = await bringToFront(window) }
             let opened = await open()
             _ = await wait(2) { GitToast.text != nil }
             return (opened, GitToast.text)
@@ -177,11 +200,13 @@ extension SelfTest {
         fresh(shown: false)
         let (declinedWindow, declined) = await opening()
         GitToast.pressOtherButtonForTest()
+        // Its own mark: neither notice again (the offer alone notes only itself as shown).
+        let ended: Bool = defaults.bool(forKey: WindowColumnOffer.hideTipKey)
         if let declinedWindow { await close(declinedWindow) }
         app.windowColumns.resetOffersForTest()
         let (againWindow, again) = await opening()
-        check(declined != nil && again == nil && !app.showsWindowColumn,
-              "window column: Don’t Ask Again ends the offer, the column staying hidden", again ?? "")
+        check(declined != nil && ended && again == nil && !app.showsWindowColumn,
+              "window column: Don’t Ask Again ends the offer, the column staying hidden", "ended \(ended), again \(again ?? "none")")
         if let againWindow { await close(againWindow) }
 
         // Shown some other way while the offer is up: the offer goes.

@@ -383,6 +383,15 @@ final class GitToast {
     private(set) static var count = 0
     /// A notice is up: an offer waits rather than push an Undo away.
     static var isShowing: Bool { current != nil }
+    /// Notices waiting for the one up to go (whenFree).
+    private static var waiting: [() -> Void] = []
+
+    /// Runs `show` (a notice that must not be lost, such as what an agent changed) now if no notice is up, else once the
+    /// one up has gone, so it never pushes an Undo away.
+    static func whenFree(_ show: @escaping () -> Void) {
+        if current == nil { return show() }
+        waiting.append(show)
+    }
 
     static func show(_ text: String, in window: NSWindow?, button: String? = nil, isError: Bool = false, begun: Int? = nil,
                      action: (() -> Void)? = nil) {
@@ -459,6 +468,13 @@ final class GitToast {
         shown = nil
         action = nil
         otherAction = nil
+        // A notice waiting for this one, once whatever replaces this one (if anything) is up: it waits again then.
+        if !waiting.isEmpty {
+            DispatchQueue.main.async {
+                guard current == nil, !waiting.isEmpty else { return }
+                waiting.removeFirst()()
+            }
+        }
     }
 
     fileprivate static func pressed() {

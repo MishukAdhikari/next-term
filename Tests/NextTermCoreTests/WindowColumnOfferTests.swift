@@ -92,4 +92,23 @@ struct WindowColumnOfferTests {
         #expect(WindowColumnSettings.grantedLine(shown: false, key: "⌃⇧⌘S") == "An agent hid the window column; ⌃⇧⌘S brings it back.")
         #expect(WindowColumnSettings.grantedLine(shown: true, key: nil) == "An agent showed the window column.")
     }
+
+    @Test func hiddenBeforeTheTimeWasKeptTheWaitStartsNow() throws {
+        let (defaults, name) = try TestDefaults.make("column-offer-stamp")
+        defer { TestDefaults.remove(defaults, name) }
+        // Hidden in 0.11.26: no time kept. The launch stamps one, and the offer waits two weeks from it.
+        WindowColumnOffer.stampHidden(shown: false, now: now, defaults)
+        let record = WindowColumnOffer.Record(defaults)
+        #expect(record.hiddenAt == now && record.hiddenWith == nil)
+        #expect(WindowColumnOffer.offer(shown: false, windows: 9, record: record, now: now.addingTimeInterval(day)) == nil)
+        #expect(WindowColumnOffer.offer(shown: false, windows: 5, record: record, now: now.addingTimeInterval(14 * day)) == .show)
+        // A time kept already stays; shown, nothing is stamped.
+        WindowColumnOffer.stampHidden(shown: false, now: now.addingTimeInterval(day), defaults)
+        #expect(WindowColumnOffer.Record(defaults).hiddenAt == now)
+        let (other, otherName) = try TestDefaults.make("column-offer-stamp-shown")
+        defer { TestDefaults.remove(other, otherName) }
+        WindowColumnOffer.stampHidden(shown: true, now: now, other)
+        #expect(WindowColumnOffer.Record(other).hiddenAt == nil)
+    }
 }
+

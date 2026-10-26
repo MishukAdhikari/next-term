@@ -248,10 +248,11 @@ final class NextTermView: LocalProcessTerminalView {
         let text: String? = board.string(forType: .string)
         switch PasteContent.choose(files: files, text: text, image: board.availableType(from: [.png, .tiff]) != nil) {
         case .files:
-            // On a server a copied file is never sent by a paste (a clipboard can be hours old): its name, as before.
-            if onRemoteDrop != nil { return pasteText(text ?? "") }
             onKeyboard?()
             onPaste?()
+            // On a server, or logged in to one by hand, this Mac's paths mean nothing, and a paste never copies a file
+            // there (a clipboard can be hours old): the names, quoted.
+            if onRemoteDrop != nil || loggedInElsewhere?() == true { return typePaths(files.map { ($0 as NSString).lastPathComponent }) }
             typePaths(files)
         case .text:
             pasteText(text ?? "")
@@ -381,6 +382,8 @@ final class NextTermView: LocalProcessTerminalView {
     var onRemoteDrop: (([URL]) -> Void)?
     /// ⌘V of an image alone: the tab hands it on as its program takes images.
     var onImagePaste: (() -> Void)?
+    /// Whether the program in front logs in to another machine (ssh): a file copied in Finder pastes as its name there.
+    var loggedInElsewhere: (() -> Bool)?
 
     /// The clipboard's image as it is there (PNG, or TIFF, as a screenshot puts it), read on the main thread.
     static func clipboardImage(_ pasteboard: NSPasteboard) -> Data? {
@@ -766,6 +769,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
         view.onImagePaste = { [weak self] in self?.pasteImage() }
+        view.loggedInElsewhere = { [weak self] in self.map { ImagePaste.loggedInElsewhere($0.programsInFront) } ?? false }
         // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
         view.passesOtherButtons = { [weak self] in !(self?.remote?.keep == .tmux && self?.isKept == true) }
 
@@ -1058,28 +1062,35 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// ⌘V of an image alone, handed on as the program here takes images (ImagePaste): an agent that reads the clipboard on
     /// ⌃V gets ⌃V; anything else on this Mac its path, kept 0600 in a new private folder for a day; a tab on a server a
     /// copy there; a tab logged in elsewhere by hand nothing, and a note why.
+    /// The program in front as typed and as it runs (an alias's own name, and ssh behind it); none at the prompt.
+    var programsInFront: [String] {
+        guard status.running else { return [] }
+        return [status.program, CommandClassifier.programName(status.expandedCommand)].filter { !$0.isEmpty }
+    }
+
     func pasteImage() {
-        let program: String? = status.running ? status.program : nil
-        switch ImagePaste.way(remote: remote != nil, agent: localAgent, program: program) {
+        switch ImagePaste.way(remote: remote != nil, agent: localAgent, programs: programsInFront) {
         case .controlV:
             view.pressControlV()
         case .elsewhere:
-            view.showNote("The image is on this Mac and this tab is logged in to another machine, so nothing was pasted. A tab opened with New Remote Tab copies pasted images to its server.")
+            view.showNote("Nothing pasted: the image is on this Mac, and this tab is logged in elsewhere (ssh).")
         case .path, .copyToServer:
             guard let data = NextTermView.clipboardImage(NextTermView.pasteboard) else { return }
             let toServer: Bool = remote != nil
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                ImagePaste.removeOld(in: ImagePaste.parent, now: Date())
                 let kept: Result<URL, Error> = Result {
                     guard let png = NextTermView.png(data) else { throw CocoaError(.fileReadCorruptFile) }
                     return try ImagePaste.keep(png, in: ImagePaste.parent, at: Date())
                 }
                 DispatchQueue.main.async {
-                    guard let self else { return }
+                    let gone: () -> Void = { if case .success(let file) = kept { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) } }
+                    guard let self else { return gone() }
                     switch kept {
                     case .failure(let error):
                         self.view.showNote("Next Term could not keep the pasted image: \(error.localizedDescription)")
                     case .success(let file):
-                        guard !self.exited, self.view.acceptsInput else { return }
+                        guard !self.exited, self.view.acceptsInput else { return gone() }
                         if toServer {
                             // The copy here goes once it is on the server, sent or not.
                             RemoteDrop.drop([file], into: self) { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }

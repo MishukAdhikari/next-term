@@ -19,10 +19,14 @@ public enum PasteContent: Equatable, Sendable {
         return image ? .image : .nothing
     }
 
-    /// Whether every line of `text` is one of `files`' names or paths.
+    /// Whether `text` only names `files`: their names or paths, one a line (Finder may part them with a return), or the
+    /// whole text one name, which may hold a line break of its own.
     static func namesOnly(_ text: String, _ files: [String]) -> Bool {
-        let known = Set(files + files.map { ($0 as NSString).lastPathComponent })
-        let lines: [String] = text.split(whereSeparator: \.isNewline).map(String.init)
+        let names: [String] = files.map { ($0 as NSString).lastPathComponent }
+        let lined: String = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        if lined == names.joined(separator: "\n") || lined == files.joined(separator: "\n") { return true }
+        let known = Set(files + names)
+        let lines: [String] = lined.split(separator: "\n").map(String.init)
         return !lines.isEmpty && lines.allSatisfy { known.contains($0) }
     }
 }
@@ -45,36 +49,52 @@ public enum ImagePaste: Equatable, Sendable {
     /// Programs that log in to another machine: a path on this Mac means nothing there.
     public static let remoteLogins: Set<String> = ["ssh", "mosh", "mosh-client", "autossh", "et"]
 
-    /// The way for a tab: on a server, or local with `agent` running, or `program` in front (nil at the prompt).
-    public static func way(remote: Bool, agent: AgentKind?, program: String?) -> ImagePaste {
+    /// The way for a tab: on a server, or local with `agent` running, or `programs` in front (the name typed and the one
+    /// it runs, as an alias names ssh; none at the prompt).
+    public static func way(remote: Bool, agent: AgentKind?, programs: [String]) -> ImagePaste {
         if remote { return .copyToServer }
         if let agent, controlVAgents.contains(agent) { return .controlV }
-        if let program, remoteLogins.contains((program as NSString).lastPathComponent) { return .elsewhere }
+        if loggedInElsewhere(programs) { return .elsewhere }
         return .path
+    }
+
+    /// Whether one of `programs` logs in to another machine: what is on this Mac (an image, a file's path) means nothing
+    /// there.
+    public static func loggedInElsewhere(_ programs: [String]) -> Bool {
+        programs.contains { remoteLogins.contains(($0 as NSString).lastPathComponent) }
     }
 
     /// Where pasted images are kept, in the temporary folder: one private folder each, named `prefix` and more.
     public static let parentName = "next-term-paste"
     public static var parent: URL { FileManager.default.temporaryDirectory.appendingPathComponent(parentName, isDirectory: true) }
     public static let prefix = "image-"
-    /// How long a kept image stays: the launch after this removes it.
+    /// How long a kept image stays: the next paste or launch after this removes it.
     public static let kept: TimeInterval = 24 * 60 * 60
 
     /// `png` written as `pasted-<time>.png` in a new private folder in `parent`: the file made 0600, never over a file or
-    /// through a link already at its name.
+    /// through a link already at its name. `parent` itself must be a folder only this user can enter, not a link to
+    /// one elsewhere. A write that fails leaves nothing behind.
     public static func keep(_ png: Data, in parent: URL, at date: Date) throws -> URL {
         let folder = try PrivateFolder.make(in: parent, prefix: prefix)
-        let file = folder.url.appendingPathComponent(RemoteUpload.imageName(at: date))
-        let descriptor: Int32 = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: file.path]) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        try handle.write(contentsOf: png)
-        try handle.close()
-        return file
+        do {
+            guard PrivateFolder.isPrivate(parent.path) else { throw PrivateFolder.NotPrivate(path: parent.path) }
+            let file = folder.url.appendingPathComponent(RemoteUpload.imageName(at: date))
+            let descriptor: Int32 = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            try handle.write(contentsOf: png)
+            try handle.close()
+            return file
+        } catch {
+            folder.remove()
+            throw error
+        }
     }
 
-    /// The pasted images kept longer than `kept`, from earlier launches: removed as Next Term starts.
+    /// The pasted images kept longer than `kept`: removed as Next Term starts and before each paste, so none outlives a
+    /// day while Next Term stays open. Nothing in a `parent` that is not a private folder (a link to one elsewhere).
     public static func removeOld(in parent: URL, now: Date) {
+        guard PrivateFolder.isPrivate(parent.path) else { return }
         for folder in PrivateFolder.leftovers(in: parent, prefix: prefix, madeBefore: now.addingTimeInterval(-kept)) { folder.remove() }
     }
 }
