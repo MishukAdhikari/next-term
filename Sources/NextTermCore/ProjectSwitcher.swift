@@ -857,6 +857,11 @@ public enum SwitcherText {
         return RecentProjects.abbreviate(parent, home: home)
     }
 
+    /// The name Edit › Undo gives a forget, after its “Undo”: “Forget “docs””, by the title the row shows.
+    public static func forgetAction(_ title: String) -> String {
+        "Forget “" + title + "”"
+    }
+
     /// A server's row to VoiceOver: "staging, deploy@staging.example.com".
     public static func accessibilityLabel(_ server: SwitcherServer) -> String {
         server.name + ", " + server.destination
