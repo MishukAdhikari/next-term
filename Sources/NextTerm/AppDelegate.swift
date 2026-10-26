@@ -860,6 +860,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A second quit while the first asks: cancelled, and the first's answers, its quit consent among them, stay its own.
         guard !askingToQuit else { return .terminateCancel }
+        // A database save under way finishes first, then the quit starts again and asks as things stand.
+        let saving: [DatabasePane] = controllers.flatMap(\.editorArea.savingDatabases)
+        if !saving.isEmpty {
+            EditorArea.afterSaving(saving) { DispatchQueue.main.async { NSApp.terminate(nil) } }
+            return .terminateCancel
+        }
         askingToQuit = true
         defer { askingToQuit = false }
         // The quit consent comes only from a press in this quit's questions (R30): none is left from a quit cancelled
@@ -890,13 +896,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return .terminateNow
     }
 
-    /// The quit's questions (QuitPolicy), one at a time: the save-changes and "Quitting stops…" alerts whenever they
-    /// apply, as always, with the resume question on one of them, or else the plain quit dialog on its own. Under an
-    /// update consent: the unsaved-files question alone, with no checkbox, and when the plan got worse than the one the
-    /// consent covers, no question at all but the update sheet again (R16). Nil when the quit is cancelled. The answer is
-    /// saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
-    private func askBeforeQuitting(update consent: UpdateConsent?, reason: QuitReason) -> QuitAsking? {
+    /// The quit's questions (QuitPolicy), one at a time: the save-changes, unsaved-values and "Quitting stops…" alerts
+    /// whenever they apply, as always, with the resume question on one of them, or else the plain quit dialog on its
+    /// own. Under an update consent: the unsaved-files and unsaved-values questions alone, with no checkbox, and when the
+    /// plan got worse than the one the consent covers, no question at all but the update sheet again (R16). Nil when the
+    /// quit is cancelled. The answer is saved only once the quit goes ahead; the quit consent comes from it (QuitAsking).
+    /// `standIn`, for the self-test: answers each question in place of the user, its alert built as it would show.
+    func askBeforeQuitting(update consent: UpdateConsent?, reason: QuitReason,
+                           standIn: ((QuitQuestion, NSAlert) -> QuitPress)? = nil) -> QuitAsking? {
         let dirty = controllers.flatMap(\.editorArea.dirtyDocuments)
+        let drafts = controllers.flatMap(\.editorArea.draftDatabases)
         let projects = openProjects
         let settings = LaunchSettings(defaults: launchDefaults)
         let sheetAttached = NSApp.windows.contains { $0.attachedSheet != nil }
@@ -905,7 +914,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let update: UpdateQuit? = consent.map { (consent: UpdateConsent) -> UpdateQuit in
             UpdateQuit(consent: consent, current: MainActor.assumeIsolated { UpdatePlanning.plan() })
         }
-        let input = QuitInput(unsavedFiles: dirty.count, busyTabs: busyCount, terminalWindows: controllers.count,
+        let input = QuitInput(unsavedFiles: dirty.count, unsavedValues: drafts.count, busyTabs: busyCount, terminalWindows: controllers.count,
                               sheetAttached: sheetAttached, reason: reason, settings: settings, update: update)
         let questions: [QuitQuestion] = QuitPolicy.questions(input)
         var asking = QuitAsking()
@@ -916,7 +925,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return nil
         }
         // A quit from the Dock while Next Term is behind another app: its first question shows in front.
-        NSApp.activate(ignoringOtherApps: true)
+        if standIn == nil { NSApp.activate(ignoringOtherApps: true) }
+        // Each question on its alert, or answered by the stand-in.
+        func dialog(_ question: QuitQuestion, _ shown: QuitAlertDialog) -> any QuitDialog {
+            guard let standIn else { return shown }
+            return StandInQuitDialog(shown) { standIn(question, shown.alert) }
+        }
         var plannedBusy: QuitQuestion?
         for question in questions {
             switch question {
@@ -924,8 +938,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 let alert = Self.saveBeforeQuittingAlert(dirty.map(\.name))
                 let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
                 // Save, Cancel, Don’t Save, as they were added. The box is read once a button is pressed (QuitAsking.ask).
-                let dialog = QuitAlertDialog(alert, presses: [.save, .cancel, .goOn], box: box)
-                switch asking.ask(question, on: dialog) {
+                let shown = dialog(question, QuitAlertDialog(alert, presses: [.save, .cancel, .goOn], box: box))
+                switch asking.ask(question, on: shown) {
                 case .save:
                     guard controllers.allSatisfy({ $0.editorArea.saveAll() }) else { return nil }
                 case .goOn:
@@ -933,10 +947,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 case .cancel:
                     return nil
                 }
+            case .unsavedValues(let checkbox):
+                // No Save: a database's save is asynchronous and one value at a time, so its tab saves it (R22).
+                // Cancel, Quit Anyway, as they were added; Cancel holds Return and ⎋.
+                let alert = UnsavedValueAlert.make(drafts, .quit)
+                let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
+                let shown = dialog(question, QuitAlertDialog(alert, presses: [.cancel, .goOn], box: box))
+                guard asking.ask(question, on: shown) == .goOn else { return nil }
             case .busy:
                 plannedBusy = question // asked below, once the busy tabs are read again
             case .quit(let checkbox):
-                guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
+                guard askPlain(checked: checkbox, projects: projects, into: &asking, dialog: dialog) else { return nil }
             case .updateSheet:
                 return nil
             }
@@ -959,11 +980,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .busy(let checkbox):
             let alert = Self.quitStopsAlert(busy)
             let box = checkbox.map { QuitReopenPrompt.addCheckbox(to: alert, checked: $0, projects: projects) }
-            let dialog = QuitAlertDialog(alert, presses: [.goOn, .cancel], box: box)
-            guard asking.ask(.busy(resumeCheckbox: checkbox), on: dialog) == .goOn else { return nil }
+            let question: QuitQuestion = .busy(resumeCheckbox: checkbox)
+            guard asking.ask(question, on: dialog(question, QuitAlertDialog(alert, presses: [.goOn, .cancel], box: box))) == .goOn else { return nil }
         case .quit(let checkbox):
-            guard askPlain(checked: checkbox, projects: projects, into: &asking) else { return nil }
-        case .saveChanges, .updateSheet, nil:
+            guard askPlain(checked: checkbox, projects: projects, into: &asking, dialog: dialog) else { return nil }
+        case .saveChanges, .unsavedValues, .updateSheet, nil:
             break
         }
         asking.settings(from: settings)?.save(to: launchDefaults)
@@ -971,9 +992,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// The plain quit dialog, "Quit Next Term?", its answer put into `asking`. False when it was cancelled.
-    private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking) -> Bool {
+    private func askPlain(checked: Bool, projects: [String], into asking: inout QuitAsking,
+                          dialog: (QuitQuestion, QuitAlertDialog) -> any QuitDialog) -> Bool {
         let prompt = QuitReopenPrompt(projects: projects, checked: checked)
-        return asking.ask(.quit(resumeCheckbox: checked), on: prompt.dialog) == .goOn
+        let question: QuitQuestion = .quit(resumeCheckbox: checked)
+        return asking.ask(question, on: dialog(question, prompt.dialog)) == .goOn
     }
 
     /// Why this quit happens: the plain self-test, the reason the relaunch harness sets, a valid update consent (the update

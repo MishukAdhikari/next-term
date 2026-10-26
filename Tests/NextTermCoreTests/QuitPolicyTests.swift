@@ -26,13 +26,13 @@ import Testing
 
 @Suite struct QuitPolicyTests {
     /// A user quit with two terminal windows open, nothing unsaved or busy, and "At launch" as given: nil, never chosen.
-    func input(unsaved: Int = 0, busy: Int = 0, windows: Int = 2, sheet: Bool = false, reason: QuitReason = .user,
+    func input(unsaved: Int = 0, values: Int = 0, busy: Int = 0, windows: Int = 2, sheet: Bool = false, reason: QuitReason = .user,
                opens: LaunchOpens? = .welcome, ask: Bool = true, update: UpdateQuit? = nil) -> QuitInput {
         var settings = LaunchSettings()
         if let opens { settings.opens = opens }
         settings.askToReopenOnQuit = ask
-        return QuitInput(unsavedFiles: unsaved, busyTabs: busy, terminalWindows: windows, sheetAttached: sheet, reason: reason,
-                         settings: settings, update: update)
+        return QuitInput(unsavedFiles: unsaved, unsavedValues: values, busyTabs: busy, terminalWindows: windows, sheetAttached: sheet,
+                         reason: reason, settings: settings, update: update)
     }
 
     /// The questions `input` gives, checked in one place: comparing arrays of enums inside `#expect` is
@@ -46,12 +46,13 @@ import Testing
     // The questions by name, typed.
     func plain(_ resumeCheckbox: Bool) -> QuitQuestion { .quit(resumeCheckbox: resumeCheckbox) }
     func saveChanges(_ resumeCheckbox: Bool?) -> QuitQuestion { .saveChanges(resumeCheckbox: resumeCheckbox) }
+    func unsavedValues(_ resumeCheckbox: Bool?) -> QuitQuestion { .unsavedValues(resumeCheckbox: resumeCheckbox) }
     func busy(_ resumeCheckbox: Bool?) -> QuitQuestion { .busy(resumeCheckbox: resumeCheckbox) }
 
     /// Whether a question carries the resume checkbox: the plain dialog, or an alert with it.
     func carriesTheBox(_ question: QuitQuestion) -> Bool {
         switch question {
-        case .saveChanges(let checkbox), .busy(let checkbox): return checkbox != nil
+        case .saveChanges(let checkbox), .unsavedValues(let checkbox), .busy(let checkbox): return checkbox != nil
         case .quit: return true
         case .updateSheet: return false
         }
@@ -86,6 +87,35 @@ import Testing
         expectQuestions(input(unsaved: 1), saveChanges(false))
         expectQuestions(input(unsaved: 2, opens: .lastProjects), saveChanges(true))
         expectQuestions(input(unsaved: 1, opens: nil), saveChanges(true))
+    }
+
+    @Test func aDatabaseValueIsWarnedAboutAfterTheFilesAndBeforeTheBusyTabs() {
+        // R22: alone, the warning carries the box; after the save-changes alert, it carries it instead.
+        expectQuestions(input(values: 1), unsavedValues(false))
+        expectQuestions(input(values: 2, opens: .lastProjects), unsavedValues(true))
+        expectQuestions(input(unsaved: 1, values: 1, opens: nil), saveChanges(nil), unsavedValues(true))
+        // "Quitting stops…" follows, so it carries the box.
+        expectQuestions(input(values: 1, busy: 1, opens: .lastProjects), unsavedValues(nil), busy(true))
+        expectQuestions(input(unsaved: 2, values: 1, busy: 3), saveChanges(nil), unsavedValues(nil), busy(false))
+        // The safety question stays where nothing is asked about resuming.
+        expectQuestions(input(values: 1, ask: false), unsavedValues(nil))
+        expectQuestions(input(values: 1, reason: .systemSession), unsavedValues(nil))
+        expectQuestions(input(values: 1, sheet: true), unsavedValues(nil))
+        expectQuestions(input(values: 1, windows: 0), unsavedValues(nil))
+        expectQuestions(input(unsaved: 1, values: 1, reason: .selfTest))
+    }
+
+    @Test func passingTheWarningGoesOnAndCancellingItCancelsTheQuit() {
+        // Don’t Save on the files, then Quit Anyway with the box checked: the quit goes ahead with the consent.
+        var both = QuitAsking()
+        both.ask(saveChanges(nil), on: AnsweredDialog(box: false, toggles: false, press: .goOn))
+        both.ask(unsavedValues(true), on: AnsweredDialog(box: true, toggles: false, press: .goOn))
+        #expect(!both.cancelled && both.quitConsent && both.settings(from: chosen(.welcome)) == chosen(.lastProjects))
+        // Cancel on the warning, after the files were answered: nothing goes ahead, and nothing is saved.
+        var cancelled = QuitAsking()
+        cancelled.ask(saveChanges(nil), on: AnsweredDialog(box: false, toggles: false, press: .goOn))
+        #expect(cancelled.ask(unsavedValues(true), on: AnsweredDialog(box: true, toggles: false, press: .cancel)) == .cancel)
+        #expect(cancelled.cancelled && !cancelled.quitConsent && cancelled.settings(from: chosen(.welcome)) == nil)
     }
 
     @Test func askOffAsksNothingAboutResuming() {
@@ -125,15 +155,17 @@ import Testing
         let counts = [0, 1, 3]
         let choices: [LaunchOpens?] = [nil] + LaunchOpens.allCases.map { (opens: LaunchOpens) -> LaunchOpens? in opens }
         for unsaved in counts {
-            for busy in counts {
-                for windows in counts {
-                    for sheet in [false, true] {
-                        for reason in QuitReason.allCases {
-                            for opens in choices {
-                                for ask in [false, true] {
-                                    let quit = input(unsaved: unsaved, busy: busy, windows: windows, sheet: sheet,
-                                                     reason: reason, opens: opens, ask: ask)
-                                    check(quit)
+            for values in [0, 2] {
+                for busy in counts {
+                    for windows in counts {
+                        for sheet in [false, true] {
+                            for reason in QuitReason.allCases {
+                                for opens in choices {
+                                    for ask in [false, true] {
+                                        let quit = input(unsaved: unsaved, values: values, busy: busy, windows: windows, sheet: sheet,
+                                                         reason: reason, opens: opens, ask: ask)
+                                        check(quit)
+                                    }
                                 }
                             }
                         }
@@ -159,18 +191,23 @@ import Testing
         let starts: Bool = !quit.settings.opensChosen || quit.settings.opens == .lastProjects
         for question in carriers {
             switch question {
-            case .saveChanges(let checkbox), .busy(let checkbox): #expect(checkbox == starts, "\(label)")
+            case .saveChanges(let checkbox), .unsavedValues(let checkbox), .busy(let checkbox): #expect(checkbox == starts, "\(label)")
             case .quit(let checkbox): #expect(checkbox == starts, "\(label)")
             case .updateSheet: #expect(Bool(false), "\(label)")
             }
         }
         if asked.contains(where: isPlain) { #expect(asked.count == 1, "\(label)") }
         let saves: Int? = asked.firstIndex(where: isSaveChanges)
+        let warns: Int? = asked.firstIndex(where: isUnsavedValues)
         let stops: Int? = asked.firstIndex(where: isBusy)
         #expect((saves != nil) == (quit.unsavedFiles > 0), "\(label)")
+        #expect((warns != nil) == (quit.unsavedValues > 0), "\(label)")
         let busyAsked: Bool = quit.busyTabs > 0 && quit.reason != .updateRelaunch
         #expect((stops != nil) == busyAsked, "\(label)")
         if let saves { #expect(saves == 0, "\(label)") }
+        // The files' question first, then the values' warning, then what quitting stops.
+        if let warns { #expect(warns == (saves == nil ? 0 : 1), "\(label)") }
+        if let warns, let stops { #expect(warns < stops, "\(label)") }
         #expect(!asked.contains(.updateSheet), "\(label)")
     }
 
@@ -180,6 +217,10 @@ import Testing
 
     func isSaveChanges(_ question: QuitQuestion) -> Bool {
         if case .saveChanges = question { return true } else { return false }
+    }
+
+    func isUnsavedValues(_ question: QuitQuestion) -> Bool {
+        if case .unsavedValues = question { return true } else { return false }
     }
 
     func isBusy(_ question: QuitQuestion) -> Bool {
@@ -281,7 +322,8 @@ import Testing
     /// The user changes the resume box while a quit dialog shows, then presses a button: the answer is the box as the user
     /// left it, on every dialog that carries it, never how it started (R29, R30).
     @Test func eachDialogReadsItsBoxOnlyAfterThePress() {
-        let questions: [QuitQuestion] = [saveChanges(true), saveChanges(false), busy(true), busy(false), plain(true), plain(false)]
+        let questions: [QuitQuestion] = [saveChanges(true), saveChanges(false), unsavedValues(true), unsavedValues(false), busy(true), busy(false),
+                                         plain(true), plain(false)]
         for question in questions {
             let start = question.resumeCheckbox ?? false
             var presses: [QuitPress] = [.goOn]
@@ -378,6 +420,11 @@ import Testing
         let quit = UpdateQuit(consent: consent, current: saw.plan)
         expectQuestions(input(reason: .updateRelaunch, opens: nil, update: quit))
         expectQuestions(input(unsaved: 1, reason: .updateRelaunch, opens: nil, update: quit), saveChanges(nil))
+        // R22: an unsaved database value is warned about as an unsaved file is asked about, after it, with no box: the
+        // update never drops it unasked.
+        expectQuestions(input(values: 1, reason: .updateRelaunch, opens: nil, update: quit), unsavedValues(nil))
+        expectQuestions(input(unsaved: 1, values: 2, reason: .updateRelaunch, opens: .lastProjects, update: quit), saveChanges(nil), unsavedValues(nil))
+        expectQuestions(input(values: 1, reason: .updateRelaunch), unsavedValues(nil))
         // A busy tab the plan covered is never asked about: the sheet showed it stops.
         let busy = saw.consent(busy: [saw.agent])
         let stillBusy = UpdateQuit(consent: busy, current: saw.planned(busy: [saw.agent]))
@@ -398,6 +445,7 @@ import Testing
         // A new busy tab.
         let newBusy = UpdateQuit(consent: consent, current: saw.planned(busy: [saw.command]))
         expectQuestions(input(unsaved: 1, busy: 1, reason: .updateRelaunch, update: newBusy), .updateSheet)
+        expectQuestions(input(values: 1, busy: 1, reason: .updateRelaunch, update: newBusy), .updateSheet)
         // A session that can no longer be kept: the last save failed.
         var unsaved = saw.plan
         unsaved.refusal = .notSaved

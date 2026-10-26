@@ -35,8 +35,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   kernel's language, and the outputs saved in the file (text, tables as text, images and errors). Nothing
   runs (there is no kernel); Open as JSON shows the file itself.
 - **Large data files.** A JSON Lines, CSV or TSV file over 2 MB opens in a read-only head view: its first
-  1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As.
-  Logs and other text files over 32 MB open there too.
+  1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As;
+  click a cell for its whole value (a JSON object indented, as written). Logs and other text files over
+  32 MB open there too.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
   for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
@@ -201,9 +202,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **Databases.** A Databases group in the sidebar lists the databases a project's own files name (Laravel
   and Herd `DB_*` keys, `DATABASE_URL`, Prisma, Drizzle, Supabase, Vercel-linked projects, SQLite files),
   found by reading them, without running project code; local or remote by host, passwords masked. SQLite
-  files open in a read-only viewer; other connections open in TablePlus when it is installed (libSQL
-  aside), and local and development ones (Docker, OrbStack) in `mysql` or `psql` in a new tab. Each
-  provider badge (Neon, Supabase, Vercel, Herd and others) opens that provider's page in the browser.
+  files open in a viewer that stays read-only until you allow editing in its tab; click a cell for its
+  whole value, up to 4 MB (text wrapped, JSON indented, a blob's size and first bytes in hex, the row beside
+  it). Other connections open in
+  TablePlus when it is installed (libSQL aside), and local and development ones (Docker, OrbStack) in
+  `mysql` or `psql` in a new tab. Each provider badge (Neon, Supabase, Vercel, Herd and others) opens that
+  provider's page in the browser.
 - **Services.** Below Databases, a Services group lists what else a project's files name: AI model
   providers, vector stores, tracing and evals, agent frameworks, local dev servers, backends and hosting.
   Each row's badge opens its page: a local server on the port the project sets, or the most specific
@@ -496,6 +500,22 @@ Next Term's menu.
   warning and Undo, and task text is never logged. Wrap Up and Post Update make no request either: handoffs and
   updates are files in your project, and today's commits are read only for your own `user.email`. See [where tasks
   go](docs/task-destinations.md) and [Wrap Up and Post Update](docs/wrap-up.md).
+- **SQLite editing:** the SQLite viewer opens every file read-only (SQLite's read-only mode, `query_only`, and
+  immutable when nothing is in its write-ahead log). Editing is opt-in per tab: Allow Editing… asks first,
+  saying the file may belong to an app that is running now and naming the processes that have it open, and
+  the allowance is bound to that file in that tab, ends when the tab closes, you click Stop Editing or the
+  file is replaced, and is never remembered. Nothing is written until you click Save (or ⌘S, or Return in
+  the cell): then one value is written, in one transaction on a connection of its own (SQLite's defensive
+  mode on, so a full-text index's own tables and the schema stay read-only), by one `UPDATE OR ABORT` keyed by
+  the row's rowid or primary key. It changes the cell only if the cell still holds, byte for byte and of the
+  same type, the value that was read, and the row's other values are still the ones read, since a key alone
+  can name another row once SQLite gives a rowid out again. OR ABORT overrides a table's own ON CONFLICT
+  REPLACE or IGNORE, so a save never deletes another row. If anything differs, or the file is busy, nothing
+  is written and the viewer says why. Edit › Undo writes the old value back the same checked way. A file
+  with no -wal beside it gets none. A value typed and not saved is asked about before its tab closes;
+  closing it with other tabs, closing its window or quitting warns first and writes nothing. Views,
+  virtual tables and their own tables, key and generated columns and blobs can't be edited. No agent or MCP
+  tool can allow editing or write a database.
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the
   index lock while your own git commands run. On its own, Next Term only runs `git fetch`: every 10 minutes
   while it is the active app, and as the branch popup opens if the last fetch is over 5 minutes old. That
