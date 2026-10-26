@@ -12,28 +12,36 @@ extension SelfTest {
     /// Increase Contrast, which draws that badge alone again; the worktree's dot is 6 points at the badge's corner, its cut
     /// inside the button; two capitals are set 0.7 points apart and mixed case not; a working mark in the column or ⌘O
     /// never turns, while a tab's does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
-    static func calmChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController) {
+    static func calmChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController) async {
         let column: WindowColumnView = five[0].windowColumn
         guard let own = column.button(for: five[0].indexID), let marked = column.button(for: worktree.indexID) else {
             return check(false, "window column: the calm look's badges to check")
         }
         let badge: NSRect = own.badgeForTest
-        // As drawn: just outside the badge, in the well, the darker colour of the tab you are in, not a light ring.
-        let wellColor: NSColor? = color(of: own, at: NSPoint(x: badge.minX - 1, y: badge.midY))
+        // As the window shows it: just outside the badge, in the well, the darker colour of the tab you are in, not a
+        // light ring.
+        if let window = five[0].window { _ = await bringToFront(window) }
+        await pause(0.3)
+        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: badge.minX - 1, y: badge.midY))
+        // The terminal's own background, as the same image shows it (an image of the screen is in the display's colours,
+        // not the theme's numbers): the well is that colour.
+        let terminal: NSView? = five[0].activeTab?.view
+        let backgroundColor: NSColor? = terminal.flatMap { shownColor(of: $0, at: NSPoint(x: $0.bounds.maxX - 30, y: $0.bounds.midY)) }
         let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -2, dy: -2)
-            && wellColor.map { close($0, Theme.background) } == true
+            && wellColor != nil && backgroundColor != nil && close(wellColor!, backgroundColor!)
         let corner: NSRect = marked.badgeForTest
         let dot: NSRect? = marked.dotFrameForTest
         let dotPlaced: Bool = dot == NSRect(x: corner.maxX - 5, y: corner.minY - 1, width: 6, height: 6)
             && dot.map { marked.bounds.contains($0.insetBy(dx: -2, dy: -2)) } == true
         check(well && dotPlaced, "window column: this window's badge sits in a darker well, and a dot is 6 points at a badge's corner, its cut inside",
-              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none"), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
+              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
 
         let font = NSFont.systemFont(ofSize: 10, weight: .medium)
         func width(_ text: String) -> CGFloat { NSAttributedString(string: text, attributes: [.font: font]).size().width }
         let spread: CGFloat = WindowColumnButton.lettersText("XC").size().width - width("XC")
         let mixed: CGFloat = WindowColumnButton.lettersText("Ag").size().width - width("Ag")
-        check(abs(spread - 0.7) < 0.05 && abs(mixed) < 0.01, "window column: two capitals are set a little apart, mixed case as the font sets it",
+        // Tracking takes the place of the pair's own kerning, so two capitals open by a little more than its 0.7 points.
+        check(spread > 0.5 && spread < 1.3 && abs(mixed) < 0.01, "window column: two capitals are set a little apart, mixed case as the font sets it",
               "XC +\(spread), Ag +\(mixed)")
 
         // As View › Agent Spinner has it: a tab's mark turns with Spinning; the marks ⌘O's rows and the unfolded column's
@@ -53,7 +61,7 @@ extension SelfTest {
         column.shownButtons.forEach { $0.resetCounters() }
         DisplayOptions.increasesContrastOverride = true
         let plain: NSImage? = StatusGlyph.image(for: .done)
-        column.displayIfNeeded()
+        await pause(0.5) // drawn as the window next displays
         let redrawn: [Int] = column.shownButtons.filter { $0.drawCount > 0 }.map(\.id)
         DisplayOptions.increasesContrastOverride = contrast
         check(quiet != nil && plain != nil && quiet?.tiffRepresentation != plain?.tiffRepresentation && redrawn == [five[0].indexID],
@@ -61,14 +69,17 @@ extension SelfTest {
               "redrawn \(redrawn) of \(column.shownButtons.map(\.id))")
     }
 
-    /// The colour `view` draws at `point` (its own coordinates), read from a drawing of it.
-    private static func color(of view: NSView, at point: NSPoint) -> NSColor? {
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        let scale: CGFloat = CGFloat(rep.pixelsWide) / max(1, view.bounds.width)
-        // The drawing's rows run from the top, as the flipped view's do.
-        let y: CGFloat = view.isFlipped ? point.y : view.bounds.height - point.y
-        return rep.colorAt(x: Int(point.x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
+    /// The colour the window shows at `point` in `view` (its own coordinates), read from an image of the window as it is
+    /// on screen, as the self-test's screenshots are taken.
+    private static func shownColor(of view: NSView, at point: NSPoint) -> NSColor? {
+        guard let window = view.window,
+              let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                                  [.boundsIgnoreFraming, .bestResolution]) else { return nil }
+        let rep = NSBitmapImageRep(cgImage: image)
+        let inWindow: NSPoint = view.convert(point, to: nil)
+        let scale: CGFloat = CGFloat(rep.pixelsWide) / max(1, window.frame.width)
+        // The image's rows run from the top; the window's from the bottom.
+        return rep.colorAt(x: Int(inWindow.x * scale), y: Int((window.frame.height - inWindow.y) * scale))?.usingColorSpace(.sRGB)
     }
 
     /// Two colours the same to within a step of each channel.

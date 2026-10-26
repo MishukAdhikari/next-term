@@ -107,7 +107,7 @@ extension SelfTest {
         await screenshot(plain, suffix: "-column-folded")
         await idleBudget(app)
         await bellChecks(app, five, worktree: worktree, tree: tree)
-        calmChecks(app, five, worktree: worktree)
+        await calmChecks(app, five, worktree: worktree)
         await unfoldedMarksChecks(app, worktree: worktree)
         await overflowChecks(app, project)
         await roomChecks(app, project)
