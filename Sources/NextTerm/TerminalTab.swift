@@ -762,7 +762,15 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    #if DEBUG
+    /// For the self-test: the terminal's size as its shell started (a restored pane's is its real one).
+    private(set) var sizeAtStart: NSSize?
+    #endif
+
     func start() {
+        #if DEBUG
+        sizeAtStart = view.frame.size
+        #endif
         showRestoredScrollback()
         started = true
         if let remote {

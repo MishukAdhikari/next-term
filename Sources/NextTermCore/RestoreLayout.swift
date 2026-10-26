@@ -35,6 +35,19 @@ public enum RestoreLayout {
         return saved
     }
 
+    /// The order the restore lists `windows` in, saved front to back, as indices into them: the order they opened, as
+    /// saved (`opened`), so every window's column and ⌘O read as they did before the quit, whichever window was used
+    /// last. Windows saved without it, from an older file, come after, back to front, as a restore listed them before.
+    public static func openingOrder(_ windows: [SessionSnapshot.Window]) -> [Int] {
+        let backToFront: [Int] = Array(windows.indices.reversed())
+        let ranked = backToFront.enumerated().map { (entry: (offset: Int, element: Int)) -> (place: Int, then: Int, index: Int) in
+            (windows[entry.element].opened ?? Int.max, entry.offset, entry.element)
+        }
+        return ranked.sorted { (a: (place: Int, then: Int, index: Int), b: (place: Int, then: Int, index: Int)) -> Bool in
+            a.place != b.place ? a.place < b.place : a.then < b.then
+        }.map(\.index)
+    }
+
     /// A split's divider positions as the restore builds it: those saved, when every one of its `children` was built;
     /// when the ones at `dropped` could not be (a tab on a host removed since), each one's room goes to its neighbour, as
     /// when the app closes a pane. Equal shares when the saved ones do not fit.

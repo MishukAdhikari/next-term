@@ -97,6 +97,24 @@ import Testing
         #expect(paneIDs(back.panes) == ids(1, 2, 3, 5, 4, 6))
     }
 
+    @Test func eachWindowsPlaceInTheOrderTheyOpenedRoundTripsAndAFileWithoutItReadsNone() throws {
+        let first = Window(groups: [Group(root: .pane(pane(1)), focused: id(1))], opened: 2)
+        let second = Window(groups: [Group(root: .pane(pane(2)), focused: id(2))], opened: 0)
+        let snapshot = Snapshot(header: header(), windows: [first, second])
+        let back = try Snapshot.decode(snapshot.encoded())
+        #expect(back == snapshot)
+        #expect(back.windows.map(\.opened) == [2, 0])
+        // Written before it was kept: none, and nothing written for it.
+        #expect(try decode(frozenV1).windows.allSatisfy { (window: Window) -> Bool in window.opened == nil })
+        let none = try JSONSerialization.jsonObject(with: Snapshot(header: header(), windows: [Window(groups: first.groups)]).encoded())
+        let written = try #require((none as? [String: Any])?["windows"] as? [[String: Any]])
+        #expect(written.first?["opened"] == nil)
+        // A place that is not one reads as none.
+        #expect(try decode(oneTab(paneJSON(1), extra: #","opened":-3"#)).windows.first?.opened == nil)
+        #expect(try decode(oneTab(paneJSON(1), extra: #","opened":"first""#)).windows.first?.opened == nil)
+        #expect(try decode(oneTab(paneJSON(1), extra: #","opened":4"#)).windows.first?.opened == 4)
+    }
+
     @Test func theFileNameCarriesTheMajorVersion() {
         #expect(Snapshot.fileName() == "state-v\(Snapshot.schema).json")
         #expect(Snapshot.fileName(schema: 2) == "state-v2.json")

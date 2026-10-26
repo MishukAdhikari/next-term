@@ -139,32 +139,73 @@ extension SelfTest {
     /// key to its selection drawn. The window's layout and display run at once, and Core Animation's changes go out,
     /// so each time is the strip's own work and the shown terminal's draw, not how soon the run loop came round. The
     /// list's median is within a millisecond of the bar's, and nineteen switches in twenty take under a frame (16 ms).
+    ///
+    /// Every key is pressed while the window has the keyboard. The part brings it to the front twenty seconds before,
+    /// and another app can take the front meanwhile (an emulator's window once did): a key sent then finds no key
+    /// window, so Window › Select Tab has no target and selects nothing, and the ⌘1 after it lands on the tab already
+    /// selected. Twenty of the forty keys then "selected nothing", and the other twenty timed no switch at all. So each
+    /// round starts with the window brought to the front, and a round in which it lost the keyboard runs again from the
+    /// start, so that all its numbers come from one hold; a window that cannot keep it skips the measure with the
+    /// part's "not frontmost" note. Each key is a switch: after a miss the other tab is selected again first.
     private static func switchingBudget(_ w: TerminalWindowController, window: NSWindow) async {
         let app: AppDelegate = AppDelegate.shared
         var times: [TerminalTabsSetting: [TimeInterval]] = [:]
         var missed: [TerminalTabsSetting: Int] = [:]
+        var lost: [String] = []
+        let holds = { NSApp.isActive && window.isKeyWindow }
         for tabs in [TerminalTabsSetting.left, .top] {
-            app.moveTerminalTabs(to: tabs)
-            w.select(0)
-            window.layoutIfNeeded()
-            await pause(0.5)
-            var taken: [TimeInterval] = []
-            var wrong = 0
-            for press in 0..<40 {
-                let target: Int = press % 2 == 0 ? 1 : 0
-                let began: TimeInterval = ProcessInfo.processInfo.systemUptime
-                keyStroke(window, code: target == 1 ? 19 : 18, .command) // ⌘2, ⌘1
+            let name: String = tabs == .top ? "bar" : "list"
+            var round: (taken: [TimeInterval], wrong: Int)?
+            for _ in 0..<3 where round == nil {
+                guard await bringToFront(window) else {
+                    return note("tab list budget: ⌘1 and ⌘2 not measured with the \(name), " + notFrontmost(window))
+                }
+                app.moveTerminalTabs(to: tabs)
+                w.select(0)
                 window.layoutIfNeeded()
-                window.displayIfNeeded()
-                CATransaction.flush()
-                let shown: TimeInterval = ProcessInfo.processInfo.systemUptime
-                let stripSelected: Bool = tabs == .top ? w.tabBar.selectedIndex == target : w.tabList.selectedIndex == target
-                if w.activeIndex == target && stripSelected { taken.append(shown - began) } else { wrong += 1 }
-                await pause(0.05) // each key from a quiet window
+                await pause(0.5)
+                var taken: [TimeInterval] = []
+                var wrong = 0
+                var held = true
+                for press in 0..<40 {
+                    let target: Int = press % 2 == 0 ? 1 : 0
+                    if w.activeIndex == target {
+                        w.select(1 - target)
+                        window.layoutIfNeeded()
+                        window.displayIfNeeded()
+                        await pause(0.05)
+                    }
+                    guard holds() else {
+                        held = false
+                        break
+                    }
+                    let began: TimeInterval = ProcessInfo.processInfo.systemUptime
+                    keyStroke(window, code: target == 1 ? 19 : 18, .command) // ⌘2, ⌘1
+                    window.layoutIfNeeded()
+                    window.displayIfNeeded()
+                    CATransaction.flush()
+                    let shown: TimeInterval = ProcessInfo.processInfo.systemUptime
+                    let stripSelected: Bool = tabs == .top ? w.tabBar.selectedIndex == target : w.tabList.selectedIndex == target
+                    if w.activeIndex == target && stripSelected { taken.append(shown - began) } else { wrong += 1 }
+                    await pause(0.05) // each key from a quiet window
+                }
+                if held && holds() { round = (taken, wrong) } else if NSApp.isActive {
+                    // The app in front and its window not key: one of Next Term's own windows took the keyboard, which is the
+                    // app's fault (as bringToFront has it), never a reason to measure again.
+                    return check(false, "tab list budget: the window keeps the keyboard while ⌘1 and ⌘2 are pressed with the \(name)",
+                                 "another of Next Term's windows took it after \(taken.count + wrong) keys: \(NSApp.keyWindow?.title ?? "none")")
+                } else {
+                    lost.append("\(name): another app took the keyboard after \(taken.count + wrong) keys")
+                }
             }
-            times[tabs] = taken
-            missed[tabs] = wrong
+            guard let round else {
+                return note("tab list budget: ⌘1 and ⌘2 not measured with the \(name), as the window lost the keyboard in three rounds, "
+                            + notFrontmost(window) + " (\(lost.joined(separator: "; ")))")
+            }
+            times[tabs] = round.taken
+            missed[tabs] = round.wrong
         }
+        if !lost.isEmpty { note("tab list budget: a round of ⌘1 and ⌘2 ran again, " + lost.joined(separator: "; ")) }
         let list: [TimeInterval] = times[.left] ?? []
         let bar: [TimeInterval] = times[.top] ?? []
         let listMedian: TimeInterval = quantile(list, 0.5)

@@ -97,6 +97,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         set { UserDefaults.standard.set(newValue, forKey: "tabListShowsFolders") }
     }
 
+    // MARK: the window column
+
+    /// Every window's column (WindowColumns): its rows, whether it shows, and what changed.
+    let windowColumns = WindowColumns()
+    /// Settings › General's checkbox follows the View menu, and the menu Settings.
+    static let windowColumnChanged = Notification.Name(WindowColumnSettings.changedName)
+
+    /// "Show the window column when two or more windows are open" (Settings › General, View › Hide Window Column): on
+    /// unless turned off, for every window.
+    var showsWindowColumn: Bool {
+        get { WindowColumnSettings.shown(UserDefaults.standard.object(forKey: WindowColumnSettings.shownKey)) }
+        set {
+            guard newValue != showsWindowColumn else { return }
+            UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.shownKey)
+            windowColumns.settingsChanged()
+            NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
+        }
+    }
+
+    /// Unfolded in every window (⌃⌘S, View › Expand Window Column, the column's chevron); folded by default.
+    var windowColumnExpanded: Bool {
+        get { WindowColumnSettings.expanded(UserDefaults.standard.object(forKey: WindowColumnSettings.expandedKey)) }
+        set {
+            guard newValue != windowColumnExpanded else { return }
+            UserDefaults.standard.set(newValue, forKey: WindowColumnSettings.expandedKey)
+            windowColumns.settingsChanged()
+            NotificationCenter.default.post(name: Self.windowColumnChanged, object: nil)
+        }
+    }
+
+    /// View › Hide Window Column, or Show Window Column while it is off.
+    @objc func toggleWindowColumn(_ sender: Any?) { showsWindowColumn.toggle() }
+
+    /// View › Collapse Window Column, or Expand Window Column while it is folded: every window at once.
+    @objc func toggleWindowColumnExpanded(_ sender: Any?) { windowColumnExpanded.toggle() }
+
+    /// A click on a window's badge or row: that window in front, with its tab as it is. Nothing it shows changes.
+    func bringForward(_ id: Int) {
+        guard let controller = controllers.first(where: { $0.indexID == id && !$0.hasClosed }), let window = controller.window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     @objc func setTerminalPosition(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let position = TerminalPosition(rawValue: raw) else { return }
         moveTerminal(to: position, announce: true)
@@ -1051,6 +1095,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             controller.window?.center()
         }
         controllers.append(controller)
+        indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         if forAgent { return controller }
@@ -1059,13 +1104,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return controller
     }
 
-    /// A window the restore built, placed and filled (SessionRestore): shown as it is, with no cascade and no first tab.
-    func openWindow(restored controller: TerminalWindowController) {
+    /// A window the restore built, placed and filled (SessionRestore), taken in: listed in every window's column and ⌘O
+    /// in the order the restore takes them, the order they opened before, and not shown yet (`presentRestored`).
+    func adoptRestored(_ controller: TerminalWindowController) {
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         welcome?.close()
         controllers.append(controller)
+        indexed(controller) // in every window's column, before it shows
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
+    }
+
+    /// A restored window taken in (`adoptRestored`), shown as it is, with no cascade and no first tab, in front.
+    func presentRestored(_ controller: TerminalWindowController) {
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
     }
@@ -1074,6 +1125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func windowClosed(_ closed: TerminalWindowController, welcome: Bool) {
         // Out of the index at once: Go to Next Agent Needing You and the Welcome window never go to a closed window.
         windowIndex.remove(window: closed.indexID)
+        windowColumns.rebuild()
         self.welcome?.windowsChanged()
         // Defer: the window is still mid-close in this call.
         DispatchQueue.main.async { [self] in
@@ -1508,6 +1560,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if item.action == #selector(toggleSidebarSingleClick(_:)) { item.state = sidebarSingleClickOpens ? .on : .off }
         if item.action == #selector(toggleProjectColors(_:)) { item.state = ProjectColorStore.isShown ? .on : .off }
+        if item.action == #selector(toggleWindowColumn(_:)) { item.title = showsWindowColumn ? "Hide Window Column" : "Show Window Column" }
+        if item.action == #selector(toggleWindowColumnExpanded(_:)) {
+            item.title = windowColumnExpanded ? "Collapse Window Column" : "Expand Window Column"
+            return windowColumns.visible // only while the column shows: the setting on and two or more windows open
+        }
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = softWrap ? .on : .off }
         if item.action == #selector(toggleSuggestionsWhileTyping(_:)) { item.state = GhostPreferences.isOn ? .on : .off }
         if item.action == #selector(togglePrivateMode(_:)) { item.state = GhostPreferences.privateMode ? .on : .off }
@@ -1588,13 +1645,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A window being made is told once it is listed; one closing, never again.
         guard !controller.hasClosed, controllers.contains(where: { $0 === controller }) else { return }
         guard windowIndex.update(controller.indexEntry) else { return }
+        windowColumns.windowChanged(controller.indexID)
         welcome?.windowsChanged()
     }
 
     /// Every window's entry as it is this moment, not at its last refresh (a window no one can see refreshes once a
     /// second): before a key or a menu reads the index.
     func refreshWindowIndex() {
-        for controller in controllers where !controller.hasClosed { windowIndex.update(controller.indexEntry) }
+        for controller in controllers where !controller.hasClosed {
+            if windowIndex.update(controller.indexEntry) { windowColumns.windowChanged(controller.indexID) }
+        }
     }
 
     /// Agents › Go to Next Agent Needing You: the terminal or herdr agent that has waited longest for you (a decision, then
@@ -2184,6 +2244,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state
+        // The window column at the window's outer edge, while two or more windows are open; also Settings › General.
+        item(view, "Hide Window Column", #selector(toggleWindowColumn(_:)), "", target: self) // title follows the setting
+        item(view, "Collapse Window Column", #selector(toggleWindowColumnExpanded(_:)), "s", [.command, .control], target: self) // and the fold
         item(view, "Show File in Project Sidebar", #selector(TerminalWindowController.revealInSidebar(_:)), "")
         view.addItem(.separator())
         let positions = NSMenu(title: "Terminal Position")
