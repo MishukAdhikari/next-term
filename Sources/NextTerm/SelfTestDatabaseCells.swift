@@ -595,6 +595,7 @@ extension SelfTest {
         await previewDraftChecks(c, store: store, hand: hand)
         await readOnlyFileChecks(c, store: store)
         await closeWhileSavingChecks(c, store: store, hand: hand)
+        await closingWithAValueChecks(c, store: store, hand: hand)
     }
 
     /// The sheet over `window`, once it is up, and its text ("" when none came).
@@ -862,6 +863,137 @@ extension SelfTest {
               && window.undoManager?.undoActionName != "Edit Cell", "R22: Save writes the value and closes the tab, leaving no step on Edit › Undo",
               window.undoManager?.undoActionName ?? "")
         area.closeAll()
+    }
+
+    /// R22: Close Others, Close Tabs to the Right, closing the window and quitting warn about a value not saved yet,
+    /// after a text file's own question, with no Save: Cancel (⎋ too) keeps the tab and its value, and Close Anyway
+    /// closes it. Nothing is written either way. The quit's questions are answered by a stand-in, never by quitting, and
+    /// the window's close is asked of its delegate, which closes nothing itself.
+    private static func closingWithAValueChecks(_ c: TerminalWindowController, store: CellStore, hand: CellHand) async {
+        let window = hand.window, area = c.editorArea, fm = FileManager.default
+        area.closeAll()
+        await endStrayQuestions(after: "the checks before R22's closing with a value")
+        let keepURL = store.folder.appendingPathComponent("keep.txt"), editedURL = store.folder.appendingPathComponent("edited.txt")
+        try? "keep\n".write(to: keepURL, atomically: true, encoding: .utf8)
+        try? "one\n".write(to: editedURL, atomically: true, encoding: .utf8)
+        defer {
+            area.closeAll()
+            for url in [keepURL, editedURL] { try? fm.removeItem(at: url) }
+        }
+        area.open(keepURL)
+        area.open(editedURL)
+        guard let keep = area.editors.first(where: { $0.document.path == canonicalPath(keepURL.path) }),
+              let edited = area.editors.first(where: { $0.document.path == canonicalPath(editedURL.path) }) else {
+            return check(false, "R22 closing: the two text files open")
+        }
+        edited.textView.insertText("edited ", replacementRange: NSRange(location: 0, length: 0))
+        func openWithValue(_ text: String) async -> DatabasePane? {
+            area.openDatabase(store.path)
+            guard let pane = area.activeDatabase, pane.path == store.path else { return nil }
+            _ = await wait(5) { pane.isSettled && pane.page != nil }
+            pane.select(table: "messages")
+            _ = await wait(5) { pane.isSettled && pane.page?.table == "messages" }
+            guard await allowEditing(pane, in: window, part: "R22's closing with a value"), let content = pane.page?.columns.firstIndex(of: "content") else { return nil }
+            hand.click(pane.grid, row: 3, column: content)
+            _ = await wait(2) { pane.detail.detail?.body == "message 4" }
+            pane.beginDetailEdit()
+            pane.detail.textView.insertText(text, replacementRange: NSRange(location: 0, length: (pane.detail.textView.string as NSString).length))
+            return pane.hasDraft ? pane : nil
+        }
+        guard let pane = await openWithValue("kept, not saved") else { return check(false, "R22 closing: a value typed and not saved") }
+        let bytes = fm.contents(atPath: store.path)
+        func unwritten() -> Bool { fm.contents(atPath: store.path) == bytes && store.one("SELECT content FROM messages WHERE id = 4") == "message 4" }
+        func menu(of tab: NSView) -> NSMenu { area.panes.firstIndex { $0 === tab }.flatMap { c.editorTabMenu(at: $0) } ?? NSMenu() }
+        func run(_ title: String, in menu: NSMenu) -> Bool {
+            guard let index = menu.items.firstIndex(where: { $0.title == title }), menu.items[index].isEnabled else { return false }
+            menu.performActionForItem(at: index)
+            return true
+        }
+        func sheetButtons() -> [NSButton] { window.attachedSheet?.contentView.map { SelfTestRestore.buttons(in: $0) }?.filter { !$0.isHiddenOrHasHiddenAncestor && !$0.title.isEmpty } ?? [] }
+        func press(_ title: String) async -> Bool {
+            guard await wait(5, { sheetButtons().contains { $0.title == title } }), let button = sheetButtons().first(where: { $0.title == title }) else { return false }
+            let sheet = window.attachedSheet
+            button.performClick(nil)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+            return true
+        }
+        /// The warning's text, and its buttons as "title=key".
+        func warning() async -> (text: String, buttons: [String]) {
+            let text = await cellSheet(window)
+            let keys = sheetButtons().map { "\($0.title)=\($0.keyEquivalent == "\r" ? "Return" : $0.keyEquivalent.isEmpty ? "none" : $0.keyEquivalent)" }
+            return (text, keys.sorted())
+        }
+        let warned = "“agent.db” has a value you haven’t saved."
+        let closeButtons = ["Cancel=Return", "Close Anyway=none"]
+
+        // Close Others: the text file's question first, as before; then the warning, which still has to be passed.
+        check(run("Close Others", in: menu(of: keep)), "R22: Close Others runs from the text file's tab")
+        let first = await cellSheet(window)
+        check(first.contains("Save changes to “edited.txt” before closing?") && !first.contains("agent.db"),
+              "R22: Close Others asks about the unsaved text file first, as it did", first)
+        _ = await press("Don’t Save")
+        let others = await warning()
+        check(others.text.contains(warned) && others.text.contains("If you close anyway, it is lost and nothing is written.") && others.buttons == closeButtons,
+              "R22: then Close Others warns about the database's value: Cancel on Return, or Close Anyway, and no Save",
+              "\(others.text) \(others.buttons)")
+        // ⎋ is Cancel too.
+        if let sheet = window.attachedSheet, let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                                        windowNumber: sheet.windowNumber, context: nil, characters: "\u{1B}",
+                                                                        charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53) {
+            NSApp.sendEvent(esc)
+            _ = await wait(2) { window.attachedSheet !== sheet }
+        }
+        check(window.attachedSheet == nil && area.panes.contains { $0 === pane } && pane.hasDraft && area.panes.contains { $0 === edited } && edited.document.isDirty
+              && unwritten(), "R22: ⎋ on the warning is Cancel: every tab stays, the value and the edits with them, and nothing is written",
+              window.attachedSheet.map { _ in sheetText(window) } ?? "\(area.panes.count) tabs, draft \(pane.hasDraft)")
+        await endStrayQuestions(after: "R22's Close Others")
+
+        // Quitting: the stand-in answers Don’t Save to the files and Cancel to the warning, so nothing quits or is saved.
+        var asked: [(question: QuitQuestion, title: String, info: String, buttons: [String])] = []
+        let delegate = AppDelegate.shared!
+        let quit = delegate.askBeforeQuitting(update: nil, reason: .user) { (question: QuitQuestion, alert: NSAlert) -> QuitPress in
+            asked.append((question, alert.messageText, alert.informativeText, alert.buttons.map { "\($0.title)=\($0.keyEquivalent == "\r" ? "Return" : $0.keyEquivalent.isEmpty ? "none" : $0.keyEquivalent)" }))
+            if case .saveChanges = question { return .goOn }
+            return .cancel
+        }
+        let saves = asked.firstIndex { if case .saveChanges = $0.question { return true } else { return false } }
+        let values = asked.firstIndex { if case .unsavedValues = $0.question { return true } else { return false } }
+        let shown = values.map { asked[$0] }
+        check(quit == nil && values != nil && (saves ?? -1) < (values ?? -1) && values == asked.count - 1,
+              "R22: the quit's questions ask about the text file, then warn about the database's value, and its Cancel cancels the quit",
+              asked.map { "\($0.question): \($0.title)" }.joined(separator: " | "))
+        check(shown?.title == warned && shown?.info.contains("If you quit anyway, it is lost and nothing is written.") == true
+              && shown?.buttons == ["Cancel=Return", "Quit Anyway=none"],
+              "R22: the quit's warning names the file, with Cancel on Return and Quit Anyway, and no Save",
+              shown.map { "\($0.title) \($0.info) \($0.buttons)" } ?? "no warning")
+        check(!delegate.isTerminating && NSApp.modalWindow == nil && area.panes.contains { $0 === pane } && pane.hasDraft && unwritten(),
+              "R22: and the tab keeps its value, written nowhere")
+
+        // The text file goes (Don’t Save); closing the window then warns about the value alone.
+        area.close(edited)
+        _ = await press("Don’t Save")
+        check(await wait(2) { !area.panes.contains { $0 === edited } }, "R22: the edited text file closes with Don’t Save")
+        let shouldClose = c.windowShouldClose(window)
+        let closing = await warning()
+        check(!shouldClose && closing.text.contains(warned) && closing.text.contains("If you close anyway") && closing.buttons == closeButtons,
+              "R22: closing the window warns about the database's value: Cancel on Return, or Close Anyway, and no Save", "\(shouldClose) \(closing.text) \(closing.buttons)")
+        _ = await press("Cancel")
+        check(window.isVisible && window.attachedSheet == nil && area.panes.contains { $0 === pane } && pane.hasDraft && unwritten(),
+              "R22: Cancel keeps the window, the tab and its value, and writes nothing")
+        // The window's last terminal tab takes the window with it, so closing it asks too.
+        if c.tabs.count == 1, let only = c.tabs.first {
+            check(c.asksToSave(closing: only), "R22: closing the window's last terminal tab with a value not saved asks first")
+        }
+
+        // Close Tabs to the Right, with only the database tab there: the warning alone; Close Anyway closes it unwritten.
+        check(run("Close Tabs to the Right", in: menu(of: keep)), "R22: Close Tabs to the Right runs from the text file's tab")
+        let right = await warning()
+        check(right.text.contains(warned) && !right.text.contains("Save changes") && right.buttons == closeButtons,
+              "R22: Close Tabs to the Right warns about the database's value alone", "\(right.text) \(right.buttons)")
+        _ = await press("Close Anyway")
+        check(await wait(3) { !area.panes.contains { $0 === pane } } && area.panes.contains { $0 === keep } && unwritten(),
+              "R22: Close Anyway closes the database tab and writes nothing", "\(area.panes.count) tabs")
+        await endStrayQuestions(after: "R22's closing with a value")
     }
 
     /// AE14: a WAL store with nothing beside it: after a Save and an Undo the folder lists what it did before.
