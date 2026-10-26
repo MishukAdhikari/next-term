@@ -10,7 +10,8 @@ import NextTermCore
 /// Settings' checkbox on. Five windows show five badges in the order they opened, the worktree under its repository; a
 /// bell in the worktree's tab behind puts a dot on its badge alone, and a click on it brings that window forward with its
 /// tab as it was; a click on a window's own badge does nothing. A narrow window hides its column alone, an unfolded one
-/// folds first; the traffic lights keep their room; ⌘B leaves the column; ⌃⌘S folds and unfolds every window's. VoiceOver
+/// folds first; the traffic lights keep their room; ⌘B leaves the column; ⌃⌘S folds and unfolds every window's; ⌘1 to ⌘9
+/// select tabs beside it, folded or not, and a click on it leaves the keyboard in the terminal. VoiceOver
 /// reads each badge's window and marks, and the column agrees with ⌘O's rows. Unfolded, a row whose marks change draws
 /// again. Unfolding beside a sidebar of its usual width leaves the sidebar as it is, and the width new windows take. A
 /// restore lists its windows in the order they opened, whichever was used last, and each pane starts at its real size.
@@ -109,6 +110,7 @@ extension SelfTest {
         await sidebarKeepsItsWidthChecks(app, project)
         await insetChecks(app, project)
         await foldKeyChecks(app, project)
+        await tabKeyChecks(app, project)
         await focusBudget(app, [project, main, plain])
         await openCloseBudget(app, open: { await open(loose) }, close: closeWindow)
         await restoreChecks(app, [project, main, plain], close: closeWindow)
@@ -616,6 +618,79 @@ extension SelfTest {
               "unfolded \(unfolded), menu \(title), chevron left \(chevron), folded again \(refolded)")
     }
 
+    // MARK: ⌘1 to ⌘9
+
+    /// ⌘1 to ⌘8 as the keyboard sends them select a window's first eight tabs and ⌘9 its last, in a window showing the
+    /// column folded, then unfolded, then after a real click on the window's own badge: the column takes none of the
+    /// keys, and never the keyboard, which stays in the terminal. The keys go ⌘2 to ⌘9, then ⌘1, so each is a switch.
+    /// Ten tabs; the nine added close after.
+    private static func tabKeyChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
+        guard let window = c.window, await bringToFront(window) else {
+            return note("window column: ⌘1 to ⌘9 not checked, as " + notFrontmost(c.window ?? NSWindow()))
+        }
+        let folder: String = c.project ?? canonicalPath(NSTemporaryDirectory())
+        var added: [TerminalTab] = []
+        while c.groups.count < 10 { added.append(c.addTab(directory: folder, select: false)) }
+        for tab in added { _ = await wait(20) { tab.status.integrated } }
+        let codes: [(key: Int, code: UInt16)] = [(2, 19), (3, 20), (4, 21), (5, 23), (6, 22), (7, 26), (8, 28), (9, 25), (1, 18)]
+        let expected: [Int] = codes.map { $0.key == 9 ? c.groups.count - 1 : $0.key - 1 }
+        /// From the first tab: the tab each key selected, and whether the terminal shown kept the keyboard after every one.
+        func pressAll() -> (tabs: [Int], keyboard: Bool) {
+            var tabs: [Int] = []
+            var keyboard = true
+            for (_, code) in codes {
+                pressKey(window, code: code, .command)
+                tabs.append(c.activeIndex)
+                keyboard = keyboard && window.firstResponder === c.activeTab?.view
+            }
+            return (tabs, keyboard)
+        }
+        /// `click`: before the keys, a real click on the window's own badge, which reaches it and leaves the keyboard in the
+        /// terminal.
+        func checkKeys(_ form: WindowColumnShown.Form, _ name: String, click: Bool = false) async {
+            // A key sent while another app or window has the keyboard selects nothing here: the window takes it back first.
+            if !(NSApp.isActive && window.isKeyWindow), !(await bringToFront(window)) {
+                return note("window column: ⌘1 to ⌘9 not checked with the column \(name), as " + notFrontmost(window))
+            }
+            c.select(0)
+            window.layoutIfNeeded()
+            let shows: Bool = c.columnHost.shown.form == form && !c.windowColumn.isHidden
+            var clicked = true
+            if click {
+                guard let own = c.windowColumn.button(for: c.indexID), !own.isHidden else {
+                    return check(false, "window column: the window's own badge shows, to click",
+                                 "\(c.windowColumn.shownButtons.map(\.id)), own \(c.indexID)")
+                }
+                let select: ((Int) -> Void)? = c.windowColumn.onSelect
+                var reached: Int?
+                c.windowColumn.onSelect = { (id: Int) in
+                    reached = id
+                    select?(id)
+                }
+                clickThroughWindow(own)
+                await pause(0.3)
+                c.windowColumn.onSelect = select
+                clicked = reached == c.indexID && window.firstResponder === c.activeTab?.view && c.activeIndex == 0
+            }
+            let held: Bool = NSApp.isActive && window.isKeyWindow
+            let (tabs, keyboard) = pressAll()
+            check(shows && held && clicked && tabs == expected && keyboard,
+                  "window column: ⌘1 to ⌘8 select the first eight tabs and ⌘9 the last, in a window showing the column \(name)",
+                  "column \(c.columnHost.shown), keyboard held \(held)"
+                      + (click ? ", the click reached the badge and left the keyboard in the terminal \(clicked)" : "")
+                      + "; selected \(tabs) of \(expected), the terminal kept the keyboard \(keyboard)")
+        }
+        await checkKeys(.folded, "folded")
+        app.windowColumnExpanded = true
+        await checkKeys(.expanded, "unfolded")
+        app.windowColumnExpanded = false
+        await checkKeys(.folded, "folded, after a click on its own badge", click: true)
+        for tab in added { c.requestClose(tab) }
+        _ = await wait(5) { added.allSatisfy { (tab: TerminalTab) -> Bool in !c.tabs.contains { $0 === tab } } }
+        _ = await endSheets(over: window)
+        c.select(0)
+    }
+
     // MARK: the budget
 
     /// Five seconds of every window's tick with nothing happening: no column lays out, and no badge configures or draws.
@@ -775,6 +850,23 @@ extension SelfTest {
         let location: NSPoint = view.convert(point, to: nil)
         return NSEvent.mouseEvent(with: .rightMouseDown, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                   windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+    }
+
+    /// A click in the middle of `view` as a hand makes one: the mouse-up waits in the queue, and the mouse-down goes
+    /// through the window, which hit-tests it and hands out the keyboard as it does for a real click.
+    private static func clickThroughWindow(_ view: NSView) {
+        guard let window = view.window else { return }
+        let location: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        let time: TimeInterval = ProcessInfo.processInfo.systemUptime
+        func event(_ type: NSEvent.EventType, after delay: TimeInterval) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: time + delay, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+        }
+        guard let down = event(.leftMouseDown, after: 0), let up = event(.leftMouseUp, after: 0.05) else { return }
+        NSApp.postEvent(up, atStart: false)
+        window.sendEvent(down)
+        // A mouse-up nothing tracked must not arrive later.
+        while NSApp.nextEvent(matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true) != nil {}
     }
 
     /// ⌃⌘S as the keyboard sends it: a CGEvent, so AppKit reads its characters off the layout, sent to the app, which
