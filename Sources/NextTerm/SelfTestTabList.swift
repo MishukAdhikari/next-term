@@ -333,6 +333,8 @@ extension SelfTest {
 final class TerminalResizes: NSObject {
     private var sizes: [ObjectIdentifier: NSSize] = [:]
     private var counts: [ObjectIdentifier: Int] = [:]
+    /// Each view's sizes in turn, the first as it was when watched.
+    private var history: [ObjectIdentifier: [NSSize]] = [:]
     private var posted: [(view: NSView, was: Bool)] = []
 
     init(_ views: [NSView]) {
@@ -340,6 +342,7 @@ final class TerminalResizes: NSObject {
         for view in views {
             posted.append((view, view.postsFrameChangedNotifications))
             sizes[ObjectIdentifier(view)] = view.frame.size
+            history[ObjectIdentifier(view)] = [view.frame.size]
             view.postsFrameChangedNotifications = true
             NotificationCenter.default.addObserver(self, selector: #selector(changed(_:)), name: NSView.frameDidChangeNotification, object: view)
         }
@@ -351,6 +354,12 @@ final class TerminalResizes: NSObject {
         guard sizes[id] != view.frame.size else { return }
         sizes[id] = view.frame.size
         counts[id, default: 0] += 1
+        history[id, default: []].append(view.frame.size)
+    }
+
+    /// `view`'s sizes in turn, for a report: "785×300 → 790×300".
+    func sizes(_ view: NSView) -> String {
+        (history[ObjectIdentifier(view)] ?? []).map { "\(Int($0.width))×\(Int($0.height))" }.joined(separator: " → ")
     }
 
     /// The most times any one changed size.

@@ -114,9 +114,12 @@ extension SessionSnapshot {
         public var selected: Int
         public var minimized: Bool
         public var fullScreen: Bool
+        /// Its place in the order the windows opened, 0 for the first, as every window's column and ⌘O list them: the
+        /// windows themselves are saved front to back. Nil in a file written before it was kept.
+        public var opened: Int?
 
         public init(frame: Frame? = nil, screen: String? = nil, project: String? = nil, groups: [Group], selected: Int = 0,
-                    minimized: Bool = false, fullScreen: Bool = false) {
+                    minimized: Bool = false, fullScreen: Bool = false, opened: Int? = nil) {
             self.frame = frame
             self.screen = screen
             self.project = project
@@ -124,6 +127,7 @@ extension SessionSnapshot {
             self.selected = selected
             self.minimized = minimized
             self.fullScreen = fullScreen
+            self.opened = opened
         }
     }
 
@@ -833,6 +837,7 @@ extension SessionSnapshot.Window {
         window.project = project
         window.groups = kept
         window.selected = SessionSnapshot.surviving(selected, in: survived) ?? 0
+        window.opened = opened.flatMap { (place: Int) -> Int? in place >= 0 ? place : nil }
         return window
     }
 }
@@ -1245,7 +1250,7 @@ extension SessionSnapshot.Header: Codable {
 }
 
 extension SessionSnapshot.Window: Codable {
-    private enum Keys: String, CodingKey { case frame, screen, project, groups, selected, minimized, fullScreen }
+    private enum Keys: String, CodingKey { case frame, screen, project, groups, selected, minimized, fullScreen, opened }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -1260,6 +1265,7 @@ extension SessionSnapshot.Window: Codable {
         project = c.optional(String.self, .project)
         minimized = c.flag(.minimized)
         fullScreen = c.flag(.fullScreen)
+        opened = c.optional(Int.self, .opened)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1271,6 +1277,7 @@ extension SessionSnapshot.Window: Codable {
         try c.encode(selected, forKey: .selected)
         try c.encode(minimized, forKey: .minimized)
         try c.encode(fullScreen, forKey: .fullScreen)
+        try c.encodeIfPresent(opened, forKey: .opened)
     }
 }
 

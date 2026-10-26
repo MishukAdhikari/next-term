@@ -343,6 +343,10 @@ final class SwitcherHeaderCell: NSTableCellView {
 /// connection as RemoteMarkView), with how many show it when more than one ("2"). The row says it to VoiceOver in words.
 final class SwitcherMarksView: NSStackView {
     private(set) var shown: [AgentMarks.Mark] = []
+    #if DEBUG
+    /// For the self-test: the marks' dots as they are drawn.
+    var dotsForTest: [StatusDotView] { arrangedSubviews.compactMap { $0 as? StatusDotView } }
+    #endif
     private var counts: [NSTextField] = []
     /// The server marks, in the row's secondary colour as the counts are.
     private var links: [RemoteMarkView] = []
@@ -386,6 +390,7 @@ final class SwitcherMarksView: NSStackView {
     private func dot(_ state: TabState) -> StatusDotView {
         let dot = StatusDotView()
         dot.pulsesForAttention = false
+        dot.turnsWhileWorking = false // the list is looked at, not watched
         dot.state = state
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.widthAnchor.constraint(equalToConstant: 10).isActive = true

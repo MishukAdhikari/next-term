@@ -14,6 +14,11 @@ enum Theme {
 
     static let working = NSColor(hex: 0x3574F0)
     static let done = NSColor(hex: 0x5FB865)
+    /// Done, quietly: the green three-quarters over the bar. Nothing needs you yet, so the mark doesn't pull the eye, and
+    /// it stays 3:1 against the bar, the selected tab and a hovered one. Increase Contrast keeps `done`.
+    static let doneQuiet = NSColor(hex: 0x529558)
+    /// The small counts beside marks ("+3", the window column's count): tabular figures, so they never shift.
+    static let countFont = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
     static let failed = NSColor(hex: 0xE55765)
     static let attention = NSColor(hex: 0xF2C55C)
 
@@ -142,6 +147,17 @@ extension NSColor {
 /// Attributed text without a paragraph style falls back to word wrapping and ignores the label's own
 /// line-break mode, so every attributed label gets an explicit style from here.
 enum Typography {
+    /// Capitals (or figures) set apart by `tracking`, as short capitals read best, and none after the last character, so
+    /// the word centres as it would without it.
+    static func capitals(_ text: String, font: NSFont, color: NSColor, tracking: CGFloat) -> NSAttributedString {
+        let set = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        guard tracking != 0, !text.isEmpty else { return set }
+        let whole = text as NSString
+        let last: NSRange = whole.rangeOfComposedCharacterSequence(at: whole.length - 1)
+        if last.location > 0 { set.addAttribute(.tracking, value: tracking, range: NSRange(location: 0, length: last.location)) }
+        return set
+    }
+
     static func paragraph(_ mode: NSLineBreakMode, alignment: NSTextAlignment = .natural) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = mode
@@ -178,5 +194,18 @@ enum Typography {
         let copy = NSMutableAttributedString(attributedString: text)
         copy.addAttribute(.paragraphStyle, value: paragraph(mode, alignment: alignment), range: NSRange(location: 0, length: copy.length))
         return copy
+    }
+}
+
+/// The display options a mark follows: Increase Contrast (System Settings › Accessibility › Display) makes the marks
+/// that are quiet on purpose plain again. Read as each is drawn; a change is passed on as AgentSpinner.changed.
+enum DisplayOptions {
+    static var increasesContrast: Bool {
+        increasesContrastOverride ?? NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    }
+
+    /// The self-test's setting, nil for the system's.
+    static var increasesContrastOverride: Bool? {
+        didSet { NotificationCenter.default.post(name: AgentSpinner.changed, object: nil) }
     }
 }

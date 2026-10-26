@@ -31,6 +31,23 @@ import Testing
         }
     }
 
+    @Test func windowsAreListedInTheOrderTheyOpenedWhicheverWasUsedLast() {
+        func window(_ opened: Int?) -> SessionSnapshot.Window {
+            let pane = SessionSnapshot.Pane(id: UUID())
+            return SessionSnapshot.Window(groups: [SessionSnapshot.Group(root: .pane(pane), focused: pane.id)], opened: opened)
+        }
+        // Opened A, B, C, D; D used, then B: saved front to back as B, D, C, A. Listed A, B, C, D again.
+        let saved = [window(1), window(3), window(2), window(0)]
+        #expect(RestoreLayout.openingOrder(saved) == [3, 0, 2, 1])
+        // A file written before the order was kept: back to front, as before.
+        #expect(RestoreLayout.openingOrder([window(nil), window(nil), window(nil)]) == [2, 1, 0])
+        // Some with it and some without: those with it first, in their order, then the rest back to front.
+        #expect(RestoreLayout.openingOrder([window(nil), window(1), window(nil), window(0)]) == [3, 1, 2, 0])
+        // Places with gaps (a window not saved) and none at all.
+        #expect(RestoreLayout.openingOrder([window(7), window(2)]) == [1, 0])
+        #expect(RestoreLayout.openingOrder([]).isEmpty)
+    }
+
     @Test func aNoteIsFedAsOneDimLineOfPlainText() {
         let hostile = "Last command: printf \u{1B}]52;c;aGk=\u{07}\u{9B}6n done.\nrm -rf ~\r\u{1B}[201~"
         let fed = RestoreLayout.noteLine(hostile)

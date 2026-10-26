@@ -7,41 +7,29 @@ import NextTermCore
 /// own drop or paste in that tab; a tab that is not connected, a copy that fails, or a drop over the limits pastes
 /// nothing and says why, in a line over the tab.
 enum RemoteDrop {
-    /// Copies `urls` (files and folders on this Mac) to the tab's host and pastes their paths there.
-    static func drop(_ urls: [URL], into tab: TerminalTab) {
+    /// Copies `urls` (files and folders on this Mac) to the tab's host and pastes their paths there. `done` runs once it
+    /// is over, copied or not (a pasted image's copy here is removed then).
+    static func drop(_ urls: [URL], into tab: TerminalTab, done: (() -> Void)? = nil) {
         guard let remote = tab.remote, let path = tab.controlPath, tab.remoteConnected, !tab.disconnected else {
+            done?()
             return tab.view.showNote("This tab is not connected, so the drop could not be copied to its server. Nothing was pasted.")
         }
         let names = urls.map(\.lastPathComponent)
         DispatchQueue.global(qos: .userInitiated).async {
             let bytes = urls.reduce(0) { $0 + size(of: $1, upTo: RemoteUpload.maxBytes + 1) }
             if let refusal = RemoteUpload.refusal(items: urls.count, bytes: bytes, names: names) {
-                return DispatchQueue.main.async { tab.view.showNote(refusal) }
+                return DispatchQueue.main.async { done?(); tab.view.showNote(refusal) }
             }
             guard let stream = tarStream(urls) else {
-                return DispatchQueue.main.async { tab.view.showNote("Next Term could not read what was dropped. Nothing was pasted.") }
+                return DispatchQueue.main.async { done?(); tab.view.showNote("Next Term could not read what was dropped. Nothing was pasted.") }
             }
-            DispatchQueue.main.async { send(stream, names: names, to: remote.host, path: path, tab: tab) }
-        }
-    }
-
-    /// ⌘V with an image and no text or file on the pasteboard: the image is written as `pasted-<time>.png` in a private
-    /// folder on this Mac first, then copied as a drop.
-    static func pasteImage(_ png: Data, into tab: TerminalTab) {
-        do {
-            let parent = FileManager.default.temporaryDirectory.appendingPathComponent("next-term-paste", isDirectory: true)
-            let folder = try PrivateFolder.make(in: parent, prefix: "image-")
-            let file = folder.url.appendingPathComponent(RemoteUpload.imageName(at: Date()))
-            try png.write(to: file, options: .withoutOverwriting)
-            drop([file], into: tab)
-        } catch {
-            tab.view.showNote("Next Term could not keep the pasted image to copy it: \(error.localizedDescription)")
+            DispatchQueue.main.async { send(stream, names: names, to: remote.host, path: path, tab: tab, done: done) }
         }
     }
 
     /// The stream goes as the script's stdin; then the paths are typed in, and the note says where they went. A copy
     /// that takes more than 2 s says so meanwhile.
-    private static func send(_ stream: Data, names: [String], to host: RemoteHost, path: String, tab: TerminalTab) {
+    private static func send(_ stream: Data, names: [String], to host: RemoteHost, path: String, tab: TerminalTab, done finished: (() -> Void)?) {
         var done = false
         let what = names.count == 1 ? names[0] : "\(names.count) items"
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -49,6 +37,7 @@ enum RemoteDrop {
         }
         RemoteConnection.run(host, path: path, script: RemoteUpload.script, input: stream, timeout: 300) { output in
             done = true
+            finished?()
             switch RemoteUpload.folder(output.output) {
             case .failure(let error):
                 tab.view.showNote(output.timedOut ? "The copy to \(host.name) did not finish in time. Nothing was pasted." : error.text)

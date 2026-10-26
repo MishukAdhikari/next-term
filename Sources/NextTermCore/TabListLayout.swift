@@ -312,7 +312,7 @@ public struct TabListLayout: Equatable, Sendable {
 }
 
 /// The collapsed list, a 24-point column with one mark per tab in 24-point slots under the chevron that opens it,
-/// counted as the terminal rail counts its marks: when not all fit, the last place says how many more.
+/// counted as the terminal rail counts its marks (MarkColumn): when not all fit, the last place says how many more.
 public struct TabListCollapsed: Equatable, Sendable {
     /// The chevron's strip along the top.
     public static let chevronStrip: CGFloat = 38
@@ -327,24 +327,14 @@ public struct TabListCollapsed: Equatable, Sendable {
     public let hiddenCount: Int
 
     public init(tabCount: Int, height: CGFloat) {
-        let marksTop: CGFloat = Self.chevronStrip + Self.margin
-        let room = Int(max(0, height - marksTop - Self.margin) / Self.slotSize)
-        let shown: Int = tabCount <= room ? tabCount : max(0, room - 1)
-        let slots: [CGRect] = (0..<shown).map { index -> CGRect in
-            CGRect(x: 0, y: marksTop + CGFloat(index) * Self.slotSize, width: Self.slotSize, height: Self.slotSize)
-        }
-        let hidden: Int = tabCount - shown
-        let moreY: CGFloat = marksTop + CGFloat(shown) * Self.slotSize
-        self.slots = slots
-        self.hiddenCount = hidden
-        self.more = hidden > 0 && room > 0 ? CGRect(x: 0, y: moreY, width: Self.slotSize, height: Self.slotSize) : nil
+        let column = MarkColumn(count: tabCount, height: height, top: Self.chevronStrip, slot: Self.slotSize, margin: Self.margin)
+        self.slots = column.slots
+        self.more = column.more
+        self.hiddenCount = column.hiddenCount
     }
 
     public var shownCount: Int { slots.count }
 
     /// The "+N"'s colour: the most urgent of the tabs it stands for, as the rail's.
-    public static func moreState(_ hidden: [TabState]) -> TabState {
-        let urgency: [TabState] = [.attention, .failed, .done, .working]
-        return urgency.first(where: hidden.contains) ?? .idle
-    }
+    public static func moreState(_ hidden: [TabState]) -> TabState { MarkColumn.moreState(hidden) }
 }

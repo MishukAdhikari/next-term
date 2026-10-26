@@ -10,10 +10,10 @@ import NextTermCore
 /// ⌘W, ⌘J and the sidebar's key pressed through the menus.
 extension SelfTest {
     static func dividerLineChecks(_ c: TerminalWindowController, proj: URL, tab: TerminalTab) async {
-        guard let window = c.window, let work = c.editorArea.superview as? HairlineSplitView,
-              let outer = window.contentView as? HairlineSplitView, let terminal = c.tabBar.superview else {
+        guard let window = c.window, let work = c.editorArea.superview as? HairlineSplitView, let terminal = c.tabBar.superview else {
             return check(false, "lines: the window's split views draw their own lines")
         }
+        let outer: HairlineSplitView = c.outerSplitView
         let app = AppDelegate.shared!
         let area = c.editorArea
         let defaults = UserDefaults.standard

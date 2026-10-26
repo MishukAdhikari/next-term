@@ -52,7 +52,7 @@ enum MCPWriteControl {
         case "close_pane": closePane(arguments, context, reply: reply)
         case "zoom_pane": zoomPane(arguments, context, reply: reply)
         case "set_layout": setLayout(arguments, context, reply: reply)
-        case "settings_get": reply(MCPControl.ok(settingsList()))
+        case "settings_get": reply(MCPControl.ok(settingsList(context)))
         case "settings_set": setSettings(arguments, context, reply: reply)
         default: reply(MCPControl.fail("Unknown tool \(tool)"))
         }

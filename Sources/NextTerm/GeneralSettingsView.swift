@@ -3,7 +3,8 @@ import NextTermCore
 
 /// Settings › General: what a launch that names no folder or file shows, whether a quit with a terminal window open asks
 /// about resuming, whether a restore brings scrollback back, whether windows show their project's colour, where a
-/// project opens when the window in front is in use, and Full Disk Access… for the user who wants it. Each control saves
+/// project opens when the window in front is in use, whether the window column shows, and Full Disk Access… for the user
+/// who wants it. Each control saves
 /// only its own choice, as it changes, and it is read at the next launch, reopen or quit (LaunchSettings): "At launch"
 /// counts as chosen only once the user chose it. The project colours show or hide at once, as View › Project Color ›
 /// Show Project Colors does, and where projects open is File › Open Projects In's setting, read at the next open.
@@ -18,6 +19,8 @@ final class GeneralSettingsView: NSView {
     let keepScrollback = NSButton(checkboxWithTitle: "Keep scrollback", target: nil, action: nil)
     /// Beside "Windows:": Show Project Colors.
     let projectColors = NSButton(checkboxWithTitle: "Show project colors", target: nil, action: nil)
+    /// Under it: the window column, as View › Hide Window Column sets it.
+    let windowColumn = NSButton(checkboxWithTitle: "Show the window column when two or more windows are open", target: nil, action: nil)
     /// Beside "Projects:", after "Open in": File › Open Projects In's choices, in its order.
     let projectsIn = NSPopUpButton(frame: .zero, pullsDown: false)
     /// Beside "Privacy:": System Settings' Full Disk Access pane, opened when clicked. Nothing asks for it by itself.
@@ -52,6 +55,8 @@ final class GeneralSettingsView: NSView {
         keepScrollback.action = #selector(keepScrollbackChanged)
         projectColors.target = self
         projectColors.action = #selector(projectColorsChanged)
+        windowColumn.target = self
+        windowColumn.action = #selector(windowColumnChanged)
         let targets: [(String, AppDelegate.ProjectTarget)] = [
             ("Ask Each Time", .ask), ("This Window", .thisWindow), ("New Window", .newWindow),
         ]
@@ -68,7 +73,7 @@ final class GeneralSettingsView: NSView {
 
         // No wider than the widest control above them, which the column never gets narrower than: a note squeezed in a
         // narrow window would wrap to a line its height leaves out.
-        let noteWidth: CGFloat = (opens + [askToResume, keepScrollback, projectColors]).map(\.fittingSize.width).max() ?? 290
+        let noteWidth: CGFloat = (opens + [askToResume, keepScrollback, projectColors, windowColumn]).map(\.fittingSize.width).max() ?? 290
         func note(_ text: String) -> NSTextField {
             let note = NSTextField(wrappingLabelWithString: text)
             note.textColor = .secondaryLabelColor
@@ -80,6 +85,7 @@ final class GeneralSettingsView: NSView {
         let askNote = note("Asks only when a terminal window is open. Unsaved files and running work are always asked about.")
         let scrollbackNote = note("Brings shell output back when windows resume after a quit or an update. It is kept in private files, with secrets masked on a best-effort basis, until Next Term next opens.")
         let colorsNote = note("A soft glow of each project’s colour along the top of its window, behind the window’s buttons. A worktree’s window has its repository’s. Choose another in View › Project Color, or right-click the window’s top row.")
+        let columnNote = note("A strip at the window’s edge listing every open window; a click brings one forward.")
         let projectsNote = note("Where Open Project and Open as Project Window go when the window in front is in use. An unused window always takes the project. Also in File › Open Projects In.")
         let privacyNote = note("Only if you want Next Term and the commands in it to reach every folder without macOS asking: this opens System Settings, where you add Next Term yourself.")
         // VoiceOver reads each note with the controls it is about.
@@ -87,6 +93,7 @@ final class GeneralSettingsView: NSView {
         askToResume.setAccessibilityHelp(askNote.stringValue)
         keepScrollback.setAccessibilityHelp(scrollbackNote.stringValue)
         projectColors.setAccessibilityHelp(colorsNote.stringValue)
+        windowColumn.setAccessibilityHelp(columnNote.stringValue)
         projectsIn.setAccessibilityHelp(projectsNote.stringValue)
         fullDiskAccess.setAccessibilityHelp(privacyNote.stringValue)
         // A label in the 110 pt column on the left, as in the other tabs, and its controls beside it: on the first line's
@@ -115,6 +122,8 @@ final class GeneralSettingsView: NSView {
         let scrollbackNoteRow = row(blank(), [scrollbackNote])
         let windowsRow = row(windowsLabel, [projectColors])
         let colorsNoteRow = row(blank(), [colorsNote])
+        let columnRow = row(blank(), [windowColumn])
+        let columnNoteRow = row(blank(), [columnNote])
         // "Open in" before the pop-up, which VoiceOver names "Open projects in" itself.
         let openIn = NSTextField(labelWithString: "Open in")
         openIn.setAccessibilityElement(false)
@@ -123,7 +132,7 @@ final class GeneralSettingsView: NSView {
         let projectsNoteRow = row(blank(), [projectsNote])
         let privacyRow = row(privacyLabel, [fullDiskAccess])
         let rows: [NSView] = [launchRow, opensNoteRow, quitRow, askNoteRow, sessionsRow, scrollbackNoteRow, windowsRow, colorsNoteRow,
-                              projectsRow, projectsNoteRow, privacyRow, row(blank(), [privacyNote])]
+                              columnRow, columnNoteRow, projectsRow, projectsNoteRow, privacyRow, row(blank(), [privacyNote])]
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -131,7 +140,8 @@ final class GeneralSettingsView: NSView {
         stack.setCustomSpacing(20, after: opensNoteRow)
         stack.setCustomSpacing(20, after: askNoteRow)
         stack.setCustomSpacing(20, after: scrollbackNoteRow)
-        stack.setCustomSpacing(20, after: colorsNoteRow)
+        stack.setCustomSpacing(12, after: colorsNoteRow)
+        stack.setCustomSpacing(20, after: columnNoteRow)
         stack.setCustomSpacing(20, after: projectsNoteRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -149,6 +159,8 @@ final class GeneralSettingsView: NSView {
         // File › Open Projects In, or the Ask dialog's "Always do this".
         let targetChanged: Notification.Name = AppDelegate.projectTargetChanged
         NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: targetChanged, object: nil)
+        // View › Hide Window Column, while this shows.
+        NotificationCenter.default.addObserver(self, selector: #selector(importChanged), name: AppDelegate.windowColumnChanged, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -173,6 +185,7 @@ final class GeneralSettingsView: NSView {
         askToResume.state = settings.askToReopenOnQuit ? .on : .off
         keepScrollback.state = settings.keepScrollback ? .on : .off
         projectColors.state = ProjectColorStore.isShown ? .on : .off
+        windowColumn.state = AppDelegate.shared?.showsWindowColumn ?? true ? .on : .off
         let target: AppDelegate.ProjectTarget = AppDelegate.shared?.projectTarget ?? .ask
         let index: Int = projectsIn.indexOfItem(withRepresentedObject: target.rawValue)
         projectsIn.selectItem(at: max(index, 0))
@@ -209,6 +222,11 @@ final class GeneralSettingsView: NSView {
     /// Every window's project colour, shown or hidden at once.
     @objc private func projectColorsChanged() {
         ProjectColorStore.isShown = projectColors.state == .on
+    }
+
+    /// The window column in every window, shown while two or more are open, or never.
+    @objc private func windowColumnChanged() {
+        AppDelegate.shared?.showsWindowColumn = windowColumn.state == .on
     }
 
     @objc private func keepScrollbackChanged() {
