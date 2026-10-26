@@ -605,6 +605,21 @@ extension SelfTest {
         _ = await wait(2) { window.attachedSheet !== sheet }
     }
 
+    /// Allow Editing… in `pane`, answered Allow: true once editing is allowed. Only its own question is answered:
+    /// a sheet the checks before left up fails them and is ended first, never taken for this one.
+    private static func allowEditing(_ pane: DatabasePane, in window: NSWindow, part: String) async -> Bool {
+        await endStrayQuestions(after: "the checks before \(part)")
+        pane.editingButton.performClick(nil)
+        let asked = await cellSheet(window)
+        guard asked.contains("Allow editing “\(pane.name)”?") else {
+            check(false, "\(part): Allow Editing… asks about “\(pane.name)”", asked)
+            await endSheets(over: window, with: .alertSecondButtonReturn)
+            return false
+        }
+        await answerSheet(window, .alertFirstButtonReturn)
+        return await wait(2) { pane.isEditingAllowed }
+    }
+
     /// ↩ on (row, column), and the field that opens in its cell.
     private static func openInCell(_ pane: DatabasePane, _ hand: CellHand, row: Int, column: Int) async -> NSTextView? {
         hand.click(pane.grid, row: row, column: column)
@@ -785,11 +800,7 @@ extension SelfTest {
             _ = await wait(5) { pane.isSettled && pane.page != nil }
             pane.select(table: "messages")
             _ = await wait(5) { pane.isSettled && pane.page?.table == "messages" }
-            pane.editingButton.performClick(nil)
-            _ = await cellSheet(window)
-            await answerSheet(window, .alertFirstButtonReturn)
-            _ = await wait(2) { pane.isEditingAllowed }
-            return pane
+            return await allowEditing(pane, in: window, part: "closing while saving") ? pane : nil
         }
         func draft(_ pane: DatabasePane, row: Int, _ text: String) async {
             guard let content = pane.page?.columns.firstIndex(of: "content") else { return }
@@ -862,9 +873,7 @@ extension SelfTest {
         _ = await wait(5) { pane.isSettled && pane.page != nil }
         pane.select(table: "kv")
         _ = await wait(5) { pane.isSettled && pane.page?.table == "kv" }
-        pane.editingButton.performClick(nil)
-        if await wait(5, { window.attachedSheet != nil }), let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
-        _ = await wait(2) { pane.isEditingAllowed }
+        guard await allowEditing(pane, in: window, part: "AE14") else { return check(false, "AE14: editing is allowed on the WAL store") }
         guard let theme = pane.page?.rows.firstIndex(where: { $0.first == .text("theme", truncated: false) }) else { return check(false, "AE14: kv lists theme") }
         hand.click(pane.grid, row: theme, column: 1)
         pane.beginDetailEdit()
@@ -872,12 +881,14 @@ extension SelfTest {
         pane.lastOutcome = nil
         pane.save()
         _ = await wait(5) { pane.lastOutcome != nil && !pane.edit.isSaving }
+        let saved = pane.lastOutcome
         pane.lastOutcome = nil
         window.undoManager?.undo()
         _ = await wait(5) { pane.lastOutcome != nil && !pane.edit.isSaving }
         // Listed before the check reads the file, whose own connection leaves -wal and -shm as Apple's SQLite does.
         let after = (try? FileManager.default.contentsOfDirectory(atPath: walFolder.path))?.sorted() ?? []
-        check(pane.lastOutcome?.stored == .text("dark", truncated: false), "AE14: Save and Undo on the WAL store", String(describing: pane.lastOutcome))
+        check(saved?.stored == .text("light", truncated: false) && pane.lastOutcome?.stored == .text("dark", truncated: false),
+              "AE14: Save and Undo on the WAL store", "save \(String(describing: saved)), undo \(String(describing: pane.lastOutcome))")
         check(after == listed, "AE14: and the folder lists exactly what it did before", after.joined(separator: ", "))
         check(store.one("SELECT v FROM kv WHERE k = 'theme'") == "dark", "AE14: the file holds the value put back")
     }
@@ -892,9 +903,10 @@ extension SelfTest {
         _ = await wait(5) { pane.isSettled && pane.page != nil }
         pane.select(table: "kv")
         _ = await wait(5) { pane.isSettled && pane.page?.table == "kv" }
-        pane.editingButton.performClick(nil)
-        if await wait(5, { window.attachedSheet != nil }), let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
-        _ = await wait(2) { pane.isEditingAllowed }
+        guard await allowEditing(pane, in: window, part: "AE15's preview") else {
+            area.closeAll()
+            return check(false, "AE15: editing is allowed in the preview")
+        }
         hand.click(pane.grid, row: 0, column: 1)
         pane.beginDetailEdit()
         pane.detail.textView.insertText("unsaved", replacementRange: NSRange(location: 0, length: (pane.detail.textView.string as NSString).length))
@@ -918,6 +930,7 @@ extension SelfTest {
     /// AE8: a write-protected copy can't be allowed, and says why.
     private static func readOnlyFileChecks(_ c: TerminalWindowController, store: CellStore) async {
         guard let window = c.window else { return }
+        await endStrayQuestions(after: "the checks before AE8's write-protected copy")
         let copy = store.folder.appendingPathComponent("agent-ro.db")
         try? FileManager.default.removeItem(at: copy)
         try? FileManager.default.copyItem(atPath: store.path, toPath: copy.path)
