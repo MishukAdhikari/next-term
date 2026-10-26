@@ -2604,6 +2604,12 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             }
             return false
         }
+        // A save under way finishes first, then the window asks again as things stand.
+        let saving: [DatabasePane] = editorArea.savingDatabases
+        if !saving.isEmpty {
+            EditorArea.afterSaving(saving) { DispatchQueue.main.async { sender.performClose(nil) } }
+            return false
+        }
         // A database value not saved yet, after the files: Cancel or Close Anyway, with no Save (R22).
         let drafts = editorArea.draftDatabases
         if !drafts.isEmpty && !valuesConfirmed {

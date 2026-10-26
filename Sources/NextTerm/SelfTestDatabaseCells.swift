@@ -959,7 +959,7 @@ extension SelfTest {
         let saves = asked.firstIndex { if case .saveChanges = $0.question { return true } else { return false } }
         let values = asked.firstIndex { if case .unsavedValues = $0.question { return true } else { return false } }
         let shown = values.map { asked[$0] }
-        check(quit == nil && values != nil && (saves ?? -1) < (values ?? -1) && values == asked.count - 1,
+        check(quit == nil && saves != nil && values != nil && (saves ?? -1) < (values ?? -1) && values == asked.count - 1,
               "R22: the quit's questions ask about the text file, then warn about the database's value, and its Cancel cancels the quit",
               asked.map { "\($0.question): \($0.title)" }.joined(separator: " | "))
         check(shown?.title == warned && shown?.info.contains("If you quit anyway, it is lost and nothing is written.") == true
@@ -983,6 +983,8 @@ extension SelfTest {
         // The window's last terminal tab takes the window with it, so closing it asks too.
         if c.tabs.count == 1, let only = c.tabs.first {
             check(c.asksToSave(closing: only), "R22: closing the window's last terminal tab with a value not saved asks first")
+        } else {
+            note("R22: closing the window's last terminal tab not checked here: the window has \(c.tabs.count) terminal tabs")
         }
 
         // Close Tabs to the Right, with only the database tab there: the warning alone; Close Anyway closes it unwritten.

@@ -468,9 +468,9 @@ Next Term's menu.
   same type, the value that was read, and the row's other values are still the ones read, since a key alone
   can name another row once SQLite gives a rowid out again. OR ABORT overrides a table's own ON CONFLICT
   REPLACE or IGNORE, so a save never deletes another row. If anything differs, or the file is busy, nothing
-  is written and the viewer says why. Edit › Undo writes the old value back the same checked way. A value
-  typed and not saved is asked about before its tab closes; closing it with other tabs, closing its window
-  or quitting warns first and writes nothing. A file with no -wal beside it gets none. Views,
+  is written and the viewer says why. Edit › Undo writes the old value back the same checked way. A file
+  with no -wal beside it gets none. A value typed and not saved is asked about before its tab closes;
+  closing it with other tabs, closing its window or quitting warns first and writes nothing. Views,
   virtual tables and their own tables, key and generated columns and blobs can't be edited. No agent or MCP
   tool can allow editing or write a database.
 - **Git:** the sidebar reads status with read-only calls and `--no-optional-locks`, so it never holds the

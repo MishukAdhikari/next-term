@@ -805,6 +805,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A second quit while the first asks: cancelled, and the first's answers, its quit consent among them, stay its own.
         guard !askingToQuit else { return .terminateCancel }
+        // A database save under way finishes first, then the quit starts again and asks as things stand.
+        let saving: [DatabasePane] = controllers.flatMap(\.editorArea.savingDatabases)
+        if !saving.isEmpty {
+            EditorArea.afterSaving(saving) { DispatchQueue.main.async { NSApp.terminate(nil) } }
+            return .terminateCancel
+        }
         askingToQuit = true
         defer { askingToQuit = false }
         // The quit consent comes only from a press in this quit's questions (R30): none is left from a quit cancelled

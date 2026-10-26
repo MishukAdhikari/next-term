@@ -75,6 +75,21 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// Database tabs holding a value not saved yet (DatabasePane.hasDraft): closing them with others, with the window
     /// or at a quit warns first (UnsavedValueAlert).
     var draftDatabases: [DatabasePane] { databases.filter(\.hasDraft) }
+    /// Database tabs writing a save right now.
+    var savingDatabases: [DatabasePane] { databases.filter(\.edit.isSaving) }
+
+    /// Runs `then` once each of these database tabs has finished the save it is writing; at once when none is. A close or a
+    /// quit waits for it this way, then asks about the tabs as they stand: a value saved is nothing to warn about.
+    static func afterSaving(_ panes: [DatabasePane], _ then: @escaping () -> Void) {
+        var left: Int = panes.count
+        guard left > 0 else { return then() }
+        for pane in panes {
+            pane.whenSaved {
+                left -= 1
+                if left == 0 { then() }
+            }
+        }
+    }
     var isEmpty: Bool { panes.isEmpty }
 
     /// Shown exactly while a tab is open, whoever sets it. A split view shows a hidden pane by itself when
@@ -558,6 +573,9 @@ final class EditorArea: NSView, TabBarViewDelegate {
     /// reject. A database tab among them with a value not saved yet is warned about after that (Cancel or
     /// Close Anyway, with no Save), or alone. `keeping` comes to the front if the tab in front was among them.
     func close(_ closing: [NSView], keeping: NSView) {
+        // A save under way finishes first; then the tabs are asked about as they stand.
+        let saving: [DatabasePane] = closing.compactMap { $0 as? DatabasePane }.filter(\.edit.isSaving)
+        if !saving.isEmpty { return Self.afterSaving(saving) { [weak self] in self?.close(closing, keeping: keeping) } }
         let front = activePane
         let done = { [weak self] in
             guard let self else { return }
