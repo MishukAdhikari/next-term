@@ -406,7 +406,7 @@ public enum SQLiteReader {
 
     /// Rows of an ordinary table, each with its rowid, read the way a page keeps them but without loading
     /// a blob: SQLite tells a blob's type and size from the row's header, and its first bytes come through
-    /// sqlite3_blob_read (substr() in a table with a generated column, which SQLite opens no blob in). A
+    /// sqlite3_blob_read (substr() in a table with a generated column, where no blob is opened). A
     /// page of large attachments then costs what its text does. `tail` follows the FROM clause (a WHERE, a
     /// LIMIT), with `values` bound to it. One read transaction, so the first bytes are of the rows read.
     static func lightRows(_ db: OpaquePointer, _ table: String, info: SQLiteTableInfo, rowid: String, tail: String,
@@ -439,8 +439,10 @@ public enum SQLiteReader {
             }
             result.append(values)
         }
-        // One handle a column, moved from row to row. SQLite opens no blob in a table with a generated column:
-        // there the first bytes come from substr(), which loads that blob alone.
+        // One handle a column, moved from row to row. In a table with a generated column the first bytes come from
+        // substr(), which loads that blob alone: newer SQLite opens no blob there, and the SQLite of macOS 13 to 15
+        // opens one that can read another column's bytes, since a virtual column has no place in the stored row.
+        let opensBlobs: Bool = !info.columns.contains { (column: SQLiteColumn) -> Bool in column.isGenerated }
         var handles: [Int: OpaquePointer] = [:]
         var statements: [Int: OpaquePointer] = [:]
         defer {
@@ -459,7 +461,7 @@ public enum SQLiteReader {
                 }
                 if handles[blob.column] == nil {
                     var made: OpaquePointer?
-                    if sqlite3_blob_open(db, "main", table, name, id, 0, &made) == SQLITE_OK, let made {
+                    if opensBlobs, sqlite3_blob_open(db, "main", table, name, id, 0, &made) == SQLITE_OK, let made {
                         handles[blob.column] = made
                     } else {
                         sqlite3_blob_close(made)

@@ -55,8 +55,7 @@ public enum SQLiteSaveOutcome: Sendable, Equatable {
 /// the user's action; nothing an agent or an MCP tool runs reaches it.
 ///
 /// Each save opens its own read-write connection (never one that could create the file), with SQLite's
-/// defensive mode on (an index's own tables and the schema are read-only), untrusted schema and foreign
-/// keys on. In one `BEGIN IMMEDIATE` transaction it checks the table is still an ordinary or WITHOUT ROWID
+/// defensive mode on (an index's own tables and the schema are read-only) and foreign keys on. In one `BEGIN IMMEDIATE` transaction it checks the table is still an ordinary or WITHOUT ROWID
 /// table and that every name it will use is one of its columns, then runs one `UPDATE OR ABORT` keyed by
 /// the row's rowid or primary key. It changes the cell only if the cell still holds, byte for byte and of
 /// the same type, the value that was read, and the row's other values are still the ones read: a key
@@ -108,7 +107,11 @@ public enum SQLiteWriter {
         guard nt_sqlite3_db_config_flag(db, SQLITE_DBCONFIG_DEFENSIVE, 1) == 1 else {
             return (connection, .refused("its defensive mode could not be turned on."))
         }
-        sqlite3_exec(db, "PRAGMA trusted_schema = OFF", nil, nil, nil)
+        // The file's triggers run as SQLite runs them, so a full-text index stays in step: the SQLite of macOS 14 and
+        // 15 refuses an FTS table in a trigger when the schema isn't trusted. Trusting it opens nothing here: this
+        // connection adds no functions or modules of its own, extension loading stays off, and defensive mode keeps
+        // the schema and an index's own tables read-only.
+        sqlite3_exec(db, "PRAGMA trusted_schema = ON", nil, nil, nil)
         sqlite3_exec(db, "PRAGMA foreign_keys = ON", nil, nil, nil)
         if !hadWAL {
             // Apple's SQLite keeps -wal and -shm after the last connection closes; none was there before this.

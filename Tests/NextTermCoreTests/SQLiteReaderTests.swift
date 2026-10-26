@@ -181,8 +181,10 @@ import Testing
         sqlite3_exec(db, """
             CREATE TABLE b (id INTEGER PRIMARY KEY, data BLOB, copy BLOB GENERATED ALWAYS AS (data) VIRTUAL, note TEXT);
             CREATE TABLE w (k TEXT PRIMARY KEY, data BLOB) WITHOUT ROWID;
+            CREATE TABLE g (id INTEGER PRIMARY KEY, n INTEGER, twice INTEGER GENERATED ALWAYS AS (n * 2) VIRTUAL, data BLOB, tail BLOB);
             INSERT INTO b (data, note) VALUES (randomblob(1000000), 'big'), (x'', 'empty'), (NULL, 'none'), (x'0102', 'small');
             INSERT INTO w VALUES ('k', x'0a0b0c');
+            INSERT INTO g (n, data, tail) VALUES (1, x'0a0b', x'0c0d0e');
             """, nil, nil, nil)
         sqlite3_close(db)
         let page = try SQLiteReader.page("b", at: path, offset: 0)
@@ -195,6 +197,9 @@ import Testing
         #expect(page.keys == (1...4).map { .rowid(name: "rowid", value: Int64($0)) })
         let w = try SQLiteReader.page("w", at: path, offset: 0)
         #expect(w.rows == [[.text("k", truncated: false), .blob(3, head: Data([0x0A, 0x0B, 0x0C]))]])
+        // A blob stored after a virtual column: the SQLite of macOS 13 to 15 opens a blob there at the wrong place.
+        let g = try SQLiteReader.page("g", at: path, offset: 0)
+        #expect(g.rows == [[.integer(1), .integer(1), .integer(2), .blob(2, head: Data([0x0A, 0x0B])), .blob(3, head: Data([0x0C, 0x0D, 0x0E]))]])
     }
 
     @Test func oneRowReadAgainByItsKey() throws {
