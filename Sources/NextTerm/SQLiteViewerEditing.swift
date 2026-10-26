@@ -40,6 +40,9 @@ extension DatabasePane {
         var isSaving = false
         /// What waits for the save under way: closing the tab, Stop Editing, leaving the draft, another write.
         var afterSave: [() -> Void] = []
+        /// Editing ends once the save under way is written: Stop Editing or closing the tab waits for it, or
+        /// closing's Save wrote it. It leaves no undo step, and its notice no Undo.
+        var endsAfterSave = false
         /// The last save's sentence, or why the typed text can't be saved.
         var message: String?
         /// The draft is in the cell's own field rather than the detail pane.
@@ -70,9 +73,11 @@ extension DatabasePane {
     /// A draft that would change its cell: the tab shows the modified dot, and File › Save is on.
     var hasDraft: Bool { edit.draft?.isModified == true }
 
-    /// Runs `action` once the save under way has its outcome (at once when there is none).
-    func whenSaved(_ action: @escaping () -> Void) {
+    /// Runs `action` once the save under way has its outcome (at once when there is none). `ending`: the
+    /// action stops editing or closes the tab, so a save that goes through leaves no undo step.
+    func whenSaved(ending: Bool = false, _ action: @escaping () -> Void) {
         guard edit.isSaving else { return action() }
+        if ending { edit.endsAfterSave = true }
         edit.afterSave.append(action)
     }
 
@@ -129,10 +134,10 @@ extension DatabasePane {
     }
 
     /// Back to read-only: the draft goes (asking first when there is one), and this tab's undo steps. A save
-    /// under way is waited for, so what it says (and its undo step) comes first.
+    /// under way is waited for, so what it says comes first; written, it leaves no undo step.
     func stopEditing(asking: Bool = true) {
         guard isEditingAllowed else { return }
-        if edit.isSaving { return whenSaved { [weak self] in self?.stopEditing(asking: asking) } }
+        if edit.isSaving { return whenSaved(ending: true) { [weak self] in self?.stopEditing(asking: asking) } }
         if asking, hasDraft, let window, let cell = edit.cell {
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -400,7 +405,8 @@ extension DatabasePane {
     enum WriteKind { case save, undo, redo }
 
     /// File › Save, the Save button, ↩ in the cell: writes the draft, one checked value in its row as read.
-    func save(then done: ((Bool) -> Void)? = nil) {
+    /// `ending`: the tab closes once it is written (closing's Save), so it leaves no undo step.
+    func save(ending: Bool = false, then done: ((Bool) -> Void)? = nil) {
         guard let draft = edit.draft, let cell = edit.cell, isEditingAllowed, !edit.isSaving else {
             NSSound.beep()
             done?(false)
@@ -418,15 +424,16 @@ extension DatabasePane {
             draftChanged()
             done?(false)
         case let .success(value):
-            write(SQLiteEdit(table: cell.table, column: cell.column, key: cell.key, expected: draft.original, value: value, row: edit.row), as: .save, then: done)
+            write(SQLiteEdit(table: cell.table, column: cell.column, key: cell.key, expected: draft.original, value: value, row: edit.row),
+                  as: .save, ending: ending, then: done)
         }
     }
 
     /// Writes on the reading queue, which takes reads and writes in turn; "saving…" meanwhile. `step` is the
     /// undo step registered for it, taken off again if the write is refused. One write at a time: another
-    /// waits for the one under way.
-    func write(_ change: SQLiteEdit, as kind: WriteKind, step: CellUndoStep? = nil, then done: ((Bool) -> Void)? = nil) {
-        if edit.isSaving { return whenSaved { [weak self] in self?.write(change, as: kind, step: step, then: done) } }
+    /// waits for the one under way. `ending`: editing ends once it is written.
+    func write(_ change: SQLiteEdit, as kind: WriteKind, step: CellUndoStep? = nil, ending: Bool = false, then done: ((Bool) -> Void)? = nil) {
+        if edit.isSaving { return whenSaved { [weak self] in self?.write(change, as: kind, step: step, ending: ending, then: done) } }
         guard let allowed = edit.allowed, FileIdentity(path: path) == allowed else {
             if let step { drop(step) }
             checkIdentity()
@@ -434,6 +441,7 @@ extension DatabasePane {
             return
         }
         edit.isSaving = true
+        edit.endsAfterSave = ending
         if kind == .save { edit.message = "saving…" }
         draftChanged()
         let path = self.path
@@ -445,6 +453,8 @@ extension DatabasePane {
 
     private func wrote(_ outcome: SQLiteSaveOutcome, _ change: SQLiteEdit, _ kind: WriteKind, step: CellUndoStep?, then done: ((Bool) -> Void)?) {
         edit.isSaving = false
+        let ending = edit.endsAfterSave
+        edit.endsAfterSave = false
         #if DEBUG
         lastOutcome = outcome
         #endif
@@ -495,8 +505,11 @@ extension DatabasePane {
         }
         showSaved(row, table: change.table, key: change.key)
         if kind == .save {
-            // Editing stopped while it was saving: no step is left that could only do nothing.
-            let undo = isEditingAllowed ? registerStep(applied.reversed(row: row), kind: .undo) : nil
+            // Editing ends now that it is written: no step is left that could only do nothing. Nor is one
+            // registered to be taken off at once: the undo manager drops a group its last action leaves only
+            // once the group is closed, at the end of this turn of the run loop, so a step taken off in the
+            // turn it was registered leaves its group behind, empty, still on Edit › Undo as Edit Cell.
+            let undo = isEditingAllowed && !ending ? registerStep(applied.reversed(row: row), kind: .undo) : nil
             edit.draft = nil
             edit.cell = nil
             edit.row = []

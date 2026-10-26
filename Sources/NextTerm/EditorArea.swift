@@ -511,9 +511,11 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     /// Closes a database tab, asking first about an unsaved value: Save (closing once it is written), Don't
     /// Save, or Cancel. A save under way is waited for: it closes once that is written (its notice first),
-    /// or asks if it wasn't.
+    /// or asks if it wasn't. A save the tab closes after leaves no undo step.
     func requestClose(_ database: DatabasePane) {
-        if database.edit.isSaving { return database.whenSaved { [weak self, weak database] in if let database { self?.requestClose(database) } } }
+        if database.edit.isSaving {
+            return database.whenSaved(ending: true) { [weak self, weak database] in if let database { self?.requestClose(database) } }
+        }
         guard database.hasDraft, let window, let column = database.edit.cell?.column else { return remove(database) }
         let alert = NSAlert()
         alert.messageText = "Save your change to “\(CellText.line(column, limit: 80))” in “\(database.name)”?"
@@ -525,7 +527,7 @@ final class EditorArea: NSView, TabBarViewDelegate {
         alert.beginSheetModal(for: window) { [weak self, weak database] response in
             guard let self, let database else { return }
             switch response {
-            case .alertFirstButtonReturn: database.save { saved in if saved { self.remove(database) } }
+            case .alertFirstButtonReturn: database.save(ending: true) { saved in if saved { self.remove(database) } }
             case .alertThirdButtonReturn: self.remove(database)
             default: break
             }

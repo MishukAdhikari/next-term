@@ -822,6 +822,8 @@ extension SelfTest {
         check(await wait(5) { !area.panes.contains { $0 === pane } }, "closing while saving: the tab closes once the value is written")
         check(store.one("SELECT content FROM messages WHERE id = 6") == "while closing" && GitToast.text == "Saved “content” in row 6",
               "closing while saving: the value is in the file, and its notice came up first", GitToast.text ?? "no notice")
+        check(window.undoManager?.undoActionName != "Edit Cell", "closing while saving: no step is left on Edit › Undo for the closed tab",
+              window.undoManager?.undoActionName ?? "")
 
         guard let again = await open() else { return check(false, "closing while saving: the store opens again") }
         await draft(again, row: 8, "while stopping")
@@ -832,6 +834,18 @@ extension SelfTest {
         check(await wait(5) { !again.isEditingAllowed && again.lastOutcome != nil }, "Stop Editing during a save stops once it is written")
         check(store.one("SELECT content FROM messages WHERE id = 9") == "while stopping" && again.edit.steps.isEmpty && window.undoManager?.undoActionName != "Edit Cell",
               "Stop Editing during a save: the value is written, and no step is left that could only do nothing", window.undoManager?.undoActionName ?? "")
+
+        // Closing's Save: the value is written and the tab closes, with no step left for it.
+        area.closeAll()
+        guard let last = await open() else { return check(false, "closing's Save: the store opens again") }
+        await draft(last, row: 9, "saved on closing")
+        area.close(last)
+        let closing = await cellSheet(window)
+        check(closing.contains("Save your change to “content” in “agent.db”?"), "closing's Save: closing with an unsaved value asks", closing)
+        await answerSheet(window, .alertFirstButtonReturn)
+        check(await wait(5) { !area.panes.contains { $0 === last } } && store.one("SELECT content FROM messages WHERE id = 10") == "saved on closing"
+              && window.undoManager?.undoActionName != "Edit Cell", "R22: Save writes the value and closes the tab, leaving no step on Edit › Undo",
+              window.undoManager?.undoActionName ?? "")
         area.closeAll()
     }
 
