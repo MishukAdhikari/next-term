@@ -619,6 +619,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { Updater.shared.start() }
         // An update's disk image and folder that a quit or a crash left mid-staging.
         Updater.removeLeftovers()
+        // Images pasted as a path a day ago or more.
+        DispatchQueue.global(qos: .utility).async { ImagePaste.removeOld(in: ImagePaste.parent, now: Date()) }
         // Skill updates, once a day, for Agents › Skills…' count.
         MainActor.assumeIsolated { SkillsUpdateCheck.start() }
         if let command { handle(command) }

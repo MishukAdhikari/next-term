@@ -38,6 +38,12 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   1,000 rows as a table, as fast for a 2 GB file as for a small one, with Load More, search and Copy As;
   click a cell for its whole value (a JSON object indented, as written). Logs and other text files over
   32 MB open there too.
+- **⌘V pastes an image into your agent.** With a screenshot or another image alone on the clipboard, ⌘V in a tab
+  running Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent or Command Code sends that agent ⌃V, its
+  own key for an image, and it reads the image from the clipboard itself. At a shell, in Copilot CLI or any other
+  program on this Mac, the image is kept as a PNG in a new folder only you can read, for a day, and its quoted path is
+  pasted; in a tab logged in to another machine by hand (ssh) nothing is pasted. A file copied in Finder pastes as
+  its full path, as dropping it does. Text on the clipboard always pastes as text.
 - **Send to Agent (⌥⌘K).** Select code in the editor or a diff, or files and folders in the sidebar, and send
   them to the agent in your tab: Next Term types the reference in that agent’s own syntax (`@app/User.php#L10-20`
   for Claude, `@app/User.php#10-20` for OpenCode, `app/User.php:10-20` for Codex and others) and hands you
@@ -181,7 +187,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   edge, on the project sidebar's side (the far left, or the far right with the sidebar on the right): a
   badge for each open window in the order they opened, in its project's colour with two letters of its
   name, a worktree's under its repository's, and a dot when an agent there needs you, failed or finished.
-  The count of windows is at its top, and your own window's badge is outlined. A click on a badge brings
+  The count of windows is at its top, and your own window's badge sits in a darker well, as the tab you are
+  in does. It stays quiet on purpose: only a decision or a failure stands out. A click on a badge brings
   that window forward as it was. ⌃⌘S, or the chevron, unfolds it in every window to show each window's
   name and marks, as ⌘O does; a window too narrow for it folds it, then hides it, until it is wider. When
   it appears, the editor and terminal give it the room and the sidebar keeps its width. View › Hide Window
@@ -323,8 +330,8 @@ NextTerm-x.y.z.dmg.sha256` before allowing it.
 | Mark | Meaning |
 |---|---|
 | none | At the prompt, a plain command running, or an agent working with View › Agent Spinner set to Off |
-| spinner | An AI agent is working (View › Agent Spinner: Spinning, Still or Off) |
-| green ✓ | An agent stopped and is waiting for your next prompt, or a command finished |
+| spinner | An AI agent is working (View › Agent Spinner: Spinning, Still or Off; still in ⌘O and the window column) |
+| green ✓ | An agent stopped and is waiting for your next prompt, or a command finished: a dark ✓ on a soft green, quiet as nothing needs you yet (plain green with Increase Contrast) |
 | amber ! | An agent is waiting on your decision (the question is in the tooltip), or a program rang the bell |
 | red ✕ | A command exited with an error (the exit code is in the tooltip) |
 
@@ -457,7 +464,7 @@ Next Term's menu.
 - **Screen contents** cannot be read back through terminal queries (DECRQCRA answers are blanked).
 - **Status marks** from the shell carry a random per-tab secret that programs never see, so output (a
   `cat` of a log, a remote host) cannot fake "command finished" and skip the close confirmation.
-- **Paths you drop or insert** are quoted so that no file name can run a command, even one containing
+- **Paths you drop, paste or insert** are quoted so that no file name can run a command, even one containing
   control characters, and are sent as a bracketed paste.
 - **Opening files** from the sidebar or with ⌘-click asks first when the file is an app, a script or an
   executable, including behind a symlink or a Finder alias (cloned repos carry no quarantine flag, so

@@ -519,6 +519,7 @@ enum SelfTest {
         if let savedClipboard { NSPasteboard.general.setString(savedClipboard, forType: .string) }
         let pastedText = (try? String(contentsOf: pasted, encoding: .utf8)) ?? "missing"
         check(pastedText == "a[201~b\n", "pasted text loses its escape characters", pastedText.debugDescription)
+        await imagePasteChecks(second, dir: dir)
 
         // `exec bash`: the kernel reports the exec, and polling takes over: commands, cd, exit status.
         let fallback = c.addTab(directory: nil)

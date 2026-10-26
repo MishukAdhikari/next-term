@@ -234,21 +234,60 @@ final class NextTermView: LocalProcessTerminalView {
         return ArraySlice(neutral.data(using: .isoLatin1) ?? Data(data))
     }
 
-    /// ⌘V. Pasted text loses every control character except tab and newline: an escape sequence on the
-    /// clipboard (from OSC 52, a web page or a file name) could otherwise end bracketed paste early and
-    /// run the rest as typed input.
+    /// The clipboard ⌘V reads: the system's, or the self-test's own, so a run never touches what the user copied.
+    static var pasteboard: NSPasteboard = .general
+
+    /// ⌘V (and the terminal's Paste). Files Finder copied paste as their full paths, as a drop gives them; text pastes
+    /// as text; an image alone goes to the program as it takes images (TerminalTab.pasteImage). Pasted text loses every
+    /// control character except tab and newline: an escape sequence on the clipboard (from OSC 52, a web page or a file
+    /// name) could otherwise end bracketed paste early and run the rest as typed input.
     override func paste(_ sender: Any) {
-        // An image alone (a screenshot) in a tab on a server: copied there first (RemoteDrop), its path pasted.
-        if acceptsInput, let onImagePaste, let image = Self.pastedImage(NSPasteboard.general) {
+        guard acceptsInput else { return }
+        let board: NSPasteboard = Self.pasteboard
+        let files: [String] = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL])?.map(\.path) ?? []
+        let text: String? = board.string(forType: .string)
+        switch PasteContent.choose(files: files, text: text, image: board.availableType(from: [.png, .tiff]) != nil) {
+        case .files:
+            // On a server a copied file is never sent by a paste (a clipboard can be hours old): its name, as before.
+            if onRemoteDrop != nil { return pasteText(text ?? "") }
             onKeyboard?()
-            return onImagePaste(image)
+            onPaste?()
+            typePaths(files)
+        case .text:
+            pasteText(text ?? "")
+        case .image:
+            onKeyboard?()
+            onImagePaste?()
+        case .nothing:
+            return
         }
-        guard acceptsInput, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+    }
+
+    private func pasteText(_ text: String) {
+        guard !text.isEmpty else { return }
         onKeyboard?()
         onPaste?()
         let kept = String(text.unicodeScalars.filter { $0 == "\t" || $0 == "\n" || $0 == "\r" || !ShellQuote.isControl($0) })
         let lines = kept.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
         send(txt: getTerminal().bracketedPasteMode ? "\u{1b}[200~" + lines + "\u{1b}[201~" : lines)
+    }
+
+    /// Paths typed in as a drop types them: each quoted, a space between and after.
+    func typePaths(_ paths: [String]) {
+        typeIn(paths.map(ShellQuote.quote).joined(separator: " ") + " ")
+    }
+
+    /// ⌃V as the keyboard sends it, down and up, encoded by the terminal as a real one would be (with the keyboard
+    /// protocol a program asked for): what an agent reads an image from the clipboard on.
+    func pressControlV() {
+        guard let window else { return }
+        let time: TimeInterval = ProcessInfo.processInfo.systemUptime
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: .control, timestamp: time,
+                                               windowNumber: window.windowNumber, context: nil, characters: "\u{16}",
+                                               charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9) else { return }
+            if type == .keyDown { keyDown(with: event) } else { keyUp(with: event) }
+        }
     }
 
     // MARK: drawing only what can be seen
@@ -340,16 +379,18 @@ final class NextTermView: LocalProcessTerminalView {
 
     /// A drop on a tab on a server: its files are copied there first (RemoteDrop), and their paths there pasted.
     var onRemoteDrop: (([URL]) -> Void)?
-    /// ⌘V of an image alone (PNG data) in a tab on a server.
-    var onImagePaste: ((Data) -> Void)?
+    /// ⌘V of an image alone: the tab hands it on as its program takes images.
+    var onImagePaste: (() -> Void)?
 
-    /// The pasteboard's image as PNG when it holds one and no text or file (a screenshot copied to the clipboard).
-    static func pastedImage(_ pasteboard: NSPasteboard) -> Data? {
-        guard pasteboard.string(forType: .string) == nil,
-              pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])?.isEmpty ?? true else { return nil }
-        if let png = pasteboard.data(forType: .png) { return png }
-        guard let tiff = pasteboard.data(forType: .tiff), let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-        return bitmap.representation(using: .png, properties: [:])
+    /// The clipboard's image as it is there (PNG, or TIFF, as a screenshot puts it), read on the main thread.
+    static func clipboardImage(_ pasteboard: NSPasteboard) -> Data? {
+        pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff)
+    }
+
+    /// `data` as PNG: as it is when it is PNG already, else converted (off the main thread: a screenshot is large).
+    nonisolated static func png(_ data: Data) -> Data? {
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return data }
+        return NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:])
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -361,7 +402,7 @@ final class NextTermView: LocalProcessTerminalView {
             window?.makeFirstResponder(self)
             return true
         }
-        typeIn(paths.map(ShellQuote.quote).joined(separator: " ") + " ")
+        typePaths(paths)
         window?.makeFirstResponder(self)
         return true
     }
@@ -723,11 +764,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
                 guard let self else { return }
                 RemoteDrop.drop(urls, into: self)
             }
-            view.onImagePaste = { [weak self] png in
-                guard let self else { return }
-                RemoteDrop.pasteImage(png, into: self)
-            }
         }
+        view.onImagePaste = { [weak self] in self?.pasteImage() }
         // Next Term's own tmux turns the mouse on for the wheel: right and middle clicks there stay Next Term's.
         view.passesOtherButtons = { [weak self] in !(self?.remote?.keep == .tmux && self?.isKept == true) }
 
@@ -1007,6 +1045,51 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let keyboard = view.window?.firstResponder === view
         guard let focused = focusReport.look(keyboard: keyboard, seen: seen) else { return }
         view.getTerminal().setTerminalFocus(focused)
+    }
+
+    // MARK: ⌘V with an image
+
+    /// The agent running in this tab on this Mac, by its kind: none on a server, at the prompt, or for another program.
+    var localAgent: AgentKind? {
+        guard remote == nil, status.running, status.kind == .agent else { return nil }
+        return AgentKind(program: status.program) ?? AgentKind(program: CommandClassifier.programName(status.expandedCommand))
+    }
+
+    /// ⌘V of an image alone, handed on as the program here takes images (ImagePaste): an agent that reads the clipboard on
+    /// ⌃V gets ⌃V; anything else on this Mac its path, kept 0600 in a new private folder for a day; a tab on a server a
+    /// copy there; a tab logged in elsewhere by hand nothing, and a note why.
+    func pasteImage() {
+        let program: String? = status.running ? status.program : nil
+        switch ImagePaste.way(remote: remote != nil, agent: localAgent, program: program) {
+        case .controlV:
+            view.pressControlV()
+        case .elsewhere:
+            view.showNote("The image is on this Mac and this tab is logged in to another machine, so nothing was pasted. A tab opened with New Remote Tab copies pasted images to its server.")
+        case .path, .copyToServer:
+            guard let data = NextTermView.clipboardImage(NextTermView.pasteboard) else { return }
+            let toServer: Bool = remote != nil
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let kept: Result<URL, Error> = Result {
+                    guard let png = NextTermView.png(data) else { throw CocoaError(.fileReadCorruptFile) }
+                    return try ImagePaste.keep(png, in: ImagePaste.parent, at: Date())
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch kept {
+                    case .failure(let error):
+                        self.view.showNote("Next Term could not keep the pasted image: \(error.localizedDescription)")
+                    case .success(let file):
+                        guard !self.exited, self.view.acceptsInput else { return }
+                        if toServer {
+                            // The copy here goes once it is on the server, sent or not.
+                            RemoteDrop.drop([file], into: self) { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+                        } else {
+                            self.view.typePaths([file.path])
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: the record of your commands (CommandHistoryStore)
