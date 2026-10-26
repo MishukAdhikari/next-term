@@ -219,6 +219,28 @@ extension SelfTest {
         NSApp.postEvent(event, atStart: false)
     }
 
+    /// An event of our own through the app's queue, as the next key a hand presses comes. AppKit closes the window's
+    /// undo step when it has handled an event from the queue, not when the run loop only turns: the keys switcherKey
+    /// sends, and calls such as a field's commands, all land in one step until an event comes, and on an idle Mac none
+    /// does. A note when the step is still open after it.
+    fileprivate static func eventBetweenKeys(_ window: NSWindow) async {
+        var handled = false
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { (event: NSEvent) -> NSEvent? in
+            if event.subtype.rawValue == 0x4E54, event.data1 == 0x756E { handled = true }
+            return event
+        }
+        if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0,
+                                          windowNumber: window.windowNumber, context: nil, subtype: 0x4E54, data1: 0x756E, data2: 0) {
+            NSApp.postEvent(event, atStart: false)
+        }
+        _ = await wait(5) { handled }
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        let closed: Bool = await wait(2) { (window.undoManager?.groupingLevel ?? 0) == 0 }
+        if !closed {
+            note("Welcome: the window's undo step was still open after an event, at level \(window.undoManager?.groupingLevel ?? 0)")
+        }
+    }
+
     /// The keys pressed here have the menus' default chords: ⌘1–⌘9 (Select Tab 1–9), ⌘W (Close Tab), ⌘O, ⌥⌘T and ⌘N;
     /// and the keyboard layout in use has a key for each of their letters and figures.
     fileprivate static var switcherKeysAreDefault: Bool {
@@ -1015,9 +1037,10 @@ extension SelfTest {
         check(cleared && kept, "Welcome: ⌘⌫ with text typed forgets no project, and the search deletes to the line's start",
               "“\(search.stringValue)”, history kept \(recorder.history.paths == historyBefore), recents kept \(app.recentProjects == recentsBefore)")
 
-        // Each key a hand presses is an event of its own, and the window's undo closes its step at the end of each: the
-        // run loop turns here as it would between keys, so the search's deletion and the forget are two steps, not one.
-        await pause(0.2)
+        // Each key a hand presses is an event of its own, and AppKit closes the window's undo step at the end of each. The
+        // deletion above was a call, not a key, so an event goes through here as the next key would: the search's
+        // deletion and the forget are then two steps, not one.
+        await eventBetweenKeys(window)
         let docs: String = fixtures.path("docs")
         welcome.select(project: docs)
         guard welcome.selectedProject == docs else { return check(false, "Welcome: the closed project docs is listed, for ⌘⌫") }
@@ -1029,7 +1052,7 @@ extension SelfTest {
         }
         check(forgot, "Welcome: ⌘⌫ on the empty search forgets the selected closed project, here and in File › Open Recent",
               "listed \(welcome.shownProjects.contains(docs)), in Open Recent \(app.recentProjects.contains(docs))")
-        await pause(0.2)
+        await eventBetweenKeys(window)
         if forgot { await undoForgetChecks(app, welcome, docs, usedBefore: usedBefore, recentAt: recentAt) }
 
         welcome.select(project: shop)

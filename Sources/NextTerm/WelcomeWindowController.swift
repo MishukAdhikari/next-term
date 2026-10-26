@@ -1107,8 +1107,6 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     // MARK: window
 
-    /// Back in front, the list is read again: windows may have opened, closed or come forward behind it. Not in a show,
-    /// which read it a moment ago.
     /// The projects search's editor. AppKit's own field editor keeps an undo manager of its own, which Edit › Undo asks
     /// while the search has the keyboard: the forget's “Undo Forget …” (in the window's) would be out of its reach.
     private lazy var searchEditor: SharedUndoFieldEditor = {
@@ -1122,6 +1120,8 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         return searchEditor
     }
 
+    /// Back in front, the list is read again: windows may have opened, closed or come forward behind it. Not in a show,
+    /// which read it a moment ago.
     func windowDidBecomeKey(_ notification: Notification) {
         if !showing { reloadProjects() }
         // A quit's resume question can have set it since.
