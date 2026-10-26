@@ -127,7 +127,11 @@ extension SelfTest {
             table.scrollRowToVisible(row)
             table.scrollColumnToVisible(column)
             table.layoutSubtreeIfNeeded()
-            let rect = table.frameOfCell(atColumn: column, row: row)
+            // Where a hand would click: the middle of what shows of the cell. A cell wider than the grid (the Lines
+            // view's text is 4,000 points) has its own middle off the grid, and off the window.
+            let cell = table.frameOfCell(atColumn: column, row: row)
+            let shown = cell.intersection(table.visibleRect)
+            let rect = shown.isEmpty ? cell : shown
             let point = table.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
             guard byHand else {
                 if let grid = table as? DatabaseGridView {
@@ -1001,7 +1005,9 @@ extension SelfTest {
                 pane.show(lines: true)
                 hand.click(grid, row: 0, column: 1)
                 _ = await wait(2) { pane.detail.detail?.isJSON == true && pane.detail.detail?.title.hasPrefix("Line") == true }
-                check(pane.detail.detail?.body.hasPrefix("{\n  \"id\": 0,") == true, "R10: in Lines, the whole line, indented", pane.detail.detail?.body.prefix(40).description ?? "")
+                check(pane.detail.detail?.body.hasPrefix("{\n  \"id\": 0,") == true, "R10: in Lines, the whole line, indented",
+                      "\(pane.detail.detail.map { "\($0.title): \($0.body.prefix(40))" } ?? "no detail"), current cell \(String(describing: grid.currentCell)), "
+                        + "detail shown \(pane.isDetailShown)")
                 pane.show(lines: false)
             }
             check(pane.detail.editor == nil && pane.detail.editButton.isHidden && pane.detail.saveButton.isHidden && !pane.detail.textView.isEditable,
