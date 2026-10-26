@@ -72,6 +72,9 @@ final class EditorArea: NSView, TabBarViewDelegate {
     var activeTextView: NSTextView? { activeEditor?.textView ?? activeNotebook?.textView }
     var documents: [EditorDocument] { editors.map(\.document) }
     var dirtyDocuments: [EditorDocument] { documents.filter(\.isDirty) }
+    /// Database tabs holding a value not saved yet (DatabasePane.hasDraft): closing them with others, with the window
+    /// or at a quit warns first (UnsavedValueAlert).
+    var draftDatabases: [DatabasePane] { databases.filter(\.hasDraft) }
     var isEmpty: Bool { panes.isEmpty }
 
     /// Shown exactly while a tab is open, whoever sets it. A split view shows a hidden pane by itself when
@@ -552,7 +555,8 @@ final class EditorArea: NSView, TabBarViewDelegate {
 
     /// Close Others and Close Tabs to the Right: several tabs at once, asking once about the unsaved files
     /// among them (Save, Cancel or Don't Save, as closing one asks) and the agents' proposals closing would
-    /// reject. `keeping` comes to the front if the tab in front was among them.
+    /// reject. A database tab among them with a value not saved yet is warned about after that (Cancel or
+    /// Close Anyway, with no Save), or alone. `keeping` comes to the front if the tab in front was among them.
     func close(_ closing: [NSView], keeping: NSView) {
         let front = activePane
         let done = { [weak self] in
@@ -564,7 +568,16 @@ final class EditorArea: NSView, TabBarViewDelegate {
         }
         let dirty = closing.compactMap { ($0 as? CodeEditorView)?.document }.filter(\.isDirty)
         let undecided = closing.compactMap { $0 as? DiffPane }.filter { $0.proposal != nil && !$0.isDecided }
-        guard !dirty.isEmpty || !undecided.isEmpty, let window else { return done() }
+        let drafts = closing.compactMap { $0 as? DatabasePane }.filter(\.hasDraft)
+        guard !dirty.isEmpty || !undecided.isEmpty || !drafts.isEmpty, let window else { return done() }
+        // The values last: after the files' question, or alone, saying what closing rejects in place of "Close 3 tabs?".
+        let warned = { (rejects: [DiffPane]) in
+            guard !drafts.isEmpty else { return done() }
+            let alert = UnsavedValueAlert.make(drafts, .close)
+            if !rejects.isEmpty { alert.informativeText += "\n\n" + Self.rejectNote(rejects) }
+            UnsavedValueAlert.begin(alert, over: window) { closes in if closes { done() } }
+        }
+        if dirty.isEmpty, !drafts.isEmpty { return warned(undecided) }
         let alert = dirty.isEmpty ? Self.closeAlert(closing) : Self.saveAlert(dirty)
         if !undecided.isEmpty {
             alert.informativeText = [alert.informativeText, Self.rejectNote(undecided)].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -574,9 +587,9 @@ final class EditorArea: NSView, TabBarViewDelegate {
             switch response {
             case .alertFirstButtonReturn:
                 // A file that could not be saved says why, and nothing closes.
-                if dirty.allSatisfy({ self.save($0) }) { done() }
+                if dirty.allSatisfy({ self.save($0) }) { warned([]) }
             case .alertThirdButtonReturn:
-                done()
+                warned([])
             default:
                 break
             }

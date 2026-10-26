@@ -925,8 +925,8 @@ enum MCPControl {
         if let why = MCPInputLine.refusal(tab) { return reply(fail(why)) }
         let force = arguments["force"] as? Bool ?? false
         let id = tab.id.uuidString.lowercased()
-        // The window's last tab, with files unsaved in its editor: closing it closes the window, so the user
-        // is asked first (Save, Don't Save or Cancel), and the answer says so without waiting for theirs.
+        // The window's last tab, with files unsaved in its editor (or a database value): closing it closes the
+        // window, so the user is asked first, and the answer says so without waiting for theirs.
         func close(_ info: [String: Any]) -> MCPServer.CallResult {
             let asks = controller.asksToSave(closing: tab)
             controller.remove(tab)
@@ -934,7 +934,7 @@ enum MCPControl {
                 lastSent.removeValue(forKey: tab.id)
                 return ok(info)
             }
-            var answer: [String: Any] = ["id": id, "closed": false, "asking_user": "It is the last tab in its window and the editor there has unsaved files, so closing it closes the window: Next Term asks the user whether to save them. The tab closes if they choose Save or Don't Save; list_tabs shows whether it did."]
+            var answer: [String: Any] = ["id": id, "closed": false, "asking_user": "It is the last tab in its window and the editor there has unsaved files (or a database value not saved yet), so closing it closes the window: Next Term asks the user first. The tab closes if they let it (Save, Don't Save or Close Anyway); list_tabs shows whether it did."]
             // Done already, whatever the user answers: force ended the tmux session, and what ran in it.
             if let ended = info["session_ended"] {
                 answer["session_ended"] = ended
