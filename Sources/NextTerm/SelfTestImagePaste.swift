@@ -1,7 +1,6 @@
 import AppKit
 import NextTermCore
 
-#if DEBUG
 /// ⌘V with an image, on a pasteboard of the self-test's own (the user's clipboard is never read or changed): a stand-in
 /// claude gets the ⌃V its own key sends; at a shell (cat) the image is kept 0600 in a private folder and
 /// its path typed; text beside an image pastes the text; a file Finder copied pastes as its full path; a stand-in ssh
@@ -113,4 +112,3 @@ extension SelfTest {
               "logged \(logged), nothing \(nothing), file \(read(elsewhere).debugDescription)")
     }
 }
-#endif

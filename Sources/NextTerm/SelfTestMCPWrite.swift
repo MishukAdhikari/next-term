@@ -336,7 +336,7 @@ extension SelfTest {
         let columnLine: Bool = hidColumn.shown.contains(WindowColumnSettings.approvalLine(shown: false, key: columnKey))
         let columnSaid: Bool = hidColumn.json?["window_column"] as? String == "hidden" && (hidColumn.json?["changed"] as? [String]) == ["window_column"]
             && hidColumn.json?["window_column_here"] as? String == "hidden"
-        let columnHidden: Bool = !app.showsWindowColumn && defaultsValue(WindowColumnSettings.shownKey) == false
+        let columnHidden: Bool = !app.showsWindowColumn && UserDefaults.standard.object(forKey: WindowColumnSettings.shownKey) as? Bool == false
         let sameColumn = await client.call("set_layout", ["window_column": "hidden", "project": proj.path])
         let columnAtOnce: Bool = (json(sameColumn.text)?["changed"] as? [String])?.isEmpty == true && MCPWriteControl.pending == nil
         // Asked the other way from the saved fold, so it is a change whichever way it was left.
