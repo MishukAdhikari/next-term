@@ -792,6 +792,14 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(clean, forType: .string)
         }
+        // OSC 7501, program status: answered when a program asks whether it is taken, and its reports followed.
+        terminal.registerOscHandler(code: ProgramStatus.oscCode) { [weak self, weak terminal] payload in
+            guard let self, let parsed = ProgramStatus.parse(payload) else { return }
+            switch parsed {
+            case .query: terminal?.sendResponse(text: ProgramStatus.reply)
+            case .report(let report): self.programReported(report)
+            }
+        }
         // OSC 9 (iTerm2 / ConEmu) and OSC 777 (rxvt) desktop notifications mean "look at me", in the program's own
         // words when it gives some. OSC 9;4 is a progress report, not a notification.
         for code in [9, 777] {
@@ -1506,13 +1514,51 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// For a running AI agent: read its screen (working, asking a question, or idle) so the tab's status follows the
-    /// agent itself. Not herdr's own screen, here or on a server: its agents report their states.
+    /// agent itself, or, once it has reported over OSC 7501 this run, its reports. Not herdr's own screen, here or on a
+    /// server: its agents report their states.
     func pollAgentScreen() {
         guard !exited, status.running, status.kind == .agent, remote?.keep != .herdr || fellBack else { return } // herdr reports its own
         guard status.program != "herdr" else { return }
         let before = (status.state, status.question)
-        status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
+        if programReports {
+            // Its records cleared (`clear`) say nothing either way: the status stays as it was.
+            guard let activity = reportedActivity() else { return }
+            status.observe(agentScreen: activity, at: Self.now)
+        } else {
+            status.observe(agentScreen: agentActivity(liveTail(agentScreenLines)), at: Self.now)
+        }
         if before.0 != status.state || before.1 != status.question { delegate?.tabDidChange(self) }
+    }
+
+    /// The OSC 7501 records the program in front reported (ProgramStatus), and the run they belong to: a new command
+    /// starts with none.
+    private var programRecords = ProgramStatus.Records()
+    private var programRecordsRun = -1
+
+    /// The program in front has reported its status this run, so its reports, not its screen's hints, say what it does.
+    var programReports: Bool { programRecordsRun == status.commandsStarted }
+
+    private func programReported(_ report: ProgramStatus.Report) {
+        if !programReports {
+            programRecords = ProgramStatus.Records()
+            programRecordsRun = status.commandsStarted
+        }
+        programRecords.apply(report)
+        pollAgentScreen() // at once, not at the next look
+    }
+
+    /// The records as the screen's activity would be. A question's words come from the screen when it shows one (its
+    /// menu is what answer_agent answers), else from the report.
+    private func reportedActivity() -> AgentActivity? {
+        switch programRecords.activity {
+        case nil: return nil
+        case .working: return .working
+        case .stopped: return .ready
+        case .asking(let kind, let message):
+            if case .asking(let shown) = agentActivity(liveTail(agentScreenLines)) { return .asking(shown) }
+            let words = message.map { $0.count > ProgramNotice.maxLength ? String($0.prefix(ProgramNotice.maxLength - 1)) + "\u{2026}" : $0 }
+            return .asking(words ?? ProgramStatus.words(for: kind))
+        }
     }
 
     /// The last screen read and what it says, with the masks it was read with: an agent that drew nothing new since
