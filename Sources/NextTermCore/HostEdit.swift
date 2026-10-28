@@ -27,31 +27,33 @@ public struct HostEdit: Equatable, Sendable {
         self.tmuxHistory = tmuxHistory
     }
 
-    /// edit_host's arguments, each checked for its type; the host's own rules are `apply`'s.
+    /// edit_host's arguments, each checked for its type; the host's own rules are `apply`'s. null counts as not given,
+    /// as for the other tools (MCPArguments).
     public static func parse(_ arguments: [String: Any]) -> Result<HostEdit, HostEditFailure> {
         var edit = HostEdit()
-        func text(_ key: String) -> String? { (arguments[key] as? String)?.trimmingCharacters(in: .whitespaces) }
+        func given(_ key: String) -> Any? { arguments[key].flatMap { $0 is NSNull ? nil : $0 } }
+        func text(_ key: String) -> String? { (given(key) as? String)?.trimmingCharacters(in: .whitespaces) }
         edit.name = text("name")
         edit.destination = text("destination")
         edit.directory = text("directory")
-        if let value = arguments["port"] {
+        if let value = given("port") {
             guard let port = value as? Int else { return .failure(.init("port is a number from 1 to 65535.")) }
             edit.port = port
         }
-        edit.clearPort = arguments["clear_port"] as? Bool ?? false
+        edit.clearPort = given("clear_port") as? Bool ?? false
         if edit.clearPort, edit.port != nil { return .failure(.init("Give port or clear_port, not both.")) }
-        if let value = arguments["keep"] {
+        if let value = given("keep") {
             guard let raw = value as? String, let keep = KeepMode(rawValue: raw) else { return .failure(.init("keep is off, tmux or herdr.")) }
             edit.keep = keep
         }
-        if let value = arguments["tmux_prefix"] {
+        if let value = given("tmux_prefix") {
             guard let raw = value as? String, let prefix = TmuxPrefix(rawValue: raw) else {
                 let known: String = TmuxPrefix.allCases.map(\.rawValue).joined(separator: ", ")
                 return .failure(.init("tmux_prefix is one of \(known)."))
             }
             edit.tmuxPrefix = prefix
         }
-        if let value = arguments["tmux_history"] {
+        if let value = given("tmux_history") {
             guard let lines = value as? Int else { return .failure(.init("tmux_history is a number of lines, 1,000 to 200,000.")) }
             edit.tmuxHistory = lines
         }

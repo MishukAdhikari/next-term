@@ -14,6 +14,28 @@ import Testing
         }
     }
 
+    /// Approval windows name tabs by their titles, so a title holds nothing that hides or reorders text (010a review):
+    /// C1 controls, direction marks and isolates, zero-width characters, soft hyphens, line and paragraph separators.
+    @Test func aTitleHoldsNothingThatHidesOrReordersText() throws {
+        for bad in ["a\u{85}b", "code-ab\u{202E}evil", "api\u{2066}x\u{2069}", "a\u{200B}b", "a\u{200F}b", "a\u{AD}b",
+                    "a\u{2028}b", "a\u{2029}b", "a\u{FEFF}b"] {
+            #expect(throws: TabRenameRefusal.self, "\(bad.debugDescription)") { try TabRename.title(bad).get() }
+        }
+        #expect(try TabRename.title("Café ☕ 日本 — tests").get() == "Café ☕ 日本 — tests")
+        // new_tab's and new_remote_tab's title: none when not given, null or empty; otherwise rename_tab's rules.
+        #expect(try TabRename.given(nil).get() == nil)
+        #expect(try TabRename.given(NSNull()).get() == nil)
+        #expect(try TabRename.given("  ").get() == nil)
+        #expect(try TabRename.given(" api ").get() == "api")
+        #expect(throws: TabRenameRefusal.self) { try TabRename.given(42).get() }
+        #expect(throws: TabRenameRefusal.self) { try TabRename.given("a\u{202E}b").get() }
+        // A saved host's name, which approval windows name it by, the same.
+        var host = RemoteHost(name: "web\u{202E}1", destination: "dev@203.0.113.5")
+        #expect(host.problem?.contains("show as themselves") == true)
+        host.name = "web-1"
+        #expect(host.problem == nil)
+    }
+
     @Test func theToolOnlyChangesALabel() throws {
         let tool = try #require(MCPServer.tool(named: "rename_tab"))
         #expect(!tool.readOnly && !tool.destructive && tool.idempotent)
@@ -28,6 +50,7 @@ import Testing
             let said = try #require(MCPServer.tool(named: name)).description
             let sentences = said.components(separatedBy: ". ").count
             #expect(sentences <= 2 && said.count <= 300, "\(name): \(said)")
+            #expect(MCPRemoteReach.text.contains(name), "\(name)")
             #expect(!MCPServer.instructions.contains(name), "\(name)")
         }
     }

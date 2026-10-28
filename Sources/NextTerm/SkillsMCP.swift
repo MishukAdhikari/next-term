@@ -301,7 +301,7 @@ enum SkillsMCP {
     static func describe(_ caller: TerminalTab?) -> String {
         guard let caller else { return "an agent outside Next Term's tabs (another terminal or an editor)" }
         let project = MCPControl.controller(of: caller)?.project.map { " in \(($0 as NSString).lastPathComponent)" } ?? ""
-        return "the agent in the tab “\(caller.title)”\(project)"
+        return "the agent in \(MCPTabNames.named(caller))\(project)"
     }
 
     /// Answers with the request's outcome, or `pending` after `answerWithin` seconds.

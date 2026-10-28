@@ -190,9 +190,12 @@ enum RemoteConnection {
     /// ssh's arguments for a tab; `token` is this connection's (see RemoteShell.tabScript). `reattach`: the tab was
     /// connected before, so its tmux session is expected to be there.
     static func tabArguments(_ remote: RemoteTab, path: String, tabKey: String, token: String, reattach: Bool = false) -> [String] {
+        // The saved host's options as they are now: a tab keeps its host as it opened, and a reconnect would otherwise
+        // write the old prefix and history back over an edit_host (010a review). Hosts keep their id through such an edit.
+        let tmux: TmuxOptions = RemoteHosts.all.first { $0.id == remote.host.id }?.tmuxOptions ?? remote.host.tmuxOptions
         let script = RemoteShell.tabScript(keep: remote.keep, directory: remote.directory, session: remote.session, tabID: tabKey, token: token,
                                            completionHook: RemoteCompletionConsent.startsHooked(remote), herdrSession: remote.herdrSession,
-                                           tmux: remote.host.tmuxOptions, expectsSession: remote.expectsSession || reattach)
+                                           tmux: tmux, expectsSession: remote.expectsSession || reattach)
         return SSHArguments.tab(remote.host, controlPath: path, configFile: configFile, command: RemoteShell.command(script))
     }
 

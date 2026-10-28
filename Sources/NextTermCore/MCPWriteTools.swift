@@ -7,8 +7,9 @@ import Glibc
 
 /// Who approves the change one of Next Term's write tools would make (the tools tagged `write` that the
 /// app's MCPWriteControl runs: write_file, create_file, stage, commit, focus_tab, split_pane, close_pane,
-/// zoom_pane, set_layout and settings_set, and add_task through its approval), and the skill requests
-/// install_skill and remove_skill.
+/// zoom_pane, set_layout and settings_set, and add_task through its approval), the skill requests
+/// install_skill and remove_skill, and the host and tab changes that ask (add_host, remove_host, edit_host,
+/// end_session and close_tab). start_agent and close_tab on a herdr agent's id always ask on the Mac.
 ///
 /// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, connection:,
 /// reply:)` in the app, on the main thread; its reply can come from any thread.

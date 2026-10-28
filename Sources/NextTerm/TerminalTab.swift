@@ -667,7 +667,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// The same agents followed one by one: their decisions and finishes, what is on screen, what needs you, their rows.
     private(set) var herdrTracker = HerdrAgents()
     /// herdr's client in front of this tab on this Mac (its own screen, HerdrClient), whose agents the tab follows as a
-    /// server's (LocalHerdrWatch); nil otherwise. Next Term only reads it: the tab is not kept, nor rerun on restore.
+    /// server's (LocalHerdrWatch); nil otherwise. The tab is not kept, nor rerun on restore.
     private(set) var localHerdr: LocalHerdrClient?
     /// This tab shows herdr and follows its agents one by one: herdr answers its checks.
     var followsHerdr: Bool {
@@ -843,7 +843,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             remoteConnected = false
             remoteReady = false
             // The tab script tries tmux or herdr again: whether this connection fell back, or its pane is in copy mode,
-            // is for its own reports to say (a .plain file comes back if the tool is still missing).
+            // is for its own reports to say (a .plain file comes back if the tool is still missing). A tab that only ever
+            // had a plain shell had no session to come back to, so it expects none (no false "made anew" note).
+            let wasPlain: Bool = fellBack
             fellBack = false
             fellBackReason = nil
             sessionCreated = false
@@ -858,7 +860,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             view.acceptsInput = true
             DescriptorSweep.markCloseOnExec() // ssh inherits nothing of ours (see below)
             let args: [String] = RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken,
-                                                               reattach: everConnected)
+                                                               reattach: everConnected && !wasPlain)
             view.startProcess(executable: shellPath, args: args,
                               environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
             return

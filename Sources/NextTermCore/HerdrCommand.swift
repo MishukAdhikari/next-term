@@ -4,9 +4,10 @@ import Foundation
 /// fixed text and quoted values, sent base64) or as argument lists for herdr on this Mac, which no shell reads. Each one
 /// tries herdr's current verb first and, when herdr answers that it lacks it (HerdrResult.saysUnsupported), the verb an
 /// older herdr has, in the same run: never by herdr's version string. Next Term never starts, stops, updates or installs
-/// herdr, never stops or deletes one of its sessions, and never makes a workspace, pane or session. Only once the user
+/// herdr, never stops or deletes one of its sessions, and never makes a workspace or session. Only once the user
 /// approves on the Mac (plan 010a U5b, U6b) does it start one of herdr's agents in a new herdr tab (`tab create`, then
-/// `agent start`) or end one (`pane close`), and never on one of herdr's saved machines.
+/// `agent start`) or end one (`pane close`, which closes the pane's herdr tab too when it was that tab's only pane), and
+/// never on one of herdr's saved machines.
 ///
 /// Text for an agent never sits on this Mac's command lines: the script reads it from its stdin (`T=$(cat)`), and the
 /// argument lists take it as one element. On the host it is herdr's argument while herdr runs.
@@ -17,6 +18,8 @@ import Foundation
 public enum HerdrCommand: Equatable, Sendable {
     /// `agent list`, or `pane list` before herdr 0.5.10.
     case list
+    /// `pane list`: every pane with its herdr tab, counted (HerdrPanes) before an agent's pane is closed.
+    case panes
     /// `tab list`: which tab has herdr's focus.
     case tabs
     /// `session list --json`.
@@ -144,7 +147,7 @@ public enum HerdrCommand: Equatable, Sendable {
     public var changesHerdr: Bool {
         switch self {
         case .prompt, .text, .keys, .focus, .closePane, .newTab, .startAgent: return true
-        case .list, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds: return false
+        case .list, .panes, .tabs, .sessions, .read, .version, .explain, .machines, .startKinds: return false
         }
     }
 
@@ -152,7 +155,7 @@ public enum HerdrCommand: Equatable, Sendable {
     public var goesToMachines: Bool {
         switch self {
         case .list, .read, .prompt, .keys, .focus, .explain: return true
-        case .tabs, .sessions, .text, .version, .machines, .closePane, .startKinds, .newTab, .startAgent: return false
+        case .panes, .tabs, .sessions, .text, .version, .machines, .closePane, .startKinds, .newTab, .startAgent: return false
         }
     }
 
@@ -162,6 +165,8 @@ public enum HerdrCommand: Equatable, Sendable {
         switch self {
         case .list:
             return [[["agent", "list"]], [["pane", "list"]]]
+        case .panes:
+            return [[["pane", "list"]]]
         case .tabs:
             return [[["tab", "list"]]]
         case .sessions:
@@ -222,7 +227,7 @@ public enum HerdrCommand: Equatable, Sendable {
             if !goesToMachines { return "herdr sends only its agent commands to a saved machine." }
         }
         switch self {
-        case .list, .tabs, .sessions, .version:
+        case .list, .panes, .tabs, .sessions, .version:
             return nil
         case .machines:
             return session == nil ? nil : "herdr's machines are not a session's: ask without one."

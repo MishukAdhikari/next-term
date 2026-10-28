@@ -15,7 +15,8 @@ extension SelfTest {
     /// The stand-in herdr at `path`, with its files in `base`: herdr-agents (agent list), herdr-tabs (tab list),
     /// herdr-sessions (session list --json), herdr-read (any read; herdr-read-next takes its place at the next keys, as an
     /// agent's screen moves), herdr-explain (agent explain), herdr-machines (machine list), herdr-machine-agents (agent
-    /// list on a machine), and herdr-old (no agent verbs, as herdr before 0.7.5). Each call goes to herdr-calls with the
+    /// list on a machine), herdr-panes (pane list; by default each listed agent's pane, w1:p1 in w1:t1 and w2:p1 in w2:t1),
+    /// and herdr-old (no agent verbs, as herdr before 0.7.5). Each call goes to herdr-calls with the
     /// socket it was given; with no verb it is herdr's screen until `q`, which turns focus reports on and keeps every byte
     /// it gets in herdr-screen-input.
     static func herdrStandIn(at path: URL, base: URL) {
@@ -55,6 +56,8 @@ extension SelfTest {
               'agent read'|'pane read') cat \(file("herdr-read")) ;;
               'agent send-keys') [ -e \(file("herdr-read-next")) ] && mv -f \(file("herdr-read-next")) \(file("herdr-read")) ;;
               'agent focus') echo '{"id":"cli:agent:focus","result":{"type":"agent_info"}}' ;;
+              'pane list') if [ -e \(file("herdr-panes")) ]; then cat \(file("herdr-panes")); else echo '{"id":"cli:pane:list","result":{"type":"pane_list","panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"},{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2"}]}}'; fi ;;
+              'pane close') echo '{"id":"cli:pane:close","result":{"type":"ok"}}' ;;
               'agent start') if [ "$3" = --help ]; then echo '          [possible values: claude, codex, opencode]'; else echo '{"id":"cli:agent:start","result":{"type":"ok"}}'; fi ;;
               'tab create') echo '{"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w2:p9","tab_id":"w2:t9"},"tab":{"tab_id":"w2:t9"},"type":"tab_created"}}' ;;
             esac
@@ -315,26 +318,45 @@ extension SelfTest {
         let shown = await herdrTool("show_tab", ["tab_id": id])
         check(!shown.isError && !read().contains("focus"), "herdr MCP: show_tab shows the herdr tab and leaves herdr's view", shown.text)
         // close_tab on an agent ends that agent only, once approved on the Mac, seeing herdr's command (010a U6b); a
-        // working one needs force, refused before any window. split_pane still refuses an agent's id.
+        // working one needs force, refused before any window, and so is the session's last pane. split_pane still
+        // refuses an agent's id, and rename_tab refuses one, asking herdr nothing.
         clearCalls()
-        let working: Bool = tab.herdrTracker.agents.first { $0.paneID == "w2:p1" }?.status == .working
-        let unforced = await herdrTool("close_tab", ["tab_id": id])
-        check(!working || (unforced.isError && unforced.text.contains("force") && MCPWriteControl.pending == nil),
-              "herdr MCP: close_tab on a working agent without force is refused before asking", unforced.text)
+        let working: Bool = await wait(10) { tab.herdrTracker.agents.first { $0.paneID == "w2:p1" }?.status == .working }
+        check(working, "herdr MCP: the stand-in codex shows as working before close_tab")
+        if working {
+            let unforced = await herdrTool("close_tab", ["tab_id": id])
+            check(unforced.isError && unforced.text.contains("force") && MCPWriteControl.pending == nil,
+                  "herdr MCP: close_tab on a working agent without force is refused before asking", unforced.text)
+        }
+        write("herdr-panes", #"{"id":"cli:pane:list","result":{"type":"pane_list","panes":[{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2"}]}}"#)
+        clearCalls()
+        let last = await herdrTool("close_tab", ["tab_id": id, "force": true])
+        check(last.isError && last.text.contains("last pane") && MCPWriteControl.pending == nil && !read().contains("pane close"),
+              "herdr MCP: close_tab refuses the session's last pane before asking", last.text)
+        unlink(base.appendingPathComponent("herdr-panes").path)
         for approve in [false, true] {
             clearCalls()
             let call = Task { await herdrTool("close_tab", ["tab_id": id, "force": true]) }
             _ = await wait(20) { MCPWriteControl.pending?.window != nil }
             let window = MCPWriteControl.pending?.window
             let shown = SelfTest.texts(window?.window?.contentView)
-            check(window != nil && shown.contains("herdr pane close w2:p1"), "herdr MCP: close_tab on an agent asks on the Mac first, naming herdr's command", shown)
+            check(window != nil && shown.contains("herdr pane close w2:p1") && shown.contains("its herdr tab with it"),
+                  "herdr MCP: close_tab on an agent asks on the Mac first, naming herdr's command and that its one-pane herdr tab closes too", shown)
             if approve { window?.approveButton.performClick(nil) } else { window?.declineButton.performClick(nil) }
             let result = await call.value
             let ran = read().contains("pane close w2:p1|")
-            check(approve ? (!result.isError && ran) : (result.isError && !ran),
-                  approve ? "herdr MCP: close_tab, approved, ends the agent with herdr's pane close" : "herdr MCP: close_tab, declined, sends herdr nothing",
+            let rereads: Bool = read().contains("agent list|") && read().contains("pane list|")
+            let tabClosed: Bool = result.json?["herdr_tab_closed"] as? Bool == true
+            let closedRight: Bool = !result.isError && ran && rereads && tabClosed
+            let declinedRight: Bool = result.isError && !ran
+            check(approve ? closedRight : declinedRight,
+                  approve ? "herdr MCP: close_tab, approved, reads herdr again, then ends the agent with herdr's pane close" : "herdr MCP: close_tab, declined, sends herdr nothing",
                   result.text)
         }
+        clearCalls()
+        let renamedAgent = await herdrTool("rename_tab", ["tab_id": id, "title": "x"])
+        check(renamedAgent.isError && renamedAgent.text == TabRename.agentRefusal && read().isEmpty,
+              "herdr MCP: rename_tab refuses an agent's id, and herdr is asked nothing", renamedAgent.text)
         let split = await herdrTool("split_pane", ["tab_id": id])
         check(split.isError && c.tabs.contains { $0 === tab }, "herdr MCP: split_pane refuses an agent's id, and the herdr tab stays", split.text)
         // start_agent (010a U5b): a kind herdr does not list is refused before asking; asked on the Mac, naming herdr's
@@ -507,7 +529,7 @@ extension SelfTest {
         write("herdr-read", "Allow rm -rf build? (y/n)\n")
         defer {
             for path in [herdr, standIn, herdr.appendingPathExtension("c")] { unlink(path.path) }
-            for name in ["herdr-calls", "herdr-agents", "herdr-machines", "herdr-machine-agents", "herdr-read", "herdr-screen-input"] {
+            for name in ["herdr-calls", "herdr-agents", "herdr-machines", "herdr-machine-agents", "herdr-read", "herdr-screen-input", "herdr-panes"] {
                 unlink(base.appendingPathComponent(name).path)
             }
         }

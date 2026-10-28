@@ -341,9 +341,15 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         host.port = portText.isEmpty ? nil : Int(portText) ?? -1
         host.directory = folderText.isEmpty ? "~" : folderText
         host.keep = KeepMode.allCases[max(0, keepControl.selectedSegment)]
-        let prefix: TmuxPrefix = TmuxPrefix.allCases[max(0, prefixPopup.indexOfSelectedItem)]
-        host.tmuxPrefix = prefix == .ctrlB ? nil : prefix
-        host.tmuxHistory = TmuxSettingsText.history(historyField.stringValue)
+        // The tmux rows show only while keep is tmux: hidden, they keep what the host had, and never block Connect.
+        if host.keep == .tmux {
+            let prefix: TmuxPrefix = TmuxPrefix.allCases[max(0, prefixPopup.indexOfSelectedItem)]
+            host.tmuxPrefix = prefix == .ctrlB ? nil : prefix
+            host.tmuxHistory = TmuxSettingsText.history(historyField.stringValue)
+        } else {
+            host.tmuxPrefix = selectedHost?.tmuxPrefix
+            host.tmuxHistory = selectedHost?.tmuxHistory
+        }
         if let problem = host.problem {
             problemLabel.stringValue = problem
             problemLabel.isHidden = false

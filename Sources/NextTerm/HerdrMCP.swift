@@ -2,8 +2,9 @@ import AppKit
 import NextTermCore
 
 /// herdr's agents over MCP. Each one has an id of its own, its herdr tab's id, a slash and herdr's pane id (HerdrTarget),
-/// which goes wherever a tab id goes: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent and show_tab are
-/// answered here, focus_tab by MCPWriteControl (it asks the user first), and close_tab and the pane tools refuse one.
+/// which goes wherever a tab id goes: read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab and close_tab
+/// are answered here (close_tab asks the user first), focus_tab by MCPWriteControl (it asks first too), and rename_tab and
+/// the pane tools refuse one.
 /// Every check a tab gets holds for its agents (not the caller's own, connected, not logging in, a line that is the
 /// user's own), and every command is one of HerdrCommand's, run by HerdrRunner. Typing into an agent asks nothing, as
 /// typing into a tab does, and makes that agent, not its whole herdr tab, driven: its finishes are the calling agent's
@@ -140,12 +141,16 @@ enum HerdrMCP {
             return reply(fail("Give kind: one of herdr's agent kinds, such as claude or codex."))
         }
         let name: String = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespaces) ?? kind
+        // An empty folder is none: herdr's own folder, and the window shows no --cwd.
         let directory: String? = (arguments["directory"] as? String).map { $0.trimmingCharacters(in: .whitespaces) }
-        let given: Any? = arguments["words"]
+            .flatMap { $0.isEmpty ? nil : $0 }
+        // null counts as not given, as for the other tools.
+        let given: Any? = arguments["words"].flatMap { $0 is NSNull ? nil : $0 }
         guard given == nil || given is [String] else { return reply(fail("words is a list of words, such as [\"--model\", \"opus\"].")) }
         let words: [String] = given as? [String] ?? []
+        let begun = Date()
         // Every check that can refuse, before anything runs: the pane id stands in until herdr makes the tab.
-        let newTab = HerdrCommand.newTab(directory: directory?.isEmpty == true ? nil : directory, label: name)
+        let newTab = HerdrCommand.newTab(directory: directory, label: name)
         let start = HerdrCommand.startAgent(name: name, kind: kind, pane: "w1:p1", words: words)
         if let refusal = newTab.refusal(session: nil) ?? start.refusal(session: nil) { return reply(fail(refusal + " Nothing was started.")) }
         HerdrRunner.run(.startKinds, for: tab) { result in
@@ -157,21 +162,18 @@ enum HerdrMCP {
                     let listed = kinds.isEmpty ? "none" : kinds.joined(separator: ", ")
                     return reply(fail("herdr there starts these kinds: \(listed). Nothing was started."))
                 }
-                askToStart(tab, name: name, kind: kind, directory: directory, words: words, newTab: newTab, arguments, caller: caller, reply: reply)
+                askToStart(tab, name: name, kind: kind, words: words, newTab: newTab, begun: begun, arguments, caller: caller, reply: reply)
             }
         }
     }
 
     @MainActor
-    private static func askToStart(_ tab: TerminalTab, name: String, kind: String, directory: String?, words: [String],
-                                   newTab: HerdrCommand, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
+    private static func askToStart(_ tab: TerminalTab, name: String, kind: String, words: [String], newTab: HerdrCommand,
+                                   begun: Date, _ arguments: [String: Any], caller: TerminalTab?, reply: @escaping Reply) {
         let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
-        let session: String = tab.remote?.herdrSession ?? tab.localHerdr?.session ?? "its default session"
-        let folder: String = directory.map { " --cwd \($0)" } ?? ""
-        let rest: String = words.isEmpty ? "" : " -- " + words.joined(separator: " ")
-        let commands = "herdr tab create\(folder) --label \(name) --no-focus, then herdr agent start \(name) --kind \(kind) --pane <its pane>\(rest)"
+        let session: String? = tab.remote?.herdrSession ?? tab.localHerdr?.session
         let ask = MCPWriteControl.Ask(title: "An agent asks to start an agent in herdr",
-                                      details: "\(kind), named “\(name)”, in a new herdr tab of herdr \(place) (\(session)): it runs there until it ends. Next Term runs: \(commands)")
+                                      details: "\(kind), named “\(name)”, in a new herdr tab of herdr \(place) (\(session ?? "its default session")): it runs there until it ends. Next Term runs: \(shownCommands(newTab, name: name, kind: kind, words: words, session: session))")
         let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
         MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
             window?.finish()
@@ -183,16 +185,50 @@ enum HerdrMCP {
                         return reply(fail("herdr made no tab there that Next Term could read; read_tab on the herdr tab shows what happened."))
                     }
                     let start = HerdrCommand.startAgent(name: name, kind: kind, pane: created.pane, words: words)
-                    HerdrRunner.run(start, for: tab, timeout: Double(HerdrCommand.startWait) / 1000 + 10) { started in
-                        MainActor.assumeIsolated {
-                            let id = tab.id.uuidString.lowercased() + "/" + created.pane
-                            if let problem = problem(started, pane: created.pane) {
-                                return reply(fail("herdr made tab \(created.tab) (pane \(created.pane)), but \(kind) did not start in it: \(problem) The tab stays: close_tab with \(id) ends it."))
-                            }
-                            driven.insert(id)
-                            reply(ok(["id": id, "pane": created.pane, "herdr_tab": created.tab, "kind": kind, "name": name, "approved": approved]))
+                    startWhenReady(tab, start, created: created, begun: begun, firstTry: Date()) { started in
+                        let id = tab.id.uuidString.lowercased() + "/" + created.pane
+                        if let problem = problem(started, pane: created.pane) {
+                            return reply(fail("herdr made tab \(created.tab) (pane \(created.pane)), but \(kind) did not start in it: \(problem) The tab stays; close_tab with \(id) closes that pane, and the tab with it, while herdr lists it; otherwise close it in herdr."))
                         }
+                        driven.insert(id)
+                        reply(ok(["id": id, "pane": created.pane, "herdr_tab": created.tab, "kind": kind, "name": name, "approved": approved]))
                     }
+                }
+            }
+        }
+    }
+
+    /// The commands as the window shows them: herdr's own argument lists, each word shell-quoted, the new pane's id
+    /// named for what it is.
+    private static func shownCommands(_ newTab: HerdrCommand, name: String, kind: String, words: [String], session: String?) -> String {
+        let quote: (String) -> String = { ShellQuote.quote($0) }
+        let create: [String]? = newTab.argv(executable: "herdr", session: session, text: nil)?.first?.first
+        // A valid pane id stands in, then shows as <its pane>: argv refuses an id herdr would not take.
+        let start: [String]? = HerdrCommand.startAgent(name: name, kind: kind, pane: "w1:p1", words: words)
+            .argv(executable: "herdr", session: session, text: nil)?.first?.first
+        guard let create, let start else { return "herdr tab create, then herdr agent start" }
+        var shown: [String] = start.map(quote)
+        if let at = start.firstIndex(of: "--pane"), at + 1 < shown.count { shown[at + 1] = "<its pane>" }
+        return create.map(quote).joined(separator: " ") + ", then " + shown.joined(separator: " ")
+    }
+
+    /// herdr answers these while the new pane's shell is not at its prompt yet.
+    private static let paneNotReady: Set<String> = ["agent_pane_busy", "agent_pane_unavailable"]
+
+    /// `agent start`, tried again every half second while herdr says the new pane is not ready, for up to 10 s, and only
+    /// while a whole try still fits in start_agent's time (MCPServer: 120 s from the call).
+    @MainActor
+    private static func startWhenReady(_ tab: TerminalTab, _ start: HerdrCommand, created: (tab: String, pane: String),
+                                       begun: Date, firstTry: Date, completion: @escaping (HerdrResult) -> Void) {
+        let wait: Double = Double(HerdrCommand.startWait) / 1000 + 10
+        HerdrRunner.run(start, for: tab, timeout: wait) { started in
+            MainActor.assumeIsolated {
+                guard case .error(let code, _) = started, paneNotReady.contains(code) else { return completion(started) }
+                let now = Date()
+                let retrying: Bool = now.timeIntervalSince(firstTry) < 10 && now.timeIntervalSince(begun) + 0.5 + wait < 118
+                guard retrying else { return completion(started) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    startWhenReady(tab, start, created: created, begun: begun, firstTry: firstTry, completion: completion)
                 }
             }
         }
@@ -200,8 +236,10 @@ enum HerdrMCP {
 
     /// close_tab with an agent's id (plan 010a U6b): herdr closes that agent's pane, and what runs there stops, once the
     /// user approves on the Mac, seeing the exact command. Every refusal comes first: the caller's own pane, an agent on
-    /// one of herdr's machines, a working agent without force. After Approve the agent is read again: one that began
-    /// working meanwhile is not ended without force. Only the agent: never its herdr tab, session or server.
+    /// one of herdr's machines, a working agent without force, the session's last pane. herdr closes the pane's tab with
+    /// it when it was that tab's only pane, and the window says so (HerdrPanes); the session and its server stay. After
+    /// Approve, herdr is asked again, not the last listing: the same pane must still run the same agent (kind and name),
+    /// not working unless forced, and not be the session's last pane.
     @MainActor
     private static func closeAgent(_ target: HerdrTarget, _ arguments: [String: Any], caller: TerminalTab?,
                                    herdrCaller: [String: String], reply: @escaping Reply) {
@@ -214,28 +252,83 @@ enum HerdrMCP {
         case .success(let pair): found = pair
         }
         let force: Bool = arguments["force"] as? Bool ?? false
-        let name: String = MCPControl.field(found.agent.name)
+        let name: String = SecretApprovalPanel.sanitized(found.agent.name, limit: 60)
         if found.agent.status == .working, !force {
             return reply(fail("“\(name)” is working: pass force: true to end it anyway. Nothing was closed."))
         }
-        let tab = found.ref.tab
-        let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
-        let ask = MCPWriteControl.Ask(title: "An agent asks to end a herdr agent",
-                                      details: "“\(name)” (\(found.agent.paneID), \(found.agent.status.rawValue)) in herdr \(place): herdr closes its pane, and what runs there stops. Its herdr tab, session and server stay. Next Term runs: herdr pane close \(found.agent.paneID)")
-        let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
-        MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
-            window?.finish()
-            guard let now = found.ref.agent else {
-                return reply(ok(["id": found.ref.id, "closed": true, "note": "herdr no longer listed it, so nothing was run."]))
-            }
-            if now.status == .working, !force {
-                return reply(fail("“\(name)” began working while you were asked: pass force: true to end it anyway. Nothing was closed."))
-            }
-            found.ref.run(.closePane(pane: now.paneID)) { result in
-                if let problem = problem(result, pane: now.paneID) { return reply(fail(problem)) }
-                reply(ok(["id": found.ref.id, "closed": true, "approved": approved]))
+        let pane: String = found.agent.paneID
+        found.ref.run(.panes) { counted in
+            MainActor.assumeIsolated {
+                let panes: HerdrPanes
+                switch paneCount(counted) {
+                case .failure(let error): return reply(fail(error.text))
+                case .success(let read): panes = read
+                }
+                if let refusal = panes.lastPaneRefusal { return reply(fail(refusal)) }
+                let tab = found.ref.tab
+                let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
+                let closes: String = panes.isAlone(tab: found.agent.tabID)
+                    ? "herdr closes its pane, and its herdr tab with it (the pane is that tab's only one); what runs there stops."
+                    : "herdr closes its pane, and what runs there stops; the rest of its herdr tab stays."
+                let ask = MCPWriteControl.Ask(title: "An agent asks to end a herdr agent",
+                                              details: "“\(name)” (\(pane), \(found.agent.status.rawValue)) in herdr \(place): \(closes) The session and its server keep running. Next Term runs: herdr pane close \(pane)")
+                let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
+                MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
+                    window?.finish()
+                    closeAgain(found, force: force, approved: approved, reply: reply)
+                }
             }
         }
+    }
+
+    /// After Approve: herdr's agents and panes read again, then the pane closed only if it is the agent the user was
+    /// asked about. Nothing is run when herdr no longer lists it.
+    @MainActor
+    private static func closeAgain(_ found: (ref: HerdrAgentRef, agent: HerdrAgent), force: Bool, approved: String,
+                                   reply: @escaping Reply) {
+        let asked: HerdrAgent = found.agent
+        let name: String = SecretApprovalPanel.sanitized(asked.name, limit: 60)
+        found.ref.run(.list) { listed in
+            MainActor.assumeIsolated {
+                var agents: [HerdrAgent]?
+                if case .json(let text) = listed, case .agents(let list) = HerdrAgent.listing(output: text, exit: 0) { agents = list }
+                guard let agents else {
+                    let why: String = problem(listed, pane: asked.paneID, sent: false) ?? "herdr did not list its agents there."
+                    return reply(fail(why + " Nothing was closed."))
+                }
+                guard let now = agents.first(where: { $0.paneID == asked.paneID }) else {
+                    return reply(ok(["id": found.ref.id, "closed": false, "note": "herdr no longer lists it, so nothing was run."]))
+                }
+                guard now.kind == asked.kind, now.customName == asked.customName, now.displayName == asked.displayName else {
+                    return reply(fail("Pane \(asked.paneID) now runs another agent than the one you were asked about. Nothing was closed."))
+                }
+                if now.status == .working, !force {
+                    return reply(fail("“\(name)” began working while you were asked: pass force: true to end it anyway. Nothing was closed."))
+                }
+                found.ref.run(.panes) { counted in
+                    MainActor.assumeIsolated {
+                        let panes: HerdrPanes
+                        switch paneCount(counted) {
+                        case .failure(let error): return reply(fail(error.text))
+                        case .success(let read): panes = read
+                        }
+                        if let refusal = panes.lastPaneRefusal { return reply(fail(refusal)) }
+                        let alone: Bool = panes.isAlone(tab: now.tabID)
+                        found.ref.run(.closePane(pane: now.paneID)) { result in
+                            if let problem = problem(result, pane: now.paneID) { return reply(fail(problem)) }
+                            reply(ok(["id": found.ref.id, "closed": true, "herdr_tab_closed": alone, "approved": approved]))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// herdr's panes counted, or why they could not be: nothing is closed without the count.
+    private static func paneCount(_ result: HerdrResult) -> Result<HerdrPanes, MCPControl.MCPError> {
+        if case .json(let text) = result, let panes = HerdrPanes.parse(text) { return .success(panes) }
+        let why: String = problem(result, pane: "", sent: false) ?? "herdr did not list its panes there."
+        return .failure(.init(why + " Nothing was closed."))
     }
 
     /// The agent an id names, after the checks its tab gets: the tab is there and follows herdr's agents, herdr lists the

@@ -303,18 +303,21 @@ enum MCPControl {
     static func ok(_ value: Any) -> MCPServer.CallResult { MCPServer.CallResult(text: MCPServer.json(value)) }
 
     /// Runs a tool. `approval`, `requester` and `connection` are for the write tools that MCPWriteControl
-    /// runs, and for install_skill and remove_skill: who approves their change, who asks as the approval
-    /// window names it, and which remote connection (its grant id) a Decline and Stop Asking stops. The
-    /// local socket passes none, so a local agent's change always waits for Approve on the Mac; the remote
-    /// door passes its connection's policy, name and grant id (see MCPApproval).
+    /// runs, for install_skill and remove_skill, and for the host and tab changes that ask (add_host,
+    /// remove_host, edit_host, end_session through RemoteMCP.call, and close_tab): who approves their change,
+    /// who asks as the approval window names it, and which remote connection (its grant id) a Decline and Stop
+    /// Asking stops. The local socket passes none, so a local agent's change always waits for Approve on the
+    /// Mac; the remote door passes its connection's policy, name and grant id (see MCPApproval). start_agent
+    /// and close_tab on a herdr agent's id always ask on the Mac (HerdrMCP), whatever is passed.
     /// `herdrCaller`: what the bridge said of the agent that called, its herdr pane (MCPCalls.Request.caller).
     static func call(_ tool: String, _ arguments: [String: Any], caller pid: pid_t?, herdrCaller: [String: String] = [:],
                      approval: MCPApproval = .askOnMac, requester: String? = nil, connection: String? = nil, reply: @escaping Reply) {
         let caller = pid.flatMap { ClaudeIDEServer.tab(for: $0, among: allTabs) }
         // Safe mode runs only tools that read; an update's wait refuses new work elsewhere (U13).
         if let refusal = MCPRestoredTabs.refusal(tool, arguments) { return reply(fail(refusal)) }
-        // Through a remote connection: not herdr's agents, nor the host and tab changes, until the door names them.
-        if connection != nil, let refusal = MCPRemoteReach.refusal(tool, arguments) { return reply(fail(refusal)) }
+        // Through a remote connection (its grant id, or only a requester's name, as SecretsMCP.isRemote counts it): no herdr
+        // agent's id, nor edit_host, end_session, rename_tab or start_agent, until the door names them (MCPRemoteReach).
+        if connection != nil || requester != nil, let refusal = MCPRemoteReach.refusal(tool, arguments) { return reply(fail(refusal)) }
         // One of herdr's agents: its id stands where a tab's does, its tab's refusals first (HerdrMCP).
         if let raw = arguments["tab_id"] as? String, let target = HerdrTarget.parse(raw) {
             if let refusal = MCPRestoredTabs.refusal(tool, ["tab_id": target.tabID]) { return reply(fail(refusal)) }
@@ -340,7 +343,7 @@ enum MCPControl {
         case "read_file", "find_in_files", "git_status", "get_diff": projectTool(tool, arguments, caller: caller, reply: reply)
         case "show_tab": reply(withTab(arguments) { tab in showTab(tab) })
         case "close_tab": closeTab(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
-        case "rename_tab": reply(renameTab(arguments))
+        case "rename_tab": reply(renameTab(arguments, caller: caller))
         case "start_agent": MainActor.assumeIsolated { HerdrMCP.startAgent(arguments, caller: caller, reply: reply) }
         case "open_in_editor": reply(openInEditor(arguments))
         case "list_hosts", "add_host", "remove_host", "edit_host", "check_host", "new_remote_tab", "host_sessions", "end_session",
@@ -592,6 +595,11 @@ enum MCPControl {
         guard let directory = absolute(arguments["directory"]), isFolder(directory) else {
             return reply(fail("Not a folder (give an absolute path): \(arguments["directory"] as? String ?? "")"))
         }
+        let title: String?
+        switch TabRename.given(arguments["title"]) {
+        case .failure(let refusal): return reply(fail(refusal.text))
+        case .success(let given): title = given
+        }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -626,7 +634,8 @@ enum MCPControl {
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }
-        if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
+        if let title { tab.userTitle = title }
+        MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         let answer = {
             var info: [String: Any] = ["id": tab.id.uuidString.lowercased(), "directory": tab.directory,
@@ -999,10 +1008,11 @@ enum MCPControl {
 
     /// rename_tab: the title Rename Tab… sets; "" gives the tab its own back. It only changes a label, so it asks nothing,
     /// on the caller's own tab too.
-    private static func renameTab(_ arguments: [String: Any]) -> MCPServer.CallResult {
+    private static func renameTab(_ arguments: [String: Any], caller: TerminalTab?) -> MCPServer.CallResult {
         guard let tab = findTab(arguments["tab_id"]), let controller = controller(of: tab) else {
             return fail("No tab with that id; list_tabs shows them.")
         }
+        guard MCPTabOpeners.mayRename(tab, caller: caller) else { return fail(MCPTabOpeners.refusal) }
         guard let raw = arguments["title"] as? String else { return fail("Give title: the new name, or \"\" for the tab's own.") }
         switch TabRename.title(raw) {
         case .failure(let refusal): return fail(refusal.text)

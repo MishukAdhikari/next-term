@@ -173,8 +173,12 @@ public struct RemoteHost: Codable, Equatable, Sendable {
         if let issue = Self.directoryProblem(directory) { return issue }
         if let tmuxHistory, let issue = TmuxOptions.historyProblem(tmuxHistory) { return issue }
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty || trimmed.count > 64 || trimmed.unicodeScalars.contains(where: ShellQuote.isControl) {
+        if trimmed.isEmpty || trimmed.count > 64 {
             return "Give the host a name of up to 64 characters."
+        }
+        // Approval windows name a host by it: no character that hides or reorders text (TabRename.hidden).
+        if trimmed.unicodeScalars.contains(where: TabRename.hidden) {
+            return "The host's name must be one line of characters that show as themselves: no control or format characters (such as direction marks) and no line or paragraph separators."
         }
         return nil
     }

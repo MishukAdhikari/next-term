@@ -455,4 +455,20 @@ import Testing
         // Never to one of herdr's machines.
         #expect(HerdrCommand.startAgent(name: "fixer", kind: "codex", pane: "w1:p2", words: []).refusal(session: nil, machine: "m1") != nil)
     }
+
+    /// close_tab on an agent counts herdr's panes first: `pane list`, on this Mac or the host, never on a machine.
+    @Test func thePanesAreListedAndCounted() throws {
+        #expect(try #require(HerdrCommand.panes.argv(executable: "h", session: "review", text: nil)) == [[["h", "--session", "review", "pane", "list"]]])
+        #expect(HerdrCommand.panes.refusal(session: nil, machine: "m1") != nil)
+        #expect(!HerdrCommand.panes.changesHerdr && !HerdrCommand.panes.goesToMachines)
+        // herdr 0.9.1's own answer, as a scratch herdr gave it (2026-10-28).
+        let listed = #"{"id":"cli:pane:list","result":{"panes":[{"agent_status":"unknown","pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"},{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"},{"pane_id":"w1:p3","tab_id":"w1:t1","workspace_id":"w1"}]}}"#
+        let panes = try #require(HerdrPanes.parse(listed))
+        #expect(panes.total == 3 && panes.byTab == ["w1:t1": 2, "w1:t2": 1])
+        #expect(panes.isAlone(tab: "w1:t2") && !panes.isAlone(tab: "w1:t1") && !panes.isAlone(tab: nil))
+        #expect(panes.lastPaneRefusal == nil)
+        let one = try #require(HerdrPanes.parse(#"[{"pane_id":"w1:p1","tab_id":"w1:t1"}]"#))
+        #expect(one.total == 1 && one.lastPaneRefusal?.contains("last pane") == true)
+        #expect(HerdrPanes.parse("not json") == nil && HerdrPanes.parse(#"{"result":{"agents":[]}}"#) == nil)
+    }
 }

@@ -153,14 +153,16 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   why herdr gives its state, and ⌘2 its conversation, from the transcript herdr names (Claude Code and Codex).
   A tab can open one of herdr's named sessions, picked in New Remote Tab; a connected herdr server with no herdr
   tab still shows its agents in Go to Agent, and a saved herdr server is one choice away. herdr run in a tab on
-  this Mac gets the same, the machines saved in it included, read through that herdr; that tab is only read,
-  never kept or reopened. Keep herdr's `ui.toast.delivery` at its default when Next Term follows herdr on this
+  this Mac gets the same, the machines saved in it included, read through that herdr; that tab is not kept, nor
+  rerun on restore. Keep herdr's `ui.toast.delivery` at its default when Next Term follows herdr on this
   Mac, or herdr posts its own notices too. Next Term tells programs that ask (herdr, vim, tmux) when its window or
   the app loses the focus, so herdr keeps a finish you have not seen. It runs only herdr's own commands (its
-  agent list, read, prompt, keys, focus and explain, its sessions and its list of machines): it never installs,
-  starts, stops or updates herdr, never stops a herdr session, and never changes its machines. An agent over MCP
-  can start one of herdr's agents in a new herdr tab (`start_agent`, with herdr's own kinds) or end one (`close_tab`
-  on its id, herdr's `pane close`), each only after you approve it on the Mac, which shows herdr's commands.
+  agent and pane lists, read, prompt, keys, focus and explain, `agent start --help` for its agent kinds, its
+  sessions and its list of machines): it never installs, starts, stops or updates herdr, never stops a herdr
+  session, and never changes its machines. An agent over MCP can start one of herdr's agents in a new herdr tab
+  (`start_agent`, with herdr's own kinds) or end one (`close_tab` on its id, herdr's `pane close`; when that was its
+  herdr tab's only pane, herdr closes the tab too, and the session's last pane is never closed from here), each only
+  after you approve it on the Mac, which shows herdr's commands.
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
   first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,

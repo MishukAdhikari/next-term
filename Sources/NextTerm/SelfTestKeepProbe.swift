@@ -53,10 +53,11 @@ enum SelfTestKeepProbe {
             self.tools = tools
         }
 
-        /// The variables every look runs the tools with: the scratch ones, and no others of the app's.
+        /// The variables every look runs the tools with: the scratch ones, HOME among them (a login shell in a pane would
+        /// read the user's ~/.profile), and no others of the app's.
         var environment: [String: String] {
             [
-                "HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+                "HOME": root + "/h", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
                 "XDG_CONFIG_HOME": root + "/c", "XDG_DATA_HOME": root + "/d", "XDG_STATE_HOME": root + "/s",
                 "XDG_CACHE_HOME": root + "/k", "XDG_RUNTIME_DIR": root + "/r", "TMUX_TMPDIR": root + "/t",
             ]
@@ -104,7 +105,9 @@ enum SelfTestKeepProbe {
         }
         try? (pids.joined(separator: "\n") + "\n").write(to: probe.pids, atomically: true, encoding: .utf8)
         guard !pids.isEmpty else {
-            SelfTestRestore.record("RESULT nothing to probe: neither herdr nor tmux is on this Mac")
+            // No tool here is a skip; tools here that started nothing is a failure, which the driver reports.
+            SelfTestRestore.record(probe.tools.isEmpty ? "RESULT nothing to probe: neither herdr nor tmux is on this Mac"
+                                                       : "RESULT nothing started: no server came up on its scratch socket")
             return SelfTestRestore.finish()
         }
 

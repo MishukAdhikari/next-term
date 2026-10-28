@@ -1736,13 +1736,13 @@ struct SplitMix: RandomNumberGenerator {
         }
         #expect(description("host_sessions").contains("herdr_sessions") && description("host_sessions").contains("herdr agent's id"))
         #expect(description("new_remote_tab").contains("herdr_sessions from host_sessions"))
-        #expect(description("list_tabs").contains("read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab and focus_tab take that id"))
+        #expect(description("list_tabs").contains("read_tab, wait_for_tab, send_to_tab, press_keys, answer_agent, show_tab, close_tab and focus_tab take that id"))
         // herdr's own machines, and how long an agent has waited.
         #expect(description("list_tabs").contains("machine") && description("list_tabs").contains("/@, the machine's id"))
         #expect(description("list_tabs").contains("waiting_seconds"))
-        // The schema's words for it, on exactly the seven tools an agent's id works with.
+        // The schema's words for it, on exactly the eight tools an agent's id works with.
         let taking = MCPServer.tools.filter { $0.inputSchema.contains("or a herdr agent's id from its herdr_agents") }.map(\.name)
-        #expect(Set(taking) == ["read_tab", "wait_for_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "focus_tab"])
+        #expect(Set(taking) == ["read_tab", "wait_for_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab", "focus_tab"])
     }
 
     @Test func theBridgeSaysWhichHerdrPaneTheCallerRunsIn() throws {

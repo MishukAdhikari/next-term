@@ -452,7 +452,8 @@ extension SelfTest {
                 check(await wait(20) { backTab?.status.program == "sleep" }, "remote MCP: new_remote_tab with session reattaches to it",
                       backTab?.screenTail(4).joined(separator: " | ") ?? back.text)
                 // force asks on the Mac first: Decline leaves the session running and the tab open, Approve ends it.
-                func answerWhenAsked(_ approve: Bool) {
+                // Each answer's task is awaited after its call, so one still waiting never answers the next window.
+                func answerWhenAsked(_ approve: Bool) -> Task<Void, Never> {
                     Task { @MainActor in
                         _ = await wait(30) { MCPWriteControl.pending?.window != nil }
                         let window = MCPWriteControl.pending?.window
@@ -460,15 +461,39 @@ extension SelfTest {
                     }
                 }
                 let backID: String = backTab?.id.uuidString.lowercased() ?? ""
-                answerWhenAsked(false)
+                let declining = answerWhenAsked(false)
                 let declined = await tool("close_tab", ["tab_id": backID, "force": true], timeout: 60)
+                await declining.value
                 let kept: Bool = sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null").contains(session)
-                check(declined.isError && kept && backTab.map { (tab: TerminalTab) -> Bool in c.tabs.contains { $0 === tab } } == true,
+                check(declined.isError && declined.text.contains("Declined on the Mac") && kept
+                        && backTab.map { (tab: TerminalTab) -> Bool in c.tabs.contains { $0 === tab } } == true,
                       "remote MCP: close_tab force asks first, and Decline leaves the session running and the tab open", declined.text)
-                answerWhenAsked(true)
+                let approving = answerWhenAsked(true)
                 let ended = await tool("close_tab", ["tab_id": backID, "force": true], timeout: 60)
+                await approving.value
                 let gone = await wait(10) { !sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null").contains(session) }
                 check(ended.json?["session_ended"] as? String == session && gone, "remote MCP: close_tab force ends the session once approved", ended.text)
+                // end_session (plan 010a U6a) asks the same way: Decline leaves the session running and its tab open,
+                // Approve ends it and closes the tab here that shows it.
+                let spare = await tool("new_remote_tab", ["host": "selftest", "command": "sleep 300"], timeout: 60)
+                let spareID: String = spare.json?["id"] as? String ?? ""
+                let spareTab = c.tabs.first { $0.id.uuidString.lowercased() == spareID }
+                _ = await wait(20) { spareTab?.status.program == "sleep" }
+                let spareSession: String = spareTab?.remote?.session ?? ""
+                let listed = { sh("tmux -L nextterm list-sessions -F '#{session_name}' 2>/dev/null") }
+                let declinedEnd = answerWhenAsked(false)
+                let notEnded = await tool("end_session", ["host": "selftest", "session": spareSession], timeout: 60)
+                await declinedEnd.value
+                check(notEnded.isError && notEnded.text.contains("Declined on the Mac") && listed().contains(spareSession)
+                        && spareTab.map { (tab: TerminalTab) -> Bool in c.tabs.contains { $0 === tab } } == true,
+                      "remote MCP: end_session asks first, and Decline leaves the session running and its tab open", notEnded.text)
+                let approvedEnd = answerWhenAsked(true)
+                let endedSession = await tool("end_session", ["host": "selftest", "session": spareSession], timeout: 60)
+                await approvedEnd.value
+                let spareGone = await wait(10) { !listed().contains(spareSession) }
+                let closedTabs: [String] = endedSession.json?["closed_tabs"] as? [String] ?? []
+                check(!endedSession.isError && spareGone && closedTabs.contains(spareID),
+                      "remote MCP: end_session ends the session once approved, and closes the tab here that showed it", endedSession.text)
             } else {
                 flag("unreachable", false)
                 master.start()
@@ -535,7 +560,8 @@ extension SelfTest {
     /// add_host, edit_host and remove_host ask on the Mac first (plan 010a U6a): Approve saves, changes or forgets a made-up
     /// host; Decline leaves it as it was; a call that would fail opens no window.
     static func askingHostChecks(_ tool: (String, [String: Any], Double) async -> (json: [String: Any]?, text: String, isError: Bool)) async {
-        func answerWhenAsked(_ approve: Bool) {
+        // Each answer's task is awaited after its call, so one still waiting never answers the next window.
+        func answerWhenAsked(_ approve: Bool) -> Task<Void, Never> {
             Task { @MainActor in
                 _ = await wait(30) { MCPWriteControl.pending?.window != nil }
                 let window = MCPWriteControl.pending?.window
@@ -544,22 +570,27 @@ extension SelfTest {
         }
         func saved() -> RemoteHost? { RemoteHosts.all.first { $0.name.hasPrefix("selftest-asks") } }
         defer { if let left = saved() { RemoteHosts.remove(id: left.id) } }
-        answerWhenAsked(true)
+        var answering = answerWhenAsked(true)
         let added = await tool("add_host", ["name": "selftest-asks", "destination": "nt@asks.invalid", "reason": "To test asking."], 60)
+        await answering.value
         check(!added.isError && added.json?["approved"] as? String == "on this Mac" && saved()?.destination == "nt@asks.invalid",
               "remote MCP: add_host saves a server once the user approves on the Mac", added.text)
         let both = await tool("edit_host", ["host": "selftest-asks", "port": 22, "clear_port": true], 30)
         check(both.isError && MCPWriteControl.pending == nil, "remote MCP: edit_host refuses port with clear_port before asking", both.text)
-        answerWhenAsked(true)
+        answering = answerWhenAsked(true)
         let edited = await tool("edit_host", ["host": "selftest-asks", "name": "selftest-asks-2", "tmux_history": 9000], 60)
+        await answering.value
         let host = saved()
         check(!edited.isError && host?.name == "selftest-asks-2" && host?.tmuxHistory == 9000 && edited.json?["repointed"] == nil,
               "remote MCP: edit_host changes only what it names, once approved", edited.text)
-        answerWhenAsked(false)
+        answering = answerWhenAsked(false)
         let kept = await tool("remove_host", ["host": "selftest-asks-2"], 60)
-        check(kept.isError && saved() != nil, "remote MCP: remove_host declined on the Mac forgets nothing", kept.text)
-        answerWhenAsked(true)
+        await answering.value
+        check(kept.isError && kept.text.contains("Declined on the Mac") && saved() != nil,
+              "remote MCP: remove_host declined on the Mac forgets nothing", kept.text)
+        answering = answerWhenAsked(true)
         let removed = await tool("remove_host", ["host": "selftest-asks-2"], 60)
+        await answering.value
         check(!removed.isError && saved() == nil, "remote MCP: remove_host forgets the server once approved", removed.text)
     }
     #endif

@@ -94,7 +94,8 @@ enum RemoteMCP {
         if let existing, existing == host { return reply(ok(["host": describe(host), "saved": true, "unchanged": true])) }
         let details: String
         if let existing {
-            details = HostEdit.changes(from: existing, to: host).joined(separator: "\n")
+            // Which server, then what changes: a name alone does not say where it points.
+            details = named(existing) + ":\n" + HostEdit.changes(from: existing, to: host).joined(separator: "\n")
         } else {
             details = "\(named(host)), folder \(host.directory), keep \(host.keep.rawValue). Next Term connects to it only when a tab opens there, with your own ssh and keys; nothing is installed or run on it now."
         }
@@ -160,19 +161,25 @@ enum RemoteMCP {
             lines.append("It then points at another server: tabs saved for it are not reopened there.")
         }
         if open > 0 {
-            lines.append("\(open) tab\(open == 1 ? "" : "s") open on it keep the old settings until closed.")
+            lines.append("\(open) tab\(open == 1 ? "" : "s") open on it keep their connection; tmux's prefix and history reach them as they reconnect.")
         }
         let ask = MCPWriteControl.Ask(title: "An agent asks to change a saved server", details: named(saved) + ":\n" + lines.joined(separator: "\n"))
         MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
             window?.finish()
-            guard RemoteHosts.all.contains(saved) else {
+            let now: [RemoteHost] = RemoteHosts.all
+            guard now.contains(saved) else {
                 return reply(fail("“\(saved.name)” changed or was removed while you were asked; nothing changed. list_hosts shows it now."))
             }
+            // The new name still free: another server may have taken it while the user was asked.
+            let taken: Bool = now.contains { (other: RemoteHost) -> Bool in
+                other.id != saved.id && other.name.caseInsensitiveCompare(applied.host.name) == .orderedSame
+            }
+            guard !taken else { return reply(fail("Another saved server took the name “\(applied.host.name)” while you were asked; nothing changed.")) }
             if applied.repointed { RemoteHosts.remove(id: saved.id) }
             RemoteHosts.save(applied.host)
             var info: [String: Any] = ["host": describe(applied.host), "changed": applied.changes, "approved": approved]
             if applied.repointed { info["repointed"] = true }
-            if open > 0 { info["note"] = "Tabs open on it keep the old settings until they close." }
+            if open > 0 { info["note"] = "Tabs open on it keep their connection; tmux's prefix and history reach them as they reconnect." }
             reply(ok(info))
         }
     }
@@ -320,6 +327,8 @@ enum RemoteMCP {
         if let problem = RemoteHost.directoryProblem(directory) { return reply(fail(problem)) }
         let command = (arguments["command"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
         if command.contains("\n") { return reply(fail("The command must be one line.")) }
+        // The title's check first, so a refused one opens nothing; open(...) sets it.
+        if case .failure(let refusal) = TabRename.given(arguments["title"]) { return reply(fail(refusal.text)) }
         if !command.isEmpty && mode == .herdr {
             return reply(fail("A herdr tab shows herdr itself, not a shell: give herdr's agents work with send_to_tab on their ids from list_tabs, or open the tab with keep tmux or off to run a command."))
         }
@@ -420,7 +429,8 @@ enum RemoteMCP {
             controller.presentForAgent(tab)
         }
         MCPControl.driven.insert(tab.id)
-        if let title = arguments["title"] as? String, !title.isEmpty { tab.userTitle = String(title.prefix(100)) }
+        if case .success(let title?) = TabRename.given(arguments["title"]) { tab.userTitle = title }
+        MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         var answer: [String: Any] = ["id": tab.id.uuidString.lowercased(), "host": found.name, "directory": directory,
                                      "keep": mode.rawValue, "session": tab.remote?.session ?? ""]

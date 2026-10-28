@@ -226,14 +226,28 @@ extension SelfTest {
         let extra = pc.addTab(directory: root.path, select: false)
         _ = await wait(20) { extra.status.integrated }
         let extraID = extra.id.uuidString.lowercased()
+        // rename_tab names only the caller's own tab and the tabs it opened (010a review): the test opened this one itself.
+        let notMine = await client.call("rename_tab", ["tab_id": extraID, "title": "API server"])
+        check(notMine.isError && notMine.text.contains("only your own tab") && extra.userTitle == nil,
+              "MCP writes: rename_tab refuses a tab the agent did not open", notMine.text)
+        // A title that hides or reorders text (a direction isolate here) is refused, and no tab opens for it.
+        let tabsBeforeTitle: Int = pc.tabs.count
+        let hiddenTitle = await client.call("new_tab", ["directory": root.path, "title": "api\u{2066}server"])
+        check(hiddenTitle.isError && pc.tabs.count == tabsBeforeTitle, "MCP writes: new_tab refuses a title with a direction mark, and opens nothing", hiddenTitle.text)
+        let opened = await client.call("new_tab", ["directory": root.path])
+        let openedID: String = json(opened.text)?["id"] as? String ?? ""
+        let worker: TerminalTab? = pc.tabs.first { $0.id.uuidString.lowercased() == openedID }
         // rename_tab asks nothing: it only changes the label, which the tab bar shows; "" gives the tab its own back.
-        let renamed = await client.call("rename_tab", ["tab_id": extraID, "title": "  API server  "])
-        let named: Bool = extra.userTitle == "API server" && extra.title == "API server" && MCPWriteControl.pending == nil
-        check(!renamed.isError && named, "MCP writes: rename_tab names the tab as Rename Tab… does, and asks nothing", renamed.text)
-        let twoLines = await client.call("rename_tab", ["tab_id": extraID, "title": "a\nb"])
-        check(twoLines.isError && extra.userTitle == "API server", "MCP writes: rename_tab refuses a title of two lines", twoLines.text)
-        let own = await client.call("rename_tab", ["tab_id": extraID, "title": ""])
-        check(!own.isError && extra.userTitle == nil, "MCP writes: rename_tab with an empty title gives the tab its own back", own.text)
+        let renamed = await client.call("rename_tab", ["tab_id": openedID, "title": "  API server  "])
+        let named: Bool = worker?.userTitle == "API server" && worker?.title == "API server" && MCPWriteControl.pending == nil
+        check(!renamed.isError && named, "MCP writes: rename_tab names a tab the agent opened, as Rename Tab… does, and asks nothing", renamed.text)
+        let twoLines = await client.call("rename_tab", ["tab_id": openedID, "title": "a\nb"])
+        check(twoLines.isError && worker?.userTitle == "API server", "MCP writes: rename_tab refuses a title of two lines", twoLines.text)
+        let bidi = await client.call("rename_tab", ["tab_id": openedID, "title": "a\u{202E}b"])
+        check(bidi.isError && worker?.userTitle == "API server", "MCP writes: rename_tab refuses a title with a direction override", bidi.text)
+        let own = await client.call("rename_tab", ["tab_id": openedID, "title": ""])
+        check(!own.isError && worker?.userTitle == nil, "MCP writes: rename_tab with an empty title gives the tab its own back", own.text)
+        if let worker { pc.remove(worker) }
         let front = pc.activeTab
         let noFocus = await client.asked("focus_tab", ["tab_id": extraID], .decline)
         check(noFocus.isError && pc.activeTab === front, "MCP writes: focus_tab asks first, and Decline leaves the keyboard where it is", noFocus.text)

@@ -178,7 +178,7 @@ keep_probe() {
   local folder root session="nt-probe-$$" herdr="" tmux="" step failed=0
   folder="$(cd "$(mktemp -d)" && pwd -P)"
   root="$(cd "$(mktemp -d /tmp/ntp.XXXXXX)" && pwd -P)"
-  mkdir -p "$root/c" "$root/d" "$root/s" "$root/k" "$root/r" "$root/t"
+  mkdir -p "$root/c" "$root/d" "$root/s" "$root/k" "$root/r" "$root/t" "$root/h"
   chmod 700 "$root/r" "$root/t"
   for candidate in "$(command -v herdr 2>/dev/null || true)" "$HOME/.local/bin/herdr" /opt/homebrew/bin/herdr /usr/local/bin/herdr; do
     if [[ -n "$candidate" && -x "$candidate" ]]; then herdr="$candidate"; break; fi
@@ -186,20 +186,26 @@ keep_probe() {
   for candidate in "$(command -v tmux 2>/dev/null || true)" /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
     if [[ -n "$candidate" && -x "$candidate" ]]; then tmux="$candidate"; break; fi
   done
-  local herdr_config_before=""
-  [[ -e "$HOME/.config/herdr" ]] && herdr_config_before="$(stat -f %m "$HOME/.config/herdr")"
-  local variables=(HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" SHELL=/bin/sh PATH=/usr/bin:/bin:/usr/sbin:/sbin
+  # The user's own herdr config must never hold the probe's session: looked for while it runs and after cleanup (a
+  # session folder by its name), through a symlinked folder too.
+  herdr_config_leak() {
+    [[ -e "$HOME/.config/herdr" ]] || return 0
+    find -L "$HOME/.config/herdr" -name "$session" -print -quit 2>/dev/null || true
+  }
+  # HOME is scratch too: the panes' login shells would otherwise read the user's ~/.profile.
+  local variables=(HOME="$root/h" USER="$USER" LOGNAME="${LOGNAME:-$USER}" SHELL=/bin/sh PATH=/usr/bin:/bin:/usr/sbin:/sbin
     TERM=xterm-256color LANG=en_US.UTF-8 XDG_CONFIG_HOME="$root/c" XDG_DATA_HOME="$root/d" XDG_STATE_HOME="$root/s"
     XDG_CACHE_HOME="$root/k" XDG_RUNTIME_DIR="$root/r" TMUX_TMPDIR="$root/t")
 
-  # The cleanup, on every exit. herdr's own commands first, on the probe's session only; then any process still
-  # holding one of the two scratch sockets (each checked again just before the signal, so a reused pid is never hit).
+  # The cleanup, on every exit. herdr's session stopped and tmux's server killed, on the probe's own only; then any
+  # process still holding one of the two scratch sockets, while they are still there; then herdr's session deleted; then
+  # each pid the probe recorded, only while it still holds a file in the scratch root (each checked again just before
+  # the signal, so a reused pid is never hit).
   cleanup() {
     local socket pid
     [[ -n "${folder:-}" && -n "${root:-}" ]] || return 0
     if [[ -n "$herdr" ]]; then
       /usr/bin/env -i "${variables[@]}" "$herdr" session stop "$session" >/dev/null 2>&1 || true
-      /usr/bin/env -i "${variables[@]}" "$herdr" session delete "$session" >/dev/null 2>&1 || true
     fi
     if [[ -n "$tmux" ]]; then
       /usr/bin/env -i "${variables[@]}" "$tmux" -L "$session" kill-server >/dev/null 2>&1 || true
@@ -210,6 +216,17 @@ keep_probe() {
       for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -z "$(lsof -t -- "$socket" 2>/dev/null)" ]] && break; sleep 0.5; done
       for pid in $(lsof -t -- "$socket" 2>/dev/null); do kill -KILL "$pid" 2>/dev/null || true; done
     done
+    if [[ -n "$herdr" ]]; then
+      /usr/bin/env -i "${variables[@]}" "$herdr" session delete "$session" >/dev/null 2>&1 || true
+    fi
+    held() { lsof -p "$1" -Fn 2>/dev/null | grep -qF "n$root/"; }
+    if [[ -s "$folder/probe-pids" ]]; then
+      for pid in $(awk '{print $2}' "$folder/probe-pids"); do
+        held "$pid" && kill -TERM "$pid" 2>/dev/null
+        for _ in 1 2 3 4 5 6 7 8 9 10; do held "$pid" || break; sleep 0.5; done
+        held "$pid" && kill -KILL "$pid" 2>/dev/null
+      done
+    fi
     pkill -f "$folder/install/Next Term.app/Contents/MacOS/NextTerm" 2>/dev/null || true
     rm -rf "$root"
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
@@ -217,7 +234,8 @@ keep_probe() {
     defaults delete "$HARNESS_ID" >/dev/null 2>&1 || true
     rm -rf "$folder"
   }
-  trap cleanup EXIT
+  # An early failure (set -e) still shows the report before cleanup removes it.
+  trap 'status=$?; [[ $status -ne 0 && -s "$folder/report.txt" ]] && cat "$folder/report.txt" >&2; cleanup' EXIT
   trap 'exit 130' INT TERM
 
   make_app "$folder/install" 0.0.1
@@ -253,12 +271,16 @@ keep_probe() {
     fi
   }
   launch_step keep-probe-start
-  if grep -q '^RESULT nothing to probe' "$folder/report.txt"; then
+  if grep -qE '^RESULT nothing (to probe|started)' "$folder/report.txt"; then
     cat "$folder/report.txt"
+    grep -qE '^(FAIL|RESULT nothing started)' "$folder/report.txt" && failed=1
     trap - EXIT
     cleanup
-    return 0
+    return "$failed"
   fi
+  local leaked
+  leaked="$(herdr_config_leak)"
+  [[ -z "$leaked" ]] || echo "FAIL [driver] the probe's herdr session is in the user's own config: $leaked" >> "$folder/report.txt"
   for _ in $(seq 1 300); do [[ -s "$folder/opened" ]] && break; sleep 0.2; done
   [[ -s "$folder/opened" ]] || echo "FAIL [driver] the install script opened nothing within a minute of the quit" >> "$folder/report.txt"
   launch_step keep-probe-after-update
@@ -284,14 +306,14 @@ keep_probe() {
   for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive+=" $pid"; done
   local left
   left="$(pgrep -f "$session" || true)"
-  local herdr_config_after=""
-  [[ -e "$HOME/.config/herdr" ]] && herdr_config_after="$(stat -f %m "$HOME/.config/herdr")"
-  if [[ -n "$alive" || -n "$left" || -e "$root" || "$herdr_config_after" != "$herdr_config_before" ]]; then
+  local leftover
+  leftover="$(herdr_config_leak)"
+  if [[ -n "$alive" || -n "$left" || -e "$root" || -n "$leftover" ]]; then
     echo "FAIL [driver] the probe left something: pids alive${alive:- none}, processes naming $session: ${left:-none}," \
-      "scratch root there: $([[ -e "$root" ]] && echo yes || echo no), ~/.config/herdr changed: $([[ "$herdr_config_after" != "$herdr_config_before" ]] && echo yes || echo no)"
+      "scratch root there: $([[ -e "$root" ]] && echo yes || echo no), its session in ~/.config/herdr: ${leftover:-no}"
     failed=1
   else
-    echo "PASS [driver] the probe left nothing: no pid it noted alive, no process naming $session, the scratch root gone, ~/.config/herdr as it was"
+    echo "PASS [driver] the probe left nothing: no pid it noted alive, no process naming $session, the scratch root gone, nothing of its session in ~/.config/herdr"
   fi
   return "$failed"
 }

@@ -11,6 +11,16 @@ import Testing
         HostEdit.parse(arguments).flatMap { (edit: HostEdit) in edit.apply(to: Self.saved, others: [Self.saved] + others) }
     }
 
+    /// null counts as not given, as for the other tools.
+    @Test func nullIsNotGiven() throws {
+        let null = NSNull()
+        let applied = try apply(["port": null, "keep": null, "tmux_prefix": null, "tmux_history": null, "clear_port": null,
+                                 "name": null, "directory": "/srv/api"]).get()
+        #expect(applied.host.port == 2222 && applied.host.keep == .tmux && applied.host.name == "web-1")
+        #expect(applied.host.tmuxPrefix == nil && applied.host.tmuxHistory == nil)
+        #expect(applied.changes == ["folder: ~/app → /srv/api"])
+    }
+
     @Test func onlyTheFieldsGivenChange() throws {
         let applied = try apply(["directory": "/srv/api", "tmux_prefix": "C-a", "tmux_history": 100_000]).get()
         #expect(applied.host.directory == "/srv/api")
