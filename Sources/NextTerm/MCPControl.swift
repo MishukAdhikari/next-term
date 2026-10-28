@@ -273,7 +273,7 @@ enum MCPControl {
 
     /// The screen and `input` for read_tab and wait_for_tab: the line being typed at a zsh prompt, and a plugin's ghost,
     /// which is left out of the screen.
-    private static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
+    static func screenFields(_ tab: TerminalTab, lines: Int) -> [String: Any] {
         let typed = tab.typedInput(mask: field)
         let ghost = typed?.ghost ?? []
         let rows = fieldMasks ? tab.screenTail(lines, masked: SecretMask.current, excludingGhost: ghost) : tab.screenTail(lines, excludingGhost: ghost)

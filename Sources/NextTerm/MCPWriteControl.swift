@@ -48,6 +48,7 @@ enum MCPWriteControl {
         case "create_file": writeFile(arguments, context, creating: true, reply: reply)
         case "stage", "commit": git(tool, arguments, context, reply: reply)
         case "focus_tab": focusTab(arguments, context, reply: reply)
+        case "run_command": runCommand(arguments, context, reply: reply)
         case "split_pane": splitPane(arguments, context, reply: reply)
         case "close_pane": closePane(arguments, context, reply: reply)
         case "zoom_pane": zoomPane(arguments, context, reply: reply)
@@ -105,6 +106,10 @@ enum MCPWriteControl {
     struct Ask {
         let title: String
         let details: String
+        /// A command the change runs, shown in its own box as it will be typed (run_command).
+        var command: String?
+        /// The primary's title.
+        var approveTitle = "Approve"
     }
 
     /// Runs `change` once the change is approved: at once under a grant, after Approve on the Mac
@@ -122,7 +127,7 @@ enum MCPWriteControl {
         let asking = Asking(asker: context.asker)
         pending = asking
         let request = AgentApprovalWindow.Request(title: ask.title, requester: context.who, agentWords: context.reason, details: ask.details,
-                                                  approveTitle: "Approve", stopTitle: "Decline and Stop Asking")
+                                                  approveTitle: ask.approveTitle, stopTitle: "Decline and Stop Asking", command: ask.command)
         let window = AgentApprovalWindow(request, approve: { window in
             guard !asking.answered else { return }
             asking.answered = true

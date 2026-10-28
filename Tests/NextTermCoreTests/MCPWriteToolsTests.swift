@@ -55,7 +55,7 @@ import Testing
         // name: (destructive, idempotent)
         let expected: [String: (Bool, Bool)] = [
             "propose_edit": (false, false), "write_file": (true, true), "create_file": (false, true), "stage": (true, true),
-            "commit": (true, false), "focus_tab": (false, true), "split_pane": (false, false), "close_pane": (true, true),
+            "commit": (true, false), "run_command": (true, false), "focus_tab": (false, true), "split_pane": (false, false), "close_pane": (true, true),
             "zoom_pane": (false, true), "set_layout": (false, true), "settings_set": (false, true),
         ]
         #expect(Set(expected.keys).union(["settings_get"]) == Set(MCPServer.controlTools.map(\.name)))

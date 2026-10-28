@@ -25,6 +25,8 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         var stopTitle: String?
         /// How the primary looks: tinted for a yes, marked destructive for one that can't be undone (Remove).
         var primaryLook: ApprovalLayout.PrimaryLook = .accent
+        /// A command the approval runs, shown as it will be typed, in its own box over the details (run_command).
+        var command: String?
     }
 
     private let request: Request
@@ -59,8 +61,8 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
 
     private static let width: CGFloat = 480
 
-    /// Groups, 16 points apart: what is asked and the agent's words; what would happen; who asked; then Decline and the
-    /// primary.
+    /// Groups, 16 points apart: what is asked and the agent's words; what would happen (a command first, in its box); who
+    /// asked; then Decline and the primary.
     private func build() {
         guard let content = window?.contentView else { return }
         let inner = ApprovalLayout.inner(Self.width)
@@ -83,7 +85,8 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         if let stopTitle = request.stopTitle { stopButton = NSButton(title: stopTitle, target: self, action: #selector(declineAndStop)) }
         let buttons = ApprovalLayout.buttonRow(left: [stopButton].compactMap { $0 }, decline: declineButton, primary: approveButton,
                                                look: request.primaryLook)
-        let views: [NSView] = [ApprovalLayout.group(top), detailsBox, requesterLabel, ApprovalLayout.group([statusLabel, buttons])]
+        let what: NSView = request.command.map { ApprovalLayout.group([CommandBox($0, width: inner), detailsBox]) } ?? detailsBox
+        let views: [NSView] = [ApprovalLayout.group(top), what, requesterLabel, ApprovalLayout.group([statusLabel, buttons])]
 
         let stack = NSStackView(views: views)
         stack.orientation = .vertical

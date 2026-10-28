@@ -277,6 +277,7 @@ extension SelfTest {
               "MCP writes: send_to_tab, close_tab and the pane tools refuse a tab whose input line is not the user's own", typed.text + " / " + notClosed.text)
         pc.remove(extra)
         if let front { pc.show(front) }
+        await runCommandChecks(client, pc: pc, root: root)
 
         // set_layout, for the project's window; a call that changes nothing asks nothing.
         let position = app.terminalPosition.rawValue
@@ -593,6 +594,7 @@ extension SelfTest {
         guard let view else { return "" }
         var found: [String] = []
         if let field = view as? NSTextField { found.append(field.stringValue) }
+        if let text = view as? NSTextView { found.append(text.string) } // a command in its box
         for sub in view.subviews {
             let text = texts(sub)
             if !text.isEmpty { found.append(text) }
@@ -604,6 +606,61 @@ extension SelfTest {
     private static func proposalPane(in controller: TerminalWindowController) async -> DiffPane? {
         _ = await wait(30) { controller.editorArea.proposals.contains { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided } }
         return controller.editorArea.proposals.first { $0.proposal?.tag.hasPrefix("mcp:") == true && !$0.isDecided }
+    }
+
+    /// run_command from an agent outside the tabs (the self-test's client): the command shows in its box with Run as the
+    /// primary; Decline runs nothing; Run runs it in a new tab in the folder, which takes the keyboard, and the answer has
+    /// its exit code and output; a command still running answers with a request_id that waits for it.
+    private static func runCommandChecks(_ client: WriteClient, pc: TerminalWindowController, root: URL) async {
+        func tab(_ id: Any?) -> TerminalTab? { pc.tabs.first { $0.id.uuidString.lowercased() == id as? String } }
+        let marker = "nt-run-" + UUID().uuidString.prefix(8).lowercased()
+        let command = "sh -c 'echo \(marker); exit 3'"
+        let arguments: [String: Any] = ["command": command, "directory": root.path, "reason": "The login needs your password."]
+        let missing = await client.call("run_command", ["command": command])
+        let twoLines = await client.call("run_command", ["command": "echo a\necho b", "directory": root.path])
+        check(missing.isError && missing.text.contains("Give directory") && twoLines.isError && MCPWriteControl.pending == nil,
+              "MCP writes: run_command from outside the tabs needs a directory, and takes one line", missing.text + " / " + twoLines.text)
+        let tabsBefore = pc.tabs.count
+        let declined = await client.asked("run_command", arguments, .decline)
+        check(declined.isError && pc.tabs.count == tabsBefore, "MCP writes: run_command asks first, and Decline runs nothing", declined.text)
+
+        // The window as the user sees it, before Run.
+        let call = Task { await client.call("run_command", arguments) }
+        _ = await wait(30) { MCPWriteControl.pending?.window != nil }
+        let window = MCPWriteControl.pending?.window
+        let shown = texts(window?.window?.contentView)
+        if let shownWindow = window?.window { await screenshot(shownWindow, suffix: "-run-command") }
+        let run = window?.approveButton
+        let primary = run?.title == "Run" && run?.bezelColor == .controlAccentColor && run?.keyEquivalent.isEmpty == true
+            && run?.refusesFirstResponder == true && window?.declineButton.keyEquivalent == "\u{1b}"
+        check(primary && shown.contains(command) && shown.contains("The login needs your password.") && window?.window?.isKeyWindow == false,
+              "MCP writes: run_command shows the command in its box and the agent's words, with Run as the primary, a click only",
+              "Run: \(run?.title ?? "none") \(String(describing: run?.bezelColor)) | \(shown)")
+        run?.performClick(nil)
+        let answer = json(await call.value.text) ?? [:]
+        let opened = tab(answer["tab_id"])
+        let output = answer["output"] as? String ?? ""
+        let keyboard = opened.map { pc.activeTab === $0 && pc.window?.firstResponder === $0.view } ?? false
+        check(answer["status"] as? String == "ran" && answer["exit_code"] as? Int == 3 && output.contains(marker) && opened != nil,
+              "MCP writes: run_command runs the command once Run is clicked, in a new tab in the folder, and answers its exit code and output",
+              "\(answer)")
+        check(keyboard, "MCP writes: run_command's tab takes the keyboard, for a password", "active \(pc.activeTab?.title ?? "none")")
+        if let opened { pc.remove(opened) }
+
+        // Still running at the wait's end: running with a request_id, and that id waits for the end.
+        let savedWait = MCPWriteControl.answerWithin
+        MCPWriteControl.answerWithin = 3
+        let slow = await client.asked("run_command", ["command": "sleep 4; echo \(marker)-slow", "directory": root.path], .approve)
+        let first = slow.json ?? [:]
+        let id = first["request_id"] as? String ?? ""
+        let later = json(await client.call("run_command", ["request_id": id]).text) ?? [:]
+        let notMine = await client.call("run_command", ["request_id": "nope"])
+        MCPWriteControl.answerWithin = savedWait
+        check(first["status"] as? String == "running" && !id.isEmpty && later["status"] as? String == "ran"
+              && (later["output"] as? String ?? "").contains(marker + "-slow") && notMine.isError,
+              "MCP writes: run_command still running answers running with a request_id, and calling with it waits for the end",
+              "\(first) / \(later)")
+        if let slowTab = tab(first["tab_id"]) { pc.remove(slowTab) }
     }
 
     private static func json(_ text: String) -> [String: Any]? {

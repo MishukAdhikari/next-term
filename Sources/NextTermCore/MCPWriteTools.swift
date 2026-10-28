@@ -8,7 +8,7 @@ import Glibc
 /// Who approves the change one of Next Term's write tools would make (the tools tagged `write` that the
 /// app's MCPWriteControl runs: write_file, create_file, stage, commit, focus_tab, split_pane, close_pane,
 /// zoom_pane, set_layout and settings_set, and add_task through its approval), and the skill requests
-/// install_skill and remove_skill.
+/// install_skill and remove_skill. run_command asks on the Mac under either policy: what it runs is the user's to start.
 ///
 /// The entry point is `MCPControl.call(tool, arguments, caller: pid, approval:, requester:, connection:,
 /// reply:)` in the app, on the main thread; its reply can come from any thread.
@@ -54,7 +54,7 @@ extension MCPServer {
                     "preview_import", "list_secrets"]
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab",
                      "add_host", "remove_host", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
-                     "propose_edit", "write_file", "create_file", "stage", "commit", "focus_tab", "split_pane",
+                     "propose_edit", "write_file", "create_file", "stage", "commit", "run_command", "focus_tab", "split_pane",
                      "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
                      "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         var tags: [String: Scope] = [:]
@@ -95,6 +95,10 @@ extension MCPServer {
              description: "Puts a tab (or a pane of a split tab) in front of its window and gives it that window's keyboard, so what the user types there goes to it: a tab an agent opened takes it only this way, or by the user's click. Unlike show_tab, it does not bring the window or Next Term forward. The user is asked on the Mac first. A herdr agent's id also moves herdr's view to that agent's pane.",
              inputSchema: #"{"type": "object", "properties": {\#(MCPServer.agentTabID), \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
+        Tool(name: "run_command", title: "Ask the user to run a command",
+             description: "For a command the user has to run themselves (sudo, a login such as gh auth login or gcloud auth login, anything that asks for their password or a browser), instead of asking them to copy it or type it after !. The user is asked on the Mac first, seeing the exact command and your reason as your words, and chooses Run or Decline; it never runs on your word alone, under any connection's grant either. On Run it runs in a new pane below your tab (on the same host for a remote tab), in your tab's folder or directory, and that pane takes the keyboard for a password or a prompt. Outside Next Term's tabs, give directory: it runs in a new tab there. Answers within about 50 seconds: ran with exit_code (when the shell reports it) and output (the pane's last lines, stored keys masked), declined, or running or pending with a request_id: call again with only request_id to keep waiting. The pane stays open for the user; its id is tab_id, for read_tab.",
+             inputSchema: #"{"type": "object", "properties": {"command": {"type": "string", "maxLength": 2000, "description": "One line, run at the pane's shell prompt as typed."}, "directory": {"type": "string", "description": "Absolute folder it runs in. Default: your tab's folder; needed outside Next Term's tabs."}, \#(reasonArgument), "request_id": {"type": "string", "description": "A request's id, to keep waiting for its answer."}}, "additionalProperties": false}"#,
+             readOnly: false, destructive: true, idempotent: false, timeout: 60),
         Tool(name: "split_pane", title: "Split a pane",
              description: "Opens a new terminal pane beside a tab's pane: to its right, or below it with direction down, in that pane's folder or directory, without taking the keyboard. Beside a remote tab with no directory, the new pane opens on the same host. The user is asked on the Mac first. Returns the new pane's id, which works like any tab's.",
              inputSchema: #"{"type": "object", "properties": {\#(tabArgument), "direction": {"type": "string", "enum": ["right", "down"], "description": "Default right."}, "directory": {"type": "string", "description": "Absolute folder on this Mac. Default: the pane's folder."}, \#(reasonArgument)}, "required": ["tab_id"], "additionalProperties": false}"#,
