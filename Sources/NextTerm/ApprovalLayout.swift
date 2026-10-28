@@ -49,7 +49,6 @@ enum ApprovalLayout {
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ])
         label.preferredMaxLayoutWidth = width
-        label.setAccessibilityLabel(text)
         return label
     }
 
@@ -62,7 +61,7 @@ enum ApprovalLayout {
         let caption = caption(speaker)
         let text = body(words, width: width - 12)
         text.toolTip = "These are the agent\u{2019}s words, not Next Term\u{2019}s."
-        text.setAccessibilityLabel("\(speaker), in its own words: \(words)")
+        text.setAccessibilityLabel("\(speaker), in its own words")
         let rule = NSBox()
         rule.boxType = .custom
         rule.borderWidth = 0
@@ -119,15 +118,15 @@ enum ApprovalLayout {
         return row
     }
 
-    /// The primary's look, kept when its title changes.
+    /// The primary's look, kept when its title changes. Only the weight is set on the title: AppKit gives it the colour
+    /// that reads on the bezel as drawn, tinted while the window draws active and plain while it draws inactive (Next Term
+    /// in the background), where a fixed white title would vanish.
     static func style(_ primary: NSButton, look: PrimaryLook) {
+        primary.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
         switch look {
         case .accent:
             primary.bezelColor = .controlAccentColor
             primary.hasDestructiveAction = false
-            primary.attributedTitle = NSAttributedString(string: primary.title, attributes: [
-                .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold), .foregroundColor: NSColor.white,
-            ])
         case .destructive:
             primary.bezelColor = nil
             primary.hasDestructiveAction = true
@@ -162,6 +161,7 @@ final class DisclosureRow: NSStackView {
         words.target = self
         words.action = #selector(wordsClicked)
         words.setAccessibilityElement(false)
+        words.refusesFirstResponder = true // the triangle is the one keyboard stop, as it is the one VoiceOver element
         let header = NSStackView(views: [triangle, words])
         header.spacing = 2
         content.isHidden = true
@@ -209,10 +209,8 @@ final class CommandBox: NSView, NSLayoutManagerDelegate {
         text.textContainer?.widthTracksTextView = true
         text.isVerticallyResizable = true
         text.layoutManager?.delegate = self
-        text.setAccessibilityLabel("Command: \(command)")
+        text.setAccessibilityLabel("Command") // its value is the command
         wantsLayer = true
-        layer?.cornerRadius = 5
-        layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.12).cgColor
         addSubview(text)
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: width).isActive = true
@@ -221,6 +219,17 @@ final class CommandBox: NSView, NSLayoutManagerDelegate {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
+
+    // The fill is set as the box draws, so it follows the window's appearance (dark, light) and Increase Contrast.
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.cornerRadius = 5
+        layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.12).cgColor
+        let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        layer?.borderWidth = contrast ? 1 : 0
+        layer?.borderColor = contrast ? NSColor.separatorColor.cgColor : nil
+    }
 
     override var intrinsicContentSize: NSSize {
         guard let manager = text.layoutManager, let container = text.textContainer else { return NSSize(width: width, height: 24) }

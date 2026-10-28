@@ -38,7 +38,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
 
     static let writeOnlyLine = "Next Term never shows or copies this key again. Commands you allow still get it. "
         + "Keep your own copy if you\u{2019}ll need it on another Mac. This can\u{2019}t be undone."
-    static let shortLine = "Shorter than 12 characters: Next Term can't hide it by value in what agents read."
+    static let shortLine = "Shorter than 12 characters: Next Term can\u{2019}t hide it by value in what agents read."
 
     private let content: Content
     private let onSave: (Form) -> Void
@@ -252,7 +252,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         let day = SecretRequests.dayText(entry.created)
         let whose = entry.addedByUser ? "the key you added on \(day)" : "the key an agent saved on \(day)"
         return "This replaces \(whose). Commands and MCP servers that use it will get the value you enter here. "
-            + "What it's for stays as it is."
+            + "What it\u{2019}s for stays as it is."
     }
 
     // MARK: answers

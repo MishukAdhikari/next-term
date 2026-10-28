@@ -954,7 +954,7 @@ final class SecretRequests {
     static func who(_ request: Request) -> String {
         let facts = request.askedBy
         var parts: [String] = []
-        if let agent = facts.agent { parts.append("\(agent) (going by its program's name)") }
+        if let agent = facts.agent { parts.append("\(agent) (going by its program\u{2019}s name)") }
         if facts.checkedNxtrm { parts.append("through Next Term’s own nxtrm") }
         if let connection = facts.connection { parts.append("the remote connection “\(connection)”") }
         if let tab = facts.tab { parts.append(tab + (facts.project.map { " of \($0)" } ?? "")) }

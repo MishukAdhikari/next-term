@@ -337,7 +337,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             // One choice is no choice: the radio stays (the panel's state reads it), out of sight.
             let only = views.compactMap { $0 as? NSButton }
             only.forEach { $0.isHidden = true }
-            let line = ApprovalLayout.secondary(asking ?? "Allow once only.", width: inner)
+            let line = ApprovalLayout.secondary(asking ?? "A remote connection\u{2019}s request is allowed once at a time.", width: inner)
             let stack = ApprovalLayout.group(only + [line])
             return stack
         }
@@ -507,8 +507,10 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         guard !answered, !isBusy, let window else { return }
         let alert = Self.makePauseAlert()
         pauseAlert = alert
+        let escape: Any? = alert.escapePressesCancel() // Cancel holds Return, so Escape is given back to it
         alert.beginSheetModal(for: window) { [weak self] response in
             MainActor.assumeIsolated {
+                if let escape { NSEvent.removeMonitor(escape) }
                 guard let self else { return }
                 self.pauseAlert = nil
                 guard response == .alertFirstButtonReturn, !self.answered else { return }

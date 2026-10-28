@@ -35,7 +35,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static let tamperedLine = "Secrets' file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
     static let tooLargeLine = "Secrets’ file is larger than Next Term can read (8 MB), so no key is released. Start Over, or restore an "
         + "older copy of the file from a backup."
-    static let unlistedLine = "Next Term’s list of the vaults it made on this Mac is missing from the login keychain, so it can't tell these "
+    static let unlistedLine = "Next Term’s list of the vaults it made on this Mac is missing from the login keychain, so it can\u{2019}t tell these "
         + "keys are its own, and no key is released. Start Over to make a new vault."
     static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
@@ -819,8 +819,10 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         alert.accessoryView = box
         undoDeleteBox = box
         self.alert = alert
+        let escape: Any? = alert.escapePressesCancel() // Cancel holds Return, so Escape is given back to it
         alert.beginSheetModal(for: window) { [weak self] response in
             MainActor.assumeIsolated {
+                if let escape { NSEvent.removeMonitor(escape) }
                 guard let self else { return }
                 self.alert = nil
                 let delete = box.state == .on

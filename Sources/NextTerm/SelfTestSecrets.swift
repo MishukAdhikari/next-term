@@ -1172,9 +1172,9 @@ extension SelfTest {
         let purpose = window.purposeField.stringValue
         check(purpose.count <= 200 && purpose.hasSuffix("…") && shown.title == "An agent outside Next Term’s tabs asks you to add STRIPE_KEY",
               "secrets: request_secret's window prefills what it's for with at most 200 characters, ending in …", "\(purpose.count): \(shown.title)")
-        check(!shown.isKeyWindow && window.saveButton.keyEquivalent.isEmpty && window.declineButton.keyEquivalent.isEmpty
-              && window.stopButton.keyEquivalent.isEmpty && !(shown is NSPanel),
-              "secrets: the request window is an ordinary window that never takes the keyboard on its own and has no default button")
+        check(!shown.isKeyWindow && window.saveButton.keyEquivalent.isEmpty && window.saveButton.refusesFirstResponder
+              && window.declineButton.keyEquivalent == "\u{1b}" && window.stopButton.keyEquivalent.isEmpty && !(shown is NSPanel),
+              "secrets: the request window is an ordinary window that never takes the keyboard on its own; only a click saves, and Escape declines")
         let pasteboard = SecretClipboard.shared.pasteboard
         let general = NSPasteboard.general.changeCount
         pasteboard.clearContents()

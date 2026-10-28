@@ -164,9 +164,9 @@ extension SelfTest {
         check(first["status"] as? String == "pending" && first["request_id"] as? String == request?.id,
               "skills mcp: an install request waits for the user, then answers pending with an id", "\(first)")
         let approval = request?.window
-        check(approval?.approveButton.keyEquivalent.isEmpty == true && approval?.declineButton.keyEquivalent.isEmpty == true
-              && approval?.window?.isKeyWindow == false && approval?.window?.isVisible == true,
-              "skills mcp: the request window shows without taking the keyboard, and has no Return button")
+        check(approval?.approveButton.keyEquivalent.isEmpty == true && approval?.approveButton.refusesFirstResponder == true
+              && approval?.declineButton.keyEquivalent == "\u{1b}" && approval?.window?.isKeyWindow == false && approval?.window?.isVisible == true,
+              "skills mcp: the request window shows without taking the keyboard; only a click approves, and Escape declines")
         let busy = await ask("install_skill", ["source": "example-org/other"])
         check(busy["status"] as? String == "busy", "skills mcp: a second request while one is open is told the user is busy", "\(busy)")
 

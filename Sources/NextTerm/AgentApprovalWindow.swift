@@ -124,8 +124,8 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
 
     /// The agent's tab closed, or it stopped asking: what the user decides still happens.
     func requesterGone() {
-        requesterLabel.stringValue = "Asked by \(request.requester), which has gone since. What you decide still happens."
-        requesterLabel.textColor = .secondaryLabelColor
+        let text = "Asked by \(request.requester), which has gone since. What you decide still happens."
+        requesterLabel.attributedStringValue = ApprovalLayout.secondary(text, width: ApprovalLayout.inner(Self.width)).attributedStringValue
     }
 
     /// Holds approving (and the close button) while something runs; Decline stays, to stop it.
