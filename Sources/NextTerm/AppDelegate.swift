@@ -1047,13 +1047,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// "Quit Next Term?", with what quitting stops: Quit, Cancel. Quit is not the default, so Return quits nothing (R29);
-    /// NSAlert gives Cancel ⎋.
+    /// NSAlert gives Cancel ⎋. Quit stops what runs, so it is marked destructive.
     static func quitStopsAlert(_ busy: [TerminalTab]) -> NSAlert {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Quit Next Term?"
         alert.informativeText = TerminalWindowController.stopText("Quitting stops", busy)
-        alert.addButton(withTitle: "Quit").keyEquivalent = ""
+        let quit = alert.addButton(withTitle: "Quit")
+        quit.keyEquivalent = ""
+        quit.hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         return alert
     }

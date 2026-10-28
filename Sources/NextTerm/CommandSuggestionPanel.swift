@@ -181,7 +181,10 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
         view.documentView = textView
         view.hasVerticalScroller = true
         alert.accessoryView = view
-        alert.addButton(withTitle: "Include").keyEquivalent = ""
+        // What the user came here for, tinted as the primary but pressed only by a click: Return sends no output.
+        let include = alert.addButton(withTitle: "Include")
+        include.keyEquivalent = ""
+        MainActor.assumeIsolated { ApprovalLayout.style(include, look: .accent) }
         alert.addButton(withTitle: "Don’t Include").keyEquivalent = "\u{1b}"
         Self.outputQuestion = alert
         alert.beginSheetModal(for: panel) { [weak self] response in

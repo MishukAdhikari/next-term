@@ -299,7 +299,7 @@ enum SkillsMCP {
     }
 
     static func describe(_ caller: TerminalTab?) -> String {
-        guard let caller else { return "an agent outside Next Term's tabs (another terminal or an editor)" }
+        guard let caller else { return "an agent outside Next Term’s tabs (another terminal or an editor)" }
         let project = MCPControl.controller(of: caller)?.project.map { " in \(($0 as NSString).lastPathComponent)" } ?? ""
         return "the agent in the tab “\(caller.title)”\(project)"
     }
@@ -413,7 +413,8 @@ enum SkillsMCP {
         lines += leftovers.map { "• " + $0 }
         lines.append("Undo in Settings › Skills puts it back.")
         let window = AgentApprovalWindow(.init(title: "An agent asks to remove the skill “\(name)”", requester: requester, agentWords: reason,
-                                               details: lines.joined(separator: "\n"), approveTitle: "Remove", stopTitle: "Decline and Stop Asking"),
+                                               details: lines.joined(separator: "\n"), approveTitle: "Remove", stopTitle: "Decline and Stop Asking",
+                                               primaryLook: .destructive),
                                          approve: { window in
                                              window.setBusy(true)
                                              request.task = Task {

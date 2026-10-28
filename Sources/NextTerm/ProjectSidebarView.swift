@@ -1695,7 +1695,7 @@ final class ProjectSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDe
             let alert = NSAlert()
             alert.messageText = urls.count == 1 ? "Move “\(urls[0].lastPathComponent)” to the Trash?" : "Move \(urls.count) items to the Trash?"
             alert.informativeText = "You can undo this with ⌘Z, or put it back from the Trash."
-            alert.addButton(withTitle: "Move to Trash")
+            alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }

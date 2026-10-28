@@ -2730,7 +2730,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.alertStyle = .warning
         alert.messageText = "Close this window?"
         alert.informativeText = info
-        alert.addButton(withTitle: "Close Window")
+        alert.addButton(withTitle: "Close Window").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender, completionHandler: answered)
         return false
@@ -2823,7 +2823,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.alertStyle = .warning
         alert.messageText = "Close this tab and its \(group.panes.count) panes?"
         alert.informativeText = [busy.isEmpty ? "" : Self.stopText("Closing it stops", busy), kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Close Tab").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             if response == .alertFirstButtonReturn { group.panes.forEach { self?.remove($0) } }

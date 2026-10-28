@@ -18,6 +18,8 @@ import NextTermCore
 ///   one-use grant at its use or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
 @MainActor
 final class SecretRequests {
+    /// A key's last use, before it has one.
+    static let neverUsed = "Never used"
     static let shared = SecretRequests()
     /// Posted when the queue, the grants or the limits changed: Settings › Secrets and the panel refresh.
     static let changed = Notification.Name("NextTermSecretRequestsChanged")
@@ -389,7 +391,7 @@ final class SecretRequests {
             return SecretApprovalPanel.Content.KeyRow(name: key.name, envName: key.envName, purpose: purpose,
                                                       purposeByAgent: entry.map { $0.purposeBy == .agent } ?? !request.isUse,
                                                       writeOnly: entry?.writeOnly == true,
-                                                      lastUsed: used.map { SecretApprovalPanel.lastUsedText($0) } ?? "Never used")
+                                                      lastUsed: used.map { SecretApprovalPanel.lastUsedText($0) } ?? Self.neverUsed)
         }
         var content = SecretApprovalPanel.Content(
             title: SecretApprovalPanel.title(request), keys: keys, command: request.command,
@@ -953,10 +955,10 @@ final class SecretRequests {
         let facts = request.askedBy
         var parts: [String] = []
         if let agent = facts.agent { parts.append("\(agent) (going by its program's name)") }
-        if facts.checkedNxtrm { parts.append("through Next Term's own nxtrm") }
+        if facts.checkedNxtrm { parts.append("through Next Term’s own nxtrm") }
         if let connection = facts.connection { parts.append("the remote connection “\(connection)”") }
         if let tab = facts.tab { parts.append(tab + (facts.project.map { " of \($0)" } ?? "")) }
-        if facts.tab == nil, facts.connection == nil { parts.append("a program outside Next Term's tabs") }
+        if facts.tab == nil, facts.connection == nil { parts.append("a program outside Next Term’s tabs") }
         return parts.joined(separator: ", ")
     }
 

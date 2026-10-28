@@ -74,6 +74,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 420), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = SecretApprovalPanel.sanitized(content.title, limit: 200)
+        window.titleVisibility = .hidden // the heading says it once; the title stays for VoiceOver and the Window menu
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
@@ -88,28 +89,23 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
 
     private func build() {
         guard let view = window?.contentView else { return }
-        let title = SecretApprovalPanel.label(SecretApprovalPanel.sanitized(content.title, limit: 200), size: 14, weight: .semibold)
-        let asked = SecretApprovalPanel.label("Asked by \(SecretApprovalPanel.sanitized(content.askedBy, limit: 300)).", size: 12)
-        asked.textColor = .secondaryLabelColor
-        var views: [NSView] = [title, asked]
+        let inner = ApprovalLayout.inner(500)
+        var top: [NSView] = [ApprovalLayout.heading(SecretApprovalPanel.sanitized(content.title, limit: 200), width: inner)]
         if let words = content.agentWords.map({ SecretApprovalPanel.sanitized($0, limit: 500) }), !words.isEmpty {
-            let quote = SecretApprovalPanel.label("The agent says: “\(words)”", size: 12)
-            quote.font = NSFontManager.shared.convert(.systemFont(ofSize: 12), toHaveTrait: .italicFontMask)
-            quote.toolTip = "These are the agent's words, not Next Term's."
-            quote.setAccessibilityLabel("The agent says, in its own words: \(words)")
-            views.append(quote)
+            top.append(ApprovalLayout.agentWords(words, who: nil, width: inner))
         }
-        views.append(contentsOf: fieldRows())
+        top.append(ApprovalLayout.secondary("Asked by \(SecretApprovalPanel.sanitized(content.askedBy, limit: 300)).", width: inner))
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.isHidden = true
-        views.append(statusLabel)
-        views.append(buttonRow())
+        let fields = ApprovalLayout.group(fieldRows())
+        fields.spacing = 6
+        let views: [NSView] = [ApprovalLayout.group(top), fields, ApprovalLayout.group([statusLabel, buttonRow()])]
 
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.spacing = ApprovalLayout.groupSpacing
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 16, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints = [
@@ -120,6 +116,11 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
             stack.widthAnchor.constraint(equalToConstant: 500),
         ]
         for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for group in stack.arrangedSubviews.compactMap({ $0 as? NSStackView }) {
+            for row in group.arrangedSubviews where row is NSTextField || row is NSStackView || row is NSSecureTextField {
+                constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36))
+            }
+        }
         NSLayoutConstraint.activate(constraints)
         refreshName()
     }
@@ -135,9 +136,9 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         replaceLabel.font = .systemFont(ofSize: 12)
         replaceLabel.isHidden = true
         purposeField.stringValue = content.purpose
-        purposeField.placeholderString = "What it's for (agents see this)"
+        purposeField.placeholderString = "What it\u{2019}s for (agents see this)"
         purposeField.delegate = self
-        purposeField.setAccessibilityLabel("What it's for")
+        purposeField.setAccessibilityLabel("What it\u{2019}s for")
         valueField.placeholderString = "Paste or type the key"
         valueField.delegate = self
         valueField.setAccessibilityLabel("Value, hidden key")
@@ -154,27 +155,19 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         linkField.onChange = { [weak self] in self?.refreshName() }
         linkField.value = { [weak self] in self.map { SecretBytes(utf8: $0.valueField.stringValue) } }
         linkField.suggest(value: nil, name: content.name)
-        return [Self.caption("Name"), nameField, savedAsLabel, replaceLabel, Self.caption("What it's for"), purposeField,
+        return [Self.caption("Name"), nameField, savedAsLabel, replaceLabel, Self.caption("What it\u{2019}s for"), purposeField,
                 linkField, Self.caption("Value"), valueField, shortLabel, writeOnlyBox, writeOnlyLine]
     }
 
-    private static func caption(_ text: String) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        return label
-    }
+    /// A field's label: plain and secondary, so the heading stays the one bold line.
+    private static func caption(_ text: String) -> NSTextField { ApprovalLayout.caption(text) }
 
     private func buttonRow() -> NSView {
         stopButton = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
         declineButton = NSButton(title: "Decline", target: self, action: #selector(decline))
         saveButton = NSButton(title: "Save", target: self, action: #selector(save))
-        for button in [stopButton, declineButton, saveButton] {
-            button?.bezelStyle = .rounded
-            button?.keyEquivalent = "" // no default button, even once the window is key
-        }
-        let row = NSStackView(views: [stopButton, NSView(), declineButton, saveButton])
-        row.spacing = 8
-        return row
+        // Save is the primary, by a click only, even once the window is key; Escape declines.
+        return ApprovalLayout.buttonRow(left: [stopButton], decline: declineButton, primary: saveButton)
     }
 
     // MARK: showing
@@ -315,6 +308,8 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         linkField.setEnabled(false)
         for button in [stopButton, declineButton, writeOnlyBox] { button?.isHidden = true }
         saveButton.title = "Close"
+        ApprovalLayout.style(saveButton, look: .accent) // the one button left, still the primary
+        saveButton.keyEquivalent = "\r" // nothing left to approve: Return closes
         saveButton.isEnabled = true
         saveButton.action = #selector(closeSaved)
         window?.standardWindowButton(.closeButton)?.isEnabled = true

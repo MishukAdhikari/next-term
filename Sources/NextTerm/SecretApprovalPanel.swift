@@ -6,7 +6,8 @@ import NextTermCore
 /// the Touch ID or Mac password sheet.
 ///
 /// It follows `AgentApprovalWindow`'s rules: it never takes the keyboard on its own (`becomesKeyOnlyIfNeeded`), it has
-/// no default button, Allow refuses first responder, and closing it declines. So a request reaches the user wherever
+/// no default button (Allow is the primary, rightmost and tinted, pressed by a click only; Escape declines), Allow
+/// refuses first responder, and closing it declines. So a request reaches the user wherever
 /// they are, it also never activates Next Term (`.nonactivatingPanel`), joins every Space and shows over a full-screen
 /// window, floats while it waits, and bounces the Dock icon when Next Term is in the background.
 @MainActor
@@ -86,6 +87,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 400), styleMask: style,
                             backing: .buffered, defer: false)
         panel.title = Self.sanitized(content.title, limit: 200)
+        panel.titleVisibility = .hidden // the heading says it once; the title stays for VoiceOver and the Window menu
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
@@ -107,8 +109,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let rows = NSStackView(views: rowViews())
         rows.orientation = .vertical
         rows.alignment = .leading
-        rows.spacing = 10
-        rows.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 10, right: 18)
+        rows.spacing = ApprovalLayout.groupSpacing
+        rows.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 10, right: 18)
         rows.translatesAutoresizingMaskIntoConstraints = false
         let document = FlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -119,18 +121,22 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         scroll.documentView = document
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let pinned = NSStackView(views: [howLongView(), statusLabel, buttonRow()].compactMap { $0 })
+        cardLabel.font = .systemFont(ofSize: 12)
+        cardLabel.textColor = .labelColor
+        cardLabel.isHidden = true
+        statusLabel.isHidden = true
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.textColor = .secondaryLabelColor
+        let pinned = NSStackView(views: [howLongView(), cardLabel, waitingRow(), statusLabel, buttonRow()].compactMap { $0 })
         pinned.orientation = .vertical
         pinned.alignment = .leading
         pinned.spacing = 8
-        pinned.edgeInsets = NSEdgeInsets(top: 8, left: 18, bottom: 16, right: 18)
+        pinned.edgeInsets = NSEdgeInsets(top: 10, left: 18, bottom: 16, right: 18)
         pinned.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.isHidden = true
-        statusLabel.font = .systemFont(ofSize: 12)
 
         view.addSubview(scroll)
         view.addSubview(pinned)
-        let inner = Self.width - 36
+        let inner = ApprovalLayout.inner(Self.width)
         var constraints = [
             scroll.topAnchor.constraint(equalTo: view.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -146,20 +152,24 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             rows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
             rows.bottomAnchor.constraint(equalTo: document.bottomAnchor),
         ]
-        for row in rows.arrangedSubviews { constraints.append(row.widthAnchor.constraint(lessThanOrEqualToConstant: inner)) }
-        for row in rows.arrangedSubviews where row is NSTextField || row is NSStackView {
-            constraints.append(row.widthAnchor.constraint(equalToConstant: inner))
-        }
+        for row in rows.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalToConstant: inner)) }
         for row in pinned.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalToConstant: inner)) }
         NSLayoutConstraint.activate(constraints)
         let height = scroll.heightAnchor.constraint(equalToConstant: 200)
         height.isActive = true
         scrollHeight = height
-        fitHeight(rows: rows, pinned: pinned)
+        rowsStack = rows
+        pinnedStack = pinned
+        fitHeight()
     }
 
-    /// The rows' height, up to about 70% of the screen's visible height with "How long" and the buttons below.
-    private func fitHeight(rows: NSStackView, pinned: NSStackView) {
+    private var rowsStack: NSStackView?
+    private var pinnedStack: NSStackView?
+
+    /// The rows' height, up to about 70% of the screen's visible height with "How long" and the buttons below; again
+    /// whenever what shows changes (Details, the card, the waiting line), so nothing lands below the fold unseen.
+    private func fitHeight() {
+        guard let rows = rowsStack, let pinned = pinnedStack else { return }
         rows.layoutSubtreeIfNeeded()
         pinned.layoutSubtreeIfNeeded()
         let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame.height ?? 800
@@ -167,83 +177,64 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         scrollHeight?.constant = min(rows.fittingSize.height, room)
     }
 
+    /// Groups, 16 points apart: what is asked and the agent's words; the command and folder; the notice and warnings; the
+    /// keys; who asked; Details. The window's title bar stays empty: the heading says it once.
     private func rowViews() -> [NSView] {
-        var views: [NSView] = []
-        let title = Self.label(Self.sanitized(content.title, limit: 200), size: 14, weight: .semibold)
-        views.append(title)
-        for key in content.keys { views.append(keyRow(key)) }
-        views.append(contentsOf: commandRows())
-        views.append(contentsOf: folderRows())
-        if let notice = content.notice { views.append(Self.label(notice, size: 12, weight: .medium)) }
-        for warning in content.warnings { views.append(warningRow(warning)) }
+        let inner = ApprovalLayout.inner(Self.width)
+        var groups: [NSView] = []
+        var top: [NSView] = [ApprovalLayout.heading(Self.sanitized(content.title, limit: 200), width: inner)]
         if let words = content.agentWords.map({ Self.sanitized($0, limit: 500) }), !words.isEmpty {
-            let quote = Self.label("The agent says: “\(words)”", size: 12)
-            quote.font = NSFontManager.shared.convert(.systemFont(ofSize: 12), toHaveTrait: .italicFontMask)
-            quote.toolTip = "These are the agent's words, not Next Term's."
-            quote.setAccessibilityLabel("The agent says, in its own words: \(words)")
-            views.append(quote)
+            top.append(ApprovalLayout.agentWords(words, who: content.askedBy.agent.map { Self.sanitized($0, limit: 60) }, width: inner))
         }
-        views.append(contentsOf: askedByRows())
-        views.append(detailsRow())
-        cardLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        cardLabel.isHidden = true
-        views.append(cardLabel)
-        waitingLabel.font = .systemFont(ofSize: 11)
-        waitingLabel.textColor = .secondaryLabelColor
-        views.append(waitingLabel)
-        setWaiting(content.waiting)
-        return views
+        groups.append(ApprovalLayout.group(top))
+        let what: [NSView] = commandRows() + folderRows()
+        if !what.isEmpty { groups.append(ApprovalLayout.group(what)) }
+        var warnings: [NSView] = []
+        if let notice = content.notice { warnings.append(ApprovalLayout.body(notice, width: inner)) }
+        for warning in content.warnings { warnings.append(warningRow(warning)) }
+        if !warnings.isEmpty { groups.append(ApprovalLayout.group(warnings)) }
+        groups.append(ApprovalLayout.group(content.keys.map(keyRow)))
+        groups.append(askedByRow())
+        groups.append(detailsRow())
+        return groups
     }
 
+    /// A key: its name, then what it's for (a note an agent wrote says so) and when it was last used.
     private func keyRow(_ key: Content.KeyRow) -> NSView {
-        let name = Self.label(key.name, size: 12, weight: .semibold)
-        name.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
-        var parts: [NSView] = [name]
-        if key.writeOnly {
-            let badge = Self.label(SecretNewKeyDefaults.neverShownHelp, size: 10, weight: .medium)
-            badge.textColor = .secondaryLabelColor
-            badge.setAccessibilityLabel(SecretNewKeyDefaults.neverShownHelp)
-            parts.append(badge)
-        }
-        let line = NSStackView(views: parts)
-        line.spacing = 8
-        var purpose = key.purpose.isEmpty ? "No note of what it's for" : Self.sanitized(key.purpose, limit: 200)
-        if key.purposeByAgent { purpose += " (an agent wrote this)" }
-        let about = Self.label("\(purpose). Last used: \(key.lastUsed).", size: 11)
-        about.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [line, about])
-        stack.orientation = .vertical
-        stack.alignment = .leading
+        let inner = ApprovalLayout.inner(Self.width)
+        let name = NSTextField(labelWithString: key.name)
+        name.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        var purpose: String = key.purpose.isEmpty ? "No note of what it\u{2019}s for" : Self.sanitized(key.purpose, limit: 200)
+        if key.purposeByAgent { purpose = "Note by an agent: " + purpose }
+        let used: String = key.lastUsed == SecretRequests.neverUsed ? "Never used" : "Last used \(key.lastUsed)"
+        var lines: [NSView] = [name, ApprovalLayout.secondary("\(purpose). \(used).", width: inner)]
+        if key.writeOnly { lines.append(ApprovalLayout.secondary(SecretNewKeyDefaults.neverShownHelp, width: inner)) }
+        let stack = ApprovalLayout.group(lines)
         stack.spacing = 2
         return stack
     }
 
+    /// The command as it runs, in a box that wraps only between words or path parts.
     private func commandRows() -> [NSView] {
         guard !content.command.isEmpty else { return [] } // store_secret runs nothing
         let shown = Self.shownCommand(content.command, limit: 4000)
-        let command = NSTextField(wrappingLabelWithString: shown)
-        command.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        command.preferredMaxLayoutWidth = Self.width - 36
-        command.isSelectable = true
-        command.setAccessibilityLabel("Command: \(shown)")
-        var views: [NSView] = [command]
-        if content.runsAsShell {
-            let shell = Self.label("Runs as a shell command", size: 11)
-            shell.textColor = .secondaryLabelColor
-            views.append(shell)
-        }
-        // Under the command: any program running as the user can read its environment while it runs.
-        let readable = Self.label(SecretRun.environmentNote(keys: content.keys.count), size: 11)
-        readable.textColor = .secondaryLabelColor
-        views.append(readable)
-        return views
+        let box = CommandBox(shown, width: ApprovalLayout.inner(Self.width))
+        commandBox = box
+        return [box]
     }
 
+    private(set) var commandBox: CommandBox?
+
+    /// The folder, and each key that goes in under another name, in the command's own type under it.
     private func folderRows() -> [NSView] {
-        var lines = content.folder.isEmpty ? [] : ["Folder: \(Self.sanitized(content.folder, limit: 1000))"]
-        for key in content.keys where key.envName != key.name { lines.append("\(key.name) → \(key.envName)") }
+        var lines = content.folder.isEmpty ? [] : ["in " + Self.sanitized(content.folder, limit: 1000)]
+        for key in content.keys where key.envName != key.name { lines.append("\(key.name) as \(key.envName)") }
         guard !lines.isEmpty else { return [] }
-        let label = Self.label(lines.joined(separator: "\n"), size: 12)
+        let label = NSTextField(wrappingLabelWithString: lines.joined(separator: "\n"))
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        label.textColor = .secondaryLabelColor
+        label.preferredMaxLayoutWidth = ApprovalLayout.inner(Self.width)
+        label.setAccessibilityLabel("Folder and names: " + lines.joined(separator: ", "))
         return [label]
     }
 
@@ -252,8 +243,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let icon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Warning") ?? NSImage())
         icon.contentTintColor = .systemOrange
         icon.setAccessibilityElement(false)
-        let label = Self.label(shown, size: 12)
-        label.preferredMaxLayoutWidth = Self.width - 36 - 24
+        let label = ApprovalLayout.body(shown, width: ApprovalLayout.inner(Self.width) - 24)
+        label.setAccessibilityElement(false) // the row speaks for it, once
         let row = NSStackView(views: [icon, label])
         row.alignment = .firstBaseline
         row.spacing = 6
@@ -263,75 +254,74 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         return row
     }
 
-    private func askedByRows() -> [NSView] {
+    /// Who asked, in one line: "Asked by Codex (going by its program’s name), tab 2 in ~/Code/app". The rest (the
+    /// checked nxtrm, a title a program set) is in Details.
+    private func askedByRow() -> NSView {
+        let facts = content.askedBy
+        var who: String = facts.agent.map { "\(Self.sanitized($0, limit: 60)) (going by its program\u{2019}s name)" } ?? "a program"
+        if let connection = facts.connection {
+            who = "the remote connection \u{201C}\(Self.sanitized(connection, limit: 80))\u{201D}"
+        } else if let tab = facts.tab {
+            who += ", " + tab + (facts.project.map { " in " + RecentProjects.abbreviate(Self.sanitized($0, limit: 300), home: NSHomeDirectory()) } ?? "")
+        } else {
+            who += " outside Next Term\u{2019}s tabs"
+        }
+        let line = ApprovalLayout.secondary("Asked by " + who, width: ApprovalLayout.inner(Self.width))
+        return line
+    }
+
+    /// Details, closed: how it runs (the same on every request, so not in the way), the checked nxtrm, a title a program
+    /// set, the process, the program and its arguments.
+    private func detailsRow() -> NSView {
         let facts = content.askedBy
         var lines: [String] = []
-        if let agent = facts.agent { lines.append("\(Self.sanitized(agent, limit: 60)), going by its program's name") }
-        if facts.checkedNxtrm { lines.append("Asked through Next Term's own nxtrm (checked)") }
-        if let connection = facts.connection {
-            lines.append("The remote connection “\(Self.sanitized(connection, limit: 80))”")
-        } else if let tab = facts.tab {
-            lines.append(tab + (facts.project.map { ", project \(Self.sanitized($0, limit: 300))" } ?? ""))
-        } else {
-            lines.append("A program outside Next Term's tabs")
-        }
+        if content.runsAsShell { lines.append("Runs as a shell command (/bin/sh -c)") }
+        if !content.command.isEmpty { lines.append(SecretRun.environmentNote(keys: content.keys.count)) }
+        if facts.checkedNxtrm { lines.append("Asked through Next Term\u{2019}s own nxtrm (checked)") }
         if let title = facts.programTitle.map({ Self.sanitized($0, limit: 80) }), !title.isEmpty {
             lines.append("Tab title (set by a program): \(title)")
         }
-        let heading = Self.label("Asked by", size: 12, weight: .semibold)
-        let body = Self.label(lines.joined(separator: "\n"), size: 12)
-        return [heading, body]
-    }
-
-    private func detailsRow() -> NSView {
-        detailsDisclosure = NSButton(title: "Details", target: self, action: #selector(toggleDetails))
-        detailsDisclosure.setButtonType(.pushOnPushOff)
-        detailsDisclosure.bezelStyle = .disclosure
-        detailsDisclosure.state = .off
-        detailsDisclosure.setAccessibilityLabel("Details")
-        let title = Self.label("Details", size: 12)
-        let header = NSStackView(views: [detailsDisclosure, title])
-        header.spacing = 4
-        var lines: [String] = []
-        if let pid = content.askedBy.pid { lines.append("Process: \(pid)") }
-        if let executable = content.askedBy.executable { lines.append("Program: \(Self.sanitized(executable, limit: 1000))") }
-        let arguments = content.askedBy.arguments.isEmpty ? content.argv : content.askedBy.arguments
+        if let pid = facts.pid { lines.append("Process: \(pid)") }
+        if let executable = facts.executable { lines.append("Program: \(Self.sanitized(executable, limit: 1000))") }
+        let arguments = facts.arguments.isEmpty ? content.argv : facts.arguments
         if !arguments.isEmpty {
             lines.append("\(arguments.count) \(arguments.count == 1 ? "argument" : "arguments"):")
             lines.append(contentsOf: arguments.prefix(200).map { "  " + Self.escaped(Self.masked($0)) })
-            if arguments.count > 200 { lines.append("  … and \(arguments.count - 200) more") }
+            if arguments.count > 200 { lines.append("  \u{2026} and \(arguments.count - 200) more") }
         }
-        if content.runsAsShell { lines.append("Runs with /bin/sh -c") }
         let body = NSTextField(wrappingLabelWithString: lines.joined(separator: "\n"))
         body.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        body.preferredMaxLayoutWidth = Self.width - 36
+        body.textColor = .secondaryLabelColor
+        body.preferredMaxLayoutWidth = ApprovalLayout.inner(Self.width)
         body.isSelectable = true
         detailsBox.orientation = .vertical
         detailsBox.alignment = .leading
         detailsBox.addArrangedSubview(body)
-        detailsBox.isHidden = true
-        let stack = NSStackView(views: [header, detailsBox])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        return stack
+        let row = DisclosureRow(title: "Details", content: detailsBox)
+        row.onToggle = { [weak self] in self?.fitHeight() }
+        detailsDisclosure = row.triangle
+        return row
     }
 
+    /// "How long", only when there is a choice: with one (a remote request, a key that asks for Touch ID every time)
+    /// the radio stays, hidden, and a line says why Allow once is all there is.
     private func howLongView() -> NSView? {
         guard content.offersHowLong else { return nil }
+        let inner = ApprovalLayout.inner(Self.width)
         var views: [NSView] = []
         func radio(_ title: String, _ how: SecretRequests.How, note: String?) {
             let button = NSButton(radioButtonWithTitle: title, target: self, action: #selector(choseHowLong(_:)))
             durationChoice[how] = button
             views.append(button)
             if let note {
-                let label = Self.label(note, size: 11)
-                label.textColor = .secondaryLabelColor
-                views.append(label)
+                let label = ApprovalLayout.secondary(note, width: inner - 20)
+                let indented = NSStackView(views: [label])
+                indented.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 0, right: 0)
+                views.append(indented)
             }
         }
         let asking: String? = content.askingEveryUse.isEmpty ? nil : Self.askingNote(content.askingEveryUse)
-        radio("Allow once", .once, note: asking)
+        radio("Allow once", .once, note: nil)
         if content.choices.contains(.fifteenMinutes) {
             let note = content.isWrapper ? Self.fifteenMinutesNote + " " + Self.wrapperRestartNote : Self.fifteenMinutesNote
             radio("Allow for 15 minutes", .fifteenMinutes, note: note)
@@ -340,33 +330,47 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             let agent = content.askedBy.agent ?? "this program"
             radio("Allow this command until the Mac locks", .untilLock,
                   note: "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
-                    + "or Next Term quits. Revoke it in Settings › Secrets.")
+                    + "or Next Term quits. Revoke it in Settings \u{203A} Secrets.")
         }
         durationChoice[.once]?.state = .on
-        let heading = Self.label("How long", size: 12, weight: .semibold)
-        let stack = NSStackView(views: [heading] + views)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        return stack
+        guard durationChoice.count > 1 else {
+            // One choice is no choice: the radio stays (the panel's state reads it), out of sight.
+            let only = views.compactMap { $0 as? NSButton }
+            only.forEach { $0.isHidden = true }
+            let line = ApprovalLayout.secondary(asking ?? "Allow once only.", width: inner)
+            let stack = ApprovalLayout.group(only + [line])
+            return stack
+        }
+        if let asking { views.insert(ApprovalLayout.secondary(asking, width: inner), at: 0) }
+        let caption = ApprovalLayout.caption("How long")
+        return ApprovalLayout.group([caption] + views)
     }
 
+    /// Requests waiting behind this one, and the hour's pause that declines them all, beside it (also in the Secrets
+    /// menu): only while some wait.
+    private func waitingRow() -> NSView {
+        pauseButton = NSButton(title: "Pause Key Requests for 1 Hour\u{2026}", target: self, action: #selector(pause))
+        pauseButton.bezelStyle = .rounded
+        pauseButton.controlSize = .small
+        pauseButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        pauseButton.keyEquivalent = ""
+        waitingLabel.font = .systemFont(ofSize: 11)
+        waitingLabel.textColor = .secondaryLabelColor
+        let row = NSStackView(views: [waitingLabel, NSView(), pauseButton])
+        row.spacing = 8
+        waitingRowView = row
+        setWaiting(content.waiting)
+        return row
+    }
+
+    private var waitingRowView: NSStackView?
+
+    /// Decline and Stop Asking at the start; Decline (Escape) and Allow at the end, Allow the primary, by a click only.
     private func buttonRow() -> NSView {
-        pauseButton = NSButton(title: "Pause Key Requests for 1 Hour…", target: self, action: #selector(pause))
         stopButton = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
         declineButton = NSButton(title: "Decline", target: self, action: #selector(decline))
         allowButton = NSButton(title: content.allowTitle, target: self, action: #selector(allow))
-        for button in [pauseButton, stopButton, declineButton, allowButton] {
-            button?.bezelStyle = .rounded
-            button?.keyEquivalent = "" // no default button
-        }
-        // Only a click allows: never Return, nor Tab then Space with keyboard navigation on.
-        allowButton.refusesFirstResponder = true
-        // store_secret's panel has no "How long" and no hour pause: Decline and Stop Asking, Decline, Save.
-        pauseButton.isHidden = !content.offersHowLong
-        let row = NSStackView(views: [pauseButton, NSView(), stopButton, declineButton, allowButton])
-        row.spacing = 8
-        return row
+        return ApprovalLayout.buttonRow(left: [stopButton], decline: declineButton, primary: allowButton)
     }
 
     // MARK: showing
@@ -393,6 +397,10 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     func setWaiting(_ count: Int) {
         waitingLabel.stringValue = count == 0 ? "" : "\(count) more \(count == 1 ? "request" : "requests") waiting"
         waitingLabel.isHidden = count == 0
+        // The hour's pause is for a flood of requests: beside them while some wait, and never on store_secret's panel.
+        pauseButton?.isHidden = count == 0 || !content.offersHowLong
+        waitingRowView?.isHidden = count == 0
+        fitHeight()
     }
 
     /// Allow is waiting for Touch ID or the password: the panel says so, and nothing else can be pressed.
@@ -415,6 +423,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     func markGone() {
         cardLabel.stringValue = Self.cardText
         cardLabel.isHidden = false
+        fitHeight()
         if oncePausesWhenGone {
             select(.fifteenMinutes)
             durationChoice[.once]?.isEnabled = false
@@ -478,10 +487,6 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         sender.state = .on
     }
 
-    @objc private func toggleDetails() {
-        detailsBox.isHidden = detailsDisclosure.state != .on
-    }
-
     @objc private func allow() {
         guard !answered, !isBusy else { return }
         onAllow(selectedHow)
@@ -522,13 +527,18 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         alert.messageText = "Pause key requests for an hour?"
         guard fromMenu else {
             alert.informativeText = "This declines this and every waiting request, refuses new ones for an hour, and ends every approval you gave. "
-                + "MCP servers that need keys won't start."
-            alert.addButton(withTitle: "Pause for 1 Hour")
-            alert.addButton(withTitle: "Cancel")
+                + "MCP servers that need keys won\u{2019}t start."
+            // As the menu's: Return cancels, as the pause declines every request and ends every approval.
+            let pause = alert.addButton(withTitle: "Pause for 1 Hour")
+            pause.keyEquivalent = ""
+            pause.hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
             return alert
         }
         alert.informativeText = menuPauseText
-        alert.addButton(withTitle: "Pause for 1 Hour").keyEquivalent = ""
+        let pause = alert.addButton(withTitle: "Pause for 1 Hour")
+        pause.keyEquivalent = ""
+        pause.hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel").keyEquivalent = "\r" // Return cancels
         return alert
     }
@@ -559,7 +569,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         if let connection = facts.connection { return "The remote connection “\(connection)” \(tail)" }
         if let agent = facts.agent { return "\(agent) \(tail)" }
         if let tab = facts.tab { return "A command in \(tab) \(tail)" }
-        return "A program outside Next Term's tabs \(tail)"
+        return "A program outside Next Term’s tabs \(tail)"
     }
 
     /// "5 min ago by Claude Code", from a `use` line.

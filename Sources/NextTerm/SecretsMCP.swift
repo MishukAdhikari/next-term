@@ -150,7 +150,7 @@ enum SecretsMCP {
         if let connection = facts.connection { return "The remote connection “\(connection)”" }
         if let agent = facts.agent { return agent }
         if let tab = facts.tab { return "An agent in \(tab)" }
-        return "An agent outside Next Term's tabs"
+        return "An agent outside Next Term’s tabs"
     }
 
     // MARK: request_secret

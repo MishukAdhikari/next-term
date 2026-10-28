@@ -105,7 +105,7 @@ extension SelfTest {
             window.applyForTest()
         }
         let text = shown.joined(separator: "\n")
-        check(text.contains("outside Next Term's tabs") && text.contains("asks to bring these over from NT Agent Editor")
+        check(text.contains("outside Next Term’s tabs") && text.contains("asks to bring these over from NT Agent Editor")
               && text.contains("“\(reason)”") && shown.contains("Decline and Stop Asking"),
               "import tools: apply_import opens the import window with a banner naming who asks, in their words", text)
         check(states == ["preset": true, "set:fontSize": true, "set:softWrap": false, "set:terminalCursorBlink": false],

@@ -35,7 +35,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static let tamperedLine = "Secrets' file was changed outside Next Term, so no key is released. Start Over, or restore the file from a backup."
     static let tooLargeLine = "Secrets’ file is larger than Next Term can read (8 MB), so no key is released. Start Over, or restore an "
         + "older copy of the file from a backup."
-    static let unlistedLine = "Next Term's list of the vaults it made on this Mac is missing from the login keychain, so it can't tell these "
+    static let unlistedLine = "Next Term’s list of the vaults it made on this Mac is missing from the login keychain, so it can't tell these "
         + "keys are its own, and no key is released. Start Over to make a new vault."
     static let agentControlLine = "Agents and MCP servers can't use these keys while “Let agents control Next Term” is off "
         + "(Settings › Editor › Agents)."
@@ -567,7 +567,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
     /// Who an asker is, in words.
     static func askerText(_ asker: String) -> String {
-        if asker == "outside" { return "Agents outside Next Term's tabs" }
+        if asker == "outside" { return "Agents outside Next Term’s tabs" }
         if asker.hasPrefix("remote") { return "A remote connection" }
         if asker.hasPrefix("wrapper:") {
             let path = asker.dropFirst("wrapper:".count).split(separator: ":").first.map(String.init) ?? "none"
@@ -726,9 +726,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         }
         let alert = NSAlert()
         alert.messageText = "Start over with an empty Secrets?"
-        alert.informativeText = "Next Term keeps the old folder as \(name). MCP servers that use these keys won't start until you add them again."
-        alert.addButton(withTitle: "Start Over")
-        alert.addButton(withTitle: "Cancel")
+        alert.informativeText = "Next Term keeps the old folder as \(name). MCP servers that use these keys won\u{2019}t start until you add them again."
+        // Every key goes: Cancel holds Return, and Start Over is marked destructive.
+        let over = alert.addButton(withTitle: "Start Over")
+        over.keyEquivalent = ""
+        over.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         confirm(alert) { [weak self] in
             do {
                 try SecretsStore.shared.startOver()
@@ -806,8 +809,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let alert = NSAlert()
         alert.messageText = "Put \(names.count) \(names.count == 1 ? "key" : "keys") back into these files as plain text?"
         alert.informativeText = Set(row.backups.map(\.path)).sorted().map { "• " + SecretImportSheet.file($0) }.joined(separator: "\n")
-        alert.addButton(withTitle: "Put Back")
-        alert.addButton(withTitle: "Cancel")
+        // Keys written into files as plain text: Cancel holds Return, and Put Back is marked destructive.
+        let back = alert.addButton(withTitle: "Put Back")
+        back.keyEquivalent = ""
+        back.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         let box = NSButton(checkboxWithTitle: "Also delete these keys from Secrets", target: nil, action: nil)
         box.state = .off
         alert.accessoryView = box

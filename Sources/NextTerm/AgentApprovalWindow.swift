@@ -6,8 +6,9 @@ import AppKit
 ///
 /// Agents ask at moments of their own choosing, so the window never takes the keyboard: it opens in
 /// front without becoming key (typing to a terminal keeps going to the terminal), bounces the Dock icon
-/// when Next Term is in the background, and has no default button, so no Return meant for something
-/// else answers it. Any agent action that needs a person's yes can use it.
+/// when Next Term is in the background, and has no default button: its primary (Approve) is the rightmost, tinted
+/// button, but only a click presses it, so no Return meant for something else answers it; Escape declines. Any agent
+/// action that needs a person's yes can use it (ApprovalLayout).
 @MainActor
 final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
     struct Request {
@@ -22,6 +23,8 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         var declineTitle = "Decline"
         /// A third choice that declines and stops further requests from the same asker, or nil.
         var stopTitle: String?
+        /// How the primary looks: tinted for a yes, marked destructive for one that can't be undone (Remove).
+        var primaryLook: ApprovalLayout.PrimaryLook = .accent
     }
 
     private let request: Request
@@ -42,6 +45,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 260), styleMask: [.titled, .closable, .utilityWindow],
                              backing: .buffered, defer: false)
         window.title = request.title
+        window.titleVisibility = .hidden // the heading says it once; the title stays for VoiceOver and the Window menu
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
         window.becomesKeyOnlyIfNeeded = true
@@ -53,48 +57,39 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    private static let width: CGFloat = 480
+
+    /// Groups, 16 points apart: what is asked and the agent's words; what would happen; who asked; then Decline and the
+    /// primary.
     private func build() {
         guard let content = window?.contentView else { return }
-        let title = NSTextField(wrappingLabelWithString: request.title)
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
-        requesterLabel.stringValue = "Asked by \(request.requester)."
-        requesterLabel.textColor = .secondaryLabelColor
-        var views: [NSView] = [title, requesterLabel]
-        if let words = request.agentWords?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
-            let quote = NSTextField(wrappingLabelWithString: "The agent says: “\(String(words.prefix(500)))”")
-            quote.font = .systemFont(ofSize: 12).withTraits(.italic)
-            quote.toolTip = "These are the agent's words, not Next Term's."
-            views.append(quote)
+        let inner = ApprovalLayout.inner(Self.width)
+        var top: [NSView] = [ApprovalLayout.heading(SecretApprovalPanel.sanitized(request.title, limit: 200), width: inner)]
+        if let raw = request.agentWords {
+            let words = SecretApprovalPanel.sanitized(raw.trimmingCharacters(in: .whitespacesAndNewlines), limit: 500)
+            if !words.isEmpty { top.append(ApprovalLayout.agentWords(words, who: nil, width: inner)) }
         }
-        let details = NSTextField(wrappingLabelWithString: request.details)
-        details.font = .systemFont(ofSize: 12)
-        details.preferredMaxLayoutWidth = 424 // the stack's 444, less room for the scroller
+        let details = ApprovalLayout.body(request.details, width: inner - 20) // room for the scroller
         // Long details (a task's whole file) scroll in a box of their own, so Decline and Approve stay on the screen.
         let detailsBox = UpdateListScroll(maxHeight: 320, bordered: false)
         detailsBox.stack.addArrangedSubview(details)
-        views.append(detailsBox)
+        requesterLabel.attributedStringValue = ApprovalLayout.secondary("Asked by \(request.requester).", width: inner).attributedStringValue
+        requesterLabel.preferredMaxLayoutWidth = inner
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.isHidden = true
-        views.append(statusLabel)
 
         declineButton = NSButton(title: request.declineTitle, target: self, action: #selector(decline))
         approveButton = NSButton(title: request.approveTitle, target: self, action: #selector(approve))
         if let stopTitle = request.stopTitle { stopButton = NSButton(title: stopTitle, target: self, action: #selector(declineAndStop)) }
-        for button in [stopButton, declineButton, approveButton].compactMap({ $0 }) {
-            button.bezelStyle = .rounded
-            button.keyEquivalent = "" // no default button: see the type's comment
-        }
-        // Only a click approves: never Return, nor Tab then Space with keyboard navigation on.
-        approveButton.refusesFirstResponder = true
-        let buttons = NSStackView(views: [stopButton, NSView(), declineButton, approveButton].compactMap { $0 })
-        buttons.spacing = 8
-        views.append(buttons)
+        let buttons = ApprovalLayout.buttonRow(left: [stopButton].compactMap { $0 }, decline: declineButton, primary: approveButton,
+                                               look: request.primaryLook)
+        let views: [NSView] = [ApprovalLayout.group(top), detailsBox, requesterLabel, ApprovalLayout.group([statusLabel, buttons])]
 
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.spacing = ApprovalLayout.groupSpacing
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 16, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -102,11 +97,10 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            stack.widthAnchor.constraint(equalToConstant: 480),
-            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36),
+            stack.widthAnchor.constraint(equalToConstant: Self.width),
+            buttons.widthAnchor.constraint(equalToConstant: inner),
         ])
-        for view in views where view is NSTextField { view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36).isActive = true }
-        detailsBox.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36).isActive = true
+        for view in views { view.widthAnchor.constraint(equalToConstant: inner).isActive = true }
         detailsBox.fit()
     }
 
@@ -131,6 +125,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
     /// The agent's tab closed, or it stopped asking: what the user decides still happens.
     func requesterGone() {
         requesterLabel.stringValue = "Asked by \(request.requester), which has gone since. What you decide still happens."
+        requesterLabel.textColor = .secondaryLabelColor
     }
 
     /// Holds approving (and the close button) while something runs; Decline stays, to stop it.
@@ -171,11 +166,5 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         guard !answered else { return }
         answered = true
         onDecline(false)
-    }
-}
-
-private extension NSFont {
-    func withTraits(_ traits: NSFontDescriptor.SymbolicTraits) -> NSFont {
-        NSFont(descriptor: fontDescriptor.withSymbolicTraits(traits), size: pointSize) ?? self
     }
 }

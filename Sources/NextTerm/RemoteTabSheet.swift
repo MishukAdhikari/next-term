@@ -289,7 +289,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         alert.messageText = "Remove “\(host.name)”?"
         alert.informativeText = (open > 0 ? "\(open) tab\(open == 1 ? "" : "s") on it stay open until closed, and will not be reopened at the next launch. " : "")
             + "Sessions kept on the host (tmux, herdr) keep running there."
-        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Remove").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: panel) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }

@@ -91,7 +91,7 @@ extension SelfTest {
         let declined = await client.asked("write_file", ["path": notes, "content": "one\nTWO\n", "reason": "Fix the second line."], .decline)
         let declinedRefused = declined.isError && declined.text.contains("Declined on the Mac")
         check(declinedRefused && read("notes.txt") == "one\ntwo\n", "MCP writes: write_file asks on the Mac first, and Decline writes nothing", declined.text)
-        let namesAsker = declined.shown.contains("outside Next Term's tabs")
+        let namesAsker = declined.shown.contains("outside Next Term’s tabs")
         let quotesAgent = declined.shown.contains("“Fix the second line.”")
         let showsChange = declined.shown.contains("notes.txt") && declined.shown.contains("+1 −1")
         check(namesAsker && quotesAgent && showsChange && declined.unkeyed,

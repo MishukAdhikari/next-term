@@ -17,10 +17,13 @@ final class QuitReopenPrompt {
         alert.messageText = QuitPolicy.promptTitle
         alert.informativeText = ""
         // NSAlert gives the first button Return, and the button titled "Cancel" the ⎋ key, which ⌘. presses too. Quit's
-        // Return is cleared, so no button is the default and Return quits nothing.
+        // Return is cleared, so Return quits nothing; Quit is still tinted as the primary (ApprovalLayout), for a click.
         for button in buttons {
             let added = alert.addButton(withTitle: button.title)
-            if button == .quit { added.keyEquivalent = "" }
+            if button == .quit {
+                added.keyEquivalent = ""
+                MainActor.assumeIsolated { ApprovalLayout.style(added, look: .accent) }
+            }
         }
         checkbox = Self.addCheckbox(to: alert, checked: checked, projects: projects)
         alert.showsSuppressionButton = true

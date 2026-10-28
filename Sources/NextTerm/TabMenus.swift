@@ -231,7 +231,7 @@ extension TerminalWindowController {
         alert.messageText = closing.count == 1 ? "Close “\(closing[0].focused.title)”?" : "Close \(closing.count) tabs?"
         let stops = busy.isEmpty ? "" : Self.stopText("Closing \(closing.count == 1 ? "it" : "them") stops", busy)
         alert.informativeText = [stops, kept].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        alert.addButton(withTitle: closing.count == 1 ? "Close Tab" : "Close Tabs")
+        alert.addButton(withTitle: closing.count == 1 ? "Close Tab" : "Close Tabs").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
