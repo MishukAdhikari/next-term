@@ -53,6 +53,11 @@ enum SelfTestRestore {
             case setAside = "set-aside"
             /// Safe mode again, answered "Keep As Is". The last step.
             case safeModeKeep = "safe-mode-keep"
+            /// The keep probe's own run (`--keep-probe`, SelfTestKeepProbe): herdr and tmux started in tabs, then the update
+            /// quit; after it, a look and a quit as the user's; after that, a last look.
+            case keepProbeStart = "keep-probe-start"
+            case keepProbeAfterUpdate = "keep-probe-after-update"
+            case keepProbeAfterQuit = "keep-probe-after-quit"
         }
 
         let folder: URL
@@ -192,6 +197,9 @@ enum SelfTestRestore {
             case .safeModeTryAgain: await afterTryAgain(harness, restore: restore, runs: runs)
             case .setAside: await afterSetAside(harness, restore: restore)
             case .safeModeKeep: await afterKeepAsIs(harness, restore: restore, runs: runs)
+            case .keepProbeStart: await SelfTestKeepProbe.start(harness)
+            case .keepProbeAfterUpdate: await SelfTestKeepProbe.afterUpdate(harness)
+            case .keepProbeAfterQuit: await SelfTestKeepProbe.afterQuit(harness)
             case .failOnce, .failAgain: break
             }
         }
@@ -643,7 +651,8 @@ enum SelfTestRestore {
         case .afterWelcomeQuit: checkedQuitSaved(harness)
         case .afterQuitChecked: unaskedQuitSaved(harness)
         case .afterQuitUnasked: logoutQuitSaved(harness)
-        case .openRequest, .afterCrash, .failOnce, .failAgain, .safeModeTryAgain, .setAside, .safeModeKeep:
+        case .keepProbeStart, .keepProbeAfterUpdate: SelfTestKeepProbe.quitSaved()
+        case .openRequest, .afterCrash, .failOnce, .failAgain, .safeModeTryAgain, .setAside, .safeModeKeep, .keepProbeAfterQuit:
             check(false, "this step ends without a quit")
             recordStepEnd()
         }
@@ -720,6 +729,28 @@ enum SelfTestRestore {
         }
         recordStepEnd()
         try? FileManager.default.removeItem(at: SelfTest.copilotLockFolder)
+    }
+
+    /// The user's own state as this step finds it, for a later step to compare (`realStateChecks`).
+    static func recordRealState(_ harness: Harness) {
+        try? JSONEncoder().encode(realState()).write(to: harness.realState)
+    }
+
+    /// Nothing outside the harness's folder changed since `recordRealState`: what only the harness could have put there
+    /// (`leakChecks`), and the rest as that step found it, unless the user's own Next Term ran meanwhile.
+    static func realStateChecks(_ harness: Harness, step: String) {
+        leakChecks(harness)
+        let before = (try? Data(contentsOf: harness.realState)).flatMap { try? JSONDecoder().decode(RealState.self, from: $0) }
+        let after = realState()
+        guard let before else { return check(false, "the first step recorded the user's own state") }
+        let names = Set(before.items.keys).union(after.items.keys)
+        let changed: [String] = names.sorted().filter { before.items[$0] != after.items[$0] }
+        if !before.running, !after.running {
+            check(changed.isEmpty, "the user's own defaults, MCP socket and folder in Application Support are as they were",
+                  "changed: \(changed)")
+        } else if !changed.isEmpty {
+            record("NOTE [\(step)] your own Next Term ran meanwhile, so these changes may be its own: \(changed)")
+        }
     }
 
     /// What the harness must leave as it is outside its folder, as one step found it.

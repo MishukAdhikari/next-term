@@ -640,6 +640,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var paneInMode = false
     /// The folder asked for was not on the host (the tab opened in the home folder).
     private(set) var remoteFolderMissing = false
+    /// The tmux session this tab came back to was gone, so this connection made a new one: the title and list_tabs say
+    /// so until the next connection.
+    private(set) var sessionCreated = false
     /// Something on the host keeps this tab's session when the connection drops.
     var isKept: Bool { (remote?.keep ?? .off) != .off && !fellBack }
     private var waitingForConnection = false
@@ -664,7 +667,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
     /// The same agents followed one by one: their decisions and finishes, what is on screen, what needs you, their rows.
     private(set) var herdrTracker = HerdrAgents()
     /// herdr's client in front of this tab on this Mac (its own screen, HerdrClient), whose agents the tab follows as a
-    /// server's (LocalHerdrWatch); nil otherwise. Next Term only reads it: the tab is not kept, nor rerun on restore.
+    /// server's (LocalHerdrWatch); nil otherwise. The tab is not kept, nor rerun on restore.
     private(set) var localHerdr: LocalHerdrClient?
     /// This tab shows herdr and follows its agents one by one: herdr answers its checks.
     var followsHerdr: Bool {
@@ -848,9 +851,12 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             remoteConnected = false
             remoteReady = false
             // The tab script tries tmux or herdr again: whether this connection fell back, or its pane is in copy mode,
-            // is for its own reports to say (a .plain file comes back if the tool is still missing).
+            // is for its own reports to say (a .plain file comes back if the tool is still missing). A tab that only ever
+            // had a plain shell had no session to come back to, so it expects none (no false "made anew" note).
+            let wasPlain: Bool = fellBack
             fellBack = false
             fellBackReason = nil
+            sessionCreated = false
             // herdr's rows wait for its first list on this connection. Its agents are followed on from before the drop:
             // one still blocked is not news again, and one that finished or moved on meanwhile says so.
             herdrWatch = HerdrWatch()
@@ -861,7 +867,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             view.interceptInput = nil
             view.acceptsInput = true
             DescriptorSweep.markCloseOnExec() // ssh inherits nothing of ours (see below)
-            view.startProcess(executable: shellPath, args: RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken),
+            let args: [String] = RemoteConnection.tabArguments(remote, path: path, tabKey: remoteKey, token: connectionToken,
+                                                               reattach: everConnected && !wasPlain)
+            view.startProcess(executable: shellPath, args: args,
                               environment: RemoteConnection.environment(), execName: nil, currentDirectory: NSHomeDirectory())
             return
         }
@@ -1656,8 +1664,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         return RemoteMark(host: remote.host.name, destination: remote.host.destination, link: remoteLink)
     }
 
-    /// Where a remote tab's connection stands, when it is not simply up: for the title and list_tabs.
-    var connectionNote: String? { remoteLink?.titleNote }
+    /// Where a remote tab's connection stands, when it is not simply up, or that its tmux session was made anew: for the
+    /// title and list_tabs.
+    var connectionNote: String? { remoteLink?.titleNote ?? (sessionCreated ? Self.newSessionNote : nil) }
+    static let newSessionNote = "new session: the old one was gone"
 
     /// A folder or program name keeps both ends, like Finder; a title a program sets is prose and gives
     /// way at the end.
@@ -2030,6 +2040,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             fellBackReason = report.plainReason
         }
         if report.folderMissing { remoteFolderMissing = true }
+        if report.sessionCreated, !sessionCreated { madeNewSession(remote) }
         paneInMode = report.inMode
         // A herdr tab shows herdr: its state comes from herdr's agents (applyHerdr), not from what runs in front.
         if let foreground = report.foreground, remote.keep != .herdr || fellBack {
@@ -2042,6 +2053,17 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // A title the remote prompt set is stale once a program runs, and the other way round.
         if (status.running, status.command) != (before.0, before.1) { programTitle = nil }
         if (status.running, status.command, directory, remoteConnected, fellBack) != before { delegate?.tabDidChange(self) }
+    }
+
+    /// The host made this tab's tmux session anew, the old one gone (ended there, or the host restarted): the title says
+    /// so, and a notification does while Next Term is not in front, as for any alert. Once per connection.
+    private func madeNewSession(_ remote: RemoteTab) {
+        sessionCreated = true
+        delegate?.tabDidChange(self)
+        guard let controller = delegate as? TerminalWindowController else { return }
+        let message = "The tmux session this tab came back to on \(remote.host.name) was gone, so this is a new one: what ran there has stopped."
+        let notice = TabNotice(state: .attention, command: "", program: "tmux", kind: .command, stillRunning: true, message: message)
+        AppDelegate.shared.post(notice, tab: self, in: controller)
     }
 
     /// What the host's status checks say about this tab's prompt, for what Next Term types in by itself (Suggest a

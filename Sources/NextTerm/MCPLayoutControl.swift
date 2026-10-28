@@ -19,7 +19,7 @@ extension MCPWriteControl {
             return reply(MCPControl.ok(["id": id, "focused": true, "note": "It has its window's keyboard already."]))
         }
         let ask = Ask(title: "An agent asks to move the keyboard to a tab",
-                      details: "“\(tab.title)” comes to the front of \(place(controller)) and takes its keyboard: what you type in that window goes to it. The window stays where it is.")
+                      details: "In \(place(controller)), \(MCPTabNames.named(tab)) comes to the front and takes the keyboard: what you type in that window goes to it. The window stays where it is.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
@@ -43,7 +43,7 @@ extension MCPWriteControl {
         if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
         let host = found.ref.machineLabel.map { "on its machine “\($0)”" } ?? tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
         let ask = Ask(title: "An agent asks to show a herdr agent",
-                      details: "“\(found.agent.name)” (\(found.agent.paneID)) in herdr \(host) comes to the front of \(place(controller)): herdr shows that pane in every window attached to its session, and the tab takes the keyboard.")
+                      details: "“\(SecretApprovalPanel.sanitized(found.agent.name, limit: 60))” (\(found.agent.paneID)) in herdr \(host) comes to the front of \(place(controller)): herdr shows that pane in every window attached to its session, and the tab takes the keyboard.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else {
@@ -82,7 +82,7 @@ extension MCPWriteControl {
         let down = direction == "down"
         let folder = directory ?? (tab.remote.map { "\(tab.directory) on \($0.host.name)" } ?? tab.directory)
         let ask = Ask(title: "An agent asks to split a pane",
-                      details: "A new terminal opens \(down ? "below" : "to the right of") “\(tab.title)” in \(place(controller)), in \(folder). It doesn't take the keyboard.")
+                      details: "A new terminal opens \(down ? "below" : "to the right of") \(MCPTabNames.named(tab)) in \(place(controller)), in \(folder). It doesn't take the keyboard.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
@@ -91,6 +91,7 @@ extension MCPWriteControl {
             }
             controller.presentForAgent(nil) // its window comes forward; the pane waits for the user's click
             MCPControl.driven.insert(pane.id) // the agent that asked for it waits for its work
+            MCPTabOpeners.record(pane, openedBy: context.caller)
             reply(MCPControl.ok(["id": pane.id.uuidString.lowercased(), "beside": tab.id.uuidString.lowercased(),
                                  "directory": pane.directory, "approved": approved]))
         }
@@ -110,7 +111,7 @@ extension MCPWriteControl {
         if !kept, let warning = tab.closeWarning, !force {
             return reply(MCPControl.fail("The pane is running \(warning); pass force: true to stop it and close the pane."))
         }
-        var details = "Closes the pane “\(tab.title)” in \(place(controller)); the tab's other panes stay."
+        var details = "Closes the pane “\(MCPTabNames.title(tab))” of \(MCPTabNames.position(tab)) in \(place(controller)); the tab's other panes stay."
         if kept, let host = tab.remote?.host.name { details += " It only detaches: what runs on \(host) keeps running." }
         if !kept, let warning = tab.closeWarning { details += " This stops \(warning)." }
         approve(Ask(title: "An agent asks to close a pane", details: details), context, reply: reply) { approved, window in
@@ -141,8 +142,8 @@ extension MCPWriteControl {
         if zoomed ? group.zoomed === tab : group.zoomed == nil {
             return reply(MCPControl.ok(["id": id, "zoomed": zoomed, "note": "It is so already."]))
         }
-        let details = zoomed ? "“\(tab.title)” fills its tab in \(place(controller)) and takes the window's keyboard; the other panes keep running behind it."
-                             : "Every pane of the tab with “\(tab.title)” in \(place(controller)) comes back."
+        let details = zoomed ? "The pane “\(MCPTabNames.title(tab))” fills \(MCPTabNames.position(tab)) in \(place(controller)) and takes the window's keyboard; the other panes keep running behind it."
+                             : "Every pane of \(MCPTabNames.named(tab)) in \(place(controller)) comes back."
         approve(Ask(title: zoomed ? "An agent asks to zoom a pane" : "An agent asks to bring the panes back", details: details), context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab), let group = controller.group(of: tab), group.isSplit else {

@@ -25,6 +25,13 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     private let folderField = NSTextField()
     private let keepControl = NSSegmentedControl(labels: KeepMode.allCases.map(\.label), trackingMode: .selectOne, target: nil, action: nil)
     private let keepNote = NSTextField(wrappingLabelWithString: "")
+    /// Next Term's tmux on the host: its prefix key and the history each pane keeps, shown while keep is tmux.
+    private let prefixPopup = NSPopUpButton()
+    private let historyField = NSTextField()
+    private let tmuxNote = NSTextField(wrappingLabelWithString: TmuxSettingsText.note)
+    private var grid: NSGridView?
+    /// The tmux row and its note, in the grid.
+    private static let tmuxRows = [7, 8]
     /// Next Term's tmux sessions still running on the host, to reattach one (after a closed tab); for keep herdr, herdr's
     /// sessions there, to open one.
     private let sessionPopup = NSPopUpButton()
@@ -72,10 +79,16 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         portField.placeholderString = "22"
         folderField.placeholderString = "~"
         destinationField.delegate = self
-        for field in [nameField, destinationField, portField, folderField] {
+        historyField.placeholderString = String(TmuxOptions.defaultHistory)
+        for field in [nameField, destinationField, portField, folderField, historyField] {
             field.lineBreakMode = .byTruncatingTail
             field.usesSingleLineMode = true
         }
+        for prefix in TmuxPrefix.allCases { prefixPopup.addItem(withTitle: prefix.title) }
+        prefixPopup.toolTip = "The key tmux’s own commands start with in Next Term’s tmux sessions on this host. Pressed twice, it goes on to the program."
+        historyField.toolTip = "Lines of history each tmux pane keeps on this host: 1,000 to 200,000."
+        tmuxNote.textColor = .secondaryLabelColor
+        tmuxNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         keepNote.textColor = .secondaryLabelColor
         keepNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         sessionNote.textColor = .secondaryLabelColor
@@ -86,6 +99,9 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
 
         let hostRow = NSStackView(views: [hostPopup, removeButton])
         hostRow.spacing = 8
+        let tmuxRow = NSStackView(views: [prefixPopup, NSTextField(labelWithString: "History:"), historyField,
+                                          NSTextField(labelWithString: "lines")])
+        tmuxRow.spacing = 6
         let grid = NSGridView(views: [
             [label("Host:"), hostRow],
             [label("Name:"), nameField],
@@ -94,6 +110,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             [label("Folder on host:"), folderField],
             [label("Keep agents running:"), keepControl],
             [NSGridCell.emptyContentView, keepNote],
+            [label("tmux prefix:"), tmuxRow],
+            [NSGridCell.emptyContentView, tmuxNote],
             [label("Session:"), sessionPopup],
             [NSGridCell.emptyContentView, sessionNote],
             [label("Tab completion:"), completionRow],
@@ -103,7 +121,9 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         grid.column(at: 0).xPlacement = .trailing
         grid.rowAlignment = .firstBaseline
         portField.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        historyField.widthAnchor.constraint(equalToConstant: 80).isActive = true
         destinationField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
+        self.grid = grid
 
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel(_:)))
         cancel.keyEquivalent = "\u{1b}"
@@ -129,6 +149,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             buttons.widthAnchor.constraint(equalTo: grid.widthAnchor),
             problemLabel.widthAnchor.constraint(equalTo: grid.widthAnchor),
             keepNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
+            tmuxNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
             sessionNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
         ])
         panel.contentView = content
@@ -152,11 +173,14 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             portField.stringValue = host.port.map(String.init) ?? ""
             folderField.stringValue = host.directory
             keepControl.selectedSegment = KeepMode.allCases.firstIndex(of: host.keep) ?? 1
+            prefixPopup.selectItem(at: TmuxPrefix.allCases.firstIndex(of: host.tmuxPrefix ?? .ctrlB) ?? 0)
+            historyField.stringValue = host.tmuxHistory.map(String.init) ?? ""
             removeButton.isEnabled = true
         } else {
             hostPopup.selectItem(at: hostPopup.numberOfItems - 1)
-            for field in [nameField, destinationField, portField, folderField] { field.stringValue = "" }
+            for field in [nameField, destinationField, portField, folderField, historyField] { field.stringValue = "" }
             keepControl.selectedSegment = KeepMode.allCases.firstIndex(of: .tmux) ?? 1
+            prefixPopup.selectItem(at: 0)
             removeButton.isEnabled = false
         }
         keepChanged(nil)
@@ -179,6 +203,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
     @objc private func keepChanged(_ sender: Any?) {
         let keep = KeepMode.allCases[max(0, keepControl.selectedSegment)]
         keepNote.stringValue = keep.summary
+        for row in Self.tmuxRows { grid?.row(at: row).isHidden = keep != .tmux }
         fillSessions(keep)
     }
 
@@ -316,7 +341,17 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         host.port = portText.isEmpty ? nil : Int(portText) ?? -1
         host.directory = folderText.isEmpty ? "~" : folderText
         host.keep = KeepMode.allCases[max(0, keepControl.selectedSegment)]
-        if let problem = host.problem {
+        // The tmux rows show only while keep is tmux: hidden, they keep what the host had, and never block Connect.
+        if host.keep == .tmux {
+            let prefix: TmuxPrefix = TmuxPrefix.allCases[max(0, prefixPopup.indexOfSelectedItem)]
+            host.tmuxPrefix = prefix == .ctrlB ? nil : prefix
+            host.tmuxHistory = TmuxSettingsText.history(historyField.stringValue)
+        } else {
+            host.tmuxPrefix = selectedHost?.tmuxPrefix
+            host.tmuxHistory = selectedHost?.tmuxHistory
+        }
+        // A new or changed name also shows as itself (RemoteHost.nameProblem); a saved one stays as it was.
+        if let problem = host.problem ?? (host.name != selectedHost?.name ? RemoteHost.nameProblem(host.name) : nil) {
             problemLabel.stringValue = problem
             problemLabel.isHidden = false
             NSSound.beep()
@@ -335,6 +370,22 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         let herdrSession = host.keep == .herdr ? herdrSessions?.first { $0.name == chosen && !$0.isDefault }?.name : nil
         panel.sheetParent?.endSheet(panel)
         open(RemoteTab(host: host, directory: session?.directory.isEmpty == false ? session?.directory : nil, session: session?.name,
-                       herdrSession: herdrSession))
+                       herdrSession: herdrSession, expectsSession: session != nil))
     }
 }
+
+#if DEBUG
+extension RemoteTabSheet {
+    /// The sheet that shows, for the self-test.
+    static var shownForTest: RemoteTabSheet? { current }
+
+    /// Whether tmux's prefix and history row shows.
+    var showsTmuxOptions: Bool { Self.tmuxRows.allSatisfy { (row: Int) -> Bool in grid?.row(at: row).isHidden == false } }
+
+    /// Picks `keep`, as a click on its segment does.
+    func chooseKeep(_ keep: KeepMode) {
+        keepControl.selectedSegment = KeepMode.allCases.firstIndex(of: keep) ?? 0
+        keepChanged(nil)
+    }
+}
+#endif

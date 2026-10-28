@@ -217,7 +217,15 @@ extension SelfTest {
         w.openFile(file)
         w.editorArea.activeEditor?.textView.insertText("third ", replacementRange: NSRange(location: 0, length: 0))
         _ = await mcp.call(1, "initialize", ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selftest", "version": "1"]])
-        let reply = await mcp.call(2, "tools/call", ["name": "close_tab", "arguments": ["tab_id": kept.id.uuidString.lowercased(), "force": true]], timeout: 30)
+        // force asks on the Mac first, and nothing else shows until it is answered: no save sheet under the window.
+        var sheetWhileAsked = true
+        Task { @MainActor in
+            let shown: Bool = await wait(30) { MCPWriteControl.pending?.window != nil }
+            sheetWhileAsked = !shown || window.attachedSheet != nil
+            MCPWriteControl.pending?.window?.approveButton.performClick(nil)
+        }
+        let reply = await mcp.call(2, "tools/call", ["name": "close_tab", "arguments": ["tab_id": kept.id.uuidString.lowercased(), "force": true]], timeout: 60)
+        check(!sheetWhileAsked, "remote MCP: close_tab force asks on the Mac first, with no save sheet until it is answered")
         mcp.close()
         let told = (((reply?["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
         let json = (try? JSONSerialization.jsonObject(with: Data(told.utf8))) as? [String: Any]

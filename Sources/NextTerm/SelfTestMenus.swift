@@ -501,6 +501,16 @@ extension SelfTest {
         check(remoteItem?.isEnabled == true, "welcome: File › New Remote Tab… is on with only the Welcome window open", remoteItem?.title ?? "no such item")
         NSApp.sendAction(#selector(TerminalWindowController.newRemoteTab(_:)), to: nil, from: nil)
         check(await wait(3) { welcomeWindow.attachedSheet?.title == "New Remote Tab" }, "welcome: ⌥⌘T brings the remote sheet over the Welcome window")
+        #if DEBUG
+        if let sheet = RemoteTabSheet.shownForTest {
+            sheet.chooseKeep(.tmux)
+            let shown: Bool = sheet.showsTmuxOptions
+            sheet.chooseKeep(.herdr)
+            let hidden: Bool = !sheet.showsTmuxOptions
+            check(shown && hidden, "welcome: New Remote Tab shows tmux's prefix and history while keep is tmux, and hides them for herdr",
+                  "shown \(shown), hidden \(hidden)")
+        }
+        #endif
         _ = await press("Cancel", inSheetOf: welcomeWindow)
         check(await wait(3) { welcomeWindow.attachedSheet == nil } && app.controllers.isEmpty && welcomeWindow.isVisible,
               "welcome: Cancel leaves the Welcome window as it was, with no window opened")

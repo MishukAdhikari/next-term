@@ -81,7 +81,8 @@ enum LocalHerdr {
 /// The 2-second check for herdr run in local tabs, as the status check is for a server's: while a tab has herdr's client
 /// in front, one `herdr agent list` per herdr server (and `herdr tab list` when one of its tabs is on screen and no agent
 /// has herdr's focus), off the main thread, through the client's own herdr and its own socket. It stops when no tab
-/// needs it. Next Term only reads this herdr: it never starts, keeps or restores it.
+/// needs it. Next Term never starts, keeps or restores this herdr; it changes it only as an agent asks over MCP and the
+/// user approves on the Mac (start_agent, close_tab on an agent's id; HerdrMCP).
 final class LocalHerdrWatch {
     static let shared = LocalHerdrWatch()
 
