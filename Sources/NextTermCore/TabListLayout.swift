@@ -335,6 +335,30 @@ public struct TabListCollapsed: Equatable, Sendable {
 
     public var shownCount: Int { slots.count }
 
+    /// A mark dragged in the column: the tops it may take, from the first shown mark's place to the last's.
+    public var dragRange: ClosedRange<CGFloat>? {
+        guard let first = slots.first, let last = slots.last else { return nil }
+        return first.minY...last.minY
+    }
+
+    /// The place among the shown marks that a mark dragged with its middle at `centreY` drops into: the slot whose
+    /// middle is nearest.
+    public func dropIndex(centreY: CGFloat) -> Int {
+        slots.indices.min { (a: Int, b: Int) -> Bool in abs(slots[a].midY - centreY) < abs(slots[b].midY - centreY) } ?? 0
+    }
+
+    /// Each shown tab's slot, by its place before the move, with tab `from` moved to place `to`: the marks between
+    /// close up behind it and open before it, as the list's rows do.
+    public func slots(movingTab from: Int, to: Int) -> [CGRect] {
+        guard slots.indices.contains(from), slots.indices.contains(to) else { return slots }
+        var order: [Int] = Array(slots.indices)
+        order.remove(at: from)
+        order.insert(from, at: to)
+        var moved: [CGRect] = slots
+        for (place, tab) in order.enumerated() { moved[tab] = slots[place] }
+        return moved
+    }
+
     /// The "+N"'s colour: the most urgent of the tabs it stands for, as the rail's.
     public static func moreState(_ hidden: [TabState]) -> TabState { MarkColumn.moreState(hidden) }
 }

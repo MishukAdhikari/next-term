@@ -60,9 +60,10 @@ extension TabListView {
     /// A tab's row dragged up or down reorders the tabs, as the top bar's tabs drag sideways: nothing until the
     /// pointer has moved 4 points; then the row follows it with its pane rows, the other tabs slide aside, the list
     /// scrolls while the pointer is held near its top or bottom, and updates that arrive meanwhile wait for the
-    /// drop. The collapsed column does not drag: its marks only select.
+    /// drop. Collapsed, a mark drags the same way among the marks that show (trackColumnDrag).
     func trackDrag(of view: TabListRowView, from event: NSEvent) {
-        guard let window, !isCollapsed, !view.isPane, tabRows.count > 1 else { return }
+        guard let window, !view.isPane, tabRows.count > 1 else { return }
+        if isCollapsed { return trackColumnDrag(of: view, from: event, in: window) }
         let press: NSPoint = event.locationInWindow
         var started = false
         window.trackEvents(matching: [.leftMouseDragged, .leftMouseUp, .periodic], timeout: .infinity,
@@ -188,8 +189,18 @@ extension TabListView {
     private func dropDrag() {
         guard let drag = rowDrag else { return }
         if drag.autoscrolling { NSEvent.stopPeriodicEvents() }
-        rowDrag = nil
         let dragged: [TabListRowView] = drag.block.compactMap { (index: Int) -> TabListRowView? in rowViews[safe: index] }
+        finishDrag(dragged) {
+            let settled: [CGRect] = self.rowLayout.frames(movingTab: drag.from, to: drag.to)
+            return drag.block.compactMap { (index: Int) -> CGRect? in settled[safe: index] }
+        }
+    }
+
+    /// The end of either drag: the dragged views let go, an update that came meanwhile applied (alone, when it opened or
+    /// closed a tab), else the views settled at `places` and the tab moved, once.
+    private func finishDrag(_ dragged: [TabListRowView], places: () -> [CGRect]) {
+        guard let drag = rowDrag else { return }
+        rowDrag = nil
         dragged.forEach { $0.isDragging = false }
         let pending: Update? = pendingUpdate
         pendingUpdate = nil
@@ -199,14 +210,68 @@ extension TabListView {
             needsLayout = true
             return
         }
-        let settled: [CGRect] = rowLayout.frames(movingTab: drag.from, to: drag.to)
-        let places: [CGRect] = drag.block.compactMap { (index: Int) -> CGRect? in settled[safe: index] }
-        settle(dragged, at: places)
+        settle(dragged, at: places())
         if drag.to != drag.from {
             delegate?.tabList(self, didMove: drag.from, to: drag.to) // which feeds the list its rows in the new order
             needsLayout = true
         } else if let pending {
             apply(pending)
+        }
+    }
+
+    // MARK: the collapsed column
+
+    /// Collapsed: a mark dragged up or down reorders the tabs among the marks that show, as the list's rows do: nothing
+    /// until the pointer has moved 4 points; then the mark follows it, the others slide aside, and the drop moves the
+    /// tab once. The "+N" stays where it is: a tab behind it is reached by opening the list.
+    private func trackColumnDrag(of view: TabListRowView, from event: NSEvent, in window: NSWindow) {
+        guard let row = rowViews.firstIndex(where: { $0 === view }), tabOfRow.indices.contains(row) else { return }
+        let tab: Int = tabOfRow[row]
+        let column: TabListCollapsed = TabListLayout.collapsed(tabCount: tabRows.count, height: bounds.height)
+        guard column.slots.indices.contains(tab), column.shownCount > 1, let range = column.dragRange else { return }
+        let slotX: CGFloat = ((bounds.width - TabListCollapsed.slotSize) / 2).rounded()
+        let press: NSPoint = event.locationInWindow
+        let grab: CGFloat = documentY(press) - column.slots[tab].minY
+        var started = false
+        window.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: .infinity,
+                           mode: .eventTracking) { (event: NSEvent?, stop: UnsafeMutablePointer<ObjCBool>) in
+            guard let event, event.type != .leftMouseUp else {
+                stop.pointee = true
+                return
+            }
+            if !started {
+                guard abs(event.locationInWindow.y - press.y) >= TabListMotion.dragThreshold else { return }
+                started = true
+                self.rowDrag = TabListRowDrag(from: tab, to: tab, block: row..<(row + 1), offsets: [0], grab: grab, pointer: press)
+                view.isDragging = true
+            }
+            guard var drag = self.rowDrag else { return }
+            drag.pointer = event.locationInWindow
+            let top: CGFloat = min(max(self.documentY(drag.pointer) - grab, range.lowerBound), range.upperBound)
+            view.frame.origin.y = top
+            let target: Int = column.dropIndex(centreY: top + TabListCollapsed.slotSize / 2)
+            if target != drag.to {
+                drag.to = target
+                self.slideMarks(to: column.slots(movingTab: tab, to: target), slotX: slotX, except: view)
+            }
+            self.rowDrag = drag
+        }
+        guard started, let drag = rowDrag else { return }
+        finishDrag([view]) {
+            column.slots(movingTab: drag.from, to: drag.to)[safe: drag.from].map { [$0.offsetBy(dx: slotX, dy: 0)] } ?? []
+        }
+    }
+
+    /// The marks not dragged, to their slots around the dragged tab's new place; only those that move.
+    private func slideMarks(to slots: [CGRect], slotX: CGFloat, except dragged: TabListRowView) {
+        let views: [TabListRowView] = tabRows.compactMap { (row: Int) -> TabListRowView? in rowViews[safe: row] }
+        NSAnimationContext.runAnimationGroup { (context: NSAnimationContext) in
+            context.duration = TabListMotion.slide
+            for (tab, view) in views.enumerated() where view !== dragged {
+                guard let slot = slots[safe: tab] else { continue }
+                let frame: CGRect = slot.offsetBy(dx: slotX, dy: 0)
+                if view.frame != frame { view.animator().frame = frame }
+            }
         }
     }
 
