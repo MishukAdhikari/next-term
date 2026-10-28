@@ -159,6 +159,9 @@ extension SelfTest {
         check(column && !list.isCollapsed && abs(list.frame.width - openWidth) < 1 && toggled.most <= 2,
               "tab list: Collapse Tab List folds it to its column of marks, Expand brings it back at its width, each terminal resized once each way",
               "column \(column), width \(openWidth) → \(list.frame.width), resized \(toggled.most) times")
+        #if DEBUG
+        await collapsedDragChecks(c, list: list, in: window) // a paced drag, as SelfTestTabListBudget's
+        #endif
         if let project = c.project {
             let entry = TabListWidths(propertyList: defaults.dictionary(forKey: TabListWidths.key)).entry(for: project)
             check(entry?.collapsed == false && abs((entry?.width ?? 0) - openWidth) < 1, "tab list: the project keeps its list's width and collapse",
