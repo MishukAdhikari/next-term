@@ -91,6 +91,7 @@ enum RemoteMCP {
         case .success(let mode): if let mode { host.keep = mode }
         }
         if let problem = host.problem { return reply(fail(problem)) }
+        if existing?.name != host.name, let problem = RemoteHost.nameProblem(host.name) { return reply(fail(problem)) }
         if let existing, existing == host { return reply(ok(["host": describe(host), "saved": true, "unchanged": true])) }
         let details: String
         if let existing {
@@ -161,7 +162,10 @@ enum RemoteMCP {
             lines.append("It then points at another server: tabs saved for it are not reopened there.")
         }
         if open > 0 {
-            lines.append("\(open) tab\(open == 1 ? "" : "s") open on it keep their connection; tmux's prefix and history reach them as they reconnect.")
+            // A host pointed elsewhere gets a new id, which open tabs don't follow: they keep their old options.
+            lines.append(applied.repointed
+                ? "\(open) tab\(open == 1 ? "" : "s") open on it keep their connection, and its old tmux prefix and history, until they close."
+                : "\(open) tab\(open == 1 ? "" : "s") open on it keep their connection; tmux's prefix and history reach them as they reconnect.")
         }
         let ask = MCPWriteControl.Ask(title: "An agent asks to change a saved server", details: named(saved) + ":\n" + lines.joined(separator: "\n"))
         MCPWriteControl.approve(ask, context, reply: reply) { approved, window in
@@ -179,7 +183,11 @@ enum RemoteMCP {
             RemoteHosts.save(applied.host)
             var info: [String: Any] = ["host": describe(applied.host), "changed": applied.changes, "approved": approved]
             if applied.repointed { info["repointed"] = true }
-            if open > 0 { info["note"] = "Tabs open on it keep their connection; tmux's prefix and history reach them as they reconnect." }
+            if open > 0 {
+                info["note"] = applied.repointed
+                    ? "Tabs open on it keep their connection, and the old tmux prefix and history, until they close."
+                    : "Tabs open on it keep their connection; tmux's prefix and history reach them as they reconnect."
+            }
             reply(ok(info))
         }
     }

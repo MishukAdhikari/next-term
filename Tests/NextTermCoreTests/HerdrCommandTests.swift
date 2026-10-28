@@ -466,6 +466,10 @@ import Testing
         let panes = try #require(HerdrPanes.parse(listed))
         #expect(panes.total == 3 && panes.byTab == ["w1:t1": 2, "w1:t2": 1])
         #expect(panes.isAlone(tab: "w1:t2") && !panes.isAlone(tab: "w1:t1") && !panes.isAlone(tab: nil))
+        #expect(panes.tabOf["w1:p2"] == "w1:t2" && panes.workspaceOf["w1:p2"] == "w1" && !panes.isAloneInWorkspace(pane: "w1:p2"))
+        // A pane alone in a workspace beside another: its tab and workspace close with it.
+        let two = try #require(HerdrPanes.parse(#"[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"},{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2"}]"#))
+        #expect(two.isAloneInWorkspace(pane: "w2:p1") && two.isAlone(tab: "w2:t1") && two.lastPaneRefusal == nil)
         #expect(panes.lastPaneRefusal == nil)
         let one = try #require(HerdrPanes.parse(#"[{"pane_id":"w1:p1","tab_id":"w1:t1"}]"#))
         #expect(one.total == 1 && one.lastPaneRefusal?.contains("last pane") == true)

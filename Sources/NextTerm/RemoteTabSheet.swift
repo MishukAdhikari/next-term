@@ -350,7 +350,8 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             host.tmuxPrefix = selectedHost?.tmuxPrefix
             host.tmuxHistory = selectedHost?.tmuxHistory
         }
-        if let problem = host.problem {
+        // A new or changed name also shows as itself (RemoteHost.nameProblem); a saved one stays as it was.
+        if let problem = host.problem ?? (host.name != selectedHost?.name ? RemoteHost.nameProblem(host.name) : nil) {
             problemLabel.stringValue = problem
             problemLabel.isHidden = false
             NSSound.beep()

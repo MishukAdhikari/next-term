@@ -168,11 +168,13 @@ C
 # The keep probe (plan 010a U8): does herdr, or tmux, started in a tab outlive the app's update relaunch, then its quit?
 # The harness's two bundles as above, each step launched as the Finder launches an app (`open -n -W`, so the app is no
 # child of this script), against a herdr and a tmux of the probe's own: a scratch root in /tmp (short, for the sockets)
-# with its own XDG folders and TMUX_TMPDIR, and launchers that start each tool with only the variables it needs and none
-# of its config. Nothing here installs herdr or tmux; a missing one is reported skipped. The exit trap ends what the
-# probe started, on every path: herdr's probe session stopped and deleted, the probe's tmux server killed, then any
-# process still holding a scratch socket, then the scratch root, the harness folder and the throwaway app's defaults.
-# It never touches a process by name alone, nor the user's own herdr or tmux.
+# with its own XDG folders, TMUX_TMPDIR and HOME, and launchers that start each tool with only the variables it needs and
+# none of its config (nor the user's ~/.profile). Nothing here installs herdr or tmux; a missing one is reported skipped,
+# and tools here that start nothing fail. The exit trap prints the report on an early failure, then ends what the probe
+# started, on every path: herdr's probe session stopped and the probe's tmux server killed, then any process still
+# holding a scratch socket, then herdr's session deleted, then each pid the probe recorded that still holds a scratch
+# file, then the scratch root, the harness folder and the throwaway app's defaults. It never touches a process by name
+# alone, nor the user's own herdr or tmux.
 keep_probe() {
   swift build
   local folder root session="nt-probe-$$" herdr="" tmux="" step failed=0
@@ -219,12 +221,14 @@ keep_probe() {
     if [[ -n "$herdr" ]]; then
       /usr/bin/env -i "${variables[@]}" "$herdr" session delete "$session" >/dev/null 2>&1 || true
     fi
-    held() { lsof -p "$1" -Fn 2>/dev/null | grep -qF "n$root/"; }
+    # grep reads all of lsof's output (no -q), so lsof never dies of a closed pipe under pipefail; each kill may find the
+    # process gone already, which must not stop the cleanup (set -e).
+    held() { lsof -p "$1" -Fn 2>/dev/null | grep -F "n$root/" >/dev/null; }
     if [[ -s "$folder/probe-pids" ]]; then
       for pid in $(awk '{print $2}' "$folder/probe-pids"); do
-        held "$pid" && kill -TERM "$pid" 2>/dev/null
+        if held "$pid"; then kill -TERM "$pid" 2>/dev/null || true; fi
         for _ in 1 2 3 4 5 6 7 8 9 10; do held "$pid" || break; sleep 0.5; done
-        held "$pid" && kill -KILL "$pid" 2>/dev/null
+        if held "$pid"; then kill -KILL "$pid" 2>/dev/null || true; fi
       done
     fi
     pkill -f "$folder/install/Next Term.app/Contents/MacOS/NextTerm" 2>/dev/null || true

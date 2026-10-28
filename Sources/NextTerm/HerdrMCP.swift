@@ -267,9 +267,7 @@ enum HerdrMCP {
                 if let refusal = panes.lastPaneRefusal { return reply(fail(refusal)) }
                 let tab = found.ref.tab
                 let place: String = tab.remote.map { "on \($0.host.name)" } ?? "on this Mac"
-                let closes: String = panes.isAlone(tab: found.agent.tabID)
-                    ? "herdr closes its pane, and its herdr tab with it (the pane is that tab's only one); what runs there stops."
-                    : "herdr closes its pane, and what runs there stops; the rest of its herdr tab stays."
+                let closes: String = closing(pane, tab: found.agent.tabID, panes)
                 let ask = MCPWriteControl.Ask(title: "An agent asks to end a herdr agent",
                                               details: "“\(name)” (\(pane), \(found.agent.status.rawValue)) in herdr \(place): \(closes) The session and its server keep running. Next Term runs: herdr pane close \(pane)")
                 let context = MCPWriteControl.context(arguments, caller: caller, approval: .askOnMac, requester: nil, connection: nil)
@@ -299,7 +297,8 @@ enum HerdrMCP {
                 guard let now = agents.first(where: { $0.paneID == asked.paneID }) else {
                     return reply(ok(["id": found.ref.id, "closed": false, "note": "herdr no longer lists it, so nothing was run."]))
                 }
-                guard now.kind == asked.kind, now.customName == asked.customName, now.displayName == asked.displayName else {
+                // The kind and herdr's own name: a naming plugin may change the shown name while the user is asked.
+                guard now.kind == asked.kind, now.customName == asked.customName else {
                     return reply(fail("Pane \(asked.paneID) now runs another agent than the one you were asked about. Nothing was closed."))
                 }
                 if now.status == .working, !force {
@@ -313,15 +312,33 @@ enum HerdrMCP {
                         case .success(let read): panes = read
                         }
                         if let refusal = panes.lastPaneRefusal { return reply(fail(refusal)) }
-                        let alone: Bool = panes.isAlone(tab: now.tabID)
+                        let tab: String? = now.tabID ?? panes.tabOf[now.paneID]
+                        let workspaceClosed: Bool = panes.isAloneInWorkspace(pane: now.paneID)
+                        let tabClosed: Bool = workspaceClosed || panes.isAlone(tab: tab)
                         found.ref.run(.closePane(pane: now.paneID)) { result in
                             if let problem = problem(result, pane: now.paneID) { return reply(fail(problem)) }
-                            reply(ok(["id": found.ref.id, "closed": true, "herdr_tab_closed": alone, "approved": approved]))
+                            reply(ok(["id": found.ref.id, "closed": true, "herdr_tab_closed": tabClosed,
+                                      "herdr_workspace_closed": workspaceClosed, "approved": approved]))
                         }
                     }
                 }
             }
         }
+    }
+
+    /// What closes with the pane, as the window says it: its workspace too when it is that workspace's only pane, its tab
+    /// when it is that tab's only one (the tab from the agent list, else the pane list), and nothing more said when
+    /// herdr gives neither.
+    private static func closing(_ pane: String, tab: String?, _ panes: HerdrPanes) -> String {
+        let tab: String? = tab ?? panes.tabOf[pane]
+        if panes.isAloneInWorkspace(pane: pane) {
+            return "herdr closes its pane, and its herdr tab and workspace with it (the pane is the only one in that workspace); what runs there stops."
+        }
+        if panes.isAlone(tab: tab) {
+            return "herdr closes its pane, and its herdr tab with it (the pane is that tab's only one); what runs there stops."
+        }
+        if tab != nil { return "herdr closes its pane, and what runs there stops; the rest of its herdr tab stays." }
+        return "herdr closes its pane, and what runs there stops."
     }
 
     /// herdr's panes counted, or why they could not be: nothing is closed without the count.

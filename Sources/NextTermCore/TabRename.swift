@@ -21,20 +21,21 @@ public enum TabRename {
         return title(raw)
     }
 
-    /// A character that doesn't show as itself, as the approval panels leave it out: a control, a format character
-    /// (the direction marks among them), or a line or paragraph separator. A title is what approval windows name a tab
-    /// by, so it may hold none.
+    /// A character that doesn't show as itself: a control, a format character (direction marks and isolates, zero-width
+    /// spaces, the byte-order mark), or a line or paragraph separator. A title is what approval windows name a tab by, so
+    /// it may hold none. The zero-width joiner is allowed: emoji such as 🧑‍💻 are made with it.
     public static func hidden(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar == "\u{200D}" { return false }
         switch scalar.properties.generalCategory {
         case .control, .format, .lineSeparator, .paragraphSeparator: return true
         default: return false
         }
     }
 
-    static let hiddenRefusal = "The title must be one line of characters that show as themselves: no control or format characters (such as direction marks or zero-width joiners) and no line or paragraph separators."
+    static let hiddenRefusal = "The title must be one line of characters that show as themselves: no direction marks, zero-width spaces, other control or format characters, or line or paragraph separators."
 
     /// What an agent's id is told.
-    public static let agentRefusal = "That is one of herdr's agents: herdr's names are shown as given, and Next Term does not rename agents. rename_tab with its tab's id (before the slash) renames the herdr tab."
+    public static let agentRefusal = "That is one of herdr's agents: herdr's names are shown as given, and Next Term does not rename agents. rename_tab with its tab's id (before the slash) renames the herdr tab, if it is your own or one you opened."
 }
 
 public struct TabRenameRefusal: Error, Equatable, Sendable {

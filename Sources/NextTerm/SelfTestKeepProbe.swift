@@ -5,7 +5,7 @@ import NextTermCore
 /// The keep probe (plan 010a U8), in debug builds only: does a herdr session, or a tmux server, started in a Next Term tab
 /// outlive the app's update relaunch, and then its quit? `scripts/selftest.sh --keep-probe` runs it in the relaunch
 /// harness's throwaway copy, launched as the Finder launches an app, against a herdr and a tmux of its own: a scratch
-/// root with its own XDG folders and TMUX_TMPDIR. The driver names the tools, the session and the scratch root in
+/// root with its own XDG folders, TMUX_TMPDIR and HOME. The driver names the tools, the session and the scratch root in
 /// `probe-tools`, and writes the two launchers the tabs run (`probe-herdr`, `probe-tmux`), which start the tool with only
 /// the variables it needs: no herdr or tmux variable of the driver's or the user's reaches it, and neither reads the
 /// user's config. A step only looks; the driver's exit trap ends what the probe started and removes the scratch root.

@@ -85,6 +85,7 @@ public struct HostEdit: Equatable, Sendable {
         if let tmuxPrefix { host.tmuxPrefix = tmuxPrefix == .ctrlB ? nil : tmuxPrefix }
         if let tmuxHistory { host.tmuxHistory = tmuxHistory == TmuxOptions.defaultHistory ? nil : tmuxHistory }
         if let problem = host.problem { return .failure(.init(problem)) }
+        if host.name != saved.name, let problem = RemoteHost.nameProblem(host.name) { return .failure(.init(problem)) }
         let taken = others.contains { (other: RemoteHost) -> Bool in
             other.id != saved.id && other.name.caseInsensitiveCompare(host.name.trimmingCharacters(in: .whitespaces)) == .orderedSame
         }

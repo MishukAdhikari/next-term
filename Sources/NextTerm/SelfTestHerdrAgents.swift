@@ -340,13 +340,16 @@ extension SelfTest {
             _ = await wait(20) { MCPWriteControl.pending?.window != nil }
             let window = MCPWriteControl.pending?.window
             let shown = SelfTest.texts(window?.window?.contentView)
-            check(window != nil && shown.contains("herdr pane close w2:p1") && shown.contains("its herdr tab with it"),
-                  "herdr MCP: close_tab on an agent asks on the Mac first, naming herdr's command and that its one-pane herdr tab closes too", shown)
+            // w2:p1 is the only pane of workspace w2 in the stand-in's pane list: its tab and workspace close with it.
+            check(window != nil && shown.contains("herdr pane close w2:p1") && shown.contains("its herdr tab and workspace with it"),
+                  "herdr MCP: close_tab on an agent asks on the Mac first, naming herdr's command and what closes with the pane", shown)
+            clearCalls() // what follows is the answer's own: herdr read again after Approve, then closed
             if approve { window?.approveButton.performClick(nil) } else { window?.declineButton.performClick(nil) }
             let result = await call.value
             let ran = read().contains("pane close w2:p1|")
             let rereads: Bool = read().contains("agent list|") && read().contains("pane list|")
             let tabClosed: Bool = result.json?["herdr_tab_closed"] as? Bool == true
+                && result.json?["herdr_workspace_closed"] as? Bool == true
             let closedRight: Bool = !result.isError && ran && rereads && tabClosed
             let declinedRight: Bool = result.isError && !ran
             check(approve ? closedRight : declinedRight,
@@ -355,7 +358,7 @@ extension SelfTest {
         }
         clearCalls()
         let renamedAgent = await herdrTool("rename_tab", ["tab_id": id, "title": "x"])
-        check(renamedAgent.isError && renamedAgent.text == TabRename.agentRefusal && read().isEmpty,
+        check(renamedAgent.isError && renamedAgent.text == TabRename.agentRefusal && !read().contains("rename"),
               "herdr MCP: rename_tab refuses an agent's id, and herdr is asked nothing", renamedAgent.text)
         let split = await herdrTool("split_pane", ["tab_id": id])
         check(split.isError && c.tabs.contains { $0 === tab }, "herdr MCP: split_pane refuses an agent's id, and the herdr tab stays", split.text)

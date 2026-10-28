@@ -173,14 +173,18 @@ public struct RemoteHost: Codable, Equatable, Sendable {
         if let issue = Self.directoryProblem(directory) { return issue }
         if let tmuxHistory, let issue = TmuxOptions.historyProblem(tmuxHistory) { return issue }
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty || trimmed.count > 64 {
+        if trimmed.isEmpty || trimmed.count > 64 || trimmed.unicodeScalars.contains(where: ShellQuote.isControl) {
             return "Give the host a name of up to 64 characters."
         }
-        // Approval windows name a host by it: no character that hides or reorders text (TabRename.hidden).
-        if trimmed.unicodeScalars.contains(where: TabRename.hidden) {
-            return "The host's name must be one line of characters that show as themselves: no control or format characters (such as direction marks) and no line or paragraph separators."
-        }
         return nil
+    }
+
+    /// Why a name given now (add_host, edit_host, the sheet's save) can't be: approval windows name a host by it, so no
+    /// character that hides or reorders text (TabRename.hidden). Only for a new or changed name, never in `problem`:
+    /// decodeList drops a host with a problem, and a host saved under an older rule must never vanish.
+    public static func nameProblem(_ name: String) -> String? {
+        guard name.unicodeScalars.contains(where: TabRename.hidden) else { return nil }
+        return "The host's name must be one line of characters that show as themselves: no direction marks, zero-width spaces, other control or format characters, or line or paragraph separators."
     }
 
     /// ssh destinations: letters, digits and `. _ - @ : % +` (IPv6 as `user@2001:db8::1`; OpenSSH takes no

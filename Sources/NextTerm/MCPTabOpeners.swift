@@ -15,5 +15,5 @@ enum MCPTabOpeners {
         return opener[tab.id] == key(caller)
     }
 
-    static let refusal = "rename_tab names only your own tab and the tabs you opened (new_tab, new_remote_tab, split_pane). The user renames the others with Rename Tab…."
+    static let refusal = "rename_tab names only your own tab and the tabs you opened (new_tab, new_remote_tab, split_pane); the others are the user's to rename (Rename Tab…)."
 }

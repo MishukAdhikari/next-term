@@ -22,6 +22,8 @@ import Testing
             #expect(throws: TabRenameRefusal.self, "\(bad.debugDescription)") { try TabRename.title(bad).get() }
         }
         #expect(try TabRename.title("Café ☕ 日本 — tests").get() == "Café ☕ 日本 — tests")
+        // The zero-width joiner inside emoji is allowed.
+        #expect(try TabRename.title("🧑‍💻 api · 👩‍💻").get() == "🧑‍💻 api · 👩‍💻")
         // new_tab's and new_remote_tab's title: none when not given, null or empty; otherwise rename_tab's rules.
         #expect(try TabRename.given(nil).get() == nil)
         #expect(try TabRename.given(NSNull()).get() == nil)
@@ -29,11 +31,13 @@ import Testing
         #expect(try TabRename.given(" api ").get() == "api")
         #expect(throws: TabRenameRefusal.self) { try TabRename.given(42).get() }
         #expect(throws: TabRenameRefusal.self) { try TabRename.given("a\u{202E}b").get() }
-        // A saved host's name, which approval windows name it by, the same.
-        var host = RemoteHost(name: "web\u{202E}1", destination: "dev@203.0.113.5")
-        #expect(host.problem?.contains("show as themselves") == true)
-        host.name = "web-1"
-        #expect(host.problem == nil)
+        // A host's name given now, which approval windows name it by, the same; an emoji name is fine.
+        #expect(RemoteHost.nameProblem("web\u{202E}1")?.contains("show as themselves") == true)
+        #expect(RemoteHost.nameProblem("🧑‍💻 dev box") == nil && RemoteHost.nameProblem("web-1") == nil)
+        // A host saved earlier under such a name is never dropped: the check is for new names only, not `problem`.
+        let old = RemoteHost(name: "web\u{202E}1", destination: "dev@203.0.113.5")
+        #expect(old.problem == nil)
+        #expect(RemoteHost.decodeList(RemoteHost.encodeList([old])).map(\.name) == ["web\u{202E}1"])
     }
 
     @Test func theToolOnlyChangesALabel() throws {
