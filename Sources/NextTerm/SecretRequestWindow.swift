@@ -48,7 +48,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     private(set) var purposeField = NSTextField()
     private(set) var valueField = NSSecureTextField()
     private(set) var writeOnlyBox: NSButton!
-    private(set) var saveButton: NSButton!
+    private(set) var saveButton: PrimaryButton!
     private(set) var declineButton: NSButton!
     private(set) var stopButton: NSButton!
     private let savedAsLabel = NSTextField(labelWithString: "")
@@ -165,7 +165,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
     private func buttonRow() -> NSView {
         stopButton = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
         declineButton = NSButton(title: "Decline", target: self, action: #selector(decline))
-        saveButton = NSButton(title: "Save", target: self, action: #selector(save))
+        saveButton = PrimaryButton(title: "Save", target: self, action: #selector(save))
         // Save is the primary, by a click only, even once the window is key; Escape declines.
         return ApprovalLayout.buttonRow(left: [stopButton], decline: declineButton, primary: saveButton)
     }
@@ -307,8 +307,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         for field in [nameField, purposeField, valueField] { field.isEnabled = false }
         linkField.setEnabled(false)
         for button in [stopButton, declineButton, writeOnlyBox] { button?.isHidden = true }
-        saveButton.title = "Close"
-        ApprovalLayout.style(saveButton, look: .accent) // the one button left, still the primary
+        saveButton.title = "Close" // the one button left, still the primary
         saveButton.keyEquivalent = "\r" // nothing left to approve: Return closes
         saveButton.isEnabled = true
         saveButton.action = #selector(closeSaved)
