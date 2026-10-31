@@ -43,7 +43,8 @@ import Testing
         #expect(SkillLibrary.projectFolders(from: package, home: home) == [package, repo + "/packages", repo])
         #expect(SkillLibrary.projectFolders(from: home, home: home).isEmpty) // never the home folder
         let entries = SkillLibrary.entries(from: package, home: home, nextTerm: BuiltInSkill.all)
-        #expect(entries.map(\.name) == ["lint", "deploy", "review", "notes", "next-term-tabs", "next-term-worktrees", "next-term-setup"])
+        #expect(entries.map(\.name) == ["lint", "deploy", "review", "notes", "next-term-tabs", "next-term-worktrees", "next-term-setup",
+                                          "next-term-secrets"])
         let lint = try #require(entries.first)
         #expect(lint.copy.scope == .project && lint.copy.place == "packages/web/.agents/skills" && !lint.native)
         // An agent Next Term doesn't know gets the nearest copy, and the other is named.
@@ -160,14 +161,37 @@ import Testing
     /// Each built-in in the Agent Skills format, named as it is served, with a description list_skills shows whole (it cuts
     /// at 300 characters), and only next-term-tabs under the tabs switch.
     @Test func everyBuiltInIsWholeInListSkills() {
-        #expect(BuiltInSkill.all.map(\.name) == ["next-term-tabs", "next-term-worktrees", "next-term-setup"])
+        #expect(BuiltInSkill.all.map(\.name) == ["next-term-tabs", "next-term-worktrees", "next-term-setup", "next-term-secrets"])
         for builtIn in BuiltInSkill.all {
             #expect(builtIn.text.hasPrefix("---\nname: \(builtIn.name)\ndescription: "), "\(builtIn.name)")
             #expect(!builtIn.description.isEmpty && builtIn.description.count <= 300, "\(builtIn.name): \(builtIn.description.count)")
             #expect(BuiltInSkill.named(builtIn.name) == builtIn)
         }
         #expect(BuiltInSkill.offered(tabs: true) == BuiltInSkill.all)
-        #expect(BuiltInSkill.offered(tabs: false).map(\.name) == ["next-term-worktrees", "next-term-setup"])
+        #expect(BuiltInSkill.offered(tabs: false).map(\.name) == ["next-term-worktrees", "next-term-setup", "next-term-secrets"])
+    }
+
+    /// next-term-secrets: Secrets first, a key used by name and never seen, and a missing one asked for in Next Term, not
+    /// in the chat. Its recipes give a key a name only the wrapper sets when a command's arguments need it, and pin their
+    /// packages (2026-10-31: an agent grepped ~/.zshrc for a token Secrets held).
+    @Test func theSecretsSkillLooksFirstAndNeverSeesAValue() {
+        let text = BuiltInSkill.secrets.text
+        for said in ["call `list_secrets` before anything else", "before reading ~/.zshrc", "nxtrm secret run NAME=ENVNAME -- command",
+                     "'Authorization: Bearer ${NXTRM_API_TOKEN}'", "Keep the single quotes", "a name only the wrapper sets",
+                     "mcp-remote@0.15.2", "Pin every package to an exact version", "bearer_token_env_var", "startup_timeout_sec = 60",
+                     "Never start the agent itself", "`request_secret`", "Never ask the user to paste a key into the chat",
+                     "Read only that entry", "Never open, print or search an agent's MCP config", "missing environment variables", "`run_command`", "The user's own instructions win", "If you have no `next-term` tools"] {
+            #expect(text.contains(said), "\(said)")
+        }
+        #expect(!text.contains("printf") && !text.contains("echo $"))
+        // Every `npx -y` in it is pinned to a version.
+        for line in text.split(separator: "\n") where line.contains("npx -y ") {
+            let package = line.components(separatedBy: "npx -y ")[1].split(separator: " ")[0]
+            #expect(package.dropFirst().contains("@"), "\(line)")
+        }
+        let description = BuiltInSkill.secrets.description
+        #expect(description.contains("API keys, tokens and passwords") && description.contains("list_secrets"))
+        #expect(!BuiltInSkill.secrets.offersTabs)
     }
 
     /// next-term-worktrees: finds what the project has by reading only, asks once, and moves with the same agent.
@@ -194,18 +218,21 @@ import Testing
         #expect(text.contains("Settings › Tasks") && text.contains("skills, tasks or secrets"))
     }
 
-    /// Within the 2,048 characters older Claude Code keeps, the skills whole in the first 512 some clients read, and only
-    /// for an agent in a Next Term tab.
+    /// Within the 2,048 characters older Claude Code keeps, and only for an agent in a Next Term tab: the skills right after
+    /// Secrets' first line, which every agent gets. Since that line went first (2026-10-31) the skills no longer end within
+    /// the first 512 characters: Codex shows a deferred server's first line, and that line is the one about keys.
     @Test func theSkillsLeadTheInstructionsOnlyInsideNextTerm() {
         let with = MCPServer.instructions(inTab: true, offeringTabs: true), noTabs = MCPServer.instructions(inTab: true, offeringTabs: false)
         let outside = MCPServer.instructions(inTab: false, offeringTabs: true)
         #expect(with.utf16.count <= 2_048 && noTabs.utf16.count <= 2_048 && outside == MCPServer.instructions)
-        let first = String(with.prefix(512))
-        #expect(first.contains("get_skill next-term-tabs when the user asks for work in parallel") && first.contains("only after the user types yes")
-                && first.contains("next-term-worktrees when the user pastes a repo, branch or PR")
-                && first.contains("next-term-setup when the user asks to change Next Term") && first.contains("opened_by"))
-        let firstNoTabs = String(noTabs.prefix(512))
-        #expect(!noTabs.contains("next-term-tabs") && firstNoTabs.contains("get_skill next-term-worktrees") && firstNoTabs.contains("next-term-setup"))
+        #expect(with.hasPrefix(MCPServer.secretsLead + "\n" + MCPServer.skillsParagraph(offeringTabs: true) + " "))
+        #expect(noTabs.hasPrefix(MCPServer.secretsLead + "\n" + MCPServer.skillsParagraph(offeringTabs: false) + " "))
+        #expect(with.contains("get_skill next-term-tabs when the user asks for work in parallel") && with.contains("only after the user types yes")
+                && with.contains("next-term-worktrees when the user pastes a repo, branch or PR")
+                && with.contains("next-term-setup when the user asks to change Next Term") && with.contains("opened_by"))
+        #expect(!noTabs.contains("next-term-tabs") && noTabs.contains("get_skill next-term-worktrees") && noTabs.contains("next-term-setup"))
+        // next-term-secrets is not offered there: the first line already says when to look in Secrets.
+        #expect(!with.contains("next-term-secrets when") && !noTabs.contains("next-term-secrets when"))
         #expect(!outside.contains("get_skill next-term"))
         // Still says what the tests of the rest pin.
         #expect(outside.contains("list_tabs") && outside.contains("brings back after an update or a quit keeps its id"))

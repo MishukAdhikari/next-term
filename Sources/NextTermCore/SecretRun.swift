@@ -18,8 +18,20 @@ public enum SecretRun {
         Touch ID or your password. NAME is a stored key; ENVNAME, when given, is the variable it is set as. Every \
         other stored key's name is taken out of the command's environment. Nothing is written to standard output.
 
-        For an MCP server, put it in the server's command:
-          nxtrm secret run GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github
+        For an MCP server, put it in the server's command, ENVNAME being the variable the server reads:
+          nxtrm secret run GH_TOKEN=GITHUB_PERSONAL_ACCESS_TOKEN -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+
+        For a server at a URL that wants a bearer token, give the key a name only this command sets (starting with NXTRM_, 64 characters at most), so an agent that fills in ${...} from its own environment leaves it alone; mcp-remote fills it in \
+        itself (keep the single quotes):
+          nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'
+
+        To add one to an agent, put the whole line after its own command:
+          codex mcp add docs -- nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'
+          claude mcp add docs -- nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'
+        In a JSON or TOML config, nxtrm is the command and the rest are its arguments. Pin each package to a version: \
+        Next Term warns about an npx -y package that runs whatever is newest. Next Term asks you when the server starts: \
+        each time for a key set to ask for Touch ID every time. Claude Code lists NXTRM_ names under missing \
+        environment variables; that is expected: never set or export them.
 
         Internal: nxtrm secret run --ticket <id> is the line Next Term types for run_with_secrets.
         """

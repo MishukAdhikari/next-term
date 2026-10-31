@@ -18,9 +18,16 @@ public enum MCPServer {
         (home as NSString).appendingPathComponent("Library/Application Support/Next Term/mcp.sock")
     }
 
-    public static let instructions = """
-        Next Term is the terminal and editor this agent may run in, for orchestrating work across projects. \
-        list_tabs shows every project, tab and herdr agent with its state (working, done, needs attention). Start \
+    /// What `initialize` says to an agent outside a Next Term tab. Its first line is Secrets' (secretsLead), whole in the
+    /// 250 characters Codex shows of a deferred server's first line, so an agent that needs a key looks there before its
+    /// shell files or the user; what the tools do follows, and how keys are used ends it (secretsUse). Every variant stays
+    /// within the 2,048 characters older Claude Code keeps.
+    public static let instructions = secretsLead + "\n" + "Next Term is the terminal and editor this agent may run in. "
+        + orchestration + " " + secretsUse
+
+    /// What Next Term's tools do, between Secrets' first line and its last sentences.
+    static let orchestration = """
+        list_tabs shows every project, tab and herdr agent with its state. Start \
         an agent with new_tab (a folder and a command such as "claude", "codex" or "opencode"), give it a task with \
         send_to_tab, then wait_for_tab until it stops and read_tab. An agent awaiting a decision shows \
         "attention" and a question_id for answer_agent. Never type into your own tab ("you": true). \
@@ -31,18 +38,17 @@ public enum MCPServer {
         create_file, stage, commit, focus_tab, split_pane, close_pane, zoom_pane, set_layout, settings_set, \
         install_skill, remove_skill, apply_import, undo_import and add_task ask the user on the Mac first, and change \
         nothing when declined. For settings from another app use list_import_sources and preview_import, \
-        never its files. A tab Next Term brings back after an update or a quit keeps its id. list_secrets \
-        lists the user's stored keys by name; no tool returns a key's value. run_with_secrets runs a command \
-        with keys in its environment once the user approves on the Mac with Touch ID. request_secret asks \
-        the user to type a key into Next Term. store_secret saves a key you already hold.
+        never its files. A tab Next Term brings back after an update or a quit keeps its id.
         """
 
-    /// First in the instructions when the agent runs in a Next Term tab: each of Next Term's own skills offered
+    /// Right after Secrets' first line when the agent runs in a Next Term tab: each of Next Term's own skills offered
     /// (BuiltInSkill.offered), with when to read it; get_skill gives the rules. next-term-tabs leads, while Settings ›
-    /// Editor › "Agents offer to run parallel work in tabs" is on. Whole within its first 512 characters, as some
-    /// clients read only those.
+    /// Editor › "Agents offer to run parallel work in tabs" is on. next-term-secrets is left out: the first line already
+    /// tells every agent when to look in Secrets, and the 2,048 characters have no room for it. Since Secrets' line went
+    /// first (2026-10-31), the paragraph no longer ends within the first 512 characters: Codex shows a deferred server's
+    /// first line, and that line is the one about keys.
     public static func skillsParagraph(offeringTabs: Bool) -> String {
-        let offered = BuiltInSkill.offered(tabs: offeringTabs).map { $0.name + " " + $0.when }
+        let offered = BuiltInSkill.offered(tabs: offeringTabs).filter { $0 != .secrets }.map { $0.name + " " + $0.when }
         return "This agent runs in a Next Term tab. Read get_skill " + offered.joined(separator: "; ") + ". Not in a tab with opened_by."
     }
 
@@ -60,9 +66,11 @@ public enum MCPServer {
         return false
     }
 
-    /// What `initialize` says: for an agent in a Next Term tab (`inTab`), Next Term's own skills first.
+    /// What `initialize` says: for an agent in a Next Term tab (`inTab`), Secrets' line, then Next Term's own skills in
+    /// place of the line that names Next Term.
     public static func instructions(inTab: Bool, offeringTabs: Bool) -> String {
-        inTab ? skillsParagraph(offeringTabs: offeringTabs) + " " + instructions : instructions
+        guard inTab else { return instructions }
+        return secretsLead + "\n" + skillsParagraph(offeringTabs: offeringTabs) + " " + orchestration + " " + secretsUse
     }
 
     // MARK: tools
@@ -208,11 +216,11 @@ public enum MCPServer {
              inputSchema: #"{"type": "object", "properties": {\#(hostRef), "directory": {"type": "string", "description": "Folder on the host. Default: the host's folder."}, "diff": {"type": "boolean", "description": "Include the diff. Default true."}, "max_bytes": {"type": "integer", "minimum": 1000, "maximum": 2000000, "description": "Longest diff to return. Default 200000."}}, "required": ["host"], "additionalProperties": false}"#,
              readOnly: false, destructive: true, idempotent: true, timeout: 60, openWorld: true),
         Tool(name: "list_skills", title: "List agent skills",
-             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills, .opencode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, OpenCode's in ~/.config/opencode/skills, with which of Claude Code, Codex, Command Code and OpenCode loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
+             description: "Lists the agent skills you can use here, found as your agent finds them: the project's (.agents/skills, .claude/skills, .codex/skills, .commandcode/skills, .opencode/skills in your folder and each above it to the repository's top), the user's (the same in the home folder, OpenCode's in ~/.config/opencode/skills, with which of Claude Code, Codex, Command Code and OpenCode loads each, its source and updates), and Next Term's own (next-term-tabs: parallel work in tabs; next-term-worktrees: going on in a worktree the project has; next-term-setup: changing Next Term for the user; next-term-secrets: using the user's keys by name). One entry a name, by your agent's rule for duplicates (also: the other copies). Each has name, description, scope, place, and native: your agent loads it itself. get_skill gives the others' instructions.",
              inputSchema: #"{"type": "object", "properties": {"project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "get_skill", title: "Get a skill",
-             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, and next-term-setup before changing Next Term for the user.",
+             description: "A skill's instructions (its SKILL.md), its folder and its other files, from Next Term's library: the project's skills, the user's and Next Term's own, the copy your agent's rule picks; works for any agent. Read one when its description fits the task and your agent doesn't load it itself (list_skills: native false). Read Next Term's next-term-tabs before running work in parallel in Next Term tabs, next-term-worktrees when the user pastes a repo, branch or PR the project has a worktree or branch for, next-term-setup before changing Next Term for the user, and next-term-secrets when something needs an API key, token or password.",
              inputSchema: #"{"type": "object", "properties": {"name": {"type": "string", "description": "The skill's name, as list_skills gives it."}, "scope": {"type": "string", "enum": ["project", "personal", "next-term"], "description": "That scope's copy instead of the one your agent's rule picks."}, "project": {"type": "string", "description": "A folder in an open project. Default: your tab's folder."}}, "required": ["name"], "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "list_shortcuts", title: "List keyboard shortcuts",

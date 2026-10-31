@@ -2,10 +2,12 @@ import Foundation
 
 /// The skills Next Term ships in its library (SkillLibrary, over MCP's get_skill): how an agent running in a Next Term
 /// tab runs work in parallel tabs (next-term-tabs), goes on with work in a worktree the project already has, in its own
-/// window (next-term-worktrees), and changes Next Term's settings and layout for the user, keys first
-/// (next-term-setup). Nothing is written to any agent's folders: an agent gets them from Next Term while it runs in a
-/// tab. Settings › Editor › "Agents offer to run parallel work in tabs" (MCP settings_set agents_offer_tabs) takes
-/// next-term-tabs and its offer out; the others are there whenever agents may control Next Term.
+/// window (next-term-worktrees), changes Next Term's settings and layout for the user, keys first
+/// (next-term-setup), and uses the user's keys from Secrets by name, never seeing them (next-term-secrets). Nothing is
+/// written to any agent's folders: an agent gets them from Next Term. next-term-secrets is not in the skills paragraph,
+/// since the instructions' first line already tells every agent, in a tab or not, when to look in Secrets. Settings ›
+/// Editor › "Agents offer to run parallel work in tabs" (MCP settings_set agents_offer_tabs) takes next-term-tabs and
+/// its offer out; the others are there whenever agents may control Next Term.
 public struct BuiltInSkill: Sendable, Equatable {
     public let name: String
     /// The skill, in the Agent Skills format. Its description is what list_skills shows (at most 300 characters, as it
@@ -19,7 +21,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     /// The description in its front matter.
     public var description: String { SkillFrontMatter.parse(text)?.description ?? "" }
 
-    public static let all = [tabs, worktrees, setup]
+    public static let all = [tabs, worktrees, setup, secrets]
 
     public static func named(_ name: String) -> BuiltInSkill? { all.first { $0.name == name } }
 
@@ -172,4 +174,56 @@ public struct BuiltInSkill: Sendable, Equatable {
         Write "—" for a command with no key. Add only the keys that go with what was asked, not a full list: `list_shortcuts` is there when the user wants more.
         """#, offersTabs: false,
         when: "when the user asks to change Next Term (settings, layout, keys) or how to do something in it")
+
+    /// Keys from Secrets, by name: look there first, use a key without seeing it (run_with_secrets, `nxtrm secret run`
+    /// in an MCP server's config), and ask for a missing one in Next Term, never in the chat.
+    public static let secrets = BuiltInSkill(name: "next-term-secrets", text: #"""
+        ---
+        name: next-term-secrets
+        description: Use the user's API keys, tokens and passwords from Next Term's Secrets without seeing them. Use whenever a command, script, .env file, CLI or MCP server needs a key, token or password, or an OAuth login fails: check list_secrets first, before shell profiles or asking the user.
+        ---
+
+        # Keys from Next Term's Secrets
+
+        Next Term keeps the user's API keys, tokens and passwords in its Secrets, and this skill comes from its library (MCP `get_skill`). Its MCP server (`next-term`) tells you the keys' names, never their values, and puts a key in a program's environment only after the user approves on the Mac with Touch ID or their password. You use a key by its name and never see it.
+
+        The user's own instructions win over this skill: what they told you, and their CLAUDE.md or AGENTS.md. If you have no `next-term` tools (no `list_secrets`), this skill does not apply: say nothing about Secrets.
+
+        ## Look in Secrets first
+
+        When anything needs a key, token or password, call `list_secrets` before anything else: before reading ~/.zshrc, ~/.zprofile, `env` or `.env` files for it, and before asking the user. A config that names a token counts (a `${NAME}` placeholder, an `Authorization` header): look before you try an OAuth login, and again when one fails (a 404 on registration means the server wants a token).
+
+        Match by name and by what each key is for. A program may want another name than the stored one (it reads `OPENAI_API_KEY`, stored as `OPENAI_KEY`): give it as `NAME=ENVNAME`. When two could fit, ask the user which, by name.
+
+        ## Use it by name
+
+        - A command, script or SDK call you run now: `run_with_secrets` with the names and the command, which uses the key as `$ENVNAME`. `read_tab` shows its output with stored keys masked.
+        - A program another app starts later, such as an MCP server in an agent's config: make its command `nxtrm secret run NAME=ENVNAME -- command`, ENVNAME being the variable the program reads. Next Term asks the user on the Mac when it starts: each time for a key that asks for Touch ID every time (the default), otherwise once the user's allowance has run out; tell them so, and to approve promptly.
+          - A local server that reads its token from a variable: `nxtrm secret run GH_TOKEN=GITHUB_PERSONAL_ACCESS_TOKEN -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server` (`-e` with no value takes it from the wrapper's environment)
+          - When the command's arguments need the value, as a server at a URL that wants a bearer token does, give it a name only the wrapper sets, starting with `NXTRM_`, 64 characters at most (shorten a long one: `API_TOKEN=NXTRM_TOKEN`): `nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y mcp-remote@0.15.2 https://mcp.example.com/mcp --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'`. Keep the single quotes: mcp-remote fills in `${NXTRM_API_TOKEN}` itself. An agent that fills in `${…}` from its own environment then finds nothing to fill, so a value the user also exports never lands in a command line.
+          - Pin every package to an exact version (`npm view mcp-remote version`): Next Term warns the user about an unpinned `npx -y` package, which runs whatever is newest each time.
+          - Codex: `codex mcp add NAME -- nxtrm secret run …`, then ask the user to add `startup_timeout_sec = 60` under that server in ~/.codex/config.toml, as their approval takes a moment. Claude Code: `claude mcp add NAME -- nxtrm secret run …`; it lists `NXTRM_…` under missing environment variables, which is expected: never set or export it, only `nxtrm secret run` does. A JSON or TOML config: `nxtrm` as the command, the rest as its arguments.
+          - Never open, print or search an agent's MCP config as a whole (~/.codex/config.toml, ~/.claude.json, .mcp.json): other servers' entries can hold keys. Use the agent's own `mcp add` and `mcp get NAME`.
+          - If `command -v nxtrm` finds nothing, take the command of the `next-term` server's own entry (`codex mcp get next-term`, `claude mcp get next-term`): `nxtrm` by its full path, quoted in a shell (it has a space). Read only that entry: other servers' entries can hold keys.
+          - Not `--bearer-token-env-var`, `bearer_token_env_var`, `env_http_headers` or a variable in a URL server's own headers: those read your agent's own environment, which has no key.
+          - Don't check a wrapped server with `claude mcp list` or a test run: each start asks the user. Tell them it will ask when the agent next starts it.
+          - Never start the agent itself under `nxtrm secret run`: every command it runs could read the key.
+        - Setting up a program that reads a `.env` file, with the key in Secrets: leave the key out of the file and start the program with `run_with_secrets` or under `nxtrm secret run`; dotenv and most loaders keep a variable that is already set. A `.env` that already works: leave it alone, and offer `import_secrets` only when the user asks to move keys into Secrets.
+
+        ## Never
+
+        - Never ask the user to paste a key into the chat, and never propose exporting one in ~/.zshrc or typing it into a config.
+        - Never print, echo, log or copy a key's value, and never put one in a command, an argument, a file or a commit.
+        - Never read a key's value out of shell files, `.env` files or the keychain to use it yourself: start the program so it reads them itself, or use Secrets.
+
+        ## Missing or new
+
+        - Not in `list_secrets`, but the program already gets it on its own (a `.env` it loads, a variable it inherits; check by name, never the value): let it, and mention that Secrets could keep it. Otherwise `request_secret` with the name the program expects and a reason ("API_TOKEN for the docs MCP server"). The user types it into Next Term on the Mac; you get back only `saved`. If you know where the user gets one (the provider's key page), say so in a line. Then use it by name.
+        - `vault` none: the user keeps no keys in Next Term yet. Use their own setup for the key, or offer `request_secret` to keep it here. cant_open or tampered: tell the user, and stop.
+        - The user pastes a key into the chat anyway, or a CLI prints a new token: `store_secret` it right away, use it by name from then on, and never repeat it.
+        - A command that asks for the user's own password or login (sudo, `gh auth login`): `run_command` if you have it, or ask the user to run it in their tab. Never ask for that password in the chat.
+        - `declined`: the user said no. Say what you could not do, and don't ask again in this task.
+        """#, offersTabs: false,
+        // Not shown in the skills paragraph (MCPServer leaves next-term-secrets out); get_skill's description says it.
+        when: "when a command, script, .env file or MCP server needs an API key, token or password")
 }

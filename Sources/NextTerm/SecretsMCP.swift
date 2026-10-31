@@ -42,7 +42,8 @@ enum SecretsMCP {
     }
 
     static let cantOpenNote = "Secrets can't be opened on this Mac. The user can see why in Settings › Secrets."
-    static let listNote = "Values are never returned. Use run_with_secrets, or nxtrm secret run in an MCP server's config."
+    /// With every list_secrets answer that lists keys: how to use one by name (MCPServer.secretsListNote).
+    static let listNote = MCPServer.secretsListNote
     static let atTheMacNote = "Only someone at the Mac can add keys."
 
     /// A call through the remote door: one with a `requester`, or a `connection`.
@@ -84,12 +85,14 @@ enum SecretsMCP {
     static func listSecrets() -> [String: Any] {
         let store = SecretsStore.shared
         store.reloadIfChanged()
-        guard let index = store.index else { return ["vault": "none", "secrets": [Any](), "note": listNote] }
+        // A vault that can't be read says so before "none": a tampered one may have no index read yet, and "none" would
+        // send the agent to the user's own setup.
         switch store.protection {
         case .cantOpen: return ["vault": "cant_open", "secrets": [Any](), "note": cantOpenNote]
         case .tampered: return ["vault": "tampered", "secrets": [Any](), "note": cantOpenNote]
         default: break
         }
+        guard let index = store.index else { return ["vault": "none", "secrets": [Any](), "note": MCPServer.secretsNoneNote] }
         let time = ISO8601DateFormatter()
         let now = Date()
         let secrets: [[String: Any]] = index.entries.map { (entry: SecretVault.Entry) -> [String: Any] in
