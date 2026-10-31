@@ -58,7 +58,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     private let onDecline: (_ stopAsking: Bool) -> Void
     private let onPause: () -> Void
 
-    private(set) var allowButton: NSButton!
+    private(set) var allowButton: PrimaryButton!
     private(set) var declineButton: NSButton!
     private(set) var stopButton: NSButton!
     private(set) var pauseButton: NSButton!
@@ -369,7 +369,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
     private func buttonRow() -> NSView {
         stopButton = NSButton(title: "Decline and Stop Asking", target: self, action: #selector(declineAndStop))
         declineButton = NSButton(title: "Decline", target: self, action: #selector(decline))
-        allowButton = NSButton(title: content.allowTitle, target: self, action: #selector(allow))
+        allowButton = PrimaryButton(title: content.allowTitle, target: self, action: #selector(allow))
         return ApprovalLayout.buttonRow(left: [stopButton], decline: declineButton, primary: allowButton)
     }
 

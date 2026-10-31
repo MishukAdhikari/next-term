@@ -34,7 +34,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
     private let onDecline: (_ stopAsking: Bool) -> Void
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let requesterLabel = NSTextField(wrappingLabelWithString: "")
-    private(set) var approveButton: NSButton!
+    private(set) var approveButton: PrimaryButton!
     private(set) var declineButton: NSButton!
     private(set) var stopButton: NSButton?
     private var answered = false
@@ -81,7 +81,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         statusLabel.isHidden = true
 
         declineButton = NSButton(title: request.declineTitle, target: self, action: #selector(decline))
-        approveButton = NSButton(title: request.approveTitle, target: self, action: #selector(approve))
+        approveButton = PrimaryButton(title: request.approveTitle, target: self, action: #selector(approve))
         if let stopTitle = request.stopTitle { stopButton = NSButton(title: stopTitle, target: self, action: #selector(declineAndStop)) }
         let buttons = ApprovalLayout.buttonRow(left: [stopButton].compactMap { $0 }, decline: declineButton, primary: approveButton,
                                                look: request.primaryLook)

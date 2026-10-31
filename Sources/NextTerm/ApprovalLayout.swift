@@ -5,10 +5,10 @@ import NextTermCore
 /// a key request): one type scale, the agent's words set apart as its own, a disclosure row that works as one control,
 /// a command box that wraps only between words or path parts, and one row of buttons with a single primary.
 ///
-/// The primary (Allow, Approve, Save) is the rightmost button, in the accent colour and semibold, so it reads as the
-/// action at a glance. It is pressed only by a click: these windows come up while the user types elsewhere, so Return
-/// never answers them, nor Tab then Space. Escape declines, which is always safe. A choice that can't be undone (Remove)
-/// is marked destructive instead of tinted.
+/// The primary (Allow, Approve, Save, Run) is the rightmost button, filled with the accent colour and semibold, so it
+/// reads as the action at a glance (PrimaryButton). It is pressed only by a click: these windows come up while the user
+/// types elsewhere, so Return never answers them, nor Tab then Space. Escape declines, which is always safe. A choice
+/// that can't be undone (Remove) is filled red instead.
 @MainActor
 enum ApprovalLayout {
     /// The windows' inner width: their content less the 18-point margins either side.
@@ -104,23 +104,23 @@ enum ApprovalLayout {
 
     /// The window's buttons: `left` (rarer choices, such as Decline and Stop Asking) at the start, then Decline and the
     /// primary at the end. Decline takes Escape; the primary takes no key and never the keyboard, so only a click
-    /// presses it.
-    static func buttonRow(left: [NSButton], decline: NSButton, primary: NSButton, look: PrimaryLook = .accent) -> NSStackView {
+    /// presses it. It stands as tall as Decline's bezel.
+    static func buttonRow(left: [NSButton], decline: NSButton, primary: PrimaryButton, look: PrimaryLook = .accent) -> NSStackView {
         for button in left + [decline, primary] {
             button.bezelStyle = .rounded
             button.keyEquivalent = ""
         }
         decline.keyEquivalent = "\u{1b}" // Escape declines, which is always safe
         primary.refusesFirstResponder = true
-        style(primary, look: look)
+        primary.look = look
         let row = NSStackView(views: left + [NSView(), decline, primary])
         row.spacing = 8
+        primary.heightAnchor.constraint(equalTo: decline.heightAnchor).isActive = true
         return row
     }
 
-    /// The primary's look, kept when its title changes. Only the weight is set on the title: AppKit gives it the colour
-    /// that reads on the bezel as drawn, tinted while the window draws active and plain while it draws inactive (Next Term
-    /// in the background), where a fixed white title would vanish.
+    /// An alert's chosen button (an NSAlert, key while it shows, so AppKit's own tint draws): tinted and semibold, or
+    /// marked destructive.
     static func style(_ primary: NSButton, look: PrimaryLook) {
         primary.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
         switch look {
@@ -131,6 +131,65 @@ enum ApprovalLayout {
             primary.bezelColor = nil
             primary.hasDestructiveAction = true
         }
+    }
+}
+
+/// The approval windows' primary: filled with the accent colour (red for one that can't be undone), a white semibold
+/// title, darker while pressed and faded while disabled. It draws its own fill because these windows never become key,
+/// and AppKit draws a tint, a default button and a prominent button only in the key window: anything else would be as
+/// grey as Decline beside it.
+@MainActor
+final class PrimaryButton: NSButton {
+    var look: ApprovalLayout.PrimaryLook = .accent {
+        didSet { restyle() }
+    }
+
+    private static let padding: CGFloat = 14
+
+    /// Made by NSButton's `init(title:target:action:)`, which sets a bezel first: borderless from here on.
+    private func restyle() {
+        isBordered = false
+        wantsLayer = true
+        bezelColor = look == .accent ? .controlAccentColor : .systemRed
+        hasDestructiveAction = look == .destructive
+        let colour = NSColor.white.withAlphaComponent(isEnabled ? 1 : 0.6)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        super.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold), .foregroundColor: colour, .paragraphStyle: paragraph,
+        ])
+        needsDisplay = true
+        invalidateIntrinsicContentSize()
+    }
+
+    override var title: String {
+        get { super.title }
+        set {
+            super.title = newValue
+            restyle()
+        }
+    }
+
+    override var isEnabled: Bool {
+        didSet { restyle() }
+    }
+
+    override var isHighlighted: Bool {
+        didSet { needsDisplay = true }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let text = attributedTitle.size()
+        return NSSize(width: ceil(text.width) + Self.padding * 2, height: max(ceil(text.height) + 8, 22))
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        let fill: NSColor = look == .accent ? .controlAccentColor : .systemRed
+        let shown = isHighlighted ? fill.blended(withFraction: 0.25, of: .black) ?? fill : fill
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = shown.withAlphaComponent(isEnabled ? 1 : 0.45).cgColor
     }
 }
 
