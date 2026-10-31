@@ -13,6 +13,11 @@ import NextTermCore
 /// is, folded when they would not but do beside a minimal sidebar, hidden when even folded they would not. The user's
 /// choice is kept meanwhile. A resize of the window is shared out first, as the split view shares any; only then does the
 /// column change width, so the window puts the sidebar back where the resize alone left it.
+///
+/// Folded to its rail, resting the pointer on it slides the list out over the content (`list`, the column unfolded,
+/// made on the first hover and kept): it takes no room, so nothing beside it moves or resizes. Passing over the rail opens
+/// nothing (WindowColumnRail.openDelay), and the list goes once the pointer has been off the rail and the list for
+/// WindowColumnRail.closeDelay. It never takes the keyboard.
 final class WindowColumnHost: NSView {
     let column = WindowColumnView()
     let content: NSView
@@ -40,6 +45,18 @@ final class WindowColumnHost: NSView {
     var onShownChange: ((WindowColumnShown) -> Void)?
     /// How the column shows now.
     private(set) var shown: WindowColumnShown = .hidden
+    /// Where the hovering list's header words start, past the traffic lights when it sits under them.
+    var listLeading: () -> CGFloat = { 8 }
+    /// Reduce Motion as System Settings has it: the list appears and goes without sliding. The self-test stands in.
+    static var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// The list that slides out over the content from the rail, once made.
+    private(set) var list: WindowColumnView?
+    var listShowing: Bool { list.map { !$0.isHidden } ?? false }
+    private var onRail = false
+    private var onList = false
+    /// Counts the pointer's moves on and off: a delay whose count has moved on does nothing.
+    private var hoverMoves = 0
 
     init(content: NSView) {
         self.content = content
@@ -49,6 +66,8 @@ final class WindowColumnHost: NSView {
         addSubview(content)
         column.isHidden = true
         addSubview(column)
+        column.onPointer = { [weak self] (inside: Bool) in self?.railPointer(inside) }
+        column.onUpdated = { [weak self] in self?.mirror() }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -90,9 +109,137 @@ final class WindowColumnHost: NSView {
         }
         let columnResized: Bool = width != shown.width
         if columnResized, let around = aroundColumnChange { around(apply) } else { apply() }
+        if decided.form != .folded {
+            hideList(animated: false) // pinned open, or hidden: no list over the content
+        } else if listShowing, let list {
+            list.frame = listFrame()
+        }
         guard decided != shown else { return }
         shown = decided
         onShownChange?(decided)
+    }
+
+    // MARK: the list on hover
+
+    private func railPointer(_ inside: Bool) {
+        onRail = inside
+        hoverMoves += 1
+        guard shown.form == .folded, !column.isHidden else { return }
+        if inside {
+            guard !listShowing else { return }
+            after(WindowColumnRail.openDelay) { [weak self] in
+                guard let self, self.onRail else { return }
+                self.showList()
+            }
+        } else {
+            closeSoon()
+        }
+    }
+
+    private func listPointer(_ inside: Bool) {
+        onList = inside
+        hoverMoves += 1
+        if !inside { closeSoon() }
+    }
+
+    /// The list goes once the pointer has stayed off the rail and the list for closeDelay.
+    private func closeSoon() {
+        guard listShowing else { return }
+        after(WindowColumnRail.closeDelay) { [weak self] in
+            guard let self, !self.onRail, !self.onList else { return }
+            self.hideList(animated: true)
+        }
+    }
+
+    /// `body` after `delay`, unless the pointer moved on or off the rail or the list meanwhile.
+    private func after(_ delay: TimeInterval, _ body: @escaping () -> Void) {
+        let move: Int = hoverMoves
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.hoverMoves == move else { return }
+                body()
+            }
+        }
+    }
+
+    /// The list beside the rail, over the content: as tall as the window, the unfolded column's width.
+    private func listFrame() -> NSRect {
+        let width: CGFloat = WindowColumnRail.listWidth + WindowColumnWidth.hairline
+        let x: CGFloat = columnOnRight ? column.frame.minX - width : column.frame.maxX
+        return NSRect(x: x, y: 0, width: width, height: bounds.height)
+    }
+
+    private func makeList() -> WindowColumnView {
+        let made = WindowColumnView()
+        made.isHidden = true
+        made.shadow = {
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+            shadow.shadowBlurRadius = 10
+            return shadow
+        }()
+        made.onSelect = { [weak self] (id: Int) in
+            self?.hideList(animated: false)
+            self?.column.onSelect?(id)
+        }
+        made.onToggle = { [weak self] in self?.column.onToggle?() } // a double-click pins it
+        made.onMore = { [weak self] in self?.column.onMore?() }
+        made.onTopRowMenu = { [weak self] in self?.column.onTopRowMenu?() }
+        made.onPointer = { [weak self] (inside: Bool) in self?.listPointer(inside) }
+        addSubview(made) // over the split view and the rail
+        list = made
+        return made
+    }
+
+    /// The rows as the rail has them, unfolded, while the list shows.
+    private func mirror() {
+        guard listShowing, let list else { return }
+        list.update(list: column.list, change: .structure, current: column.current, expanded: true)
+    }
+
+    /// Slides the list out from the rail; at once with Reduce Motion.
+    func showList() {
+        guard visible, shown.form == .folded, !column.isHidden else { return }
+        let panel: WindowColumnView = list ?? makeList()
+        panel.onRight = columnOnRight
+        panel.headerLeading = listLeading()
+        panel.isHidden = false
+        panel.update(list: column.list, change: .structure, current: column.current, expanded: true)
+        let final: NSRect = listFrame()
+        guard !Self.reducesMotion() else {
+            panel.alphaValue = 1
+            panel.frame = final
+            return
+        }
+        panel.frame = final.offsetBy(dx: columnOnRight ? 16 : -16, dy: 0)
+        panel.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { (context: NSAnimationContext) in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().frame = final
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    /// The list back into the rail; at once with Reduce Motion, or when the column pins open or hides.
+    func hideList(animated: Bool) {
+        onList = false
+        guard let list, !list.isHidden else { return }
+        guard animated, !Self.reducesMotion() else {
+            list.isHidden = true
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ (context: NSAnimationContext) in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            list.animator().alphaValue = 0
+        }, completionHandler: { [weak list] in
+            MainActor.assumeIsolated {
+                // Hovered again meanwhile: it stays.
+                guard let list, list.alphaValue == 0 else { return }
+                list.isHidden = true
+            }
+        })
     }
 
     private func setContentFrame(_ frame: NSRect) {

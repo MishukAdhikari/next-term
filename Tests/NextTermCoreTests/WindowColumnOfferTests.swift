@@ -85,7 +85,7 @@ struct WindowColumnOfferTests {
         #expect(WindowColumnSettings.approvalLine(shown: false, key: nil)
             == "The window column is hidden in every window; View › Show Window Column or Settings › General brings it back.")
         #expect(WindowColumnSettings.approvalLine(shown: true, key: "⌃⇧⌘S").hasPrefix("The window column shows at the outer edge of every window"))
-        #expect(WindowColumnSettings.approvalLine(folded: true) == "The window column folds to a badge for each window, in every window.")
+        #expect(WindowColumnSettings.approvalLine(folded: true) == "The window column folds to its rail, a dot for each window, in every window.")
         #expect(WindowColumnSettings.approvalLine(folded: false).hasPrefix("The window column unfolds in every window"))
         #expect(WindowColumnSettings.unseenLine(shown: true) == "Window column on: it shows from two windows on.")
         #expect(WindowColumnSettings.unseenLine(shown: false) == "Window column off: no window will show it.")

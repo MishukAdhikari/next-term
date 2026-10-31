@@ -80,12 +80,17 @@ extension TerminalWindowController {
         return columnHost.shown.width
     }
 
-    /// The column's own insets for the traffic lights: folded at the top-left, a strip of title bar over its chevron;
-    /// unfolded, its header's words after them. On the right, or in full screen, it starts at the top.
+    /// The column's own insets for the traffic lights: folded at the top-left, a strip of title bar over its count, so
+    /// nothing sits under them; unfolded, its header's words after them, as the hovering list's are past the rail. On the
+    /// right, or in full screen, it starts at the top.
     func updateWindowColumnInsets() {
-        let column: WindowColumnView = columnHost.column
-        let underLights: Bool = !columnHost.columnOnRight && !isFullScreen
-        column.topInset = underLights && columnHost.shown.form == .folded ? TabBarView.height : 0
-        column.headerLeading = underLights ? 78 : 8
+        let host: WindowColumnHost = columnHost
+        let underLights: Bool = !host.columnOnRight && !isFullScreen
+        host.column.topInset = underLights && host.shown.form == .folded ? TabBarView.height : 0
+        host.column.headerLeading = underLights ? lightsEnd : 8
+        host.listLeading = { [weak self] () -> CGFloat in
+            guard let self, !host.columnOnRight, !self.isFullScreen else { return 8 }
+            return max(8, self.lightsEnd - host.column.frame.maxX)
+        }
     }
 }
