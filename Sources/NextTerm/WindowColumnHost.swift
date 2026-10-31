@@ -128,7 +128,8 @@ final class WindowColumnHost: NSView {
         if inside {
             guard !listShowing else { return }
             after(WindowColumnRail.openDelay) { [weak self] in
-                guard let self, self.onRail else { return }
+                // Not while a button is down: a drag or a click passing over the rail is not a rest on it.
+                guard let self, self.onRail, NSEvent.pressedMouseButtons == 0 else { return }
                 self.showList()
             }
         } else {
@@ -140,6 +141,12 @@ final class WindowColumnHost: NSView {
         onList = inside
         hoverMoves += 1
         if !inside { closeSoon() }
+    }
+
+    /// A window chosen on the rail: no list opens after the click, and an open one goes, as a click in the list does.
+    func chose() {
+        hoverMoves += 1 // a pending open finds the count moved on, and does nothing
+        hideList(animated: false)
     }
 
     /// The list goes once the pointer has stayed off the rail and the list for closeDelay.
@@ -171,6 +178,7 @@ final class WindowColumnHost: NSView {
 
     private func makeList() -> WindowColumnView {
         let made = WindowColumnView()
+        made.hovers = true
         made.isHidden = true
         made.shadow = {
             let shadow = NSShadow()
@@ -206,6 +214,7 @@ final class WindowColumnHost: NSView {
         panel.isHidden = false
         panel.update(list: column.list, change: .structure, current: column.current, expanded: true)
         let final: NSRect = listFrame()
+        watchEscape()
         guard !Self.reducesMotion() else {
             panel.alphaValue = 1
             panel.frame = final
@@ -223,9 +232,13 @@ final class WindowColumnHost: NSView {
 
     /// The list back into the rail; at once with Reduce Motion, or when the column pins open or hides.
     func hideList(animated: Bool) {
-        onList = false
-        guard let list, !list.isHidden else { return }
+        unwatchEscape()
+        guard let list, !list.isHidden else {
+            onList = false
+            return
+        }
         guard animated, !Self.reducesMotion() else {
+            onList = false
             list.isHidden = true
             return
         }
@@ -233,13 +246,44 @@ final class WindowColumnHost: NSView {
             context.duration = 0.12
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             list.animator().alphaValue = 0
-        }, completionHandler: { [weak list] in
+        }, completionHandler: { [weak self, weak list] in
             MainActor.assumeIsolated {
-                // Hovered again meanwhile: it stays.
-                guard let list, list.alphaValue == 0 else { return }
-                list.isHidden = true
+                guard let self, let list, list.alphaValue == 0 else { return }
+                if self.onRail || self.onList {
+                    // The pointer came back while it faded: it stays.
+                    list.animator().alphaValue = 1
+                    self.watchEscape()
+                } else {
+                    list.isHidden = true
+                }
             }
         })
+    }
+
+    /// While the list shows, Escape in its window closes it, and still goes where it was going (the terminal, the
+    /// editor): the list never takes a key.
+    private var escapeMonitor: Any?
+
+    private func watchEscape() {
+        guard escapeMonitor == nil else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] (event: NSEvent) -> NSEvent? in
+            MainActor.assumeIsolated {
+                if let self, event.keyCode == 53, event.window === self.window,
+                   event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+                    self.hoverMoves += 1
+                    self.onRail = false
+                    self.onList = false // gone by the key, not by the pointer: it doesn't come back as it fades
+                    self.hideList(animated: true)
+                }
+            }
+            return event
+        }
+    }
+
+    private func unwatchEscape() {
+        guard let monitor = escapeMonitor else { return }
+        NSEvent.removeMonitor(monitor)
+        escapeMonitor = nil
     }
 
     private func setContentFrame(_ frame: NSRect) {

@@ -31,12 +31,13 @@ final class WindowColumnView: NSView, ProjectGlowing {
             needsDisplay = true
         }
     }
-    /// Folded at the window's top-left outside full screen: a strip of title bar for the traffic lights over the chevron.
+    /// Folded at the window's top-left outside full screen: a strip of title bar for the traffic lights over the count.
     var topInset: CGFloat = 0 {
         didSet {
             guard topInset != oldValue else { return }
             needsLayout = true
             needsDisplay = true
+            updateTrackingAreas()
         }
     }
     /// Unfolded, where the header's words start: after the traffic lights at the window's top-left.
@@ -54,6 +55,11 @@ final class WindowColumnView: NSView, ProjectGlowing {
     var onPointer: ((Bool) -> Void)?
     /// It took new rows, a new form or a new window of its own: the hover list shows them too.
     var onUpdated: (() -> Void)?
+    /// The list that slides out over the content from the rail (WindowColumnHost): no chevron, since it neither folds nor
+    /// pins by one; a double-click on it pins the column, and leaving it closes it.
+    var hovers = false {
+        didSet { if hovers != oldValue { needsLayout = true } }
+    }
     /// A right-click on the top row: the window's Project Color menu.
     var onTopRowMenu: (() -> NSMenu?)?
     /// The top row's slice of the project colour, as the tab bars beside it have.
@@ -99,6 +105,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
         footButton.action = #selector(AppDelegate.toggleWindowColumn(_:))
         footButton.isHidden = true
         addSubview(footButton)
+        // The foot's key as the user sets it, as the menus' and the tooltips' follow it.
+        NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         updateChevron()
         // A group, not a button: VoiceOver goes into it, to each window's button.
         setAccessibilityElement(true)
@@ -111,12 +119,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    /// Its frame is set by hand (WindowColumnHost): a new size lays it out again, as a window resize or a new form does.
-    override func setFrameSize(_ newSize: NSSize) {
-        let resized: Bool = newSize != frame.size
-        super.setFrameSize(newSize)
-        if resized { needsLayout = true }
-    }
+    // Its frame is set by hand (WindowColumnHost): a new size lays it out again, as a window resize or a new form does
+    // (setFrameSize, below with its tracking).
 
     /// "Windows, 5 open".
     static func groupLabel(_ count: Int) -> String { "Windows, \(count) open" }
@@ -207,10 +211,12 @@ final class WindowColumnView: NSView, ProjectGlowing {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let x: CGFloat = stripX, width: CGFloat = stripWidth
-        // Folded to the rail, no chevron: resting the pointer on it, a double-click or ⌃⌘S unfolds it.
-        if chevron.isHidden == expanded { chevron.isHidden = !expanded }
+        // Folded to the rail, no chevron: resting the pointer on it, a double-click or ⌃⌘S unfolds it. Nor on the hovering
+        // list, which neither folds nor pins by one.
+        let showsChevron: Bool = expanded && !hovers
+        if chevron.isHidden == showsChevron { chevron.isHidden = !showsChevron }
         let chevronFrame = NSRect(x: onRight ? x : x + width - Self.slot, y: 0, width: Self.slot, height: Self.header)
-        if expanded, chevron.frame != chevronFrame { chevron.frame = chevronFrame }
+        if showsChevron, chevron.frame != chevronFrame { chevron.frame = chevronFrame }
         if footButton.isHidden == expanded { footButton.isHidden = !expanded }
         let foot: CGFloat = expanded ? Self.footRow : 0
         if expanded {
@@ -340,10 +346,22 @@ final class WindowColumnView: NSView, ProjectGlowing {
         if event.clickCount == 2 { onToggle?() }
     }
 
+    /// Below the title bar's strip while it is there: resting on the traffic lights, or dragging the window from there,
+    /// opens nothing.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        let place = NSRect(x: 0, y: topInset, width: bounds.width, height: max(0, bounds.height - topInset))
+        addTrackingArea(NSTrackingArea(rect: place, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let resized: Bool = newSize != frame.size
+        super.setFrameSize(newSize)
+        if resized {
+            needsLayout = true
+            updateTrackingAreas() // its rect is not the visible rect's, so it follows the size itself
+        }
     }
 
     override func mouseEntered(with event: NSEvent) { onPointer?(true) }
@@ -370,6 +388,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
     }
 
     @objc private func chevronClicked() { onToggle?() }
+
+    @objc private func shortcutsChanged() { if expanded { updateFoot() } }
     @objc private func moreClicked() { onMore?() }
 
     @objc private func buttonClicked(_ sender: WindowColumnButton) {
@@ -566,9 +586,10 @@ final class WindowColumnButton: NSButton {
         }
         let fill: NSColor = NSColor(hex: row.color?.badge ?? ProjectColor.neutralBadge)
         guard expanded else {
-            // The rail: the window's dot, unless its mark stands in its place.
+            // The rail: the window's dot in its project's own colour (the Welcome rows' dot, readable on the bar where the
+            // badge's darker tone is not), grey without one; its mark in its place when it needs you or failed.
             if railMark == nil {
-                fill.setFill()
+                (row.color?.swatchColor ?? Theme.textDim).setFill()
                 NSBezierPath(ovalIn: railDotRect).fill()
             }
             return

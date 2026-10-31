@@ -359,9 +359,9 @@ extension SelfTest {
               budget.joined(separator: " | "))
         let button: WindowColumnButton? = five[0].windowColumn.button(for: id)
         let label: String = button?.accessibilityLabel() ?? ""
-        check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == "xCloud ▸ 7027-sso\n1 needs you"
-              && button?.accessibilityRole() == .button,
-              "window column: VoiceOver reads the badge's window and its marks, and so does its tooltip", "\(label) / \(button?.toolTip ?? "")")
+        check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == nil && button?.accessibilityRole() == .button,
+              "window column: VoiceOver reads the rail's window and its marks; the rail has no tooltip, as the list on hover names it",
+              "\(label) / \(button?.toolTip ?? "no tooltip")")
         let quiet: WindowColumnButton? = five[0].windowColumn.button(for: five[0].indexID)
         check(quiet?.accessibilityLabel() == five[0].window?.title && quiet?.isAccessibilitySelected() == true
               && five[0].windowColumn.accessibilityLabel() == WindowColumnView.groupLabel(five[0].windowColumn.list.count)
@@ -437,7 +437,10 @@ extension SelfTest {
         guard let window = c.window else { return }
         let frame: NSRect = window.frame
         defer { window.setFrame(frame, display: true) }
-        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 240, width: frame.width, height: 240), display: true)
+        // Room for fewer places than windows: under the title bar's strip and the count, places of 24 points for all but two.
+        let windows: Int = c.windowColumn.list.count
+        let height: CGFloat = TabBarView.height + 22 + 8 + WindowColumnRail.slot * CGFloat(max(2, windows - 2))
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height), display: true)
         window.layoutIfNeeded()
         let column: WindowColumnView = c.windowColumn
         let count: Int = column.list.count
