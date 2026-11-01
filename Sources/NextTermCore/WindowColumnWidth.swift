@@ -83,8 +83,6 @@ public enum WindowColumnWidth {
     public static let expanded: CGFloat = 180
     /// Along the column's inner edge, as the sidebar's divider.
     public static let hairline: CGFloat = 1
-    /// The badge in each row of the list.
-    public static let badge: CGFloat = 22
     /// The narrowest the editor and terminal beside it get, as beside the tab list.
     public static let workMinimum: CGFloat = TabListWidth.terminalMinimum
 
@@ -124,7 +122,7 @@ public enum WindowColumnRail {
     public static var openDelay: TimeInterval = 0.35
     /// How long the pointer is off the rail and the list before the list goes.
     public static var closeDelay: TimeInterval = 0.3
-    /// The hovering list's width: the unfolded column's.
+    /// The hovering list's width: the unfolded column's. It covers the rail, so its dots are the rail's.
     public static var listWidth: CGFloat { WindowColumnWidth.expanded }
 
     /// Where a bar beside the traffic lights may start: `gap` points past the zoom button's right edge (in the window's
@@ -133,5 +131,73 @@ public enum WindowColumnRail {
     public static func lightsEnd(zoomMaxX: CGFloat?, gap: CGFloat = 16, minimum: CGFloat = 78) -> CGFloat {
         guard let zoomMaxX, zoomMaxX > 0 else { return minimum }
         return max(minimum, ceil(zoomMaxX + gap))
+    }
+}
+
+/// One grid for the rail, the list on hover and the pinned column (plan 031): every dot, the count and this window's well
+/// sit at the same place in the window in all three, so opening, pinning or folding moves no dot, and only names come or
+/// go beside them. In a strip's own points, the hairline left out: the strip is `WindowColumnWidth.folded` across on the
+/// rail, `WindowColumnWidth.expanded` unfolded, its dot column at the window's outer edge.
+public enum WindowColumnGrid {
+    /// A row: the rail's place for a window.
+    public static var row: CGFloat { WindowColumnRail.slot }
+    /// The dot column: the rail's width, a dot in its middle.
+    public static var dotColumn: CGFloat { WindowColumnWidth.folded }
+    /// Above the first row and under the last.
+    public static let margin: CGFloat = 4
+    /// The title bar's strip: the tab bars' height.
+    public static let titleStrip: CGFloat = 38
+    /// The count's row under the traffic lights, under the title bar's strip.
+    public static let countRow: CGFloat = 22
+    /// The foot's row, kept in every form, so the rail and the list run out of room at the same place.
+    public static let foot: CGFloat = 24
+    /// Where a name starts past the dot column, and how much further in a nested worktree's goes (the tab list's pane
+    /// indent).
+    public static let nameGap: CGFloat = 4
+    public static let indent: CGFloat = 14
+    /// On the right, where a name starts from the strip's inner edge.
+    public static let innerName: CGFloat = 12
+    /// The trailing column's end before the strip's outer edge on the left.
+    public static let trailingInset: CGFloat = 8
+    /// The row's plate (this window's well, a hover): in from the strip's two edges, as tall as the rail's well, round.
+    public static let plateInset: CGFloat = 3
+    public static let plate: CGFloat = 18
+    public static let plateRadius: CGFloat = 7
+
+    /// The dot column's left edge in a strip `width` across: at the outer edge, the left one unless `onRight`.
+    public static func dotColumnX(width: CGFloat, onRight: Bool) -> CGFloat { onRight ? max(0, width - dotColumn) : 0 }
+
+    /// Where a row's name starts, `depth` deep: past the dot column on the left; from the inner edge on the right.
+    public static func nameX(width: CGFloat, onRight: Bool, depth: Int) -> CGFloat {
+        (onRight ? innerName : dotColumn + nameGap) + CGFloat(max(0, depth)) * indent
+    }
+
+    /// Where the trailing column (the marks, a key) ends: before the outer edge on the left; before the dot column on
+    /// the right.
+    public static func trailingEnd(width: CGFloat, onRight: Bool) -> CGFloat {
+        onRight ? dotColumnX(width: width, onRight: true) - nameGap : width - trailingInset
+    }
+
+    /// The count's row: under the title bar's strip while the traffic lights are over it (`topInset`), else the top row
+    /// with the tab bars. The first row comes `margin` under it.
+    public static func countTop(topInset: CGFloat) -> CGFloat { topInset > 0 ? topInset : 0 }
+    public static func countHeight(topInset: CGFloat) -> CGFloat { topInset > 0 ? countRow : titleStrip }
+    public static func rowsTop(topInset: CGFloat) -> CGFloat { countTop(topInset: topInset) + countHeight(topInset: topInset) }
+
+    /// A row's plate, in a row `width` across and `height` tall: the well round the dot on the rail, the pill unfolded.
+    public static func plateRect(width: CGFloat, height: CGFloat, rail: Bool, onRight: Bool) -> CGRect {
+        let y: CGFloat = ((height - plate) / 2).rounded()
+        if rail {
+            let x: CGFloat = dotColumnX(width: width, onRight: onRight) + ((dotColumn - plate) / 2).rounded()
+            return CGRect(x: x, y: y, width: plate, height: plate)
+        }
+        return CGRect(x: plateInset, y: y, width: max(0, width - 2 * plateInset), height: plate)
+    }
+
+    /// A row's dot, in the middle of the dot column.
+    public static func dotRect(width: CGFloat, height: CGFloat, onRight: Bool) -> CGRect {
+        let size: CGFloat = WindowColumnRail.dot
+        let x: CGFloat = dotColumnX(width: width, onRight: onRight) + ((dotColumn - size) / 2).rounded()
+        return CGRect(x: x, y: ((height - size) / 2).rounded(), width: size, height: size)
     }
 }

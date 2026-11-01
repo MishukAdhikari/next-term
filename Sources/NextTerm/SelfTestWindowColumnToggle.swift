@@ -10,14 +10,14 @@ import NextTermCore
 extension SelfTest {
     /// Quiet on purpose: on the rail, this window's dot sits in a darker well 5 points round it, with no ring, edged only
     /// with Increase Contrast, which draws that button alone again; the worktree's window, which needs you, shows its mark
-    /// in its dot's place; the list's two capitals are set 0.7 points apart and mixed case not; a working mark in the column or ⌘O
-    /// never turns, while a tab's does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
+    /// in its dot's place; a mark's count goes before it; a working mark in the column or ⌘O never turns, while a tab's
+    /// does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
     static func calmChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController) async {
         let column: WindowColumnView = five[0].windowColumn
         guard let own = column.button(for: five[0].indexID), let marked = column.button(for: worktree.indexID) else {
-            return check(false, "window column: the calm look's badges to check")
+            return check(false, "window column: the calm look's rows to check")
         }
-        let badge: NSRect = own.railDotForTest
+        let badge: NSRect = own.dotForTest
         // As the window shows it: just outside the dot, in the well, the darker colour of the tab you are in, not a
         // light ring.
         if let window = five[0].window { _ = await bringToFront(window) }
@@ -30,7 +30,7 @@ extension SelfTest {
         let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -5, dy: -5)
             && wellColor != nil && backgroundColor != nil && close(wellColor!, backgroundColor!)
         // The worktree's window needs you (bellChecks): its mark stands in its dot's place, the dot's size, in its button.
-        let place: NSRect = marked.railDotForTest
+        let place: NSRect = marked.dotForTest
         let mark: NSRect? = marked.dotFrameForTest
         let markPlaced: Bool = marked.row?.urgent == .attention && mark == place && place.width == WindowColumnRail.dot
             && marked.bounds.contains(place.insetBy(dx: -2, dy: -2))
@@ -41,13 +41,12 @@ extension SelfTest {
               "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), "
                   + "mark \(mark.map { "\($0)" } ?? "none") at \(place) (\(marked.row?.urgent?.rawValue ?? "no mark")), plain \(plainDots)")
 
-        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
-        func width(_ text: String) -> CGFloat { NSAttributedString(string: text, attributes: [.font: font]).size().width }
-        let spread: CGFloat = WindowColumnButton.lettersText("XC").size().width - width("XC")
-        let mixed: CGFloat = WindowColumnButton.lettersText("Ag").size().width - width("Ag")
-        // Tracking takes the place of the pair's own kerning, so two capitals open by a little more than its 0.7 points.
-        check(spread > 0.5 && spread < 1.3 && abs(mixed) < 0.01, "window column: two capitals are set a little apart, mixed case as the font sets it",
-              "XC +\(spread), Ag +\(mixed)")
+        // A mark's count before it ("2 ✓"), so the marks end a row in one place, with a count or without, in the column
+        // and ⌘O alike.
+        let counted = SwitcherMarksView()
+        counted.show([AgentMarks.Mark(state: .attention, count: 1), AgentMarks.Mark(state: .done, count: 2)], color: Theme.textDim)
+        let kinds: [String] = counted.arrangedSubviews.map { (view: NSView) -> String in view is NSTextField ? "count" : "mark" }
+        check(kinds == ["mark", "count", "mark"], "window column: a mark's count goes before it, as in ⌘O", "\(kinds)")
 
         // As View › Agent Spinner has it: a tab's mark turns with Spinning; the marks ⌘O's rows and the unfolded column's
         // rows show (SwitcherMarksView, the same view in both) never.
@@ -70,7 +69,7 @@ extension SelfTest {
         let redrawn: [Int] = column.shownButtons.filter { $0.drawCount > 0 }.map(\.id)
         DisplayOptions.increasesContrastOverride = contrast
         check(quiet != nil && plain != nil && quiet?.tiffRepresentation != plain?.tiffRepresentation && redrawn == [five[0].indexID],
-              "window column: Increase Contrast makes done plain green and draws this window's badge alone again, for its edge",
+              "window column: Increase Contrast makes done plain green and draws this window's dot alone again on the rail, for its well's edge",
               "redrawn \(redrawn) of \(column.shownButtons.map(\.id))")
     }
 

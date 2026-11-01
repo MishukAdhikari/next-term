@@ -21,18 +21,26 @@ import Testing
                                   lastKey: .distantPast, tabs: tabs, repository: Self.xcloud)
     }
 
-    private func plain(_ id: Int, _ name: String = "~/Downloads") -> WindowIndex.Window {
-        WindowIndex.Window(id: id, kind: .plain, project: nil, name: name, title: name, lastKey: .distantPast, tabs: [])
+    private func plain(_ id: Int, _ name: String = "~/Downloads", front: String? = nil) -> WindowIndex.Window {
+        WindowIndex.Window(id: id, kind: .plain, project: nil, name: name, title: front.map { name + " — " + $0 } ?? name,
+                           lastKey: .distantPast, tabs: [])
     }
 
-    private func server(_ id: Int, _ name: String = "web-1") -> WindowIndex.Window {
-        WindowIndex.Window(id: id, kind: .server, project: nil, name: name, title: name + " — app", lastKey: .distantPast, tabs: [],
-                           destination: "deploy@203.0.113.5")
+    private func server(_ id: Int, _ name: String = "web-1", front: String = "app", destination: String = "deploy@203.0.113.5") -> WindowIndex.Window {
+        WindowIndex.Window(id: id, kind: .server, project: nil, name: name, title: name + " — " + front, lastKey: .distantPast, tabs: [],
+                           destination: destination)
+    }
+
+    private func project(_ id: Int, _ name: String, in folder: String, front: String? = nil) -> WindowIndex.Window {
+        WindowIndex.Window(id: id, kind: .project, project: folder + "/" + name, name: name, title: front.map { name + " — " + $0 } ?? name,
+                           lastKey: .distantPast, tabs: [])
     }
 
     private func list(_ windows: [WindowIndex.Window], colors: [Int: ProjectColor] = [:], working: Bool = true) -> WindowColumnList {
-        WindowColumnList.build(windows: windows, colors: colors, showsWorking: working)
+        WindowColumnList.build(windows: windows, colors: colors, showsWorking: working, home: "/Users/sam")
     }
+
+    private func details(_ list: WindowColumnList) -> [String?] { list.rows.map(\.detail) }
 
     private func ids(_ list: WindowColumnList) -> [Int] { list.rows.map(\.id) }
     private func depths(_ list: WindowColumnList) -> [Int] { list.rows.map(\.depth) }
@@ -61,12 +69,18 @@ import Testing
         #expect(shown == ["xCloud", "7027-sso", "shop"])
     }
 
-    @Test func aWorktreeWithNoRepositoryWindowOpenStaysAtTheTopWithItsWholeName() {
+    @Test func aWorktreeWithNoRepositoryWindowOpenStaysAtTheTopAfterItsRepositorysName() {
         let rows: WindowColumnList = list([project(2, "shop"), worktree(3)])
         let nesting: [Int] = depths(rows)
         let shown: [String] = names(rows)
+        let prefixes: [String?] = rows.rows.map(\.prefix)
         #expect(nesting == [0, 0])
-        #expect(shown == ["shop", "xCloud ▸ 7027-sso"])
+        #expect(shown == ["shop", "7027-sso"])
+        #expect(prefixes == [nil, "xCloud"])
+        // Under its repository's row, the prefix goes: the row above says it.
+        let nested: WindowColumnList = list([project(1, "xCloud"), worktree(3)])
+        let under: [String?] = nested.rows.map(\.prefix)
+        #expect(under == [nil, nil])
     }
 
     @Test func aMainCheckoutOpenedAfterItsWorktreeLeadsItsGroup() {
@@ -80,47 +94,110 @@ import Testing
         #expect(shown == ["xCloud", "7027-sso", "aichat", "shop"])
     }
 
-    @Test func fiveWindowsOfEveryKindGiveFiveBadgesInOrder() {
+    @Test func fiveWindowsOfEveryKindGiveFiveRowsInOrder() {
         // Two projects, the worktree, a ⌘N window and a server's: AE4's five, with an agent waiting in the worktree.
         let windows: [WindowIndex.Window] = [project(1, "next-term"), project(2, "xCloud"), worktree(3, "7027-sso", [tab(1), tab(2, .attention)]),
                                              plain(4), server(5)]
         let rows: WindowColumnList = list(windows, colors: [1: .sky, 2: .amber, 3: .amber])
         let order: [Int] = ids(rows)
-        let letters: [String] = rows.rows.map(\.letters)
+        let shown: [String] = names(rows)
         let dots: [TabState?] = rows.rows.map(\.urgent)
         #expect(order == [1, 2, 3, 4, 5])
-        #expect(letters == ["NT", "XC", "7S", "Do", "W1"])
+        #expect(shown == ["next-term", "xCloud", "7027-sso", "Downloads", "web-1"])
         #expect(dots == [nil, nil, .attention, nil, nil])
         #expect(rows.row(3)?.color == .amber && rows.row(2)?.color == .amber)
+        // Every name differs: no row needs a detail.
+        #expect(details(rows).allSatisfy { $0 == nil })
     }
 
-    // MARK: badges
+    // MARK: names
 
-    @Test func theLettersOfEachKindOfName() {
-        #expect(WindowColumnBadge.letters(name: "next-term", kind: .project) == "NT")
-        #expect(WindowColumnBadge.letters(name: "xCloud", kind: .project) == "XC")
-        #expect(WindowColumnBadge.letters(name: "xCloud ▸ 7027-sso", kind: .worktree) == "7S")
-        #expect(WindowColumnBadge.letters(name: "7027-sso", kind: .worktree) == "7S")
-        #expect(WindowColumnBadge.letters(name: "web-1", kind: .server) == "W1")
-        #expect(WindowColumnBadge.letters(name: "shop", kind: .project) == "Sh")
-        #expect(WindowColumnBadge.letters(name: "~", kind: .plain) == "~")
-        #expect(WindowColumnBadge.letters(name: "~/Downloads", kind: .plain) == "Do")
-        #expect(WindowColumnBadge.letters(name: "/", kind: .plain) == "/")
-        #expect(WindowColumnBadge.letters(name: "a", kind: .project) == "A")
-        #expect(WindowColumnBadge.letters(name: "my app", kind: .project) == "MA")
-        #expect(WindowColumnBadge.ownPart(of: "xCloud ▸ 7027-sso") == "7027-sso")
-        #expect(WindowColumnBadge.ownPart(of: "shop") == "shop")
+    @Test func whatARowCallsEachKindOfWindow() {
+        func shown(_ window: WindowIndex.Window, _ depth: Int = 0) -> String {
+            let parts = WindowColumnName.shown(window, depth: depth)
+            return (parts.prefix.map { $0 + " | " } ?? "") + parts.name
+        }
+        #expect(shown(project(1, "next-term")) == "next-term")
+        #expect(shown(server(1)) == "web-1")
+        #expect(shown(plain(1, "~")) == "~")
+        #expect(shown(plain(1, "~/Downloads")) == "Downloads")
+        #expect(shown(plain(1, "~/Code/next-term")) == "next-term")
+        #expect(shown(plain(1, "/")) == "/")
+        #expect(shown(plain(1, "/tmp")) == "tmp")
+        #expect(shown(worktree(1, "7027-sso"), 1) == "7027-sso")
+        #expect(shown(worktree(1, "7027-sso"), 0) == "xCloud | 7027-sso")
+        // A worktree's folder named after its repository: the repository's name goes, as the row above says it.
+        #expect(shown(worktree(1, "xCloud-cx-8858"), 1) == "cx-8858")
+        #expect(shown(worktree(1, "xcloud_cx-8858"), 0) == "xCloud | cx-8858")
+        #expect(WindowColumnName.stripped("xCloud-cx-8858", repository: "xCloud") == "cx-8858")
+        #expect(WindowColumnName.stripped("xCloud.next", repository: "xcloud") == "next")
+        #expect(WindowColumnName.stripped("xCloud-", repository: "xCloud") == "xCloud-")
+        #expect(WindowColumnName.stripped("xCloudy", repository: "xCloud") == "xCloudy")
+        #expect(WindowColumnName.stripped("7027-sso", repository: "xCloud") == "7027-sso")
+        #expect(WindowColumnName.ownPart(of: "xCloud ▸ 7027-sso") == "7027-sso")
+        #expect(WindowColumnName.ownPart(of: "shop") == "shop")
+        #expect(WindowColumnName.repositoryPart(of: "xCloud ▸ 7027-sso") == "xCloud")
+        #expect(WindowColumnName.repositoryPart(of: "shop") == nil)
+    }
+
+    @Test func whatIsInFrontIsTheTitleAfterTheName() {
+        #expect(plain(1, "~", front: "claude").front == "claude")
+        #expect(plain(1, "~").front == nil)
+        #expect(server(1, front: "app").front == "app")
+        #expect(project(1, "shop").front == nil)
+    }
+
+    // MARK: telling windows apart
+
+    @Test func windowsOfTheSameNameAreToldApartByWhatIsInFront() {
+        // Three windows at home: two with an agent each, one at its prompt.
+        let rows: WindowColumnList = list([plain(1, "~", front: "claude"), plain(2, "~", front: "codex"), plain(3, "~"), project(4, "shop")])
+        #expect(names(rows) == ["~", "~", "~", "shop"])
+        #expect(details(rows) == ["claude", "codex", nil, nil])
+        // The same in front in each tells nothing: none.
+        let same: WindowColumnList = list([plain(1, "~", front: "zsh"), plain(2, "~", front: "zsh")])
+        #expect(details(same) == [nil, nil])
+    }
+
+    @Test func windowsOfTheSameNameInDifferentFoldersAreToldApartByTheirFolders() {
+        let rows: WindowColumnList = list([project(1, "app", in: "/Users/sam/Code", front: "claude"), project(2, "app", in: "/Users/sam/Work"),
+                                           plain(3, "~/Code/api"), plain(4, "/srv/api")])
+        #expect(details(rows) == ["~/Code", "~/Work", "~/Code", "/srv"])
+        // Two windows on one server: what is in front, as their places are the same.
+        let servers: WindowColumnList = list([server(1, front: "app"), server(2, front: "logs"), server(3, "web-2")])
+        #expect(details(servers) == ["app", "logs", nil])
+        // The same name on two servers: where each connects.
+        let hosts: WindowColumnList = list([server(1, destination: "deploy@a"), server(2, destination: "deploy@b")])
+        #expect(details(hosts) == ["deploy@a", "deploy@b"])
+    }
+
+    @Test func aRowsDetailFollowsItsWindowAndTheRowsBesideIt() {
+        let start: WindowColumnList = list([plain(1, "~", front: "claude"), plain(2, "~"), project(3, "shop")])
+        #expect(details(start) == ["claude", nil, nil])
+        // The second starts a command: both rows are made again, and only the one whose detail changed is drawn.
+        let ran = start.updating(plain(2, "~", front: "npm test"), color: nil, showsWorking: true)
+        #expect(details(ran.list) == ["claude", "npm test", nil])
+        #expect(ran.change == .rows([2]))
+        // The first goes elsewhere: alone with its name now, neither row needs a detail.
+        let moved = ran.list.updating(plain(1, "~/Downloads", front: "claude"), color: nil, showsWorking: true)
+        #expect(names(moved.list) == ["Downloads", "~", "shop"])
+        #expect(details(moved.list) == [nil, nil, nil])
+        #expect(moved.change == .rows([1, 2]))
+        // A row alone with its name: its title changes its words and nothing else.
+        let retitled = moved.list.updating(project(3, "shop", in: "/Users/sam/Code", front: "vim"), color: nil, showsWorking: true)
+        #expect(retitled.change == .rows([3]))
+        #expect(retitled.list.row(3)?.face == moved.list.row(3)?.face)
     }
 
     @Test func theDotIsTheMostUrgentOfNeedsYouFailedAndDoneAndWorkingGivesNone() {
-        #expect(WindowColumnBadge.urgent(AgentMarks([.done, .failed, .attention])) == .attention)
-        #expect(WindowColumnBadge.urgent(AgentMarks([.done, .failed, .working])) == .failed)
-        #expect(WindowColumnBadge.urgent(AgentMarks([.done, .working, .idle])) == .done)
-        #expect(WindowColumnBadge.urgent(AgentMarks([.working, .working])) == nil)
-        #expect(WindowColumnBadge.urgent(AgentMarks()) == nil)
+        #expect(WindowColumnRow.urgent(AgentMarks([.done, .failed, .attention])) == .attention)
+        #expect(WindowColumnRow.urgent(AgentMarks([.done, .failed, .working])) == .failed)
+        #expect(WindowColumnRow.urgent(AgentMarks([.done, .working, .idle])) == .done)
+        #expect(WindowColumnRow.urgent(AgentMarks([.working, .working])) == nil)
+        #expect(WindowColumnRow.urgent(AgentMarks()) == nil)
         var lost = AgentMarks()
         lost.disconnected = 1
-        #expect(WindowColumnBadge.urgent(lost) == nil)
+        #expect(WindowColumnRow.urgent(lost) == nil)
         // The unfolded row still shows working, as ⌘O does, unless Agent Spinner is off.
         let busy: WindowColumnRow = list([project(1, "shop", [tab(1, .working)])]).rows[0]
         #expect(busy.marks == [AgentMarks.Mark(state: .working, count: 1)])
@@ -196,11 +273,6 @@ import Testing
         #expect(WindowColumnList.change(from: before, to: before) == .none)
         let closed: WindowColumnList = list(Array(windows.dropLast()), colors: [1: .sky, 2: .amber])
         #expect(WindowColumnList.change(from: before, to: closed) == .structure)
-    }
-
-    @Test func capitalsAndFiguresAreSetApartMixedCaseNot() {
-        for letters in ["XC", "7S", "73", "MV"] { #expect(WindowColumnBadge.tracks(letters), "\(letters)") }
-        for letters in ["Ai", "Sh", "Ag", "~", "X", ""] { #expect(!WindowColumnBadge.tracks(letters), "\(letters)") }
     }
 
     /// Done's quiet green (Theme.doneQuiet in the app, kept here as its hex) still reads as a mark, 3:1 at least, against

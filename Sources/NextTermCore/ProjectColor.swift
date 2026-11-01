@@ -58,24 +58,10 @@ public enum ProjectColor: Int, CaseIterable, Sendable {
         OKLab(lightness: OKLab(rgb: bar).l, chroma: Self.glowChroma, hue: hue).rgb
     }
 
-    /// The colour as a swatch: a menu item's circle, a Welcome row's dot.
+    /// The colour as a swatch: a menu item's circle, a Welcome row's dot, a window's dot in the window column.
     public var swatch: UInt32 {
         OKLab(lightness: Self.swatchLightness, chroma: Self.swatchChroma, hue: hue).rgb
     }
-
-    /// The window column's badges: a tile lighter than the bar it sits on and dark enough under light letters (4.5:1 at
-    /// least, as the contrast test checks), in the hue at a chroma the eye still names.
-    static let badgeLightness: Double = 0.42
-    static let badgeChroma: Double = 0.07
-
-    /// A window's badge in the window column, behind its two letters.
-    public var badge: UInt32 {
-        OKLab(lightness: Self.badgeLightness, chroma: Self.badgeChroma, hue: hue).rgb
-    }
-
-    /// The badge of a window with no colour (no project, None for This Project, or Show Project Colors off): the same
-    /// lightness, with no hue.
-    public static let neutralBadge: UInt32 = OKLab(lightness: badgeLightness, chroma: 0, hue: 0).rgb
 
     /// The contrast ratio of two colours (0xRRGGBB), as WCAG 2 measures it: 1 to 21, 4.5 the least for small text.
     public static func contrast(_ first: UInt32, _ second: UInt32) -> Double {

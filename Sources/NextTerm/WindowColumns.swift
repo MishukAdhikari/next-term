@@ -49,14 +49,17 @@ final class WindowColumns: NSObject {
         DispatchQueue.main.async { [weak self] in self?.remade() }
     }
 
-    /// Agent Spinner, Reduce Motion or Increase Contrast changed (AgentSpinner.changed): the rows, and the well's edge
-    /// when Increase Contrast is what changed.
+    /// Agent Spinner, Reduce Motion or Increase Contrast changed (AgentSpinner.changed): the rows, and the well's edge and
+    /// the dim text when Increase Contrast is what changed.
     @objc private func spinnerChanged() {
         remade()
         let contrast: Bool = DisplayOptions.increasesContrast
         guard contrast != contrastDrawn else { return }
         contrastDrawn = contrast
-        for controller in windows { controller.windowColumn.buttons.forEach { $0.contrastChanged() } }
+        for controller in windows {
+            controller.windowColumn.contrastChanged()
+            controller.columnHost.list?.contrastChanged()
+        }
     }
 
     private var contrastDrawn: Bool = DisplayOptions.increasesContrast
@@ -107,9 +110,23 @@ final class WindowColumns: NSObject {
     }
 
     /// Window `id`'s entry in the index changed: only its row is made again, and nothing goes on when the row is the same.
-    func windowChanged(_ id: Int) {
+    /// A change only to rows' details (what is in front in windows of the same name) waits `detailHold` first, unless
+    /// `holding` is false: a quick command coming and going in a window's title never flashes beside its name, and a
+    /// title that keeps changing shows at most once a second.
+    func windowChanged(_ id: Int, holding: Bool = true) {
         guard let entry = app.windowIndex.window(id) else { return rebuild() }
         let (next, change) = list.updating(entry, color: color(of: id), showsWorking: showsWorking)
+        if holding, case .rows(let ids) = change, Self.onlyDetails(ids, from: list, to: next) {
+            // The list keeps the entry it had, so a title back as it was by then changes nothing.
+            guard held.insert(id).inserted else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.detailHold) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.held.remove(id) != nil else { return }
+                    self.windowChanged(id, holding: false)
+                }
+            }
+            return
+        }
         list = next
         switch change {
         case .none:
@@ -119,6 +136,25 @@ final class WindowColumns: NSObject {
         case .rows:
             tell(change)
         }
+    }
+
+    /// How long a change to a row's detail alone waits before it is drawn.
+    static var detailHold: TimeInterval = 1
+    /// The windows whose details are waiting.
+    private var held: Set<Int> = []
+
+    /// Whether going from `old` to `new` changes rows `ids` in their details and nothing else they draw (their words may
+    /// change too: those draw nothing).
+    private static func onlyDetails(_ ids: [Int], from old: WindowColumnList, to new: WindowColumnList) -> Bool {
+        var details = false
+        for id in ids {
+            guard let before = old.row(id), let after = new.row(id) else { return false }
+            guard before.face != after.face else { continue }
+            guard before.depth == after.depth, before.name == after.name, before.prefix == after.prefix, before.color == after.color,
+                  before.urgent == after.urgent, before.marks == after.marks else { return false }
+            details = true
+        }
+        return details
     }
 
     /// A colour or Agent Spinner changed: every row made again, and only the rows that differ drawn again.

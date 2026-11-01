@@ -197,6 +197,14 @@ public struct WindowIndex: Sendable {
             return marks
         }
 
+        /// What is in front in it, as its title says after its name (WindowTitle.make): the file the editor has the
+        /// keyboard in, else its tab's title ("claude", "npm run dev"); nil when the title is the name alone.
+        public var front: String? {
+            let lead: String = name + " — "
+            guard title.count > lead.count, title.hasPrefix(lead) else { return nil }
+            return String(title.dropFirst(lead.count))
+        }
+
         /// What the index knows its entries by: each terminal's id, and each of herdr's agents' key.
         var keys: [String] {
             tabs.map { (tab: Tab) -> String in tab.id.uuidString } + agents.map { (agent: Agent) -> String in agent.key }

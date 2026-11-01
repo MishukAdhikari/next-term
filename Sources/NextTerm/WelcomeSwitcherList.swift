@@ -372,17 +372,18 @@ final class SwitcherMarksView: NSStackView {
         }
         counts = []
         links = []
+        // Each count before its mark ("2 ✓"), so the marks keep one place at the row's end, with or without a count.
         for mark in marks {
-            let view: NSView = mark.disconnected ? link(color) : dot(mark.state)
-            addArrangedSubview(view)
-            guard mark.count > 1 else { continue }
-            let count = NSTextField(labelWithString: "\(mark.count)")
-            count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            count.textColor = color
-            count.setAccessibilityElement(false)
-            addArrangedSubview(count)
-            setCustomSpacing(3, after: view)
-            counts.append(count)
+            if mark.count > 1 {
+                let count = NSTextField(labelWithString: "\(mark.count)")
+                count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+                count.textColor = color
+                count.setAccessibilityElement(false)
+                addArrangedSubview(count)
+                setCustomSpacing(3, after: count)
+                counts.append(count)
+            }
+            addArrangedSubview(mark.disconnected ? link(color) : dot(mark.state))
         }
         isHidden = marks.isEmpty
     }

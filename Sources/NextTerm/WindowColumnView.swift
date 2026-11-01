@@ -3,35 +3,32 @@ import NextTermCore
 
 /// The window column: a strip at the window's outer edge listing every open Next Term window, folded to its rail (the
 /// count, then a dot apiece in its project's colour, a mark only where a window needs you or failed) or unfolded to a row
-/// apiece (its name, colour and marks, as ⌘O shows them), with "Hide window column ⌃⇧⌘S" at its foot. A click brings
-/// that window forward; a double-click on its empty space pins it unfolded or folds it back, in every window. Unfolded, a
-/// chevron at its top folds it. Under the traffic lights, a strip of title bar. The same view unfolded is the list that
-/// slides out over the content while the pointer rests on the rail (WindowColumnHost).
+/// apiece (the same dot, its name, and its marks as ⌘O shows them), with "Hide Column" and its key at its foot. A click
+/// brings that window forward; a double-click on its empty space pins it unfolded or folds it back, in every window.
+/// Pinned, a chevron in its count row folds it. Under the traffic lights, a strip of title bar. The same view unfolded is
+/// the list that the rail opens over the content while the pointer rests on it (WindowColumnHost).
+///
+/// One grid in every form (WindowColumnGrid): the dot column at the window's outer edge, the count in it, a row of 24
+/// points per window under it, a foot of 24 kept at the bottom. Unfolding only draws the names beside the dots: no dot,
+/// count or well moves.
 ///
 /// It does only what a change asks (WindowColumnList.Change): a window opening or closing matches its buttons by id and
 /// lays it out once; one window's marks reconfigure that window's button alone, which draws only when what it shows
-/// changed. Idle, it lays out and draws nothing. Badges and rows are plain buttons with frames set by hand, placed as the
-/// rail and the folded tab list place their marks (MarkColumn); windows that do not fit become a "+N" that opens ⌘O.
+/// changed. Idle, it lays out and draws nothing. Rows are plain buttons with frames set by hand, placed as the folded tab
+/// list places its marks (MarkColumn); windows that do not fit become a "+N" that opens ⌘O.
 final class WindowColumnView: NSView, ProjectGlowing {
-    /// An unfolded row's place; the rail's is WindowColumnRail.slot.
-    static let slot: CGFloat = 28
-    private static let margin: CGFloat = 4
-    private static let header: CGFloat = TabBarView.height
-    /// The rail's count, under the title bar's strip when that is there.
-    private static let countRow: CGFloat = 22
-    /// Unfolded, the foot's row: how to hide the column.
-    static let footRow: CGFloat = 26
-
-    /// At the window's right edge: the hairline goes on its left, the window's side, and the chevron points the other way.
+    /// At the window's right edge: the hairline goes on its left, the window's side, and the dots on its right.
     var onRight = false {
         didSet {
             guard onRight != oldValue else { return }
             updateChevron()
+            for (button, row) in zip(buttons, list.rows) { button.configure(row, current: row.id == current, expanded: expanded, onRight: onRight) }
             needsLayout = true
             needsDisplay = true
         }
     }
-    /// Folded at the window's top-left outside full screen: a strip of title bar for the traffic lights over the count.
+    /// At the window's top-left outside full screen: a strip of title bar for the traffic lights over the count, in every
+    /// form, so nothing of the column is under them.
     var topInset: CGFloat = 0 {
         didSet {
             guard topInset != oldValue else { return }
@@ -40,41 +37,41 @@ final class WindowColumnView: NSView, ProjectGlowing {
             updateTrackingAreas()
         }
     }
-    /// Unfolded, where the header's words start: after the traffic lights at the window's top-left.
-    var headerLeading: CGFloat = 8 {
-        didSet { if headerLeading != oldValue { needsDisplay = true } }
-    }
 
-    /// A badge or row was clicked: its window's id.
+    /// A row was clicked: its window's id.
     var onSelect: ((Int) -> Void)?
-    /// The chevron: fold or unfold the column in every window.
+    /// The chevron, or a double-click on its empty space: fold or unfold the column in every window.
     var onToggle: (() -> Void)?
     /// The "+N" for the windows there is no room for: ⌘O, which lists every one.
     var onMore: (() -> Void)?
     /// The pointer came onto the column (true) or left it (false): the rail's hover list follows it.
     var onPointer: ((Bool) -> Void)?
+    /// The pointer moved on the column: a list held back for a pointer at rest may open now.
+    var onMoved: (() -> Void)?
     /// It took new rows, a new form or a new window of its own: the hover list shows them too.
     var onUpdated: (() -> Void)?
-    /// The list that slides out over the content from the rail (WindowColumnHost): no chevron, since it neither folds nor
-    /// pins by one; a double-click on it pins the column, and leaving it closes it.
+    /// The list that the rail opens over the content (WindowColumnHost): no chevron, since it neither folds nor pins by
+    /// one; a double-click on it pins the column, and leaving it closes it.
     var hovers = false {
         didSet { if hovers != oldValue { needsLayout = true } }
     }
+    /// The list on hover covers the rail: VoiceOver hears each window once, in the list.
+    var covered = false
     /// A right-click on the top row: the window's Project Color menu.
     var onTopRowMenu: (() -> NSMenu?)?
     /// The top row's slice of the project colour, as the tab bars beside it have.
     private(set) lazy var projectGlow = ProjectGlow(self)
 
     private(set) var list = WindowColumnList()
-    /// This column's own window: its badge is outlined, its row highlighted.
+    /// This column's own window: its dot sits in a darker well, its row in a darker pill.
     private(set) var current = 0
     /// Unfolded as it shows: the user's choice, unless the window's room folded it.
     private(set) var expanded = false
     private(set) var buttons: [WindowColumnButton] = []
     private let chevron = HoverButton()
-    private let moreButton = HoverButton()
-    /// Unfolded, at its foot: "Hide window column ⌃⇧⌘S", with the key as the user has it.
-    private let footButton = HoverButton()
+    private let moreButton = WindowColumnActionButton()
+    /// Unfolded, at its foot: "Hide Column", with the key as the user has it.
+    private let footButton = WindowColumnActionButton()
     private var chevronTip: ShortcutToolTip?
     /// How many buttons fit, as last laid out.
     private var shownCount = 0
@@ -90,24 +87,20 @@ final class WindowColumnView: NSView, ProjectGlowing {
         chevron.target = self
         chevron.action = #selector(chevronClicked)
         addSubview(chevron)
-        moreButton.isBordered = false
-        moreButton.bezelStyle = .regularSquare
-        moreButton.refusesFirstResponder = true
         moreButton.target = self
         moreButton.action = #selector(moreClicked)
         moreButton.isHidden = true
         addSubview(moreButton)
-        footButton.isBordered = false
-        footButton.bezelStyle = .regularSquare
-        footButton.refusesFirstResponder = true
-        footButton.alignment = .left
         footButton.target = AppDelegate.shared
         footButton.action = #selector(AppDelegate.toggleWindowColumn(_:))
         footButton.isHidden = true
+        footButton.words = "Hide Column"
+        footButton.wordsFont = .systemFont(ofSize: 11)
         addSubview(footButton)
-        // The foot's key as the user sets it, as the menus' and the tooltips' follow it.
+        // The keys at the foot and on "+N" as the user sets them, as the menus' and the tooltips' follow them.
         NotificationCenter.default.addObserver(self, selector: #selector(shortcutsChanged), name: KeyboardShortcuts.changed, object: nil)
         updateChevron()
+        updateFoot()
         // A group, not a button: VoiceOver goes into it, to each window's button.
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -143,7 +136,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
             if !formChanged && !currentChanged {
                 for id in ids {
                     guard let button = buttons.first(where: { $0.id == id }), let row = newList.row(id) else { continue }
-                    button.configure(row, current: id == current, expanded: expanded)
+                    button.configure(row, current: id == current, expanded: expanded, onRight: onRight)
                 }
             }
         case .structure:
@@ -151,7 +144,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
             needsLayout = true
         }
         if formChanged || currentChanged || change == .structure {
-            for (button, row) in zip(buttons, newList.rows) { button.configure(row, current: row.id == current, expanded: expanded) }
+            for (button, row) in zip(buttons, newList.rows) { button.configure(row, current: row.id == current, expanded: expanded, onRight: onRight) }
         }
         if formChanged {
             updateChevron()
@@ -159,7 +152,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
             needsDisplay = true
         }
         if countChanged {
-            needsDisplay = true // the header's count
+            needsDisplay = true // the count
             setAccessibilityLabel(Self.groupLabel(newList.count))
         }
         if change != .none || formChanged { updateMore() }
@@ -193,15 +186,12 @@ final class WindowColumnView: NSView, ProjectGlowing {
     /// Where the strip starts across: after the hairline, which is on the window's side.
     private var stripX: CGFloat { onRight ? WindowColumnWidth.hairline : 0 }
     private var stripWidth: CGFloat { max(0, bounds.width - WindowColumnWidth.hairline) }
-    /// The header's top: under the title bar's strip folded at the top-left, else the column's top.
-    private var headerTop: CGFloat { expanded ? 0 : topInset }
-    /// Folded, where the count goes: under the title bar's strip at the top-left, else in the top row with the tab bars.
+    /// The count, in the dot column: under the title bar's strip at the top-left, else in the top row with the tab bars.
     private var countRect: NSRect {
-        topInset > 0 ? NSRect(x: stripX, y: topInset, width: stripWidth, height: Self.countRow)
-            : NSRect(x: stripX, y: 0, width: stripWidth, height: Self.header)
+        let x: CGFloat = stripX + WindowColumnGrid.dotColumnX(width: stripWidth, onRight: onRight)
+        return NSRect(x: x, y: WindowColumnGrid.countTop(topInset: topInset), width: WindowColumnGrid.dotColumn,
+                      height: WindowColumnGrid.countHeight(topInset: topInset))
     }
-    /// Where the windows' places start: under the count folded, under the header unfolded.
-    private var placesTop: CGFloat { expanded ? Self.header : countRect.maxY }
 
     override func layout() {
         super.layout()
@@ -211,21 +201,22 @@ final class WindowColumnView: NSView, ProjectGlowing {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let x: CGFloat = stripX, width: CGFloat = stripWidth
+        let count: NSRect = countRect
         // Folded to the rail, no chevron: resting the pointer on it, a double-click or ⌃⌘S unfolds it. Nor on the hovering
-        // list, which neither folds nor pins by one.
+        // list, which neither folds nor pins by one. Pinned, at the count row's trailing end.
         let showsChevron: Bool = expanded && !hovers
         if chevron.isHidden == showsChevron { chevron.isHidden = !showsChevron }
-        let chevronFrame = NSRect(x: onRight ? x : x + width - Self.slot, y: 0, width: Self.slot, height: Self.header)
+        let end: CGFloat = x + WindowColumnGrid.trailingEnd(width: width, onRight: onRight)
+        let chevronFrame = NSRect(x: end - 14, y: count.minY, width: 20, height: count.height) // its glyph ends at `end`
         if showsChevron, chevron.frame != chevronFrame { chevron.frame = chevronFrame }
         if footButton.isHidden == expanded { footButton.isHidden = !expanded }
-        let foot: CGFloat = expanded ? Self.footRow : 0
+        let foot: CGFloat = WindowColumnGrid.foot
         if expanded {
-            let frame = NSRect(x: x, y: bounds.height - Self.footRow, width: width, height: Self.footRow)
+            let frame = NSRect(x: x, y: bounds.height - foot, width: width, height: foot)
             if footButton.frame != frame { footButton.frame = frame }
-            updateFoot()
         }
-        let slot: CGFloat = expanded ? Self.slot : WindowColumnRail.slot
-        let column = MarkColumn(count: buttons.count, height: bounds.height - foot, top: placesTop, slot: slot, margin: Self.margin)
+        let column = MarkColumn(count: buttons.count, height: bounds.height - foot, top: count.maxY, slot: WindowColumnGrid.row,
+                                margin: WindowColumnGrid.margin)
         shownCount = column.shownCount
         for (index, button) in buttons.enumerated() {
             let shows: Bool = index < column.shownCount
@@ -242,43 +233,38 @@ final class WindowColumnView: NSView, ProjectGlowing {
         } else {
             moreButton.isHidden = true
         }
+        moreButton.place(expanded: expanded, onRight: onRight)
+        footButton.place(expanded: expanded, onRight: onRight)
         CATransaction.commit()
         updateMore()
     }
 
-    /// The "+N": how many windows do not fit, in the colour of the most urgent mark among them; its tooltip names them.
+    /// The "+N": how many windows do not fit, in the colour of the most urgent mark among them; unfolded, "All Windows…"
+    /// beside it with ⌘O's key. Its tooltip names them.
     private func updateMore() {
         guard !moreButton.isHidden else { return }
         let hidden: [WindowColumnRow] = Array(list.rows.dropFirst(shownCount))
         guard !hidden.isEmpty else { return }
         let state: TabState = MarkColumn.moreState(hidden.map { $0.urgent ?? .idle })
-        let title = NSAttributedString(string: "+\(hidden.count)", attributes: [
-            .foregroundColor: StatusGlyph.moreColor(for: state), .font: Theme.countFont,
-        ])
-        if moreButton.attributedTitle != title { moreButton.attributedTitle = title }
+        moreButton.lead = "+\(hidden.count)"
+        moreButton.leadColor = StatusGlyph.moreColor(for: state)
+        moreButton.words = "All Windows…"
+        moreButton.key = KeyboardShortcuts.shared.chord(for: "openProjectPanel:")?.display ?? ""
         let tip = "\(hidden.count) more window\(hidden.count == 1 ? "" : "s"): " + hidden.map(\.label).joined(separator: "; ")
         if moreButton.toolTip != tip { moreButton.toolTip = tip } // re-setting a tooltip resets it
         moreButton.setAccessibilityLabel(tip)
     }
 
-    /// "Hide window column ⌃⇧⌘S", the key as the user has it now (without one, the words alone).
+    /// "Hide Column" and the key as the user has it now (without one, the words alone).
     private func updateFoot() {
         let key: String = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display ?? ""
-        let words: String = "Hide window column" + (key.isEmpty ? "" : "  " + key)
-        guard footButton.title != words else { return }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.firstLineHeadIndent = 10
-        paragraph.headIndent = 10
-        footButton.attributedTitle = NSAttributedString(string: words, attributes: [
-            .foregroundColor: Theme.textDim, .font: NSFont.systemFont(ofSize: 11), .paragraphStyle: paragraph,
-        ])
+        footButton.key = key
         footButton.setAccessibilityLabel(key.isEmpty ? "Hide Window Column" : "Hide Window Column, \(key)")
     }
 
-    /// Folded, the chevron points into the window, the way the column opens; unfolded, the way it folds.
+    /// Pinned, the chevron points the way the column folds: toward the window's edge.
     private func updateChevron() {
-        let inward: Bool = !expanded
-        let pointsRight: Bool = onRight ? !inward : inward
+        let pointsRight: Bool = onRight
         let symbol: String = pointsRight ? "chevron.right" : "chevron.left"
         let words: String = expanded ? "Collapse Window Column" : "Expand Window Column"
         chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: words)?
@@ -292,13 +278,17 @@ final class WindowColumnView: NSView, ProjectGlowing {
     /// For the self-test: which way the chevron points.
     private(set) var chevronPointsRight = true
 
-    /// The hairline down its inner edge. Folded under the traffic lights, from the strip's bottom line down: the strip and
-    /// the bar beside it read as one title bar, with no line between the lights.
+    /// The hairline down its inner edge. Under the traffic lights, from the strip's bottom line down: the strip and the
+    /// bar beside it read as one title bar, with no line between the lights.
     var hairlineRect: NSRect {
-        let top: CGFloat = topInset > 0 ? Self.header - 1 : 0
+        let top: CGFloat = topInset > 0 ? WindowColumnGrid.titleStrip - 1 : 0
         return NSRect(x: onRight ? 0 : bounds.width - WindowColumnWidth.hairline, y: top, width: WindowColumnWidth.hairline,
                       height: max(0, bounds.height - top))
     }
+
+    /// Text that is not a window's name (the count, the heading, a detail, the foot): dim, and plainer with Increase
+    /// Contrast.
+    static var secondary: NSColor { DisplayOptions.increasesContrast ? SwitcherRowStyle.selectedSecondary : Theme.textDim }
 
     override func draw(_ dirtyRect: NSRect) {
         #if DEBUG
@@ -306,39 +296,49 @@ final class WindowColumnView: NSView, ProjectGlowing {
         #endif
         Theme.bar.setFill()
         bounds.fill()
-        projectGlow.draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: Self.header - 1))
-        // The tab bars' bottom line runs on across the top row, and the hairline down the window's side.
+        let strip: CGFloat = WindowColumnGrid.titleStrip
+        projectGlow.draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: strip - 1))
+        // The tab bars' bottom line runs on across the top row, and the hairline down the window's side: the list's
+        // plainer with Increase Contrast, where it lies over the content.
         Theme.border.setFill()
-        NSRect(x: 0, y: Self.header - 1, width: bounds.width, height: 1).fill()
+        NSRect(x: 0, y: strip - 1, width: bounds.width, height: 1).fill()
+        if hovers && DisplayOptions.increasesContrast { Theme.textDim.setFill() }
         hairlineRect.fill()
-        let count = "\(list.count)"
-        if expanded {
-            // As ⌘O heads its windows: small capitals set apart, and the count in figures that never shift.
-            let title: NSAttributedString = WelcomeWindowController.headingText("Windows")
-            let number = NSAttributedString(string: count, attributes: [
-                .foregroundColor: Theme.textDim, .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-            ])
-            let leading: CGFloat = onRight ? stripX + Self.slot + 4 : headerLeading
-            let titleSize: NSSize = title.size()
-            title.draw(at: NSPoint(x: leading, y: ((Self.header - titleSize.height) / 2).rounded()))
-            let numberSize: NSSize = number.size()
-            number.draw(at: NSPoint(x: leading + titleSize.width + 6, y: ((Self.header - numberSize.height) / 2).rounded()))
-            // The foot's hairline, apart from the rows above it.
-            Theme.border.setFill()
-            NSRect(x: stripX, y: bounds.height - Self.footRow, width: stripWidth, height: 1).fill()
-        } else {
-            // The rail: the count in its own row, clear of the traffic lights, the dots below it.
-            let number = NSAttributedString(string: count, attributes: [.foregroundColor: Theme.textDim, .font: Theme.countFont])
-            let size: NSSize = number.size()
-            let place: NSRect = countRect
-            number.draw(at: NSPoint(x: place.minX + ((place.width - size.width) / 2).rounded(), y: place.minY + ((place.height - size.height) / 2).rounded()))
-        }
+        // The count in the dot column, as the rail draws it, in figures that never shift.
+        let place: NSRect = countRect
+        let number = NSAttributedString(string: "\(list.count)", attributes: [.foregroundColor: Self.secondary, .font: Theme.countFont])
+        let size: NSSize = number.size()
+        let numberAt = NSPoint(x: place.minX + ((place.width - size.width) / 2).rounded(), y: place.minY + ((place.height - size.height) / 2).rounded())
+        number.draw(at: numberAt)
+        guard expanded else { return }
+        // Unfolded, what they are beside it, at the names' x and on its baseline: a figure in one column, a word in the
+        // other, as ⌘O heads its rows.
+        let heading: NSAttributedString = Self.headingText()
+        let baseline: CGFloat = numberAt.y + Theme.countFont.ascender
+        let headingFont: NSFont = heading.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 11)
+        let x: CGFloat = stripX + WindowColumnGrid.nameX(width: stripWidth, onRight: onRight, depth: 0)
+        heading.draw(at: NSPoint(x: x, y: WindowColumnButton.snap(baseline - headingFont.ascender, in: self)))
+    }
+
+    /// "WINDOWS", as ⌘O heads its windows: small capitals set apart.
+    static func headingText() -> NSAttributedString {
+        let set = NSMutableAttributedString(attributedString: WelcomeWindowController.headingText("Windows"))
+        set.addAttribute(.foregroundColor, value: secondary, range: NSRange(location: 0, length: set.length))
+        return set
+    }
+
+    /// Increase Contrast changed: the dim text, the hairline, the wells' edges.
+    func contrastChanged() {
+        needsDisplay = true
+        buttons.forEach { $0.contrastChanged() }
+        moreButton.contrastChanged()
+        footButton.contrastChanged()
     }
 
     // MARK: mouse
 
     /// The top row is title bar: it moves the window, as the tab bars beside it do.
-    func isTitleBar(_ point: NSPoint) -> Bool { point.y < Self.header }
+    func isTitleBar(_ point: NSPoint) -> Bool { point.y < WindowColumnGrid.titleStrip }
 
     override func mouseDown(with event: NSEvent) {
         if isTitleBar(convert(event.locationInWindow, from: nil)) { return TabBarView.titleBarMouseDown(event, in: window) }
@@ -347,12 +347,12 @@ final class WindowColumnView: NSView, ProjectGlowing {
     }
 
     /// Below the title bar's strip while it is there: resting on the traffic lights, or dragging the window from there,
-    /// opens nothing.
+    /// opens nothing. Its moves say when a pointer held still has moved.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         let place = NSRect(x: 0, y: topInset, width: bounds.width, height: max(0, bounds.height - topInset))
-        addTrackingArea(NSTrackingArea(rect: place, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+        addTrackingArea(NSTrackingArea(rect: place, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways], owner: self))
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -366,6 +366,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
 
     override func mouseEntered(with event: NSEvent) { onPointer?(true) }
     override func mouseExited(with event: NSEvent) { onPointer?(false) }
+    override func mouseMoved(with event: NSEvent) { onMoved?() }
 
     /// The top row: the window's Project Color menu. Below it: Hide Window Column and Collapse (or Expand) Window Column.
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -389,11 +390,15 @@ final class WindowColumnView: NSView, ProjectGlowing {
 
     @objc private func chevronClicked() { onToggle?() }
 
-    @objc private func shortcutsChanged() { if expanded { updateFoot() } }
+    @objc private func shortcutsChanged() {
+        updateFoot()
+        updateMore()
+    }
+
     @objc private func moreClicked() { onMore?() }
 
     @objc private func buttonClicked(_ sender: WindowColumnButton) {
-        // The window's own badge: it is in front already, and nothing more happens.
+        // The window's own row: it is in front already, and nothing more happens.
         guard sender.id != current else { return }
         onSelect?(sender.id)
     }
@@ -401,6 +406,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
     // MARK: VoiceOver
 
     override func accessibilityChildren() -> [Any]? {
+        // Under the list on hover, which reads the same windows: nothing here, so none is heard twice.
+        if covered { return [] }
         var views: [NSView] = chevron.isHidden ? [] : [chevron]
         views += buttons.filter { !$0.isHidden } as [NSView]
         if !moreButton.isHidden { views.append(moreButton) }
@@ -412,8 +419,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
     // MARK: the self-test
 
     var chevronButton: NSButton { chevron }
-    var overflowButton: NSButton { moreButton }
-    var hideButton: NSButton { footButton }
+    var overflowButton: WindowColumnActionButton { moreButton }
+    var hideButton: WindowColumnActionButton { footButton }
     var countFrame: NSRect { countRect }
     var shownButtons: [WindowColumnButton] { buttons.filter { !$0.isHidden } }
     func button(for id: Int) -> WindowColumnButton? { buttons.first { $0.id == id } }
@@ -430,27 +437,38 @@ final class WindowColumnView: NSView, ProjectGlowing {
     #endif
 }
 
-/// One window in the column: folded to the rail, a dot in its project's colour (its mark instead when an agent there
-/// needs you or failed, in a darker well when it is this window, as the tab you are in sits darker than the others);
-/// unfolded, its row (the badge, its name, and its marks with counts). It draws itself, and only when what its form shows
-/// changed: a tooltip or a VoiceOver label is set without a draw. Quiet on purpose: only a decision or a failure in a
-/// window should draw the eye.
+/// One window in the column, on the grid every form shares (WindowColumnGrid): its dot in the dot column in its
+/// project's colour (its mark instead when an agent there needs you or failed), in a darker well when it is this window,
+/// as the tab you are in sits darker than the others. Unfolded, its name beside the dot, at its depth; a dimmer detail
+/// after it while another row shows the same name; its marks with counts at the row's end; and this window's well is a
+/// pill along the row. It draws itself, and only when what its form shows changed: a tooltip or a VoiceOver label is set
+/// without a draw. Quiet on purpose: only a decision or a failure in a window should draw the eye.
 final class WindowColumnButton: NSButton {
     let id: Int
     private(set) var row: WindowColumnRow?
     private(set) var isCurrent = false
     private(set) var expanded = false
-    /// On the rail, the mark of a window that needs you or failed, in its dot's place.
+    private(set) var onRight = false
+    /// The mark of a window that needs you or failed, in its dot's place.
     private let dot = StatusDotView()
     /// Unfolded, the marks with counts, as ⌘O's rows show them.
     private let marks = SwitcherMarksView()
     private var hovering = false {
-        didSet { if hovering != oldValue { needsDisplay = true } }
+        didSet {
+            guard hovering != oldValue else { return }
+            needsDisplay = true
+            if expanded { marks.show(row?.marks ?? [], color: marksColor) }
+        }
     }
 
-    private static let badge: CGFloat = WindowColumnWidth.badge
-    /// A nested worktree's row is this much further in.
-    private static let indent: CGFloat = 14
+    /// The name's face: the tab bar's, the tab list's and the project tree's size, so a window reads as a tab does.
+    static let nameFont = NSFont.systemFont(ofSize: 12.5)
+    /// A detail after it: the sidebar's smaller size, in the dim colour.
+    static let detailFont = NSFont.systemFont(ofSize: 12)
+    /// Between a name and its detail, and between its end and the marks.
+    private static let gap: CGFloat = 6
+    /// The least room a detail is shown in: less, and it gives way whole.
+    private static let detailMinimum: CGFloat = 24
 
     init(id: Int) {
         self.id = id
@@ -473,47 +491,47 @@ final class WindowColumnButton: NSButton {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    /// Where an unfolded row's badge is, further in for a nested worktree.
-    private var badgeRect: NSRect {
-        let y: CGFloat = ((bounds.height - Self.badge) / 2).rounded()
-        let depth: CGFloat = CGFloat(row?.depth ?? 0)
-        return NSRect(x: 5 + depth * Self.indent, y: y, width: Self.badge, height: Self.badge)
+    /// The dot, in the middle of the dot column.
+    private var dotRect: NSRect { WindowColumnGrid.dotRect(width: bounds.width, height: bounds.height, onRight: onRight) }
+
+    /// The plate behind this window and under the pointer: on the rail, the well round its dot; unfolded, the pill.
+    private var plateRect: NSRect {
+        WindowColumnGrid.plateRect(width: bounds.width, height: bounds.height, rail: !expanded, onRight: onRight)
     }
 
-    /// On the rail, the dot in the middle of the window's place.
-    private var railDotRect: NSRect {
-        let size: CGFloat = WindowColumnRail.dot
-        return NSRect(x: ((bounds.width - size) / 2).rounded(), y: ((bounds.height - size) / 2).rounded(), width: size, height: size)
-    }
-
-    /// The well behind this window: on the rail, round its dot; unfolded, the row.
-    private var plateRect: NSRect { expanded ? bounds.insetBy(dx: 3, dy: 1) : railDotRect.insetBy(dx: -5, dy: -5) }
-
-    /// What the rail marks: only a decision or a failure. Done and working stay a plain dot there; the list says them.
+    /// What the dot's place marks: only a decision or a failure. Done and working stay a plain dot there; the list's marks
+    /// say them.
     private var railMark: TabState? {
         guard let urgent = row?.urgent, urgent == .attention || urgent == .failed else { return nil }
         return urgent
     }
 
+    /// A hovered or pressed row lights its dim text a step, as a selected ⌘O row does; this window's own row stays.
+    private var lit: Bool { expanded && !isCurrent && (hovering || isHighlighted) }
+    private var secondaryColor: NSColor { lit ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary }
+    private var marksColor: NSColor { secondaryColor }
+
     /// `row` as it is now: drawn again only if what this form shows of it changed.
-    func configure(_ newRow: WindowColumnRow, current: Bool, expanded newExpanded: Bool) {
+    func configure(_ newRow: WindowColumnRow, current: Bool, expanded newExpanded: Bool, onRight newOnRight: Bool) {
         #if DEBUG
         configureCount += 1
         #endif
         let old: WindowColumnRow? = row
-        let formChanged: Bool = newExpanded != expanded
+        let formChanged: Bool = newExpanded != expanded || newOnRight != onRight
         let redraw: Bool = old.map { Self.drawsDifferently($0, newRow, expanded: newExpanded) } ?? true
             || current != isCurrent || formChanged
         row = newRow
+        let currentChanged: Bool = current != isCurrent
         isCurrent = current
         expanded = newExpanded
+        onRight = newOnRight
         if redraw {
             dot.state = railMark ?? .idle
             place()
             needsDisplay = true
         }
         if expanded {
-            marks.show(newRow.marks, color: Theme.textDim)
+            marks.show(newRow.marks, color: marksColor)
             placeMarks()
         } else if !marks.isHidden {
             marks.isHidden = true
@@ -524,16 +542,20 @@ final class WindowColumnButton: NSButton {
             if toolTip != tip { toolTip = tip } // re-setting a tooltip resets it
             setAccessibilityLabel(newRow.label)
         }
+        if currentChanged || old == nil {
+            setAccessibilityHelp(current ? "This window" : "Brings this window to the front")
+        }
         if isAccessibilitySelected() != current { setAccessibilitySelected(current) }
     }
 
-    /// What each form draws of its row: on the rail, the dot (colour, or the mark of a decision or a failure); unfolded, the
-    /// badge and the name, at its depth, up to the marks. The marks are a view of their own, but the room the name has ends
-    /// where they start, so a change of them draws the row again.
+    /// What each form draws of its row: on the rail, the dot (colour, or the mark of a decision or a failure); unfolded,
+    /// the dot and the name, its prefix and detail, at its depth, up to the marks. The marks are a view of their own, but
+    /// the room the name has ends where they start, so a change of them draws the row again.
     private static func drawsDifferently(_ old: WindowColumnRow, _ new: WindowColumnRow, expanded: Bool) -> Bool {
-        if old.letters != new.letters || old.color != new.color { return true }
-        if expanded { return old.name != new.name || old.depth != new.depth || old.marks != new.marks }
-        return old.color != new.color || old.urgent != new.urgent
+        if old.color != new.color || old.urgent != new.urgent { return true }
+        guard expanded else { return false }
+        return old.name != new.name || old.prefix != new.prefix || old.detail != new.detail || old.depth != new.depth
+            || old.marks != new.marks
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -542,24 +564,32 @@ final class WindowColumnButton: NSButton {
         placeMarks()
     }
 
-    /// On the rail, the mark of a decision or a failure in the dot's place: unfolded, the marks say it with counts.
+    /// The mark of a decision or a failure in the dot's place, in either form: the list over the rail shows what the rail
+    /// does, and its marks say it again with counts.
     private func place() {
-        let shows: Bool = !expanded && railMark != nil
+        let shows: Bool = railMark != nil
         if dot.isHidden == shows { dot.isHidden = !shows }
         guard shows else { return }
-        let frame: NSRect = railDotRect
+        let frame: NSRect = dotRect
         if dot.frame != frame { dot.frame = frame }
     }
 
-    /// Unfolded, the marks at the row's end, before its edge.
+    /// Unfolded, the marks at the trailing column's end, centred on the dot's line.
     private func placeMarks() {
         guard expanded else { return }
         let shows: Bool = !(row?.marks.isEmpty ?? true)
         if marks.isHidden == shows { marks.isHidden = !shows }
         guard shows else { return }
         let size: NSSize = marks.fittingSize
-        let frame = NSRect(x: bounds.width - 8 - size.width, y: ((bounds.height - size.height) / 2).rounded(), width: size.width, height: size.height)
+        let end: CGFloat = WindowColumnGrid.trailingEnd(width: bounds.width, onRight: onRight)
+        let frame = NSRect(x: end - size.width, y: ((bounds.height - size.height) / 2).rounded(), width: size.width, height: size.height)
         if marks.frame != frame { marks.frame = frame }
+    }
+
+    /// `y` on the screen's pixel grid, so text sits sharp.
+    static func snap(_ y: CGFloat, in view: NSView) -> CGFloat {
+        let scale: CGFloat = view.window?.backingScaleFactor ?? 2
+        return (y * scale).rounded() / scale
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -568,61 +598,83 @@ final class WindowColumnButton: NSButton {
         #endif
         guard let row else { return }
         let plate: NSRect = plateRect
-        let place = NSBezierPath(roundedRect: plate, xRadius: 7, yRadius: 7)
+        let radius: CGFloat = WindowColumnGrid.plateRadius
+        let shape = NSBezierPath(roundedRect: plate, xRadius: radius, yRadius: radius)
         if isCurrent {
-            // This window: a darker well, as the tab you are in. Increase Contrast edges it.
+            // This window: a darker well, as the tab you are in. Increase Contrast edges it. No hover over it: a click on
+            // it does nothing.
             Theme.background.setFill()
-            place.fill()
+            shape.fill()
             if DisplayOptions.increasesContrast {
                 Theme.textDim.setStroke()
-                let edge = NSBezierPath(roundedRect: plate.insetBy(dx: 0.5, dy: 0.5), xRadius: 6.5, yRadius: 6.5)
+                let edge = NSBezierPath(roundedRect: plate.insetBy(dx: 0.5, dy: 0.5), xRadius: radius - 0.5, yRadius: radius - 0.5)
                 edge.lineWidth = 1
                 edge.stroke()
             }
-        }
-        if hovering || isHighlighted {
-            NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
-            place.fill()
-        }
-        let fill: NSColor = NSColor(hex: row.color?.badge ?? ProjectColor.neutralBadge)
-        guard expanded else {
-            // The rail: the window's dot in its project's own colour (the Welcome rows' dot, readable on the bar where the
-            // badge's darker tone is not), grey without one; its mark in its place when it needs you or failed.
-            if railMark == nil {
-                (row.color?.swatchColor ?? Theme.textDim).setFill()
-                NSBezierPath(ovalIn: railDotRect).fill()
+        } else if hovering || isHighlighted {
+            if expanded {
+                // A row: the tab list's hover, and a step lighter pressed.
+                (isHighlighted ? Theme.tabHover : TabListRowView.hoverFill).setFill()
+            } else {
+                NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
             }
-            return
+            shape.fill()
         }
-        let badge: NSRect = badgeRect
-        let tile = NSBezierPath(roundedRect: badge, xRadius: 5, yRadius: 5)
-        fill.setFill()
-        tile.fill()
-        let letters: NSAttributedString = Self.lettersText(row.letters)
-        let size: NSSize = letters.size()
-        letters.draw(at: NSPoint(x: badge.minX + ((badge.width - size.width) / 2).rounded(), y: badge.minY + ((badge.height - size.height) / 2).rounded()))
-        // Cut in the middle: a window with no project is named by its folder's path, whose end is the folder.
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingMiddle
-        let name = NSAttributedString(string: row.name, attributes: [
-            .foregroundColor: Theme.text, .font: NSFont.systemFont(ofSize: 12), .paragraphStyle: paragraph,
+        // The window's dot in its project's own colour (the Welcome rows' dot), grey without one; its mark in its place
+        // when it needs you or failed.
+        if railMark == nil {
+            (row.color?.swatchColor ?? Theme.textDim).setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+        }
+        guard expanded else { return }
+        drawWords(row)
+    }
+
+    /// The name, with a worktree's repository before it, and a detail after it while there is room, on one baseline:
+    /// the name's cap height centred on the dot. The name keeps its room first; the detail gives way, cut at its end,
+    /// and goes whole under `detailMinimum`.
+    private func drawWords(_ row: WindowColumnRow) {
+        let start: CGFloat = WindowColumnGrid.nameX(width: bounds.width, onRight: onRight, depth: row.depth)
+        let end: CGFloat = marks.isHidden ? WindowColumnGrid.trailingEnd(width: bounds.width, onRight: onRight) : marks.frame.minX - Self.gap
+        guard end > start else { return }
+        let dim: NSColor = secondaryColor
+        let name = NSMutableAttributedString()
+        if let prefix = row.prefix {
+            name.append(NSAttributedString(string: prefix + WorktreeWindow.separator, attributes: [.font: Self.nameFont, .foregroundColor: dim]))
+        }
+        name.append(NSAttributedString(string: row.name, attributes: [.font: Self.nameFont, .foregroundColor: Theme.text]))
+        let baseline: CGFloat = Self.snap(bounds.height / 2 + Self.nameFont.capHeight / 2, in: self)
+        let room: CGFloat = end - start
+        let nameWidth: CGFloat = ceil(name.size().width)
+        // Cut in the middle: a name's end tells it apart as much as its start does.
+        let shown: NSAttributedString = Typography.truncating(name, .byTruncatingMiddle)
+        let nameHeight: CGFloat = ceil(Self.nameFont.ascender - Self.nameFont.descender)
+        shown.draw(with: NSRect(x: start, y: baseline - Self.nameFont.ascender, width: min(room, nameWidth), height: nameHeight),
+                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        guard let detail = row.detail, nameWidth < room else { return }
+        let left: CGFloat = room - nameWidth - Self.gap
+        guard left >= Self.detailMinimum else { return }
+        let words = NSAttributedString(string: detail, attributes: [
+            .font: Self.detailFont, .foregroundColor: dim, .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
-        let start: CGFloat = badge.maxX + 7
-        let end: CGFloat = marks.isHidden ? bounds.width - 8 : marks.frame.minX - 6
-        let height: CGFloat = ceil(name.size().height)
-        name.draw(with: NSRect(x: start, y: ((bounds.height - height) / 2).rounded(), width: max(0, end - start), height: height),
-                  options: [.usesLineFragmentOrigin])
+        let detailHeight: CGFloat = ceil(Self.detailFont.ascender - Self.detailFont.descender)
+        words.draw(with: NSRect(x: start + nameWidth + Self.gap, y: baseline - Self.detailFont.ascender, width: left, height: detailHeight),
+                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 
-    /// A badge's two letters: medium, lighter than bold as light text on dark reads heavier; two capitals or figures
-    /// ("XC", "73") set a little apart, as short capitals read best, mixed case ("Ag") as the font sets it.
-    static func lettersText(_ letters: String) -> NSAttributedString {
-        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
-        return Typography.capitals(letters, font: font, color: Theme.text, tracking: WindowColumnBadge.tracks(letters) ? 0.7 : 0)
+    /// Increase Contrast changed: the well's edge, and unfolded the dim text, are drawn again (the dot follows by itself).
+    func contrastChanged() {
+        guard isCurrent || expanded else { return }
+        needsDisplay = true
+        if expanded { marks.show(row?.marks ?? [], color: marksColor) }
     }
 
-    /// Increase Contrast changed: the well's edge is drawn again (the dot follows by itself).
-    func contrastChanged() { if isCurrent { needsDisplay = true } }
+    override var isHighlighted: Bool {
+        didSet {
+            guard isHighlighted != oldValue else { return }
+            needsDisplay = true
+        }
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -637,7 +689,7 @@ final class WindowColumnButton: NSButton {
         hovering = false
     }
 
-    /// Clicks anywhere on the badge or row are the button's, the dot and the marks included.
+    /// Clicks anywhere on the row are the button's, the dot and the marks included.
     override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
     // VoiceOver reads the button itself: its window's title and marks, selected for this window.
@@ -658,10 +710,141 @@ final class WindowColumnButton: NSButton {
         configureCount = 0
     }
 
-    /// For the self-test: where the badge, the well and the dot are.
-    var badgeForTest: NSRect { badgeRect }
-    var railDotForTest: NSRect { railDotRect }
+    /// For the self-test: where the dot, the plate, the mark and the marks are.
+    var dotForTest: NSRect { dotRect }
     var plateForTest: NSRect { plateRect }
     var dotFrameForTest: NSRect? { dot.isHidden ? nil : dot.frame }
+    var marksFrameForTest: NSRect? { marks.isHidden ? nil : marks.frame }
+    var marksForTest: SwitcherMarksView { marks }
+    var hoveringForTest: Bool {
+        get { hovering }
+        set { hovering = newValue }
+    }
     #endif
+}
+
+/// A row of the column that is not a window: "+N" for the windows with no room (unfolded, "All Windows…" and ⌘O's key
+/// beside it) and the foot's "Hide Column" with its key. On the same grid as the windows' rows: the lead in the dot
+/// column, the words at the names' x, the key at the trailing column's end, a row's pill under the pointer. One button,
+/// the whole row, so it is easy to hit.
+final class WindowColumnActionButton: NSButton {
+    /// In the dot column: "+3".
+    var lead: String? {
+        didSet { if lead != oldValue { needsDisplay = true } }
+    }
+    var leadColor: NSColor = Theme.textDim {
+        didSet { if leadColor != oldValue { needsDisplay = true } }
+    }
+    /// Unfolded, at the names' x.
+    var words: String = "" {
+        didSet { if words != oldValue { needsDisplay = true } }
+    }
+    var wordsFont: NSFont = WindowColumnButton.nameFont {
+        didSet { if wordsFont != oldValue { needsDisplay = true } }
+    }
+    /// Unfolded, at the trailing end: the key, as KeyHint shows one; nothing without one.
+    var key: String = "" {
+        didSet { if key != oldValue { needsDisplay = true } }
+    }
+    private(set) var expanded = false
+    private(set) var onRight = false
+    private var hovering = false {
+        didSet { if hovering != oldValue { needsDisplay = true } }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        bezelStyle = .regularSquare
+        refusesFirstResponder = true
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    func place(expanded newExpanded: Bool, onRight newOnRight: Bool) {
+        guard newExpanded != expanded || newOnRight != onRight else { return }
+        expanded = newExpanded
+        onRight = newOnRight
+        needsDisplay = true
+    }
+
+    /// What it says, for the self-test: "+3", "All Windows…  ⌘O", "Hide Column  ⌃⇧⌘S".
+    var shownWords: String {
+        let parts: [String] = [lead ?? "", expanded ? words : "", expanded ? key : ""].filter { !$0.isEmpty }
+        return parts.joined(separator: "  ")
+    }
+
+    override var isHighlighted: Bool {
+        didSet { if isHighlighted != oldValue { needsDisplay = true } }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if hovering || isHighlighted {
+            let plate: NSRect = WindowColumnGrid.plateRect(width: bounds.width, height: bounds.height, rail: !expanded, onRight: onRight)
+            let radius: CGFloat = WindowColumnGrid.plateRadius
+            if expanded {
+                (isHighlighted ? Theme.tabHover : TabListRowView.hoverFill).setFill()
+            } else {
+                NSColor.white.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
+            }
+            NSBezierPath(roundedRect: plate, xRadius: radius, yRadius: radius).fill()
+        }
+        let lit: Bool = expanded && (hovering || isHighlighted)
+        let dim: NSColor = lit ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary
+        let middle: CGFloat = bounds.height / 2
+        if let lead {
+            let text = NSAttributedString(string: lead, attributes: [.foregroundColor: leadColor, .font: Theme.countFont])
+            let size: NSSize = text.size()
+            let column: CGFloat = WindowColumnGrid.dotColumnX(width: bounds.width, onRight: onRight)
+            text.draw(at: NSPoint(x: column + ((WindowColumnGrid.dotColumn - size.width) / 2).rounded(), y: (middle - size.height / 2).rounded()))
+        }
+        guard expanded else { return }
+        let baseline: CGFloat = WindowColumnButton.snap(middle + wordsFont.capHeight / 2, in: self)
+        let start: CGFloat = WindowColumnGrid.nameX(width: bounds.width, onRight: onRight, depth: 0)
+        let end: CGFloat = WindowColumnGrid.trailingEnd(width: bounds.width, onRight: onRight)
+        let keyFont = NSFont.systemFont(ofSize: 11)
+        var keyStart: CGFloat = end
+        if !key.isEmpty {
+            let hint = NSAttributedString(string: key, attributes: [.font: keyFont, .foregroundColor: dim])
+            let width: CGFloat = ceil(hint.size().width)
+            keyStart = end - width
+            hint.draw(at: NSPoint(x: keyStart, y: baseline - keyFont.ascender))
+        }
+        let room: CGFloat = keyStart - KeyHint.lead - start
+        guard !words.isEmpty, room > 0 else { return }
+        let text = NSAttributedString(string: words, attributes: [
+            .font: wordsFont, .foregroundColor: dim, .paragraphStyle: Typography.paragraph(.byTruncatingTail),
+        ])
+        let height: CGFloat = ceil(wordsFont.ascender - wordsFont.descender)
+        text.draw(with: NSRect(x: start, y: baseline - wordsFont.ascender, width: room, height: height),
+                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+
+    /// Increase Contrast changed: unfolded, its dim text is drawn again.
+    func contrastChanged() { if expanded { needsDisplay = true } }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func viewDidHide() {
+        super.viewDidHide()
+        hovering = false
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityPerformPress() -> Bool {
+        performClick(nil)
+        return true
+    }
 }
