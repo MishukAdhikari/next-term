@@ -264,11 +264,12 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             savedAsLabel.textColor = .secondaryLabelColor
         }
         let length = valueField.stringValue.trimmingCharacters(in: .whitespaces).utf8.count
-        let shortWasHidden: Bool = shortLabel.isHidden
         shortLabel.isHidden = !hasValue || length == 0 || length >= SecretMask.minimumLength
-        if shortLabel.isHidden != shortWasHidden { DialogFit.fit(window) } // a note shown or gone takes its space
         let purposeOK = purposeField.stringValue.count <= SecretVault.maxPurposeLength
         linkField?.refresh()
+        // A note, the link's suggestion or its refusal shown or gone takes its space (DialogFit moves nothing when the
+        // height is the same).
+        DialogFit.fit(window)
         let linkOK: Bool = linkField?.blocksSave != true
         let valueOK: Bool = !hasValue || length > 0
         saveButton?.isEnabled = !isBusy && StoredSecretName.isValid(name) && !taken && purposeOK && linkOK && valueOK

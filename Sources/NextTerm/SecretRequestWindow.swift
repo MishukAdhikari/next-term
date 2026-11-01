@@ -115,10 +115,10 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stack.widthAnchor.constraint(equalToConstant: 500),
         ]
-        for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40)) }
         for group in stack.arrangedSubviews.compactMap({ $0 as? NSStackView }) {
             for row in group.arrangedSubviews where row is NSTextField || row is NSStackView || row is NSSecureTextField {
-                constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36))
+                constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40))
             }
         }
         NSLayoutConstraint.activate(constraints)

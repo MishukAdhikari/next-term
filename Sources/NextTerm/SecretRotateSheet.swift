@@ -358,12 +358,12 @@ extension SecretRotateSheet {
         doneLabel.stringValue = lines.joined(separator: " ")
         openAgainButton.isHidden = !hasPage
         bottomRow.isHidden = true
-        DialogFit.fit(window) // the save row gone: no empty space where it was
         saveButton.keyEquivalent = ""
         cancelButton.keyEquivalent = ""
         doneButton.keyEquivalent = "\r"
         setStatus("")
         refresh()
+        DialogFit.fit(window) // the save row and the status lines gone: no empty space where they were
         window?.makeFirstResponder(doneButton)
         guard let window else { return }
         NSAccessibility.post(element: window, notification: .announcementRequested,
