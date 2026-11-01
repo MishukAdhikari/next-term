@@ -151,7 +151,10 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
             keepNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
             tmuxNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
             sessionNote.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
+            // A long host name or destination is cut in its middle, never widening the sheet.
+            hostPopup.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
         ])
+        (hostPopup.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingMiddle
         panel.contentView = content
         rebuildPopup()
     }
@@ -187,6 +190,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         loadSessions()
         completionRow.show(selectedHost, over: panel)
         problemLabel.isHidden = true
+        DialogFit.fit(panel)
         panel.makeFirstResponder(destinationField.stringValue.isEmpty ? destinationField : folderField)
     }
 
@@ -205,6 +209,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         keepNote.stringValue = keep.summary
         for row in Self.tmuxRows { grid?.row(at: row).isHidden = keep != .tmux }
         fillSessions(keep)
+        DialogFit.fit(panel) // rows hidden take their space with them
     }
 
     /// The session popup for `keep`: tmux's sessions to reattach, or herdr's to open, from the last list; nothing else.
@@ -354,6 +359,7 @@ final class RemoteTabSheet: NSObject, NSTextFieldDelegate {
         if let problem = host.problem ?? (host.name != selectedHost?.name ? RemoteHost.nameProblem(host.name) : nil) {
             problemLabel.stringValue = problem
             problemLabel.isHidden = false
+            DialogFit.fit(panel)
             NSSound.beep()
             return
         }

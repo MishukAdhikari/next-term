@@ -497,6 +497,9 @@ final class SkillsUnifySheet: NSObject {
     let claude = SkillsUnifyChoice(width: 460)
     private let copies: [SkillCopy]
     private weak var unifyButton: NSButton?
+    /// The alert's accessory and the alert, to fit it as its steps change.
+    private var accessory: NSView?
+    private weak var alert: NSAlert?
 
     init(row: SkillRow, inventory: SkillInventory, plugins: SkillInstall.PluginFacts) {
         self.row = row
@@ -540,7 +543,7 @@ final class SkillsUnifySheet: NSObject {
         choice.selectItem(at: firstGood)
         choice.target = self
         choice.action = #selector(choiceChanged)
-        claude.choice.onChange = { [weak self] in self?.updateSteps() }
+        claude.choice.onChange = { [weak self] in self?.updateSteps(); self?.fitAccessory() }
         stepsText.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         let drifted = row.health == .drifted
         let label = NSTextField(labelWithString: drifted ? "The copies differ. Keep:" : "Keep:")
@@ -563,6 +566,8 @@ final class SkillsUnifySheet: NSObject {
         alert.informativeText = "One copy stays, in ~/.agents/skills: Codex and Command Code read it there, \(claudeText). "
             + "The other copies go to the Trash, and links are removed (never what they point to). Undo puts everything back."
         alert.accessoryView = stack
+        accessory = stack
+        self.alert = alert
         unifyButton = alert.addButton(withTitle: "Unify")
         alert.addButton(withTitle: "Cancel")
         choiceChanged()
@@ -586,6 +591,13 @@ final class SkillsUnifySheet: NSObject {
         let canWin = row.cannotWin(winner) == nil
         claude.show(canWin ? pluginLink(winner) : nil, linked: claudeLinks(to: winner))
         updateSteps()
+        fitAccessory()
+    }
+
+    /// The accessory as tall as its steps: one sentence or a list, neither cut off nor followed by empty space.
+    private func fitAccessory() {
+        guard let accessory else { return }
+        DialogFit.fitAccessory(accessory, width: 460, in: alert)
     }
 
     private func updateSteps() {

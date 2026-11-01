@@ -110,7 +110,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.spacing = ApprovalLayout.groupSpacing
-        rows.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 10, right: 18)
+        rows.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 10, right: 20)
         rows.translatesAutoresizingMaskIntoConstraints = false
         let document = FlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -131,7 +131,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         pinned.orientation = .vertical
         pinned.alignment = .leading
         pinned.spacing = 8
-        pinned.edgeInsets = NSEdgeInsets(top: 10, left: 18, bottom: 16, right: 18)
+        pinned.edgeInsets = NSEdgeInsets(top: 10, left: 20, bottom: 20, right: 20)
         pinned.translatesAutoresizingMaskIntoConstraints = false
 
         view.addSubview(scroll)

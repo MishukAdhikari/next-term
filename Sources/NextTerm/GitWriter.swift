@@ -523,11 +523,13 @@ enum GitPrompt {
         stack.spacing = 6
         stack.frame = NSRect(x: 0, y: 0, width: 320, height: 52)
         alert.accessoryView = stack
+        DialogFit.fitAccessory(stack, width: 320, in: nil)
         let ok = alert.addButton(withTitle: button)
         alert.addButton(withTitle: "Cancel")
         let watcher = FieldWatcher { text in
             let why = text.isEmpty ? nil : check(text)
             problem.stringValue = why ?? ""
+            DialogFit.fitAccessory(stack, width: 320, in: alert) // a two-line problem is not cut off
             ok.isEnabled = !text.isEmpty && why == nil
         }
         field.delegate = watcher

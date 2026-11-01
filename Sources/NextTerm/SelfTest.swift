@@ -1503,6 +1503,10 @@ enum SelfTest {
         window.tickShortcutForTest("goToFile:")
         check(window.applyTitle == "Apply \(KeymapPreset.vsCode.overrides.count + 6 - alreadySet) Changes", "the preview counts what is ticked",
               window.applyTitle)
+        let fit = window.buttonsFitForTest
+        check(fit.map { $0.bottom >= 19 && $0.emptyBelowRows <= 1 } == true,
+              "the preview's buttons sit 20 points from the bottom, with no empty space below its rows",
+              fit.map { "bottom \($0.bottom), empty \($0.emptyBelowRows)" } ?? "no preview")
         func swatches(in view: NSView?) -> [PaletteSwatches] {
             guard let view else { return [] }
             return (view as? PaletteSwatches).map { [$0] } ?? view.subviews.flatMap { swatches(in: $0) }

@@ -38,14 +38,15 @@ extension SecretManagerImportSheet {
         cancelButton.action = #selector(cancel)
         cancelButton.keyEquivalent = openButton.isHidden ? "\r" : "\u{1b}"
         for button in [openButton, cancelButton] { button.bezelStyle = .rounded }
+        DialogFit.widen([openButton, cancelButton])
         let buttons = NSStackView(views: [NSView(), cancelButton, openButton])
-        buttons.spacing = 8
+        buttons.spacing = 12
         views.append(buttons)
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints: [NSLayoutConstraint] = [
@@ -56,8 +57,9 @@ extension SecretManagerImportSheet {
             view.widthAnchor.constraint(equalToConstant: 560),
         ]
         let wide: [NSView] = [explanation, commandField, offLabel, buttons]
-        for item in wide { constraints.append(item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for item in wide { constraints.append(item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40)) }
         NSLayoutConstraint.activate(constraints)
+        DialogFit.fit(window) // as tall as what it says: no empty space under its buttons
     }
 
     /// The shell a new tab starts, by its name: the account's login shell, as a tab picks it.

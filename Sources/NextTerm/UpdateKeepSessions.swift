@@ -669,7 +669,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         stack.spacing = 10
         stack.setCustomSpacing(4, after: titleLabel)
         stack.setCustomSpacing(4, after: keepBox)
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
+        stack.edgeInsets = DialogFit.insets
         // The checkbox and the buttons stay in view however long the lists get: each scrolls past its height.
         let wide: [NSView] = [subtitleLabel, busyList, refusalLabel, summaryLabel, detailsList, decisionsList, noteLabel, buttonRow]
         for view in wide {

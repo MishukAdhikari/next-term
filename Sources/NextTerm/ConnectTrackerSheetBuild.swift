@@ -20,18 +20,19 @@ extension ConnectTrackerSheet {
         rows.alignment = .leading
         rows.spacing = 12
         status.font = .systemFont(ofSize: 12)
-        status.preferredMaxLayoutWidth = Self.width - 36
+        status.preferredMaxLayoutWidth = Self.width - 40
         doneButton.target = self
         doneButton.action = #selector(done)
         doneButton.bezelStyle = .rounded
         doneButton.keyEquivalent = "\u{1b}"
+        DialogFit.widen([doneButton])
         let buttons = NSStackView(views: [NSView(), doneButton])
         let views: [NSView] = [title, intro, trackerRow, rows, heldList(), status, buttons]
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints: [NSLayoutConstraint] = [
@@ -42,7 +43,7 @@ extension ConnectTrackerSheet {
             view.widthAnchor.constraint(equalToConstant: Self.width),
         ]
         let wide: [NSView] = [intro, rows, status, buttons]
-        for item in wide { constraints.append(item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for item in wide { constraints.append(item.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40)) }
         NSLayoutConstraint.activate(constraints)
         fillRows()
     }
@@ -55,6 +56,7 @@ extension ConnectTrackerSheet {
         }
         rowViews = [:]
         for agent in TrackerLines.agents { rows.addArrangedSubview(row(agent)) }
+        DialogFit.fit(window) // another tracker's rows: the sheet as tall as they are
     }
 
     private func row(_ agent: AgentKind) -> NSView {
@@ -62,7 +64,7 @@ extension ConnectTrackerSheet {
         name.font = .systemFont(ofSize: 12, weight: .semibold)
         let cell: TrackerLines.Cell = tracker.cell(for: agent)
         let line = NSTextField(wrappingLabelWithString: "")
-        line.preferredMaxLayoutWidth = Self.width - 36
+        line.preferredMaxLayoutWidth = Self.width - 40
         var parts: [NSView] = [name, line]
         var copy: NSButton?
         var open: NSButton?

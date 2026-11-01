@@ -348,6 +348,8 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
     // MARK: showing
 
     private func refresh() {
+        // Each stage's rows shown or gone: the panel as tall as they are, its top edge under the caret where it was.
+        defer { if panel.isVisible { DialogFit.fit(panel) } }
         let answered = stage == .answered
         field.isEditable = stage == .asking
         outputButton.isHidden = stage != .asking
