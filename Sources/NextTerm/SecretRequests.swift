@@ -14,10 +14,11 @@ import NextTermCore
 /// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes",
 ///   "Allow this command until the Mac locks" and "Allow for this session" keep copies of exactly those keys' values in a
 ///   grant.
-/// - Grants end on a lock, a sleep, the session resigning (a session grant excepted, as the owner chose), Revoke, a
+/// - Grants other than a session grant end on a lock, a sleep and the session resigning. Every grant ends on Revoke, a
 ///   key's change or its asking every time, the hour pause, quit, and for `run_with_secrets` when its asking tab gets
-///   input from MCP. A session grant ends with its session: the agent process exits, its run in its tab ends or the tab
-///   closes, or MCP types into that tab. Grants also end on their own: after 15 minutes, and a one-use grant at its use
+///   input from MCP. A session grant lasts through a lock, a sleep and a switch of users, and ends with its session: the
+///   agent process exits, its run in its tab ends or the tab closes, or MCP or another agent types into that tab. Agents
+///   in tmux or herdr, which run under the host's server rather than the tab's shell, get no session choice. Grants also end on their own: after 15 minutes, and a one-use grant at its use
 ///   or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
 @MainActor
 final class SecretRequests {
@@ -351,6 +352,7 @@ final class SecretRequests {
             !request.isAnswered && request.importAsk?.wasOpened != true
         }
         guard showing == nil, let next else { return }
+        if settledWhileQueued(next) { return } // finish() shows the one after it
         if let ask = next.importAsk {
             return ask.open(ended: { [weak self, weak next] (end: SecretImportAsk.End) in
                 guard let self, let next else { return }
@@ -445,8 +447,13 @@ final class SecretRequests {
         // "Allow once" goes to one caller. One that left in the moment before, its leaving not heard here yet, is let go
         // now as its leaving would have been: the use passes to the next caller, or a wrapper's one-use grant is made.
         // Asked again of the vault this unlock checked: a key ticked to ask every time gets no lasting grant.
-        // A session that ended during Touch ID is Allow once here too: one caller, no grant, "once" in the answer.
+        // A session that ended during Touch ID is Allow once here too: one caller, no grant, "once" in the answer; the use's
+        // line, written as Touch ID ended, said this session, so a line after it says what was allowed.
+        let asked: How = how
         let how: How = Self.stillOffered(how, request, offered: offered(request))
+        if asked == .session, how == .once {
+            audit(.use, request, approval: .once, outcome: "its session ended during Touch ID: allowed once, with no session grant")
+        }
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
         let now = now()
@@ -805,6 +812,27 @@ final class SecretRequests {
                                              hasSession: request.session != nil)
     }
 
+    /// A use that waited behind an identical request of another session: a grant that answers it, made meanwhile, answers
+    /// it now, and a decline meanwhile that paused it refuses it, as either would have had it joined that panel.
+    private func settledWhileQueued(_ request: Request) -> Bool {
+        guard request.isUse, !request.isRemote, request.importAsk == nil, request.panel == nil else { return false }
+        let now = now()
+        if let grant = book.take(request.binding, session: request.session, plain: request.warnings.isEmpty, at: now),
+           let values = held[grant.id] {
+            expire(at: now)
+            audit(.use, request, approval: .grant, outcome: "allowed")
+            finish(request, outcome: .answeredByGrant, decision: .allowed(copies(values), how: .grant))
+            return true
+        }
+        // Only a pause: the other limits counted it already when it asked.
+        if let refusal = limits.admit(asker: request.asker, binding: request.binding, at: now), case .paused = refusal {
+            audit(.refused, request, outcome: Self.word(refusal))
+            finish(request, outcome: .refusedByLimits, decision: .refused(refusal))
+            return true
+        }
+        return false
+    }
+
     // MARK: sessions
 
     /// `how` as it still holds: the lasting choices gone with a key's box ticked since, and Allow for this session gone
@@ -932,7 +960,7 @@ final class SecretRequests {
         SecretsStore.shared.record(line)
     }
 
-    /// A lock, a sleep or the session resigning: every grant ends, and pending cards are dropped.
+    /// A lock, a sleep or the session resigning: every grant but a session grant ends, and pending cards are dropped.
     private func locked(_ event: SecretsStore.LockEvent) {
         switch event {
         case .screenLocked: end(.screenLocked)

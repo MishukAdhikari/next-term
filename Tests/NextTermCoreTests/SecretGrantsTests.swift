@@ -290,9 +290,9 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         let id = "tab:T5:2|pid:41:1700000000.5"
         let tool = SecretGrant(kind: .session, binding: request(), made: start, session: id)
         let wrapper = SecretGrant(kind: .session, binding: wrapperBinding { $0.warned = [:] }, made: start, session: id)
-        // The same session string from the other door: not answered.
-        #expect(!tool.matches(wrapperBinding { $0.warned = [:] }, session: id, at: start))
-        #expect(!wrapper.matches(request(), session: id, at: start))
+        // The same request but from the other door, nothing else changed: not answered.
+        #expect(!tool.matches(request { $0.source = .wrapper }, session: id, at: start))
+        #expect(!wrapper.matches(wrapperBinding { $0.warned = [:]; $0.source = .tool }, session: id, at: start))
         // The same pid started again (another start time) is another session.
         #expect(!tool.matches(request(), session: "tab:T5:2|pid:41:1700000001.0", at: start))
         // Another agent path or script.

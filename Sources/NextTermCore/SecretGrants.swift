@@ -174,7 +174,8 @@ public struct SecretGrant: Identifiable, Sendable {
 
     /// Whether it answers `binding` at `now`: identical in every field, not expired, not used up. A session grant answers
     /// instead a request of its own session (`session`) with no warnings (`plain`: the panel would warn about it, so it
-    /// shows), from the same asker and agent, for keys it holds under the same names, whatever the command, folder or tab.
+    /// shows), from the same door, asker and agent, for keys it holds under the same names, and for run_with_secrets the
+    /// same target tab, whatever the command or folder.
     public func matches(_ binding: SecretBinding, session: String? = nil, plain: Bool = true, at now: ContinuousClock.Instant) -> Bool {
         guard !isExpired(at: now) else { return false }
         guard kind == .session else { return binding == self.binding }

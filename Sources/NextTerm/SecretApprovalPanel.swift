@@ -336,8 +336,8 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             // The widest: last, and plain about what ends it.
             let agent = content.askedBy.agent ?? "this agent"
             radio("Allow for this session", .session,
-                  note: "These keys, for any command \(agent) runs with them, until \(agent) exits, its tab closes or something types "
-                    + "into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. A command "
+                  note: "These keys, for any command \(agent) runs with them, until \(agent) exits, its tab closes or another agent "
+                    + "types into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. A command "
                     + "Next Term would warn about still asks. Revoke it in Settings \u{203A} Secrets.")
         }
         durationChoice[.once]?.state = .on

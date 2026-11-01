@@ -522,7 +522,9 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             let front: String? = tab.flatMap { $0.status.running && $0.status.kind == .agent ? AgentName.of(program: $0.status.program) : nil }
             let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : front ?? "The agent"
             let place: String = tab.map { " in \u{201C}\(SecretApprovalPanel.sanitized($0.title, limit: 60))\u{201D}" } ?? ""
-            return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) for any command, until the session ends"
+            // Which door it answers: run_with_secrets' commands, or the servers nxtrm secret run starts.
+            let door: String = binding.source == .wrapper ? "for any server it starts with nxtrm secret run" : "for any command it runs through Next Term"
+            return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) \(door), until the session ends"
         }
         let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
         let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)
