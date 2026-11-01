@@ -27,6 +27,9 @@ extension SelfTest {
             app.windowColumnExpanded = false
         }
         app.windowColumnExpanded = false
+        // The real pointer may rest anywhere while the run is unattended: the checks drive the pointer's comings and goings
+        // themselves, so it stands far off the screen, where it is on no list.
+        WindowColumnHost.pointerLocation = { NSPoint(x: -100_000, y: -100_000) }
         _ = await bringToFront(window)
         window.layoutIfNeeded()
 
@@ -169,7 +172,7 @@ extension SelfTest {
               "waits \(waited), shut \(stayedShut), opens after leaving \(reopened)")
         host.hideList(animated: false)
         column.onPointer?(false)
-        WindowColumnHost.pointerLocation = pointer
+        WindowColumnHost.pointerLocation = { NSPoint(x: -100_000, y: -100_000) }
 
         // Reduce Motion: the list shows whole at once.
         WindowColumnHost.reducesMotion = { true }

@@ -388,6 +388,15 @@ final class SwitcherMarksView: NSStackView {
         isHidden = marks.isEmpty
     }
 
+    /// Where its first count's baseline is under its top, laid out `height` tall; nil with no count.
+    func countBaseline(height: CGFloat) -> CGFloat? {
+        guard let count = counts.first else { return nil }
+        if frame.height != height { setFrameSize(NSSize(width: fittingSize.width, height: height)) }
+        layoutSubtreeIfNeeded()
+        // The stack is not flipped: its top is at its height.
+        return height - count.frame.maxY + count.firstBaselineOffsetFromTop
+    }
+
     private func dot(_ state: TabState) -> StatusDotView {
         let dot = StatusDotView()
         dot.pulsesForAttention = false

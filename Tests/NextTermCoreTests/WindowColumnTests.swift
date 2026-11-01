@@ -166,6 +166,13 @@ import Testing
         // Two windows on one server: what is in front, as their places are the same.
         let servers: WindowColumnList = list([server(1, front: "app"), server(2, front: "logs"), server(3, "web-2")])
         #expect(details(servers) == ["app", "logs", nil])
+        // Two of three alike in their folder: those two by what is in front in them, the third by its folder.
+        let mixed: WindowColumnList = list([plain(1, "~/Code/api", front: "claude"), plain(2, "~/Code/api", front: "codex"), plain(3, "/srv/api")])
+        #expect(details(mixed) == ["claude", "codex", "/srv"])
+        // Two worktrees whose own parts came to the same name: their folders' names tell them apart.
+        let trees: WindowColumnList = list([project(1, "xCloud"), worktree(2, "xCloud-fix"), worktree(3, "fix")])
+        #expect(names(trees) == ["xCloud", "fix", "fix"])
+        #expect(details(trees) == [nil, "xCloud-fix", nil])
         // The same name on two servers: where each connects.
         let hosts: WindowColumnList = list([server(1, destination: "deploy@a"), server(2, destination: "deploy@b")])
         #expect(details(hosts) == ["deploy@a", "deploy@b"])

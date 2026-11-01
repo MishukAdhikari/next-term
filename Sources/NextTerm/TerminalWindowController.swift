@@ -1281,7 +1281,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     /// The bars of the top row, each with its slice of the glow.
     private var projectGlows: [ProjectGlow] {
+        // The window column's list on hover, once made, lies over the top-left corner too.
         [sidebar.header.projectGlow, tabBar.projectGlow, editorArea.tabBar.projectGlow, terminalRail.projectGlow, windowColumn.projectGlow]
+            + [columnHost.list?.projectGlow].compactMap { $0 }
     }
 
     private func paintProjectColor() {
@@ -2771,6 +2773,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         hasClosed = true
         ticker?.invalidate()
         ticker = nil
+        columnHost.hideList(animated: false) // its reveal's timer and its Escape monitor go with it
         sidebar.stopWatching()
         _ = TerminalTab.terminate(tabs, finishLater: true)
         groups.removeAll()

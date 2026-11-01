@@ -89,6 +89,9 @@ extension TerminalWindowController {
     func updateWindowColumnInsets() {
         let host: WindowColumnHost = columnHost
         let underLights: Bool = !host.columnOnRight && !isFullScreen
-        host.column.topInset = underLights ? TabBarView.height : 0
+        let inset: CGFloat = underLights ? TabBarView.height : 0
+        guard host.column.topInset != inset else { return }
+        host.hideList(animated: false) // its grid was the old one's
+        host.column.topInset = inset
     }
 }

@@ -33,6 +33,7 @@ final class WindowColumnHost: NSView {
     var columnOnRight = false {
         didSet {
             guard columnOnRight != oldValue else { return }
+            hideList(animated: false) // laid out for the other side
             column.onRight = columnOnRight
             place(force: true)
         }
@@ -97,11 +98,27 @@ final class WindowColumnHost: NSView {
         heldAt = pointerOnColumn() ? Self.pointerLocation() : nil
     }
 
-    /// Whether the pointer is on the column, as it is now.
+    /// Whether the pointer is on the column, as it is now, in this window and not one over it.
     private func pointerOnColumn() -> Bool {
-        guard let window, !column.isHidden else { return false }
-        let point: NSPoint = convert(window.convertPoint(fromScreen: Self.pointerLocation()), from: nil)
+        guard !column.isHidden, let point = pointerHere() else { return false }
         return column.frame.contains(point)
+    }
+
+    /// Whether the pointer is on the open list below its title bar's strip: a list that opens under the pointer hears no
+    /// entry, as its tracking starts with the pointer inside, so its place is measured.
+    private func pointerOnList() -> Bool {
+        guard let shade = listShade, !shade.isHidden, let point = pointerHere() else { return false }
+        var place: NSRect = shade.frame
+        place.size.height -= column.topInset // the host is not flipped: the strip is at the frame's top
+        return place.contains(point)
+    }
+
+    /// The pointer in the host's coordinates while this window is the one under it; nil otherwise.
+    private func pointerHere() -> NSPoint? {
+        guard let window else { return nil }
+        let screen: NSPoint = Self.pointerLocation()
+        guard NSWindow.windowNumber(at: screen, belowWindowWithWindowNumber: 0) == window.windowNumber else { return nil }
+        return convert(window.convertPoint(fromScreen: screen), from: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -208,11 +225,16 @@ final class WindowColumnHost: NSView {
         hideList(animated: false)
     }
 
-    /// The list goes once the pointer has stayed off the rail and the list for closeDelay.
+    /// The list goes once the pointer has stayed off the rail and the list for closeDelay. One the pointer is on, though it
+    /// heard no entry, stays, and goes when the pointer leaves it.
     private func closeSoon() {
         guard listShowing, !closing else { return }
         after(WindowColumnRail.closeDelay) { [weak self] in
             guard let self, !self.onRail, !self.onList else { return }
+            if self.pointerOnList() {
+                self.onList = true
+                return
+            }
             self.hideList(animated: true)
         }
     }
@@ -287,6 +309,7 @@ final class WindowColumnHost: NSView {
         let opening: Bool = !listShowing
         listShade?.isHidden = false
         column.covered = true
+        if opening { onList = pointerOnList() }
         if opening {
             panel.update(list: column.list, change: .structure, current: column.current, expanded: true)
             panel.frame = NSRect(origin: .zero, size: listFrame().size)
@@ -355,8 +378,11 @@ final class WindowColumnHost: NSView {
         stopReveal()
         setShade(width: from)
         reveal = (from, to, CACurrentMediaTime(), duration, opening)
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.revealStep() }
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] (timer: Timer) in
+            MainActor.assumeIsolated {
+                guard let self else { return timer.invalidate() } // its window closed mid-reveal
+                self.revealStep()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         revealTimer = timer

@@ -17,17 +17,17 @@ extension SelfTest {
         guard let own = column.button(for: five[0].indexID), let marked = column.button(for: worktree.indexID) else {
             return check(false, "window column: the calm look's rows to check")
         }
-        let badge: NSRect = own.dotForTest
+        let dot: NSRect = own.dotForTest
         // As the window shows it: just outside the dot, in the well, the darker colour of the tab you are in, not a
         // light ring.
         if let window = five[0].window { _ = await bringToFront(window) }
         await pause(0.3)
-        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: badge.minX - 3, y: badge.midY))
+        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: dot.minX - 3, y: dot.midY))
         // The terminal's own background, as the same image shows it (an image of the screen is in the display's colours,
         // not the theme's numbers): the well is that colour.
         let terminal: NSView? = five[0].activeTab?.view
         let backgroundColor: NSColor? = terminal.flatMap { shownColor(of: $0, at: NSPoint(x: $0.bounds.maxX - 30, y: $0.bounds.midY)) }
-        let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -5, dy: -5)
+        let well: Bool = own.isCurrent && own.plateForTest == dot.insetBy(dx: -5, dy: -5)
             && wellColor != nil && backgroundColor != nil && close(wellColor!, backgroundColor!)
         // The worktree's window needs you (bellChecks): its mark stands in its dot's place, the dot's size, in its button.
         let place: NSRect = marked.dotForTest
@@ -38,7 +38,7 @@ extension SelfTest {
         let plainDots: Bool = column.shownButtons.filter { $0.row?.urgent != .attention && $0.row?.urgent != .failed }.allSatisfy { $0.dotFrameForTest == nil }
         check(well && markPlaced && plainDots,
               "window column: on the rail this window's dot sits in a darker well, a window that needs you shows its mark in its dot's place, and the others a plain dot",
-              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), "
+              "well \(own.plateForTest) round \(dot), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), "
                   + "mark \(mark.map { "\($0)" } ?? "none") at \(place) (\(marked.row?.urgent?.rawValue ?? "no mark")), plain \(plainDots)")
 
         // A mark's count before it ("2 ✓"), so the marks end a row in one place, with a count or without, in the column

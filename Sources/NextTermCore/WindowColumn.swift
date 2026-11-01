@@ -228,8 +228,9 @@ public struct WindowColumnList: Equatable, Sendable {
     }
 
     /// Rows that show the same name, each with a detail after it: where its window is, when those differ (its parent
-    /// folder, a server's destination), else what is in front in it (its title after the name: an agent, a command, a
-    /// file), when those differ; else none. A row alone with its name has none: the name is enough.
+    /// folder, a server's destination); among rows still alike there, what is in front in each (its title after the name:
+    /// an agent, a command, a file), when those differ; and among rows alike in that too, a worktree's own part as its
+    /// folder names it, before the repository's name came off. A row alone with its name has none: the name is enough.
     static func details(_ rows: [WindowColumnRow], windows: [WindowIndex.Window], home: String) -> [WindowColumnRow] {
         var named: [String: [Int]] = [:]
         for (index, row) in rows.enumerated() { named[row.shownKey, default: []].append(index) }
@@ -238,12 +239,32 @@ public struct WindowColumnList: Equatable, Sendable {
             let entries: [WindowIndex.Window?] = indices.map { (index: Int) -> WindowIndex.Window? in
                 windows.first { (window: WindowIndex.Window) -> Bool in window.id == rows[index].id }
             }
-            let places: [String?] = entries.map { (window: WindowIndex.Window?) -> String? in window.flatMap { WindowColumnName.place(of: $0, home: home) } }
-            let fronts: [String?] = entries.map { (window: WindowIndex.Window?) -> String? in window?.front }
-            let chosen: [String?] = Set(places).count > 1 ? places : Set(fronts).count > 1 ? fronts : []
-            for (at, index) in indices.enumerated() where at < chosen.count { told[index] = rows[index].with(detail: chosen[at]) }
+            let ways: [[String?]] = [
+                entries.map { (window: WindowIndex.Window?) -> String? in window.flatMap { WindowColumnName.place(of: $0, home: home) } },
+                entries.map { (window: WindowIndex.Window?) -> String? in window?.front },
+                entries.map { (window: WindowIndex.Window?) -> String? in
+                    window.flatMap { $0.kind == .worktree ? WindowColumnName.ownPart(of: $0.name) : nil }
+                },
+            ]
+            var chosen: [String?] = Array(repeating: nil, count: indices.count)
+            tellApart(Array(indices.indices), ways: ways[...], into: &chosen)
+            for (at, index) in indices.enumerated() { told[index] = rows[index].with(detail: chosen[at]) }
         }
         return told
+    }
+
+    /// `members` (places in a group of rows alike so far) told apart by the first of `ways` that differs among them; those
+    /// still alike in it, by the next.
+    private static func tellApart(_ members: [Int], ways: ArraySlice<[String?]>, into chosen: inout [String?]) {
+        guard members.count > 1, let way = ways.first else { return }
+        let values: [String?] = members.map { (member: Int) -> String? in way[member] }
+        guard Set(values).count > 1 else { return tellApart(members, ways: ways.dropFirst(), into: &chosen) }
+        var alike: [String?: [Int]] = [:]
+        for member in members {
+            chosen[member] = way[member]
+            alike[way[member], default: []].append(member)
+        }
+        for group in alike.values where group.count > 1 { tellApart(group, ways: ways.dropFirst(), into: &chosen) }
     }
 
     /// The list with `window`'s entry as it is now, and what that asks of a column. Only that window's row is made again:

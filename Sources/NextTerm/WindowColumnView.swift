@@ -314,10 +314,10 @@ final class WindowColumnView: NSView, ProjectGlowing {
         // Unfolded, what they are beside it, at the names' x and on its baseline: a figure in one column, a word in the
         // other, as ⌘O heads its rows.
         let heading: NSAttributedString = Self.headingText()
-        let baseline: CGFloat = numberAt.y + Theme.countFont.ascender
+        let baseline: CGFloat = numberAt.y + TextBaseline.offset(Theme.countFont)
         let headingFont: NSFont = heading.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 11)
         let x: CGFloat = stripX + WindowColumnGrid.nameX(width: stripWidth, onRight: onRight, depth: 0)
-        heading.draw(at: NSPoint(x: x, y: WindowColumnButton.snap(baseline - headingFont.ascender, in: self)))
+        heading.draw(at: NSPoint(x: x, y: TextBaseline.top(baseline, headingFont)))
     }
 
     /// "WINDOWS", as ⌘O heads its windows: small capitals set apart.
@@ -574,7 +574,10 @@ final class WindowColumnButton: NSButton {
         if dot.frame != frame { dot.frame = frame }
     }
 
-    /// Unfolded, the marks at the trailing column's end, centred on the dot's line.
+    /// Where the name's baseline is: its cap height centred on the dot, on the screen's pixel grid.
+    private var nameBaseline: CGFloat { Self.snap(bounds.height / 2 + Self.nameFont.capHeight / 2, in: self) }
+
+    /// Unfolded, the marks at the trailing column's end: a count's baseline on the name's, else centred on the dot's line.
     private func placeMarks() {
         guard expanded else { return }
         let shows: Bool = !(row?.marks.isEmpty ?? true)
@@ -582,7 +585,9 @@ final class WindowColumnButton: NSButton {
         guard shows else { return }
         let size: NSSize = marks.fittingSize
         let end: CGFloat = WindowColumnGrid.trailingEnd(width: bounds.width, onRight: onRight)
-        let frame = NSRect(x: end - size.width, y: ((bounds.height - size.height) / 2).rounded(), width: size.width, height: size.height)
+        var y: CGFloat = ((bounds.height - size.height) / 2).rounded()
+        if let count = marks.countBaseline(height: size.height) { y = nameBaseline - count }
+        let frame = NSRect(x: end - size.width, y: y, width: size.width, height: size.height)
         if marks.frame != frame { marks.frame = frame }
     }
 
@@ -643,13 +648,13 @@ final class WindowColumnButton: NSButton {
             name.append(NSAttributedString(string: prefix + WorktreeWindow.separator, attributes: [.font: Self.nameFont, .foregroundColor: dim]))
         }
         name.append(NSAttributedString(string: row.name, attributes: [.font: Self.nameFont, .foregroundColor: Theme.text]))
-        let baseline: CGFloat = Self.snap(bounds.height / 2 + Self.nameFont.capHeight / 2, in: self)
+        let baseline: CGFloat = nameBaseline
         let room: CGFloat = end - start
         let nameWidth: CGFloat = ceil(name.size().width)
         // Cut in the middle: a name's end tells it apart as much as its start does.
         let shown: NSAttributedString = Typography.truncating(name, .byTruncatingMiddle)
         let nameHeight: CGFloat = ceil(Self.nameFont.ascender - Self.nameFont.descender)
-        shown.draw(with: NSRect(x: start, y: baseline - Self.nameFont.ascender, width: min(room, nameWidth), height: nameHeight),
+        shown.draw(with: NSRect(x: start, y: TextBaseline.top(baseline, Self.nameFont), width: min(room, nameWidth), height: nameHeight),
                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         guard let detail = row.detail, nameWidth < room else { return }
         let left: CGFloat = room - nameWidth - Self.gap
@@ -658,7 +663,7 @@ final class WindowColumnButton: NSButton {
             .font: Self.detailFont, .foregroundColor: dim, .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
         let detailHeight: CGFloat = ceil(Self.detailFont.ascender - Self.detailFont.descender)
-        words.draw(with: NSRect(x: start + nameWidth + Self.gap, y: baseline - Self.detailFont.ascender, width: left, height: detailHeight),
+        words.draw(with: NSRect(x: start + nameWidth + Self.gap, y: TextBaseline.top(baseline, Self.detailFont), width: left, height: detailHeight),
                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 
@@ -813,7 +818,7 @@ final class WindowColumnActionButton: NSButton {
             let hint = NSAttributedString(string: key, attributes: [.font: keyFont, .foregroundColor: dim])
             let width: CGFloat = ceil(hint.size().width)
             keyStart = end - width
-            hint.draw(at: NSPoint(x: keyStart, y: baseline - keyFont.ascender))
+            hint.draw(at: NSPoint(x: keyStart, y: TextBaseline.top(baseline, keyFont)))
         }
         let room: CGFloat = keyStart - KeyHint.lead - start
         guard !words.isEmpty, room > 0 else { return }
@@ -821,7 +826,7 @@ final class WindowColumnActionButton: NSButton {
             .font: wordsFont, .foregroundColor: dim, .paragraphStyle: Typography.paragraph(.byTruncatingTail),
         ])
         let height: CGFloat = ceil(wordsFont.ascender - wordsFont.descender)
-        text.draw(with: NSRect(x: start, y: baseline - wordsFont.ascender, width: room, height: height),
+        text.draw(with: NSRect(x: start, y: TextBaseline.top(baseline, wordsFont), width: room, height: height),
                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 
@@ -847,4 +852,16 @@ final class WindowColumnActionButton: NSButton {
         performClick(nil)
         return true
     }
+}
+
+/// Where text drawn at a point or in a rect has its baseline: the layout manager's own offset for the font (its ascender,
+/// rounded), not the font's ascender, so words in two sizes drawn on one baseline land on it.
+@MainActor
+enum TextBaseline {
+    private static let layout = NSLayoutManager()
+
+    static func offset(_ font: NSFont) -> CGFloat { layout.defaultBaselineOffset(for: font) }
+
+    /// The top to draw `font`'s text at for its baseline to be at `baseline`.
+    static func top(_ baseline: CGFloat, _ font: NSFont) -> CGFloat { baseline - offset(font) }
 }
