@@ -78,7 +78,7 @@ import Testing
     /// no value lands in a command line), and no package Next Term's approval panel would warn about as unpinned.
     @Test func theRecipesKeepValuesOutOfCommandLinesAndPinTheirPackages() {
         #expect(MCPServer.wrapperPrefix == "NXTRM_")
-        #expect(!SecretVault.refusedEnvPrefixes.contains { "NXTRM_API_TOKEN".hasPrefix($0) })
+        #expect(!StoredSecretName.isRefusedEnvName("NXTRM_API_TOKEN"))
         let url = ["npx", "-y", MCPServer.mcpRemote, "https://mcp.example.com/mcp", "--header", "Authorization: Bearer ${NXTRM_API_TOKEN}"]
         let local = ["docker", "run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
         #expect(SecretRun.warnings(argv: url).isEmpty, "\(SecretRun.warnings(argv: url))")
