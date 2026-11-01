@@ -27,7 +27,7 @@ extension SelfTest {
         // not the theme's numbers): the well is that colour.
         let terminal: NSView? = five[0].activeTab?.view
         let backgroundColor: NSColor? = terminal.flatMap { shownColor(of: $0, at: NSPoint(x: $0.bounds.maxX - 30, y: $0.bounds.midY)) }
-        let well: Bool = own.isCurrent && own.plateForTest == dot.insetBy(dx: -5, dy: -5)
+        let well: Bool = own.isCurrent && own.plateForTest == dot.insetBy(dx: -(WindowColumnGrid.plate - WindowColumnRail.dot) / 2, dy: -(WindowColumnGrid.plate - WindowColumnRail.dot) / 2)
             && wellColor != nil && backgroundColor != nil && close(wellColor!, backgroundColor!)
         // The worktree's window needs you (bellChecks): its mark stands in its dot's place, the dot's size, in its button.
         let place: NSRect = marked.dotForTest

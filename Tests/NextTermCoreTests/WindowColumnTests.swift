@@ -200,6 +200,44 @@ import Testing
         #expect(retitled.list.row(3)?.face == moved.list.row(3)?.face)
     }
 
+    // MARK: folding a repository's worktrees
+
+    @Test func aFoldedRepositoryRowStandsForItsWorktreesAndCountsTheirMarks() {
+        let windows: [WindowIndex.Window] = [project(1, "xCloud", [tab(1, .done)]), worktree(2, "aichat", [tab(2, .attention)]),
+                                             worktree(3, "cx-8858"), project(4, "shop")]
+        let open: WindowColumnList = list(windows)
+        let key: String? = open.row(1)?.foldKey
+        #expect(key != nil && open.row(4)?.foldKey == nil && open.row(2)?.foldKey == nil)
+        #expect(ids(open) == [1, 2, 3, 4])
+        let folded = WindowColumnList.build(windows: windows, colors: [:], showsWorking: true, home: "/Users/sam", folded: [key ?? ""])
+        #expect(ids(folded) == [1, 4])
+        let row: WindowColumnRow? = folded.row(1)
+        #expect(row?.hidden == [2, 3] && row?.isFolded == true)
+        // Its own done and the worktree's needs-you: the most urgent shows on its dot, both in its marks.
+        #expect(row?.urgent == .attention)
+        #expect(row?.marks == [AgentMarks.Mark(state: .attention, count: 1), AgentMarks.Mark(state: .done, count: 1)])
+        #expect(row?.label == "xCloud, 2 worktrees folded: 1 needs you, 1 done")
+        // A folded worktree's window is found where its group is.
+        #expect(folded.row(showing: 3)?.id == 1 && folded.row(showing: 4)?.id == 4)
+        #expect(WindowColumnList.change(from: open, to: folded) == .structure)
+    }
+
+    @Test func aFoldedWorktreesChangeRedrawsItsRepositorysRow() {
+        let windows: [WindowIndex.Window] = [project(1, "xCloud"), worktree(2, "aichat"), project(4, "shop")]
+        let key: String = list(windows).row(1)?.foldKey ?? ""
+        let folded = WindowColumnList.build(windows: windows, colors: [:], showsWorking: true, home: "/Users/sam", folded: [key])
+        let rang = folded.updating(worktree(2, "aichat", [tab(1, .attention)]), color: nil, showsWorking: true)
+        #expect(rang.change == .rows([1]))
+        #expect(rang.list.row(1)?.urgent == .attention && ids(rang.list) == [1, 4])
+        // The repository's own change keeps the fold.
+        let own = rang.list.updating(project(1, "xCloud", [tab(3, .failed)]), color: nil, showsWorking: true)
+        #expect(own.change == .rows([1]) && own.list.row(1)?.hidden == [2] && own.list.row(1)?.urgent == .attention)
+        // A worktree with no repository window open has nothing to fold into.
+        let alone = WindowColumnList.build(windows: [worktree(2, "aichat"), worktree(3, "cx")], colors: [:], showsWorking: true,
+                                           home: "/Users/sam", folded: [key])
+        #expect(ids(alone) == [2, 3] && alone.rows.allSatisfy { $0.foldKey == nil })
+    }
+
     @Test func theDotIsTheMostUrgentOfNeedsYouFailedAndDoneAndWorkingGivesNone() {
         #expect(WindowColumnRow.urgent(AgentMarks([.done, .failed, .attention])) == .attention)
         #expect(WindowColumnRow.urgent(AgentMarks([.done, .failed, .working])) == .failed)

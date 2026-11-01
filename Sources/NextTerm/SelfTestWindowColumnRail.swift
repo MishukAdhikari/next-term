@@ -61,16 +61,24 @@ extension SelfTest {
               "width \(column.frame.width), places \(places), chevron hidden \(column.chevronButton.isHidden)")
         await screenshot(c, suffix: "-rail")
 
-        // Passing over it opens nothing.
-        WindowColumnRail.openDelay = 0.35
-        WindowColumnRail.closeDelay = 0.3
+        // At rest the dots are a quiet grey, and the hide key stands at the foot a key to a line.
+        let footKey: String = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display ?? ""
+        let quiet: Bool = column.shownButtons.filter { $0.dotColorForTest != nil }
+            .allSatisfy { $0.dotColorForTest == WindowColumnButton.restingDot.cgColor } && !column.awake
+        checkUntouched(since: started, quiet && (footKey.isEmpty || (column.hideButton.shownWords == footKey && !column.hideButton.isHidden)),
+                       "window column: at rest the rail's dots are a quiet grey, and its foot shows the hide key",
+                       "awake \(column.awake), foot “\(column.hideButton.shownWords)”")
+
+        // Passing over it opens nothing; resting on it wakes the dots into their colours.
         let content: NSRect = host.content.frame
         let keyboard: NSResponder? = window.firstResponder
         column.onPointer?(true)
-        await pause(0.15)
+        let woke: Bool = column.awake
+        await pause(0.06)
         column.onPointer?(false)
         await pause(0.6)
-        checkUntouched(since: started, !host.listShowing, "window column: the pointer passing over the rail opens nothing")
+        checkUntouched(since: started, !host.listShowing && woke && !column.awake,
+                       "window column: the pointer passing over the rail opens nothing, its dots waking while it is on it")
 
         // Resting on it opens the list over the rail and the content: as tall as the window, from the window's edge, the
         // content and the keyboard where they were.
@@ -244,6 +252,83 @@ extension SelfTest {
         app.refreshWindowIndex()
         let alone: Bool = await wait(3) { detail(plain) == nil }
         check(alone, "window column: alone with its name again, the window shows no detail")
+    }
+
+    /// A repository's fold arrow: unfolded, a guide runs beside its worktrees; folded, its worktrees' rows go from every
+    /// column, on the rail too, and its row counts their marks, the worktree's own window marked on it; the arrow brings
+    /// them back. The choice is kept.
+    static func foldChecks(_ app: AppDelegate, repo: TerminalWindowController, worktree: TerminalWindowController) async {
+        let all: [TerminalWindowController] = app.controllers.filter { !$0.hasClosed }
+        let saved: Any? = UserDefaults.standard.object(forKey: WindowColumnSettings.foldedKey)
+        app.windowColumnExpanded = true
+        defer {
+            app.windowColumnExpanded = false
+            if let saved { UserDefaults.standard.set(saved, forKey: WindowColumnSettings.foldedKey) } else {
+                UserDefaults.standard.removeObject(forKey: WindowColumnSettings.foldedKey)
+            }
+        }
+        for c in all { c.window?.layoutIfNeeded() }
+        let column: WindowColumnView = repo.windowColumn
+        guard repo.columnHost.shown.form == .expanded, let parent = column.button(for: repo.indexID), let arrow = parent.foldForTest,
+              let key = parent.row?.foldKey else {
+            return note("window column: folding not checked, as the repository's row has no fold arrow or no room to unfold")
+        }
+        let guided: Bool = !column.guides.isEmpty
+        let marks: AgentMarks = repo.indexEntry.marks + worktree.indexEntry.marks
+        arrow.performClick(nil)
+        for c in all { c.window?.layoutIfNeeded() }
+        let gone: Bool = all.allSatisfy { $0.windowColumn.button(for: worktree.indexID) == nil }
+        let row: WindowColumnRow? = column.button(for: repo.indexID)?.row
+        let counted: Bool = row?.hidden == [worktree.indexID] && row?.urgent == WindowColumnRow.urgent(marks)
+        let ownWell: Bool = worktree.windowColumn.button(for: repo.indexID)?.isCurrent == true
+        let kept: Bool = UserDefaults.standard.stringArray(forKey: WindowColumnSettings.foldedKey)?.contains(key) == true
+        await screenshot(repo, suffix: "-column-folded-worktrees")
+        column.button(for: repo.indexID)?.foldForTest?.performClick(nil)
+        for c in all { c.window?.layoutIfNeeded() }
+        let back: Bool = all.allSatisfy { $0.windowColumn.button(for: worktree.indexID) != nil }
+        check(guided && gone && counted && ownWell && kept && back,
+              "window column: a repository's arrow folds its worktrees into its row in every column, counting their marks, and brings them back",
+              "guide \(guided), gone \(gone), counted \(counted) (\(row?.hidden ?? []), \(row?.urgent?.rawValue ?? "none")), "
+                  + "the worktree's own window on its repository's row \(ownWell), kept \(kept), back \(back)")
+    }
+
+    /// Pinned, its inner edge dragged: the column takes the width in the window dragged in and, once the drag ends, in
+    /// every window, and the list on hover too; never past the room the work area keeps; a double-click puts back 180.
+    static func resizeChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
+        let all: [TerminalWindowController] = app.controllers.filter { !$0.hasClosed }
+        let saved: Any? = UserDefaults.standard.object(forKey: WindowColumnSettings.widthKey)
+        app.windowColumnExpanded = true
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: WindowColumnSettings.widthKey) } else {
+                UserDefaults.standard.removeObject(forKey: WindowColumnSettings.widthKey)
+            }
+            WindowColumnWidth.expanded = WindowColumnWidth.expandedWidth(CGFloat(UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey)))
+            app.windowColumnExpanded = false
+            for each in all { each.placeWindowColumn() }
+        }
+        c.window?.layoutIfNeeded()
+        let column: WindowColumnView = c.windowColumn
+        guard c.columnHost.shown.form == .expanded, column.resizeEdge != nil else {
+            return note("window column: resizing not checked, as the window had no room to unfold its column")
+        }
+        let room: CGFloat = c.columnHost.unfoldedRoom()
+        let target: CGFloat = min(240, room)
+        column.onResize?(target, false)
+        let live: Bool = column.frame.width == target + WindowColumnWidth.hairline
+        column.onResize?(target, true)
+        for each in all { each.window?.layoutIfNeeded() }
+        let everywhere: Bool = all.filter { $0.columnHost.shown.form == .expanded }
+            .allSatisfy { $0.windowColumn.frame.width == target + WindowColumnWidth.hairline }
+        let kept: Bool = UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey) == Double(target)
+        column.onResize?(room + 200, true)
+        let capped: Bool = column.frame.width <= room + WindowColumnWidth.hairline && c.columnHost.shown.form == .expanded
+        column.onResize?(nil, true)
+        let reset: Bool = WindowColumnWidth.expanded == WindowColumnWidth.defaultExpanded
+            && column.frame.width == WindowColumnWidth.defaultExpanded + WindowColumnWidth.hairline
+            && UserDefaults.standard.object(forKey: WindowColumnSettings.widthKey) == nil
+        check(live && everywhere && kept && capped && reset,
+              "window column: dragging the pinned column's edge sets its width in every window, within the window's room, and a double-click puts back 180",
+              "live \(live), everywhere \(everywhere), kept \(kept), capped \(capped), reset \(reset) (room \(room))")
     }
 }
 #endif

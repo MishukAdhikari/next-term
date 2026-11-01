@@ -36,6 +36,14 @@ extension TerminalWindowController {
             AppDelegate.shared.bringForward(id)
         }
         column.onToggle = { AppDelegate.shared.toggleWindowColumnExpanded(nil) }
+        column.onFold = { (key: String) in AppDelegate.shared.windowColumns.toggleFold(key) }
+        // Its edge dragged: as wide as the pointer says, but never past the room the editor and terminal keep beside the
+        // sidebar, so the drag never folds it.
+        column.onResize = { [weak self] (width: CGFloat?, ended: Bool) in
+            guard let self else { return }
+            let room: CGFloat = self.columnHost.unfoldedRoom()
+            AppDelegate.shared.windowColumns.setWidth(width.map { min($0, room) }, from: self, ended: ended)
+        }
         column.onMore = { AppDelegate.shared.openProjectPanel(nil) }
     }
 

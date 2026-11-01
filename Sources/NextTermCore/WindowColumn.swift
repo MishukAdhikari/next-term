@@ -28,6 +28,11 @@ public struct WindowColumnRow: Equatable, Sendable {
     public let toolTip: String
     /// What VoiceOver reads: "xCloud ▸ 7027-sso: 1 needs you", or the title alone.
     public let label: String
+    /// On a repository's row with its worktrees' windows nested under it: the group they fold by (WindowColumnList's
+    /// `folded`); nil on every other row.
+    public let foldKey: String?
+    /// Folded, the worktrees' windows it stands for, which have no rows of their own: their marks are in its marks.
+    public let hidden: [Int]
 
     /// What is drawn: a change here draws the dot or row again.
     public struct Face: Equatable, Sendable {
@@ -38,6 +43,8 @@ public struct WindowColumnRow: Equatable, Sendable {
         public let color: ProjectColor?
         public let urgent: TabState?
         public let marks: [AgentMarks.Mark]
+        public let foldKey: String?
+        public let hidden: [Int]
     }
 
     /// What is only read, by the tooltip and VoiceOver: a change here draws nothing.
@@ -46,34 +53,48 @@ public struct WindowColumnRow: Equatable, Sendable {
         public let label: String
     }
 
-    public var face: Face { Face(depth: depth, name: name, prefix: prefix, detail: detail, color: color, urgent: urgent, marks: marks) }
+    public var face: Face {
+        Face(depth: depth, name: name, prefix: prefix, detail: detail, color: color, urgent: urgent, marks: marks, foldKey: foldKey,
+             hidden: hidden)
+    }
+
+    /// Folded: it stands for windows of its own.
+    public var isFolded: Bool { !hidden.isEmpty }
     public var words: Words { Words(toolTip: toolTip, label: label) }
 
     /// `window`'s row at `depth`, in `color` (left out for a window with no project), its marks with working shown or
-    /// not as View › Agent Spinner says (`showsWorking`), and `detail` after its name.
-    public init(window: WindowIndex.Window, depth: Int, color: ProjectColor?, showsWorking: Bool, detail: String? = nil) {
+    /// not as View › Agent Spinner says (`showsWorking`), and `detail` after its name. `foldKey`: its group, on a
+    /// repository's row with worktrees nested under it; `folding`: those worktrees' windows while the group is folded,
+    /// their marks counted in its own.
+    public init(window: WindowIndex.Window, depth: Int, color: ProjectColor?, showsWorking: Bool, detail: String? = nil,
+                foldKey: String? = nil, folding: [WindowIndex.Window] = []) {
         let shown: (prefix: String?, name: String) = WindowColumnName.shown(window, depth: depth)
-        let spoken: String? = window.marks.spoken(working: showsWorking)
+        let all: AgentMarks = folding.reduce(window.marks) { (sum: AgentMarks, other: WindowIndex.Window) -> AgentMarks in sum + other.marks }
+        let spoken: String? = all.spoken(working: showsWorking)
+        let title: String = folding.isEmpty ? window.title
+            : window.title + ", \(folding.count) worktree\(folding.count == 1 ? "" : "s") folded"
         self.id = window.id
         self.depth = depth
         self.name = shown.name
         self.prefix = shown.prefix
         self.detail = detail == shown.name ? nil : detail
         self.color = window.kind.hasProject ? color : nil
-        self.urgent = Self.urgent(window.marks)
-        self.marks = window.marks.shown(working: showsWorking)
-        self.toolTip = spoken.map { (words: String) -> String in window.title + "\n" + words } ?? window.title
-        self.label = spoken.map { (words: String) -> String in window.title + ": " + words } ?? window.title
+        self.urgent = Self.urgent(all)
+        self.marks = all.shown(working: showsWorking)
+        self.toolTip = spoken.map { (words: String) -> String in title + "\n" + words } ?? title
+        self.label = spoken.map { (words: String) -> String in title + ": " + words } ?? title
+        self.foldKey = foldKey
+        self.hidden = folding.map(\.id)
     }
 
     /// The row with `detail` after its name instead.
     func with(detail: String?) -> WindowColumnRow {
         WindowColumnRow(id: id, depth: depth, name: name, prefix: prefix, detail: detail == name ? nil : detail, color: color,
-                        urgent: urgent, marks: marks, toolTip: toolTip, label: label)
+                        urgent: urgent, marks: marks, toolTip: toolTip, label: label, foldKey: foldKey, hidden: hidden)
     }
 
     private init(id: Int, depth: Int, name: String, prefix: String?, detail: String?, color: ProjectColor?, urgent: TabState?,
-                 marks: [AgentMarks.Mark], toolTip: String, label: String) {
+                 marks: [AgentMarks.Mark], toolTip: String, label: String, foldKey: String?, hidden: [Int]) {
         self.id = id
         self.depth = depth
         self.name = name
@@ -84,6 +105,8 @@ public struct WindowColumnRow: Equatable, Sendable {
         self.marks = marks
         self.toolTip = toolTip
         self.label = label
+        self.foldKey = foldKey
+        self.hidden = hidden
     }
 
     /// What the row is known by on the screen: its prefix and its name. Two rows with the same are told apart by a detail.
@@ -180,6 +203,8 @@ public struct WindowColumnList: Equatable, Sendable {
     private var colors: [Int: ProjectColor] = [:]
     /// The home folder places are shortened by ("~/Code").
     private var home: String = NSHomeDirectory()
+    /// The groups whose worktrees are folded into their repository's row, by their rows' `foldKey`.
+    public private(set) var folded: Set<String> = []
 
     public init() {}
 
@@ -195,9 +220,11 @@ public struct WindowColumnList: Equatable, Sendable {
     ///   project is a group of its own. Groups go in the order their first window opened.
     /// - In a group, the repository's own windows first, then its worktrees' windows, each in the order it opened; the
     ///   worktrees one deep, under the repository's, when one of its own is open, and showing only their own part.
+    /// - A group whose worktrees are nested under its repository's row can fold them into that row (`folded`): they have
+    ///   no rows then, and the row counts their marks with its own.
     /// - Rows that show the same name get a detail apiece (`details`); `home` shortens their places.
     public static func build(windows: [WindowIndex.Window], colors: [Int: ProjectColor], showsWorking: Bool,
-                             home: String = NSHomeDirectory()) -> WindowColumnList {
+                             home: String = NSHomeDirectory(), folded: Set<String> = []) -> WindowColumnList {
         var order: [String] = []
         var members: [String: [WindowIndex.Window]] = [:]
         for window in windows {
@@ -212,9 +239,14 @@ public struct WindowColumnList: Equatable, Sendable {
             let own: [WindowIndex.Window] = group.filter { (window: WindowIndex.Window) -> Bool in window.kind != .worktree }
             let trees: [WindowIndex.Window] = group.filter { (window: WindowIndex.Window) -> Bool in window.kind == .worktree }
             let depth: Int = own.isEmpty ? 0 : 1
-            for window in own {
-                rows.append(WindowColumnRow(window: window, depth: 0, color: colors[window.id], showsWorking: showsWorking))
+            let nests: Bool = !own.isEmpty && !trees.isEmpty
+            let folds: Bool = nests && folded.contains(key)
+            for (place, window) in own.enumerated() {
+                let leads: Bool = nests && place == 0
+                rows.append(WindowColumnRow(window: window, depth: 0, color: colors[window.id], showsWorking: showsWorking,
+                                            foldKey: leads ? key : nil, folding: leads && folds ? trees : []))
             }
+            if folds { continue }
             for window in trees {
                 rows.append(WindowColumnRow(window: window, depth: depth, color: colors[window.id], showsWorking: showsWorking))
             }
@@ -224,7 +256,13 @@ public struct WindowColumnList: Equatable, Sendable {
         list.windows = windows
         list.colors = colors
         list.home = home
+        list.folded = folded
         return list
+    }
+
+    /// The row a window's own row or its folded group's is: where it is in the column.
+    public func row(showing id: Int) -> WindowColumnRow? {
+        rows.first { (row: WindowColumnRow) -> Bool in row.id == id || row.hidden.contains(id) }
     }
 
     /// Rows that show the same name, each with a detail after it: where its window is, when those differ (its parent
@@ -278,20 +316,27 @@ public struct WindowColumnList: Equatable, Sendable {
     public func updating(_ window: WindowIndex.Window, color: ProjectColor?, showsWorking: Bool) -> (list: WindowColumnList, change: Change) {
         var next: WindowColumnList = self
         next.colors[window.id] = color
-        guard let at = windows.firstIndex(where: { (known: WindowIndex.Window) -> Bool in known.id == window.id }),
-              let place = rows.firstIndex(where: { (row: WindowColumnRow) -> Bool in row.id == window.id }) else {
+        guard let at = windows.firstIndex(where: { (known: WindowIndex.Window) -> Bool in known.id == window.id }) else {
             next.windows.append(window)
-            return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home), .structure)
+            return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded), .structure)
         }
         let old: WindowIndex.Window = windows[at]
         next.windows[at] = window
         let regrouped: Bool = Self.group(of: old) != Self.group(of: window) || (old.kind == .worktree) != (window.kind == .worktree)
-        if regrouped { return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home), .structure) }
+        if regrouped {
+            return (Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded), .structure)
+        }
+        // Folded into its repository's row, or the row others are folded into: that row counts them all, so it is made
+        // again with them.
+        guard let place = rows.firstIndex(where: { (row: WindowColumnRow) -> Bool in row.id == window.id }), !rows[place].isFolded else {
+            let remade = Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded)
+            return (remade, Self.change(from: self, to: remade))
+        }
         let before: WindowColumnRow = rows[place]
-        let row = WindowColumnRow(window: window, depth: before.depth, color: color, showsWorking: showsWorking)
+        let row = WindowColumnRow(window: window, depth: before.depth, color: color, showsWorking: showsWorking, foldKey: before.foldKey)
         let shared: Bool = rows.contains { (other: WindowColumnRow) -> Bool in other.id != before.id && other.shownKey == before.shownKey }
         if row.shownKey != before.shownKey || shared {
-            let remade = Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home)
+            let remade = Self.build(windows: next.windows, colors: next.colors, showsWorking: showsWorking, home: home, folded: folded)
             return (remade, Self.change(from: self, to: remade))
         }
         next.rows[place] = row

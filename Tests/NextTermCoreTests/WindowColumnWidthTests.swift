@@ -91,9 +91,18 @@ import Testing
 /// The rail the folded column rests as, and where a bar may start beside the traffic lights.
 @Suite struct WindowColumnRailTests {
     @Test func theRailIsAsWideAsTheFoldedTerminalsAndItsListAsTheUnfoldedColumn() {
-        #expect(WindowColumnWidth.folded == 24 && WindowColumnRail.slot == 24)
+        #expect(WindowColumnWidth.folded == 24 && WindowColumnRail.slot == 28)
         #expect(WindowColumnRail.listWidth == WindowColumnWidth.expanded)
-        #expect(WindowColumnRail.openDelay > WindowColumnRail.closeDelay - 0.1 && WindowColumnRail.openDelay < 1)
+        // A rest opens it quickly; the grace to leave it is longer, so an overshoot keeps it.
+        #expect(WindowColumnRail.openDelay < 0.3 && WindowColumnRail.closeDelay > WindowColumnRail.openDelay)
+        #expect(WindowColumnGrid.foot >= WindowColumnRail.slot && WindowColumnGrid.plate < WindowColumnRail.slot)
+    }
+
+    @Test func aDraggedWidthStaysWithinItsRangeAndNoneIsTheDefault() {
+        #expect(WindowColumnWidth.expandedWidth(0) == 180)
+        #expect(WindowColumnWidth.expandedWidth(80) == 140)
+        #expect(WindowColumnWidth.expandedWidth(240.4) == 240)
+        #expect(WindowColumnWidth.expandedWidth(900) == 360)
     }
 
     @Test func aBarBesideTheLightsStartsPastTheZoomButton() {

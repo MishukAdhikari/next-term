@@ -21,6 +21,9 @@ final class WindowColumns: NSObject {
     private var offerNotice: Int?
 
     private(set) var list = WindowColumnList()
+    /// The repositories whose worktrees are folded into their row (WindowColumnRow.foldKey), in every window, kept across
+    /// launches: a repository folded and closed is folded again when it opens.
+    private(set) var folded: Set<String> = Set(UserDefaults.standard.stringArray(forKey: WindowColumnSettings.foldedKey) ?? [])
     /// Whether every window shows the column now.
     private(set) var visible = false
     /// Windows a restore is building and about to open, one at a time (SessionRestoreBuild): counted, so each is laid out
@@ -38,6 +41,7 @@ final class WindowColumns: NSObject {
     #endif
 
     override init() {
+        WindowColumnWidth.expanded = WindowColumnWidth.expandedWidth(CGFloat(UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey)))
         super.init()
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(colorsChanged), name: ProjectColorStore.changed, object: nil)
@@ -104,9 +108,30 @@ final class WindowColumns: NSObject {
         rebuildCount += 1
         #endif
         let entries: [WindowIndex.Window] = app.windowIndex.windows
-        list = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking)
+        list = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking, folded: folded)
         visible = decideVisible(count: entries.count)
         tell(.structure)
+    }
+
+    /// The pinned column's inner edge dragged to `width` in the window `from`: that window follows the drag, and every
+    /// other window once it ends (`ended`), when the width is kept. Nil puts back the default.
+    func setWidth(_ width: CGFloat?, from: TerminalWindowController, ended: Bool) {
+        WindowColumnWidth.expanded = WindowColumnWidth.expandedWidth(width ?? 0)
+        from.placeWindowColumn()
+        guard ended else { return }
+        if width == nil {
+            UserDefaults.standard.removeObject(forKey: WindowColumnSettings.widthKey)
+        } else {
+            UserDefaults.standard.set(Double(WindowColumnWidth.expanded), forKey: WindowColumnSettings.widthKey)
+        }
+        for controller in windows where controller !== from { controller.placeWindowColumn() }
+    }
+
+    /// A repository's fold arrow, in any window's column: its worktrees fold into its row, or come out again, everywhere.
+    func toggleFold(_ key: String) {
+        if folded.remove(key) == nil { folded.insert(key) }
+        UserDefaults.standard.set(folded.sorted(), forKey: WindowColumnSettings.foldedKey)
+        rebuild()
     }
 
     /// Window `id`'s entry in the index changed: only its row is made again, and nothing goes on when the row is the same.
@@ -160,7 +185,7 @@ final class WindowColumns: NSObject {
     /// A colour or Agent Spinner changed: every row made again, and only the rows that differ drawn again.
     private func remade() {
         let entries: [WindowIndex.Window] = app.windowIndex.windows
-        let next = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking)
+        let next = WindowColumnList.build(windows: entries, colors: colors(), showsWorking: showsWorking, folded: folded)
         let change: WindowColumnList.Change = WindowColumnList.change(from: list, to: next)
         list = next
         guard change != .none else { return }

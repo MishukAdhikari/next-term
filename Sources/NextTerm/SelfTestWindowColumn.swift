@@ -109,6 +109,8 @@ extension SelfTest {
         await bellChecks(app, five, worktree: worktree, tree: tree)
         await calmChecks(app, five, worktree: worktree)
         await railChecks(app, project, others: [main, worktree, home, plain])
+        await foldChecks(app, repo: main, worktree: worktree)
+        await resizeChecks(app, project)
         await unfoldedMarksChecks(app, worktree: worktree)
         await detailChecks(app, plain, open: { await open(loose) }, close: closeWindow)
         await overflowChecks(app, project)

@@ -50,6 +50,17 @@ public struct AgentMarks: Equatable, Sendable {
         }
     }
 
+    /// Two windows' marks counted together: a folded group's row shows its worktrees' with its own.
+    public static func + (lhs: AgentMarks, rhs: AgentMarks) -> AgentMarks {
+        var sum: AgentMarks = lhs
+        sum.attention += rhs.attention
+        sum.failed += rhs.failed
+        sum.done += rhs.done
+        sum.working += rhs.working
+        sum.disconnected += rhs.disconnected
+        return sum
+    }
+
     /// The terminals and herdr's agents that need you: the ones Go to Next Agent Needing You goes to.
     public var needingYou: Int { attention + failed + done }
 
