@@ -135,6 +135,24 @@ final class WindowColumnHost: NSView {
         return place.contains(point)
     }
 
+    #if DEBUG
+    /// For the self-test: whether the real pointer rests where the column and its list are, which its real entries and
+    /// exits then race the checks' own.
+    var realPointerOnColumnArea: Bool {
+        guard let window else { return false }
+        let real: NSPoint = convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        let area = NSRect(x: columnOnRight ? column.frame.maxX - WindowColumnRail.listWidth - 1 : column.frame.minX, y: 0,
+                          width: WindowColumnRail.listWidth + 1, height: bounds.height)
+        return area.contains(real) && NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
+    }
+
+    /// For the self-test: where the hover stands.
+    var hoverForTest: String {
+        "rail \(onRail), list \(onList), closing \(closing), showing \(listShowing), held \(heldAt != nil), "
+            + (realPointerOnColumnArea ? "the real pointer on the column's area" : "the real pointer elsewhere")
+    }
+    #endif
+
     /// Whether the pointer is on the rail's foot, the hide key.
     private func pointerOnFoot() -> Bool {
         guard let point = pointerHere(), !column.hideButton.isHidden else { return false }
@@ -226,7 +244,8 @@ final class WindowColumnHost: NSView {
         updateAwake()
         guard shown.form == .folded, !column.isHidden else { return }
         if inside {
-            if closing { return showList() } // back while it closes: it opens again from where it is
+            // Back while it closes: it opens again from where it is; not while Escape holds it shut.
+            if closing { return heldAt == nil ? showList() : () }
             guard !listShowing else { return }
             // Back on the rail just after the list went: it opens at once, as a slip off the edge costs no wait.
             if let closedAt, CACurrentMediaTime() - closedAt < WindowColumnRail.warmDelay, heldAt == nil, !waitsForExit, !pointerOnFoot() {
@@ -275,7 +294,9 @@ final class WindowColumnHost: NSView {
     private func listPointer(_ inside: Bool) {
         onList = inside
         hoverMoves += 1
-        if inside, closing { return showList() }
+        // The pointer back on it while it closes opens it again, unless Escape closed it: a list closing under a resting
+        // pointer hears an entry as its tracking is set up again, which is no move toward it.
+        if inside, closing, heldAt == nil { return showList() }
         if !inside { closeSoon() }
     }
 
@@ -483,6 +504,8 @@ final class WindowColumnHost: NSView {
                     self.onRail = false
                     self.onList = false // gone by the key, not by the pointer: it doesn't come back as it fades
                     self.dismissedByKey = true
+                    // Held shut where the pointer is: nothing opens it again until the pointer moves.
+                    self.heldAt = Self.pointerLocation()
                     self.hideList(animated: true)
                 }
             }
