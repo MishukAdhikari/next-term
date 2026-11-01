@@ -128,9 +128,9 @@ public enum WindowColumnWidth {
 /// per window in its project's colour, a mark only where a window needs you or failed. Resting the pointer on it slides
 /// the list out over the content after `openDelay`; leaving the rail and the list for `closeDelay` slides it back.
 public enum WindowColumnRail {
-    /// A window's place on the rail and its row in the list: 28 points, as a tab's in the tab list, so a row is easy to
-    /// hit (the owner's "the click feeling"). The rail stays 24 points wide.
-    public static let slot: CGFloat = 28
+    /// A window's place on the rail and its row in the list: 32 points, a macOS 26 sidebar's row, so a row is easy to hit
+    /// (the owner's "the click feeling"). The rail stays 24 points wide.
+    public static let slot: CGFloat = 32
     /// A window's dot.
     public static let dot: CGFloat = 8
     /// How long the pointer rests on the rail, moving no more than `restRadius`, before the list opens: passing over it,
@@ -185,9 +185,11 @@ public enum WindowColumnGrid {
     public static let innerName: CGFloat = 12
     /// The trailing column's end before the strip's outer edge on the left.
     public static let trailingInset: CGFloat = 8
-    /// The row's plate (this window's well, a hover): in from the strip's two edges, as tall as the rail's well, round.
+    /// The row's plate (this window's well, a hover): unfolded a pill in from the strip's two edges, `pill` tall; on the
+    /// rail, a well `plate` square round the dot, as wide as the 24-point rail allows.
     public static let plateInset: CGFloat = 2
     public static let plate: CGFloat = 20
+    public static let pill: CGFloat = 24
     public static let plateRadius: CGFloat = 7
 
     /// The dot column's left edge in a strip `width` across: at the outer edge, the left one unless `onRight`.
@@ -212,12 +214,11 @@ public enum WindowColumnGrid {
 
     /// A row's plate, in a row `width` across and `height` tall: the well round the dot on the rail, the pill unfolded.
     public static func plateRect(width: CGFloat, height: CGFloat, rail: Bool, onRight: Bool) -> CGRect {
-        let y: CGFloat = ((height - plate) / 2).rounded()
         if rail {
             let x: CGFloat = dotColumnX(width: width, onRight: onRight) + ((dotColumn - plate) / 2).rounded()
-            return CGRect(x: x, y: y, width: plate, height: plate)
+            return CGRect(x: x, y: ((height - plate) / 2).rounded(), width: plate, height: plate)
         }
-        return CGRect(x: plateInset, y: y, width: max(0, width - 2 * plateInset), height: plate)
+        return CGRect(x: plateInset, y: ((height - pill) / 2).rounded(), width: max(0, width - 2 * plateInset), height: pill)
     }
 
     /// A row's dot, in the middle of the dot column.

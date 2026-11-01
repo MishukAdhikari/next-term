@@ -119,7 +119,8 @@ extension SelfTest {
                 if railDot != listDot { moved.append("\(rail.id) dot \(railDot) → \(listDot)") }
                 let railWell: NSRect = rail.convert(rail.plateForTest, to: nil)
                 let listWell: NSRect = row.convert(row.plateForTest, to: nil)
-                if rail.isCurrent, railWell.minX != listWell.minX || railWell.minY != listWell.minY || railWell.height != listWell.height {
+                // The rail's well grows into the list's pill: the same left edge and the same middle.
+                if rail.isCurrent, railWell.minX != listWell.minX || railWell.midY != listWell.midY {
                     moved.append("well \(railWell) → \(listWell)")
                 }
             }
@@ -340,15 +341,22 @@ extension SelfTest {
         // A window narrower than the widest column: the drag stops at its room, a fraction of a point less than it, and the
         // column stays unfolded.
         var capped = false
+        var cappedWords = ""
         if let window = c.window {
             let frame: NSRect = window.frame
-            window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: frame.width - (room - 300.5), height: frame.height), display: true)
-            window.layoutIfNeeded()
-            let narrow: CGFloat = c.columnHost.unfoldedRoom()
+            // The sidebar takes some of a narrowing first: narrowed again until the room is about 300 points.
+            var narrow: CGFloat = room
+            for _ in 0..<5 where narrow > 330 {
+                let width: CGFloat = max(window.minSize.width, window.frame.width - (narrow - 300.5))
+                window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: width, height: frame.height), display: true)
+                window.layoutIfNeeded()
+                narrow = c.columnHost.unfoldedRoom()
+            }
             column.onResize?(narrow + 200, true)
             window.layoutIfNeeded()
             capped = narrow < WindowColumnWidth.expandedRange.upperBound && column.frame.width <= narrow + WindowColumnWidth.hairline
                 && c.columnHost.shown.form == .expanded
+            cappedWords = "room \(narrow), column \(column.frame.width), \(c.columnHost.shown.form)"
             window.setFrame(frame, display: true)
             window.layoutIfNeeded()
         }
@@ -358,7 +366,7 @@ extension SelfTest {
             && UserDefaults.standard.object(forKey: WindowColumnSettings.widthKey) == nil
         check(live && everywhere && kept && capped && reset,
               "window column: dragging the pinned column's edge sets its width in every window, within the window's room, and a double-click puts back 180",
-              "live \(live), everywhere \(everywhere), kept \(kept), capped \(capped), reset \(reset) (room \(room))")
+              "live \(live), everywhere \(everywhere), kept \(kept), capped \(capped) (\(cappedWords)), reset \(reset) (room \(room))")
     }
 }
 #endif
