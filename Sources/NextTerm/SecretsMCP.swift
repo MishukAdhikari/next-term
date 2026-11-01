@@ -316,6 +316,8 @@ enum SecretsMCP {
             result["tab_id"] = tabID
             resolve(call, result)
         }
+        // The calling agent's run in its tab: "Allow for this session" binds to it.
+        ticket.session = caller.flatMap(SecretRequests.session(of:))
         calls[call.id] = call
         requests.add(ticket)
         MCPControl.driven.insert(ticketTab.id)
@@ -447,6 +449,7 @@ enum SecretsMCP {
             case .once, .remote: approved = "once"
             case .fifteenMinutes: approved = "for 15 minutes"
             case .untilLock: approved = "until the Mac locks"
+            case .session: approved = "for this session"
             case .grant: approved = "by an earlier approval"
             }
             return ["status": Status.started.rawValue, "approved": approved,

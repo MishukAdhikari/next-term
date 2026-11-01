@@ -510,9 +510,15 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         bottom.widthAnchor.constraint(equalTo: allowedBox.widthAnchor).isActive = true
     }
 
-    /// "Codex: GITHUB_TOKEN for npx -y … in api, 12 min".
+    /// "Codex: GITHUB_TOKEN for npx -y … in api, 12 min"; a session's: "Claude Code's session: OPENAI_API_KEY for any
+    /// command, until it ends".
     static func grantText(_ grant: SecretGrant, now: ContinuousClock.Instant = .now) -> String {
         let binding = grant.binding
+        if grant.kind == .session {
+            // run_with_secrets names the command's program; its asker is the agent's tab.
+            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : "An agent"
+            return "\(agent)\u{2019}s session: \(SecretRun.keysText(binding.names)) for any command, until the session ends"
+        }
         let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
         let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)
         let folder = (binding.folder as NSString).lastPathComponent

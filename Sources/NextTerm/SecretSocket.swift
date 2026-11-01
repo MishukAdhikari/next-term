@@ -173,6 +173,8 @@ enum SecretSocket {
         let program = ((request.argv.first ?? "") as NSString).lastPathComponent
         let asking = SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: request.argv, folder: request.directory,
                                             warnings: warnings, agentWords: nil, askedBy: facts, program: program, isRemote: false)
+        // The agent above, followed to its exit: "Allow for this session" binds to it.
+        asking.session = agent.flatMap { $0.pid > 1 ? SecretRequests.session(ofProcess: $0.pid) : nil }
         let waiting = SecretRequests.shared.ask(asking, left: { waiter.hasLeft }) { decision in
             waiter.set(answer(for: decision, request: request))
         }
@@ -284,6 +286,8 @@ enum SecretSocket {
     struct Agent {
         var name: String
         var program: String
+        /// Its process, for its session (SecretRequests.session(ofProcess:)).
+        var pid: pid_t = 0
         /// Its executable's path, and its script when it runs under an interpreter.
         var path: String
         var script: String?
@@ -303,7 +307,7 @@ enum SecretSocket {
                     let base = ((arguments.first ?? path) as NSString).lastPathComponent
                     let interpreted = ["node", "bun", "deno", "python", "python3", "ruby"].contains(base)
                     let script = interpreted ? arguments.dropFirst().first { !$0.hasPrefix("-") } : nil
-                    return Agent(name: AgentName.of(program: program), program: program, path: path, script: script)
+                    return Agent(name: AgentName.of(program: program), program: program, pid: process, path: path, script: script)
                 }
             }
             current = parent(of: process)

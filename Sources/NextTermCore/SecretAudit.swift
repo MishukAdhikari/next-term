@@ -30,6 +30,7 @@ public enum SecretAudit {
         case once
         case fifteenMinutes = "15 minutes"
         case untilLock = "until lock"
+        case session = "this session"
         case grant, remote
     }
 

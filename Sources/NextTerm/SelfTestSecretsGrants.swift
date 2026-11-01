@@ -35,6 +35,7 @@ extension SelfTest {
               secretsJSON(toolAnswer))
         await secretsLeftCallerChecks()
         await secretsGrantEndChecks(store)
+        await secretsSessionGrantChecks(store)
         await secretsOtherCopyGrantChecks()
         _ = try? await store.perform(.delete(name: "PANEL_KEY"))
     }
@@ -160,6 +161,59 @@ extension SelfTest {
               "secrets: of two identical run_with_secrets calls on one panel, one Allow once runs the command in one tab only, "
                   + "and the other call answers refused and its tab says why",
               "on one panel \(onOnePanel), \(secretsJSON(firstAnswer)) \(secretsJSON(secondAnswer)), ran in \(tabs.filter(ran).count), said \(said)")
+    }
+
+    /// "Allow for this session": offered for an agent's session Next Term can follow (this process stands in for the agent
+    /// above a wrapper); its grant lasts through a lock, answers another command of the session with no panel, never one
+    /// the panel would warn about, and ends with the session, its values with it; a tab's session ends with its run there.
+    static func secretsSessionGrantChecks(_ store: SecretsStore) async {
+        let requests = SecretRequests.shared
+        requests.now = { ContinuousClock.now }
+        guard let session = SecretRequests.session(ofProcess: getpid()) else {
+            return check(false, "secrets: this process's session reads (its pid and start time)")
+        }
+        let first = secretsRequest(asker: "wrapper:selftest-session", command: ["node", "first.js"], tab: "tab 3")
+        first.session = session
+        requests.ask(first) { _ in }
+        let offered: Bool = first.panel?.durationChoice[.session] != nil
+        first.panel?.durationChoice[.session]?.performClick(nil)
+        first.panel?.allowButton.performClick(nil)
+        let made = await wait(10) { requests.book.grants.contains { $0.kind == .session && $0.session == session } && !requests.heldGrants.isEmpty }
+        requests.end(.screenLocked)
+        let kept: Bool = requests.book.grants.contains { $0.kind == .session }
+        let answers = SecretsAnswers()
+        let another = secretsRequest(asker: "wrapper:selftest-session", command: ["node", "another.js"], tab: "tab 3")
+        another.session = session
+        requests.ask(another) { answers.take($0) }
+        let answered: Bool = secretsAllowed(answers.last)?.how == .grant && another.panel == nil
+        // A request the panel would warn about still asks.
+        let warned = secretsRequest(asker: "wrapper:selftest-session", command: ["npx", "-y", "server"], tab: "tab 3")
+        warned.session = session
+        warned.warnings = ["npx -y runs the latest version of a package"]
+        requests.ask(warned) { _ in }
+        let asksAgain: Bool = warned.panel != nil
+        warned.panel?.declineButton.performClick(nil)
+        check(offered && made && kept && answered && asksAgain,
+              "secrets: Allow for this session is offered for an agent's session, lasts through a lock, answers another command of it with no panel, "
+                  + "and a command the panel would warn about still asks",
+              "offered \(offered), made \(made), kept \(kept), answered \(answered), warned asks \(asksAgain)")
+        let before = secretsAudit(store).count
+        requests.end(.sessionEnded(session))
+        let wiped = requests.heldGrants.isEmpty && !requests.book.grants.contains { $0.kind == .session }
+        let line: Bool = secretsAudit(store).dropFirst(before).contains { $0.event == .grantEnd }
+        check(wiped && line, "secrets: the session's end ends its grant, its values with it, with a grant-end line", "wiped \(wiped), line \(line)")
+
+        // A tab's session: its run there ending (here, the tab gone) ends the grant.
+        let tab = UUID()
+        let inTab = secretsRequest(asker: tab.uuidString, command: ["npm test"], source: .tool, tab: "tab 4")
+        inTab.session = "tab:\(tab.uuidString):3"
+        requests.ask(inTab) { _ in }
+        inTab.panel?.durationChoice[.session]?.performClick(nil)
+        inTab.panel?.allowButton.performClick(nil)
+        let tabMade = await wait(10) { requests.book.grants.contains { $0.session == "tab:\(tab.uuidString):3" } }
+        SecretRequests.tabRunChanged(tab, tab: nil)
+        let tabEnded = !requests.book.grants.contains { $0.kind == .session } && requests.heldGrants.isEmpty
+        check(tabMade && tabEnded, "secrets: a session grant in a tab ends when the agent's run there ends", "made \(tabMade), ended \(tabEnded)")
     }
 
     /// A grant's values go the moment it ends on its own or is used, with no request after it (review finding 9).

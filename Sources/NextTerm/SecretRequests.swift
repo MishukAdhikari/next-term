@@ -112,6 +112,9 @@ final class SecretRequests {
         /// A title of its own (store_secret's), instead of "… asks to run …".
         var titleOverride: String?
         var kind: Kind = .use
+        /// The asking agent's session, when Next Term can follow it to its end (SecretGrant.session): what "Allow for this
+        /// session" binds to. Nil offers no such choice.
+        var session: String?
         let made: ContinuousClock.Instant
         /// A wrapper request whose wrapper stopped waiting: a pending card.
         fileprivate(set) var gone = false
@@ -217,7 +220,9 @@ final class SecretRequests {
         let now = now()
         expire(at: now)
         endGrantsAskingEveryUse() // a key that asks every time is never answered by a lasting grant
-        if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
+        if request.isUse, !request.isRemote,
+           let grant = book.take(request.binding, session: request.session, plain: request.warnings.isEmpty, at: now),
+           let values = held[grant.id] {
             limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
             expire(at: now) // a one-use grant is over now, and its values go now
             audit(.use, request, approval: .grant, outcome: "allowed")
@@ -445,12 +450,13 @@ final class SecretRequests {
         // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
         let stoppedDuringApproval = request.isWrapper && request.gone && how == .once
         if stoppedDuringApproval { kind = .oneUse }
-        if let kind, !request.isRemote {
-            let grant = SecretGrant(kind: kind, binding: request.binding, made: now)
+        if let kind, !request.isRemote, kind != .session || request.session != nil {
+            let grant = SecretGrant(kind: kind, binding: request.binding, made: now, session: request.session)
             book.add(grant)
             held[grant.id] = copies(values)
             audit(.grant, request, approval: how.approval, outcome: kind.rawValue)
             endWhenDue(grant)
+            if let session = grant.session { followSession(session) }
         }
         if stoppedDuringApproval {
             request.isAnswered = true
@@ -637,6 +643,8 @@ final class SecretRequests {
         let program: String
         let isRemote: Bool
         let notice: String?
+        /// The calling agent's session in its tab (SecretRequests.session(of:)), for "Allow for this session".
+        var session: String?
         fileprivate(set) var typedAt: ContinuousClock.Instant?
         fileprivate(set) var used = false
         /// The tool call's side: told the decision once, or `.notStarted`.
@@ -752,6 +760,7 @@ final class SecretRequests {
                              warnings: warnings, agentWords: ticket.agentWords, askedBy: ticket.askedBy, program: ticket.program,
                              isRemote: ticket.isRemote)
         asking.notice = ticket.notice
+        asking.session = ticket.session
         // The wrapper sent no names: its answer is built from the ticket's.
         var asked = request
         asked.names = ticket.names
@@ -788,7 +797,63 @@ final class SecretRequests {
     /// The "How long" choices `request` gets now: only Allow once while a key it names asks for Touch ID every time.
     func offered(_ request: Request) -> [How] {
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: SecretsStore.shared.index)
-        return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty)
+        return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty,
+                                             hasSession: request.session != nil)
+    }
+
+    // MARK: sessions
+
+    /// An agent's run in its tab, as "Allow for this session" binds to it: the tab and the run's number there, while an
+    /// agent runs in front of it. Nil otherwise.
+    static func session(of tab: TerminalTab) -> String? {
+        guard !tab.exited, tab.status.running, tab.status.kind == .agent else { return nil }
+        return "tab:\(tab.id.uuidString):\(tab.status.commandsStarted)"
+    }
+
+    /// The agent process above a wrapper: its pid with its start time, so a pid used again by another process is
+    /// another session.
+    static func session(ofProcess pid: pid_t) -> String? {
+        guard pid > 1, let started = LockHolder.startTime(of: pid) else { return nil }
+        return "pid:\(pid):\(started.timeIntervalSince1970)"
+    }
+
+    /// A tab's command started or ended, its shell ended or the tab closed (`tab` nil): the session grants of an agent
+    /// run there that is over end, and their values with them. Cheap with none.
+    func tabRunChanged(_ id: UUID, tab: TerminalTab?) {
+        guard book.grants.contains(where: { $0.kind == .session }) else { return }
+        let prefix = "tab:\(id.uuidString):"
+        let live: String? = tab.flatMap(Self.session(of:))
+        let over: Set<String> = Set(book.grants.compactMap { (grant: SecretGrant) -> String? in
+            guard let session = grant.session, session.hasPrefix(prefix), session != live else { return nil }
+            return session
+        })
+        for session in over { end(.sessionEnded(session)) }
+    }
+
+    /// The hook in TerminalTab, which runs on the main thread: a command started or ended there, its shell ended or it
+    /// closed (`tab` nil).
+    nonisolated static func tabRunChanged(_ id: UUID, tab: TerminalTab?) {
+        MainActor.assumeIsolated { shared.tabRunChanged(id, tab: tab) }
+    }
+
+    /// The process sources watching the agents above wrappers, by session, while a grant holds their session.
+    private var sessionWatches: [String: DispatchSourceProcess] = [:]
+
+    /// A wrapper's agent session: watched for its exit, which ends its grants. A tab's ends by tabRunChanged.
+    private func followSession(_ session: String) {
+        guard session.hasPrefix("pid:"), sessionWatches[session] == nil else { return }
+        let parts = session.split(separator: ":")
+        guard parts.count >= 2, let pid = pid_t(parts[1]) else { return }
+        // Gone already, or another process now: over at once.
+        guard Self.session(ofProcess: pid) == session else { return end(.sessionEnded(session)) }
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated { SecretRequests.shared.end(.sessionEnded(session)) }
+        }
+        sessionWatches[session] = source
+        source.resume()
+        // It may have ended between the check and the watch.
+        if Self.session(ofProcess: pid) != session { end(.sessionEnded(session)) }
     }
 
     /// Ends the lasting grants that hold a key set to ask for Touch ID every time it's used.
@@ -808,6 +873,9 @@ final class SecretRequests {
     /// A grant is over: its values go, wiped, and the audit log says why.
     private func over(_ grant: SecretGrant, outcome: String) {
         drop(grant.id)
+        if let session = grant.session, !book.grants.contains(where: { $0.session == session }) {
+            sessionWatches.removeValue(forKey: session)?.cancel()
+        }
         endTimers.removeValue(forKey: grant.id)?.cancel()
         let line = SecretAudit.Line(event: .grantEnd, names: grant.names, command: grant.binding.command.joined(separator: " "),
                                     folder: grant.binding.folder, outcome: outcome)
