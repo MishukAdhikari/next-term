@@ -171,7 +171,7 @@ final class AddTaskSheet: NSObject, NSTextViewDelegate {
         stack.setCustomSpacing(4, after: summary)
         stack.setCustomSpacing(4, after: placeRow)
         stack.setCustomSpacing(4, after: views.sentRow)
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
+        stack.edgeInsets = DialogFit.insets
         for view in [scroll, summary, placeRow, views.sentScroll, views.offerRow, buttons] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true

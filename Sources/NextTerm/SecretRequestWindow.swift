@@ -105,7 +105,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = ApprovalLayout.groupSpacing
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints = [

@@ -116,7 +116,7 @@ extension SecretRotateSheet {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 18, bottom: 20, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints: [NSLayoutConstraint] = [
@@ -358,6 +358,7 @@ extension SecretRotateSheet {
         doneLabel.stringValue = lines.joined(separator: " ")
         openAgainButton.isHidden = !hasPage
         bottomRow.isHidden = true
+        DialogFit.fit(window) // the save row gone: no empty space where it was
         saveButton.keyEquivalent = ""
         cancelButton.keyEquivalent = ""
         doneButton.keyEquivalent = "\r"

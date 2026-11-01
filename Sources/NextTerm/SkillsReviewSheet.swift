@@ -171,7 +171,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 18, bottom: 20, right: 18)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([

@@ -11,8 +11,8 @@ import NextTermCore
 /// that can't be undone (Remove) is filled red instead.
 @MainActor
 enum ApprovalLayout {
-    /// The windows' inner width: their content less the 18-point margins either side.
-    static func inner(_ width: CGFloat) -> CGFloat { width - 36 }
+    /// The windows' inner width: their content less the 20-point margins either side (DialogFit.insets).
+    static func inner(_ width: CGFloat) -> CGFloat { width - 40 }
 
     // MARK: type
 

@@ -134,15 +134,16 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
         saveButton = NSButton(title: "Save", target: self, action: #selector(save))
         saveButton.keyEquivalent = "\r"
         for button in [cancelButton, saveButton] { button?.bezelStyle = .rounded }
+        DialogFit.widen([cancelButton, saveButton].compactMap { $0 })
         let buttons = NSStackView(views: [NSView(), cancelButton, saveButton])
-        buttons.spacing = 8
+        buttons.spacing = 12
         views.append(buttons)
 
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         var constraints = [
@@ -152,10 +153,11 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stack.widthAnchor.constraint(equalToConstant: 460),
         ]
-        for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -36)) }
+        for row in stack.arrangedSubviews { constraints.append(row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40)) }
         NSLayoutConstraint.activate(constraints)
         suggestLink()
         refresh()
+        DialogFit.fit(window)
     }
 
     /// "Remind me to rotate" and its pop-up: Never, or 30, 90, 180 or 365 days; a key saved with another age keeps it
@@ -262,7 +264,9 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
             savedAsLabel.textColor = .secondaryLabelColor
         }
         let length = valueField.stringValue.trimmingCharacters(in: .whitespaces).utf8.count
+        let shortWasHidden: Bool = shortLabel.isHidden
         shortLabel.isHidden = !hasValue || length == 0 || length >= SecretMask.minimumLength
+        if shortLabel.isHidden != shortWasHidden { DialogFit.fit(window) } // a note shown or gone takes its space
         let purposeOK = purposeField.stringValue.count <= SecretVault.maxPurposeLength
         linkField?.refresh()
         let linkOK: Bool = linkField?.blocksSave != true
@@ -353,6 +357,7 @@ final class SecretEditSheet: NSWindowController, NSWindowDelegate, NSTextFieldDe
     private func setStatus(_ text: String) {
         statusLabel.stringValue = text
         statusLabel.isHidden = text.isEmpty
+        DialogFit.fit(window)
         guard !text.isEmpty, let window else { return }
         NSAccessibility.post(element: window, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])

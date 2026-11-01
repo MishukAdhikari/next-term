@@ -114,7 +114,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
         stack.alignment = .leading
         stack.spacing = 14
         stack.setCustomSpacing(6, after: scroll)
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 18, right: 20)
+        stack.edgeInsets = DialogFit.insets
         for view in [scroll, buttons] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true

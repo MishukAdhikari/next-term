@@ -92,7 +92,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = ApprovalLayout.groupSpacing
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 16, right: 18)
+        stack.edgeInsets = DialogFit.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -105,6 +105,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         ])
         for view in views { view.widthAnchor.constraint(equalToConstant: inner).isActive = true }
         detailsBox.fit()
+        DialogFit.fit(window, width: Self.width) // as tall as the request: a short one leaves no space under its buttons
     }
 
     /// Shows the window in front without taking the keyboard; bounces the Dock icon if Next Term is not
@@ -123,6 +124,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         statusLabel.stringValue = text
         statusLabel.textColor = problem ? .systemRed : .secondaryLabelColor
         statusLabel.isHidden = text.isEmpty
+        DialogFit.fit(window, width: Self.width)
     }
 
     /// The agent's tab closed, or it stopped asking: what the user decides still happens.
