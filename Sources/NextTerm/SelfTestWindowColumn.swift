@@ -331,6 +331,7 @@ extension SelfTest {
         let columns: [WindowColumnView] = app.controllers.filter { !$0.hasClosed }.map(\.windowColumn)
         columns.forEach { $0.resetCounters() }
         app.windowColumns.resetCounters()
+        let rung = Date()
         behind.view.send(txt: "printf '\\a'\r")
         let rang: Bool = await wait(5) { behind.status.state == .attention }
         await pause(1.5) // every window's refresh, a hidden one's once a second
@@ -356,8 +357,9 @@ extension SelfTest {
         check(rang && onlyIt, "window column: a bell in the worktree's tab behind marks that window's dot only, in every window",
               "rang \(rang); marked \(dots.joined(separator: " "))")
         note("window column budget: a bell, in each column: " + budget.joined(separator: " | "))
-        check(rang && kept, "window column budget: a bell configures that window's row once and draws it twice at most, and nothing else in any column",
-              budget.joined(separator: " | "))
+        checkUntouched(since: rung, rang && kept,
+                       "window column budget: a bell configures that window's row once and draws it twice at most, and nothing else in any column",
+                       budget.joined(separator: " | "))
         let button: WindowColumnButton? = five[0].windowColumn.button(for: id)
         let label: String = button?.accessibilityLabel() ?? ""
         check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == nil && button?.accessibilityRole() == .button,
@@ -748,6 +750,7 @@ extension SelfTest {
     private static func idleBudget(_ app: AppDelegate) async {
         let columns: [WindowColumnView] = app.controllers.filter { !$0.hasClosed }.map(\.windowColumn)
         await pause(2)
+        let started = Date()
         columns.forEach { $0.resetCounters() }
         app.windowColumns.resetCounters()
         await pause(5)
@@ -757,8 +760,9 @@ extension SelfTest {
         let numbers = "\(columns.count) columns: \(layouts) layouts, \(configures) configures, \(draws) row draws, "
             + "\(app.windowColumns.rebuildCount) rebuilds, \(app.windowColumns.passCount) passes"
         note("window column budget: idle, 5 s, " + numbers)
-        check(columns.count >= 3 && layouts == 0 && configures == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
-              "window column budget: idle, no column lays out and no row configures or draws", numbers)
+        // A row the user's pointer passes over draws its hover: only a quiet Mac says what idle costs.
+        checkUntouched(since: started, columns.count >= 3 && layouts == 0 && configures == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
+                       "window column budget: idle, no column lays out and no row configures or draws", numbers)
     }
 
     /// The key window switched across three windows, and a command retitling a tab: no row draws and no column lays

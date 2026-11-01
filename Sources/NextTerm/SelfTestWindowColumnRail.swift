@@ -5,6 +5,24 @@ import NextTermCore
 /// The window column folded to its rail (plan 030) and the list it opens on one grid with it (plan 031). Part of
 /// NEXTTERM_SELFTEST_ONLY=windowColumn.
 extension SelfTest {
+    /// Seconds since the last real input on this Mac (a key, a click, a move of the pointer): the self-test's own events
+    /// never reach the window server's input stream, so they don't count.
+    static func secondsSinceInput() -> TimeInterval {
+        let kinds: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .scrollWheel,
+                                    .keyDown, .flagsChanged]
+        return kinds.map { (kind: CGEventType) -> TimeInterval in CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: kind) }
+            .min() ?? .infinity
+    }
+
+    /// A check the user's own pointer or keys can upset (a hover draws, an entry or exit moves the list): failing while
+    /// the Mac had real input since `start`, it is noted and not failed, as a check run with the app not frontmost is.
+    static func checkUntouched(since start: Date, _ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
+        if !ok, secondsSinceInput() < Date().timeIntervalSince(start) {
+            return note("\(name): not checked, as the Mac had input meanwhile (\(detail()))")
+        }
+        check(ok, name, detail())
+    }
+
     /// The rail's form; the pointer passing over it opens nothing; resting on it opens the list over the rail and the
     /// content, its dots, count and well on the rail's own, without moving the content or taking the keyboard, VoiceOver
     /// hearing the windows once; going from the rail onto the list keeps it, leaving both closes it; the list's foot says
@@ -15,6 +33,7 @@ extension SelfTest {
         guard let window = c.window else { return }
         let host: WindowColumnHost = c.columnHost
         let column: WindowColumnView = host.column
+        let started = Date()
         let saved: (open: TimeInterval, close: TimeInterval) = (WindowColumnRail.openDelay, WindowColumnRail.closeDelay)
         let motion: () -> Bool = WindowColumnHost.reducesMotion
         let pointer: () -> NSPoint = WindowColumnHost.pointerLocation
@@ -51,7 +70,7 @@ extension SelfTest {
         await pause(0.15)
         column.onPointer?(false)
         await pause(0.6)
-        check(!host.listShowing, "window column: the pointer passing over the rail opens nothing")
+        checkUntouched(since: started, !host.listShowing, "window column: the pointer passing over the rail opens nothing")
 
         // Resting on it opens the list over the rail and the content: as tall as the window, from the window's edge, the
         // content and the keyboard where they were.
@@ -106,7 +125,7 @@ extension SelfTest {
                                                 context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
         if let escape { NSApp.postEvent(escape, atStart: false) }
         let escaped: Bool = await wait(2) { !host.listShowing }
-        check(escaped && window.firstResponder === keyboard, "window column: Escape closes the list, the keyboard where it was")
+        checkUntouched(since: started, escaped && window.firstResponder === keyboard, "window column: Escape closes the list, the keyboard where it was")
         column.onPointer?(false)
         column.onPointer?(true)
         _ = await wait(2) { host.listShowing }
@@ -118,14 +137,14 @@ extension SelfTest {
         let kept: Bool = host.listShowing
         list?.onPointer?(false)
         let closed: Bool = await wait(2) { !host.listShowing }
-        check(kept && closed, "window column: moving from the rail onto the list keeps it, and leaving both closes it",
+        checkUntouched(since: started, kept && closed, "window column: moving from the rail onto the list keeps it, and leaving both closes it",
               "kept \(kept), closed \(closed)")
 
         // A click on a dot ends the hover: no list opens after it in the window just left.
         column.onPointer?(true)
         host.chose()
         await pause(0.6)
-        check(!host.listShowing && (column.accessibilityChildren()?.count ?? 0) > 0,
+        checkUntouched(since: started, !host.listShowing && (column.accessibilityChildren()?.count ?? 0) > 0,
               "window column: choosing a window on the rail opens no list after the click, and the rail is heard again")
         column.onPointer?(false)
 
@@ -141,7 +160,7 @@ extension SelfTest {
         WindowColumnHost.pointerLocation = { NSPoint(x: onRailPoint.x, y: onRailPoint.y - 6) }
         column.onMoved?()
         let openedOnMove: Bool = await wait(2) { host.listShowing }
-        check(heldStill && openedOnMove, "window column: a pointer at rest on the rail as its window comes forward opens nothing until it moves",
+        checkUntouched(since: started, heldStill && openedOnMove, "window column: a pointer at rest on the rail as its window comes forward opens nothing until it moves",
               "held \(heldStill), opened once moved \(openedOnMove)")
         host.hideList(animated: false)
         column.onPointer?(false)
@@ -169,7 +188,7 @@ extension SelfTest {
         column.onPointer?(false)
         column.onPointer?(true)
         let reopened: Bool = await wait(2) { host.listShowing }
-        check(waited && stayedShut && reopened, "window column: folded under the pointer, it opens no list until the pointer has left the column",
+        checkUntouched(since: started, waited && stayedShut && reopened, "window column: folded under the pointer, it opens no list until the pointer has left the column",
               "waits \(waited), shut \(stayedShut), opens after leaving \(reopened)")
         host.hideList(animated: false)
         column.onPointer?(false)
