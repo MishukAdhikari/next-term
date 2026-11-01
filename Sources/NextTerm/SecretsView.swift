@@ -518,7 +518,9 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             // A wrapper names its agent; run_with_secrets names the command's program, so its tab says whose session it is.
             let tabID: String? = grant.session.flatMap { $0.hasPrefix("tab:") ? $0.split(separator: ":").dropFirst().first.map(String.init) : nil }
             let tab: TerminalTab? = tabID.flatMap { id in AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString == id } }
-            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : "The agent"
+            // A wrapper names its agent; a run_with_secrets session's is the one in front of its tab (its tab closing ends it).
+            let front: String? = tab.flatMap { $0.status.running && $0.status.kind == .agent ? AgentName.of(program: $0.status.program) : nil }
+            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : front ?? "The agent"
             let place: String = tab.map { " in \u{201C}\(SecretApprovalPanel.sanitized($0.title, limit: 60))\u{201D}" } ?? ""
             return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) for any command, until the session ends"
         }

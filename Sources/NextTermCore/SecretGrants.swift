@@ -184,8 +184,9 @@ public struct SecretGrant: Identifiable, Sendable {
         // (npm, make), which any command of the session may change: its tab and run name the agent there.
         // A wrapper's asker carries its argv's digest, which any command changes: its agent (path, file, script) and its
         // process (the session) name it instead.
+        // run_with_secrets' target too (a new tab, or the one tab it ran in): keys never land in another existing tab.
         guard binding.source == mine.source, binding.source == .wrapper || binding.asker == mine.asker,
-              binding.source == .tool || binding.program == mine.program,
+              binding.source == .tool || binding.program == mine.program, binding.target == mine.target,
               binding.agentPath == mine.agentPath, binding.agentIdentity == mine.agentIdentity, binding.agentScript == mine.agentScript,
               !binding.keys.isEmpty else { return false }
         return binding.keys.allSatisfy { (name: String, envName: String) -> Bool in mine.keys[name] == envName }
@@ -194,7 +195,7 @@ public struct SecretGrant: Identifiable, Sendable {
     /// Whether `event` ends it.
     public func ended(by event: SecretGrantEvent) -> Bool {
         switch event {
-        // A session grant lasts through a lock and a sleep, as the owner chose: its session's end ends it.
+        // A session grant lasts through a lock, a sleep and a switch of users, as the owner chose: its session's end ends it.
         case .screenLocked, .systemSleep, .sessionResigned: return kind != .session
         case .quit, .revokeAll, .hourPause, .startedOver: return true
         case .sessionEnded(let ended): return session == ended

@@ -163,72 +163,98 @@ extension SelfTest {
               "on one panel \(onOnePanel), \(secretsJSON(firstAnswer)) \(secretsJSON(secondAnswer)), ran in \(tabs.filter(ran).count), said \(said)")
     }
 
-    /// "Allow for this session": offered for an agent's session Next Term can follow (this process stands in for the agent
-    /// above a wrapper); its grant lasts through a lock, answers another command of the session with no panel, never one
-    /// the panel would warn about, and ends with the session, its values with it; a tab's session ends with its run there.
+    /// "Allow for this session", with a stand-in agent named claude (a copy of /bin/sh) in a tab, which starts a child:
+    /// the agent found above the child is it, and its session is its tab's run with its process; offered, the grant
+    /// lasts through a lock, answers another command of the session with no panel, never one the panel warns about, nor
+    /// another session (another start time, or none); a grant whose process exits ends by its exit watch alone; a session
+    /// over by the Allow gets Allow once; the agent's exit ends the rest, values with them.
     static func secretsSessionGrantChecks(_ store: SecretsStore) async {
         let requests = SecretRequests.shared
         requests.now = { ContinuousClock.now }
-        guard let session = SecretRequests.session(ofProcess: getpid()) else {
-            return check(false, "secrets: this process's session reads (its pid and start time)")
+        guard let controller = AppDelegate.shared.controllers.first else { return }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nextterm-session-\(getpid())")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try? FileManager.default.copyItem(atPath: "/bin/sh", toPath: dir.appendingPathComponent("claude").path)
+        let tab = controller.addTab(directory: dir.path, select: false)
+        defer { controller.remove(tab) }
+        _ = await wait(20) { tab.status.integrated }
+        tab.view.send(txt: "PATH=\(dir.path):$PATH claude -c 'echo $$ > agent.pid; sleep 600 & echo $! > child.pid; wait'\r")
+        func pid(_ name: String) -> pid_t? {
+            (try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         }
-        let first = secretsRequest(asker: "wrapper:selftest-session", command: ["node", "first.js"], tab: "tab 3")
-        first.session = session
+        let started = await wait(8) { pid("agent.pid") != nil && pid("child.pid") != nil && SecretRequests.session(of: tab) != nil }
+        guard started, let agentPid = pid("agent.pid"), let childPid = pid("child.pid") else {
+            return check(false, "secrets: a stand-in agent runs in a tab, with a child", "agent \(pid("agent.pid") ?? 0), child \(pid("child.pid") ?? 0)")
+        }
+        // As the wrapper and run_with_secrets find it: the agent above its child, and its session in its tab.
+        let found: SecretSocket.Agent? = SecretSocket.agentAbove(childPid)
+        let session: String? = SecretRequests.session(agent: agentPid, in: tab)
+        check(found?.pid == agentPid && found?.program == "claude" && session?.hasPrefix("tab:\(tab.id.uuidString):") == true
+                && session?.contains("|pid:\(agentPid):") == true && SecretRequests.session(agent: agentPid, in: nil) == nil,
+              "secrets: the agent above a command is found by its process, and its session is its tab's run with that process (none outside a tab)",
+              "found \(found.map { "\($0.program) \($0.pid)" } ?? "none") for \(agentPid), session \(session ?? "none")")
+        guard let session else { return }
+
+        func ask(_ command: [String], session: String?, warn: Bool = false) -> SecretRequests.Request {
+            let request = secretsRequest(asker: tab.id.uuidString, command: command, source: .tool, tab: "tab 4")
+            request.session = session
+            if warn { request.warnings = ["npx -y runs the latest version of a package"] }
+            return request
+        }
+        let first = ask(["node first.js"], session: session)
         requests.ask(first) { _ in }
-        let offered: Bool = first.panel?.durationChoice[.session] != nil
+        let titles: [String] = first.panel.map { panel in SecretRequests.How.allCases.compactMap { panel.durationChoice[$0]?.title } } ?? []
+        let offeredLast: Bool = titles.last == "Allow for this session" && first.panel?.durationChoice[.once]?.state == .on
         first.panel?.durationChoice[.session]?.performClick(nil)
         first.panel?.allowButton.performClick(nil)
         let made = await wait(10) { requests.book.grants.contains { $0.kind == .session && $0.session == session } && !requests.heldGrants.isEmpty }
         requests.end(.screenLocked)
         let kept: Bool = requests.book.grants.contains { $0.kind == .session }
         let answers = SecretsAnswers()
-        let another = secretsRequest(asker: "wrapper:selftest-session", command: ["node", "another.js"], tab: "tab 3")
-        another.session = session
+        let another = ask(["node another.js"], session: session)
         requests.ask(another) { answers.take($0) }
         let answered: Bool = secretsAllowed(answers.last)?.how == .grant && another.panel == nil
-        // A request the panel would warn about still asks.
-        let warned = secretsRequest(asker: "wrapper:selftest-session", command: ["npx", "-y", "server"], tab: "tab 3")
-        warned.session = session
-        warned.warnings = ["npx -y runs the latest version of a package"]
-        requests.ask(warned) { _ in }
-        let asksAgain: Bool = warned.panel != nil
-        warned.panel?.declineButton.performClick(nil)
-        check(offered && made && kept && answered && asksAgain,
-              "secrets: Allow for this session is offered for an agent's session, lasts through a lock, answers another command of it with no panel, "
-                  + "and a command the panel would warn about still asks",
-              "offered \(offered), made \(made), kept \(kept), answered \(answered), warned asks \(asksAgain)")
-        let before = secretsAudit(store).count
-        requests.end(.sessionEnded(session))
-        let wiped = requests.heldGrants.isEmpty && !requests.book.grants.contains { $0.kind == .session }
-        let line: Bool = secretsAudit(store).dropFirst(before).contains { $0.event == .grantEnd }
-        check(wiped && line, "secrets: the session's end ends its grant, its values with it, with a grant-end line", "wiped \(wiped), line \(line)")
+        // Each of these still shows the panel: a command the panel warns about, another start time, no session.
+        var shown: [Bool] = []
+        for other in [ask(["npx -y server"], session: session, warn: true), ask(["node x.js"], session: "tab:\(tab.id.uuidString):1|pid:\(agentPid):1.0"),
+                      ask(["node y.js"], session: nil)] {
+            requests.ask(other) { _ in }
+            shown.append(other.panel != nil)
+            other.panel?.declineButton.performClick(nil)
+            await pause(0.2)
+        }
+        check(offeredLast && made && kept && answered && shown == [true, true, true],
+              "secrets: Allow for this session, offered last, lasts through a lock and answers another command of the session with no panel; "
+                  + "a warned command, another start time and no session still ask",
+              "titles \(titles), made \(made), kept \(kept), answered \(answered), shown \(shown)")
 
-        // A tab's session: a stand-in agent named claude runs in a tab; the grant made for its run there ends when it exits.
-        guard let controller = AppDelegate.shared.controllers.first else { return }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nextterm-session-\(getpid())")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let agent = dir.appendingPathComponent("claude")
-        try? "#!/bin/sh\nprintf 'Ready.\\n'\nsleep 600\n".write(to: agent, atomically: true, encoding: .utf8)
-        chmod(agent.path, 0o755)
-        let tab = controller.addTab(directory: nil, select: false)
-        _ = await wait(20) { tab.status.integrated }
-        tab.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
-        let running = await wait(8) { SecretRequests.session(of: tab) != nil }
-        // This process stands in for the agent's own (its pid and start time); the tab's run is the stand-in's.
-        let tabSession: String? = running ? SecretRequests.session(agent: getpid(), in: tab) : nil
-        let inTab = secretsRequest(asker: tab.id.uuidString, command: ["npm test"], source: .tool, tab: "tab 4")
-        inTab.session = tabSession
-        requests.ask(inTab) { _ in }
-        let tabOffered: Bool = inTab.panel?.durationChoice[.session] != nil
-        inTab.panel?.durationChoice[.session]?.performClick(nil)
-        inTab.panel?.allowButton.performClick(nil)
-        let tabMade = await wait(10) { tabSession != nil && requests.book.grants.contains { $0.session == tabSession } }
-        tab.view.send(txt: "\u{03}") // the agent exits: its run there is over
-        let tabEnded = await wait(8) { !requests.book.grants.contains { $0.kind == .session } && requests.heldGrants.isEmpty }
-        check(running && tabOffered && tabMade && tabEnded, "secrets: a session grant in a tab ends, its values with it, when the agent's run there ends",
-              "running \(running), offered \(tabOffered), made \(tabMade), ended \(tabEnded)")
-        controller.remove(tab)
+        // The child's process as a session's: its exit alone ends that grant (the tab's run goes on), values with it.
+        guard let childSession = SecretRequests.session(agent: childPid, in: tab) else { return check(false, "secrets: the child's session reads") }
+        let byChild = ask(["node child.js"], session: childSession)
+        requests.ask(byChild) { _ in }
+        byChild.panel?.durationChoice[.session]?.performClick(nil)
+        byChild.panel?.allowButton.performClick(nil)
+        let childMade = await wait(10) { requests.book.grants.contains { $0.session == childSession } }
+        kill(childPid, SIGTERM) // the test's own child, started in its own tab
+        let childEnded = await wait(8) { !requests.book.grants.contains { $0.session == childSession } }
+        // A session over by the Allow: Allow once, no grant.
+        let late = ask(["node late.js"], session: childSession)
+        let lateAnswers = SecretsAnswers()
+        requests.ask(late) { lateAnswers.take($0) }
+        late.panel?.durationChoice[.session]?.performClick(nil)
+        late.panel?.allowButton.performClick(nil)
+        let lateOnce = await wait(10) { secretsAllowed(lateAnswers.last)?.how == .once }
+        check(childMade && childEnded && lateOnce && !requests.book.grants.contains { $0.session == childSession },
+              "secrets: a session's process exiting ends its grant by itself, and an Allow for a session already over is Allow once",
+              "made \(childMade), ended \(childEnded), late once \(lateOnce)")
+
+        // The agent exits: its run in the tab ends, and so does the grant, its values with it, with a grant-end line.
+        let before = secretsAudit(store).count
+        tab.view.send(txt: "\u{03}")
+        let ended = await wait(8) { !requests.book.grants.contains { $0.kind == .session } && requests.heldGrants.isEmpty }
+        let line: Bool = secretsAudit(store).dropFirst(before).contains { $0.event == .grantEnd }
+        check(ended && line, "secrets: the agent's exit ends its session grant, its values with it, with a grant-end line", "ended \(ended), line \(line)")
     }
 
     /// A grant's values go the moment it ends on its own or is used, with no request after it (review finding 9).

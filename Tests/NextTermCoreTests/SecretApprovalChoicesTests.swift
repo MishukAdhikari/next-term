@@ -55,7 +55,7 @@ import Testing
 
     /// The box ticked while the panel was up: Allow keeps a choice only while it is still offered.
     @Test func aChoiceNoLongerOfferedFallsToAllowOnce() {
-        let all: [SecretApprovalChoice] = [.once, .fifteenMinutes, .untilLock]
+        let all: [SecretApprovalChoice] = [.once, .fifteenMinutes, .untilLock, .session]
         for choice in all {
             #expect(SecretApprovalChoices.kept(choice, offered: all) == choice)
             #expect(SecretApprovalChoices.kept(choice, offered: [.once]) == .once)
@@ -67,7 +67,7 @@ import Testing
     /// vault the use unlocked, so a box ticked in another copy during Touch ID is recorded as Allow once.
     @Test func theAuditLineRecordsTheApprovalKept() throws {
         let index = try Self.index()
-        let lasting: [SecretAudit.Approval] = [.fifteenMinutes, .untilLock]
+        let lasting: [SecretAudit.Approval] = [.fifteenMinutes, .untilLock, .session]
         for approval in lasting {
             #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY"], in: index) == approval)
             #expect(SecretApprovalChoices.recorded(approval, names: ["LASTING_KEY", "ASKS_KEY"], in: index) == .once)
@@ -124,5 +124,8 @@ import Testing
         #expect(SecretApprovalChoices.askingNames(heldBy: grants, in: index) == ["ASKS_KEY", "GONE_KEY"])
         #expect(SecretApprovalChoices.askingNames(heldBy: [grants[0]], in: index).isEmpty)
         #expect(SecretApprovalChoices.askingNames(heldBy: [], in: nil).isEmpty)
+        // A session grant holding a key that asks every time ends too.
+        let session = SecretGrant(kind: .session, binding: binding(["ASKS_KEY"]), made: start, id: "session", session: "tab:T:1|pid:9:1.0")
+        #expect(SecretApprovalChoices.askingNames(heldBy: [session], in: index) == ["ASKS_KEY"])
     }
 }

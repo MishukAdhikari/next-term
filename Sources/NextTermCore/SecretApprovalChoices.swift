@@ -36,9 +36,10 @@ public enum SecretApprovalChoices {
     /// the request names asks every time (`asksEveryUse`).
     public static func offered(isWrapper: Bool, isRemote: Bool, asksEveryUse: Bool, hasSession: Bool = false) -> [SecretApprovalChoice] {
         guard !isRemote, !asksEveryUse else { return [.once] }
-        // Allow for this session when the request comes from an agent's session Next Term can follow to its end.
+        // Allow for this session when the request comes from an agent's session Next Term can follow to its end: the
+        // widest, so last.
         let session: [SecretApprovalChoice] = hasSession ? [.session] : []
-        return (isWrapper ? [.once, .fifteenMinutes] + session + [.untilLock] : [.once, .fifteenMinutes] + session)
+        return (isWrapper ? [.once, .fifteenMinutes, .untilLock] : [.once, .fifteenMinutes]) + session
     }
 
     /// The keys among `names` that ask every time, in their order: each one `index` says so of (a key saved before

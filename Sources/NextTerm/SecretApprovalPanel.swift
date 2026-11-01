@@ -326,18 +326,19 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
             let note = content.isWrapper ? Self.fifteenMinutesNote + " " + Self.wrapperRestartNote : Self.fifteenMinutesNote
             radio("Allow for 15 minutes", .fifteenMinutes, note: note)
         }
-        if content.choices.contains(.session) {
-            let agent = content.askedBy.agent ?? "this agent"
-            let end = content.isWrapper ? "\(agent) quits" : "\(agent) exits there or its tab closes"
-            radio("Allow for this session", .session,
-                  note: "These keys, for any command \(agent) runs with them, until \(end) or Next Term quits. Locking the Mac "
-                    + "doesn\u{2019}t end it. A command Next Term would warn about still asks. Revoke it in Settings \u{203A} Secrets.")
-        }
         if content.choices.contains(.untilLock) {
             let agent = content.askedBy.agent ?? "this program"
             radio("Allow this command until the Mac locks", .untilLock,
                   note: "For this exact command, started by \(agent) in this folder. Ends when you lock the Mac, it goes to sleep, "
                     + "or Next Term quits. Revoke it in Settings \u{203A} Secrets.")
+        }
+        if content.choices.contains(.session) {
+            // The widest: last, and plain about what ends it.
+            let agent = content.askedBy.agent ?? "this agent"
+            radio("Allow for this session", .session,
+                  note: "These keys, for any command \(agent) runs with them, until \(agent) exits, its tab closes or something types "
+                    + "into it, a key changes, or Next Term quits. Locking the Mac or switching users doesn\u{2019}t end it. A command "
+                    + "Next Term would warn about still asks. Revoke it in Settings \u{203A} Secrets.")
         }
         durationChoice[.once]?.state = .on
         guard durationChoice.count > 1 else {

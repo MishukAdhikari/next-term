@@ -11,11 +11,14 @@ import NextTermCore
 /// - An identical request (the same binding as one waiting, or as a pending card) takes over that panel or card. It
 ///   does not count and does not queue. Otherwise up to 5 wait, and more get `busy`. "Allow once" there still starts one
 ///   command: the first caller still waiting uses it, and the others hear it was used already.
-/// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes" and
-///   "Allow this command until the Mac locks" keep copies of exactly those keys' values in a grant.
-/// - Grants end on a lock, a sleep, the session resigning, Revoke, a key's change, the hour pause, and for
-///   `run_with_secrets` when its asking tab gets input from MCP. They also end on their own: after 15 minutes, and a
-///   one-use grant at its use or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
+/// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes",
+///   "Allow this command until the Mac locks" and "Allow for this session" keep copies of exactly those keys' values in a
+///   grant.
+/// - Grants end on a lock, a sleep, the session resigning (a session grant excepted, as the owner chose), Revoke, a
+///   key's change or its asking every time, the hour pause, quit, and for `run_with_secrets` when its asking tab gets
+///   input from MCP. A session grant ends with its session: the agent process exits, its run in its tab ends or the tab
+///   closes, or MCP types into that tab. Grants also end on their own: after 15 minutes, and a one-use grant at its use
+///   or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
 @MainActor
 final class SecretRequests {
     /// A key's last use, before it has one.
@@ -237,7 +240,8 @@ final class SecretRequests {
             return nil
         }
         let id = UUID()
-        if let waiting = queue.first(where: { $0.binding == request.binding && !$0.isAnswered }) {
+        // Of the same session too: another agent's identical request never rides this one's "Allow for this session".
+        if let waiting = queue.first(where: { $0.binding == request.binding && $0.session == request.session && !$0.isAnswered }) {
             limits.record(.tookOver, asker: request.asker, binding: request.binding, at: now)
             waiting.replies.append((id, reply, left))
             if waiting.gone {
@@ -418,8 +422,8 @@ final class SecretRequests {
     private func allow(_ request: Request, how: How) {
         guard !request.isAnswered, let panel = request.panel else { return }
         if case .store(let value) = request.kind { return saveStored(request, value: value, panel: panel) }
-        // A key's box ticked since the panel showed takes the lasting choices away.
-        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
+        // A key's box ticked since the panel showed takes the lasting choices away; a session over by now, its own.
+        let how: How = Self.stillOffered(how, request, offered: offered(request))
         panel.setBusy(true)
         let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
         let facts = SecretsStore.Facts(who: Self.who(request), command: request.command, folder: request.folder, approval: how.approval)
@@ -441,13 +445,12 @@ final class SecretRequests {
         // "Allow once" goes to one caller. One that left in the moment before, its leaving not heard here yet, is let go
         // now as its leaving would have been: the use passes to the next caller, or a wrapper's one-use grant is made.
         // Asked again of the vault this unlock checked: a key ticked to ask every time gets no lasting grant.
-        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
+        // A session that ended during Touch ID is Allow once here too: one caller, no grant, "once" in the answer.
+        let how: How = Self.stillOffered(how, request, offered: offered(request))
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
         let now = now()
         var kind = how.grantKind
-        // A session that ended while the panel was up gets no grant: the Allow is for this command alone.
-        if kind == .session, !(request.session.map(Self.isLive) ?? false) { kind = nil }
         // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
         let stoppedDuringApproval = request.isWrapper && request.gone && how == .once
         if stoppedDuringApproval { kind = .oneUse }
@@ -804,6 +807,14 @@ final class SecretRequests {
 
     // MARK: sessions
 
+    /// `how` as it still holds: the lasting choices gone with a key's box ticked since, and Allow for this session gone
+    /// with a session that ended while the panel was up, both to Allow once.
+    static func stillOffered(_ how: How, _ request: Request, offered: [How]) -> How {
+        let kept: How = SecretApprovalChoices.kept(how, offered: offered)
+        guard kept == .session else { return kept }
+        return request.session.map(isLive) == true ? .session : .once
+    }
+
     /// An agent's run in its tab: the tab and the run's number there, while an agent runs in front of it. Nil otherwise.
     static func session(of tab: TerminalTab) -> String? {
         guard !tab.exited, tab.status.running, tab.status.kind == .agent else { return nil }
@@ -811,13 +822,12 @@ final class SecretRequests {
     }
 
     /// What "Allow for this session" binds to: the agent process itself (`pid` and its start time, so a reused pid is
-    /// another session, and a later agent on the same command line too), with its run in its tab when it runs in one
+    /// another session, and a later agent on the same command line too) with its run in its tab
     /// ("tab:<id>:<run>|pid:<pid>:<start>"), so the grant ends with whichever ends first, and with input MCP types there.
-    /// Nil when the agent's process isn't found.
+    /// Only in a tab: an agent outside them (an editor's host, which runs many conversations in one process) gets none,
+    /// as does one whose tab shows no agent in front.
     static func session(agent pid: pid_t, in tab: TerminalTab?) -> String? {
-        guard let process = session(ofProcess: pid) else { return nil }
-        guard let tab else { return process }
-        guard let run = session(of: tab) else { return nil } // in a tab, but no agent runs in front of it: none
+        guard let tab, let run = session(of: tab), let process = session(ofProcess: pid) else { return nil }
         return run + "|" + process
     }
 
@@ -841,8 +851,17 @@ final class SecretRequests {
     /// The agent process above a wrapper: its pid with its start time, so a pid used again by another process is
     /// another session.
     static func session(ofProcess pid: pid_t) -> String? {
-        guard pid > 1, let started = LockHolder.startTime(of: pid) else { return nil }
+        guard pid > 1, isRunning(pid), let started = LockHolder.startTime(of: pid) else { return nil }
         return "pid:\(pid):\(started.timeIntervalSince1970)"
+    }
+
+    /// Whether `pid` runs: there, and not a zombie its parent has yet to reap (an agent that has exited).
+    static func isRunning(_ pid: pid_t) -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
+        return info.kp_proc.p_stat != SZOMB
     }
 
     /// A tab's command started or ended, its shell ended or the tab closed (`tab` nil): the session grants of an agent
@@ -1029,6 +1048,8 @@ final class SecretRequests {
         held.removeAll()
         for timer in endTimers.values { timer.cancel() }
         endTimers.removeAll()
+        for watch in sessionWatches.values { watch.cancel() }
+        sessionWatches.removeAll()
         now = { .now }
         #if DEBUG
         Self.grantTimer = nil
