@@ -27,6 +27,8 @@ enum DialogFit {
         pinned.isActive = false
         guard tall > 0 else { return }
         let frame: NSRect = window.frameRect(forContentRect: NSRect(origin: .zero, size: NSSize(width: wide, height: tall)))
+        // Nothing to do when it is that size already: no frame set on every keystroke.
+        if abs(frame.height - window.frame.height) < 0.5, abs(frame.width - window.frame.width) < 0.5 { return }
         let top: CGFloat = window.frame.maxY
         window.setFrame(NSRect(x: window.frame.minX, y: top - frame.height, width: frame.width, height: frame.height),
                         display: true, animate: false)
@@ -34,14 +36,30 @@ enum DialogFit {
 
     /// An alert's accessory view as tall as its views need at `width`, the alert laid out again: a wrapped line that grows
     /// or shrinks (a problem under a field, a list of steps) is neither cut off nor followed by empty space.
+    /// Sized by constraints, not its frame: once NSAlert has laid it out it ignores the frame, and the alert would change
+    /// width on each fit. One required width constraint stays; the height constraint follows what the views need.
     static func fitAccessory(_ view: NSView, width: CGFloat, in alert: NSAlert?) {
-        let pinned: NSLayoutConstraint = view.widthAnchor.constraint(equalToConstant: width)
-        pinned.isActive = true
+        view.translatesAutoresizingMaskIntoConstraints = false
+        let wide: NSLayoutConstraint = constraint(of: view, named: "DialogFit.width", attribute: .width, constant: width)
+        wide.constant = width
+        let tall: NSLayoutConstraint = constraint(of: view, named: "DialogFit.height", attribute: .height, constant: 1)
+        tall.isActive = false
         view.layoutSubtreeIfNeeded()
-        let tall: CGFloat = view.fittingSize.height
-        pinned.isActive = false
-        view.setFrameSize(NSSize(width: width, height: max(tall, 1)))
+        tall.constant = max(view.fittingSize.height, 1)
+        tall.isActive = true
         alert?.layout()
+    }
+
+    /// The accessory's own width or height constraint, made once and found again by its identifier.
+    private static func constraint(of view: NSView, named name: String, attribute: NSLayoutConstraint.Attribute,
+                                   constant: CGFloat) -> NSLayoutConstraint {
+        if let found = view.constraints.first(where: { $0.identifier == name }) { return found }
+        let made: NSLayoutConstraint = NSLayoutConstraint(item: view, attribute: attribute, relatedBy: .equal, toItem: nil,
+                                                          attribute: .notAnAttribute, multiplier: 1, constant: constant)
+        made.identifier = name
+        made.priority = .required
+        made.isActive = true
+        return made
     }
 
     /// Each button at least `buttonWidth` wide.

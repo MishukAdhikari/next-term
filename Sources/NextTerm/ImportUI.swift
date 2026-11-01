@@ -509,6 +509,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleStaleList(_ sender: NSButton) {
         staleList?.isHidden = sender.state != .on
         window?.contentView?.layoutSubtreeIfNeeded()
+        refitPage?()
     }
 
     /// "1.105.1  ·  used 3 days ago  ·  brings shortcuts, settings, fonts and colours", or "app removed" for an app
@@ -847,10 +848,12 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             (shortcutSummary?.superview as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton }.first?.state = .on
         }
         recount()
+        refitPage?()
     }
 
     @objc private func toggleShortcutList(_ sender: NSButton) {
         shortcutList?.isHidden = sender.state != .on
+        refitPage?()
     }
 
     private var choice: ImportChoice {
@@ -980,12 +983,14 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         for (i, row) in rows.enumerated() where i > 0 && ["heading", "spaced"].contains(row.identifier?.rawValue) {
             stack.setCustomSpacing(16, after: rows[i - 1])
         }
-        stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 16, right: 24)
+        stack.edgeInsets = NSEdgeInsets(top: 22, left: 20, bottom: 16, right: 20)
         let buttonRow = NSStackView(views: [NSView()] + buttons)
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 12
-        // A window's buttons sit 20 points from its edges, as macOS's own dialogs have them, each at least 80 wide.
-        buttonRow.edgeInsets = NSEdgeInsets(top: 0, left: 24, bottom: 20, right: 20)
+        // A window's buttons sit 20 points from its edges, as macOS's own dialogs have them, each at least 80 wide. A
+        // horizontal stack holds its bottom inset only while it hugs its height (else centring wins and the inset goes).
+        buttonRow.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 20, right: 20)
+        buttonRow.setHuggingPriority(.defaultHigh, for: .vertical)
         for button in buttons {
             button.bezelStyle = .rounded
             button.widthAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
@@ -1027,8 +1032,16 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         ])
         if !scrolls { stack.widthAnchor.constraint(equalToConstant: 560).isActive = true }
         window?.contentView = content
-        if scrolls { fitScrolling(content, document: stack, buttons: buttonRow) } else { fitHeight(content) }
+        if scrolls {
+            refitPage = { [weak self] in self?.fitScrolling(content, document: stack, buttons: buttonRow) }
+        } else {
+            refitPage = { [weak self] in self?.fitHeight(content) }
+        }
+        refitPage?()
     }
+
+    /// The page shown fitted again, after a list on it opens or closes.
+    private var refitPage: (() -> Void)?
 
     /// A page that can scroll: as tall as its rows and buttons, up to `scrollingHeight` (or what the screen has room
     /// for), and only past that does it scroll. A short list keeps no empty space above its buttons.

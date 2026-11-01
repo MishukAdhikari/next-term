@@ -14,7 +14,7 @@ extension SecretManagerImportSheet {
         commandField.font = line == nil ? .systemFont(ofSize: 12) : .monospacedSystemFont(ofSize: 11, weight: .regular)
         commandField.isSelectable = line != nil
         commandField.setAccessibilityLabel("The line the new tab gets")
-        commandField.preferredMaxLayoutWidth = 524
+        commandField.preferredMaxLayoutWidth = 520
         var views: [NSView] = [title, explanation, commandField]
         if let note = Self.note(preset) { views.append(Self.small(note)) }
         downloadButton.title = "Get \(preset.program): \(Self.shown(preset.download))"

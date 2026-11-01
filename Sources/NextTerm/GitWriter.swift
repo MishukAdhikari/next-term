@@ -517,6 +517,9 @@ enum GitPrompt {
         problem.font = .systemFont(ofSize: 11)
         problem.textColor = Theme.failed
         problem.preferredMaxLayoutWidth = 320
+        // The field has no width of its own: it fills the accessory's 320 points, and the problem wraps within them.
+        field.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        problem.widthAnchor.constraint(lessThanOrEqualToConstant: 320).isActive = true
         let stack = NSStackView(views: [field, problem])
         stack.orientation = .vertical
         stack.alignment = .leading
