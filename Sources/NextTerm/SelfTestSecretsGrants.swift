@@ -163,7 +163,7 @@ extension SelfTest {
               "on one panel \(onOnePanel), \(secretsJSON(firstAnswer)) \(secretsJSON(secondAnswer)), ran in \(tabs.filter(ran).count), said \(said)")
     }
 
-    /// "Allow for this session", with a stand-in agent named claude (a copy of /bin/sh) in a tab, which starts a child and a
+    /// "Allow for this session", with a stand-in agent named claude (a link to /bin/sh) in a tab, which starts a child and a
     /// nested agent named codex: the agent found above the child is it, it is the tab's front agent and codex is not, and
     /// its session is its tab's run with its process. The choice comes last; another session's identical request waits for
     /// its own panel; the grant lasts through a lock, answers another command of the session with no panel, never one the
@@ -176,7 +176,10 @@ extension SelfTest {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nextterm-session-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        for name in ["claude", "codex"] { try? FileManager.default.copyItem(atPath: "/bin/sh", toPath: dir.appendingPathComponent(name).path) }
+        // Links to /bin/sh, so the processes go by these names: a copy of a system binary is killed by macOS.
+        for name in ["claude", "codex"] {
+            try? FileManager.default.createSymbolicLink(atPath: dir.appendingPathComponent(name).path, withDestinationPath: "/bin/sh")
+        }
         // The agent stays while its nested codex runs, and after: its child's exit alone ends nothing of its own.
         try? """
         echo $$ > agent.pid
@@ -262,7 +265,8 @@ extension SelfTest {
 
         // Queued twins of another session are settled by what the panel before them made: an exact grant answers one, and
         // a decline's pause refuses another, as joining that panel would have.
-        let timed = ask(["node settle.js"], session: session)
+        // The panel before them has no session (this session's grant would answer it at once); the twins have another.
+        let timed = ask(["node settle.js"], session: nil)
         requests.ask(timed) { _ in }
         let settled = SecretsAnswers()
         let timedTwin = ask(["node settle.js"], session: nestedSession)
@@ -270,7 +274,7 @@ extension SelfTest {
         timed.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)
         timed.panel?.allowButton.performClick(nil)
         let byGrant = await wait(10) { secretsAllowed(settled.last)?.how == .grant && timedTwin.panel == nil }
-        let declined = ask(["node pause.js"], session: session)
+        let declined = ask(["node pause.js"], session: nil)
         requests.ask(declined) { _ in }
         let paused = SecretsAnswers()
         let pausedTwin = ask(["node pause.js"], session: nestedSession)
@@ -282,6 +286,9 @@ extension SelfTest {
         }
         check(byGrant && byPause, "secrets: another session's queued twin is answered by an exact grant made before its turn, and refused by a decline's pause",
               "by grant \(byGrant), by pause \(byPause)")
+        // Whatever still shows from these goes, so the next checks start with no panel up.
+        for leftOver in [timed, timedTwin, declined, pausedTwin] { leftOver.panel?.declineButton.performClick(nil) }
+        _ = await wait(3) { requests.showing == nil }
 
         // The child's process as a session's: its exit alone ends that grant, while the agent and its own grant go on.
         guard let childSession = SecretRequests.session(agent: childPid, in: tab) else { return check(false, "secrets: the child's session reads") }
@@ -309,9 +316,13 @@ extension SelfTest {
         // The agent exits: its run in the tab ends, and so does its grant, its values with it, with a grant-end line.
         let before = secretsAudit(store).count
         tab.view.send(txt: "\u{03}")
-        let ended = await wait(8) { !requests.book.grants.contains { $0.kind == .session } && requests.heldGrants.isEmpty }
+        // The session's grants and their values only: the 15-minute grant above is another, and rightly holds its own.
+        let sessionIDs: Set<String> = Set(requests.book.grants.filter { $0.kind == .session }.map(\.id))
+        let ended = await wait(8) { !requests.book.grants.contains { $0.kind == .session } }
+        let wiped: Bool = sessionIDs.isDisjoint(with: Set(requests.heldGrants))
         let line: Bool = secretsAudit(store).dropFirst(before).contains { $0.event == .grantEnd }
-        check(ended && line, "secrets: the agent's exit ends its session grant, its values with it, with a grant-end line", "ended \(ended), line \(line)")
+        check(ended && wiped && line, "secrets: the agent's exit ends its session grant, its values with it, with a grant-end line",
+              "ended \(ended), wiped \(wiped), line \(line), left \(requests.book.grants.map { "\($0.kind.rawValue) \($0.session ?? "")" })")
     }
 
     /// A grant's values go the moment it ends on its own or is used, with no request after it (review finding 9).

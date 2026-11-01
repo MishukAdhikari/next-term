@@ -817,9 +817,9 @@ final class SecretRequests {
     /// it now, and a decline meanwhile that paused it refuses it, as either would have had it joined that panel.
     private func settledWhileQueued(_ request: Request) -> Bool {
         guard request.isUse, !request.isRemote, request.importAsk == nil, request.panel == nil else { return false }
-        // Callers who left are let go first; a pending card nobody waits for keeps its own way (its card, its one use).
-        letGo(callersLeftOf: request)
-        guard !request.isAnswered, !request.gone, !request.replies.isEmpty else { return false }
+        // Only while every caller still waits: one that left, or a pending card, takes the panel's own way, where Allow
+        // passes over a caller that left and makes a wrapper's one-use approval. Nothing is let go here, before a panel.
+        guard !request.isAnswered, !request.gone, !request.replies.isEmpty, request.replies.allSatisfy({ !$0.left() }) else { return false }
         // As ask() checks before a grant answers: the vault as it is now, grants over, keys that ask every time.
         SecretsStore.shared.reloadIfChanged()
         let now = now()

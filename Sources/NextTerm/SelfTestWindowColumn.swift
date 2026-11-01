@@ -162,8 +162,9 @@ extension SelfTest {
         let narrower: CGFloat = work - first.workSplit.frame.width
         let frontOnce: Bool = front.map { resizes.count($0) == 1 } ?? false
         let sizes: String = terminals.map { resizes.sizes($0) }.joined(separator: "; ")
-        check(abs(narrower - 29) < 0.5 && abs(first.sidebar.frame.width - sidebar) < 0.5 && frontOnce && resizes.most == 1,
-              "window column: the work area gives it 28 points and the hairline, the sidebar keeps its width, and each terminal resizes once",
+        let room: CGFloat = WindowColumnWidth.folded + WindowColumnWidth.hairline
+        check(abs(narrower - room) < 0.5 && abs(first.sidebar.frame.width - sidebar) < 0.5 && frontOnce && resizes.most == 1,
+              "window column: the work area gives it the rail's 24 points and the hairline, the sidebar keeps its width, and each terminal resizes once",
               "work \(work) → \(first.workSplit.frame.width), sidebar \(sidebar) → \(first.sidebar.frame.width), resized at most \(resizes.most): \(sizes)")
         resizes = TerminalResizes(terminals)
         second.window?.close()
