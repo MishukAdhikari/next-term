@@ -229,8 +229,9 @@ public struct WindowColumnList: Equatable, Sendable {
 
     /// Rows that show the same name, each with a detail after it: where its window is, when those differ (its parent
     /// folder, a server's destination); among rows still alike there, what is in front in each (its title after the name:
-    /// an agent, a command, a file), when those differ; and among rows alike in that too, a worktree's own part as its
-    /// folder names it, before the repository's name came off. A row alone with its name has none: the name is enough.
+    /// an agent, a command, a file), when those differ; and among rows alike in that too, a worktree's folder's name. A
+    /// row that has nothing to add at a deeper step keeps what the step before gave it. A row alone with its name has
+    /// none: the name is enough.
     static func details(_ rows: [WindowColumnRow], windows: [WindowIndex.Window], home: String) -> [WindowColumnRow] {
         var named: [String: [Int]] = [:]
         for (index, row) in rows.enumerated() { named[row.shownKey, default: []].append(index) }
@@ -242,8 +243,10 @@ public struct WindowColumnList: Equatable, Sendable {
             let ways: [[String?]] = [
                 entries.map { (window: WindowIndex.Window?) -> String? in window.flatMap { WindowColumnName.place(of: $0, home: home) } },
                 entries.map { (window: WindowIndex.Window?) -> String? in window?.front },
-                entries.map { (window: WindowIndex.Window?) -> String? in
-                    window.flatMap { $0.kind == .worktree ? WindowColumnName.ownPart(of: $0.name) : nil }
+                zip(entries, indices).map { (window: WindowIndex.Window?, index: Int) -> String? in
+                    guard let window, window.kind == .worktree, let project = window.project else { return nil }
+                    let folder: String = (project as NSString).lastPathComponent
+                    return folder == rows[index].name ? nil : folder
                 },
             ]
             var chosen: [String?] = Array(repeating: nil, count: indices.count)
@@ -261,7 +264,7 @@ public struct WindowColumnList: Equatable, Sendable {
         guard Set(values).count > 1 else { return tellApart(members, ways: ways.dropFirst(), into: &chosen) }
         var alike: [String?: [Int]] = [:]
         for member in members {
-            chosen[member] = way[member]
+            chosen[member] = way[member] ?? chosen[member]
             alike[way[member], default: []].append(member)
         }
         for group in alike.values where group.count > 1 { tellApart(group, ways: ways.dropFirst(), into: &chosen) }

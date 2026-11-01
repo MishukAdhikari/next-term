@@ -169,10 +169,14 @@ import Testing
         // Two of three alike in their folder: those two by what is in front in them, the third by its folder.
         let mixed: WindowColumnList = list([plain(1, "~/Code/api", front: "claude"), plain(2, "~/Code/api", front: "codex"), plain(3, "/srv/api")])
         #expect(details(mixed) == ["claude", "codex", "/srv"])
+        // Rows alike at a deeper step keep their folder where that step has nothing for them.
+        let four: WindowColumnList = list([plain(1, "~/Code/api", front: "claude"), plain(2, "~/Code/api"), plain(3, "/srv/api", front: "npm run dev"),
+                                           plain(4, "/srv/api")])
+        #expect(details(four) == ["claude", "~/Code", "npm run dev", "/srv"])
         // Two worktrees whose own parts came to the same name: their folders' names tell them apart.
         let trees: WindowColumnList = list([project(1, "xCloud"), worktree(2, "xCloud-fix"), worktree(3, "fix")])
         #expect(names(trees) == ["xCloud", "fix", "fix"])
-        #expect(details(trees) == [nil, "xCloud-fix", nil])
+        #expect(details(trees) == [nil, "xCloud-wt-xCloud-fix", "xCloud-wt-fix"])
         // The same name on two servers: where each connects.
         let hosts: WindowColumnList = list([server(1, destination: "deploy@a"), server(2, destination: "deploy@b")])
         #expect(details(hosts) == ["deploy@a", "deploy@b"])

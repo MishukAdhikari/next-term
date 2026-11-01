@@ -2773,7 +2773,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         hasClosed = true
         ticker?.invalidate()
         ticker = nil
-        columnHost.hideList(animated: false) // its reveal's timer and its Escape monitor go with it
+        columnHost.windowClosing() // a pending open, the list, its reveal's timer and its Escape monitor go with it
         sidebar.stopWatching()
         _ = TerminalTab.terminate(tabs, finishLater: true)
         groups.removeAll()

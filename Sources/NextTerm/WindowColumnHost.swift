@@ -94,8 +94,24 @@ final class WindowColumnHost: NSView {
         NotificationCenter.default.addObserver(self, selector: #selector(cameForward), name: NSWindow.didBecomeKeyNotification, object: window)
     }
 
+    /// Its window came forward: once the window server has it in front (a turn later; it is not yet as the key change is
+    /// told), a pointer resting on the rail holds the list back. An open already on its way waits for that too, as it
+    /// asks again when it is due.
     @objc func cameForward() {
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.holdIfResting() }
+        }
+    }
+
+    func holdIfResting() {
         heldAt = pointerOnColumn() ? Self.pointerLocation() : nil
+    }
+
+    /// Its window is closing: no open on its way, and the list, its reveal and its Escape monitor gone.
+    func windowClosing() {
+        hoverMoves += 1
+        onRail = false
+        hideList(animated: false)
     }
 
     /// Whether the pointer is on the column, as it is now, in this window and not one over it.

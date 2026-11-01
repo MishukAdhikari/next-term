@@ -134,6 +134,7 @@ extension SelfTest {
         let onRailPoint: NSPoint = window.convertPoint(toScreen: column.convert(NSPoint(x: column.bounds.midX, y: column.bounds.midY), to: nil))
         WindowColumnHost.pointerLocation = { onRailPoint }
         host.cameForward()
+        await pause(0.05) // it looks a turn later, once the window server has the window in front
         column.onPointer?(true)
         await pause(0.6)
         let heldStill: Bool = !host.listShowing && host.heldAt != nil
