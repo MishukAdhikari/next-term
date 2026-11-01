@@ -42,7 +42,8 @@ extension TerminalWindowController {
         column.onResize = { [weak self] (width: CGFloat?, ended: Bool) in
             guard let self else { return }
             let room: CGFloat = self.columnHost.unfoldedRoom()
-            AppDelegate.shared.windowColumns.setWidth(width.map { min($0, room) }, from: self, ended: ended)
+            // Whole points under the room, so rounding never takes it past and folds it.
+            AppDelegate.shared.windowColumns.setWidth(width.map { min($0, room.rounded(.down)) }, from: self, ended: ended)
         }
         column.onMore = { AppDelegate.shared.openProjectPanel(nil) }
     }

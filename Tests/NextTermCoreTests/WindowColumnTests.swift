@@ -210,7 +210,7 @@ import Testing
         #expect(key != nil && open.row(4)?.foldKey == nil && open.row(2)?.foldKey == nil)
         #expect(ids(open) == [1, 2, 3, 4])
         let folded = WindowColumnList.build(windows: windows, colors: [:], showsWorking: true, home: "/Users/sam", folded: [key ?? ""])
-        #expect(ids(folded) == [1, 4])
+        #expect(ids(folded) == [1, 4] && folded.count == 4)
         let row: WindowColumnRow? = folded.row(1)
         #expect(row?.hidden == [2, 3] && row?.isFolded == true)
         // Its own done and the worktree's needs-you: the most urgent shows on its dot, both in its marks.

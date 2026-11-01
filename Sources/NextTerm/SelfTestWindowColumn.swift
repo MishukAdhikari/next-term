@@ -39,6 +39,9 @@ extension SelfTest {
         sh("commit", "-q", "-m", "start")
         sh("worktree", "add", "-q", "-b", "sso", tree)
         var windows: [TerminalWindowController] = []
+        // The checks' widths are the default's, whatever width the user dragged the column to.
+        let userWidth: CGFloat = WindowColumnWidth.expanded
+        WindowColumnWidth.expanded = WindowColumnWidth.defaultExpanded
         WindowColumns.suppressed = false
         app.showsWindowColumn = true
         app.windowColumnExpanded = false
@@ -59,6 +62,7 @@ extension SelfTest {
             restoreDefault(saved.colorsShown, ProjectColors.shownKey)
             NotificationCenter.default.post(name: ProjectColorStore.changed, object: nil)
             WindowColumns.suppressed = true
+            WindowColumnWidth.expanded = userWidth
             app.windowColumns.rebuild()
         }
         func open(_ path: String?, project: Bool = false) async -> TerminalWindowController? {
@@ -404,6 +408,7 @@ extension SelfTest {
             return note("window column: unfolded marks not checked, as a window had no room to unfold its column")
         }
         await pause(1)
+        let started = Date()
         let id: Int = worktree.indexID
         var found: [String] = []
         var drawn = true
@@ -433,8 +438,9 @@ extension SelfTest {
             }
             found.append(step + ": " + marks.joined(separator: "; "))
         }
-        check(drawn, "window column: unfolded, a row whose marks alone change draws again, that row only, in every column",
-              found.joined(separator: " | "))
+        // A row the user's pointer passes over draws its hover too.
+        checkUntouched(since: started, drawn, "window column: unfolded, a row whose marks alone change draws again, that row only, in every column",
+                       found.joined(separator: " | "))
     }
 
     /// Room for fewer rows than windows: the last place says how many more, in the colour of the most urgent of them,
@@ -772,6 +778,7 @@ extension SelfTest {
     private static func focusBudget(_ app: AppDelegate, _ three: [TerminalWindowController]) async {
         let columns: [WindowColumnView] = app.controllers.filter { !$0.hasClosed }.map(\.windowColumn)
         await pause(1)
+        let started = Date()
         columns.forEach { $0.resetCounters() }
         app.windowColumns.resetCounters()
         for c in three + three {
@@ -793,7 +800,7 @@ extension SelfTest {
         let numbers = "\(layouts) layouts, \(draws) row draws, \(configures) configures (tooltips), \(strips) top-row draws (the glow dims "
             + "with the window), \(app.windowColumns.rebuildCount) rebuilds"
         note("window column budget: focus across three windows twice and a retitled tab: " + numbers)
-        check(layouts == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
+        checkUntouched(since: started, layouts == 0 && draws == 0 && app.windowColumns.rebuildCount == 0,
               "window column budget: switching the key window and retitling a tab draw no row and lay out no column", numbers)
     }
 

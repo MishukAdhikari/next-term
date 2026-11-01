@@ -93,7 +93,7 @@ public enum WindowColumnWidth {
     /// `width` within `expandedRange`, whole points; a width never set (0) is the default.
     public static func expandedWidth(_ width: CGFloat) -> CGFloat {
         guard width > 0 else { return defaultExpanded }
-        return min(max(width.rounded(), expandedRange.lowerBound), expandedRange.upperBound)
+        return min(max(width.rounded(.down), expandedRange.lowerBound), expandedRange.upperBound)
     }
     /// Along the column's inner edge, as the sidebar's divider.
     public static let hairline: CGFloat = 1

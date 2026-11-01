@@ -232,7 +232,9 @@ final class WindowColumnView: NSView, ProjectGlowing {
         let end: CGFloat = x + WindowColumnGrid.trailingEnd(width: width, onRight: onRight)
         let chevronFrame = NSRect(x: end - 14, y: count.minY, width: 20, height: count.height) // its glyph ends at `end`
         if showsChevron, chevron.frame != chevronFrame { chevron.frame = chevronFrame }
-        if footButton.isHidden { footButton.isHidden = false }
+        // On the rail only with a key to show: without one it would be an empty button that hides the column.
+        let showsFoot: Bool = expanded || !footButton.key.isEmpty
+        if footButton.isHidden == showsFoot { footButton.isHidden = !showsFoot }
         let foot: CGFloat = WindowColumnGrid.foot
         // Unfolded, its last row; on the rail, the whole foot, for the key a line a key.
         let footHeight: CGFloat = expanded ? WindowColumnGrid.row : foot
@@ -299,12 +301,14 @@ final class WindowColumnView: NSView, ProjectGlowing {
         let hidden: [WindowColumnRow] = Array(list.rows.dropFirst(shownCount))
         guard !hidden.isEmpty else { return }
         let state: TabState = MarkColumn.moreState(hidden.map { $0.urgent ?? .idle })
-        moreButton.lead = "+\(hidden.count)"
+        // Windows, not rows: a folded row stands for its worktrees too.
+        let windows: Int = hidden.reduce(0) { (sum: Int, row: WindowColumnRow) -> Int in sum + 1 + row.hidden.count }
+        moreButton.lead = "+\(windows)"
         moreButton.leadColor = StatusGlyph.moreColor(for: state)
         moreButton.words = "All Windows…"
         moreButton.key = KeyboardShortcuts.shared.chord(for: "openProjectPanel:")?.display ?? ""
         moreButton.leadFont = Self.countFont
-        let tip = "\(hidden.count) more window\(hidden.count == 1 ? "" : "s"): " + hidden.map(\.label).joined(separator: "; ")
+        let tip = "\(windows) more window\(windows == 1 ? "" : "s"): " + hidden.map(\.label).joined(separator: "; ")
         if moreButton.toolTip != tip { moreButton.toolTip = tip } // re-setting a tooltip resets it
         moreButton.setAccessibilityLabel(tip)
     }
@@ -312,6 +316,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
     /// "Hide Column" and the key as the user has it now (without one, the words alone).
     private func updateFoot() {
         let key: String = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display ?? ""
+        if footButton.key != key { needsLayout = true }
         footButton.key = key
         footButton.stacksKey = true
         footButton.setAccessibilityLabel(key.isEmpty ? "Hide Window Column" : "Hide Window Column, \(key)")
@@ -418,10 +423,13 @@ final class WindowColumnView: NSView, ProjectGlowing {
         func width(_ event: NSEvent) -> CGFloat {
             (onRight ? outer - event.locationInWindow.x : event.locationInWindow.x - outer) - WindowColumnWidth.hairline
         }
+        // Where in the edge it was taken: the edge keeps that offset from the pointer, as a divider does, and a click
+        // that never moves changes nothing.
+        let grab: CGFloat = width(event) - (bounds.width - WindowColumnWidth.hairline)
         while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-            let proposed: CGFloat = width(next)
+            let proposed: CGFloat = width(next) - grab
             if next.type == .leftMouseUp {
-                onResize?(last ?? proposed, true)
+                if let last { onResize?(last, true) }
                 break
             }
             if proposed != last {
@@ -492,8 +500,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
     @objc private func moreClicked() { onMore?() }
 
     @objc private func buttonClicked(_ sender: WindowColumnButton) {
-        // The window's own row: it is in front already, and nothing more happens.
-        guard sender.id != current else { return }
+        // The window's own row, or the repository's row it is folded into: it is in front already, and nothing happens.
+        guard !sender.isCurrent else { return }
         onSelect?(sender.id)
     }
 
@@ -563,7 +571,7 @@ final class WindowColumnButton: NSButton {
             needsDisplay = true
             if expanded {
                 marks.show(row?.marks ?? [], color: marksColor)
-                if !fold.isHidden { fold.contentTintColor = secondaryColor }
+                updateFold()
             }
         }
     }
@@ -660,30 +668,50 @@ final class WindowColumnButton: NSButton {
         onFold?(key)
     }
 
-    /// The arrow as the row has it: down while its worktrees show; to the side after their count while folded in.
+    /// The arrow as the row has it: down while its worktrees show; to the side after their count while folded in. Set
+    /// only where it changed: a tooltip set again resets, and the arrow draws only when it looks different. VoiceOver's
+    /// action to fold or show them is the row's in every form, the rail's too.
     private func updateFold() {
+        let actionName: String? = row.flatMap { (row: WindowColumnRow) -> String? in
+            guard row.foldKey != nil else { return nil }
+            let count: Int = row.hidden.count
+            return row.isFolded ? "Show \(count) worktree\(count == 1 ? "" : "s")" : "Fold worktrees"
+        }
+        if actionName != shownFoldAction {
+            shownFoldAction = actionName
+            setAccessibilityCustomActions(actionName.map { [NSAccessibilityCustomAction(name: $0, target: self, selector: #selector(foldAction))] } ?? [])
+        }
         let shows: Bool = expanded && row?.foldKey != nil
         if fold.isHidden == shows { fold.isHidden = !shows }
         guard shows, let row else { return }
         let folded: Bool = row.isFolded
-        let symbol: String = folded ? "chevron.right" : "chevron.down"
-        let words: String = folded ? "Show \(row.hidden.count) worktree\(row.hidden.count == 1 ? "" : "s")" : "Fold worktrees"
         let tint: NSColor = secondaryColor
-        fold.image = NSImage(systemSymbolName: symbol, accessibilityDescription: words)?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
-        fold.contentTintColor = tint
-        let count: String = folded ? "\(row.hidden.count)" : ""
-        let title = NSAttributedString(string: count, attributes: [.font: WindowColumnView.countFont, .foregroundColor: tint])
-        if fold.attributedTitle != title { fold.attributedTitle = title }
-        fold.imagePosition = folded ? .imageTrailing : .imageOnly
-        fold.toolTip = folded ? "Show its \(row.hidden.count) worktree\(row.hidden.count == 1 ? "" : "s") (\(row.hidden.count) folded in)"
-            : "Fold its worktrees into this row"
+        let look = FoldLook(folded: folded, count: row.hidden.count, tint: tint)
+        if look != foldLook {
+            foldLook = look
+            fold.image = NSImage(systemSymbolName: folded ? "chevron.right" : "chevron.down", accessibilityDescription: actionName)?
+                .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            fold.contentTintColor = tint
+            let count: String = folded ? "\(row.hidden.count)" : ""
+            fold.attributedTitle = NSAttributedString(string: count, attributes: [.font: WindowColumnView.countFont, .foregroundColor: tint])
+            fold.imagePosition = folded ? .imageTrailing : .imageOnly
+            fold.alignment = .right
+        }
+        let tip: String = folded ? "Show its \(row.hidden.count) worktree\(row.hidden.count == 1 ? "" : "s")" : "Fold its worktrees into this row"
+        if fold.toolTip != tip { fold.toolTip = tip }
         let end: CGFloat = WindowColumnGrid.trailingEnd(width: bounds.width, onRight: onRight)
         let frame = NSRect(x: end - Self.foldWidth + 4, y: 0, width: Self.foldWidth, height: bounds.height)
         if fold.frame != frame { fold.frame = frame }
-        fold.alignment = .right
-        setAccessibilityCustomActions([NSAccessibilityCustomAction(name: words, target: self, selector: #selector(foldAction))])
     }
+
+    /// What the arrow shows, to set it again only when that changes.
+    private struct FoldLook: Equatable {
+        let folded: Bool
+        let count: Int
+        let tint: NSColor
+    }
+    private var foldLook: FoldLook?
+    private var shownFoldAction: String?
 
     @objc private func foldAction() -> Bool {
         foldClicked()
@@ -737,7 +765,6 @@ final class WindowColumnButton: NSButton {
         } else if !marks.isHidden {
             marks.isHidden = true
         }
-        if newRow.foldKey == nil, old?.foldKey != nil { setAccessibilityCustomActions([]) }
         if old?.words != newRow.words || old == nil || formChanged {
             // On the rail the list that opens on hover names the windows: no tooltip there to pop up over it.
             let tip: String? = expanded ? newRow.toolTip : nil
@@ -879,6 +906,10 @@ final class WindowColumnButton: NSButton {
         didSet {
             guard isHighlighted != oldValue else { return }
             needsDisplay = true
+            if expanded {
+                marks.show(row?.marks ?? [], color: marksColor)
+                updateFold()
+            }
         }
     }
 
@@ -997,17 +1028,28 @@ final class WindowColumnActionButton: NSButton {
         return parts.joined(separator: "  ")
     }
 
-    /// On the rail, the stacked key's lines: each key on its own, top to bottom, ending `bottomMargin` over the foot's end.
-    private static let keyLine: CGFloat = 11
-    private static let bottomMargin: CGFloat = 6
-    private var keyLines: [String] { key.map { String($0) } }
+    /// On the rail, the stacked key's lines: each modifier on its own, then the key's name whole ("S", "Space"), top to
+    /// bottom, ending `bottomMargin` over the foot's end, a line as tall as the foot lets them all be.
+    private static let keyLine: CGFloat = 10
+    private static let bottomMargin: CGFloat = 2
+    private var keyLines: [String] {
+        let modifiers: Set<Character> = ["⌃", "⌥", "⇧", "⌘"]
+        let glyphs: [String] = key.prefix { modifiers.contains($0) }.map { String($0) }
+        let name: String = String(key.drop { modifiers.contains($0) })
+        return glyphs + (name.isEmpty ? [] : [name])
+    }
+    private var lineHeight: CGFloat {
+        let lines: CGFloat = CGFloat(max(1, keyLines.count))
+        return min(Self.keyLine, floor((bounds.height - Self.bottomMargin - 6) / lines))
+    }
 
-    /// On the rail, where the stacked key is: its plate under the pointer.
+    /// On the rail, where the stacked key is: its plate under the pointer, never above the foot's top.
     private var stackRect: NSRect {
-        let height: CGFloat = CGFloat(keyLines.count) * Self.keyLine
+        let height: CGFloat = CGFloat(keyLines.count) * lineHeight
         let column: CGFloat = WindowColumnGrid.dotColumnX(width: bounds.width, onRight: onRight)
-        return NSRect(x: column + WindowColumnGrid.plateInset, y: bounds.height - Self.bottomMargin - height - 3,
-                      width: WindowColumnGrid.dotColumn - 2 * WindowColumnGrid.plateInset, height: height + 6)
+        let top: CGFloat = max(0, bounds.height - Self.bottomMargin - height - 6)
+        return NSRect(x: column + WindowColumnGrid.plateInset, y: top,
+                      width: WindowColumnGrid.dotColumn - 2 * WindowColumnGrid.plateInset, height: min(bounds.height - top, height + 6))
     }
 
     override var isHighlighted: Bool {
@@ -1068,12 +1110,18 @@ final class WindowColumnActionButton: NSButton {
             (isHighlighted ? NSColor.white.withAlphaComponent(0.14) : NSColor.white.withAlphaComponent(0.08)).setFill()
             NSBezierPath(roundedRect: place, xRadius: WindowColumnGrid.plateRadius, yRadius: WindowColumnGrid.plateRadius).fill()
         }
-        let font = NSFont.systemFont(ofSize: 10)
         let color: NSColor = hovering ? SwitcherRowStyle.selectedSecondary : WindowColumnView.secondary
-        for (index, line) in keyLines.enumerated() {
-            let text = NSAttributedString(string: line, attributes: [.font: font, .foregroundColor: color])
+        let line: CGFloat = lineHeight
+        for (index, word) in keyLines.enumerated() {
+            // A long key's name ("Space", "F10") a size smaller, to stay inside the rail.
+            var font = NSFont.systemFont(ofSize: min(10, line))
+            var text = NSAttributedString(string: word, attributes: [.font: font, .foregroundColor: color])
+            if text.size().width > place.width {
+                font = NSFont.systemFont(ofSize: max(7, font.pointSize * place.width / text.size().width))
+                text = NSAttributedString(string: word, attributes: [.font: font, .foregroundColor: color])
+            }
             let size: NSSize = text.size()
-            let y: CGFloat = place.minY + 3 + CGFloat(index) * Self.keyLine + ((Self.keyLine - size.height) / 2).rounded()
+            let y: CGFloat = place.minY + 3 + CGFloat(index) * line + ((line - size.height) / 2).rounded()
             text.draw(at: NSPoint(x: place.minX + ((place.width - size.width) / 2).rounded(), y: y))
         }
     }

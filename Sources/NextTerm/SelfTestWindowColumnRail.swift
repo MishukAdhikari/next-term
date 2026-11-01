@@ -61,7 +61,15 @@ extension SelfTest {
               "width \(column.frame.width), places \(places), chevron hidden \(column.chevronButton.isHidden)")
         await screenshot(c, suffix: "-rail")
 
-        // At rest the dots are a quiet grey, and the hide key stands at the foot a key to a line.
+        // At rest the dots are a quiet grey, and the hide key stands at the foot a key to a line. (Increase Contrast keeps
+        // their colours: off for this.)
+        let contrast: Bool? = DisplayOptions.increasesContrastOverride
+        DisplayOptions.increasesContrastOverride = false
+        column.contrastChanged()
+        defer {
+            DisplayOptions.increasesContrastOverride = contrast
+            column.contrastChanged()
+        }
         let footKey: String = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display ?? ""
         let quiet: Bool = column.shownButtons.filter { $0.dotColorForTest != nil }
             .allSatisfy { $0.dotColorForTest == WindowColumnButton.restingDot.cgColor } && !column.awake
@@ -148,7 +156,16 @@ extension SelfTest {
         checkUntouched(since: started, kept && closed, "window column: moving from the rail onto the list keeps it, and leaving both closes it",
               "kept \(kept), closed \(closed)")
 
-        // A click on a dot ends the hover: no list opens after it in the window just left.
+        // Back on the rail just after the list went: it opens at once, with no rest.
+        column.onPointer?(true)
+        let warm: Bool = host.listShowing
+        host.hideList(animated: false)
+        column.onPointer?(false)
+        checkUntouched(since: started, warm, "window column: back on the rail just after the list went, it opens at once")
+
+        // A click on a dot ends the hover: no list opens after it in the window just left (past the quick reopen, so
+        // the open is one still on its way).
+        await pause(WindowColumnRail.warmDelay + 0.1)
         column.onPointer?(true)
         host.chose()
         await pause(0.6)
@@ -175,7 +192,7 @@ extension SelfTest {
 
         // A double-click on the rail's empty space pins the column unfolded, and on the unfolded column folds it back.
         func doubleClick(_ view: NSView) {
-            let point: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.maxY - 6), to: nil)
+            let point: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.maxY - WindowColumnGrid.foot - 6), to: nil)
             let event: NSEvent? = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2,
                                                      pressure: 1)
@@ -320,8 +337,21 @@ extension SelfTest {
         let everywhere: Bool = all.filter { $0.columnHost.shown.form == .expanded }
             .allSatisfy { $0.windowColumn.frame.width == target + WindowColumnWidth.hairline }
         let kept: Bool = UserDefaults.standard.double(forKey: WindowColumnSettings.widthKey) == Double(target)
-        column.onResize?(room + 200, true)
-        let capped: Bool = column.frame.width <= room + WindowColumnWidth.hairline && c.columnHost.shown.form == .expanded
+        // A window narrower than the widest column: the drag stops at its room, a fraction of a point less than it, and the
+        // column stays unfolded.
+        var capped = false
+        if let window = c.window {
+            let frame: NSRect = window.frame
+            window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: frame.width - (room - 300.5), height: frame.height), display: true)
+            window.layoutIfNeeded()
+            let narrow: CGFloat = c.columnHost.unfoldedRoom()
+            column.onResize?(narrow + 200, true)
+            window.layoutIfNeeded()
+            capped = narrow < WindowColumnWidth.expandedRange.upperBound && column.frame.width <= narrow + WindowColumnWidth.hairline
+                && c.columnHost.shown.form == .expanded
+            window.setFrame(frame, display: true)
+            window.layoutIfNeeded()
+        }
         column.onResize?(nil, true)
         let reset: Bool = WindowColumnWidth.expanded == WindowColumnWidth.defaultExpanded
             && column.frame.width == WindowColumnWidth.defaultExpanded + WindowColumnWidth.hairline

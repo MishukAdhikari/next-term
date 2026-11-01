@@ -208,8 +208,8 @@ public struct WindowColumnList: Equatable, Sendable {
 
     public init() {}
 
-    /// How many windows are open: the header's count.
-    public var count: Int { rows.count }
+    /// How many windows are open: the count at the column's top. Folded worktrees count, though they have no rows.
+    public var count: Int { windows.count }
 
     public func row(_ id: Int) -> WindowColumnRow? {
         rows.first { (row: WindowColumnRow) -> Bool in row.id == id }

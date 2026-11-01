@@ -70,8 +70,10 @@ final class WindowColumnHost: NSView {
     private(set) var waitsForExit = false
     /// Where the pointer last came to rest on the rail: the list opens once it has stayed within restRadius of it.
     private var restPoint: NSPoint?
-    /// When the list last went: coming back onto the rail within warmDelay opens it at once.
+    /// When the list last went: coming back onto the rail within warmDelay opens it at once. Not after Escape, which
+    /// sent it away on purpose.
     private var closedAt: CFTimeInterval?
+    private var dismissedByKey = false
     /// The reveal under way: the shade's width going from `from` to `to` over `duration`, then `done`.
     private var reveal: (from: CGFloat, to: CGFloat, start: CFTimeInterval, duration: CFTimeInterval, opening: Bool)?
     private var revealTimer: Timer?
@@ -133,6 +135,12 @@ final class WindowColumnHost: NSView {
         return place.contains(point)
     }
 
+    /// Whether the pointer is on the rail's foot, the hide key.
+    private func pointerOnFoot() -> Bool {
+        guard let point = pointerHere(), !column.hideButton.isHidden else { return false }
+        return column.convert(column.hideButton.frame, to: self).contains(point)
+    }
+
     /// The pointer in the host's coordinates while this window is the one under it; nil otherwise.
     private func pointerHere() -> NSPoint? {
         guard let window else { return nil }
@@ -186,6 +194,12 @@ final class WindowColumnHost: NSView {
         }
         let columnResized: Bool = width != shown.width
         if columnResized, let around = aroundColumnChange { around(apply) } else { apply() }
+        if width == 0, onRail {
+            // Hidden under the pointer, which then sends no exit: the pointer is off it, and the dots rest.
+            onRail = false
+            hoverMoves += 1
+            updateAwake()
+        }
         if decided.form != .folded {
             hideList(animated: false) // pinned open, or hidden: no list over the content
         } else if listShowing {
@@ -215,7 +229,7 @@ final class WindowColumnHost: NSView {
             if closing { return showList() } // back while it closes: it opens again from where it is
             guard !listShowing else { return }
             // Back on the rail just after the list went: it opens at once, as a slip off the edge costs no wait.
-            if let closedAt, CACurrentMediaTime() - closedAt < WindowColumnRail.warmDelay, heldAt == nil, !waitsForExit {
+            if let closedAt, CACurrentMediaTime() - closedAt < WindowColumnRail.warmDelay, heldAt == nil, !waitsForExit, !pointerOnFoot() {
                 return showList()
             }
             restPoint = Self.pointerLocation()
@@ -252,6 +266,8 @@ final class WindowColumnHost: NSView {
         guard heldAt == nil, !waitsForExit else { return }
         after(WindowColumnRail.openDelay) { [weak self] in
             guard let self, self.onRail, self.heldAt == nil, !self.waitsForExit, NSEvent.pressedMouseButtons == 0 else { return }
+            // Resting on the hide key at the rail's foot is for clicking it: no list over it.
+            guard !self.pointerOnFoot() else { return }
             self.showList()
         }
     }
@@ -392,7 +408,8 @@ final class WindowColumnHost: NSView {
         onList = false
         listShade?.isHidden = true
         column.covered = false
-        closedAt = CACurrentMediaTime()
+        closedAt = dismissedByKey ? nil : CACurrentMediaTime()
+        dismissedByKey = false
         updateAwake()
     }
 
@@ -465,6 +482,7 @@ final class WindowColumnHost: NSView {
                     self.hoverMoves += 1
                     self.onRail = false
                     self.onList = false // gone by the key, not by the pointer: it doesn't come back as it fades
+                    self.dismissedByKey = true
                     self.hideList(animated: true)
                 }
             }

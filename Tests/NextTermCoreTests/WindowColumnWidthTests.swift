@@ -101,7 +101,7 @@ import Testing
     @Test func aDraggedWidthStaysWithinItsRangeAndNoneIsTheDefault() {
         #expect(WindowColumnWidth.expandedWidth(0) == 180)
         #expect(WindowColumnWidth.expandedWidth(80) == 140)
-        #expect(WindowColumnWidth.expandedWidth(240.4) == 240)
+        #expect(WindowColumnWidth.expandedWidth(240.4) == 240 && WindowColumnWidth.expandedWidth(300.9) == 300)
         #expect(WindowColumnWidth.expandedWidth(900) == 360)
     }
 
