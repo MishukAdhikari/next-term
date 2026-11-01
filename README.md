@@ -103,7 +103,10 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   Undo. Rotate… opens a key’s page from its link and takes the new key in the same sheet; it keeps the old key
   masked for 30 days and can remind you when a key gets old (**Secrets › Keys Due to Rotate**). Each key asks
   for Touch ID every time it’s used until you untick that, and a key set to “Never show this key” is never
-  shown or copied, even to you.
+  shown or copied, even to you. The first thing Next Term tells every agent that uses its MCP server is to
+  check Secrets for an API key, token or password before your shell files or asking you, and its
+  `next-term-secrets` skill shows them how to use a key by name, in an MCP server’s config too
+  (`nxtrm secret help`).
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot
@@ -495,7 +498,15 @@ Next Term's menu.
   the login keychain, which Settings calls less protected); the names, what each key is for, who added it, the
   link to its page, its settings and its dates are not encrypted. Agents use a key by name, after Next Term’s
   own panel shows who asks, which keys and the command, and you approve with Touch ID or your password; no MCP
-  tool returns a value. A key’s “Ask for Touch ID every time it’s used” is ticked by default (untick it in its
+  tool returns a value. The first line of what Next Term’s MCP server tells every agent is to call
+  `list_secrets` before reading your shell profiles or `.env` files for a key, or asking you; a key it doesn’t
+  find, it asks you to type into Next Term (`request_secret`), never into the chat. In an MCP server’s config the
+  key goes by name too: `nxtrm secret run NAME=ENVNAME -- command`, and for a server at a URL that wants a bearer
+  token, a name only that command sets, `nxtrm secret run API_TOKEN=NXTRM_API_TOKEN -- npx -y
+  mcp-remote@0.15.2 URL --header 'Authorization: Bearer ${NXTRM_API_TOKEN}'`, so an agent that fills in `${…}`
+  from its own environment never puts a value in a command line (Claude Code lists such a name under missing
+  environment variables; leave it unset). Next Term asks you when such a server starts: each time for a key set
+  to ask for Touch ID every time. A key’s “Ask for Touch ID every time it’s used” is ticked by default (untick it in its
   Edit… sheet), and while it is, a request that uses the key offers only Allow once. A key set to “Never show
   this key” is never shown or copied, even to you, and that can’t be undone; commands you allow still get it.
   The New keys group in Settings › Secrets sets how both start for the keys you add, an agent asks you for, or

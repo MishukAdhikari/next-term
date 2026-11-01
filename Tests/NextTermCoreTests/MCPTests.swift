@@ -29,6 +29,8 @@ import Testing
                 let said = MCPServer.instructions(inTab: inTab, offeringTabs: offering)
                 #expect(said.utf16.count <= 2048, "\(said.utf16.count) characters, in a tab: \(inTab), offering tabs: \(offering)")
                 #expect(said.hasSuffix("store_secret saves a key you already hold."))
+                // One line break: Secrets' line, then the rest.
+                #expect(said.components(separatedBy: "\n").count == 2)
             }
         }
     }
