@@ -329,6 +329,9 @@ enum SecretSocket {
         guard tab.remote == nil else { return false }
         let leader: pid_t = tcgetpgrp(tab.view.process.childfd)
         guard leader > 1 else { return false }
+        // A member of a pipeline in front (`cat prompt | claude`: zsh makes cat the leader), started by the tab's shell
+        // itself. Not just any member of the group: an agent another one starts shares its group, but not its parent.
+        if getpgid(agent.pid) == leader, parent(of: agent.pid) == tab.view.process.shellPid { return true }
         var current: pid_t = agent.pid
         for _ in 0...parentsWalked {
             if current == leader { return true }

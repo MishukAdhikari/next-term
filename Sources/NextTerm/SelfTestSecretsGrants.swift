@@ -260,6 +260,29 @@ extension SelfTest {
               "radios \(radios.map(\.0)), lowest \(lowest ?? "none"), twin waits \(waitsItsTurn) asks \(twinAsks), made \(made), kept \(kept), "
                   + "answered \(answered), shown \(shown)")
 
+        // Queued twins of another session are settled by what the panel before them made: an exact grant answers one, and
+        // a decline's pause refuses another, as joining that panel would have.
+        let timed = ask(["node settle.js"], session: session)
+        requests.ask(timed) { _ in }
+        let settled = SecretsAnswers()
+        let timedTwin = ask(["node settle.js"], session: nestedSession)
+        requests.ask(timedTwin) { settled.take($0) }
+        timed.panel?.durationChoice[.fifteenMinutes]?.performClick(nil)
+        timed.panel?.allowButton.performClick(nil)
+        let byGrant = await wait(10) { secretsAllowed(settled.last)?.how == .grant && timedTwin.panel == nil }
+        let declined = ask(["node pause.js"], session: session)
+        requests.ask(declined) { _ in }
+        let paused = SecretsAnswers()
+        let pausedTwin = ask(["node pause.js"], session: nestedSession)
+        requests.ask(pausedTwin) { paused.take($0) }
+        declined.panel?.declineButton.performClick(nil)
+        let byPause = await wait(5) {
+            if case .paused? = secretsRefusal(paused.last) { return pausedTwin.panel == nil }
+            return false
+        }
+        check(byGrant && byPause, "secrets: another session's queued twin is answered by an exact grant made before its turn, and refused by a decline's pause",
+              "by grant \(byGrant), by pause \(byPause)")
+
         // The child's process as a session's: its exit alone ends that grant, while the agent and its own grant go on.
         guard let childSession = SecretRequests.session(agent: childPid, in: tab) else { return check(false, "secrets: the child's session reads") }
         let byChild = ask(["node child.js"], session: childSession)

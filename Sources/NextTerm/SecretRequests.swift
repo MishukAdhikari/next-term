@@ -451,11 +451,12 @@ final class SecretRequests {
         // line, written as Touch ID ended, said this session, so a line after it says what was allowed.
         let asked: How = how
         let how: How = Self.stillOffered(how, request, offered: offered(request))
-        if asked == .session, how == .once {
-            audit(.use, request, approval: .once, outcome: "its session ended during Touch ID: allowed once, with no session grant")
-        }
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
+        // Its session over, not a key ticked to ask every time: no grant, which a grant line says (not a second use).
+        if asked == .session, how == .once, SecretApprovalChoices.kept(.session, offered: offered(request)) == .session {
+            audit(.grant, request, approval: .once, outcome: "not made: its session ended during Touch ID, so allowed once")
+        }
         let now = now()
         var kind = how.grantKind
         // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
@@ -816,19 +817,34 @@ final class SecretRequests {
     /// it now, and a decline meanwhile that paused it refuses it, as either would have had it joined that panel.
     private func settledWhileQueued(_ request: Request) -> Bool {
         guard request.isUse, !request.isRemote, request.importAsk == nil, request.panel == nil else { return false }
+        // Callers who left are let go first; a pending card nobody waits for keeps its own way (its card, its one use).
+        letGo(callersLeftOf: request)
+        guard !request.isAnswered, !request.gone, !request.replies.isEmpty else { return false }
+        // As ask() checks before a grant answers: the vault as it is now, grants over, keys that ask every time.
+        SecretsStore.shared.reloadIfChanged()
         let now = now()
+        expire(at: now)
+        endGrantsAskingEveryUse()
         if let grant = book.take(request.binding, session: request.session, plain: request.warnings.isEmpty, at: now),
            let values = held[grant.id] {
-            expire(at: now)
+            expire(at: now) // a one-use grant is over now, and its values go now
             audit(.use, request, approval: .grant, outcome: "allowed")
-            finish(request, outcome: .answeredByGrant, decision: .allowed(copies(values), how: .grant))
+            // A one-use grant starts one command: its first caller's, the others hearing it was used already.
+            let how: SecretAudit.Approval = grant.kind == .oneUse ? .once : .grant
+            finish(request, outcome: .answeredByGrant, decision: .allowed(copies(values), how: how))
             return true
         }
-        // Only a pause: the other limits counted it already when it asked.
-        if let refusal = limits.admit(asker: request.asker, binding: request.binding, at: now), case .paused = refusal {
-            audit(.refused, request, outcome: Self.word(refusal))
-            finish(request, outcome: .refusedByLimits, decision: .refused(refusal))
-            return true
+        // A decline meanwhile (its pause, Decline and Stop Asking) or the hour pause: refused as it would be now. The
+        // counts are not checked again: they counted it when it asked.
+        if let refusal = limits.admit(asker: request.asker, binding: request.binding, at: now) {
+            switch refusal {
+            case .paused, .stopped, .declining:
+                audit(.refused, request, outcome: Self.word(refusal))
+                finish(request, outcome: .refusedByLimits, decision: .refused(refusal))
+                return true
+            case .busy, .limited:
+                return false
+            }
         }
         return false
     }
