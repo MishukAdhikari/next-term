@@ -174,7 +174,7 @@ enum SecretSocket {
         let asking = SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: request.argv, folder: request.directory,
                                             warnings: warnings, agentWords: nil, askedBy: facts, program: program, isRemote: false)
         // The agent above, followed to its exit: "Allow for this session" binds to it.
-        asking.session = agent.flatMap { $0.pid > 1 ? SecretRequests.session(ofProcess: $0.pid) : nil }
+        asking.session = agent.flatMap { $0.pid > 1 ? SecretRequests.session(agent: $0.pid, in: tab) : nil }
         let waiting = SecretRequests.shared.ask(asking, left: { waiter.hasLeft }) { decision in
             waiter.set(answer(for: decision, request: request))
         }

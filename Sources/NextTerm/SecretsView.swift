@@ -515,9 +515,12 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     static func grantText(_ grant: SecretGrant, now: ContinuousClock.Instant = .now) -> String {
         let binding = grant.binding
         if grant.kind == .session {
-            // run_with_secrets names the command's program; its asker is the agent's tab.
-            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : "An agent"
-            return "\(agent)\u{2019}s session: \(SecretRun.keysText(binding.names)) for any command, until the session ends"
+            // A wrapper names its agent; run_with_secrets names the command's program, so its tab says whose session it is.
+            let tabID: String? = grant.session.flatMap { $0.hasPrefix("tab:") ? $0.split(separator: ":").dropFirst().first.map(String.init) : nil }
+            let tab: TerminalTab? = tabID.flatMap { id in AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString == id } }
+            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : "The agent"
+            let place: String = tab.map { " in \u{201C}\(SecretApprovalPanel.sanitized($0.title, limit: 60))\u{201D}" } ?? ""
+            return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) for any command, until the session ends"
         }
         let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
         let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)

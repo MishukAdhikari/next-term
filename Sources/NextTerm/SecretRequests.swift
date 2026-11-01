@@ -404,8 +404,7 @@ final class SecretRequests {
             agentWords: request.agentWords, askedBy: request.askedBy, argv: request.argv, isWrapper: request.isWrapper,
             isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: store.index)
-        content.choices = SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote,
-                                                        asksEveryUse: !asking.isEmpty)
+        content.choices = offered(request) // one source for the panel's choices and the Allow's
         content.askingEveryUse = request.isRemote ? [] : asking
         if !request.isUse {
             content.offersHowLong = false
@@ -447,6 +446,8 @@ final class SecretRequests {
         guard !request.isAnswered else { return }
         let now = now()
         var kind = how.grantKind
+        // A session that ended while the panel was up gets no grant: the Allow is for this command alone.
+        if kind == .session, !(request.session.map(Self.isLive) ?? false) { kind = nil }
         // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
         let stoppedDuringApproval = request.isWrapper && request.gone && how == .once
         if stoppedDuringApproval { kind = .oneUse }
@@ -803,11 +804,38 @@ final class SecretRequests {
 
     // MARK: sessions
 
-    /// An agent's run in its tab, as "Allow for this session" binds to it: the tab and the run's number there, while an
-    /// agent runs in front of it. Nil otherwise.
+    /// An agent's run in its tab: the tab and the run's number there, while an agent runs in front of it. Nil otherwise.
     static func session(of tab: TerminalTab) -> String? {
         guard !tab.exited, tab.status.running, tab.status.kind == .agent else { return nil }
         return "tab:\(tab.id.uuidString):\(tab.status.commandsStarted)"
+    }
+
+    /// What "Allow for this session" binds to: the agent process itself (`pid` and its start time, so a reused pid is
+    /// another session, and a later agent on the same command line too), with its run in its tab when it runs in one
+    /// ("tab:<id>:<run>|pid:<pid>:<start>"), so the grant ends with whichever ends first, and with input MCP types there.
+    /// Nil when the agent's process isn't found.
+    static func session(agent pid: pid_t, in tab: TerminalTab?) -> String? {
+        guard let process = session(ofProcess: pid) else { return nil }
+        guard let tab else { return process }
+        guard let run = session(of: tab) else { return nil } // in a tab, but no agent runs in front of it: none
+        return run + "|" + process
+    }
+
+    /// Whether `session` is still going: its agent process the same one, and its run in its tab the same.
+    static func isLive(_ session: String) -> Bool {
+        for part in session.split(separator: "|").map(String.init) {
+            let fields = part.split(separator: ":")
+            guard fields.count >= 3 else { return false }
+            if fields[0] == "pid" {
+                guard let pid = pid_t(fields[1]), Self.session(ofProcess: pid) == part else { return false }
+            } else if fields[0] == "tab" {
+                let tab = AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString == String(fields[1]) }
+                guard let tab, Self.session(of: tab) == part else { return false }
+            } else {
+                return false
+            }
+        }
+        return true
     }
 
     /// The agent process above a wrapper: its pid with its start time, so a pid used again by another process is
@@ -824,8 +852,10 @@ final class SecretRequests {
         let prefix = "tab:\(id.uuidString):"
         let live: String? = tab.flatMap(Self.session(of:))
         let over: Set<String> = Set(book.grants.compactMap { (grant: SecretGrant) -> String? in
-            guard let session = grant.session, session.hasPrefix(prefix), session != live else { return nil }
-            return session
+            // Its tab part: the run in this tab it was made in, which must still be the one in front.
+            guard let session = grant.session, session.hasPrefix(prefix) else { return nil }
+            let run = session.split(separator: "|").first.map(String.init)
+            return run != live ? session : nil
         })
         for session in over { end(.sessionEnded(session)) }
     }
@@ -839,13 +869,14 @@ final class SecretRequests {
     /// The process sources watching the agents above wrappers, by session, while a grant holds their session.
     private var sessionWatches: [String: DispatchSourceProcess] = [:]
 
-    /// A wrapper's agent session: watched for its exit, which ends its grants. A tab's ends by tabRunChanged.
+    /// A session's agent process, watched for its exit, which ends its grants (its tab's run ends them by tabRunChanged).
     private func followSession(_ session: String) {
-        guard session.hasPrefix("pid:"), sessionWatches[session] == nil else { return }
-        let parts = session.split(separator: ":")
+        guard sessionWatches[session] == nil,
+              let process = session.split(separator: "|").map(String.init).first(where: { $0.hasPrefix("pid:") }) else { return }
+        let parts = process.split(separator: ":")
         guard parts.count >= 2, let pid = pid_t(parts[1]) else { return }
         // Gone already, or another process now: over at once.
-        guard Self.session(ofProcess: pid) == session else { return end(.sessionEnded(session)) }
+        guard Self.isLive(session) else { return end(.sessionEnded(session)) }
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated { SecretRequests.shared.end(.sessionEnded(session)) }
@@ -853,7 +884,7 @@ final class SecretRequests {
         sessionWatches[session] = source
         source.resume()
         // It may have ended between the check and the watch.
-        if Self.session(ofProcess: pid) != session { end(.sessionEnded(session)) }
+        if Self.session(ofProcess: pid) != process { end(.sessionEnded(session)) }
     }
 
     /// Ends the lasting grants that hold a key set to ask for Touch ID every time it's used.

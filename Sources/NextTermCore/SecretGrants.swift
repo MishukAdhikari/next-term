@@ -182,7 +182,10 @@ public struct SecretGrant: Identifiable, Sendable {
         let mine: SecretBinding = self.binding
         // A wrapper's `program` is its agent's, so it must be the same; run_with_secrets' is the command's own program
         // (npm, make), which any command of the session may change: its tab and run name the agent there.
-        guard binding.source == mine.source, binding.asker == mine.asker, binding.source == .tool || binding.program == mine.program,
+        // A wrapper's asker carries its argv's digest, which any command changes: its agent (path, file, script) and its
+        // process (the session) name it instead.
+        guard binding.source == mine.source, binding.source == .wrapper || binding.asker == mine.asker,
+              binding.source == .tool || binding.program == mine.program,
               binding.agentPath == mine.agentPath, binding.agentIdentity == mine.agentIdentity, binding.agentScript == mine.agentScript,
               !binding.keys.isEmpty else { return false }
         return binding.keys.allSatisfy { (name: String, envName: String) -> Bool in mine.keys[name] == envName }
@@ -199,7 +202,8 @@ public struct SecretGrant: Identifiable, Sendable {
         case .revoke(let id): return id == self.id
         case .keyChanged(let name): return binding.keys[name] != nil
         case .askEveryUse(let name): return kind != .oneUse && binding.keys[name] != nil
-        case .tabGotInput(let tab): return binding.source == .tool && binding.asker == tab
+        // A session in that tab too, a wrapper's agent's included ("tab:<id>:<run>|pid:…").
+        case .tabGotInput(let tab): return (binding.source == .tool && binding.asker == tab) || (session?.hasPrefix("tab:\(tab):") ?? false)
         }
     }
 

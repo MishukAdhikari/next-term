@@ -203,17 +203,32 @@ extension SelfTest {
         let line: Bool = secretsAudit(store).dropFirst(before).contains { $0.event == .grantEnd }
         check(wiped && line, "secrets: the session's end ends its grant, its values with it, with a grant-end line", "wiped \(wiped), line \(line)")
 
-        // A tab's session: its run there ending (here, the tab gone) ends the grant.
-        let tab = UUID()
-        let inTab = secretsRequest(asker: tab.uuidString, command: ["npm test"], source: .tool, tab: "tab 4")
-        inTab.session = "tab:\(tab.uuidString):3"
+        // A tab's session: a stand-in agent named claude runs in a tab; the grant made for its run there ends when it exits.
+        guard let controller = AppDelegate.shared.controllers.first else { return }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nextterm-session-\(getpid())")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let agent = dir.appendingPathComponent("claude")
+        try? "#!/bin/sh\nprintf 'Ready.\\n'\nsleep 600\n".write(to: agent, atomically: true, encoding: .utf8)
+        chmod(agent.path, 0o755)
+        let tab = controller.addTab(directory: nil, select: false)
+        _ = await wait(20) { tab.status.integrated }
+        tab.view.send(txt: "PATH=\(dir.path):$PATH claude\r")
+        let running = await wait(8) { SecretRequests.session(of: tab) != nil }
+        // This process stands in for the agent's own (its pid and start time); the tab's run is the stand-in's.
+        let tabSession: String? = running ? SecretRequests.session(agent: getpid(), in: tab) : nil
+        let inTab = secretsRequest(asker: tab.id.uuidString, command: ["npm test"], source: .tool, tab: "tab 4")
+        inTab.session = tabSession
         requests.ask(inTab) { _ in }
+        let tabOffered: Bool = inTab.panel?.durationChoice[.session] != nil
         inTab.panel?.durationChoice[.session]?.performClick(nil)
         inTab.panel?.allowButton.performClick(nil)
-        let tabMade = await wait(10) { requests.book.grants.contains { $0.session == "tab:\(tab.uuidString):3" } }
-        SecretRequests.tabRunChanged(tab, tab: nil)
-        let tabEnded = !requests.book.grants.contains { $0.kind == .session } && requests.heldGrants.isEmpty
-        check(tabMade && tabEnded, "secrets: a session grant in a tab ends when the agent's run there ends", "made \(tabMade), ended \(tabEnded)")
+        let tabMade = await wait(10) { tabSession != nil && requests.book.grants.contains { $0.session == tabSession } }
+        tab.view.send(txt: "\u{03}") // the agent exits: its run there is over
+        let tabEnded = await wait(8) { !requests.book.grants.contains { $0.kind == .session } && requests.heldGrants.isEmpty }
+        check(running && tabOffered && tabMade && tabEnded, "secrets: a session grant in a tab ends, its values with it, when the agent's run there ends",
+              "running \(running), offered \(tabOffered), made \(tabMade), ended \(tabEnded)")
+        controller.remove(tab)
     }
 
     /// A grant's values go the moment it ends on its own or is used, with no request after it (review finding 9).

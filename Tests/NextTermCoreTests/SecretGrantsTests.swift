@@ -257,6 +257,8 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         let wrapper = SecretGrant(kind: .session, binding: wrapperBinding(), made: start, session: "pid:41:1700000000.5")
         #expect(wrapper.matches(wrapperBinding { $0.warned = [:]; $0.command = ["node", "server.js"] }, session: "pid:41:1700000000.5", at: start))
         #expect(!wrapper.matches(wrapperBinding { $0.program = "claude" }, session: "pid:41:1700000000.5", at: start))
+        // A wrapper's asker carries its argv's digest, which another command changes: still the session's.
+        #expect(wrapper.matches(wrapperBinding { $0.warned = [:]; $0.asker = "wrapper:/usr/local/bin/codex:ff99" }, session: "pid:41:1700000000.5", at: start))
         #expect(!wrapper.matches(wrapperBinding { $0.agentIdentity = SecretFileIdentity(device: 1, inode: 10, size: 101, modified: 1_000) },
                                  session: "pid:41:1700000000.5", at: start))
         #expect(!grant.matches(request { $0.keys = [:] }, session: session, at: start))
@@ -273,6 +275,14 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         }
         // The exact grants end with a lock as before.
         #expect(SecretGrant(kind: .untilLock, binding: request(), made: start).ended(by: .screenLocked))
+    }
+
+    @Test func inputTypedIntoItsTabEndsASessionThere() {
+        // A wrapper's agent in a tab: its session carries the tab's run, and MCP typing into that tab ends it.
+        let inTab = SecretGrant(kind: .session, binding: request { $0.source = .wrapper; $0.asker = "wrapper:/bin/codex:ab" }, made: start,
+                                session: "tab:T5:2|pid:41:1700000000.5")
+        #expect(inTab.ended(by: .tabGotInput("T5")))
+        #expect(!inTab.ended(by: .tabGotInput("T6")))
     }
 
     @Test func onlyASessionGrantKeepsASession() {

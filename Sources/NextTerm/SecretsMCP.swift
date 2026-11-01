@@ -316,8 +316,11 @@ enum SecretsMCP {
             result["tab_id"] = tabID
             resolve(call, result)
         }
-        // The calling agent's run in its tab: "Allow for this session" binds to it.
-        ticket.session = caller.flatMap(SecretRequests.session(of:))
+        // The calling agent's own process (above the MCP bridge), with its run in its tab: "Allow for this session" binds to
+        // it, so a background job of the tab or a later agent there is another session. None without both.
+        if let caller, let bridge = facts.pid, let agent = SecretSocket.agentAbove(bridge) {
+            ticket.session = SecretRequests.session(agent: agent.pid, in: caller)
+        }
         calls[call.id] = call
         requests.add(ticket)
         MCPControl.driven.insert(ticketTab.id)
