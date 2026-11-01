@@ -117,6 +117,9 @@ extension SelfTest {
         presence.approves = true
         presence.holds = false
         let before: Date? = store.index?.entry(named: changed)?.lastSet
+        // The index keeps dates to the second (ISO 8601): a replace within the import's own second would leave the date as
+        // it was, so it waits for the next one.
+        await pause(1.1)
         let replace: SecretsStore.Action = .replace(name: changed, value: SecretBytes(utf8: secretsValue("lsv2_" + "pt_")),
                                                     writeOnly: false, origin: nil)
         var failure: String?
