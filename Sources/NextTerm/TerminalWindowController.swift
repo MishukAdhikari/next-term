@@ -1530,9 +1530,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// The window column on the left takes its width off their room in the pane after it.
     func updateInsets() {
         let column: CGFloat = windowColumnUnderLights
-        let lights: CGFloat = isFullScreen ? 8 : max(8, 78 - column)
+        let end: CGFloat = lightsEnd
+        let lights: CGFloat = isFullScreen ? 8 : max(8, end - column)
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
-        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? max(8, 70 - column) : 8
+        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? max(8, end - 8 - column) : 8
         updateWindowColumnInsets()
         let corner = sidebarTopLeft ? 8 : lights
         let editorShown = !editorArea.isHidden
@@ -1559,6 +1560,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidebar.header.onRight = sidebarOnRight
         updateUpdateButton()
     }
+
+    /// Where a bar along the window's top may start past the traffic lights (in the window), measured from its zoom button.
+    var lightsEnd: CGFloat { WindowColumnRail.lightsEnd(zoomMaxX: window?.standardWindowButton(.zoomButton)?.frame.maxX) }
 
     /// The bar along the top at the work area's right end: where the Update button goes (as the bar at
     /// the top-left corner offers back a hidden sidebar). A terminal folded to a strip beside the editor

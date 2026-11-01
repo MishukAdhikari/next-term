@@ -108,6 +108,7 @@ extension SelfTest {
         await idleBudget(app)
         await bellChecks(app, five, worktree: worktree, tree: tree)
         await calmChecks(app, five, worktree: worktree)
+        await railChecks(app, project, others: [main, worktree, home, plain])
         await unfoldedMarksChecks(app, worktree: worktree)
         await overflowChecks(app, project)
         await roomChecks(app, project)
@@ -358,9 +359,9 @@ extension SelfTest {
               budget.joined(separator: " | "))
         let button: WindowColumnButton? = five[0].windowColumn.button(for: id)
         let label: String = button?.accessibilityLabel() ?? ""
-        check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == "xCloud ▸ 7027-sso\n1 needs you"
-              && button?.accessibilityRole() == .button,
-              "window column: VoiceOver reads the badge's window and its marks, and so does its tooltip", "\(label) / \(button?.toolTip ?? "")")
+        check(label == "xCloud ▸ 7027-sso: 1 needs you" && button?.toolTip == nil && button?.accessibilityRole() == .button,
+              "window column: VoiceOver reads the rail's window and its marks; the rail has no tooltip, as the list on hover names it",
+              "\(label) / \(button?.toolTip ?? "no tooltip")")
         let quiet: WindowColumnButton? = five[0].windowColumn.button(for: five[0].indexID)
         check(quiet?.accessibilityLabel() == five[0].window?.title && quiet?.isAccessibilitySelected() == true
               && five[0].windowColumn.accessibilityLabel() == WindowColumnView.groupLabel(five[0].windowColumn.list.count)
@@ -436,7 +437,10 @@ extension SelfTest {
         guard let window = c.window else { return }
         let frame: NSRect = window.frame
         defer { window.setFrame(frame, display: true) }
-        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 240, width: frame.width, height: 240), display: true)
+        // Room for fewer places than windows: under the title bar's strip and the count, places of 24 points for all but two.
+        let windows: Int = c.windowColumn.list.count
+        let height: CGFloat = TabBarView.height + 22 + 8 + WindowColumnRail.slot * CGFloat(max(2, windows - 2))
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height), display: true)
         window.layoutIfNeeded()
         let column: WindowColumnView = c.windowColumn
         let count: Int = column.list.count
@@ -552,8 +556,9 @@ extension SelfTest {
 
     // MARK: R8 and R9: the traffic lights and ⌘B
 
-    /// On the left outside full screen: folded, a strip of title bar over its chevron, the sidebar header's inset 70 less
-    /// the column, and with the sidebar hidden (⌘B, which leaves the column where it is) the corner bar's 78 less it;
+    /// On the left outside full screen: folded, a strip of title bar over its count, nothing under the lights, the sidebar
+    /// header's inset 8 less than where the lights end (16 points past the zoom button) less the column, and with the
+    /// sidebar hidden (⌘B, which leaves the column where it is) the corner bar's start, clear of the green light, less it;
     /// unfolded, its header's words after the lights and the others at 8. In full screen it starts at the top.
     private static func insetChecks(_ app: AppDelegate, _ c: TerminalWindowController) async {
         guard let window = c.window else { return }
@@ -569,22 +574,26 @@ extension SelfTest {
         let column: WindowColumnView = c.windowColumn
         let width: CGFloat = WindowColumnWidth.folded + WindowColumnWidth.hairline
         // Its hairline starts at the strip's bottom line, so none runs between the lights.
-        let foldedLights: Bool = column.topInset == TabBarView.height && c.sidebar.headerInset == max(8, 70 - width)
-            && column.hairlineRect.minY == TabBarView.height - 1
+        let end: CGFloat = c.lightsEnd
+        let zoom: CGFloat = window.standardWindowButton(.zoomButton)?.frame.maxX ?? 0
+        // The count in its own row under the title bar's strip, so nothing of the column is under the lights.
+        let countClear: Bool = column.countFrame.minY >= TabBarView.height && column.chevronButton.isHidden
+        let foldedLights: Bool = column.topInset == TabBarView.height && c.sidebar.headerInset == max(8, end - 8 - width)
+            && column.hairlineRect.minY == TabBarView.height - 1 && countClear && end >= zoom + 16
         let where1: NSRect = column.frame
         c.toggleProjectSidebar(nil) // ⌘B
         window.layoutIfNeeded()
         let corner: CGFloat = c.editorArea.isHidden ? c.tabBar.leadingInset : c.editorArea.tabBar.leadingInset
         let stays: Bool = column.frame == where1 && !column.isHidden
-        check(foldedLights && corner == max(8, 78 - width) && stays,
+        check(foldedLights && corner == max(8, end - width) && stays,
               "window column: folded on the left, its top is title bar for the traffic lights, the sidebar header's inset and the corner bar's "
                   + "make room for the column, and ⌘B leaves the column in place",
-              "top \(column.topInset), hairline from \(column.hairlineRect.minY), sidebar header \(c.sidebar.headerInset), corner \(corner), "
-                  + "column \(where1) → \(column.frame)")
+              "top \(column.topInset), hairline from \(column.hairlineRect.minY), count \(column.countFrame), sidebar header \(c.sidebar.headerInset), "
+                  + "corner \(corner), lights end \(end) (zoom \(zoom)), column \(where1) → \(column.frame)")
         c.toggleProjectSidebar(nil)
         app.windowColumnExpanded = true
         window.layoutIfNeeded()
-        let header: Bool = column.topInset == 0 && column.headerLeading == 78 && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0
+        let header: Bool = column.topInset == 0 && column.headerLeading == end && c.sidebar.headerInset == 8 && column.hairlineRect.minY == 0
         c.toggleProjectSidebar(nil)
         window.layoutIfNeeded()
         let cornerOpen: CGFloat = c.editorArea.isHidden ? c.tabBar.leadingInset : c.editorArea.tabBar.leadingInset

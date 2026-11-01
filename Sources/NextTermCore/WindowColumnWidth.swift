@@ -23,13 +23,13 @@ public enum WindowColumnSettings {
     /// set_layout's line in the window that asks the user, for showing or hiding it in every window. `key`: the key that
     /// brings it back (View › Show Window Column's, as the user has it), or nil when it has none.
     public static func approvalLine(shown: Bool, key: String?) -> String {
-        if shown { return "The window column shows at the outer edge of every window while two or more are open: a badge for each window." }
+        if shown { return "The window column shows at the outer edge of every window while two or more are open: a dot for each window." }
         return "The window column is hidden in every window; View › Show Window Column\(keyNote(key)) or Settings › General brings it back."
     }
 
     /// set_layout's line for folding or unfolding it in every window.
     public static func approvalLine(folded: Bool) -> String {
-        folded ? "The window column folds to a badge for each window, in every window."
+        folded ? "The window column folds to its rail, a dot for each window, in every window."
             : "The window column unfolds in every window: a row for each window, with its name and its agents’ marks."
     }
 
@@ -77,13 +77,13 @@ public struct WindowColumnShown: Equatable, Sendable {
 
 /// The window column's widths, and the room a window needs for it.
 public enum WindowColumnWidth {
-    /// Folded: 28-point places, a 22-point badge in each, room for two capitals and the dot at its corner.
-    public static let folded: CGFloat = 28
+    /// Folded to its rail: 24 points, as the folded terminal's, a dot for each window (WindowColumnRail).
+    public static let folded: CGFloat = 24
     /// Unfolded: one row per window, its name, colour and marks.
     public static let expanded: CGFloat = 180
     /// Along the column's inner edge, as the sidebar's divider.
     public static let hairline: CGFloat = 1
-    /// The badge in each place.
+    /// The badge in each row of the list.
     public static let badge: CGFloat = 22
     /// The narrowest the editor and terminal beside it get, as beside the tab list.
     public static let workMinimum: CGFloat = TabListWidth.terminalMinimum
@@ -109,5 +109,29 @@ public enum WindowColumnWidth {
             return WindowColumnShown(form: .folded, width: foldedWidth, byRoom: wantsExpanded)
         }
         return WindowColumnShown(form: .hidden, width: 0, byRoom: true)
+    }
+}
+
+/// The folded column's rail and the list it shows on hover (plan 030): the window count under the traffic lights, a dot
+/// per window in its project's colour, a mark only where a window needs you or failed. Resting the pointer on it slides
+/// the list out over the content after `openDelay`; leaving the rail and the list for `closeDelay` slides it back.
+public enum WindowColumnRail {
+    /// A window's place on the rail, as a tab's on the folded terminal's.
+    public static let slot: CGFloat = 24
+    /// A window's dot.
+    public static let dot: CGFloat = 8
+    /// How long the pointer rests on the rail before the list opens: passing over it opens nothing.
+    public static var openDelay: TimeInterval = 0.35
+    /// How long the pointer is off the rail and the list before the list goes.
+    public static var closeDelay: TimeInterval = 0.3
+    /// The hovering list's width: the unfolded column's.
+    public static var listWidth: CGFloat { WindowColumnWidth.expanded }
+
+    /// Where a bar beside the traffic lights may start: `gap` points past the zoom button's right edge (in the window's
+    /// coordinates), and never before `minimum`. The lights' place changes with the macOS release, so it is measured, not
+    /// assumed; 16 points keeps the tab bar's first button (⌘B's) clear of the green light (69 on macOS 26: 85).
+    public static func lightsEnd(zoomMaxX: CGFloat?, gap: CGFloat = 16, minimum: CGFloat = 78) -> CGFloat {
+        guard let zoomMaxX, zoomMaxX > 0 else { return minimum }
+        return max(minimum, ceil(zoomMaxX + gap))
     }
 }

@@ -31,7 +31,10 @@ extension TerminalWindowController {
         }
         host.onShownChange = { [weak self] (shown: WindowColumnShown) in self?.windowColumnShownChanged(shown) }
         let column: WindowColumnView = host.column
-        column.onSelect = { (id: Int) in AppDelegate.shared.bringForward(id) }
+        column.onSelect = { [weak host] (id: Int) in
+            host?.chose() // no list slides out in the window just left
+            AppDelegate.shared.bringForward(id)
+        }
         column.onToggle = { AppDelegate.shared.toggleWindowColumnExpanded(nil) }
         column.onMore = { AppDelegate.shared.openProjectPanel(nil) }
     }
@@ -80,12 +83,18 @@ extension TerminalWindowController {
         return columnHost.shown.width
     }
 
-    /// The column's own insets for the traffic lights: folded at the top-left, a strip of title bar over its chevron;
-    /// unfolded, its header's words after them. On the right, or in full screen, it starts at the top.
+    /// The column's own insets for the traffic lights: folded at the top-left, a strip of title bar over its count, so
+    /// nothing sits under them; unfolded, its header's words after them, as the hovering list's are past the rail. On the
+    /// right, or in full screen, it starts at the top.
     func updateWindowColumnInsets() {
-        let column: WindowColumnView = columnHost.column
-        let underLights: Bool = !columnHost.columnOnRight && !isFullScreen
-        column.topInset = underLights && columnHost.shown.form == .folded ? TabBarView.height : 0
-        column.headerLeading = underLights ? 78 : 8
+        let host: WindowColumnHost = columnHost
+        let underLights: Bool = !host.columnOnRight && !isFullScreen
+        host.column.topInset = underLights && host.shown.form == .folded ? TabBarView.height : 0
+        host.column.headerLeading = underLights ? lightsEnd : 8
+        // Through self, not the host it is stored on: no cycle keeps a closed window's views.
+        host.listLeading = { [weak self] () -> CGFloat in
+            guard let self, !self.columnHost.columnOnRight, !self.isFullScreen else { return 8 }
+            return max(8, self.lightsEnd - self.columnHost.column.frame.maxX)
+        }
     }
 }

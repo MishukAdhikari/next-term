@@ -1,7 +1,7 @@
 import Foundation
 
 // The window column: a strip at every Next Term window's outer edge, on the project sidebar's side, listing each open
-// window, folded to a badge apiece or unfolded to a row apiece. Its rows come from the index of every window
+// window, folded to its rail (a dot apiece) or unfolded to a row apiece. Its rows come from the index of every window
 // (WindowIndex), the same list ⌘O, ⇧⌘U and the Dock menu read, so they agree. Values in, rows out: the views only draw
 // them, and a change to one window's entry says which row, if any, has to be drawn again.
 

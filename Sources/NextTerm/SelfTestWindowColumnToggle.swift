@@ -8,33 +8,38 @@ import NextTermCore
 /// showing it everywhere, Don't Ask Again ending it, a change of the setting taking it away, the launch's reopening and
 /// a second window in one launch offering nothing. Part of NEXTTERM_SELFTEST_ONLY=windowColumn.
 extension SelfTest {
-    /// Quiet on purpose: this window's badge sits in a darker well 2 points round it, with no ring, edged only with
-    /// Increase Contrast, which draws that badge alone again; the worktree's dot is 6 points at the badge's corner, its cut
-    /// inside the button; two capitals are set 0.7 points apart and mixed case not; a working mark in the column or ⌘O
+    /// Quiet on purpose: on the rail, this window's dot sits in a darker well 5 points round it, with no ring, edged only
+    /// with Increase Contrast, which draws that button alone again; the worktree's window, which needs you, shows its mark
+    /// in its dot's place; the list's two capitals are set 0.7 points apart and mixed case not; a working mark in the column or ⌘O
     /// never turns, while a tab's does; done is a dark ✓ on a softer green, plain green with Increase Contrast.
     static func calmChecks(_ app: AppDelegate, _ five: [TerminalWindowController], worktree: TerminalWindowController) async {
         let column: WindowColumnView = five[0].windowColumn
         guard let own = column.button(for: five[0].indexID), let marked = column.button(for: worktree.indexID) else {
             return check(false, "window column: the calm look's badges to check")
         }
-        let badge: NSRect = own.badgeForTest
-        // As the window shows it: just outside the badge, in the well, the darker colour of the tab you are in, not a
+        let badge: NSRect = own.railDotForTest
+        // As the window shows it: just outside the dot, in the well, the darker colour of the tab you are in, not a
         // light ring.
         if let window = five[0].window { _ = await bringToFront(window) }
         await pause(0.3)
-        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: badge.minX - 1, y: badge.midY))
+        let wellColor: NSColor? = shownColor(of: own, at: NSPoint(x: badge.minX - 3, y: badge.midY))
         // The terminal's own background, as the same image shows it (an image of the screen is in the display's colours,
         // not the theme's numbers): the well is that colour.
         let terminal: NSView? = five[0].activeTab?.view
         let backgroundColor: NSColor? = terminal.flatMap { shownColor(of: $0, at: NSPoint(x: $0.bounds.maxX - 30, y: $0.bounds.midY)) }
-        let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -2, dy: -2)
+        let well: Bool = own.isCurrent && own.plateForTest == badge.insetBy(dx: -5, dy: -5)
             && wellColor != nil && backgroundColor != nil && close(wellColor!, backgroundColor!)
-        let corner: NSRect = marked.badgeForTest
-        let dot: NSRect? = marked.dotFrameForTest
-        let dotPlaced: Bool = dot == NSRect(x: corner.maxX - 5, y: corner.minY - 1, width: 6, height: 6)
-            && dot.map { marked.bounds.contains($0.insetBy(dx: -2, dy: -2)) } == true
-        check(well && dotPlaced, "window column: this window's badge sits in a darker well, and a dot is 6 points at a badge's corner, its cut inside",
-              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), dot \(dot.map { "\($0)" } ?? "none") at \(corner)")
+        // The worktree's window needs you (bellChecks): its mark stands in its dot's place, the dot's size, in its button.
+        let place: NSRect = marked.railDotForTest
+        let mark: NSRect? = marked.dotFrameForTest
+        let markPlaced: Bool = marked.row?.urgent == .attention && mark == place && place.width == WindowColumnRail.dot
+            && marked.bounds.contains(place.insetBy(dx: -2, dy: -2))
+        // A window that only finished or works shows its plain dot.
+        let plainDots: Bool = column.shownButtons.filter { $0.row?.urgent != .attention && $0.row?.urgent != .failed }.allSatisfy { $0.dotFrameForTest == nil }
+        check(well && markPlaced && plainDots,
+              "window column: on the rail this window's dot sits in a darker well, a window that needs you shows its mark in its dot's place, and the others a plain dot",
+              "well \(own.plateForTest) round \(badge), coloured \(wellColor.map { "\($0)" } ?? "none") against \(backgroundColor.map { "\($0)" } ?? "none"), "
+                  + "mark \(mark.map { "\($0)" } ?? "none") at \(place) (\(marked.row?.urgent?.rawValue ?? "no mark")), plain \(plainDots)")
 
         let font = NSFont.systemFont(ofSize: 10, weight: .medium)
         func width(_ text: String) -> CGFloat { NSAttributedString(string: text, attributes: [.font: font]).size().width }
