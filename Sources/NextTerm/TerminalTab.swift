@@ -815,6 +815,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
 
     static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    /// The agent's run here may have ended: its "Allow for this session" grants end with it (SecretRequests).
+    private func sessionsMayHaveEnded() { SecretRequests.tabRunChanged(id, tab: exited ? nil : self) }
+
     #if DEBUG
     /// For the self-test: the terminal's size as its shell started (a restored pane's is its real one).
     private(set) var sizeAtStart: NSSize?
@@ -915,6 +918,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         reconnectWork?.cancel()
         reconnectWork = nil
         runEnded(exit: nil)
+        SecretRequests.tabRunChanged(id, tab: nil) // the tab goes: its agent's session grants end
         MCPControl.forget(self)
         AppDelegate.shared?.withdrawHerdrNotices(of: self)
         if localHerdr != nil { LocalHerdrWatch.shared.follow(self, false) }
@@ -1164,11 +1168,13 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         watchLocalHerdr()
         if status.integrated && !(status.running && status.kind == .command) { return }
         let before = (status.running, status.command)
+        let run = status.commandsStarted
         let wasAgent = status.running && status.kind == .agent
         let foreground = ProcessInspector.foreground(ptyFileDescriptor: view.process.childfd,
                                                      shellPid: view.process.shellPid, shellName: shellName)
         status.observe(foreground, at: Self.now)
         var changed = (status.running, status.command) != before
+        if changed || status.commandsStarted != run { sessionsMayHaveEnded() }
         if !status.integrated {
             // A prompt title ("user@host: ~/dir") is stale once a command runs, and vice versa.
             if changed { programTitle = nil }
@@ -1805,6 +1811,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             gitOutputStart = remote == nil && GitOutput.isGitCommand(expanded ?? line) ? pendingServingStart : nil
             noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
+            sessionsMayHaveEnded()
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):
@@ -1815,6 +1822,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             programTitle = nil
             runningEcho = nil
             status.commandFinished(exitCode: code, at: Self.now)
+            sessionsMayHaveEnded()
             gitCommandEnded(code)
         case .directory(let dir):
             if !dir.isEmpty { directory = dir }
@@ -1910,6 +1918,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         let reason = signal == 0 ? "exited with code \(code)" : "was ended by signal \(signal)"
         view.acceptsInput = false
         status.shellExited(code: signal == 0 ? code : 128 + signal)
+        sessionsMayHaveEnded()
         view.feed(text: "\r\n\u{1b}[2m[The shell \(reason). ⌘W closes this tab.]\u{1b}[0m\r\n")
         delegate?.tabDidChange(self)
     }
@@ -2045,7 +2054,9 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         // A herdr tab shows herdr: its state comes from herdr's agents (applyHerdr), not from what runs in front.
         if let foreground = report.foreground, remote.keep != .herdr || fellBack {
             if foreground.isShell { remoteReady = true }
+            let before = (status.running, status.commandsStarted)
             status.observe(foreground, at: Self.now)
+            if (status.running, status.commandsStarted) != before { sessionsMayHaveEnded() }
         }
         status.jobsChanged(count: report.jobs, summary: report.jobSummary)
         if let folder = report.directory, folder.hasPrefix("/") { directory = folder }

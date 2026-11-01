@@ -216,3 +216,117 @@ private func toolBinding(tab: String = "tab-2", target: String = "new") -> Secre
         #expect(limits.admit(asker: "tab-2", binding: toolBinding(), at: start) == nil)
     }
 }
+
+/// "Allow for this session": any plain request of the same agent's session for keys it holds, through a lock and a
+/// sleep, until that session ends.
+@Suite struct SecretSessionGrantTests {
+    let start = ContinuousClock.now
+    let session = "tab:T2:7"
+
+    private func request(_ change: (inout SecretBinding) -> Void = { _ in }) -> SecretBinding {
+        var binding = SecretBinding(source: .tool, asker: "T2", program: "claude", command: ["npm test"],
+                                    keys: ["OPENAI_API_KEY": "OPENAI_API_KEY", "GITHUB_TOKEN": "GH_TOKEN"], folder: "/Users/me/api",
+                                    target: "new", envDigest: "none")
+        change(&binding)
+        return binding
+    }
+
+    @Test func itAnswersAnyCommandOfItsSessionForKeysItHolds() {
+        let grant = SecretGrant(kind: .session, binding: request(), made: start, session: session)
+        #expect(grant.session == session && grant.expires == nil)
+        // Another command, folder and .env: the same session still gets it.
+        let other = request {
+            $0.command = ["npm run deploy"]
+            $0.folder = "/Users/me/web"
+            $0.envDigest = "e3b0"
+            $0.keys = ["OPENAI_API_KEY": "OPENAI_API_KEY"]
+        }
+        // Not into another tab than the one approved (here a new one): keys never land in an idle tab with no panel.
+        #expect(!grant.matches(request { $0.target = "tab-9" }, session: session, at: start))
+        #expect(grant.matches(other, session: session, at: start.advanced(by: .seconds(86_400))))
+        // Not another session, nor none, nor a request the panel would warn about.
+        #expect(!grant.matches(other, session: "tab:T2:8", at: start))
+        #expect(!grant.matches(other, session: nil, at: start))
+        #expect(!grant.matches(other, session: session, plain: false, at: start))
+        // Not a key it does not hold, nor the same key under another ENVNAME, nor another asker or agent.
+        #expect(!grant.matches(request { $0.keys = ["STRIPE_KEY": "STRIPE_KEY"] }, session: session, at: start))
+        #expect(!grant.matches(request { $0.keys = ["GITHUB_TOKEN": "GITHUB_TOKEN"] }, session: session, at: start))
+        #expect(!grant.matches(request { $0.asker = "T3" }, session: session, at: start))
+        // run_with_secrets names the command's own program, which another command may change.
+        #expect(grant.matches(request { $0.program = "make" }, session: session, at: start))
+        // A wrapper names its agent: another agent's request is not the session's.
+        let wrapper = SecretGrant(kind: .session, binding: wrapperBinding(), made: start, session: "pid:41:1700000000.5")
+        #expect(wrapper.matches(wrapperBinding { $0.warned = [:]; $0.command = ["node", "server.js"] }, session: "pid:41:1700000000.5", at: start))
+        #expect(!wrapper.matches(wrapperBinding { $0.program = "claude" }, session: "pid:41:1700000000.5", at: start))
+        // A wrapper's asker carries its argv's digest, which another command changes: still the session's.
+        #expect(wrapper.matches(wrapperBinding { $0.warned = [:]; $0.asker = "wrapper:/usr/local/bin/codex:ff99" }, session: "pid:41:1700000000.5", at: start))
+        #expect(!wrapper.matches(wrapperBinding { $0.agentIdentity = SecretFileIdentity(device: 1, inode: 10, size: 101, modified: 1_000) },
+                                 session: "pid:41:1700000000.5", at: start))
+        #expect(!grant.matches(request { $0.keys = [:] }, session: session, at: start))
+    }
+
+    @Test func aLockOrASleepLeavesItAndItsSessionsEndEndsIt() {
+        let grant = SecretGrant(kind: .session, binding: request(), made: start, session: session)
+        for event: SecretGrantEvent in [.screenLocked, .systemSleep, .sessionResigned, .displaySleep, .sessionEnded("tab:T2:6")] {
+            #expect(!grant.ended(by: event), "\(event)")
+        }
+        for event: SecretGrantEvent in [.sessionEnded(session), .quit, .revokeAll, .hourPause, .startedOver, .keyChanged("GITHUB_TOKEN"),
+                                        .askEveryUse("OPENAI_API_KEY"), .tabGotInput("T2"), .revoke(grant.id)] {
+            #expect(grant.ended(by: event), "\(event)")
+        }
+        // The exact grants end with a lock as before.
+        #expect(SecretGrant(kind: .untilLock, binding: request(), made: start).ended(by: .screenLocked))
+    }
+
+    @Test func inputTypedIntoItsTabEndsASessionThere() {
+        // A wrapper's agent in a tab: its session carries the tab's run, and MCP typing into that tab ends it.
+        let inTab = SecretGrant(kind: .session, binding: request { $0.source = .wrapper; $0.asker = "wrapper:/bin/codex:ab" }, made: start,
+                                session: "tab:T5:2|pid:41:1700000000.5")
+        #expect(inTab.ended(by: .tabGotInput("T5")))
+        #expect(!inTab.ended(by: .tabGotInput("T6")))
+    }
+
+    @Test func aSessionIsItsSourceItsProcessAndItsAgent() {
+        let id = "tab:T5:2|pid:41:1700000000.5"
+        let tool = SecretGrant(kind: .session, binding: request(), made: start, session: id)
+        let wrapper = SecretGrant(kind: .session, binding: wrapperBinding { $0.warned = [:] }, made: start, session: id)
+        // The same request but from the other door, nothing else changed: not answered.
+        #expect(!tool.matches(request { $0.source = .wrapper }, session: id, at: start))
+        #expect(!wrapper.matches(wrapperBinding { $0.warned = [:]; $0.source = .tool }, session: id, at: start))
+        // The same pid started again (another start time) is another session.
+        #expect(!tool.matches(request(), session: "tab:T5:2|pid:41:1700000001.0", at: start))
+        // Another agent path or script.
+        #expect(!wrapper.matches(wrapperBinding { $0.warned = [:]; $0.agentPath = "/opt/codex" }, session: id, at: start))
+        #expect(!wrapper.matches(wrapperBinding { $0.warned = [:]; $0.agentScript = "/tmp/other.js" }, session: id, at: start))
+    }
+
+    @Test func theExactGrantsIgnoreTheSessionArguments() {
+        let timed = SecretGrant(kind: .fifteenMinutes, binding: request(), made: start, session: "tab:T2:7")
+        #expect(timed.matches(request(), session: "tab:T9:1", plain: false, at: start))
+        #expect(!timed.matches(request { $0.command = ["make"] }, session: "tab:T2:7", at: start))
+        let untilLock = SecretGrant(kind: .untilLock, binding: request(), made: start)
+        #expect(untilLock.matches(request(), session: nil, plain: false, at: start))
+    }
+
+    @Test func onlyASessionGrantKeepsASession() {
+        #expect(SecretGrant(kind: .fifteenMinutes, binding: request(), made: start, session: session).session == nil)
+        var book = SecretGrantBook()
+        book.add(SecretGrant(kind: .session, binding: request(), made: start, session: session))
+        #expect(book.take(request { $0.command = ["make"] }, session: session, at: start) != nil)
+        #expect(book.take(request { $0.command = ["make"] }, at: start) == nil)
+        #expect(book.end(.sessionEnded(session)).count == 1 && book.grants.isEmpty)
+    }
+
+    @Test func itIsOfferedOnlyForAFollowableLocalSessionAndKeysThatDoNotAskEveryTime() {
+        #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: false, asksEveryUse: false, hasSession: true)
+                == [.once, .fifteenMinutes, .session])
+        // The widest last.
+        #expect(SecretApprovalChoices.offered(isWrapper: true, isRemote: false, asksEveryUse: false, hasSession: true)
+                == [.once, .fifteenMinutes, .untilLock, .session])
+        #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: false, asksEveryUse: false) == [.once, .fifteenMinutes])
+        #expect(SecretApprovalChoices.offered(isWrapper: false, isRemote: true, asksEveryUse: false, hasSession: true) == [.once])
+        #expect(SecretApprovalChoices.offered(isWrapper: true, isRemote: false, asksEveryUse: true, hasSession: true) == [.once])
+        #expect(SecretApprovalChoice.session.approval == .session && SecretApprovalChoice.session.grantKind == .session)
+        #expect(SecretAudit.Approval.session.rawValue == "this session")
+    }
+}

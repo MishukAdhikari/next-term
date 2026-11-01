@@ -316,6 +316,13 @@ enum SecretsMCP {
             result["tab_id"] = tabID
             resolve(call, result)
         }
+        // The calling agent's own process (above the MCP bridge), with its run in its tab: "Allow for this session" binds to
+        // it, so a background job of the tab or a later agent there is another session. None without both.
+        // Only when that agent is the one in front of its tab, which the panel names, by its process: an agent another one
+        // started (a codex its Bash runs) gets no session choice; one started by an alias, a script or npx does.
+        if let caller, let bridge = facts.pid, let agent = SecretSocket.agentAbove(bridge), SecretSocket.isFrontAgent(agent, in: caller) {
+            ticket.session = SecretRequests.session(agent: agent.pid, in: caller)
+        }
         calls[call.id] = call
         requests.add(ticket)
         MCPControl.driven.insert(ticketTab.id)
@@ -447,6 +454,7 @@ enum SecretsMCP {
             case .once, .remote: approved = "once"
             case .fifteenMinutes: approved = "for 15 minutes"
             case .untilLock: approved = "until the Mac locks"
+            case .session: approved = "for this session"
             case .grant: approved = "by an earlier approval"
             }
             return ["status": Status.started.rawValue, "approved": approved,

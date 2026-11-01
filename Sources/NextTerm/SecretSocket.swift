@@ -173,6 +173,12 @@ enum SecretSocket {
         let program = ((request.argv.first ?? "") as NSString).lastPathComponent
         let asking = SecretRequests.Request(binding: binding, keys: keys, command: shown, argv: request.argv, folder: request.directory,
                                             warnings: warnings, agentWords: nil, askedBy: facts, program: program, isRemote: false)
+        // The agent above, followed to its exit: "Allow for this session" binds to it.
+        // Only the agent in front of its tab (tmux and herdr tabs have none: their agents run under the host's server).
+        asking.session = agent.flatMap { (found: Agent) -> String? in
+            guard let tab, found.pid > 1, isFrontAgent(found, in: tab) else { return nil }
+            return SecretRequests.session(agent: found.pid, in: tab)
+        }
         let waiting = SecretRequests.shared.ask(asking, left: { waiter.hasLeft }) { decision in
             waiter.set(answer(for: decision, request: request))
         }
@@ -284,6 +290,8 @@ enum SecretSocket {
     struct Agent {
         var name: String
         var program: String
+        /// Its process, for its session (SecretRequests.session(ofProcess:)).
+        var pid: pid_t = 0
         /// Its executable's path, and its script when it runs under an interpreter.
         var path: String
         var script: String?
@@ -295,20 +303,43 @@ enum SecretSocket {
         for _ in 0..<parentsWalked {
             // Next Term itself is the top of its tabs: what started it is not the tab's agent.
             guard let process = current, process > 1, process != getpid() else { return nil }
-            if let (path, arguments) = ProcessInspector.commandLine(of: process) {
-                let name = ProcessInspector.processName(process) ?? (path as NSString).lastPathComponent
-                let foreground = ForegroundProcess(isShell: false, name: name, arguments: arguments, executablePath: path)
-                if CommandClassifier.kind(of: foreground) == .agent {
-                    let program = CommandClassifier.programName(of: foreground)
-                    let base = ((arguments.first ?? path) as NSString).lastPathComponent
-                    let interpreted = ["node", "bun", "deno", "python", "python3", "ruby"].contains(base)
-                    let script = interpreted ? arguments.dropFirst().first { !$0.hasPrefix("-") } : nil
-                    return Agent(name: AgentName.of(program: program), program: program, path: path, script: script)
-                }
-            }
+            if let agent = agent(at: process) { return agent }
             current = parent(of: process)
         }
         return nil
+    }
+
+    /// `process` as an agent, when it classifies as one.
+    static func agent(at process: pid_t) -> Agent? {
+        guard let (path, arguments) = ProcessInspector.commandLine(of: process) else { return nil }
+        let name = ProcessInspector.processName(process) ?? (path as NSString).lastPathComponent
+        let foreground = ForegroundProcess(isShell: false, name: name, arguments: arguments, executablePath: path)
+        guard CommandClassifier.kind(of: foreground) == .agent else { return nil }
+        let program = CommandClassifier.programName(of: foreground)
+        let base = ((arguments.first ?? path) as NSString).lastPathComponent
+        let interpreted = ["node", "bun", "deno", "python", "python3", "ruby"].contains(base)
+        let script = interpreted ? arguments.dropFirst().first { !$0.hasPrefix("-") } : nil
+        return Agent(name: AgentName.of(program: program), program: program, pid: process, path: path, script: script)
+    }
+
+    /// Whether `agent` is the agent in front of `tab`, the one its panel names: the leader of the tab's foreground process
+    /// group, or below that leader with no agent of another program between them or as the leader (an alias, a script or
+    /// npx starting it). An agent another one started (a codex its Bash runs) is not.
+    static func isFrontAgent(_ agent: Agent, in tab: TerminalTab) -> Bool {
+        guard tab.remote == nil else { return false }
+        let leader: pid_t = tcgetpgrp(tab.view.process.childfd)
+        guard leader > 1 else { return false }
+        // A member of a pipeline in front (`cat prompt | claude`: zsh makes cat the leader), started by the tab's shell
+        // itself. Not just any member of the group: an agent another one starts shares its group, but not its parent.
+        if getpgid(agent.pid) == leader, parent(of: agent.pid) == tab.view.process.shellPid { return true }
+        var current: pid_t = agent.pid
+        for _ in 0...parentsWalked {
+            if current == leader { return true }
+            guard let up = parent(of: current), up > 1 else { return false }
+            if let between = Self.agent(at: up), between.program != agent.program { return false }
+            current = up
+        }
+        return false
     }
 
     static func parent(of pid: pid_t) -> pid_t? {

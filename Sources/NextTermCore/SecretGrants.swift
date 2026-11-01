@@ -110,13 +110,18 @@ public enum SecretGrantEvent: Equatable, Sendable {
     /// A key set to "Ask for Touch ID every time it's used" (`SecretApprovalChoices`): no lasting grant may hold it.
     /// A one-use grant is one Allow once's single use, kept for its wrapper's restart, so it stays.
     case askEveryUse(String)
+    /// An agent's session ended (`SecretGrant.session`): the agent process exited, or its run in a tab ended or the tab
+    /// closed. The grants made for that session end.
+    case sessionEnded(String)
 }
 
 /// "Allow for 15 minutes", "Allow this command until the Mac locks", or one use within 2 minutes, for a wrapper that
-/// left during Touch ID: the same request again, and only that, starts with no panel.
+/// left during Touch ID: the same request again, and only that, starts with no panel. "Allow for this session" is wider:
+/// any request of the same agent's session (`session`) for keys it holds, with no warning on it, until that session ends,
+/// whatever the command; a lock or a sleep does not end it (the owner's choice, 2026-11-01).
 public struct SecretGrant: Identifiable, Sendable {
     public enum Kind: String, Sendable {
-        case fifteenMinutes, untilLock, oneUse
+        case fifteenMinutes, untilLock, oneUse, session
     }
 
     public static let fifteenMinutes: Duration = .seconds(15 * 60)
@@ -129,13 +134,18 @@ public struct SecretGrant: Identifiable, Sendable {
     /// When it was made, for display.
     public let madeAt: Date
     public private(set) var usesLeft: Int?
+    /// A session grant's agent session: "tab:<tab id>:<the agent's run there>" for an agent in a tab, or
+    /// "pid:<pid>:<its start time>" for the agent above a wrapper, so a reused pid never inherits it. Nil for the others.
+    public let session: String?
 
-    public init(kind: Kind, binding: SecretBinding, made: ContinuousClock.Instant, madeAt: Date = Date(), id: String = UUID().uuidString) {
+    public init(kind: Kind, binding: SecretBinding, made: ContinuousClock.Instant, madeAt: Date = Date(), id: String = UUID().uuidString,
+                session: String? = nil) {
         self.id = id
         self.kind = kind
         self.binding = binding
         self.made = made
         self.madeAt = madeAt
+        self.session = kind == .session ? session : nil
         usesLeft = kind == .oneUse ? 1 : nil
     }
 
@@ -146,7 +156,7 @@ public struct SecretGrant: Identifiable, Sendable {
         switch kind {
         case .fifteenMinutes: return made.advanced(by: Self.fifteenMinutes)
         case .oneUse: return made.advanced(by: Self.oneUseWindow)
-        case .untilLock: return nil
+        case .untilLock, .session: return nil
         }
     }
 
@@ -162,20 +172,40 @@ public struct SecretGrant: Identifiable, Sendable {
         return usesLeft == 0
     }
 
-    /// Whether it answers `binding` at `now`: identical in every field, not expired, not used up.
-    public func matches(_ binding: SecretBinding, at now: ContinuousClock.Instant) -> Bool {
-        !isExpired(at: now) && binding == self.binding
+    /// Whether it answers `binding` at `now`: identical in every field, not expired, not used up. A session grant answers
+    /// instead a request of its own session (`session`) with no warnings (`plain`: the panel would warn about it, so it
+    /// shows), from the same door, asker and agent, for keys it holds under the same names, and for run_with_secrets the
+    /// same target tab, whatever the command or folder.
+    public func matches(_ binding: SecretBinding, session: String? = nil, plain: Bool = true, at now: ContinuousClock.Instant) -> Bool {
+        guard !isExpired(at: now) else { return false }
+        guard kind == .session else { return binding == self.binding }
+        guard let session, session == self.session, plain else { return false }
+        let mine: SecretBinding = self.binding
+        // A wrapper's `program` is its agent's, so it must be the same; run_with_secrets' is the command's own program
+        // (npm, make), which any command of the session may change: its tab and run name the agent there.
+        // A wrapper's asker carries its argv's digest, which any command changes: its agent (path, file, script) and its
+        // process (the session) name it instead.
+        // run_with_secrets' target too (a new tab, or the one tab it ran in): keys never land in another existing tab.
+        guard binding.source == mine.source, binding.source == .wrapper || binding.asker == mine.asker,
+              binding.source == .tool || binding.program == mine.program, binding.target == mine.target,
+              binding.agentPath == mine.agentPath, binding.agentIdentity == mine.agentIdentity, binding.agentScript == mine.agentScript,
+              !binding.keys.isEmpty else { return false }
+        return binding.keys.allSatisfy { (name: String, envName: String) -> Bool in mine.keys[name] == envName }
     }
 
     /// Whether `event` ends it.
     public func ended(by event: SecretGrantEvent) -> Bool {
         switch event {
-        case .screenLocked, .systemSleep, .sessionResigned, .quit, .revokeAll, .hourPause, .startedOver: return true
+        // A session grant lasts through a lock, a sleep and a switch of users, as the owner chose: its session's end ends it.
+        case .screenLocked, .systemSleep, .sessionResigned: return kind != .session
+        case .quit, .revokeAll, .hourPause, .startedOver: return true
+        case .sessionEnded(let ended): return session == ended
         case .displaySleep: return false
         case .revoke(let id): return id == self.id
         case .keyChanged(let name): return binding.keys[name] != nil
         case .askEveryUse(let name): return kind != .oneUse && binding.keys[name] != nil
-        case .tabGotInput(let tab): return binding.source == .tool && binding.asker == tab
+        // A session in that tab too, a wrapper's agent's included ("tab:<id>:<run>|pid:…").
+        case .tabGotInput(let tab): return (binding.source == .tool && binding.asker == tab) || (session?.hasPrefix("tab:\(tab):") ?? false)
         }
     }
 
@@ -217,9 +247,11 @@ public struct SecretGrantBook: Sendable {
         grants.append(grant)
     }
 
-    /// The grant that answers `binding` now, used once (a one-use grant is then spent), or nil.
-    public mutating func take(_ binding: SecretBinding, at now: ContinuousClock.Instant) -> SecretGrant? {
-        guard let index = grants.firstIndex(where: { $0.matches(binding, at: now) }) else { return nil }
+    /// The grant that answers `binding` now, used once (a one-use grant is then spent), or nil. `session` and `plain`: the
+    /// request's agent session and whether it carries no warnings, for a session grant.
+    public mutating func take(_ binding: SecretBinding, session: String? = nil, plain: Bool = true,
+                              at now: ContinuousClock.Instant) -> SecretGrant? {
+        guard let index = grants.firstIndex(where: { $0.matches(binding, session: session, plain: plain, at: now) }) else { return nil }
         grants[index].use()
         return grants[index]
     }

@@ -510,9 +510,22 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         bottom.widthAnchor.constraint(equalTo: allowedBox.widthAnchor).isActive = true
     }
 
-    /// "Codex: GITHUB_TOKEN for npx -y … in api, 12 min".
+    /// "Codex: GITHUB_TOKEN for npx -y … in api, 12 min"; a session's: "Claude Code's session: OPENAI_API_KEY for any
+    /// command, until it ends".
     static func grantText(_ grant: SecretGrant, now: ContinuousClock.Instant = .now) -> String {
         let binding = grant.binding
+        if grant.kind == .session {
+            // A wrapper names its agent; run_with_secrets names the command's program, so its tab says whose session it is.
+            let tabID: String? = grant.session.flatMap { $0.hasPrefix("tab:") ? $0.split(separator: ":").dropFirst().first.map(String.init) : nil }
+            let tab: TerminalTab? = tabID.flatMap { id in AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString == id } }
+            // A wrapper names its agent; a run_with_secrets session's is the one in front of its tab (its tab closing ends it).
+            let front: String? = tab.flatMap { $0.status.running && $0.status.kind == .agent ? AgentName.of(program: $0.status.program) : nil }
+            let agent: String = binding.source == .wrapper && !binding.program.isEmpty ? AgentName.of(program: binding.program) : front ?? "The agent"
+            let place: String = tab.map { " in \u{201C}\(SecretApprovalPanel.sanitized($0.title, limit: 60))\u{201D}" } ?? ""
+            // Which door it answers: run_with_secrets' commands, or the servers nxtrm secret run starts.
+            let door: String = binding.source == .wrapper ? "for any server it starts with nxtrm secret run" : "for any command it runs through Next Term"
+            return "\(agent)\u{2019}s session\(place): \(SecretRun.keysText(binding.names)) \(door), until the session ends"
+        }
         let who = binding.program.isEmpty ? "A command" : AgentName.of(program: binding.program)
         let command = SecretApprovalPanel.sanitized(binding.command.joined(separator: " "), limit: 80)
         let folder = (binding.folder as NSString).lastPathComponent

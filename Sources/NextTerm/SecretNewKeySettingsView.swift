@@ -26,7 +26,8 @@ enum SecretNewKeyDefaults {
     /// A key's own box, in Add… and Edit….
     static let keyNeverShowTitle = "Never show this key"
     static let keyAsksTitle = "Ask for Touch ID every time it\u{2019}s used"
-    static let keyAsksHelp = "When it\u{2019}s off, you can allow a command to use it for 15 minutes, or until the Mac locks."
+    static let keyAsksHelp = "When it\u{2019}s off, you can allow a command to use it for 15 minutes or until the Mac locks, "
+        + "or an agent\u{2019}s session to use it until the agent exits."
     /// The list's lock mark.
     static let neverShownHelp = "Never shown"
 }
@@ -41,7 +42,8 @@ final class SecretNewKeySettingsView: NSStackView {
     static let neverShowHelp = "Ticks \u{201C}Never show this key\u{201D} when you add a key, when an agent asks you for one, "
         + "and on each row of an import. Commands you allow still get them."
     static let asksTitle = "Ask for Touch ID every time they\u{2019}re used"
-    static let asksHelp = "Each use of a key asks again, with no approval for 15 minutes or until the Mac locks. Untick it for "
+    static let asksHelp = "Each use of a key asks again, with no approval for 15 minutes, until the Mac locks or for an agent\u{2019}s "
+        + "session. Untick it for "
         + "one key in its Edit\u{2026} sheet."
 
     private(set) var neverShowBox = NSButton(checkboxWithTitle: SecretNewKeySettingsView.neverShowTitle, target: nil, action: nil)

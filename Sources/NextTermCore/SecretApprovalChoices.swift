@@ -6,7 +6,7 @@ import Foundation
 
 /// How long an approval lasts, as the panel's "How long" offers it.
 public enum SecretApprovalChoice: String, CaseIterable, Hashable, Sendable {
-    case once, fifteenMinutes, untilLock
+    case once, fifteenMinutes, untilLock, session
 
     /// The audit log's word for it.
     public var approval: SecretAudit.Approval {
@@ -14,6 +14,7 @@ public enum SecretApprovalChoice: String, CaseIterable, Hashable, Sendable {
         case .once: return .once
         case .fifteenMinutes: return .fifteenMinutes
         case .untilLock: return .untilLock
+        case .session: return .session
         }
     }
 
@@ -23,17 +24,22 @@ public enum SecretApprovalChoice: String, CaseIterable, Hashable, Sendable {
         case .once: return nil
         case .fifteenMinutes: return .fifteenMinutes
         case .untilLock: return .untilLock
+        case .session: return .session
         }
     }
 }
 
 public enum SecretApprovalChoices {
     /// The choices offered, in the panel's order. Allow once always; Allow for 15 minutes for a request made on this
-    /// Mac; Allow this command until the Mac locks for `nxtrm secret run`'s (`isWrapper`). Only Allow once for a remote
-    /// connection, and while any key the request names asks every time (`asksEveryUse`).
-    public static func offered(isWrapper: Bool, isRemote: Bool, asksEveryUse: Bool) -> [SecretApprovalChoice] {
+    /// Mac; Allow for this session for an agent's session Next Term can follow (`hasSession`); Allow this command until
+    /// the Mac locks for `nxtrm secret run`'s (`isWrapper`). Only Allow once for a remote connection, and while any key
+    /// the request names asks every time (`asksEveryUse`).
+    public static func offered(isWrapper: Bool, isRemote: Bool, asksEveryUse: Bool, hasSession: Bool = false) -> [SecretApprovalChoice] {
         guard !isRemote, !asksEveryUse else { return [.once] }
-        return isWrapper ? [.once, .fifteenMinutes, .untilLock] : [.once, .fifteenMinutes]
+        // Allow for this session when the request comes from an agent's session Next Term can follow to its end: the
+        // widest, so last.
+        let session: [SecretApprovalChoice] = hasSession ? [.session] : []
+        return (isWrapper ? [.once, .fifteenMinutes, .untilLock] : [.once, .fifteenMinutes]) + session
     }
 
     /// The keys among `names` that ask every time, in their order: each one `index` says so of (a key saved before
@@ -54,7 +60,7 @@ public enum SecretApprovalChoices {
     /// key's box ticked in another copy of Next Term during Touch ID makes no grant, so the line says Allow once.
     public static func recorded(_ approval: SecretAudit.Approval?, names: [String],
                                 in index: SecretVault.Index?) -> SecretAudit.Approval? {
-        guard approval == .fifteenMinutes || approval == .untilLock else { return approval }
+        guard approval == .fifteenMinutes || approval == .untilLock || approval == .session else { return approval }
         return askingEveryUse(names, in: index).isEmpty ? approval : .once
     }
 

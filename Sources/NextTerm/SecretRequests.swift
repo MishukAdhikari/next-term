@@ -11,11 +11,15 @@ import NextTermCore
 /// - An identical request (the same binding as one waiting, or as a pending card) takes over that panel or card. It
 ///   does not count and does not queue. Otherwise up to 5 wait, and more get `busy`. "Allow once" there still starts one
 ///   command: the first caller still waiting uses it, and the others hear it was used already.
-/// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes" and
-///   "Allow this command until the Mac locks" keep copies of exactly those keys' values in a grant.
-/// - Grants end on a lock, a sleep, the session resigning, Revoke, a key's change, the hour pause, and for
-///   `run_with_secrets` when its asking tab gets input from MCP. They also end on their own: after 15 minutes, and a
-///   one-use grant at its use or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
+/// - Allow asks `SecretsStore` to use the keys, which asks for Touch ID or the password. "Allow for 15 minutes",
+///   "Allow this command until the Mac locks" and "Allow for this session" keep copies of exactly those keys' values in a
+///   grant.
+/// - Grants other than a session grant end on a lock, a sleep and the session resigning. Every grant ends on Revoke, a
+///   key's change or its asking every time, the hour pause, quit, and for `run_with_secrets` when its asking tab gets
+///   input from MCP. A session grant lasts through a lock, a sleep and a switch of users, and ends with its session: the
+///   agent process exits, its run in its tab ends or the tab closes, or MCP or another agent types into that tab. Agents
+///   in tmux or herdr, which run under the host's server rather than the tab's shell, get no session choice. Grants also end on their own: after 15 minutes, and a one-use grant at its use
+///   or after 2 minutes, by a timer, with no request after them. Values are dropped with them.
 @MainActor
 final class SecretRequests {
     /// A key's last use, before it has one.
@@ -112,6 +116,9 @@ final class SecretRequests {
         /// A title of its own (store_secret's), instead of "… asks to run …".
         var titleOverride: String?
         var kind: Kind = .use
+        /// The asking agent's session, when Next Term can follow it to its end (SecretGrant.session): what "Allow for this
+        /// session" binds to. Nil offers no such choice.
+        var session: String?
         let made: ContinuousClock.Instant
         /// A wrapper request whose wrapper stopped waiting: a pending card.
         fileprivate(set) var gone = false
@@ -217,7 +224,9 @@ final class SecretRequests {
         let now = now()
         expire(at: now)
         endGrantsAskingEveryUse() // a key that asks every time is never answered by a lasting grant
-        if request.isUse, !request.isRemote, let grant = book.take(request.binding, at: now), let values = held[grant.id] {
+        if request.isUse, !request.isRemote,
+           let grant = book.take(request.binding, session: request.session, plain: request.warnings.isEmpty, at: now),
+           let values = held[grant.id] {
             limits.record(.answeredByGrant, asker: request.asker, binding: request.binding, at: now)
             expire(at: now) // a one-use grant is over now, and its values go now
             audit(.use, request, approval: .grant, outcome: "allowed")
@@ -232,7 +241,8 @@ final class SecretRequests {
             return nil
         }
         let id = UUID()
-        if let waiting = queue.first(where: { $0.binding == request.binding && !$0.isAnswered }) {
+        // Of the same session too: another agent's identical request never rides this one's "Allow for this session".
+        if let waiting = queue.first(where: { $0.binding == request.binding && $0.session == request.session && !$0.isAnswered }) {
             limits.record(.tookOver, asker: request.asker, binding: request.binding, at: now)
             waiting.replies.append((id, reply, left))
             if waiting.gone {
@@ -342,6 +352,7 @@ final class SecretRequests {
             !request.isAnswered && request.importAsk?.wasOpened != true
         }
         guard showing == nil, let next else { return }
+        if settledWhileQueued(next) { return } // finish() shows the one after it
         if let ask = next.importAsk {
             return ask.open(ended: { [weak self, weak next] (end: SecretImportAsk.End) in
                 guard let self, let next else { return }
@@ -399,8 +410,7 @@ final class SecretRequests {
             agentWords: request.agentWords, askedBy: request.askedBy, argv: request.argv, isWrapper: request.isWrapper,
             isRemote: request.isRemote, notice: request.notice, waiting: max(0, queue.count - 1))
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: store.index)
-        content.choices = SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote,
-                                                        asksEveryUse: !asking.isEmpty)
+        content.choices = offered(request) // one source for the panel's choices and the Allow's
         content.askingEveryUse = request.isRemote ? [] : asking
         if !request.isUse {
             content.offersHowLong = false
@@ -414,8 +424,8 @@ final class SecretRequests {
     private func allow(_ request: Request, how: How) {
         guard !request.isAnswered, let panel = request.panel else { return }
         if case .store(let value) = request.kind { return saveStored(request, value: value, panel: panel) }
-        // A key's box ticked since the panel showed takes the lasting choices away.
-        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
+        // A key's box ticked since the panel showed takes the lasting choices away; a session over by now, its own.
+        let how: How = Self.stillOffered(how, request, offered: offered(request))
         panel.setBusy(true)
         let reason = SecretReason.use(request.names, program: request.program, folder: request.folder)
         let facts = SecretsStore.Facts(who: Self.who(request), command: request.command, folder: request.folder, approval: how.approval)
@@ -437,20 +447,28 @@ final class SecretRequests {
         // "Allow once" goes to one caller. One that left in the moment before, its leaving not heard here yet, is let go
         // now as its leaving would have been: the use passes to the next caller, or a wrapper's one-use grant is made.
         // Asked again of the vault this unlock checked: a key ticked to ask every time gets no lasting grant.
-        let how: How = SecretApprovalChoices.kept(how, offered: offered(request))
+        // A session that ended during Touch ID is Allow once here too: one caller, no grant, "once" in the answer; the use's
+        // line, written as Touch ID ended, said this session, so a line after it says what was allowed.
+        let asked: How = how
+        let how: How = Self.stillOffered(how, request, offered: offered(request))
         if how == .once { letGo(callersLeftOf: request) }
         guard !request.isAnswered else { return }
+        // Its session over, not a key ticked to ask every time: no grant, which a grant line says (not a second use).
+        if asked == .session, how == .once, SecretApprovalChoices.kept(.session, offered: offered(request)) == .session {
+            audit(.grant, request, approval: .once, outcome: "not made: its session ended during Touch ID, so allowed once")
+        }
         let now = now()
         var kind = how.grantKind
         // The wrapper left while the user was in the Touch ID sheet after "Allow once": a one-use grant for 2 minutes.
         let stoppedDuringApproval = request.isWrapper && request.gone && how == .once
         if stoppedDuringApproval { kind = .oneUse }
-        if let kind, !request.isRemote {
-            let grant = SecretGrant(kind: kind, binding: request.binding, made: now)
+        if let kind, !request.isRemote, kind != .session || request.session != nil {
+            let grant = SecretGrant(kind: kind, binding: request.binding, made: now, session: request.session)
             book.add(grant)
             held[grant.id] = copies(values)
             audit(.grant, request, approval: how.approval, outcome: kind.rawValue)
             endWhenDue(grant)
+            if let session = grant.session { followSession(session) }
         }
         if stoppedDuringApproval {
             request.isAnswered = true
@@ -637,6 +655,8 @@ final class SecretRequests {
         let program: String
         let isRemote: Bool
         let notice: String?
+        /// The calling agent's session in its tab (SecretRequests.session(of:)), for "Allow for this session".
+        var session: String?
         fileprivate(set) var typedAt: ContinuousClock.Instant?
         fileprivate(set) var used = false
         /// The tool call's side: told the decision once, or `.notStarted`.
@@ -752,6 +772,7 @@ final class SecretRequests {
                              warnings: warnings, agentWords: ticket.agentWords, askedBy: ticket.askedBy, program: ticket.program,
                              isRemote: ticket.isRemote)
         asking.notice = ticket.notice
+        asking.session = ticket.session
         // The wrapper sent no names: its answer is built from the ticket's.
         var asked = request
         asked.names = ticket.names
@@ -788,7 +809,145 @@ final class SecretRequests {
     /// The "How long" choices `request` gets now: only Allow once while a key it names asks for Touch ID every time.
     func offered(_ request: Request) -> [How] {
         let asking: [String] = SecretApprovalChoices.askingEveryUse(request.names, in: SecretsStore.shared.index)
-        return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty)
+        return SecretApprovalChoices.offered(isWrapper: request.isWrapper, isRemote: request.isRemote, asksEveryUse: !asking.isEmpty,
+                                             hasSession: request.session != nil)
+    }
+
+    /// A use that waited behind an identical request of another session: a grant that answers it, made meanwhile, answers
+    /// it now, and a decline meanwhile that paused it refuses it, as either would have had it joined that panel.
+    private func settledWhileQueued(_ request: Request) -> Bool {
+        guard request.isUse, !request.isRemote, request.importAsk == nil, request.panel == nil else { return false }
+        // Callers who left are let go first; a pending card nobody waits for keeps its own way (its card, its one use).
+        letGo(callersLeftOf: request)
+        guard !request.isAnswered, !request.gone, !request.replies.isEmpty else { return false }
+        // As ask() checks before a grant answers: the vault as it is now, grants over, keys that ask every time.
+        SecretsStore.shared.reloadIfChanged()
+        let now = now()
+        expire(at: now)
+        endGrantsAskingEveryUse()
+        if let grant = book.take(request.binding, session: request.session, plain: request.warnings.isEmpty, at: now),
+           let values = held[grant.id] {
+            expire(at: now) // a one-use grant is over now, and its values go now
+            audit(.use, request, approval: .grant, outcome: "allowed")
+            // A one-use grant starts one command: its first caller's, the others hearing it was used already.
+            let how: SecretAudit.Approval = grant.kind == .oneUse ? .once : .grant
+            finish(request, outcome: .answeredByGrant, decision: .allowed(copies(values), how: how))
+            return true
+        }
+        // A decline meanwhile (its pause, Decline and Stop Asking) or the hour pause: refused as it would be now. The
+        // counts are not checked again: they counted it when it asked.
+        if let refusal = limits.admit(asker: request.asker, binding: request.binding, at: now) {
+            switch refusal {
+            case .paused, .stopped, .declining:
+                audit(.refused, request, outcome: Self.word(refusal))
+                finish(request, outcome: .refusedByLimits, decision: .refused(refusal))
+                return true
+            case .busy, .limited:
+                return false
+            }
+        }
+        return false
+    }
+
+    // MARK: sessions
+
+    /// `how` as it still holds: the lasting choices gone with a key's box ticked since, and Allow for this session gone
+    /// with a session that ended while the panel was up, both to Allow once.
+    static func stillOffered(_ how: How, _ request: Request, offered: [How]) -> How {
+        let kept: How = SecretApprovalChoices.kept(how, offered: offered)
+        guard kept == .session else { return kept }
+        return request.session.map(isLive) == true ? .session : .once
+    }
+
+    /// An agent's run in its tab: the tab and the run's number there, while an agent runs in front of it. Nil otherwise.
+    static func session(of tab: TerminalTab) -> String? {
+        guard !tab.exited, tab.status.running, tab.status.kind == .agent else { return nil }
+        return "tab:\(tab.id.uuidString):\(tab.status.commandsStarted)"
+    }
+
+    /// What "Allow for this session" binds to: the agent process itself (`pid` and its start time, so a reused pid is
+    /// another session, and a later agent on the same command line too) with its run in its tab
+    /// ("tab:<id>:<run>|pid:<pid>:<start>"), so the grant ends with whichever ends first, and with input MCP types there.
+    /// Only in a tab: an agent outside them (an editor's host, which runs many conversations in one process) gets none,
+    /// as does one whose tab shows no agent in front.
+    static func session(agent pid: pid_t, in tab: TerminalTab?) -> String? {
+        guard let tab, let run = session(of: tab), let process = session(ofProcess: pid) else { return nil }
+        return run + "|" + process
+    }
+
+    /// Whether `session` is still going: its agent process the same one, and its run in its tab the same.
+    static func isLive(_ session: String) -> Bool {
+        for part in session.split(separator: "|").map(String.init) {
+            let fields = part.split(separator: ":")
+            guard fields.count >= 3 else { return false }
+            if fields[0] == "pid" {
+                guard let pid = pid_t(fields[1]), Self.session(ofProcess: pid) == part else { return false }
+            } else if fields[0] == "tab" {
+                let tab = AppDelegate.shared.controllers.flatMap(\.tabs).first { $0.id.uuidString == String(fields[1]) }
+                guard let tab, Self.session(of: tab) == part else { return false }
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// The agent process above a wrapper: its pid with its start time, so a pid used again by another process is
+    /// another session.
+    static func session(ofProcess pid: pid_t) -> String? {
+        guard pid > 1, isRunning(pid), let started = LockHolder.startTime(of: pid) else { return nil }
+        return "pid:\(pid):\(started.timeIntervalSince1970)"
+    }
+
+    /// Whether `pid` runs: there, and not a zombie its parent has yet to reap (an agent that has exited).
+    static func isRunning(_ pid: pid_t) -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
+        return info.kp_proc.p_stat != SZOMB
+    }
+
+    /// A tab's command started or ended, its shell ended or the tab closed (`tab` nil): the session grants of an agent
+    /// run there that is over end, and their values with them. Cheap with none.
+    func tabRunChanged(_ id: UUID, tab: TerminalTab?) {
+        guard book.grants.contains(where: { $0.kind == .session }) else { return }
+        let prefix = "tab:\(id.uuidString):"
+        let live: String? = tab.flatMap(Self.session(of:))
+        let over: Set<String> = Set(book.grants.compactMap { (grant: SecretGrant) -> String? in
+            // Its tab part: the run in this tab it was made in, which must still be the one in front.
+            guard let session = grant.session, session.hasPrefix(prefix) else { return nil }
+            let run = session.split(separator: "|").first.map(String.init)
+            return run != live ? session : nil
+        })
+        for session in over { end(.sessionEnded(session)) }
+    }
+
+    /// The hook in TerminalTab, which runs on the main thread: a command started or ended there, its shell ended or it
+    /// closed (`tab` nil).
+    nonisolated static func tabRunChanged(_ id: UUID, tab: TerminalTab?) {
+        MainActor.assumeIsolated { shared.tabRunChanged(id, tab: tab) }
+    }
+
+    /// The process sources watching the agents above wrappers, by session, while a grant holds their session.
+    private var sessionWatches: [String: DispatchSourceProcess] = [:]
+
+    /// A session's agent process, watched for its exit, which ends its grants (its tab's run ends them by tabRunChanged).
+    private func followSession(_ session: String) {
+        guard sessionWatches[session] == nil,
+              let process = session.split(separator: "|").map(String.init).first(where: { $0.hasPrefix("pid:") }) else { return }
+        let parts = process.split(separator: ":")
+        guard parts.count >= 2, let pid = pid_t(parts[1]) else { return }
+        // Gone already, or another process now: over at once.
+        guard Self.isLive(session) else { return end(.sessionEnded(session)) }
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated { SecretRequests.shared.end(.sessionEnded(session)) }
+        }
+        sessionWatches[session] = source
+        source.resume()
+        // It may have ended between the check and the watch.
+        if Self.session(ofProcess: pid) != process { end(.sessionEnded(session)) }
     }
 
     /// Ends the lasting grants that hold a key set to ask for Touch ID every time it's used.
@@ -808,13 +967,16 @@ final class SecretRequests {
     /// A grant is over: its values go, wiped, and the audit log says why.
     private func over(_ grant: SecretGrant, outcome: String) {
         drop(grant.id)
+        if let session = grant.session, !book.grants.contains(where: { $0.session == session }) {
+            sessionWatches.removeValue(forKey: session)?.cancel()
+        }
         endTimers.removeValue(forKey: grant.id)?.cancel()
         let line = SecretAudit.Line(event: .grantEnd, names: grant.names, command: grant.binding.command.joined(separator: " "),
                                     folder: grant.binding.folder, outcome: outcome)
         SecretsStore.shared.record(line)
     }
 
-    /// A lock, a sleep or the session resigning: every grant ends, and pending cards are dropped.
+    /// A lock, a sleep or the session resigning: every grant but a session grant ends, and pending cards are dropped.
     private func locked(_ event: SecretsStore.LockEvent) {
         switch event {
         case .screenLocked: end(.screenLocked)
@@ -930,6 +1092,8 @@ final class SecretRequests {
         held.removeAll()
         for timer in endTimers.values { timer.cancel() }
         endTimers.removeAll()
+        for watch in sessionWatches.values { watch.cancel() }
+        sessionWatches.removeAll()
         now = { .now }
         #if DEBUG
         Self.grantTimer = nil
