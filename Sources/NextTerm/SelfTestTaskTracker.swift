@@ -43,20 +43,18 @@ extension SelfTest {
         check(claudeNotes == ["Then, in Claude Code: /mcp"], "connect a tracker: Claude Code's row says signing in is next",
               claudeNotes.joined(separator: " / "))
         let held: [String] = sheet.heldLabels.map(\.stringValue)
-        check(held == TrackerLines.heldSummary && held.count == 3,
+        check(held == TrackerLines.heldSummary && held.count == 4 && held.contains { $0.hasPrefix("GitHub:") && $0.contains("Secrets") },
               "connect a tracker: Not listed yet names each tracker with why", held.joined(separator: " / "))
         claude?.copy?.performClick(nil)
         check(NSPasteboard.general.string(forType: .string) == expected, "connect a tracker: Copy still copies the line")
-        sheet.choose("GitHub")
-        let heldRow: ConnectTrackerSheet.RowViews? = sheet.rowViews[.claude]
+        // Linear has no Gemini line: a held pair.
+        let heldRow: ConnectTrackerSheet.RowViews? = sheet.rowViews[.gemini]
         check(heldRow?.copy == nil && heldRow?.open == nil && heldRow?.link != nil,
               "connect a tracker: a held pair has no Copy or Open button, only its page", heldRow?.line.stringValue ?? "")
-        let codexNotes: [String] = sheet.rowViews[.codex]?.notes.map(\.stringValue) ?? []
-        let tokenNote: Bool = codexNotes.count == 1 && codexNotes[0].contains("GITHUB_PAT_TOKEN")
-        check(tokenNote, "connect a tracker: GitHub's Codex row says where the token comes from, with no sign-in step",
-              codexNotes.joined(separator: " / "))
+        check(!sheet.trackerPopup.itemTitles.contains("GitHub"),
+              "connect a tracker: GitHub is not offered, its token kept for Secrets", sheet.trackerPopup.itemTitles.joined(separator: " "))
         heldRow?.link?.performClick(nil)
-        let page: URL = TrackerLines.catalog.first { $0.name == "GitHub" }!.cell(for: .claude).page
+        let page: URL = TrackerLines.catalog.first { $0.name == "Linear" }!.cell(for: .gemini).page
         check(TaskOpen.opened == [page], "connect a tracker: a held pair's page is recorded, and nothing opens",
               TaskOpen.opened.map(\.absoluteString).joined(separator: " "))
         sheet.done()
