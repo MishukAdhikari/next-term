@@ -125,7 +125,7 @@ extension SelfTest {
         let windows: NSTextField = view.windowsLabel
         let projects: NSTextField = view.projectsLabel
         let privacy: NSTextField = view.privacyLabel
-        let targets: [String] = ["Ask Each Time", "This Window", "New Window"]
+        let targets: [String] = ["Ask Each Time", "This Window", "New Window", "New Tab in This Window", "As macOS Prefers"]
         let titles = launch.stringValue == "At launch:" && quit.stringValue == "At quit:" && sessions.stringValue == "Sessions:"
             && windows.stringValue == "Windows:" && view.projectColors.title == "Show project colors"
             && view.windowColumn.title == "Show the window column when two or more windows are open"

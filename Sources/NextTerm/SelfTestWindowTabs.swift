@@ -148,22 +148,28 @@ extension SelfTest {
         check(title.hasPrefix("\u{25CF}") && title.contains(WindowColumnName.shown(other.indexEntry, depth: 0).name),
               "window tabs: a project's tab shows its colour's dot and its name", "“\(title)”")
 
-        // An agent's tab in the project behind: it opens there, behind, and nothing moves.
+        // An agent's tab in the project behind (the second, behind the first): it opens there, behind, and nothing moves.
+        host.makeKeyAndOrderFront(nil)
+        let usersTab: Bool = await wait(3) { NSApp.keyWindow === host && host.tabGroup?.selectedWindow === host }
         let modeBefore = app.agentArrival
         app.agentArrival = .focus
         UserKeys.ignoredForTest = true
         var result = MCPServer.CallResult(text: "", isError: false)
-        MCPControl.call("new_tab", ["directory": c.project ?? c.activeTab?.directory ?? NSHomeDirectory()], caller: nil) { result = $0 }
+        MCPControl.call("new_tab", ["directory": root.path], caller: nil) { result = $0 }
         _ = await wait(10) { !result.text.isEmpty }
         let answer = (try? JSONSerialization.jsonObject(with: Data(result.text.utf8)) as? [String: Any]) ?? [:]
-        let agentTab: TerminalTab? = c.tabs.first { $0.id.uuidString.lowercased() == answer["id"] as? String }
+        let agentTab: TerminalTab? = other.tabs.first { $0.id.uuidString.lowercased() == answer["id"] as? String }
         _ = await wait(1) { false } // a raise would come on a later turn
-        check(agentTab != nil && host.tabGroup?.selectedWindow === second && NSApp.keyWindow === second && agentTab?.view.awaitsChoice == true,
+        check(usersTab && agentTab != nil && host.tabGroup?.selectedWindow === host && NSApp.keyWindow === host
+              && agentTab?.view.awaitsChoice == true && answer["selected"] as? Bool == false,
               "window tabs: an agent's tab in the project behind opens there, and the tab in use stays in front with the keyboard",
-              "\(answer), selected \(host.tabGroup?.selectedWindow?.title ?? "none"), key \(NSApp.keyWindow?.title ?? "none")")
-        if let agentTab { c.remove(agentTab) }
+              "\(answer), selected \(host.tabGroup?.selectedWindow?.title ?? "none"), key \(NSApp.keyWindow?.title ?? "none"), set up \(usersTab), "
+                  + "in the second \(agentTab != nil), waits \(agentTab?.view.awaitsChoice == true)")
+        if let agentTab { other.remove(agentTab) }
         app.agentArrival = modeBefore
         UserKeys.ignoredForTest = false
+        second.makeKeyAndOrderFront(nil)
+        _ = await wait(3) { host.tabGroup?.selectedWindow === second }
 
         // A notice for the project behind waits for its tab, and the one in front's stays.
         GitToast.dismiss()
