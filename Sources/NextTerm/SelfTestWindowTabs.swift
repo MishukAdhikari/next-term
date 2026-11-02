@@ -101,10 +101,6 @@ extension SelfTest {
               "window tabs: the project behind counts as unseen, and the one in front is the front window",
               "host seen \(host.canBeSeen), front \(TerminalWindow.front?.title ?? "none")")
         await screenshot(other, suffix: "-merged")
-        let ids: Set<Int> = [c.indexID, other.indexID]
-        check(c.columnHost.column.merged == ids && other.columnHost.column.merged == ids,
-              "window tabs: each merged window's column knows the windows merged with it, for the bracket round their rows",
-              "\(c.columnHost.column.merged) and \(other.columnHost.column.merged) of \(ids)")
 
         // One item per tab command in the menus, Next Term's; Close Window is Next Term's, not AppKit's performClose:.
         NSApp.mainMenu?.update()
@@ -185,10 +181,9 @@ extension SelfTest {
         // Split: each its own window again, its top row back beside the traffic lights.
         second.moveTabToNewWindow(nil)
         let split: Bool = await wait(3) { c.columnHost.topCover == 0 && other.columnHost.topCover == 0 }
-        _ = await wait(2) { c.columnHost.column.merged.isEmpty && other.columnHost.column.merged.isEmpty }
-        check(split && !host.isBackgroundTab && !second.isBackgroundTab && c.columnHost.column.merged.isEmpty,
-              "window tabs: Move Project to New Window splits them, each laid out as before, no bracket left",
-              "covers \(c.columnHost.topCover) and \(other.columnHost.topCover), merged \(c.columnHost.column.merged)")
+        check(split && !host.isBackgroundTab && !second.isBackgroundTab,
+              "window tabs: Move Project to New Window splits them, each laid out as before",
+              "covers \(c.columnHost.topCover) and \(other.columnHost.topCover)")
 
         // Close Window on a merged window closes every project in it, and nothing else.
         let last = app.openWindow(directory: third.path, project: third.path)

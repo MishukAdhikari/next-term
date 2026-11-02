@@ -88,9 +88,6 @@ final class WindowColumnView: NSView, ProjectGlowing {
     private(set) var list = WindowColumnList()
     /// This column's own window: its dot sits in a darker well, its row in a darker pill.
     private(set) var current = 0
-    /// The windows merged with this column's own as macOS's tabs (plan 032), its own among them: their rows are held by a
-    /// thin bracket at the column's outer edge. Empty while it is a window of its own.
-    private(set) var merged: Set<Int> = []
     /// Unfolded as it shows: the user's choice, unless the window's room folded it.
     private(set) var expanded = false
     private(set) var buttons: [WindowColumnButton] = []
@@ -184,21 +181,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
             setAccessibilityLabel(Self.groupLabel(newList.count))
         }
         if change != .none || formChanged { updateMore() }
-        if change == .structure { bracketRows() }
         onUpdated?()
-    }
-
-    /// Which windows are merged with this column's own now: their rows' bracket follows.
-    func setMerged(_ ids: Set<Int>) {
-        guard ids != merged else { return }
-        merged = ids
-        bracketRows()
-    }
-
-    private func bracketRows() {
-        for (button, row) in zip(buttons, list.rows) {
-            button.bracketed = merged.contains(row.id) || row.hidden.contains(where: merged.contains)
-        }
     }
 
     /// Whether `row` is where window `id` is: its own, or the repository's row it is folded into.
@@ -581,11 +564,6 @@ final class WindowColumnButton: NSButton {
     private let fold = HoverButton()
     /// A fold arrow was clicked: the row's fold key.
     var onFold: ((String) -> Void)?
-    /// Its window is merged with the column's own as macOS's tabs (plan 032): a thin line along the row's outer edge,
-    /// joining the lines of the rows next to it into one bracket.
-    var bracketed = false {
-        didSet { if bracketed != oldValue { needsDisplay = true } }
-    }
     private var hovering = false {
         didSet {
             guard hovering != oldValue else { return }
@@ -909,19 +887,10 @@ final class WindowColumnButton: NSButton {
             }
             shape.fill()
         }
-        if bracketed {
-            let x: CGFloat = onRight ? bounds.width - Self.bracketInset - Self.bracketWidth : Self.bracketInset
-            WindowColumnView.secondary.withAlphaComponent(0.6).setFill()
-            NSRect(x: x, y: 0, width: Self.bracketWidth, height: bounds.height).fill()
-        }
         // The dot is its own layer (paintDot), its mark in its place when it needs you or failed.
         guard expanded else { return }
         drawWords(row)
     }
-
-    /// The bracket of merged windows: a hairline and a half, just inside the column's outer edge.
-    static let bracketWidth: CGFloat = 1.5
-    static let bracketInset: CGFloat = 2
 
     /// The name, with a worktree's repository before it, and a detail after it while there is room, on one baseline:
     /// the name's cap height centred on the dot. The name keeps its room first; the detail gives way, cut at its end,
