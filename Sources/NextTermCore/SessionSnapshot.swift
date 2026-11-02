@@ -117,9 +117,12 @@ extension SessionSnapshot {
         /// Its place in the order the windows opened, 0 for the first, as every window's column and ⌘O list them: the
         /// windows themselves are saved front to back. Nil in a file written before it was kept.
         public var opened: Int?
+        /// Merged with other project windows as macOS's window tabs; nil for a window of its own (or a file written before
+        /// windows merged).
+        public var windowTab: WindowTab?
 
         public init(frame: Frame? = nil, screen: String? = nil, project: String? = nil, groups: [Group], selected: Int = 0,
-                    minimized: Bool = false, fullScreen: Bool = false, opened: Int? = nil) {
+                    minimized: Bool = false, fullScreen: Bool = false, opened: Int? = nil, windowTab: WindowTab? = nil) {
             self.frame = frame
             self.screen = screen
             self.project = project
@@ -128,6 +131,29 @@ extension SessionSnapshot {
             self.minimized = minimized
             self.fullScreen = fullScreen
             self.opened = opened
+            self.windowTab = windowTab
+        }
+    }
+
+    /// A project window's place among the windows merged into one (plan 032). Not `groups` or `selected`, which are its
+    /// own terminal tabs.
+    public struct WindowTab: Equatable, Sendable, Codable {
+        /// The same for every window merged into one, numbered within the file.
+        public var group: Int
+        /// Its place in that window's tab bar, from 0.
+        public var place: Int
+        /// The tab in front.
+        public var front: Bool
+
+        public init(group: Int, place: Int, front: Bool) {
+            self.group = group
+            self.place = place
+            self.front = front
+        }
+
+        /// Nil for numbers no saved file holds.
+        func repaired() -> Self? {
+            (0..<100_000).contains(group) && (0..<100_000).contains(place) ? self : nil
         }
     }
 
@@ -838,6 +864,7 @@ extension SessionSnapshot.Window {
         window.groups = kept
         window.selected = SessionSnapshot.surviving(selected, in: survived) ?? 0
         window.opened = opened.flatMap { (place: Int) -> Int? in place >= 0 ? place : nil }
+        window.windowTab = windowTab?.repaired()
         return window
     }
 }
@@ -1250,7 +1277,7 @@ extension SessionSnapshot.Header: Codable {
 }
 
 extension SessionSnapshot.Window: Codable {
-    private enum Keys: String, CodingKey { case frame, screen, project, groups, selected, minimized, fullScreen, opened }
+    private enum Keys: String, CodingKey { case frame, screen, project, groups, selected, minimized, fullScreen, opened, windowTab }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -1266,6 +1293,7 @@ extension SessionSnapshot.Window: Codable {
         minimized = c.flag(.minimized)
         fullScreen = c.flag(.fullScreen)
         opened = c.optional(Int.self, .opened)
+        windowTab = c.optional(SessionSnapshot.WindowTab.self, .windowTab)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1278,6 +1306,7 @@ extension SessionSnapshot.Window: Codable {
         try c.encode(minimized, forKey: .minimized)
         try c.encode(fullScreen, forKey: .fullScreen)
         try c.encodeIfPresent(opened, forKey: .opened)
+        try c.encodeIfPresent(windowTab, forKey: .windowTab)
     }
 }
 

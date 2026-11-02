@@ -188,8 +188,21 @@ enum RestoreBuild {
         // Every window is counted for the window column before the first is made: each is laid out with it, and each pane
         // has its real size before its shell starts, rather than a narrower one a moment after.
         app.windowColumns.expecting = snapshot.windows.count
-        for window in snapshot.windows {
-            guard let controller = build(window, screens: screens, gone: planned.isGone, maker: &maker) else { continue }
+        // Windows merged into one take its frame, the tab in front's, and are laid out under its tab bar before they are
+        // filled: each pane has the size it keeps before its shell starts (plan 032).
+        var saved: [SessionSnapshot.Window] = snapshot.windows
+        var merged: Set<Int> = []
+        for unit in RestoreLayout.units(saved) where unit.members.count > 1 {
+            for member in unit.members {
+                merged.insert(member)
+                guard member != unit.front else { continue }
+                saved[member].frame = saved[unit.front].frame
+                saved[member].screen = saved[unit.front].screen
+            }
+        }
+        for (index, window) in saved.enumerated() {
+            guard let controller = build(window, screens: screens, merged: merged.contains(index), gone: planned.isGone,
+                                         maker: &maker) else { continue }
             shown.append((controller, window))
         }
         app.windowColumns.expecting = shown.count
@@ -200,12 +213,28 @@ enum RestoreBuild {
             app.adoptRestored(shown[index].controller)
         }
         app.windowColumns.expecting = 0
-        for entry in shown.reversed() {
-            app.presentRestored(entry.controller)
-            if entry.window.minimized { entry.controller.window?.miniaturize(nil) }
+        // Back to front, each window as it was: on its own, or merged with the others it was merged with, in their tab
+        // order, the same one in front. Apart, whatever "Prefer tabs" says.
+        let units: [RestoreLayout.Unit] = RestoreLayout.units(shown.map(\.window))
+        WindowTabbing.withoutAutomaticTabbing {
+            for unit in units.reversed() {
+                let front: TerminalWindowController = shown[unit.front].controller
+                app.presentRestored(front)
+                if unit.members.count > 1, let group = front.window?.tabGroup {
+                    for (place, member) in unit.members.enumerated() where member != unit.front {
+                        guard let window = shown[member].controller.window else { continue }
+                        group.insertWindow(window, at: min(place, group.windows.count))
+                    }
+                    group.selectedWindow = front.window
+                } else if front.expectsTabBar {
+                    front.expectsTabBar = false // the others it was merged with were not built
+                    front.titleBarChanged(force: true)
+                }
+                if shown[unit.front].window.minimized { front.window?.miniaturize(nil) }
+            }
         }
-        for entry in shown where entry.window.fullScreen && !entry.window.minimized {
-            entry.controller.window?.toggleFullScreen(nil)
+        for unit in units where shown[unit.front].window.fullScreen && !shown[unit.front].window.minimized {
+            shown[unit.front].controller.window?.toggleFullScreen(nil) // a merged window is one Space
         }
         let remote = maker.remoteToStart
         RemoteConnection.whenShellRead {
@@ -215,8 +244,9 @@ enum RestoreBuild {
         return Built(windows: windows, panes: maker.panes, keptRemote: maker.keptRemote, skipped: maker.skipped)
     }
 
-    /// One window, laid out and filled but not shown; nil when none of its tabs could be built.
-    private static func build(_ window: SessionSnapshot.Window, screens: [RestoreLayout.Screen], gone: (String) -> Bool,
+    /// One window, laid out and filled but not shown; nil when none of its tabs could be built. `merged`: it is to be
+    /// merged with others, so laid out under their tab bar.
+    private static func build(_ window: SessionSnapshot.Window, screens: [RestoreLayout.Screen], merged: Bool, gone: (String) -> Bool,
                               maker: inout PaneMaker) -> TerminalWindowController? {
         // A project folder gone since: a plain window, its tabs in the folders left.
         let project = window.project.flatMap { (path: String) -> String? in RestorePlanner.lexical(path) }
@@ -227,6 +257,10 @@ enum RestoreBuild {
             controller.window?.setFrame(rect, display: false)
         } else {
             controller.window?.center()
+        }
+        if merged {
+            controller.expectsTabBar = true
+            controller.titleBarChanged()
         }
         var selected = 0
         for (index, group) in window.groups.enumerated() {

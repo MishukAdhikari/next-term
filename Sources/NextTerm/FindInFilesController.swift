@@ -56,6 +56,7 @@ final class FindInFilesController: NSWindowController, NSWindowDelegate, NSOutli
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),
                             styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
         panel.title = "Find in Files"
+        panel.keepsItsOwnFrame()
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false

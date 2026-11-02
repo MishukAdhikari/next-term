@@ -409,6 +409,7 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = "Import Settings and Shortcuts"
+        window.keepsItsOwnFrame()
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self

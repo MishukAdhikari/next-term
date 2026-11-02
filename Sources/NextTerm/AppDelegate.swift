@@ -534,9 +534,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // No window joins another as a tab by itself, whatever System Settings' "Prefer tabs" says: Next Term decides each
-        // merge (plan 032), and Settings, Welcome and the viewers never tab with anything.
-        NSWindow.allowsAutomaticWindowTabbing = false
         // Single clicks in the sidebar: on for a new install, kept as it was for one used before. First, before this
         // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
         // whose defaults look new at every run: its clicks part sets the setting itself.
@@ -1123,7 +1120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// `forAgent`: an agent asked over MCP. The window is placed but not shown here (the caller's presentForAgent brings
     /// it), and its first tab waits for the user's choice.
     @discardableResult
-    func openWindow(directory: String?, project: String? = nil, forAgent: Bool = false) -> TerminalWindowController {
+    /// `tabInto`: merged into that window as a tab (plan 032), else a window of its own, never merged by macOS by itself.
+    func openWindow(directory: String?, project: String? = nil, forAgent: Bool = false,
+                    tabInto: TerminalWindowController? = nil) -> TerminalWindowController {
         let controller = TerminalWindowController(directory: directory, project: project, byAgent: forAgent)
         controller.onClose = { [weak self] closed, welcome in self?.windowClosed(closed, welcome: welcome) }
         closeWelcome(forAgent: forAgent)
@@ -1144,8 +1143,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if remoteRestorePending { restoreRemoteTabs() } // the launch's first terminal window
         projectsChanged()
         if forAgent { return controller }
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
+        if let host = tabInto?.window, let window = controller.window, host.isVisible {
+            host.addTabbedWindow(window, ordered: .above)
+            controller.showWindow(nil)
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            WindowTabbing.withoutAutomaticTabbing {
+                controller.showWindow(nil)
+                controller.window?.makeKeyAndOrderFront(nil)
+            }
+        }
         windowColumns.windowOpened() // a window the user opened: a notice about the column, if one is due
         return controller
     }
@@ -1163,8 +1170,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// A restored window taken in (`adoptRestored`), shown as it is, with no cascade and no first tab, in front.
     func presentRestored(_ controller: TerminalWindowController) {
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
+        // Apart, whatever macOS prefers: the restore merges what was merged itself (SessionRestoreBuild).
+        WindowTabbing.withoutAutomaticTabbing {
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     /// A terminal window closed.
@@ -1375,14 +1385,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             open.window?.makeKeyAndOrderFront(nil)
             return
         }
-        let target = controller ?? controllers.last(where: { $0.window?.isVisible == true })
+        let target = controller ?? controllers.last(where: { $0.window?.isShownFrame == true })
         let from = target.map { (target: TerminalWindowController) -> ProjectOpening.Target in
             ProjectOpening.Target(pristine: target.isPristine, holdsRestore: target.holdsRestore)
         }
         var choice = projectTarget
-        let placement = ProjectOpening.placement(from: from, setting: choice)
+        let placement = ProjectOpening.placement(from: from, setting: choice, systemPrefersTabs: target.map(WindowTabbing.systemPrefersTabs(over:)) ?? false)
         guard let target, placement != .newWindow else {
             openWindow(directory: path, project: path)
+            return
+        }
+        if placement == .newTab {
+            openWindow(directory: path, project: path, tabInto: target)
             return
         }
         if placement == .adopt {
@@ -1393,8 +1407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if choice == .ask {
             let alert = NSAlert()
             alert.messageText = "Where do you want to open “\(url.lastPathComponent)”?"
-            alert.informativeText = "You can open it in a new window, or in this window in place of its tabs."
+            alert.informativeText = "You can open it in a new window, as a new tab of this window, or in this window in place of its tabs."
             alert.addButton(withTitle: "New Window")
+            alert.addButton(withTitle: "New Tab")
             alert.addButton(withTitle: "This Window")
             alert.addButton(withTitle: "Cancel")
             alert.showsSuppressionButton = true
@@ -1402,13 +1417,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let response = alert.runModal()
             switch response {
             case .alertFirstButtonReturn: choice = .newWindow
-            case .alertSecondButtonReturn: choice = .thisWindow
+            case .alertSecondButtonReturn: choice = .newTab
+            case .alertThirdButtonReturn: choice = .thisWindow
             default: return
             }
             if alert.suppressionButton?.state == .on { projectTarget = choice }
         }
         if choice == .newWindow {
             openWindow(directory: path, project: path)
+            return
+        }
+        if choice == .newTab {
+            openWindow(directory: path, project: path, tabInto: target)
             return
         }
         // This window: its tabs make way for the project's, so ask if that would stop anything.
@@ -1514,8 +1534,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let clear = menu.addItem(withTitle: "Clear Menu", action: clearAction, keyEquivalent: "")
             clear.target = self
         } else if menu.title == "Open Projects In" {
-            for (title, value) in [("Ask Each Time", ProjectTarget.ask), ("This Window", .thisWindow), ("New Window", .newWindow)] {
-                let item = menu.addItem(withTitle: title, action: #selector(setProjectTarget(_:)), keyEquivalent: "")
+            for value in ProjectTarget.allCases {
+                let item = menu.addItem(withTitle: value.title, action: #selector(setProjectTarget(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = value.rawValue
                 item.state = projectTarget == value ? .on : .off
@@ -1590,7 +1610,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for controller in controllers { for tab in controller.tabs { tab.view.optionAsMetaKey = Preferences.optionAsMeta } }
     }
 
+    /// File › Close Window with a window of Next Term's own in front (Settings, Skills, Secrets, a panel): it closes, as
+    /// AppKit's Close Window closes it. A project window answers it itself (TerminalWindowTabs).
+    @objc func closeWindow(_ sender: Any?) {
+        NSApp.keyWindow?.performClose(sender)
+    }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(closeWindow(_:)) { return NSApp.keyWindow?.styleMask.contains(.closable) == true }
         if item.action == #selector(reopenClosedTab(_:)) { return !ClosedTabs.isEmpty }
         if item.action == #selector(toggleOptionAsMeta(_:)) { item.state = Preferences.optionAsMeta ? .on : .off }
         if item.action == #selector(setTerminalPosition(_:)) {
@@ -2222,7 +2249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(shell, "Close Tab", #selector(TerminalWindowController.closeTab(_:)), "w")
         item(shell, "Close Other Tabs", #selector(TerminalWindowController.closeOtherTabs(_:)), "")
         item(shell, "Close Tabs to the Right", #selector(TerminalWindowController.closeTabsToTheRight(_:)), "")
-        item(shell, "Close Window", #selector(NSWindow.performClose(_:)), "w", [.command, .shift])
+        // Next Term's own action, not AppKit's performClose:, which macOS renames "Close Tab" in a merged window and
+        // gives its own Close Window beside: one Close Window, closing the whole window (TerminalWindowTabs).
+        item(shell, "Close Window", #selector(TerminalWindowController.closeWindow(_:)), "w", [.command, .shift])
 
         let edit = submenu(main, "Edit")
         item(edit, "Undo", Selector(("undo:")), "z")
@@ -2343,6 +2372,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(view, "Actual Size", #selector(resetFontSize(_:)), "0", target: self)
         view.addItem(.separator())
         item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
+        // macOS's own items for its window tabs, named for projects (plan 032); with these in place it adds none.
+        item(view, "Show Project Tab Bar", #selector(NSWindow.toggleTabBar(_:)), "")
+        item(view, "Show All Project Tabs", #selector(NSWindow.toggleTabOverview(_:)), "\\", [.command, .shift])
 
         // The agents' own: their skills, their sessions, and what goes to them. Ids are the actions, so keys changed in
         // Settings before these moved here from File and Edit stay theirs. Window › Skills finds new skills.
@@ -2395,6 +2427,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.addItem(.separator())
         item(window, "Show Next Tab", #selector(TerminalWindowController.showNextTab(_:)), "]", [.command, .shift])
         item(window, "Show Previous Tab", #selector(TerminalWindowController.showPreviousTab(_:)), "[", [.command, .shift])
+        window.addItem(.separator())
+        // Project windows merged as macOS's tabs (plan 032), with macOS's own actions: with these in place it adds none of
+        // its tab items, so ⌃⇥ stays the terminal's.
+        item(window, "Show Previous Project Tab", #selector(NSWindow.selectPreviousTab(_:)), "[", [.command, .control])
+        item(window, "Show Next Project Tab", #selector(NSWindow.selectNextTab(_:)), "]", [.command, .control])
+        item(window, "Move Project to New Window", #selector(NSWindow.moveTabToNewWindow(_:)), "")
+        item(window, "Merge All Windows", #selector(NSWindow.mergeAllWindows(_:)), "")
         window.addItem(.separator())
         let arrow = { (key: Int) in String(Character(UnicodeScalar(key)!)) }
         item(window, "Select Pane on the Left", #selector(TerminalWindowController.selectPaneLeft(_:)), arrow(NSLeftArrowFunctionKey), [.command, .option])

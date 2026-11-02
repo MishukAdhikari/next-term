@@ -31,6 +31,26 @@ import Testing
         }
     }
 
+    /// The restore shows windows saved merged as one again (plan 032): in their tab order, the one saved in front still
+    /// in front, front to back by each one's front-most window; a group left with one window comes back as a window.
+    @Test func windowsSavedMergedComeBackAsOneInTheirTabOrder() {
+        func window(_ tab: SessionSnapshot.WindowTab?) -> SessionSnapshot.Window {
+            let pane = SessionSnapshot.Pane(id: UUID())
+            return SessionSnapshot.Window(groups: [SessionSnapshot.Group(root: .pane(pane), focused: pane.id)], windowTab: tab)
+        }
+        typealias Tab = SessionSnapshot.WindowTab
+        // Front to back: B (group 0, place 1, in front), lone L, A (group 0, place 0), C (group 0, place 2), M (group 1).
+        let saved = [window(Tab(group: 0, place: 1, front: true)), window(nil), window(Tab(group: 0, place: 0, front: false)),
+                     window(Tab(group: 0, place: 2, front: false)), window(Tab(group: 1, place: 0, front: false))]
+        #expect(RestoreLayout.units(saved) == [RestoreLayout.Unit(members: [2, 0, 3], front: 0), RestoreLayout.Unit(members: [1], front: 1),
+                                               RestoreLayout.Unit(members: [4], front: 4)])
+        // The one in front was not built: its front-most window is in front.
+        let left = [window(Tab(group: 3, place: 2, front: false)), window(Tab(group: 3, place: 0, front: false))]
+        #expect(RestoreLayout.units(left) == [RestoreLayout.Unit(members: [1, 0], front: 0)])
+        // Nothing merged: each window on its own, in order.
+        #expect(RestoreLayout.units([window(nil), window(nil)]).map(\.members) == [[0], [1]])
+    }
+
     @Test func windowsAreListedInTheOrderTheyOpenedWhicheverWasUsedLast() {
         func window(_ opened: Int?) -> SessionSnapshot.Window {
             let pane = SessionSnapshot.Pane(id: UUID())

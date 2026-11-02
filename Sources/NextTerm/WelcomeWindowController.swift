@@ -90,6 +90,7 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         let window = WelcomeWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
                                    styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Welcome to Next Term"
+        window.keepsItsOwnFrame()
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true

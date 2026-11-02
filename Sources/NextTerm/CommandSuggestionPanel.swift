@@ -66,6 +66,7 @@ final class CommandSuggestionPanel: NSObject, NSWindowDelegate {
 
     private func build() {
         panel.title = "Suggest a Command"
+        panel.keepsItsOwnFrame()
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false

@@ -74,6 +74,7 @@ final class SecretRequestWindow: NSWindowController, NSWindowDelegate, NSTextFie
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 420), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = SecretApprovalPanel.sanitized(content.title, limit: 200)
+        window.keepsItsOwnFrame()
         window.titleVisibility = .hidden // the heading says it once; the title stays for VoiceOver and the Window menu
         window.isReleasedWhenClosed = false
         super.init(window: window)

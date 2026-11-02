@@ -21,7 +21,7 @@ extension ImportVSCode {
             "workbench.action.terminal.split": "splitRight:",
             "workbench.action.terminal.rename": "renameTab:",
             "workbench.action.closeActiveEditor": "closeTab:",
-            "workbench.action.closeWindow": "performClose:",
+            "workbench.action.closeWindow": "closeWindow:",
             "undo": "undo:",
             "redo": "redo:",
             "editor.action.clipboardCutAction": "cut:",

@@ -521,7 +521,7 @@ enum RemoteConnection {
     /// running on their host, or plain connections a restore would have opened afresh.
     static func tellSkipped(_ skipped: [String], kept: Bool = true) {
         let app: AppDelegate = AppDelegate.shared
-        guard !skipped.isEmpty, let window = app.controllers.first?.window else { return }
+        guard !skipped.isEmpty, let window = app.controllers.first?.window?.shownWindow else { return }
         let alert = NSAlert()
         let what = kept ? "kept remote tab" : "remote tab"
         alert.messageText = skipped.count == 1 ? "A \(what) was not reopened" : "\(skipped.count) \(what)s were not reopened"

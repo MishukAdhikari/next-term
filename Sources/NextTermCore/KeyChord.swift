@@ -306,8 +306,17 @@ public struct KeyBindings: Equatable, Sendable {
 
     public static func decode(_ data: Data?) -> KeyBindings {
         guard let data, let plain = try? JSONDecoder().decode([String: ChordBox].self, from: data) else { return KeyBindings() }
-        return KeyBindings(overrides: plain.mapValues { $0.chord })
+        var overrides: [String: KeyChord?] = plain.mapValues { $0.chord }
+        for (old, new) in renamed {
+            guard let saved = overrides.removeValue(forKey: old), overrides[new] == nil else { continue }
+            overrides[new] = saved
+        }
+        return KeyBindings(overrides: overrides)
     }
+
+    /// Commands whose id changed, old to new: a key the user gave the old one stays theirs. Close Window left AppKit's
+    /// performClose:, which macOS renames "Close Tab" while project windows are merged (plan 032).
+    public static let renamed: [String: String] = ["performClose:": "closeWindow:"]
 
     struct ChordBox: Codable { var chord: KeyChord? }
 }

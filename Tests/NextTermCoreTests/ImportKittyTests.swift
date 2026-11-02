@@ -87,7 +87,7 @@ import Testing
         let plan = try plan(home)
         let rows = plan.shortcuts.map { "\($0.command) \($0.chord?.display ?? "none")" }
         #expect(rows == ["newTab: ⇧⌘T", "splitRight: ⌘D", "splitDown: ⇧⌘D", "clearBuffer: ⌘K", "selectTabByNumber:#1 ⌘1",
-                         "toggleZoomPane: ⌘↩", "performClose: ⇧⌘W", "selectPaneLeft: ⇧⌘←", "copy: ⌃⇧C", "increaseFontSize: ⌥⌘="])
+                         "toggleZoomPane: ⌘↩", "closeWindow: ⇧⌘W", "selectPaneLeft: ⇧⌘←", "copy: ⌃⇧C", "increaseFontSize: ⌥⌘="])
         #expect(plan.shortcuts.first?.source == "map kitty_mod+t → new_tab_with_cwd")
         #expect(plan.shortcuts[1].source == "map cmd+d → launch --location=vsplit")
         #expect(plan.shortcuts.first { $0.command == "copy:" }?.allowed == false)

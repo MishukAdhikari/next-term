@@ -26,6 +26,7 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 500), styleMask: [.titled, .closable, .resizable],
                              backing: .buffered, defer: false)
         window.title = "Software Update"
+        window.keepsItsOwnFrame()
         window.minSize = NSSize(width: 460, height: 340)
         window.isReleasedWhenClosed = false
         window.animationBehavior = .alertPanel
@@ -155,6 +156,8 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
             parent.addChildWindow(window, ordered: .above)
             parentWindow = parent
             NotificationCenter.default.addObserver(self, selector: #selector(parentWillClose(_:)), name: NSWindow.willCloseNotification, object: parent)
+            NotificationCenter.default.addObserver(self, selector: #selector(parentTabChanged(_:)), name: NSWindow.tabSelectionDidChange,
+                                                   object: parent)
         } else {
             window.center()
         }
@@ -170,8 +173,16 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
     @objc private func parentWillClose(_ note: Notification) {
         guard let window, let parent = note.object as? NSWindow else { return }
         NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.tabSelectionDidChange, object: parent)
         parent.removeChildWindow(window)
         parentWindow = nil
+    }
+
+    /// Its window went behind another project's tab in the same window: it stays in sight, on its own, still unanswered.
+    @objc private func parentTabChanged(_ note: Notification) {
+        guard let window, let parent = note.object as? NSWindow, parent.isBackgroundTab else { return }
+        parentWillClose(Notification(name: NSWindow.willCloseNotification, object: parent))
+        window.orderFront(nil)
     }
 
     @objc private func openPage() { NSWorkspace.shared.open(release.pageURL) }

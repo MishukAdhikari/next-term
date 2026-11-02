@@ -323,6 +323,7 @@ final class GitCommandsWindowController: NSWindowController {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 460), styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "Git Commands"
+        window.keepsItsOwnFrame()
         window.isReleasedWhenClosed = false
         let content = NSView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -407,6 +408,13 @@ final class GitToast {
     private static func present(_ text: String, in window: NSWindow?, button: String?, isError: Bool, begun: Int?,
                                 action: (() -> Void)?, other: String?, otherAction: (() -> Void)?) {
         guard let window else { return }
+        // For a project merged behind another's tab (plan 032): it waits for that tab to come to the front, and never
+        // pushes away the notice of the project in use.
+        if window.isBackgroundTab {
+            return hold(for: window) { [weak window] in
+                present(text, in: window, button: button, isError: isError, begun: begun, action: action, other: other, otherAction: otherAction)
+            }
+        }
         guard GitNotice.replaces(shown, hasButton: button != nil, isError: isError, begun: begun) else { return }
         dismiss()
         let label = NSTextField(labelWithString: text)
@@ -459,6 +467,24 @@ final class GitToast {
         let work = DispatchWorkItem { dismiss() }
         hide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + (button == nil ? 4 : 30), execute: work)
+    }
+
+    /// The latest notice for each window merged behind another's tab, and the watch that shows it once its tab is in front.
+    private static var held: [ObjectIdentifier: (since: Date, show: () -> Void, watch: NSObjectProtocol)] = [:]
+    /// How long a held notice stays worth showing.
+    private static let heldFor: TimeInterval = 120
+
+    private static func hold(for window: NSWindow, _ show: @escaping () -> Void) {
+        let key = ObjectIdentifier(window)
+        if let old = held[key] { NotificationCenter.default.removeObserver(old.watch) }
+        let watch = NotificationCenter.default.addObserver(forName: NSWindow.tabSelectionDidChange, object: window, queue: .main) { [weak window] _ in
+            MainActor.assumeIsolated {
+                guard let window, !window.isBackgroundTab, let entry = held.removeValue(forKey: key) else { return }
+                NotificationCenter.default.removeObserver(entry.watch)
+                if Date().timeIntervalSince(entry.since) < heldFor { entry.show() }
+            }
+        }
+        held[key] = (Date(), show, watch)
     }
 
     static func dismiss() {

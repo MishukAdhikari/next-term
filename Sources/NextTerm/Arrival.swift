@@ -23,6 +23,13 @@ extension TerminalWindowController {
         return AppDelegate.shared.lastUsedController === self
     }
 
+    /// Merged behind the tab of the window the user is working in (plan 032): to an agent, as theirs. Bringing it forward
+    /// would take their window from under them, and the keyboard with it.
+    var isBehindUsersTab: Bool {
+        guard let window, window.isBackgroundTab else { return false }
+        return window.mergedWindows.contains { ($0.windowController as? TerminalWindowController)?.hasUsersKeyboard == true }
+    }
+
     /// An agent opened `tab` over MCP (nil: the window itself, a file in its editor, or a pane beside the user's): it comes
     /// forward as Settings › Editor › "When an agent opens a tab" says (AgentArrival), never with the keyboard. The tab
     /// was made waiting for the user's choice (`byAgent`). Returns what the tool's answer says: whether the tab was
@@ -39,8 +46,8 @@ extension TerminalWindowController {
         guard let window else { return (false, nil) }
         if let tab, !tabs.contains(where: { $0 === tab }) { return (false, nil) } // closed meanwhile
         let plan = AgentArrival.plan(mode: AppDelegate.shared.agentArrival, explicit: explicit, login: login, hasTab: tab != nil,
-                                     usersWindow: hasUsersKeyboard, appActive: NSApp.isActive,
-                                     onActiveSpace: !window.isVisible || window.isOnActiveSpace, sheetUp: window.attachedSheet != nil,
+                                     usersWindow: hasUsersKeyboard || isBehindUsersTab, appActive: NSApp.isActive,
+                                     onActiveSpace: !window.isVisible || window.shownWindow.isOnActiveSpace, sheetUp: window.attachedSheet != nil,
                                      modalUp: NSApp.modalWindow != nil, sinceKey: UserKeys.since, waited: waited)
         var selected = selected
         if plan.select, !selected, let tab {
@@ -53,7 +60,9 @@ extension TerminalWindowController {
             }
             return (selected, plan.note)
         }
-        raise(plan.raise)
+        // A window first shown here opens apart, whatever "Prefer tabs" says: an agent's project never joins the user's
+        // window by itself.
+        WindowTabbing.withoutAutomaticTabbing { raise(plan.raise) }
         return (selected, plan.note)
     }
 

@@ -47,6 +47,7 @@ final class AgentApprovalWindow: NSWindowController, NSWindowDelegate {
         let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 260), styleMask: [.titled, .closable, .utilityWindow],
                              backing: .buffered, defer: false)
         window.title = request.title
+        window.keepsItsOwnFrame()
         window.titleVisibility = .hidden // the heading says it once; the title stays for VoiceOver and the Window menu
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false

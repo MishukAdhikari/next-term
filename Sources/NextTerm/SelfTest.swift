@@ -98,6 +98,10 @@ enum SelfTest {
         // The window column only in its own part (windowColumn): the other parts' geometry was written without it.
         WindowColumns.suppressed = true
         WindowColumns.offersSuppressed = true // and no offer to show or hide it, but in its own checks
+        // No window joins another as a tab, whatever this Mac's "Prefer tabs" says, but in its own part (windowTabs): the
+        // other parts' windows are each a window of their own.
+        WindowTabbing.suppressed = true
+        NSWindow.allowsAutomaticWindowTabbing = false
         Task { @MainActor in
             await launchChecks() // first: it opens the window the checks after it use
             await runAll()

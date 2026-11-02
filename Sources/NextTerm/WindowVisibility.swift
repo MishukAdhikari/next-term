@@ -2,13 +2,18 @@ import AppKit
 
 extension NSWindow {
     /// Whether anyone can see the window: not when it is minimized, the app hidden, the window covered by
-    /// others or on another Space, or the screen locked or asleep. In a self-test run, whether it is on
-    /// screen at all: the run takes half an hour, and a check must not fail because the Mac locked meanwhile.
+    /// others, on another Space or a tab behind another, or the screen locked or asleep. In a self-test run, whether
+    /// it is on screen at all: the run takes half an hour, and a check must not fail because the Mac locked meanwhile.
     /// The sidebar's git refresh (GitMonitor) and the terminals' drawing (NextTermView) go by it.
     var canBeSeen: Bool {
+        if isBackgroundTab { return false }
         if Self.selfTestRun { return isVisible && !isMiniaturized }
         return occlusionState.contains(.visible)
     }
+
+    /// Posted for a window merged with others when its tab came to the front or went behind one (TerminalWindowController
+    /// watches its group): macOS posts no occlusion change for it while the screen is locked or the window covered.
+    static let tabSelectionDidChange = Notification.Name("NextTerm.windowTabSelectionDidChange")
 
     /// Read once: each terminal asks at every change it draws.
     private static let selfTestRun = SelfTest.isRequested
@@ -18,6 +23,6 @@ extension NSWindow {
     static let visibilityNotifications: [(name: Notification.Name, ofApp: Bool)] = [
         (NSWindow.didChangeOcclusionStateNotification, false), (NSWindow.didMiniaturizeNotification, false),
         (NSWindow.didDeminiaturizeNotification, false), (NSApplication.didHideNotification, true),
-        (NSApplication.didUnhideNotification, true),
+        (NSApplication.didUnhideNotification, true), (tabSelectionDidChange, false),
     ]
 }

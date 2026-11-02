@@ -87,6 +87,7 @@ final class SecretApprovalPanel: NSWindowController, NSWindowDelegate {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 400), styleMask: style,
                             backing: .buffered, defer: false)
         panel.title = Self.sanitized(content.title, limit: 200)
+        panel.keepsItsOwnFrame()
         panel.titleVisibility = .hidden // the heading says it once; the title stays for VoiceOver and the Window menu
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false

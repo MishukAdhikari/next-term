@@ -85,7 +85,9 @@ import Testing
     @Test func theAllowlistIsShortAndHarmless() {
         #expect(MCPSettings.allowlist.map(\.name) == ["font_size", "line_height", "soft_wrap", "terminal_position", "notify_decisions",
                                                       "notify_agent_finished", "notify_program_alerts", "notification_sound", "notify_commands",
-                                                      "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward"])
+                                                      "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward", "open_projects_in"])
+        #expect(MCPSettings.changes(["open_projects_in": "new_tab"]).failureText == nil)
+        #expect(MCPSettings.changes(["open_projects_in": "tab"]).failureText?.contains("takes ask, this_window, new_window, new_tab, as_macos") == true)
         if case .success(let changes) = MCPSettings.changes(["agent_spinner": "still", "agents_offer_tabs": false]) {
             #expect(changes.map(\.1) == [.choice("still"), .flag(false)])
         } else {

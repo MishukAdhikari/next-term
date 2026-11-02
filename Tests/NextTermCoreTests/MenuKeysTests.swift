@@ -100,7 +100,7 @@ struct MenuKeysTests {
             #expect(KeyBindings().owners(of: chord, defaults: keys, except: "wrapUp:").isEmpty, "\(preset.name)")
             #expect(KeyBindings().sharers(of: chord, defaults: keys, except: "wrapUp:").isEmpty, "\(preset.name)")
             // An imported row giving ⌃⌘W to Close Window, Soft Wrap or Close Tab: each is unticked, naming Wrap Up.
-            for other in ["performClose:", "toggleSoftWrap:", "closeTab:"] {
+            for other in ["closeWindow:", "toggleSoftWrap:", "closeTab:"] {
                 let row = ImportShortcuts.row(other, chord, source: "test: \(other)")
                 let plan = ImportPlan(preset: preset, shortcuts: [row])
                 let settled = plan.settlingShortcuts(current: keys, titles: ["wrapUp:": "Wrap Up…"])

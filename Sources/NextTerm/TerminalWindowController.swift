@@ -8,7 +8,7 @@ final class TerminalWindow: NSWindow {
     /// (behind Settings or a panel).
     static var front: TerminalWindow? {
         let candidates = [NSApp.mainWindow, NSApp.keyWindow] + NSApp.orderedWindows
-        return candidates.lazy.compactMap { $0 as? TerminalWindow }.first { $0.isVisible && !$0.isMiniaturized }
+        return candidates.lazy.compactMap { $0 as? TerminalWindow }.first(where: \.isShownFrame)
     }
 
     var onControlTab: ((_ backwards: Bool) -> Void)?
@@ -25,6 +25,18 @@ final class TerminalWindow: NSWindow {
         let made = super.makeFirstResponder(responder)
         if made { onFirstResponderChange?(firstResponder) }
         return made
+    }
+
+    /// macOS names its tab bar item "Show Tab Bar" or "Hide Tab Bar" each time it checks it: here it is the project
+    /// tabs' (plan 032), beside the terminal's own tab settings in View.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let valid: Bool = super.validateMenuItem(menuItem)
+        if menuItem.action == #selector(NSWindow.toggleTabBar(_:)) {
+            menuItem.title = tabGroup?.isTabBarVisible == true ? "Hide Project Tab Bar" : "Show Project Tab Bar"
+        } else if menuItem.action == #selector(NSWindow.toggleTabOverview(_:)) {
+            menuItem.title = tabGroup?.isOverviewVisible == true ? "Exit Project Tab Overview" : "Show All Project Tabs"
+        }
+        return valid
     }
 
     override func sendEvent(_ event: NSEvent) {
@@ -239,6 +251,20 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     var lightsBesideBars: Bool { !isFullScreen && columnHost.topCover == 0 }
     /// Watches the window's unobscured area, which a system tab bar coming or going changes.
     private var layoutRectWatch: NSKeyValueObservation?
+    /// The system tab group the window is in, and the watches on which tab is in front and who is in it (plan 032).
+    weak var watchedTabGroup: NSWindowTabGroup?
+    var tabGroupWatches: [NSKeyValueObservation] = []
+    /// A question about closing, asked while this project was merged behind another's tab: it waits for its tab to come
+    /// to the front (TerminalWindowTabs), and the tab is marked meanwhile.
+    var heldQuestion: (() -> Void)?
+    /// File › Close Window asked once about what stops in every project of a merged window: this one closes without
+    /// asking that again (MergedWindowClose).
+    var stopConfirmed = false
+    /// The mark on the project's system tab, as last set.
+    var projectTabMark: TabState?
+    /// A restore builds it to merge with others (plan 032): it is laid out under a tab bar before it has one, so its
+    /// panes' shells start at the size they keep. The tab bar, once there, takes over.
+    var expectsTabBar = false
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
@@ -339,7 +365,10 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Theme.background
         window.minSize = Self.minimumSize
-        window.tabbingMode = .disallowed // our own tabs, not the system's
+        // Project windows merge as macOS's own window tabs (plan 032), only with each other; Next Term places each one it
+        // shows (AppDelegate.openWindow), and the user merges, splits and drags them.
+        window.tabbingMode = WindowTabbing.suppressed ? .disallowed : .automatic
+        window.tabbingIdentifier = WindowTabbing.projectIdentifier
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
         super.init(window: window)
@@ -785,6 +814,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// as it was, with its reason.
     private func askToSave(closing: [TerminalTab], kept: String = "", then close: @escaping () -> Void) {
         guard let window, !askingToSave else { return }
+        // Merged behind the tab in use: asked once the user brings its tab to the front, its tab marked till then. Coming
+        // forward would take the window from under them, and a Return they type would answer it.
+        if window.isBackgroundTab {
+            heldQuestion = { [weak self] in self?.askToSave(closing: closing, kept: kept, then: close) }
+            updateProjectTab()
+            if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+            return
+        }
         let busy = closing.filter { $0.closeNote != nil }
         var note = "Closing the window’s last tab closes the window."
         if closing.allSatisfy(\.exited) {
@@ -950,6 +987,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         // A window no one can see refreshes once a second (its tabs' marks still reach the Dock badge and the
         // notifications), and at once when it shows again (visibilityChanged).
         if window?.canBeSeen != false || tickCount % 4 == 0 { refresh() }
+        if tickCount % 4 == 0 { updateProjectTab() }
     }
 
     @objc private func visibilityChanged() {
@@ -1104,12 +1142,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Tells VoiceOver users when a background tab finishes, fails or asks for attention: the dots are
     /// visual, so without this they would never know.
     private func announceBackgroundChanges() {
+        // Merged behind another project's tab, its tab in front is out of sight too, and the window in front speaks.
+        let behind: Bool = window?.isBackgroundTab == true
         for (i, tab) in groups.enumerated().flatMap({ index, group in group.panes.map { (index, $0) } }) {
             let state = tab.status.state
             defer { announcedStates[tab.id] = state }
-            guard i != activeIndex || terminalCollapsed, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
-            NSAccessibility.post(element: window as Any, notification: .announcementRequested, userInfo: [
-                .announcement: "\(tab.title): \(tab.stateDescription)",
+            guard i != activeIndex || terminalCollapsed || behind, announcedStates[tab.id] != state, [.done, .failed, .attention].contains(state) else { continue }
+            NSAccessibility.post(element: (behind ? window?.shownWindow : window) as Any, notification: .announcementRequested, userInfo: [
+                .announcement: behind ? "\(windowName), \(tab.title): \(tab.stateDescription)" : "\(tab.title): \(tab.stateDescription)",
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ])
         }
@@ -2689,6 +2729,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closeConfirmed || AppDelegate.shared.isTerminating { return true }
+        // Closed from behind another project's tab (its × in the tab bar, Close Other Tabs): what it asks, it asks in
+        // front, one project at a time.
+        if sender.isBackgroundTab, closeAsks {
+            if let asking = sender.mergedWindows.first(where: { $0 !== sender && $0.attachedSheet != nil }) {
+                WindowSheets.afterSheet(on: asking) { [weak sender] in sender?.performClose(nil) }
+                return false
+            }
+            sender.makeKeyAndOrderFront(nil)
+        }
         let dirty = editorArea.dirtyDocuments
         if !dirty.isEmpty && !editorsConfirmed {
             let alert = saveAlert(dirty)
@@ -2732,6 +2781,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         editorsConfirmed = false
         valuesConfirmed = false
+        if stopConfirmed { return true } // asked for the whole merged window (MergedWindowClose)
         let busy = busyTabs
         let kept = Self.keptList(tabs)
         guard !busy.isEmpty || !kept.isEmpty else { return true }
@@ -2763,6 +2813,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender, completionHandler: answered)
         return false
+    }
+
+    /// Whether closing the window now asks something first: about unsaved files or database values, or what closing stops.
+    var closeAsks: Bool {
+        if closeConfirmed { return false }
+        if !editorArea.dirtyDocuments.isEmpty && !editorsConfirmed { return true }
+        if !editorArea.draftDatabases.isEmpty && !valuesConfirmed { return true }
+        return !stopConfirmed && (!busyTabs.isEmpty || !Self.keptList(tabs).isEmpty)
     }
 
     /// Close and Remove Worktree: when the worktree at `path` can go (WorktreeRemoval.verdict, with this window's tabs
@@ -2807,6 +2865,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     func windowDidBecomeKey(_ notification: Notification) {
         if !keyingForAgent { lastKey = Date() } // brought forward for an agent: not a window the user went to
+        watchTabGroup()
         activityChanged()
         refreshVisibility()
         refresh()
@@ -2854,16 +2913,24 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// unless `force` (the end of a full-screen transition).
     func titleBarChanged(force: Bool = false) {
         guard let window else { return }
+        watchTabGroup()
         let host: WindowColumnHost = columnHost
         let layout: NSRect = host.convert(window.contentLayoutRect, from: nil)
         let shown: Bool = window.tabGroup?.isTabBarVisible == true
-        let cover: CGFloat = TitleBarCover.top(contentHeight: host.bounds.height, layoutMaxY: layout.maxY, tabBarShown: shown)
+        var cover: CGFloat = TitleBarCover.top(contentHeight: host.bounds.height, layoutMaxY: layout.maxY, tabBarShown: shown)
+        if shown {
+            expectsTabBar = false
+            if !isFullScreen, cover > 0 { WindowTabbing.measuredCover = cover }
+        } else if expectsTabBar, !isFullScreen, let measured = WindowTabbing.measuredCover {
+            cover = measured
+        }
         guard host.topCover != cover || force else { return }
         if host.topCover != cover {
             host.topCover = cover
             window.minSize = NSSize(width: Self.minimumSize.width, height: Self.minimumSize.height + cover)
         }
         updateInsets()
+        updateProjectTab()
     }
 
     /// The smallest a window gets, its top row's room for a system tab bar on top.

@@ -57,11 +57,8 @@ final class GeneralSettingsView: NSView {
         projectColors.action = #selector(projectColorsChanged)
         windowColumn.target = self
         windowColumn.action = #selector(windowColumnChanged)
-        let targets: [(String, AppDelegate.ProjectTarget)] = [
-            ("Ask Each Time", .ask), ("This Window", .thisWindow), ("New Window", .newWindow),
-        ]
-        for (title, target) in targets {
-            projectsIn.addItem(withTitle: title)
+        for target in AppDelegate.ProjectTarget.allCases {
+            projectsIn.addItem(withTitle: target.title)
             projectsIn.lastItem?.representedObject = target.rawValue
         }
         projectsIn.target = self

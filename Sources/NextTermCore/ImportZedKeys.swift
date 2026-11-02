@@ -13,7 +13,7 @@ extension ImportZed {
         "workspace::NewWindow": "newWindow:",
         "workspace::Open": "openProjectPanel:",
         "file_finder::Toggle": "goToFile:",
-        "workspace::CloseWindow": "performClose:",
+        "workspace::CloseWindow": "closeWindow:",
         "workspace::Save": "saveDocument:",
         "workspace::SaveAll": "saveAllDocuments:",
         "pane::SplitRight": "splitRight:",

@@ -481,6 +481,14 @@ enum MCPControl {
                 window["project"] = project
                 window["name"] = (project as NSString).lastPathComponent
             }
+            // Merged with other project windows into one, as macOS's tabs (plan 032): the others' projects, and whether
+            // its tab is behind the one in front, out of sight.
+            if let shown = controller.window, shown.mergedWindows.count > 1 {
+                window["merged_with"] = shown.mergedWindows.filter { $0 !== shown }.compactMap { (other: NSWindow) -> String? in
+                    (other.windowController as? TerminalWindowController).map { $0.project ?? $0.windowName }
+                }
+                window["behind"] = shown.isBackgroundTab
+            }
             return window
         }
         if windows.isEmpty, let wanted { return fail("No window has the project \(wanted) open; open_project opens it.") }

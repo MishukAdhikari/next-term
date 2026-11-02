@@ -18,7 +18,7 @@ public enum MenuKeys {
             "newTab:": cmd("t"), "newWindow:": cmd("n"), "newRemoteTab:": optCmd("t"), "reopenClosedTab:": shiftCmd("t"),
             "openProjectPanel:": cmd("o"), "goToFile:": cmd("p"), "saveDocument:": cmd("s"), "saveAllDocuments:": optCmd("s"),
             "splitRight:": cmd("d"), "splitDown:": shiftCmd("d"), "renameTab:": optCmd("r"), "closeTab:": cmd("w"),
-            "performClose:": shiftCmd("w"),
+            "closeWindow:": shiftCmd("w"),
             // Edit
             "undo:": cmd("z"), "redo:": shiftCmd("z"), "cut:": cmd("x"), "copy:": cmd("c"), "paste:": cmd("v"), "selectAll:": cmd("a"),
             "performFindPanelAction:#1": cmd("f"), "replaceInFile:": optCmd("f"), "performFindPanelAction:#2": cmd("g"),
@@ -34,7 +34,7 @@ public enum MenuKeys {
             "toggleBlameAnnotations:": KeyChord(key: "a", command: true, shift: true, control: true),
             "toggleCurrentLineBlame:": KeyChord(key: "l", command: true, shift: true, control: true),
             "increaseFontSize:": cmd("+"), "decreaseFontSize:": cmd("-"), "resetFontSize:": cmd("0"), "toggleFullScreen:": ctrlCmd("f"),
-            "toggleMarkdownPreview:": shiftCmd("v"),
+            "toggleMarkdownPreview:": shiftCmd("v"), "toggleTabOverview:": shiftCmd("\\"),
             // Markdown (Edit › Markdown), while a Markdown file's editor has the keyboard
             "toggleMarkdownBold:": cmd("b"), "toggleMarkdownItalic:": cmd("i"), "insertMarkdownLink:": cmd("k"),
             "toggleMarkdownStrikethrough:": shiftCmd("x"), "toggleMarkdownTask:": shiftCmd("l"), "markdownBodyText:": optCmd("0"),
@@ -52,6 +52,8 @@ public enum MenuKeys {
             "selectPaneLeft:": optCmd(left), "selectPaneRight:": optCmd(right), "selectPaneAbove:": optCmd(up),
             "selectPaneBelow:": optCmd(down), "selectNextPane:": optCmd("]"), "selectPreviousPane:": optCmd("["),
             "toggleZoomPane:": shiftCmd("\r"), "goToAgent:": ctrlCmd("a"),
+            // Project windows merged as macOS's tabs: ⌃ for projects, as ⇧ is for tabs and ⌥ for panes.
+            "selectPreviousTab:": ctrlCmd("["), "selectNextTab:": ctrlCmd("]"),
         ]
         for n in 1...9 { keys["selectTabByNumber:#\(n)"] = cmd("\(n)") }
         for level in 1...6 { keys["markdownHeading:#\(level)"] = optCmd("\(level)") }

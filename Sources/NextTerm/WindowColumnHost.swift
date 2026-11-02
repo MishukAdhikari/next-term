@@ -440,6 +440,7 @@ final class WindowColumnHost: NSView {
     private func mirror() {
         guard listShowing, let list else { return }
         list.update(list: column.list, change: .structure, current: column.current, expanded: true)
+        list.setMerged(column.merged)
         list.projectGlow.peak = column.projectGlow.peak
         list.projectGlow.dimmed = column.projectGlow.dimmed
     }

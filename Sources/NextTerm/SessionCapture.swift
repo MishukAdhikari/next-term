@@ -23,9 +23,17 @@ enum SessionCapture {
             a.element.lastKey != b.element.lastKey ? a.element.lastKey > b.element.lastKey : a.offset < b.offset
         }
         let opened: [ObjectIdentifier: Int] = openingOrder(controllers)
+        // Windows merged into one, numbered as they first come front to back: an unchanged session saves the same numbers.
+        var tabGroups: [ObjectIdentifier: Int] = [:]
         let windows = ordered.map { (entry: (offset: Int, element: TerminalWindowController)) -> SessionSnapshot.Window in
             var saved = window(entry.element, scrollback: scrollback)
             saved.opened = opened[ObjectIdentifier(entry.element)]
+            if let shown = entry.element.window, let group = shown.tabGroup, group.windows.count > 1,
+               let place = group.windows.firstIndex(where: { $0 === shown }) {
+                let number: Int = tabGroups[ObjectIdentifier(group)] ?? tabGroups.count
+                tabGroups[ObjectIdentifier(group)] = number
+                saved.windowTab = SessionSnapshot.WindowTab(group: number, place: place, front: group.selectedWindow === shown)
+            }
             return saved
         }
         let open = Set(controllers.flatMap(\.tabs).map(\.id))
@@ -58,7 +66,8 @@ enum SessionCapture {
                                   zoomed: group.zoomed?.id)
         }
         var window = SessionSnapshot.Window(project: project, groups: groups, selected: controller.activeIndex)
-        if let shown = controller.window {
+        // Merged behind another's tab, the window takes the frame, screen and state of the tab in front: they are one.
+        if let shown = controller.window?.shownWindow {
             let frame = shown.frame
             window.frame = SessionSnapshot.Frame(x: Double(frame.origin.x), y: Double(frame.origin.y), width: Double(frame.width),
                                                  height: Double(frame.height))

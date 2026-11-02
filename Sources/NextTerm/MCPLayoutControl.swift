@@ -322,6 +322,7 @@ extension MCPWriteControl {
         case "agent_spinner": return .choice(AgentSpinner.current.rawValue)
         case "agents_offer_tabs": return .flag(app.agentsOfferTabs)
         case "agents_bring_tabs_forward": return .choice(app.agentArrival.rawValue)
+        case "open_projects_in": return .choice(app.projectTarget.mcpName)
         default: return .flag(false)
         }
     }
@@ -345,6 +346,7 @@ extension MCPWriteControl {
         case ("agent_spinner", .choice(let name)): if let choice = AgentSpinner(rawValue: name) { AgentSpinner.current = choice }
         case ("agents_offer_tabs", .flag(let on)): app.agentsOfferTabs = on
         case ("agents_bring_tabs_forward", .choice(let name)): if let mode = AgentArrival.Mode(rawValue: name) { app.agentArrival = mode }
+        case ("open_projects_in", .choice(let name)): if let target = ProjectOpening.Setting(mcpName: name) { app.projectTarget = target }
         default: break
         }
         // Settings › Notifications shows it, if open.

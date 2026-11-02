@@ -621,6 +621,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 320), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = "Software Update"
+        window.keepsItsOwnFrame()
         window.isReleasedWhenClosed = false
         window.animationBehavior = .alertPanel
         super.init(window: window)
@@ -833,6 +834,8 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
             parentWindow = parent
             NotificationCenter.default.addObserver(self, selector: #selector(parentWillClose(_:)), name: NSWindow.willCloseNotification,
                                                    object: parent)
+            NotificationCenter.default.addObserver(self, selector: #selector(parentTabChanged(_:)), name: NSWindow.tabSelectionDidChange,
+                                                   object: parent)
         } else {
             window.center()
         }
@@ -844,8 +847,16 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
     @objc private func parentWillClose(_ note: Notification) {
         guard let window, let parent = note.object as? NSWindow else { return }
         NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: parent)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.tabSelectionDidChange, object: parent)
         parent.removeChildWindow(window)
         parentWindow = nil
+    }
+
+    /// Its window went behind another project's tab in the same window: it stays in sight, on its own, still unanswered.
+    @objc private func parentTabChanged(_ note: Notification) {
+        guard let window, let parent = note.object as? NSWindow, parent.isBackgroundTab else { return }
+        parentWillClose(Notification(name: NSWindow.willCloseNotification, object: parent))
+        window.orderFront(nil)
     }
 
     @objc private func keepChanged() {
@@ -916,6 +927,7 @@ final class UpdateWaitPanel: NSWindowController, NSWindowDelegate {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 180),
                             styleMask: [.titled, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Software Update"
+        panel.keepsItsOwnFrame()
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true

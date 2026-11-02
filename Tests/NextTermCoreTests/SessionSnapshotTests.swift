@@ -97,6 +97,28 @@ import Testing
         #expect(paneIDs(back.panes) == ids(1, 2, 3, 5, 4, 6))
     }
 
+    /// Windows merged into one (plan 032) record their group, their place in its tab bar and the one in front; a window of
+    /// its own, or a file written before windows merged, records none, and numbers no file holds read as none.
+    @Test func mergedWindowsRoundTripAndAWindowOfItsOwnRecordsNothing() throws {
+        let tab = SessionSnapshot.WindowTab(group: 0, place: 1, front: true)
+        let merged = Window(groups: [Group(root: .pane(pane(1)), focused: id(1))], windowTab: tab)
+        let apart = Window(groups: [Group(root: .pane(pane(2)), focused: id(2))])
+        let snapshot = Snapshot(header: header(), windows: [merged, apart])
+        let back = try Snapshot.decode(snapshot.encoded())
+        #expect(back == snapshot)
+        #expect(back.windows.map(\.windowTab) == [tab, nil])
+        let json = try JSONSerialization.jsonObject(with: snapshot.encoded())
+        let written = try #require((json as? [String: Any])?["windows"] as? [[String: Any]])
+        #expect(written.last?["windowTab"] == nil)
+        #expect(try decode(frozenV1).windows.allSatisfy { (window: Window) -> Bool in window.windowTab == nil })
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":{"group":2,"place":0,"front":false}"#)).windows.first?.windowTab
+                == SessionSnapshot.WindowTab(group: 2, place: 0, front: false))
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":{"group":-1,"place":0,"front":true}"#)).windows.first?.windowTab == nil)
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":"merged""#)).windows.first?.windowTab == nil)
+        // A file that cannot be read whole still reads its windows.
+        #expect(try decode(oneTab(paneJSON(1), extra: #","windowTab":{"group":1}"#)).windows.count == 1)
+    }
+
     @Test func eachWindowsPlaceInTheOrderTheyOpenedRoundTripsAndAFileWithoutItReadsNone() throws {
         let first = Window(groups: [Group(root: .pane(pane(1)), focused: id(1))], opened: 2)
         let second = Window(groups: [Group(root: .pane(pane(2)), focused: id(2))], opened: 0)
