@@ -297,7 +297,7 @@ public struct SkillChanges: Sendable {
     /// The target to write in a link at `at` so that it reaches `to`: relative between the two real
     /// folders (the system resolves a link from where it physically is, so a ~/.claude that is itself a
     /// link to a dotfiles folder counts), or absolute when they share nothing below the root.
-    static func linkTarget(at: String, to: String) -> String {
+    public static func linkTarget(at: String, to: String) -> String {
         let from = realPath((at as NSString).deletingLastPathComponent)
         // The folder holding `to`, not `to` itself: a link to the shared entry must stay a link to it,
         // even when that entry is itself a link (to the developer's own folder).

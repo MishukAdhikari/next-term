@@ -290,6 +290,7 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     // MARK: data
 
     @objc func reload() {
+        skillSetting.reload() // a copy added, edited or removed elsewhere shows as it is now
         let store = SecretsStore.shared
         // The selected key, by its id, before the list changes: its row may hold another key after a delete elsewhere,
         // and a rename keeps the id, not the name.
