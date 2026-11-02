@@ -101,6 +101,10 @@ extension SelfTest {
               "window tabs: the project behind counts as unseen, and the one in front is the front window",
               "host seen \(host.canBeSeen), front \(TerminalWindow.front?.title ?? "none")")
         await screenshot(other, suffix: "-merged")
+        let ids: Set<Int> = [c.indexID, other.indexID]
+        check(c.columnHost.column.merged == ids && other.columnHost.column.merged == ids,
+              "window tabs: each merged window's column knows the windows merged with it, for the bracket beside their rows",
+              "\(c.columnHost.column.merged) and \(other.columnHost.column.merged) of \(ids)")
 
         // One item per tab command in the menus, Next Term's; Close Window is Next Term's, not AppKit's performClose:.
         NSApp.mainMenu?.update()

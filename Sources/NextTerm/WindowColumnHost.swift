@@ -39,8 +39,6 @@ final class WindowColumnHost: NSView {
     }
     /// The strip under the system tab bar and its title row: the bar's colour, so the window's top reads as one band.
     private let coverStrip = NSView()
-    /// While another project window is dragged over this one's top row: lit, where letting go merges it in as a tab.
-    private let mergeHint = NSView()
 
     /// Every window shows the column (WindowColumns: two or more windows, and the setting on).
     var visible = false
@@ -110,13 +108,6 @@ final class WindowColumnHost: NSView {
         coverStrip.layer?.backgroundColor = Theme.bar.cgColor
         coverStrip.isHidden = true
         addSubview(coverStrip)
-        mergeHint.wantsLayer = true
-        mergeHint.layer?.backgroundColor = Theme.accent.withAlphaComponent(0.18).cgColor
-        mergeHint.layer?.borderColor = Theme.accent.cgColor
-        mergeHint.layer?.borderWidth = 1.5
-        mergeHint.layer?.cornerRadius = 7
-        mergeHint.isHidden = true
-        addSubview(mergeHint)
         column.onPointer = { [weak self] (inside: Bool) in self?.railPointer(inside) }
         column.onMoved = { [weak self] in self?.railMoved() }
         column.onUpdated = { [weak self] in self?.mirror() }
@@ -238,17 +229,6 @@ final class WindowColumnHost: NSView {
 
     /// The column and the split view where they go now; nothing moves when nothing changed. `force`: the window's size or
     /// the column's side changed, so the frames are set even with the same form.
-    /// Lights the window's top row as the place a dragged project window merges into (TerminalWindowTabs), or puts it out.
-    func showMergeHint(_ shown: Bool) {
-        guard shown == mergeHint.isHidden else { return }
-        if shown {
-            let height: CGFloat = topCover + TabBarView.height
-            mergeHint.frame = NSRect(x: 4, y: bounds.height - height + 2, width: bounds.width - 8, height: height - 4)
-            addSubview(mergeHint, positioned: .above, relativeTo: nil)
-        }
-        mergeHint.isHidden = !shown
-    }
-
     func place(force: Bool = false) {
         let strip = NSRect(x: 0, y: max(0, bounds.height - topCover), width: bounds.width, height: min(topCover, bounds.height))
         if coverStrip.frame != strip { coverStrip.frame = strip }
@@ -460,6 +440,7 @@ final class WindowColumnHost: NSView {
     private func mirror() {
         guard listShowing, let list else { return }
         list.update(list: column.list, change: .structure, current: column.current, expanded: true)
+        list.setMerged(column.merged)
         list.projectGlow.peak = column.projectGlow.peak
         list.projectGlow.dimmed = column.projectGlow.dimmed
     }

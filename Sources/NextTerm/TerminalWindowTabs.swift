@@ -43,6 +43,16 @@ extension TerminalWindowController {
         }
         refreshVisibility()
         updateProjectTab()
+        columnHost.column.setMerged(mergedIDs)
+        columnHost.list?.setMerged(mergedIDs)
+    }
+
+    /// The windows merged with this one, by their ids in the index, this one among them; empty for a window of its own.
+    var mergedIDs: Set<Int> {
+        guard let window else { return [] }
+        let windows: [NSWindow] = window.mergedWindows
+        guard windows.count > 1 else { return [] }
+        return Set(windows.compactMap { ($0.windowController as? TerminalWindowController)?.indexID })
     }
 
     /// What the project's tab in the system tab bar shows: its colour's dot and its name, a worktree's own part after
@@ -216,65 +226,3 @@ enum WindowSheets {
     }
 }
 
-/// Dragging a project window by its top row onto another project window's top row merges it in there as a tab (plan
-/// 032): the window in its own frame has no tab bar to drop on, so its top row is where it goes. The target lights up
-/// while the pointer is over it; letting go elsewhere only moves the window. Only those two merge: the others stay as
-/// they are.
-@MainActor
-enum WindowMergeDrag {
-    private static var timer: Timer?
-    private static weak var dragged: NSWindow?
-    private static weak var lit: TerminalWindowController?
-    /// Where the window was as the drag began: a drag that never moved it (a tab dragged in its bar) merges nothing.
-    private static var startedAt: NSPoint = .zero
-
-    /// A drag of `window` began (TerminalWindow): the target follows the pointer until the button is up.
-    static func began(_ window: NSWindow) {
-        guard timer == nil, window.windowController is TerminalWindowController, !window.styleMask.contains(.fullScreen) else { return }
-        dragged = window
-        startedAt = window.frame.origin
-        let tick = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in
-            MainActor.assumeIsolated { follow() }
-        }
-        RunLoop.main.add(tick, forMode: .common)
-        timer = tick
-    }
-
-    private static func follow() {
-        guard let window = dragged else { return end(merge: false) }
-        if NSEvent.pressedMouseButtons & 1 == 0 { return end(merge: true) }
-        let moved: Bool = window.frame.origin != startedAt
-        let target: TerminalWindowController? = moved ? self.target(for: window, at: NSEvent.mouseLocation) : nil
-        guard target !== lit else { return }
-        lit?.columnHost.showMergeHint(false)
-        lit = target
-        target?.columnHost.showMergeHint(true)
-    }
-
-    /// The project window whose top row is under `point`, not this one or one it is merged with already, shown and not in
-    /// full screen: frontmost first.
-    static func target(for window: NSWindow, at point: NSPoint) -> TerminalWindowController? {
-        let mine: [NSWindow] = window.mergedWindows
-        for other in NSApp.orderedWindows where other !== window && !mine.contains(where: { $0 === other }) {
-            guard other.isShownFrame, !other.styleMask.contains(.fullScreen),
-                  let controller = other.windowController as? TerminalWindowController, !controller.hasClosed else { continue }
-            let row: CGFloat = other.frame.maxY - other.contentTop + TabBarView.height
-            let strip = NSRect(x: other.frame.minX, y: other.frame.maxY - row, width: other.frame.width, height: row)
-            if strip.contains(point) { return controller }
-            if other.frame.contains(point) { return nil } // over the rest of a window in front: not one behind it
-        }
-        return nil
-    }
-
-    private static func end(merge: Bool) {
-        timer?.invalidate()
-        timer = nil
-        let target = lit, window = dragged
-        lit?.columnHost.showMergeHint(false)
-        lit = nil
-        dragged = nil
-        guard merge, let target, let host = target.window, let window, !target.hasClosed else { return }
-        host.addTabbedWindow(window, ordered: .above)
-        window.makeKeyAndOrderFront(nil)
-    }
-}

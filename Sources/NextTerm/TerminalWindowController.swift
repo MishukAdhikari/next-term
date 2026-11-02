@@ -39,19 +39,8 @@ final class TerminalWindow: NSWindow {
         return valid
     }
 
-    /// A drag by the window's top row (the tab bars, the sidebar header): onto another project window's top row, it merges
-    /// in there as a tab (WindowMergeDrag).
-    override func performDrag(with event: NSEvent) {
-        WindowMergeDrag.began(self)
-        super.performDrag(with: event)
-    }
-
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown { UserKeys.pressed() }
-        // A drag by a part that moves the window itself (the rail, the window column, the empty title row).
-        if event.type == .leftMouseDragged, NSEvent.pressedMouseButtons & 1 != 0, event.locationInWindow.y > frame.height - tabBarCover - TabBarView.height {
-            WindowMergeDrag.began(self)
-        }
         // A click on a tab an agent opened chooses it: it takes the keyboard, and the click reaches nothing in it (a
         // button in the agent's screen).
         if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type), let view = awaitingTerminal(at: event.locationInWindow) {
