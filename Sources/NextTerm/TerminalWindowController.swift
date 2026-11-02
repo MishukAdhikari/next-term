@@ -224,9 +224,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var editorsConfirmed = false
     /// Close Anyway was chosen for the database values not saved yet, for this close.
     private var valuesConfirmed = false
-    /// In full screen (or about to be): no traffic lights in the way. Set by the window's full-screen notifications, and
-    /// by the self-test, which checks the insets without a real transition.
-    var isFullScreen = false
+    /// In full screen (or about to be): no traffic lights in the way. From the window itself (a window that joins or
+    /// leaves a full-screen tab group gets no transition of its own), the transition under way, or the self-test's
+    /// setting, which checks the insets without a real transition.
+    var isFullScreen: Bool {
+        get { fullScreenForTest ?? fullScreenTransition ?? (window?.styleMask.contains(.fullScreen) == true) }
+        set { fullScreenForTest = newValue }
+    }
+    private var fullScreenForTest: Bool?
+    /// Entering (true) or leaving (false) full screen, from the will-notification until it ends or fails.
+    private var fullScreenTransition: Bool?
+    /// The traffic lights sit beside our top bars: not in full screen, and not while a system tab bar puts them in a row
+    /// of their own above it.
+    var lightsBesideBars: Bool { !isFullScreen && columnHost.topCover == 0 }
+    /// Watches the window's unobscured area, which a system tab bar coming or going changes.
+    private var layoutRectWatch: NSKeyValueObservation?
     /// Last state announced to VoiceOver per tab, so each change is announced once.
     private var announcedStates: [UUID: TabState] = [:]
     private var projectKey: String?
@@ -326,13 +338,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Theme.background
-        window.minSize = NSSize(width: 420, height: 240)
+        window.minSize = Self.minimumSize
         window.tabbingMode = .disallowed // our own tabs, not the system's
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
         super.init(window: window)
 
         window.delegate = self
+        // A system tab bar shown or hidden (a merge, a split, Show Tab Bar) moves our top row below it or back.
+        layoutRectWatch = window.observe(\.contentLayoutRect, options: [.new]) { [weak self] (_, _) in
+            MainActor.assumeIsolated { self?.titleBarChanged() }
+        }
         window.onControlTab = { [weak self] backwards in self?.cycleTab(by: backwards ? -1 : 1) }
         // Tab completion's list first, then a suggestion's keys.
         window.onTerminalKey = { [weak self] event, view in
@@ -1023,8 +1039,15 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// web-1" in a remote tab (or "xCloud — web-1: app" when the tab's name says it already); with no project
     /// "~/Downloads — vim", or "web-1 — app" with a server's tab in front. The window's name comes first, so the Window
     /// menu, Mission Control and VoiceOver lead with the project (WindowTitle).
+    /// The window's title, set only when it changes (a tab bar lays out again for each); its tab in a merged window is
+    /// named by the project, the whole title its tooltip.
     func updateTitle() {
-        window?.title = windowTitle
+        guard let window else { return }
+        let title: String = windowTitle
+        if window.title != title { window.title = title }
+        let name: String = windowName
+        if window.tab.title != name { window.tab.title = name }
+        if window.tab.toolTip != title { window.tab.toolTip = title }
     }
 
     var windowTitle: String {
@@ -1533,9 +1556,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func updateInsets() {
         let column: CGFloat = windowColumnUnderLights
         let end: CGFloat = lightsEnd
-        let lights: CGFloat = isFullScreen ? 8 : max(8, end - column)
+        let lights: CGFloat = lightsBesideBars ? max(8, end - column) : 8
         let sidebarTopLeft = isSidebarVisible && !sidebarOnRight
-        sidebar.headerInset = sidebarTopLeft && !isFullScreen ? max(8, end - 8 - column) : 8
+        sidebar.headerInset = sidebarTopLeft && lightsBesideBars ? max(8, end - 8 - column) : 8
         updateWindowColumnInsets()
         let corner = sidebarTopLeft ? 8 : lights
         let editorShown = !editorArea.isHidden
@@ -2526,7 +2549,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     /// Under the branch name at the top of the sidebar, or near the window's top left without it.
     private var branchPopupAnchor: NSRect? {
         guard let window else { return nil }
-        var anchor = NSRect(x: window.frame.minX + 80, y: window.frame.maxY - 44, width: 1, height: 1)
+        var anchor = NSRect(x: window.frame.minX + (lightsBesideBars ? 80 : 8), y: window.contentTop - 44, width: 1, height: 1)
         if isSidebarVisible {
             anchor = window.convertToScreen(sidebar.header.convert(sidebar.header.bounds, to: nil))
             anchor.origin.x += sidebar.headerInset - 4
@@ -2806,8 +2829,45 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         refreshVisibility()
     }
 
-    func windowWillEnterFullScreen(_ notification: Notification) { isFullScreen = true; updateInsets() }
-    func windowWillExitFullScreen(_ notification: Notification) { isFullScreen = false; updateInsets() }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        fullScreenTransition = true
+        updateInsets()
+    }
+    func windowWillExitFullScreen(_ notification: Notification) {
+        fullScreenTransition = false
+        updateInsets()
+    }
+    func windowDidEnterFullScreen(_ notification: Notification) { fullScreenEnded() }
+    func windowDidExitFullScreen(_ notification: Notification) { fullScreenEnded() }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { fullScreenEnded() }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { fullScreenEnded() }
+
+    /// A transition over, or failed: the window's own style mask says again.
+    private func fullScreenEnded() {
+        fullScreenTransition = nil
+        titleBarChanged(force: true)
+    }
+
+    /// The system tab bar came or went, or the window's top changed with it: how much of the top it takes now
+    /// (TitleBarCover), our top row below it, and the traffic lights' insets as they now sit. The window's frame minimum
+    /// keeps the same room for the content. A resize changes the unobscured area too and the cover not: nothing then,
+    /// unless `force` (the end of a full-screen transition).
+    func titleBarChanged(force: Bool = false) {
+        guard let window else { return }
+        let host: WindowColumnHost = columnHost
+        let layout: NSRect = host.convert(window.contentLayoutRect, from: nil)
+        let shown: Bool = window.tabGroup?.isTabBarVisible == true
+        let cover: CGFloat = TitleBarCover.top(contentHeight: host.bounds.height, layoutMaxY: layout.maxY, tabBarShown: shown)
+        guard host.topCover != cover || force else { return }
+        if host.topCover != cover {
+            host.topCover = cover
+            window.minSize = NSSize(width: Self.minimumSize.width, height: Self.minimumSize.height + cover)
+        }
+        updateInsets()
+    }
+
+    /// The smallest a window gets, its top row's room for a system tab bar on top.
+    static let minimumSize = NSSize(width: 420, height: 240)
 
     // MARK: TabBarViewDelegate
 

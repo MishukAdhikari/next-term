@@ -88,7 +88,7 @@ extension TerminalWindowController {
     /// How far the column reaches in from the window's left edge, under the traffic lights: its width with its hairline
     /// while it shows on the left outside full screen, else 0.
     var windowColumnUnderLights: CGFloat {
-        guard !columnHost.columnOnRight, !isFullScreen else { return 0 }
+        guard !columnHost.columnOnRight, lightsBesideBars else { return 0 }
         return columnHost.shown.width
     }
 
@@ -97,7 +97,7 @@ extension TerminalWindowController {
     /// keep one grid. On the right, or in full screen, it starts at the top.
     func updateWindowColumnInsets() {
         let host: WindowColumnHost = columnHost
-        let underLights: Bool = !host.columnOnRight && !isFullScreen
+        let underLights: Bool = !host.columnOnRight && lightsBesideBars
         let inset: CGFloat = underLights ? TabBarView.height : 0
         guard host.column.topInset != inset else { return }
         host.hideList(animated: false) // its grid was the old one's

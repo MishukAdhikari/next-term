@@ -534,6 +534,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var requests = ProjectOpening.LaunchRequests()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // No window joins another as a tab by itself, whatever System Settings' "Prefer tabs" says: Next Term decides each
+        // merge (plan 032), and Settings, Welcome and the viewers never tab with anything.
+        NSWindow.allowsAutomaticWindowTabbing = false
         // Single clicks in the sidebar: on for a new install, kept as it was for one used before. First, before this
         // launch writes any of the keys that tell the two apart (SidebarClick.usedInstallKeys). Not in the self-test,
         // whose defaults look new at every run: its clicks part sets the setting itself.

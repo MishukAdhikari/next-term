@@ -33,7 +33,7 @@ final class GoToHeadingController: NSObject, NSTextFieldDelegate, NSTableViewDat
         let height = 52 + Self.rowHeight * 12 + 30
         let frame = parent.frame
         let width = min(GoToFileController.width, frame.width - 40)
-        panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.maxY - 72 - height, width: width, height: height), display: false)
+        panel.setFrame(NSRect(x: frame.midX - width / 2, y: parent.contentTop - 72 - height, width: width, height: height), display: false)
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)

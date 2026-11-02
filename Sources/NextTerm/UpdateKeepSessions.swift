@@ -823,7 +823,7 @@ final class UpdateSheetController: NSWindowController, NSWindowDelegate {
         }
         if let parent, parent.isVisible, !parent.isMiniaturized {
             let size = window.frame.size
-            var origin = NSPoint(x: parent.frame.midX - size.width / 2, y: parent.frame.maxY - size.height - 64)
+            var origin = NSPoint(x: parent.frame.midX - size.width / 2, y: parent.contentTop - size.height - 64)
             if let screen = (parent.screen ?? NSScreen.main)?.visibleFrame {
                 origin.x = min(max(origin.x, screen.minX), screen.maxX - size.width)
                 origin.y = min(max(origin.y, screen.minY), screen.maxY - size.height)

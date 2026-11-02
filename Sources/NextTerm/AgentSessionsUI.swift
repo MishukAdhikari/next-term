@@ -240,7 +240,7 @@ final class SessionsPanelController: NSObject, NSTextFieldDelegate, NSTableViewD
         let frame = parent.frame
         let width = min(640, frame.width - 40)
         let height: CGFloat = 52 + 46 * 9 + 30
-        panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.maxY - 72 - height, width: width, height: height), display: false)
+        panel.setFrame(NSRect(x: frame.midX - width / 2, y: parent.contentTop - 72 - height, width: width, height: height), display: false)
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)

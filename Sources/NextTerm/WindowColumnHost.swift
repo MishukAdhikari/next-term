@@ -26,6 +26,19 @@ final class WindowColumnHost: NSView {
     let content: NSView
     /// Pinned, the handle over its inner edge: the resize cursor and the drag.
     let edge = WindowColumnEdge()
+    /// What the system's tab bar and the title row above it take off the top while macOS shows a tab bar over this window
+    /// (TitleBarCover): the column and the split view lay out below it, and the strip it covers is filled with the bar's
+    /// colour; 0 without a tab bar.
+    var topCover: CGFloat = 0 {
+        didSet {
+            guard topCover != oldValue else { return }
+            hideList(animated: false) // laid out for the old top
+            coverStrip.isHidden = topCover == 0
+            place(force: true)
+        }
+    }
+    /// The strip under the system tab bar and its title row: the bar's colour, so the window's top reads as one band.
+    private let coverStrip = NSView()
 
     /// Every window shows the column (WindowColumns: two or more windows, and the setting on).
     var visible = false
@@ -91,6 +104,10 @@ final class WindowColumnHost: NSView {
         edge.isHidden = true
         edge.onDrag = { [weak self] (event: NSEvent) in self?.column.dragEdge(from: event) }
         addSubview(edge) // over the column's rows and the content beside it
+        coverStrip.wantsLayer = true
+        coverStrip.layer?.backgroundColor = Theme.bar.cgColor
+        coverStrip.isHidden = true
+        addSubview(coverStrip)
         column.onPointer = { [weak self] (inside: Bool) in self?.railPointer(inside) }
         column.onMoved = { [weak self] in self?.railMoved() }
         column.onUpdated = { [weak self] in self?.mirror() }
@@ -133,7 +150,7 @@ final class WindowColumnHost: NSView {
         guard shows else { return }
         let half: CGFloat = 4
         let x: CGFloat = columnOnRight ? column.frame.minX - half : column.frame.maxX - half
-        let frame = NSRect(x: x, y: 0, width: 2 * half, height: max(0, bounds.height - WindowColumnGrid.titleStrip))
+        let frame = NSRect(x: x, y: 0, width: 2 * half, height: max(0, bounds.height - topCover - WindowColumnGrid.titleStrip))
         guard edge.frame != frame else { return }
         edge.frame = frame
         window?.invalidateCursorRects(for: edge)
@@ -213,6 +230,8 @@ final class WindowColumnHost: NSView {
     /// The column and the split view where they go now; nothing moves when nothing changed. `force`: the window's size or
     /// the column's side changed, so the frames are set even with the same form.
     func place(force: Bool = false) {
+        let strip = NSRect(x: 0, y: max(0, bounds.height - topCover), width: bounds.width, height: min(topCover, bounds.height))
+        if coverStrip.frame != strip { coverStrip.frame = strip }
         // The window's own change first, beside the column as it is: the split view shares it out, as it does any resize.
         let (_, resized) = frames(for: shown.width)
         if content.frame != resized { setContentFrame(resized) }
@@ -381,7 +400,7 @@ final class WindowColumnHost: NSView {
     private func listFrame() -> NSRect {
         let width: CGFloat = WindowColumnRail.listWidth + WindowColumnWidth.hairline
         let x: CGFloat = columnOnRight ? column.frame.maxX - width : column.frame.minX
-        return NSRect(x: x, y: 0, width: width, height: bounds.height)
+        return NSRect(x: x, y: 0, width: width, height: max(0, bounds.height - topCover))
     }
 
     private func makeList() -> WindowColumnView {
@@ -572,7 +591,8 @@ final class WindowColumnHost: NSView {
 
     /// The column's frame (none while it is hidden) and the split view's, for a column `width` across.
     private func frames(for width: CGFloat) -> (NSRect?, NSRect) {
-        let height: CGFloat = bounds.height
+        // Below the system tab bar while it shows (the host is not flipped: the room is left at the top).
+        let height: CGFloat = max(0, bounds.height - topCover)
         let columnFrame = NSRect(x: columnOnRight ? bounds.width - width : 0, y: 0, width: width, height: height)
         let contentFrame = NSRect(x: columnOnRight ? 0 : width, y: 0, width: max(0, bounds.width - width), height: height)
         return (width > 0 ? columnFrame : nil, contentFrame)
