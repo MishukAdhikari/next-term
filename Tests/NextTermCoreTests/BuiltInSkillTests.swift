@@ -218,6 +218,22 @@ import Testing
         #expect(text.contains("Settings › Tasks") && text.contains("skills, tasks or secrets"))
     }
 
+    /// next-term-setup's first run: read what is there, preview the import, one plan as a table, one approval with
+    /// apply_setup (or the three asks without it), then how to undo it and three keys.
+    @Test func theSetupSkillHasAFirstRun() throws {
+        let text = BuiltInSkill.setup.text
+        let firstRun = try #require(text.components(separatedBy: "## First run").last?.components(separatedBy: "## Keys").first)
+        for step in ["`settings_get`", "`list_import_sources`", "`list_shortcuts`", "`preview_import`", "one plan as a table",
+                     "Change nothing yet", "`apply_setup`", "once", "Without `apply_setup`, use `settings_set`, then `set_layout`, then `apply_import`",
+                     "Undo Agent Setup in the Next Term menu", "`undo_import`", "three keys"] {
+            #expect(firstRun.contains(step), "\(step)")
+        }
+        // Before the keys, and the rules after it still there.
+        #expect(text.range(of: "## First run")!.lowerBound < text.range(of: "## Keys")!.lowerBound)
+        #expect(text.contains("Never agent control") && text.contains("never from memory"))
+        #expect(BuiltInSkill.setup.description.contains("set it up"))
+    }
+
     /// Within the 2,048 characters older Claude Code keeps, and only for an agent in a Next Term tab: the skills right after
     /// Secrets' first line, which every agent gets. Since that line went first (2026-10-31) the skills no longer end within
     /// the first 512 characters: Codex shows a deferred server's first line, and that line is the one about keys.
@@ -233,7 +249,9 @@ import Testing
         #expect(!noTabs.contains("next-term-tabs") && noTabs.contains("get_skill next-term-worktrees") && noTabs.contains("next-term-setup"))
         // next-term-secrets is not offered there: the first line already says when to look in Secrets.
         #expect(!with.contains("next-term-secrets when") && !noTabs.contains("next-term-secrets when"))
-        #expect(!outside.contains("get_skill next-term"))
+        // Outside a tab, one sentence points to next-term-setup alone.
+        #expect(outside.contains("To set Next Term up or change it, read get_skill next-term-setup."))
+        #expect(!outside.contains("next-term-tabs") && !outside.contains("next-term-worktrees") && !with.contains(MCPServer.setupPointer))
         // Still says what the tests of the rest pin.
         #expect(outside.contains("list_tabs") && outside.contains("brings back after an update or a quit keeps its id"))
     }

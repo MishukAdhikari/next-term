@@ -20,10 +20,14 @@ public enum MCPServer {
 
     /// What `initialize` says to an agent outside a Next Term tab. Its first line is Secrets' (secretsLead), whole in the
     /// 250 characters Codex shows of a deferred server's first line, so an agent that needs a key looks there before its
-    /// shell files or the user; what the tools do follows, and how keys are used ends it (secretsUse). Every variant stays
-    /// within the 2,048 characters older Claude Code keeps.
+    /// shell files or the user; what the tools do follows, then where to learn to set Next Term up (setupPointer), and how
+    /// keys are used ends it (secretsUse). Every variant stays within the 2,048 characters older Claude Code keeps.
     public static let instructions = secretsLead + "\n" + "Next Term is the terminal and editor this agent may run in. "
-        + orchestration + " " + secretsUse
+        + orchestration + " " + setupPointer + " " + secretsUse
+
+    /// Where an agent outside a Next Term tab learns to set Next Term up: an agent in a tab has next-term-setup in the
+    /// skills paragraph instead.
+    static let setupPointer = "To set Next Term up or change it, read get_skill next-term-setup."
 
     /// What Next Term's tools do, between Secrets' first line and its last sentences.
     static let orchestration = """
@@ -89,8 +93,8 @@ public enum MCPServer {
         public let timeout: TimeInterval
         /// Reaches another machine (a server over ssh), not only this Mac.
         public var openWorld = false
-        /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (the
-        /// import tools and add_task, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
+        /// Listed for Claude Code to keep loaded (`anthropic/alwaysLoad`). Tools used once in a while (apply_import,
+        /// undo_import and add_task, MCPServer.isDeferred) leave it off, so they cost nothing until tool search finds them.
         public var alwaysLoad = true
     }
 
@@ -294,7 +298,7 @@ public enum MCPServer {
             let asked = params["protocolVersion"] as? String ?? ""
             return result([
                 "protocolVersion": supportedVersions.contains(asked) ? asked : supportedVersions[0],
-                "capabilities": ["tools": ["listChanged": false]],
+                "capabilities": ["tools": ["listChanged": false], "prompts": ["listChanged": false]],
                 "serverInfo": ["name": name, "title": "Next Term", "version": version],
                 "instructions": said,
             ])
@@ -311,7 +315,12 @@ public enum MCPServer {
         case "resources/list":
             return result(["resources": [Any]()])
         case "prompts/list":
-            return result(["prompts": [Any]()])
+            return result(["prompts": promptListing()])
+        case "prompts/get":
+            guard let name = params["name"] as? String, let prompt = prompt(named: name) else {
+                return error(-32602, "Unknown prompt: \(params["name"] as? String ?? "")")
+            }
+            return result(promptMessages(prompt))
         default:
             return error(-32601, "Method not found: \(method)")
         }

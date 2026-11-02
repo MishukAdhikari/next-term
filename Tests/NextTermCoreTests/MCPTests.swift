@@ -21,6 +21,41 @@ import Testing
         #expect((newer?["result"] as? [String: Any])?["protocolVersion"] as? String == MCPServer.supportedVersions[0])
     }
 
+    /// One prompt, setup (Claude Code's /mcp__next-term__setup), advertised in initialize, listed with no arguments, and
+    /// given as the paste prompt in one user message; an unknown name is an invalid-params error.
+    @Test func theSetupPromptIsListedAndGiven() throws {
+        let initialize = answer(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": ["protocolVersion": "2025-06-18"]])
+        let capabilities = (initialize?["result"] as? [String: Any])?["capabilities"] as? [String: Any]
+        #expect((capabilities?["prompts"] as? [String: Any])?["listChanged"] as? Bool == false && capabilities?["tools"] != nil)
+
+        let list = try #require((answer(["jsonrpc": "2.0", "id": 2, "method": "prompts/list"])?["result"] as? [String: Any])?["prompts"] as? [[String: Any]])
+        #expect(list.count == 1)
+        #expect(list.first?["name"] as? String == "setup" && list.first?["title"] as? String == "Set up Next Term")
+        #expect((list.first?["arguments"] as? [Any])?.isEmpty == true && !(list.first?["description"] as? String ?? "").isEmpty)
+
+        let got = try #require(answer(["jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": ["name": "setup"]])?["result"] as? [String: Any])
+        let messages = try #require(got["messages"] as? [[String: Any]])
+        #expect(messages.count == 1 && messages.first?["role"] as? String == "user")
+        let content = try #require(messages.first?["content"] as? [String: Any])
+        let text = try #require(content["text"] as? String)
+        #expect(content["type"] as? String == "text" && text == MCPServer.setupPrompt)
+        #expect(text.hasPrefix("Set up Next Term for me using its MCP tools.\n1. Call `list_tabs`"))
+        for step in ["ask me to restart you", "`next-term-setup` skill with `get_skill`", "`list_import_sources` and `preview_import`",
+                     "`settings_get`", "one plan as a table", "Apply it with `apply_setup` in one approval on my Mac", "how to undo it",
+                     "three shortcuts from `list_shortcuts`", "never print a key"] {
+            #expect(text.contains(step), "\(step)")
+        }
+        // Every tool it names is one the server lists, but apply_setup, which comes with the one-approval plan.
+        let quoted = text.components(separatedBy: "`").enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
+        let named = Set(quoted.filter { $0.contains("_") && !$0.contains(" ") }).subtracting(["apply_setup"])
+        #expect(named.contains("list_tabs") && named.contains("preview_import"))
+        for name in named { #expect(MCPServer.tool(named: name) != nil, "\(name)") }
+        #expect(!text.contains("'") && !text.contains("\""))
+
+        let unknown = answer(["jsonrpc": "2.0", "id": 4, "method": "prompts/get", "params": ["name": "nope"]])
+        #expect((unknown?["error"] as? [String: Any])?["code"] as? Int == -32602)
+    }
+
     /// Claude Code keeps a server's instructions up to 2,048 characters and cuts the rest, so every sentence must fit in
     /// them, the secret tools' at the end included, and with the parallel-tabs offer in front too.
     @Test func theInstructionsFitInTwoThousandAndFortyEightCharacters() {
@@ -111,7 +146,7 @@ import Testing
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - MCPServer.importTools.count - MCPServer.taskTools.count
+        let loadedCount: Int = tools.count - 2 - MCPServer.taskTools.count
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]

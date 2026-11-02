@@ -137,7 +137,7 @@ public struct BuiltInSkill: Sendable, Equatable {
     public static let setup = BuiltInSkill(name: "next-term-setup", text: #"""
         ---
         name: next-term-setup
-        description: Change how Next Term works for the user, keyboard first. Use when the user asks to change its settings, layout, panes, notifications or keys, to make it work like another editor, or how to do something in it: change what MCP allows, open Settings for the rest, and answer with a table of keys.
+        description: Set Next Term up or change how it works for the user, keyboard first. Use when the user asks to set it up, to change its settings, layout, panes, notifications or keys, to make it work like another editor, or how to do something in it, and answer with a table of keys.
         ---
 
         # Set Next Term up for the user
@@ -153,6 +153,16 @@ public struct BuiltInSkill: Sendable, Equatable {
         - `split_pane`, `zoom_pane`, `close_pane` and `focus_tab` arrange panes and give one the keyboard; each asks the user first.
         - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window. For the IDE shortcut set alone no import is needed: `settings_set` with `shortcut_set`.
         - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where.
+
+        ## First run
+
+        When the user asks you to set Next Term up (its `setup` prompt, or "set it up for me"), make one plan and apply it in one approval:
+
+        1. Read what is there: `settings_get` (the settings and the layout), `list_import_sources` (the apps the user had before, and the shortcut set in use) and `list_shortcuts`.
+        2. `preview_import` for the source the user named, or else the one `list_import_sources` shows as used last. Ask which only when two look as likely.
+        3. Propose one plan as a table, a row per change with its value now and the new one: the import's rows, the IDE shortcut set, the layout and the notification choices. Say what will not carry over, as the preview names it. Change nothing yet.
+        4. Once the user agrees, apply it with `apply_setup`: the user approves the whole plan on the Mac, once, and may untick rows. Without `apply_setup`, use `settings_set`, then `set_layout`, then `apply_import`, one ask each.
+        5. Say what changed, as Next Term's answers give it, and how to undo it: Undo Agent Setup in the Next Term menu, or `undo_import` for the import. End with three keys from `list_shortcuts` for what the user will do most, in the table below.
 
         ## Keys
 
