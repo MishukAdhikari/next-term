@@ -182,7 +182,17 @@ import Testing
         #expect(CommandClassifier.kind(of: process) == .agent)
         // Never "opencode": OpenCode's own screen reader would read the session's text.
         #expect(CommandClassifier.programName(of: process) == "nxtrm agent")
+        // The line new_tab and the menu type, by the launcher a build has.
+        #expect(CommandClassifier.kind(of: "nxtrm agent gemini --prompt 'fix it'") == .agent)
+        #expect(CommandClassifier.kind(of: "/Users/me/next-term/.build/debug/NextTerm --cli agent gemini") == .agent)
         let open = ForegroundProcess(isShell: false, name: "NextTerm", arguments: ["/A/NextTerm", "--cli", "."])
         #expect(CommandClassifier.kind(of: open) == .command)
+    }
+
+    @Test func aSessionsLineQuotesItsFirstPrompt() {
+        let gemini = ACPAgent.named("gemini")!
+        #expect(gemini.sessionLine(launcher: "nxtrm", prompt: nil) == "nxtrm agent gemini")
+        #expect(gemini.sessionLine(launcher: "nxtrm", prompt: "  ") == "nxtrm agent gemini")
+        #expect(gemini.sessionLine(launcher: "'/A B/nxtrm'", prompt: "fix Bob's test") == "'/A B/nxtrm' agent gemini --prompt 'fix Bob'\\''s test'")
     }
 }

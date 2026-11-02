@@ -92,6 +92,12 @@ extension SelfTest {
         check(!picked.isError && rejected, "agent session: answer_agent picks Reject and the agent gets it",
               "\(picked.text): \(screen().suffix(300))")
 
+        // new_tab refuses a name it can't run before opening anything, and says which would.
+        let before = c.tabs.count
+        let refused = await call("new_tab", ["directory": folder.path, "agent_session": "no-such-agent"])
+        check(refused.isError && refused.text.contains("Installed here") && c.tabs.count == before,
+              "agent session: new_tab refuses an agent_session it can't run, opening nothing", refused.text)
+
         tab.view.send(txt: "\u{04}")
         let ended = await wait(6) { !tab.status.running }
         check(ended, "agent session: ⌃D on an empty line ends the session and the agent", screen().suffix(200).description)

@@ -51,6 +51,14 @@ public struct ACPAgent: Equatable, Sendable {
         return known.filter { agent in folders.contains { exists(($0 as NSString).appendingPathComponent(agent.program)) } }
     }
 
+    /// The line a tab runs for a session of this agent: `launcher` (Next Term's `nxtrm`, quoted, or its binary and
+    /// `--cli`), `agent ID`, and the first prompt quoted for the shell.
+    public func sessionLine(launcher: String, prompt: String?) -> String {
+        var line = launcher + " agent " + id
+        if let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { line += " --prompt " + ShellQuote.quote(prompt) }
+        return line
+    }
+
     /// The ids, for a refusal that says which would run.
     public static func listed(_ agents: [ACPAgent]) -> String {
         agents.isEmpty ? "none of them is installed here" : agents.map(\.id).joined(separator: ", ")

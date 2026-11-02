@@ -608,6 +608,20 @@ enum MCPControl {
         case .failure(let refusal): return reply(fail(refusal.text))
         case .success(let given): title = given
         }
+        // An agent session (plan 030): `nxtrm agent ID` instead of a command, checked before any tab opens.
+        var sessionLine: String?
+        var sessionName: String?
+        if let name = arguments["agent_session"] as? String {
+            if let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty {
+                return reply(fail("Give command or agent_session, not both."))
+            }
+            switch ACPSessionTabs.agent(named: name) {
+            case .failure(let refusal): return reply(fail(refusal.text))
+            case .success(let agent):
+                sessionLine = agent.sessionLine(launcher: ACPSessionTabs.launcher, prompt: arguments["prompt"] as? String)
+                sessionName = agent.name
+            }
+        }
         let tab: TerminalTab
         let controller: TerminalWindowController
         if let besideID = arguments["split_beside"] {
@@ -642,7 +656,7 @@ enum MCPControl {
         // An agent's worker: it opens no tabs of its own unless the user asks it to. A hand-off carries on the user's own
         // conversation (next-term-worktrees), so it is nobody's worker.
         if arguments["hand_off"] as? Bool != true { tab.openedBy = caller?.id }
-        if let title { tab.userTitle = title }
+        if let title = title ?? sessionName { tab.userTitle = title }
         MCPTabOpeners.record(tab, openedBy: caller)
         controller.refresh()
         let answer = {
@@ -651,9 +665,9 @@ enum MCPControl {
             if let note = arrived.note { info["note"] = note }
             reply(ok(info))
         }
-        guard let command = arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
-        guard !command.contains("\n") else { return reply(fail("The command must be one line.")) }
-        let line = MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
+        guard let command = sessionLine ?? arguments["command"] as? String, !command.trimmingCharacters(in: .whitespaces).isEmpty else { return answer() }
+        guard sessionLine != nil || !command.contains("\n") else { return reply(fail("The command must be one line.")) }
+        let line = sessionLine ?? MCPServer.commandLine(command, prompt: arguments["prompt"] as? String)
         // Type it once the shell is at its first prompt (its integration reports in), or after 3 s.
         whenReady(tab, until: TerminalTab.now + 3) {
             type(line, into: tab, submit: true)

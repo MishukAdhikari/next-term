@@ -295,7 +295,8 @@ public enum CommandClassifier {
     static func kind(name: String, args: [String]) -> CommandKind {
         if name.isEmpty { return .command }
         // `nxtrm agent NAME`: an agent session (plan 030), an agent the tab follows by its reports.
-        if name == "nxtrm", args.first == "agent", args.count > 1, !args.contains(where: { ["-h", "--help", "help"].contains($0) }) {
+        let cli: ArraySlice<String> = name == "NextTerm" && args.first == "--cli" ? args.dropFirst() : args[...]
+        if name == "nxtrm" || name == "NextTerm", cli.first == "agent", cli.count > 1, !cli.contains(where: { ["-h", "--help", "help"].contains($0) }) {
             return .agent
         }
         if agents.contains(name) { return isServer(name, args: args) ? .command : .agent }
