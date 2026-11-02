@@ -167,7 +167,6 @@ final class WindowColumnView: NSView, ProjectGlowing {
             updateChevron()
             needsLayout = true
             needsDisplay = true
-            window?.invalidateCursorRects(for: self)
         }
         if countChanged {
             needsDisplay = true // the count
@@ -393,7 +392,9 @@ final class WindowColumnView: NSView, ProjectGlowing {
     /// The top row is title bar: it moves the window, as the tab bars beside it do.
     func isTitleBar(_ point: NSPoint) -> Bool { point.y < WindowColumnGrid.titleStrip }
 
-    /// Pinned, below the title bar's strip: the inner edge, where a drag sets its width as the sidebar's divider does.
+    /// Pinned, below the title bar's strip: the inner edge, where a drag sets its width as the sidebar's divider does. The
+    /// host lays a handle over it (WindowColumnEdge), half on the column and half on the content, which shows the resize
+    /// cursor and takes the drag.
     var resizeEdge: NSRect? {
         guard expanded, !hovers, onResize != nil else { return nil }
         let x: CGFloat = onRight ? 0 : bounds.width - Self.edgeWidth
@@ -403,19 +404,8 @@ final class WindowColumnView: NSView, ProjectGlowing {
 
     private static let edgeWidth: CGFloat = 5
 
-    /// The edge is the column's own, over the rows beside it.
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        if let edge = resizeEdge, edge.contains(convert(point, from: superview)), !isHidden { return self }
-        return super.hitTest(point)
-    }
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        if let edge = resizeEdge { addCursorRect(edge, cursor: .resizeLeftRight) }
-    }
-
     /// Follows the pointer from the edge until the button comes up: the width from the window's outer edge to it.
-    private func dragEdge(from event: NSEvent) {
+    func dragEdge(from event: NSEvent) {
         guard let window else { return }
         if event.clickCount == 2 { return onResize?(nil, true) ?? () }
         let outer: CGFloat = convert(NSPoint(x: onRight ? bounds.maxX : bounds.minX, y: 0), to: nil).x
@@ -437,12 +427,10 @@ final class WindowColumnView: NSView, ProjectGlowing {
                 onResize?(proposed, false)
             }
         }
-        window.invalidateCursorRects(for: self)
     }
 
     override func mouseDown(with event: NSEvent) {
         let point: NSPoint = convert(event.locationInWindow, from: nil)
-        if let edge = resizeEdge, edge.contains(point) { return dragEdge(from: event) }
         if isTitleBar(point) { return TabBarView.titleBarMouseDown(event, in: window) }
         // Its empty space: a double-click pins the column unfolded, or folds it back, in every window.
         if event.clickCount == 2 { onToggle?() }
@@ -1161,3 +1149,31 @@ enum TextBaseline {
     /// The top to draw `font`'s text at for its baseline to be at `baseline`.
     static func top(_ baseline: CGFloat, _ font: NSFont) -> CGFloat { baseline - offset(font) }
 }
+
+/// The pinned column's inner edge, laid over it by the host: 8 points, half on the column and half on the content beside
+/// it, above the rows and the terminal, so the resize cursor shows there whatever is under it, and a drag sets the
+/// column's width (WindowColumnView.dragEdge).
+final class WindowColumnEdge: NSView {
+    var onDrag: ((NSEvent) -> Void)?
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    /// The terminal sets its I-beam on cursor updates: this one is the handle's, over the strip it shares with it.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.resizeLeftRight.set() }
+
+    override func mouseDown(with event: NSEvent) { onDrag?(event) }
+
+    override func isAccessibilityElement() -> Bool { false }
+}
+

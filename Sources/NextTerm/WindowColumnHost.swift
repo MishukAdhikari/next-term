@@ -24,6 +24,8 @@ import NextTermCore
 final class WindowColumnHost: NSView {
     let column = WindowColumnView()
     let content: NSView
+    /// Pinned, the handle over its inner edge: the resize cursor and the drag.
+    let edge = WindowColumnEdge()
 
     /// Every window shows the column (WindowColumns: two or more windows, and the setting on).
     var visible = false
@@ -86,6 +88,9 @@ final class WindowColumnHost: NSView {
         addSubview(content)
         column.isHidden = true
         addSubview(column)
+        edge.isHidden = true
+        edge.onDrag = { [weak self] (event: NSEvent) in self?.column.dragEdge(from: event) }
+        addSubview(edge) // over the column's rows and the content beside it
         column.onPointer = { [weak self] (inside: Bool) in self?.railPointer(inside) }
         column.onMoved = { [weak self] in self?.railMoved() }
         column.onUpdated = { [weak self] in self?.mirror() }
@@ -118,6 +123,20 @@ final class WindowColumnHost: NSView {
         hoverMoves += 1
         onRail = false
         hideList(animated: false)
+    }
+
+    /// Pinned with a width to drag, the handle straddles the column's inner edge below the title bar's strip; else it is
+    /// hidden. The host is not flipped: the strip is at the top.
+    private func placeEdge(form: WindowColumnShown.Form) {
+        let shows: Bool = form == .expanded && !column.isHidden && column.onResize != nil
+        if edge.isHidden == shows { edge.isHidden = !shows }
+        guard shows else { return }
+        let half: CGFloat = 4
+        let x: CGFloat = columnOnRight ? column.frame.minX - half : column.frame.maxX - half
+        let frame = NSRect(x: x, y: 0, width: 2 * half, height: max(0, bounds.height - WindowColumnGrid.titleStrip))
+        guard edge.frame != frame else { return }
+        edge.frame = frame
+        window?.invalidateCursorRects(for: edge)
     }
 
     /// Whether the pointer is on the column, as it is now, in this window and not one over it.
@@ -218,6 +237,7 @@ final class WindowColumnHost: NSView {
             hoverMoves += 1
             updateAwake()
         }
+        placeEdge(form: decided.form)
         if decided.form != .folded {
             hideList(animated: false) // pinned open, or hidden: no list over the content
         } else if listShowing {

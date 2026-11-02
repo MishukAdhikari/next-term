@@ -335,6 +335,10 @@ extension SelfTest {
         guard c.columnHost.shown.form == .expanded, column.resizeEdge != nil else {
             return note("window column: resizing not checked, as the window had no room to unfold its column")
         }
+        // The handle over the inner edge, half on the column and half on the content, below the title bar's strip.
+        let handle: NSRect = c.columnHost.edge.frame
+        let straddles: Bool = !c.columnHost.edge.isHidden && abs(handle.midX - column.frame.maxX) < 0.5 && handle.width == 8
+            && handle.maxY <= c.columnHost.bounds.height - WindowColumnGrid.titleStrip
         let room: CGFloat = c.columnHost.unfoldedRoom()
         let target: CGFloat = min(240, room)
         column.onResize?(target, false)
@@ -370,6 +374,12 @@ extension SelfTest {
         let reset: Bool = WindowColumnWidth.expanded == WindowColumnWidth.defaultExpanded
             && column.frame.width == WindowColumnWidth.defaultExpanded + WindowColumnWidth.hairline
             && UserDefaults.standard.object(forKey: WindowColumnSettings.widthKey) == nil
+        app.windowColumnExpanded = false
+        c.window?.layoutIfNeeded()
+        let goneFolded: Bool = c.columnHost.edge.isHidden
+        app.windowColumnExpanded = true
+        check(straddles && goneFolded, "window column: pinned, a handle 8 points wide straddles its inner edge for the resize cursor; folded, none",
+              "handle \(handle) at the column's edge \(column.frame.maxX), hidden folded \(goneFolded)")
         check(live && everywhere && kept && capped && reset,
               "window column: dragging the pinned column's edge sets its width in every window, within the window's room, and a double-click puts back 180",
               "live \(live), everywhere \(everywhere), kept \(kept), capped \(capped) (\(cappedWords)), reset \(reset) (room \(room))")
