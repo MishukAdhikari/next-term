@@ -59,6 +59,7 @@ extension SelfTest {
         await secretsWrapperChecks(base)
         await secretsToolChecks(c, base: base, proj: proj)
         await secretsSettingsChecks(base: base)
+        await secretsSkillCopyChecks()
         #if DEBUG
         await secretsMenuChecks(base: base)
         #endif

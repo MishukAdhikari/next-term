@@ -106,7 +106,9 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
   shown or copied, even to you. The first thing Next Term tells every agent that uses its MCP server is to
   check Secrets for an API key, token or password before your shell files or asking you, and its
   `next-term-secrets` skill shows them how to use a key by name, in an MCP server’s config too
-  (`nxtrm secret help`).
+  (`nxtrm secret help`). **Settings › Secrets › Add to Agents…** puts that skill in `~/.agents/skills`, with a
+  link for Claude Code, so agents check Secrets first even outside Next Term; only when you click it, and Remove
+  takes it away.
   See [Secrets](https://nxtrm.mishuk.me/docs/secrets/).
 - **Pick up any agent's conversation.** The Welcome window lists your projects; choose one and every
   conversation Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, OpenCode, Cursor Agent and Copilot
