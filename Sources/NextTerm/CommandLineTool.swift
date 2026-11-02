@@ -176,15 +176,16 @@ enum CommandLineTool {
     }
 
     /// At launch: link `nxtrm` for other terminals where that needs no password (tabs in Next Term always
-    /// have it), as `plan` says. When no folder on PATH can take it, offer the password route.
+    /// have it), as `plan` says. When no folder on PATH can take it, nothing asks: the password route is
+    /// Next Term › Install Command Line Tool (nxtrm)…, or an agent's run_command, which the user sees first.
     static func registerQuietly() {
         guard let script = script?.path, isInStableLocation else { return }
         DispatchQueue.global(qos: .utility).async {
             // Never on a guessed PATH: /etc/paths has neither /opt/homebrew/bin nor ~/.local/bin, so a slow
-            // login shell would bring the password offer where neither needs one. A later launch decides.
+            // login shell would leave a link where the user's own PATH has none. A later launch decides.
             let path = LoginShell.shellPath
-            guard !path.isEmpty, register(script, path: path) == .unavailable else { return }
-            DispatchQueue.main.async { offer() }
+            guard !path.isEmpty else { return }
+            register(script, path: path)
         }
     }
 
@@ -208,70 +209,13 @@ enum CommandLineTool {
         return chosen
     }
 
-    // MARK: the first-launch offer
+    // MARK: the key project window
 
-    /// The version the offer was last shown in, or CommandLineLink.declined.
-    static let offerKey = "commandLineToolOffer"
-
-    private static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-    }
-
-    /// Set while the offer waits for a project window.
-    private static var offerWait: NSObjectProtocol?
-
-    /// No folder on PATH takes `nxtrm` without a password: offer the password route, once per version, on
-    /// a project window once nothing else is in the way, however long the launch's own windows (the folder
-    /// chooser, Import, Welcome) take. Until then it waits for a project window to become key.
-    private static func offer() {
-        let remembered = UserDefaults.standard.string(forKey: offerKey)
-        guard CommandLineLink.shouldOffer(remembered: remembered, version: version), offerWait == nil, !showOffer() else { return }
-        offerWait = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { _ in
-            // Once the change is over: a sheet or modal session that is ending is still there when it posts.
-            DispatchQueue.main.async {
-                guard let wait = offerWait, showOffer() else { return }
-                NotificationCenter.default.removeObserver(wait)
-                offerWait = nil
-            }
-        }
-    }
-
-    /// Shows the offer on the key project window, unless a sheet or modal window is in the way. True when
-    /// it is shown, or no longer needed.
-    private static func showOffer() -> Bool {
-        if isInstalled { return true } // with the menu command, meanwhile
-        guard let window = offerWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow) else { return false }
-        UserDefaults.standard.set(version, forKey: offerKey)
-        offerAlert().beginSheetModal(for: window) { response in
-            if response == .alertFirstButtonReturn {
-                DispatchQueue.main.async { install(from: window) }
-            } else if response == .alertThirdButtonReturn {
-                UserDefaults.standard.set(CommandLineLink.declined, forKey: offerKey)
-            }
-        }
-        return true
-    }
-
-    /// Where the offer goes: the key window, if it is a project window and no sheet or modal window is in
-    /// the way.
-    static func offerWindow(key: NSWindow?, modal: NSWindow?) -> NSWindow? {
+    /// The key window, if it is a project window and no sheet or modal window is in the way: where a notice
+    /// that waits for the user's attention goes.
+    static func freeProjectWindow(key: NSWindow?, modal: NSWindow?) -> NSWindow? {
         guard let key, key.windowController is TerminalWindowController, modal == nil, key.attachedSheet == nil else { return nil }
         return key
-    }
-
-    static func offerAlert() -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = "Install the “\(CommandLineOpen.toolName)” command?"
-        alert.informativeText = """
-            Then “nxtrm .” opens a folder in Next Term from any terminal, and “nxtrm file:42” a file at a line \
-            (Next Term’s own tabs have it already). No folder on your PATH takes it without a password, so this \
-            links \(installPath) and asks for your administrator password once. You can also do it later from \
-            Next Term › Install Command Line Tool (nxtrm)…
-            """
-        alert.addButton(withTitle: "Install…")
-        alert.addButton(withTitle: "Not Now").keyEquivalent = "\u{1b}"
-        alert.addButton(withTitle: "Don’t Ask Again")
-        return alert
     }
 
     // MARK: the menu command

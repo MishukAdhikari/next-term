@@ -118,11 +118,4 @@ import Testing
         #expect(plan(["/Applications/Other.app/Contents/Resources/bin"] + path, writable: writable, entries: [other: .file], isOurs: isNextTerm)
                 == .taken(other))
     }
-
-    @Test func theOfferComesOncePerVersionUntilDeclined() {
-        #expect(CommandLineLink.shouldOffer(remembered: nil, version: "0.9.0"))
-        #expect(!CommandLineLink.shouldOffer(remembered: "0.9.0", version: "0.9.0"))
-        #expect(CommandLineLink.shouldOffer(remembered: "0.9.0", version: "0.9.1"))
-        #expect(!CommandLineLink.shouldOffer(remembered: CommandLineLink.declined, version: "0.9.1"))
-    }
 }

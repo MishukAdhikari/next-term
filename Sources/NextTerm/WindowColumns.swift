@@ -211,7 +211,7 @@ final class WindowColumns: NSObject {
     /// decision waiting (an agent's approval or proposal), no sheet or modal window. Kept for the next window otherwise.
     @MainActor private func offerIfDue() {
         guard !offeredThisLaunch, NSApp.isActive, !GitToast.isShowing, UpdateHolds.shared.openDecisions.isEmpty,
-              let window = CommandLineTool.offerWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow),
+              let window = CommandLineTool.freeProjectWindow(key: NSApp.keyWindow, modal: NSApp.modalWindow),
               let controller = window.windowController as? TerminalWindowController else { return }
         let defaults = UserDefaults.standard
         let windows: Int = app.windowIndex.windows.count

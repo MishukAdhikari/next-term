@@ -162,7 +162,8 @@ public struct BuiltInSkill: Sendable, Equatable {
         2. `preview_import` for the source the user named, or else the one `list_import_sources` shows as used last. Ask which only when two look as likely.
         3. Propose one plan as a table, a row per change with its value now and the new one: the import's rows, the IDE shortcut set, the layout and the notification choices. Say what will not carry over, as the preview names it. Change nothing yet.
         4. Once the user agrees, apply it with `apply_setup`: the user approves the whole plan on the Mac, once, and may untick rows. Without `apply_setup`, use `settings_set`, then `set_layout`, then `apply_import`, one ask each.
-        5. Say what changed, as Next Term's answers give it, and how to undo it: Undo Agent Setup in the Next Term menu, or `undo_import` for the import. End with three keys from `list_shortcuts` for what the user will do most, in the table below.
+        5. `nxtrm` for other terminals (Next Term's own tabs have it): a launch links it where no password is needed, and nothing asks for one by itself. When `ls -l /usr/local/bin/nxtrm /opt/homebrew/bin/nxtrm ~/.local/bin/nxtrm` finds no link and the user wants it, offer `run_command` with `sudo ln -sh` from the `nxtrm` that `command -v nxtrm` gives in a Next Term tab (quoted: it has a space) to /usr/local/bin/nxtrm, after `sudo mkdir -p /usr/local/bin` if it is missing, or name Next Term › Install Command Line Tool (nxtrm)…
+        6. Say what changed, as Next Term's answers give it, and how to undo it: Undo Agent Setup in the Next Term menu, or `undo_import` for the import. End with three keys from `list_shortcuts` for what the user will do most, in the table below.
 
         ## Keys
 

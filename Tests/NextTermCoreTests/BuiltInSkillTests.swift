@@ -219,13 +219,15 @@ import Testing
     }
 
     /// next-term-setup's first run: read what is there, preview the import, one plan as a table, one approval with
-    /// apply_setup (or the three asks without it), then how to undo it and three keys.
+    /// apply_setup (or the three asks without it), nxtrm for other terminals only when the user wants it, then how to
+    /// undo it and three keys.
     @Test func theSetupSkillHasAFirstRun() throws {
         let text = BuiltInSkill.setup.text
         let firstRun = try #require(text.components(separatedBy: "## First run").last?.components(separatedBy: "## Keys").first)
         for step in ["`settings_get`", "`list_import_sources`", "`list_shortcuts`", "`preview_import`", "one plan as a table",
                      "Change nothing yet", "`apply_setup`", "once", "Without `apply_setup`, use `settings_set`, then `set_layout`, then `apply_import`",
-                     "Undo Agent Setup in the Next Term menu", "`undo_import`", "three keys"] {
+                     "Undo Agent Setup in the Next Term menu", "`undo_import`", "three keys",
+                     "`run_command` with `sudo ln -sh`", "Next Term › Install Command Line Tool (nxtrm)…", "nothing asks for one by itself"] {
             #expect(firstRun.contains(step), "\(step)")
         }
         // Before the keys, and the rules after it still there.

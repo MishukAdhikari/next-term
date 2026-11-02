@@ -835,10 +835,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// No question at launch: macOS asks the first time a notification is due (`deliver`), when the user can see
+    /// why, or from Settings › Notifications › Send Test Notification.
     private func setUpNotifications() {
         guard let center = notificationCenter, !SelfTest.isRequested else { return }
         center.delegate = self
-        Task { _ = try? await center.requestAuthorization(options: [.alert, .sound]) }
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus != .notDetermined else { return }
+            DispatchQueue.main.async { self.notificationsAnswered = true }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -2071,8 +2076,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             request = UNNotificationRequest(identifier: request.identifier, content: content, trigger: request.trigger)
         }
         if SelfTest.isRequested { return testNotifications.append(request) }
-        notificationCenter?.add(request)
+        guard let center = notificationCenter else { return }
+        if notificationsAnswered { return center.add(request) }
+        // The first one due (an agent in a tab the user is not looking at, a key’s reminder): macOS asks now, and posts it
+        // once allowed. Once answered either way, it never asks again.
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .notDetermined else {
+                DispatchQueue.main.async { self.notificationsAnswered = true }
+                return center.add(request)
+            }
+            center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                DispatchQueue.main.async { self.notificationsAnswered = true }
+                if granted { center.add(request) }
+            }
+        }
     }
+
+    /// macOS has had its question about notifications answered (allowed or not), so `deliver` posts without asking.
+    private var notificationsAnswered = false
 
     /// Settings › Notifications › Send Test Notification: one like a tab's, with the sound as set. Asks macOS
     /// first if it has not asked yet (once answered, asking again changes nothing). `done` says whether macOS

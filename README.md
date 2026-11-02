@@ -171,7 +171,8 @@ website and documentation: **[nxtrm.mishuk.me](https://nxtrm.mishuk.me)**
 - **`nxtrm`, like `code`.** `nxtrm .` opens the folder as a project, `nxtrm app/User.php:42` a
   file at a line. It works in every Next Term tab from the first launch, and in other terminals too: the
   first launch links it into a folder on your PATH that needs no password (`~/.local/bin`,
-  `/opt/homebrew/bin`), or, when there is none, offers to put it in `/usr/local/bin` with your password.
+  `/opt/homebrew/bin`). When there is none, Next Term › Install Command Line Tool (nxtrm)… puts it in
+  `/usr/local/bin` with your password; nothing asks for it by itself.
   It never changes PATH or touches anyone else's `nxtrm`.
 - **Your layout.** The terminal below the editor (default), beside it on the right or left, or above it;
   the project sidebar on the left or right; the terminal's tabs on top or in a list down its left or

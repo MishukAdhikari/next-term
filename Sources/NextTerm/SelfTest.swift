@@ -1201,25 +1201,22 @@ enum SelfTest {
         let standard = CommandLineTool.standardPath
         check(standard.contains("/usr/bin") && standard.allSatisfy { $0.hasPrefix("/") }, "nxtrm: the PATH from /etc/paths is read",
               standard.joined(separator: ":"))
-        // The offer waits, however long, for a project window that is key with nothing in front of it.
+        // A notice that waits for the user goes on a project window that is key with nothing in front of it.
         if let window = c.window {
             let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
-            let free = CommandLineTool.offerWindow(key: window, modal: nil) === window
-            let elsewhere = CommandLineTool.offerWindow(key: other, modal: nil) == nil && CommandLineTool.offerWindow(key: nil, modal: nil) == nil
-            let modal = CommandLineTool.offerWindow(key: window, modal: other) == nil
+            let free = CommandLineTool.freeProjectWindow(key: window, modal: nil) === window
+            let elsewhere = CommandLineTool.freeProjectWindow(key: other, modal: nil) == nil && CommandLineTool.freeProjectWindow(key: nil, modal: nil) == nil
+            let modal = CommandLineTool.freeProjectWindow(key: window, modal: other) == nil
             let focus = window.firstResponder
             window.beginSheet(other, completionHandler: nil)
-            let sheet = await wait(2) { window.attachedSheet != nil } && CommandLineTool.offerWindow(key: window, modal: nil) == nil
+            let sheet = await wait(2) { window.attachedSheet != nil } && CommandLineTool.freeProjectWindow(key: window, modal: nil) == nil
             window.endSheet(other)
             _ = await wait(2) { window.attachedSheet == nil }
             window.makeKeyAndOrderFront(nil)
             if let focus { window.makeFirstResponder(focus) }
-            check(free && elsewhere && modal && sheet, "nxtrm: the first-launch offer goes on the key project window, with nothing in the way",
+            check(free && elsewhere && modal && sheet, "a waiting notice goes on the key project window, with nothing in the way",
                   "free \(free), elsewhere \(elsewhere), modal \(modal), sheet \(sheet)")
         }
-        let buttons = CommandLineTool.offerAlert().buttons.map(\.title)
-        check(buttons == ["Install…", "Not Now", "Don’t Ask Again"], "nxtrm: the first-launch offer can be taken, put off or declined for good",
-              buttons.joined(separator: ", "))
     }
 
     /// Agent sessions: listed per project on the Welcome window and in ⌥⌘O, resumed in a tab in their folder.

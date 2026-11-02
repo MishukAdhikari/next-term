@@ -92,13 +92,4 @@ public enum CommandLineLink {
         }
         return free.map { .link($0) } ?? .unavailable
     }
-
-    /// The first-launch offer of the password route, when no folder takes the link: once per version
-    /// ("Not Now" asks again after an update), never after "Don't Ask Again". `remembered` is the
-    /// version it was last shown in, or `declined`.
-    public static func shouldOffer(remembered: String?, version: String) -> Bool {
-        remembered != declined && remembered != version
-    }
-
-    public static let declined = "never"
 }
