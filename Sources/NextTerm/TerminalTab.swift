@@ -1185,7 +1185,10 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
         // OpenCode found behind a plain-looking command (a function that runs it) may have titled the tab already.
-        if !wasAgent, status.kind == .agent { matchShownSession() }
+        if !wasAgent, status.kind == .agent {
+            matchShownSession()
+            MCPRegistration.refresh() // an agent installed since the last look is added for its next start
+        }
         if changed { delegate?.tabDidChange(self) }
     }
 
@@ -1777,6 +1780,7 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
         if let openedBy, let opener = AppDelegate.shared?.controllers.flatMap(\.tabs).first(where: { $0.id == openedBy }) {
             lines.append("Started by “\(opener.title)”")
         }
+        if MCPRegistration.needsRestart(self) { lines.append(MCPRegistration.restartLine) }
         if let remote {
             lines.append(remote.keep.keptLine(fellBack: fellBack))
             if fellBack, let fellBackReason { lines.append(fellBackReason) }
@@ -1812,6 +1816,8 @@ final class TerminalTab: NSObject, LocalProcessTerminalViewDelegate {
             noteEcho(line, expanded: expanded)
             status.commandStarted(line, expanded: expanded, at: Self.now)
             sessionsMayHaveEnded()
+            // An agent starting here: one installed since the last look along PATH is added for its next start.
+            if remote == nil, status.kind == .agent { MCPRegistration.refresh() }
             // Gemini or Qwen starting (or installed since launch): their IDE switch on, for the next start too.
             if ["gemini", "gemini-cli", "qwen", "qwen-code"].contains(status.program) { AppDelegate.shared.enableAgentIDEModes() }
         case .commandFinished(let code):

@@ -780,6 +780,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // The Claude app may have been opened since the last pass: what waits for it to quit, under the setting, is
         // worked out again (nothing is written while it is open).
         MCPRegistration.update(on: agentControl, claudeAppOnly: true)
+        // An agent installed since the last look is added now, not at the next launch.
+        MCPRegistration.refresh()
         if settings == nil { settings = SettingsWindowController() }
         settings?.reload()
         if let tab { settings?.showTab(tab) }
@@ -1311,7 +1313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private var welcome: WelcomeWindowController?
-    /// For the self-test.
+    /// For the self-test, and the card that says Next Term added its tools to the user's agents (MCPRegistrationAnnouncer).
     var welcomeController: WelcomeWindowController? { welcome }
 
     /// File › Open Project… (⌘O): the Welcome window, as at the first launch: your projects with a search, their agents'

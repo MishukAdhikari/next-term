@@ -63,6 +63,11 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
     private let forkButton = NSButton(title: "Fork", target: nil, action: nil)
     private let detailPane = NSView()
+    /// Next Term added its tools to the user's agents (MCPRegistrationAnnouncer): a card over the right pane, which moves
+    /// down under it while it shows.
+    private let registrationCard = MCPRegistrationCard()
+    private var paneTop: NSLayoutConstraint!
+    private var paneTopUnderCard: NSLayoutConstraint!
 
     private var sessions: [AgentSession] = []
     private var shownSessions: [AgentSession] = []
@@ -138,6 +143,23 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The card that says Next Term added its tools to the user's agents, at the top of the right pane.
+    func showRegistrationNotice(_ notice: MCPRegistrationNotice) {
+        registrationCard.show(notice)
+        registrationCard.isHidden = false
+        paneTop.isActive = false
+        paneTopUnderCard.isActive = true
+    }
+
+    private func hideRegistrationNotice() {
+        registrationCard.isHidden = true
+        paneTopUnderCard.isActive = false
+        paneTop.isActive = true
+    }
+
+    /// The card's sentence while it shows, for the self-test.
+    var registrationNoticeText: String? { registrationCard.isHidden ? nil : registrationCard.text }
 
     deinit {
         observers.forEach(NotificationCenter.default.removeObserver)
@@ -309,10 +331,15 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         serverPane.isHidden = true
         waysInCards.isHidden = true
         // The cards take the right pane's place; the footer stays under whichever pane shows.
-        for view in [left, detailPane, serverPane, waysInCards, atLaunch] as [NSView] {
+        for view in [left, detailPane, serverPane, waysInCards, atLaunch, registrationCard] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
+        registrationCard.isHidden = true
+        registrationCard.onDone = { [weak self] in self?.hideRegistrationNotice() }
+        paneTop = detailPane.topAnchor.constraint(equalTo: content.topAnchor)
+        // The project's name stands as far under the card as it stands under the title bar without it.
+        paneTopUnderCard = detailPane.topAnchor.constraint(equalTo: registrationCard.bottomAnchor, constant: -16)
         NSLayoutConstraint.activate([
             left.topAnchor.constraint(equalTo: content.topAnchor),
             left.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -350,7 +377,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
             waysInRows.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -6),
             waysInRows.bottomAnchor.constraint(equalTo: left.bottomAnchor, constant: -10),
 
-            detailPane.topAnchor.constraint(equalTo: content.topAnchor),
+            paneTop,
+            registrationCard.topAnchor.constraint(equalTo: content.topAnchor, constant: 36),
+            registrationCard.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: 24),
+            registrationCard.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             detailPane.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             detailPane.leadingAnchor.constraint(equalTo: left.trailingAnchor),
             detailPane.trailingAnchor.constraint(equalTo: content.trailingAnchor),

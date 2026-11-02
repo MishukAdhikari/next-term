@@ -13,6 +13,9 @@ enum MCPRegistration {
     nonisolated(unsafe) private static var claudeAppWaiting: Bool?
     /// The desktop apps the last pass found (`MCPRegistrar.Target.apps`), named in the summary.
     nonisolated(unsafe) private static var appsFound: Set<String> = []
+    /// When a pass added Next Term to each agent this launch (`MCPRegistrar.landed`), on the tabs' clock: an agent a tab
+    /// started before then needs a restart for the tools (`needsRestart`).
+    nonisolated(unsafe) private(set) static var landed: [String: TimeInterval] = [:]
 
     /// Posted on the main thread when a pass is done (Settings shows the result).
     static let changed = Notification.Name("NextTermMCPRegistrationsChanged")
@@ -30,16 +33,45 @@ enum MCPRegistration {
             let found = programs.merging(apps) { program, _ in program }
             let targets = MCPRegistrar.targets().filter { !claudeAppOnly || $0.readOnceBy != nil }
             let pass = MCPRegistrar.pass(targets, command: on ? command : nil, found: found) { isOpen($0, except: quit) }
+            // On the tabs' clock (TerminalTab.now), which a running agent's start is read on.
+            let written = ProcessInfo.processInfo.systemUptime
             var results = pass.statuses
             if !claudeAppOnly { results["claude"] = claude(on: on, command: command, program: found["claude"]) }
+            // Claude Code's command line can take a while: its entry lands once it is done.
+            let claudeWritten = ProcessInfo.processInfo.systemUptime
             DispatchQueue.main.async {
                 statuses = MCPRegistrar.merged(statuses, results, whole: !claudeAppOnly)
                 claudeAppWaiting = pass.waiting
                 appsFound = Set(apps.keys)
+                landed = MCPRegistrar.landed(landed, after: results.filter { $0.key != "claude" }, at: written)
+                landed = MCPRegistrar.landed(landed, after: results.filter { $0.key == "claude" }, at: claudeWritten)
                 NotificationCenter.default.post(name: changed, object: nil)
+                if on, !claudeAppOnly { MainActor.assumeIsolated { MCPRegistrationAnnouncer.passDone(statuses) } }
             }
         }
     }
+
+    /// Looks along PATH again for the agents' programs (Settings opened, an agent started in a tab on this Mac), and
+    /// registers in any found since the last look while the setting is on: one installed after launch needs no relaunch.
+    static func refresh() {
+        guard !SelfTest.isRequested, CommandLineTool.script != nil, CommandLineTool.isInStableLocation else { return }
+        queue.async {
+            guard !LoginShell.lookForPrograms().isEmpty else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { if AppDelegate.shared.agentControl { update(on: true) } }
+            }
+        }
+    }
+
+    /// The agent in `tab` started before Next Term was added to it this launch, so it has none of its tools until it
+    /// starts again.
+    static func needsRestart(_ tab: TerminalTab) -> Bool {
+        guard !landed.isEmpty, let agent = tab.localAgent, MainActor.assumeIsolated({ AppDelegate.shared?.agentControl == true }) else { return false }
+        return MCPRegistrar.needsRestart(agent, since: tab.status.runningSince, landed: landed)
+    }
+
+    /// The line a tab whose agent needs a restart shows in its tooltip.
+    static let restartLine = "Restart this agent to give it Next Term’s tools"
 
     /// An app is running, not counting `quit` (the one that just quit may still be listed when its notice comes).
     private static func isOpen(_ bundle: String, except quit: pid_t?) -> Bool {
@@ -111,9 +143,35 @@ enum MCPRegistration {
 /// The user's login shell, for what a Finder-launched app cannot see: the PATH set in .zshrc and
 /// .zprofile, where agents installed with npm, Homebrew or their own installers live.
 enum LoginShell {
-    /// Program name → path, for the agents Next Term registers in. Read once per launch, never in a PATH folder inside a
-    /// protected place (a tool unzipped in ~/Downloads): a look there at launch would set off macOS's prompt for it.
-    static let programs: [String: String] = {
+    /// Program name → path, for the agents Next Term registers in, as the last look along PATH found them: the first
+    /// read looks, and `lookForPrograms` looks again. Never in a PATH folder inside a protected place (a tool unzipped in
+    /// ~/Downloads): a look there would set off macOS's prompt for it.
+    static var programs: [String: String] {
+        programsLock.lock()
+        defer { programsLock.unlock() }
+        if let foundPrograms { return foundPrograms }
+        let found = look()
+        foundPrograms = found
+        return found
+    }
+
+    private static let programsLock = NSLock()
+    nonisolated(unsafe) private static var foundPrograms: [String: String]?
+
+    /// Looks along PATH again (the folders the login shell set at launch, so a program installed since in one of them is
+    /// found); the names found that the last look did not find, none before a first look.
+    @discardableResult
+    static func lookForPrograms() -> Set<String> {
+        let found = look()
+        programsLock.lock()
+        defer { programsLock.unlock() }
+        let before = foundPrograms
+        foundPrograms = found
+        guard let before else { return [] }
+        return Set(found.keys).subtracting(before.keys)
+    }
+
+    private static func look() -> [String: String] {
         let names = Set(MCPRegistrar.targets().flatMap(\.programs) + ["claude"])
         var found: [String: String] = [:]
         let protected = ProtectedPlaces.current
@@ -124,7 +182,7 @@ enum LoginShell {
             }
         }
         return found
-    }()
+    }
 
     /// What an interactive login shell (5 s at most) sets that a Finder-launched app lacks: PATH, the
     /// ssh agent socket (Secretive, 1Password, gpg-agent for a YubiKey are set up in .zshrc),

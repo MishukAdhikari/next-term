@@ -342,7 +342,6 @@ public enum MCPRegistrar {
         for target in targets(home: home) {
             names[target.id] = [target.name] + target.apps.filter { apps.contains($0) }.compactMap { appNames[$0] }
         }
-        func sortKey(_ name: String) -> String { (name.hasPrefix("the ") ? String(name.dropFirst(4)) : name).lowercased() }
         func named(_ wanted: (Status) -> Bool) -> [String] {
             let found = Set(statuses.filter { wanted($0.value) }.keys.flatMap { names[$0] ?? [] })
             return found.sorted { sortKey($0) < sortKey($1) }

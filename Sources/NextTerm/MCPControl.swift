@@ -428,6 +428,7 @@ enum MCPControl {
         info.merge(questionInfo(tab)) { $1 }
         info.merge(restoredFields(tab)) { $1 } // what a restart did to it (U13)
         if let code = tab.status.exitCode, tab.status.state == .failed { info["exit_code"] = Int(code) }
+        if MCPRegistration.needsRestart(tab) { info["needs_restart"] = true } // its agent started before Next Term's tools reached it
         if tab === caller { info["you"] = true }
         if let openedBy = tab.openedBy {
             info["opened_by"] = openedBy.uuidString.lowercased()
