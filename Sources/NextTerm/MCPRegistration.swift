@@ -16,6 +16,12 @@ enum MCPRegistration {
     /// When a pass added Next Term to each agent this launch (`MCPRegistrar.landed`), on the tabs' clock: an agent a tab
     /// started before then needs a restart for the tools (`needsRestart`).
     nonisolated(unsafe) private(set) static var landed: [String: TimeInterval] = [:]
+    /// The agents' programs the last whole pass found along PATH (name → path), for the agents “Set up with your agent”
+    /// offers (`SetupAgent.offered`).
+    nonisolated(unsafe) private(set) static var programsFound: [String: String] = [:]
+
+    /// The agents “Set up with your agent” offers now: registered by the last pass, their program on PATH.
+    static var setupAgents: [SetupAgent] { SetupAgent.offered(programs: programsFound, statuses: statuses) }
 
     /// Posted on the main thread when a pass is done (Settings shows the result).
     static let changed = Notification.Name("NextTermMCPRegistrationsChanged")
@@ -42,6 +48,7 @@ enum MCPRegistration {
             DispatchQueue.main.async {
                 statuses = MCPRegistrar.merged(statuses, results, whole: !claudeAppOnly)
                 claudeAppWaiting = pass.waiting
+                if !claudeAppOnly { programsFound = programs }
                 appsFound = Set(apps.keys)
                 landed = MCPRegistrar.landed(landed, after: results.filter { $0.key != "claude" }, at: written)
                 landed = MCPRegistrar.landed(landed, after: results.filter { $0.key == "claude" }, at: claudeWritten)

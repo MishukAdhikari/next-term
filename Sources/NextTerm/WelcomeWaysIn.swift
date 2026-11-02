@@ -338,10 +338,14 @@ final class WayInCard: WayInButton {
 }
 
 /// The right pane on a launch with nothing to list: the three ways in as cards of equal width, 16 pt apart, in the
-/// rows' order, centred. A click on one, or its key, does what its row does.
+/// rows' order, centred. A click on one, or its key, does what its row does. Under them, as wide as the three, the
+/// fourth card, “Set up with your agent”, while an agent is there to offer (SetupAgentCard).
 final class WaysInCards: NSView {
     let cards: [WayInCard] = SwitcherWayIn.allCases.map { (way: SwitcherWayIn) -> WayInCard in WayInCard(way) }
+    let agentCard = SetupAgentCard()
     private let stack = NSStackView()
+    /// The three over the agent card; a hidden agent card takes no room.
+    private let column = NSStackView()
     /// As wide as three cards of about 176 pt; narrower windows narrow them.
     static let width: CGFloat = 560
 
@@ -361,17 +365,27 @@ final class WaysInCards: NSView {
         stack.setAccessibilityRole(.group)
         // Not the rows' "Start": on a first launch both show, and VoiceOver tells the two groups apart.
         stack.setAccessibilityLabel("Get started")
-        addSubview(stack)
-        let wide = stack.widthAnchor.constraint(equalToConstant: Self.width)
+        column.orientation = .vertical
+        column.alignment = .centerX
+        column.spacing = 16
+        column.setHuggingPriority(.defaultHigh, for: .vertical)
+        column.translatesAutoresizingMaskIntoConstraints = false
+        for view in [stack, agentCard] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            column.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        }
+        addSubview(column)
+        let wide = column.widthAnchor.constraint(equalToConstant: Self.width)
         wide.priority = .defaultHigh
         // A little above the middle, clear of the footer below.
-        let middle = stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -16)
+        let middle = column.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -16)
         middle.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 40),
+            column.centerXAnchor.constraint(equalTo: centerXAnchor),
+            column.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 28),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -28),
+            column.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 40),
             wide,
             middle,
         ])

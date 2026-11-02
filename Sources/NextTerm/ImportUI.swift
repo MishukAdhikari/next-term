@@ -485,6 +485,18 @@ final class ImportWindowController: NSWindowController, NSWindowDelegate {
             staleList = list
             rows += [header, list]
         }
+        // The first run's other way: an agent that sets Next Term up (SetupAgentLine), shown once one is registered.
+        if firstRun {
+            let agents = SetupAgentLine()
+            agents.identifier = .init("spaced")
+            agents.onStart = { [weak self] in self?.finish(with: nil) }
+            agents.onChange = { [weak self, weak agents] in
+                guard agents?.window != nil else { return }
+                self?.window?.contentView?.layoutSubtreeIfNeeded()
+                self?.refitPage?()
+            }
+            rows.append(agents)
+        }
         rows.append(Self.wrapping("Reads files on this Mac only. Never changes the other app. Nothing leaves your Mac.", secondary: true, size: 11))
         let preview = NSButton(title: "Preview…", target: self, action: #selector(previewChosen))
         preview.keyEquivalent = "\r"
