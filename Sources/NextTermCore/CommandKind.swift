@@ -202,7 +202,10 @@ public enum CommandClassifier {
     /// not set-up (`cd`, `export`, `nvm use`), else the first. An agent run as a script names the agent
     /// (`node …/@anthropic-ai/claude-code/cli.js` is claude), judged by `scriptAgentName`.
     public static func programName(_ commandLine: String) -> String {
-        programCommand(commandLine)?.name ?? ""
+        guard let command = programCommand(commandLine) else { return "" }
+        // An agent session names itself so, never "NextTerm" or "nxtrm" (plan 030).
+        if ["nxtrm", "NextTerm"].contains(command.name), kind(name: command.name, args: command.args) == .agent { return agentSessionProgram }
+        return command.name
     }
 
     /// That program with its arguments, as the close alerts name what runs: `PATH=~/bin:$PATH claude --resume`

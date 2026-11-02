@@ -185,6 +185,9 @@ import Testing
         // The line new_tab and the menu type, by the launcher a build has.
         #expect(CommandClassifier.kind(of: "nxtrm agent gemini --prompt 'fix it'") == .agent)
         #expect(CommandClassifier.kind(of: "/Users/me/next-term/.build/debug/NextTerm --cli agent gemini") == .agent)
+        #expect(CommandClassifier.programName("PATH=/x:$PATH /Users/me/next-term/.build/debug/NextTerm --cli agent gemini") == "nxtrm agent")
+        #expect(CommandClassifier.programName("nxtrm agent opencode") == "nxtrm agent")
+        #expect(CommandClassifier.programName("nxtrm .") == "nxtrm")
         let open = ForegroundProcess(isShell: false, name: "NextTerm", arguments: ["/A/NextTerm", "--cli", "."])
         #expect(CommandClassifier.kind(of: open) == .command)
     }
