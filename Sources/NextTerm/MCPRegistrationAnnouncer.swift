@@ -77,6 +77,8 @@ enum MCPRegistrationAnnouncer {
 @MainActor
 final class MCPRegistrationCard: NSView {
     private let message = NSTextField(wrappingLabelWithString: "")
+    /// Under the headline, quieter: what it means for the user.
+    private let meaning = NSTextField(wrappingLabelWithString: "")
     private let files = NSTextField(wrappingLabelWithString: "")
     private var details: DisclosureRow!
     private var notice: MCPRegistrationNotice?
@@ -90,14 +92,18 @@ final class MCPRegistrationCard: NSView {
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
         layer?.borderColor = WorkSplitView.line.cgColor
-        message.font = .systemFont(ofSize: 12.5)
+        message.font = .systemFont(ofSize: 12.5, weight: .medium)
         message.textColor = Theme.text
+        meaning.font = .systemFont(ofSize: 12)
+        meaning.textColor = Theme.textDim
         files.font = .systemFont(ofSize: 11)
         files.textColor = Theme.textDim
         files.isSelectable = true
         details = DisclosureRow(title: "Details", content: files)
         let remove = NSButton(title: "Remove", target: self, action: #selector(removePressed))
-        let keep = PrimaryButton(title: "Keep", target: self, action: #selector(keepPressed))
+        // A plain button: Keep only puts the notice away, and the window's own primary (Go to Window, Open Project) stays
+        // the one button that stands out.
+        let keep = NSButton(title: "Keep", target: self, action: #selector(keepPressed))
         for button in [remove, keep] as [NSButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
@@ -105,12 +111,14 @@ final class MCPRegistrationCard: NSView {
         }
         keep.refusesFirstResponder = true
         let buttons = NSStackView(views: [remove, keep])
-        // Once both are in the stack: a constraint between views with no common ancestor throws.
-        keep.heightAnchor.constraint(equalTo: remove.heightAnchor).isActive = true
         buttons.spacing = 8
         let bottom = NSStackView(views: [details, NSView(), buttons])
         bottom.alignment = .top
-        let stack = NSStackView(views: [message, bottom])
+        let words = NSStackView(views: [message, meaning])
+        words.orientation = .vertical
+        words.alignment = .leading
+        words.spacing = 2
+        let stack = NSStackView(views: [words, bottom])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -123,8 +131,18 @@ final class MCPRegistrationCard: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             bottom.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -26),
-            message.widthAnchor.constraint(equalTo: bottom.widthAnchor),
+            // A line short enough to read at a glance, however wide the window: the words keep a measure of their own.
+            message.widthAnchor.constraint(lessThanOrEqualToConstant: Self.measure),
+            meaning.widthAnchor.constraint(lessThanOrEqualToConstant: Self.measure),
+            message.widthAnchor.constraint(lessThanOrEqualTo: bottom.widthAnchor),
+            meaning.widthAnchor.constraint(lessThanOrEqualTo: bottom.widthAnchor),
         ])
+        // As wide as both allow: the measure, or the card when it is narrower.
+        for label in [message, meaning] {
+            let fill = label.widthAnchor.constraint(equalTo: bottom.widthAnchor)
+            fill.priority = .defaultHigh
+            fill.isActive = true
+        }
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
     }
@@ -134,20 +152,24 @@ final class MCPRegistrationCard: NSView {
     /// The sentence and the files wrap at the card's width, and the card stands as tall as they then are.
     override func layout() {
         super.layout()
-        for label in [message, files] where label.frame.width > 0 && label.preferredMaxLayoutWidth != label.frame.width {
+        for label in [message, meaning, files] where label.frame.width > 0 && label.preferredMaxLayoutWidth != label.frame.width {
             label.preferredMaxLayoutWidth = label.frame.width
         }
     }
 
     func show(_ notice: MCPRegistrationNotice) {
         self.notice = notice
-        message.stringValue = notice.message
+        message.stringValue = notice.headline
+        meaning.stringValue = notice.meaning
         files.stringValue = notice.fileLines.joined(separator: "\n")
         setAccessibilityLabel(notice.headline)
     }
 
     /// The card's sentence, for the self-test.
-    var text: String { message.stringValue }
+    var text: String { message.stringValue + " " + meaning.stringValue }
+
+    /// About 80 characters of the card's text.
+    private static let measure: CGFloat = 520
 
     @objc private func keepPressed() { onDone?() }
 

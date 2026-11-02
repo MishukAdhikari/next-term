@@ -348,6 +348,8 @@ final class WaysInCards: NSView {
     private let column = NSStackView()
     /// As wide as three cards of about 176 pt; narrower windows narrow them.
     static let width: CGFloat = 560
+    /// The column's width, set as the view lays out (`layout`).
+    private var wide: NSLayoutConstraint!
 
     init() {
         super.init(frame: .zero)
@@ -376,7 +378,7 @@ final class WaysInCards: NSView {
             view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         }
         addSubview(column)
-        let wide = column.widthAnchor.constraint(equalToConstant: Self.width)
+        wide = column.widthAnchor.constraint(equalToConstant: Self.width)
         wide.priority = .defaultHigh
         // A little above the middle, clear of the footer below.
         let middle = column.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -16)
@@ -392,6 +394,17 @@ final class WaysInCards: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Three cards of one width, to the pixel: the room left after the gaps divides by three, so no card is half a point
+    /// wider than the one beside it.
+    override func layout() {
+        let scale: CGFloat = window?.backingScaleFactor ?? 2
+        let room: CGFloat = min(Self.width, bounds.width - 56) - 2 * stack.spacing
+        let card: CGFloat = (room / 3 * scale).rounded(.down) / scale
+        let width: CGFloat = max(0, 3 * card + 2 * stack.spacing)
+        if wide.constant != width { wide.constant = width }
+        super.layout()
+    }
 
     func card(_ way: SwitcherWayIn) -> WayInCard {
         cards.first { (card: WayInCard) -> Bool in card.way == way } ?? cards[0]

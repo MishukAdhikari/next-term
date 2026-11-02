@@ -36,8 +36,8 @@ enum SetupWithAgent {
 /// the cards are. Space or a click opens its tab; it never takes Return, which stays the Welcome list's.
 final class SetupAgentChip: FillButton {
     let agent: SetupAgent
-    private let label = NSTextField(labelWithString: "")
     static let height: CGFloat = 26
+    private static let font: NSFont = .systemFont(ofSize: 12)
 
     init(_ agent: SetupAgent) {
         self.agent = agent
@@ -46,18 +46,14 @@ final class SetupAgentChip: FillButton {
         action = #selector(start)
         toolTip = SetupWithAgent.help(agent)
         setAccessibilityHelp(SetupWithAgent.help(agent))
-        label.stringValue = agent.name
-        label.font = .systemFont(ofSize: 12)
-        label.textColor = Theme.text
-        Typography.singleLine(label, truncation: .byTruncatingTail)
-        add([label])
+        // The name is the button, drawn by its own cell over the fill, and the chip is as wide as its name and padding.
+        imagePosition = .noImage
+        attributedTitle = NSAttributedString(string: agent.name, attributes: [.font: Self.font, .foregroundColor: Theme.text])
+        let width: CGFloat = (attributedTitle.size().width + 24).rounded(.up)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.height),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(equalToConstant: width),
         ])
-        setContentHuggingPriority(.required, for: .horizontal)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -66,6 +62,13 @@ final class SetupAgentChip: FillButton {
         NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
     }
     override var restingFill: NSColor? { Theme.background }
+
+    /// The fill, then the name centred on it: FillButton draws only the fill.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let size: NSSize = attributedTitle.size()
+        attributedTitle.draw(at: NSPoint(x: ((bounds.width - size.width) / 2).rounded(), y: ((bounds.height - size.height) / 2).rounded()))
+    }
 
     @objc private func start() { SetupWithAgent.start(agent) }
 }

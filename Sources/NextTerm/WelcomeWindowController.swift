@@ -288,6 +288,9 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate, NSTab
         openButton.bezelStyle = .rounded
         openButton.target = self
         openButton.action = #selector(openSelectedProject)
+        // A long name gives way, cut in its middle; the button keeps its whole title.
+        openButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        projectName.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sessionsTitle.attributedStringValue = Self.headingText("Agent sessions")
         filter.segmentStyle = .roundRect
         filter.target = self

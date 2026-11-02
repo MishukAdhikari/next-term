@@ -43,7 +43,8 @@ extension SelfTest {
         frame.orderFront(nil)
         frame.layoutIfNeeded()
         await screenshot(frame, suffix: "-agent-card")
-        check(agents.map(\.name).prefix(3) == ["Claude Code", "Codex", "Command Code"],
+        check(agents.map(\.name).prefix(3) == ["Claude Code", "Codex", "Command Code"]
+              && card.chips.allSatisfy { $0.frame.width > $0.attributedTitle.size().width },
               "first run: Set up with your agent offers Claude Code, Codex and Command Code first", "\(agents.map(\.name))")
         frame.close()
 
