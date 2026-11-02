@@ -77,6 +77,19 @@ extension SelfTest {
                        "window column: at rest the rail's dots are a quiet grey, and its foot shows the hide key",
                        "awake \(column.awake), foot “\(column.hideButton.shownWords)”")
 
+        // A few seconds after the pointer leaves, the dots settle to a trace; back on the rail, they are whole at once.
+        let settleDelay: TimeInterval = WindowColumnRail.settleDelay
+        WindowColumnRail.settleDelay = 0.2
+        column.onPointer?(true)
+        let whole: Bool = !column.settled && column.shownButtons.allSatisfy { $0.dotOpacityForTest == 1 }
+        column.onPointer?(false)
+        await pause(0.5)
+        let traced: Bool = column.settled && column.shownButtons.filter { $0.dotColorForTest != nil }
+            .allSatisfy { $0.dotOpacityForTest == WindowColumnRail.settledOpacity }
+        WindowColumnRail.settleDelay = settleDelay
+        checkUntouched(since: started, whole && traced, "window column: a few seconds after the pointer leaves the rail its dots settle to a trace, whole again on the rail",
+                       "whole on the rail \(whole), settled \(column.settled), traced \(traced)")
+
         // Passing over it opens nothing; resting on it wakes the dots into their colours.
         let content: NSRect = host.content.frame
         let keyboard: NSResponder? = window.firstResponder

@@ -72,6 +72,14 @@ final class WindowColumnView: NSView, ProjectGlowing {
             for button in buttons { button.setAwake(awake, animated: true) }
         }
     }
+    /// A few seconds after the pointer left, the dots settle to a trace (WindowColumnRail.settleDelay); the host says
+    /// when.
+    var settled = false {
+        didSet {
+            guard settled != oldValue else { return }
+            for button in buttons { button.setSettled(settled, animated: true) }
+        }
+    }
     /// A right-click on the top row: the window's Project Color menu.
     var onTopRowMenu: (() -> NSMenu?)?
     /// The top row's slice of the project colour, as the tab bars beside it have.
@@ -196,6 +204,7 @@ final class WindowColumnView: NSView, ProjectGlowing {
             button.action = #selector(buttonClicked(_:))
             button.onFold = { [weak self] (key: String) in self?.onFold?(key) }
             button.setAwake(awake || hovers, animated: false)
+            button.setSettled(settled && !hovers, animated: false)
             addSubview(button, positioned: .below, relativeTo: moreButton)
             matched.append(button)
         }
@@ -546,6 +555,8 @@ final class WindowColumnButton: NSButton {
     /// The dot shows its project's colour: on the rail while the pointer is on it or its list is open, and always
     /// unfolded; else the quiet grey.
     private(set) var awake = false
+    /// Settled: on the rail at rest a while, the dot is only a trace.
+    private(set) var settled = false
     /// Unfolded, the marks with counts, as ⌘O's rows show them.
     private let marks = SwitcherMarksView()
     /// Unfolded, on a repository's row with worktrees under it: the arrow that folds them in (pointing down while they
@@ -597,7 +608,7 @@ final class WindowColumnButton: NSButton {
         fold.setAccessibilityElement(false) // the row's own action says it
         addSubview(fold)
         dotLayer.cornerRadius = WindowColumnRail.dot / 2
-        dotLayer.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "backgroundColor": NSNull()]
+        dotLayer.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "backgroundColor": NSNull(), "opacity": NSNull()]
         layer?.addSublayer(dotLayer)
     }
 
@@ -609,6 +620,37 @@ final class WindowColumnButton: NSButton {
     private var dotColor: NSColor {
         let lit: Bool = awake || expanded || DisplayOptions.increasesContrast
         return lit ? (row?.color?.swatchColor ?? Theme.textDim) : Self.restingDot
+    }
+
+    /// The dot's opacity as it shows now: a trace when settled on the rail, whole otherwise, and always whole with
+    /// Increase Contrast.
+    private var dotOpacity: Float {
+        settled && !expanded && !DisplayOptions.increasesContrast ? WindowColumnRail.settledOpacity : 1
+    }
+
+    /// The rail at rest a while (`newSettled`) or woken: the dot fades to its trace slowly, or back whole at once.
+    func setSettled(_ newSettled: Bool, animated: Bool) {
+        guard newSettled != settled else { return }
+        settled = newSettled
+        fadeDot(over: animated && !WindowColumnHost.reducesMotion() ? (newSettled ? WindowColumnRail.settleDuration : 0.12) : 0)
+    }
+
+    /// The dot's opacity as `dotOpacity` says, over `seconds`.
+    private func fadeDot(over seconds: TimeInterval) {
+        let opacity: Float = dotOpacity
+        guard dotLayer.opacity != opacity else { return }
+        if seconds > 0 {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = dotLayer.presentation()?.opacity ?? dotLayer.opacity
+            fade.toValue = opacity
+            fade.duration = seconds
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            dotLayer.add(fade, forKey: "settle")
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dotLayer.opacity = opacity
+        CATransaction.commit()
     }
 
     /// The pointer came onto the rail or left it: the dot fades to its colour, quickly, or back to grey, slowly.
@@ -744,6 +786,7 @@ final class WindowColumnButton: NSButton {
             dot.state = railMark ?? .idle
             place()
             paintDot()
+            fadeDot(over: 0)
             needsDisplay = true
         }
         updateFold()
@@ -885,6 +928,7 @@ final class WindowColumnButton: NSButton {
     /// Increase Contrast changed: the dot's colour, the well's edge, and unfolded the dim text, are drawn again.
     func contrastChanged() {
         paintDot()
+        fadeDot(over: 0)
         guard isCurrent || expanded else { return }
         needsDisplay = true
         if expanded { marks.show(row?.marks ?? [], color: marksColor) }
@@ -946,6 +990,7 @@ final class WindowColumnButton: NSButton {
     var marksForTest: SwitcherMarksView { marks }
     var foldForTest: NSButton? { fold.isHidden ? nil : fold }
     var dotColorForTest: CGColor? { dotLayer.isHidden ? nil : dotLayer.backgroundColor }
+    var dotOpacityForTest: Float { dotLayer.opacity }
     var hoveringForTest: Bool {
         get { hovering }
         set { hovering = newValue }

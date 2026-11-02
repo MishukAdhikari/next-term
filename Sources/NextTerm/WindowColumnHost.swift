@@ -244,6 +244,8 @@ final class WindowColumnHost: NSView {
             setShade(width: reveal == nil ? listFrame().width : shadeWidth)
         }
         guard decided != shown else { return }
+        // Shown folded with the pointer elsewhere: its dots settle a few seconds on.
+        if decided.form == .folded, shown.form != .folded { updateAwake() }
         // Folded under the pointer: the list it would open is the column just folded. It waits for the pointer to leave.
         if shown.form == .expanded && decided.form == .folded { waitsForExit = pointerOnColumn() }
         shown = decided
@@ -297,6 +299,28 @@ final class WindowColumnHost: NSView {
     private func updateAwake() {
         let awake: Bool = onRail || listShowing
         if column.awake != awake { column.awake = awake }
+        if awake {
+            settleMoves += 1 // a settle on its way finds the count moved on
+            if column.settled { column.settled = false }
+        } else {
+            settleSoon()
+        }
+    }
+
+    /// Counts the wakes: a settle whose count has moved on does nothing.
+    private var settleMoves = 0
+
+    /// A few seconds after the rail is left alone, its dots settle to a trace.
+    private func settleSoon() {
+        guard !column.settled else { return }
+        settleMoves += 1
+        let move: Int = settleMoves
+        DispatchQueue.main.asyncAfter(deadline: .now() + WindowColumnRail.settleDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.settleMoves == move, !self.column.awake else { return }
+                self.column.settled = true
+            }
+        }
     }
 
     /// The list after the pointer has rested on the rail for openDelay: not while it was held back, nor while a button

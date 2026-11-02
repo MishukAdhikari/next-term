@@ -143,6 +143,11 @@ public enum WindowColumnRail {
     public static var warmDelay: TimeInterval = 0.8
     /// How long the pointer is off the rail and the list before the list goes: room to overshoot its edge.
     public static var closeDelay: TimeInterval = 0.4
+    /// A few seconds after the pointer leaves the rail, its dots settle to a trace (`settledOpacity`), faded over
+    /// `settleDuration`, so a rail at rest all but goes; a mark that needs you stays whole.
+    public static var settleDelay: TimeInterval = 3
+    public static let settleDuration: TimeInterval = 1
+    public static let settledOpacity: Float = 0.3
     /// How long the list takes to come out, and to go back.
     public static let openDuration: TimeInterval = 0.12
     public static let closeDuration: TimeInterval = 0.1
