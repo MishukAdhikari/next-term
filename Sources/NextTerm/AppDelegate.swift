@@ -542,6 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // load check, off the main thread.
         MainActor.assumeIsolated { SecretsStore.shared.loadMarks() }
         MainActor.assumeIsolated { SecretReminders.start() } // key rotation reminders: first checked once the load is done
+        MainActor.assumeIsolated { SecretsSkillInstall.refresh() } // its own next-term-secrets copy, if added, brought up to date
         Task { @MainActor in await SecretsStore.shared.load() }
         // Every key in Next Term, in any of its windows: the typing an agent's window waits out (AgentArrival).
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in

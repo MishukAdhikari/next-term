@@ -185,7 +185,7 @@ public struct BuiltInSkill: Sendable, Equatable {
 
         # Keys from Next Term's Secrets
 
-        Next Term keeps the user's API keys, tokens and passwords in its Secrets, and this skill comes from its library (MCP `get_skill`). Its MCP server (`next-term`) tells you the keys' names, never their values, and puts a key in a program's environment only after the user approves on the Mac with Touch ID or their password. You use a key by its name and never see it.
+        Next Term keeps the user's API keys, tokens and passwords in its Secrets, and this skill comes from Next Term (MCP `get_skill`, or a copy in your skills folder that the user added). Its MCP server (`next-term`) tells you the keys' names, never their values, and puts a key in a program's environment only after the user approves on the Mac with Touch ID or their password. You use a key by its name and never see it.
 
         The user's own instructions win over this skill: what they told you, and their CLAUDE.md or AGENTS.md. If you have no `next-term` tools (no `list_secrets`), this skill does not apply: say nothing about Secrets.
 

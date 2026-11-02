@@ -77,6 +77,8 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private(set) var reminderSettings = SecretReminderSettingsView()
     /// New keys: "Never show their values" and "Ask for Touch ID every time they’re used".
     private(set) var newKeySettings = SecretNewKeySettingsView()
+    /// "Agents look here first": the next-term-secrets skill added to agents' own skills folder, or not.
+    private(set) var skillSetting = SecretsSkillSettingView()
     private var resumeActions: [ObjectIdentifier: () -> Void] = [:]
 
     private(set) var entries: [SecretVault.Entry] = []
@@ -221,11 +223,11 @@ final class SecretsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
         let docs = NSButton(title: "What Secrets protects, and what it doesn't", target: self, action: #selector(openDocs))
         docs.bezelStyle = .inline
         let rows: [NSView] = [statusLabel, startOverButton, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons,
-                              valueButtons, actionLabel, newKeySettings, reminderSettings, allowedBox, importsBox, pausedBox, footer,
-                              docs]
+                              valueButtons, actionLabel, newKeySettings, skillSetting, reminderSettings, allowedBox, importsBox, pausedBox,
+                              footer, docs]
         for row in rows { content.addArrangedSubview(row) }
         let wide: [NSView] = [statusLabel, agentControlLabel, tableScroll, emptyLabel, writeOnlyLabel, keyButtons, valueButtons,
-                              actionLabel, newKeySettings, reminderSettings, allowedBox, importsBox, pausedBox, footer]
+                              actionLabel, newKeySettings, skillSetting, reminderSettings, allowedBox, importsBox, pausedBox, footer]
         for row in wide {
             row.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32).isActive = true
         }
