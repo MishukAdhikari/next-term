@@ -365,6 +365,10 @@ enum MCPControl {
             MainActor.assumeIsolated {
                 TasksMCP.addTask(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
             }
+        case "apply_setup":
+            MainActor.assumeIsolated {
+                MCPSetupControl.call(arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)
+            }
         case _ where MCPServer.isImportTool(tool):
             MainActor.assumeIsolated {
                 MCPImportControl.call(tool, arguments, caller: caller, approval: approval, requester: requester, connection: connection, reply: reply)

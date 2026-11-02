@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     #endif
     /// When a notification last played its sound: tabs finishing together make one sound, not one each.
     var lastSoundAt = Date.distantPast
+    /// Next Term › Undo Agent Setup…, shown while an agent's setup can be undone (AgentSetupUndo).
+    var undoAgentSetupItem: NSMenuItem?
 
     /// The editor's font size, which terminals use too while they have no size of their own.
     var fontSize: CGFloat {
@@ -2222,6 +2224,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(app, "Check for Updates Automatically", #selector(toggleAutomaticUpdates(_:)), "", target: self)
         item(app, "Install Command Line Tool (nxtrm)…", #selector(installCommandLineTool(_:)), "", target: self)
         item(app, "Import Settings and Shortcuts…", #selector(showImport(_:)), "", target: self)
+        // Shown while an agent's setup (apply_setup) can be undone, across relaunches.
+        undoAgentSetupItem = item(app, "Undo Agent Setup…", #selector(undoAgentSetup(_:)), "", target: self)
+        agentSetupChanged(nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(agentSetupChanged(_:)), name: AgentSetupUndo.changed, object: nil)
         app.addItem(.separator())
         let services = NSMenu()
         app.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = services

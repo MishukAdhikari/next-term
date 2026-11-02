@@ -45,10 +45,10 @@ import Testing
                      "three shortcuts from `list_shortcuts`", "never print a key"] {
             #expect(text.contains(step), "\(step)")
         }
-        // Every tool it names is one the server lists, but apply_setup, which comes with the one-approval plan.
+        // Every tool it names is one the server lists, apply_setup's one approval among them.
         let quoted = text.components(separatedBy: "`").enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
-        let named = Set(quoted.filter { $0.contains("_") && !$0.contains(" ") }).subtracting(["apply_setup"])
-        #expect(named.contains("list_tabs") && named.contains("preview_import"))
+        let named = Set(quoted.filter { $0.contains("_") && !$0.contains(" ") })
+        #expect(named.contains("list_tabs") && named.contains("preview_import") && named.contains("apply_setup"))
         for name in named { #expect(MCPServer.tool(named: name) != nil, "\(name)") }
         #expect(!text.contains("'") && !text.contains("\""))
 
@@ -146,7 +146,7 @@ import Testing
         // Every schema is a JSON object schema (the raw strings parse).
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
         let loaded = tools.filter { !MCPServer.isDeferred($0["name"] as? String ?? "") }
-        let loadedCount: Int = tools.count - 2 - MCPServer.taskTools.count
+        let loadedCount: Int = tools.count - 2 - MCPServer.setupTools.count - MCPServer.taskTools.count
         #expect(loaded.count == loadedCount)
         let kept: [Bool] = loaded.map { tool in
             let meta: [String: Any] = tool["_meta"] as? [String: Any] ?? [:]
@@ -1756,8 +1756,9 @@ struct SplitMix: RandomNumberGenerator {
 
     @Test func toolCountAndTheInstructionsOnlyNameThem() {
         // 31 + 13 (run_command the 13th) + 4 + 5 (Secrets' five, import_secrets the fifth), and add_task, as many as without
-        // herdr's agents' ids; then edit_host and end_session (plan 010a U6a), rename_tab (U5a) and start_agent (U5b).
-        #expect(MCPServer.tools.count == 57 + MCPServer.taskTools.count)
+        // herdr's agents' ids; then edit_host and end_session (plan 010a U6a), rename_tab (U5a) and start_agent (U5b), and
+        // apply_setup.
+        #expect(MCPServer.tools.count == 57 + MCPServer.setupTools.count + MCPServer.taskTools.count)
         #expect(!MCPServer.tools.contains { $0.name.contains("herdr") })
         // Five characters more, and no sentence: list_tabs' description says the rest.
         #expect(MCPServer.instructions.contains("list_tabs shows every project, tab and herdr agent with its state"))

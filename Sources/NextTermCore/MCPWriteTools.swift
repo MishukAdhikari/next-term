@@ -57,7 +57,7 @@ extension MCPServer {
         let write = ["open_project", "new_tab", "send_to_tab", "press_keys", "answer_agent", "show_tab", "close_tab", "rename_tab", "start_agent",
                      "add_host", "remove_host", "edit_host", "end_session", "new_remote_tab", "install_skill", "remove_skill", "open_in_editor", "show_settings",
                      "propose_edit", "write_file", "create_file", "stage", "commit", "run_command", "focus_tab", "split_pane",
-                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "add_task",
+                     "close_pane", "zoom_pane", "set_layout", "settings_set", "apply_import", "undo_import", "apply_setup", "add_task",
                      "request_secret", "store_secret", "run_with_secrets", "import_secrets"]
         var tags: [String: Scope] = [:]
         for name in read { tags[name] = .read }
@@ -646,7 +646,8 @@ public enum MCPSettings {
         case folder([String])
     }
 
-    public enum Value: Equatable, Sendable {
+    /// Codable for Undo Agent Setup's snapshot (AgentSetupSnapshot).
+    public enum Value: Codable, Equatable, Sendable {
         case flag(Bool)
         case number(Double)
         case choice(String)

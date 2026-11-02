@@ -162,7 +162,7 @@ extension MCPWriteControl {
     // MARK: layout
 
     /// The window set_layout's per-window changes go to: the project's, the caller's, or the front one.
-    private static func layoutWindow(_ arguments: [String: Any], _ context: Context) -> Result<TerminalWindowController, MCPToolError> {
+    static func layoutWindow(_ arguments: [String: Any], _ context: Context) -> Result<TerminalWindowController, MCPToolError> {
         let controllers = AppDelegate.shared.controllers
         if arguments["project"] != nil {
             switch context.projects.project(arguments["project"]) {
@@ -180,7 +180,7 @@ extension MCPWriteControl {
         return .failure(MCPToolError("No Next Term window is open."))
     }
 
-    private static func layout(of controller: TerminalWindowController) -> [String: Any] {
+    static func layout(of controller: TerminalWindowController) -> [String: Any] {
         let app = AppDelegate.shared!
         var layout: [String: Any] = [
             "terminal_position": app.terminalPosition.rawValue, "sidebar_side": app.sidebarSide.rawValue,
@@ -213,6 +213,29 @@ extension MCPWriteControl {
         case .failure(let error): return reply(MCPControl.fail(error.text))
         case .success(let found): controller = found
         }
+        let change: MCPLayoutChange, lines: [String]
+        switch layoutPlan(wanted, in: controller) {
+        case .failure(let error): return reply(MCPControl.fail(error.text))
+        case .success(let plan): (change, lines) = (plan.change, plan.lines)
+        }
+        if change.isEmpty {
+            var answer = layout(of: controller)
+            answer["changed"] = [String]()
+            return reply(MCPControl.ok(answer))
+        }
+        approve(Ask(title: "An agent asks to change the layout", details: lines.joined(separator: "\n")), context, reply: reply) { approved, window in
+            window?.finish()
+            let changed = applyLayout(change, in: controller, asked: window != nil)
+            var answer = layout(of: controller)
+            answer["changed"] = changed
+            answer["approved"] = approved
+            reply(MCPControl.ok(answer))
+        }
+    }
+
+    /// What `wanted` would change, in `controller`'s window for its per-window fields: only the fields that differ
+    /// now, each with the line the approval window shows. A fold the window can't make is refused.
+    static func layoutPlan(_ wanted: MCPLayoutChange, in controller: TerminalWindowController) -> Result<(change: MCPLayoutChange, lines: [String]), MCPToolError> {
         let app = AppDelegate.shared!
         var change = MCPLayoutChange()
         var lines: [String] = []
@@ -235,7 +258,7 @@ extension MCPWriteControl {
         }
         if let folded = wanted.windowColumnFolded, folded != !app.windowColumnExpanded {
             guard app.windowColumns.wouldShow(ifShown: wanted.windowColumnShown ?? app.showsWindowColumn) else {
-                return reply(MCPControl.fail("The window column isn’t showing (it needs window_column shown and two or more windows open), so it can’t fold or unfold; nothing changed."))
+                return .failure(MCPToolError("The window column isn’t showing (it needs window_column shown and two or more windows open), so it can’t fold or unfold; nothing changed."))
             }
             change.windowColumnFolded = folded
             lines.append(WindowColumnSettings.approvalLine(folded: folded))
@@ -246,7 +269,7 @@ extension MCPWriteControl {
         }
         if let folded = wanted.terminalFolded {
             if folded, controller.editorArea.isHidden {
-                return reply(MCPControl.fail("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
+                return .failure(MCPToolError("The editor is closed in that window (no file is open), so the terminal fills it and can’t fold; nothing changed."))
             }
             // A new terminal position unfolds it: fold again after the move. Moving the sidebar leaves it as it is.
             if MCPLayoutChange.needsFoldStep(wanted: folded, folded: controller.terminalCollapsed, newPosition: change.terminalPosition != nil) {
@@ -254,58 +277,56 @@ extension MCPWriteControl {
                 lines.append("The terminal is \(folded ? "folded" : "unfolded") in \(place(controller)).")
             }
         }
-        if change.isEmpty {
-            var answer = layout(of: controller)
-            answer["changed"] = [String]()
-            return reply(MCPControl.ok(answer))
+        return .success((change, lines))
+    }
+
+    /// Makes a layout change as the View menu does, the per-window fields in `controller`'s window while it is open, and
+    /// returns the fields changed. `asked`: the user approved it in a window; a remote door's grant asked nothing, so a
+    /// toast says what changed in the window column, and how to put it back.
+    @discardableResult
+    static func applyLayout(_ change: MCPLayoutChange, in controller: TerminalWindowController?, asked: Bool) -> [String] {
+        let app = AppDelegate.shared!
+        var changed: [String] = []
+        if let position = change.terminalPosition {
+            app.applyImported(.terminalPosition(position))
+            changed.append("terminal_position")
         }
-        approve(Ask(title: "An agent asks to change the layout", details: lines.joined(separator: "\n")), context, reply: reply) { approved, window in
-            window?.finish()
-            var changed: [String] = []
-            if let position = change.terminalPosition {
-                app.applyImported(.terminalPosition(position))
-                changed.append("terminal_position")
-            }
-            if let side = change.sidebarSide {
-                app.applyImported(.sidebarSide(side))
-                changed.append("sidebar_side")
-            }
-            // Only the tabs move: a folded terminal stays folded, so terminal_folded needs no step for it.
-            if let tabs = change.terminalTabs {
-                app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
-                changed.append("terminal_tabs")
-            }
-            // The window column: every window, as the View menu and Settings › General change it.
-            if let shown = change.windowColumnShown {
-                app.showsWindowColumn = shown
-                changed.append("window_column")
-                // A remote door's grant asks nothing on the Mac: say what changed, and how to put it back.
-                if window == nil {
-                    GitToast.whenFree {
-                        guard let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller.window else { return }
-                        GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
-                    }
+        if let side = change.sidebarSide {
+            app.applyImported(.sidebarSide(side))
+            changed.append("sidebar_side")
+        }
+        // Only the tabs move: a folded terminal stays folded, so terminal_folded needs no step for it.
+        if let tabs = change.terminalTabs {
+            app.moveTerminalTabs(to: TerminalTabsSetting(stored: tabs))
+            changed.append("terminal_tabs")
+        }
+        // The window column: every window, as the View menu and Settings › General change it.
+        if let shown = change.windowColumnShown {
+            app.showsWindowColumn = shown
+            changed.append("window_column")
+            if !asked {
+                let columnKey: String? = KeyboardShortcuts.shared.chord(for: "toggleWindowColumn:")?.display
+                GitToast.whenFree {
+                    guard let front = (NSApp.keyWindow?.windowController as? TerminalWindowController)?.window ?? controller?.window else { return }
+                    GitToast.show(WindowColumnSettings.grantedLine(shown: shown, key: columnKey), in: front)
                 }
             }
-            if let folded = change.windowColumnFolded {
-                app.windowColumnExpanded = !folded
-                changed.append("window_column_folded")
-            }
-            let open = AppDelegate.shared.controllers.contains { $0 === controller }
-            if open, let shown = change.sidebarShown {
-                app.sidebarVisible = shown
-                controller.setSidebarVisible(shown)
-                changed.append("sidebar")
-            }
-            if open, let folded = change.terminalFolded {
-                if folded { controller.collapseTerminal() } else { controller.expandTerminal() }
-                changed.append("terminal_folded")
-            }
-            var answer = layout(of: controller)
-            answer["changed"] = changed
-            answer["approved"] = approved
-            reply(MCPControl.ok(answer))
         }
+        if let folded = change.windowColumnFolded {
+            app.windowColumnExpanded = !folded
+            changed.append("window_column_folded")
+        }
+        guard let controller, AppDelegate.shared.controllers.contains(where: { $0 === controller }) else { return changed }
+        if let shown = change.sidebarShown {
+            app.sidebarVisible = shown
+            controller.setSidebarVisible(shown)
+            changed.append("sidebar")
+        }
+        if let folded = change.terminalFolded {
+            if folded { controller.collapseTerminal() } else { controller.expandTerminal() }
+            changed.append("terminal_folded")
+        }
+        return changed
     }
 
     // MARK: settings
@@ -354,7 +375,7 @@ extension MCPWriteControl {
 
     /// Why a change checked against the allowlist still can't be made here (nil: it can): imported colours need
     /// colours an import brought over, which Settings keeps.
-    private static func refusal(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) -> String? {
+    static func refusal(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) -> String? {
         if setting.name == "terminal_colours", value == .choice("imported"), Preferences.customTerminalPalette == nil {
             return "No import has brought terminal colours over, so terminal_colours takes only next_term here; nothing was changed. list_import_sources and preview_import bring colours over from another terminal."
         }
@@ -362,7 +383,7 @@ extension MCPWriteControl {
     }
 
     /// Sets a value the way the menus and Settings do, so it applies at once.
-    private static func apply(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) {
+    static func apply(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) {
         let app = AppDelegate.shared!
         switch (setting.name, value) {
         case ("font_size", .number(let size)): app.setFontSize(CGFloat(size))
@@ -430,7 +451,7 @@ extension MCPWriteControl {
         }
     }
 
-    private static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {
+    static func same(_ a: MCPSettings.Value, _ b: MCPSettings.Value) -> Bool {
         if case .number(let x) = a, case .number(let y) = b { return abs(x - y) < 0.001 }
         return a == b
     }

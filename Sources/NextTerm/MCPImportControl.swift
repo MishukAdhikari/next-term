@@ -247,16 +247,28 @@ enum MCPImportControl {
         }
     }
 
-    /// Checks what the agent asked for against the plan, then opens the import window as the ask.
-    static func ask(_ prepared: Prepared, arguments: [String: Any], asked: MCPImport.Asked, asker: String, who: String,
-                    reply: @escaping Reply) {
-        let hiding = prepared.hiding
+    /// The rows an agent's request ticks, checked against the plan: the ticks, the plan settled under the shortcut set
+    /// they choose (as the window shows and applies it), the recent projects not listed yet, and what Apply would change.
+    struct Selection {
+        let ticks: Set<String>
+        let shown: ImportPlan
+        let recents: [String]
+        let changing: Int
+        let planID: String
+    }
+
+    enum Selected {
+        case ok(Selection)
+        /// What the app's files hold changed since the preview whose plan_id was given.
+        case changedSincePreview(planID: String)
+        case refused(MCPToolError)
+    }
+
+    /// The rows `items` names (or the preview's ticks), checked against the plan, as apply_import and apply_setup take them.
+    static func selection(_ prepared: Prepared, arguments: [String: Any], asked: MCPImport.Asked) -> Selected {
         let current = KeyboardShortcuts.shared.preset
         let planID = MCPImport.planID(prepared.raw)
-        if let given = asked.planID, !given.isEmpty, given != planID {
-            let note = "What the app's files hold changed since that preview. Preview again; nothing was asked."
-            return reply(ok(status("changed_since_preview", note, ["plan_id": planID]), hiding: hiding))
-        }
+        if let given = asked.planID, !given.isEmpty, given != planID { return .changedSincePreview(planID: planID) }
         // Without the shortcut set, the user's own shortcuts settle against the set in use: those rows count too.
         let alternate = ImportWindowController.settle(prepared.raw, under: current)
         let recents = MCPImport.newRecents(prepared.settled, known: AppDelegate.shared.recentProjects)
@@ -265,14 +277,30 @@ enum MCPImportControl {
         let refused = withSet.refused.merging(withoutSet.refused) { first, _ in first }
         let named: Set<String>?
         switch MCPImport.items(arguments["items"], offered: withSet.ids.union(withoutSet.ids), refused: refused) {
-        case .failure(let error): return reply(fail(error.text, hiding: hiding))
+        case .failure(let error): return .refused(error)
         case .success(let value): named = value
         }
         let ticks = named ?? MCPImport.defaultTicks(prepared.settled, currentPreset: current, newRecents: recents)
         let usesSet = ticks.contains(MCPImport.presetID) && prepared.settled.preset != current
         let shown = usesSet ? prepared.settled : alternate
         let changing = MCPImport.changes(shown, ticks: ticks, currentPreset: current, newRecents: recents, isCurrent: ImportCurrent.has)
-        guard changing > 0 else {
+        return .ok(Selection(ticks: ticks, shown: shown, recents: recents, changing: changing, planID: planID))
+    }
+
+    /// Checks what the agent asked for against the plan, then opens the import window as the ask.
+    static func ask(_ prepared: Prepared, arguments: [String: Any], asked: MCPImport.Asked, asker: String, who: String,
+                    reply: @escaping Reply) {
+        let hiding = prepared.hiding
+        let selected: Selection
+        switch selection(prepared, arguments: arguments, asked: asked) {
+        case .refused(let error): return reply(fail(error.text, hiding: hiding))
+        case .changedSincePreview(let planID):
+            let note = "What the app's files hold changed since that preview. Preview again; nothing was asked."
+            return reply(ok(status("changed_since_preview", note, ["plan_id": planID]), hiding: hiding))
+        case .ok(let value): selected = value
+        }
+        let ticks = selected.ticks, planID = selected.planID
+        guard selected.changing > 0 else {
             let note = "Nothing to change: what those rows hold is what Next Term has now. No window opened, and the last import's Undo is kept."
             return reply(ok(status("up_to_date", note, ["plan_id": planID]), hiding: hiding))
         }

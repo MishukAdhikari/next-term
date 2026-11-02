@@ -42,14 +42,15 @@ import Testing
         #expect(capitalised == ["Adds", "Markdown", "With", "The", "Mac", "Next", "Term", "Each", "Answers"], "\(capitalised.sorted())")
         #expect(tool.description.contains("With destination project (the default) the task goes where the user sends this project's tasks; "
             + "todo_folder always writes the Markdown file."))
-        // After the import tools, before Secrets' five, which end the list.
+        // After the import tools and apply_setup, before Secrets' five, which end the list.
         let names = MCPServer.tools.map(\.name)
-        #expect(names.firstIndex(of: "add_task") == names.firstIndex(of: "undo_import").map { $0 + 1 })
+        #expect(names.firstIndex(of: "apply_setup") == names.firstIndex(of: "undo_import").map { $0 + 1 })
+        #expect(names.firstIndex(of: "add_task") == names.firstIndex(of: "apply_setup").map { $0 + 1 })
         let last: [String] = Array(names.suffix(6))
         #expect(last == ["add_task", "list_secrets", "request_secret", "store_secret", "run_with_secrets", "import_secrets"])
         #expect(names.filter { $0 == "add_task" }.count == 1)
         // The instructions name it among the tools that ask, and still fit.
-        #expect(MCPServer.instructions.contains("apply_import, undo_import and add_task ask the user on the Mac first"))
+        #expect(MCPServer.instructions.contains("apply_import, undo_import, apply_setup and add_task ask the user on the Mac first"))
         for inTab in [false, true] { #expect(MCPServer.instructions(inTab: inTab, offeringTabs: true).utf16.count <= 2048) }
     }
 

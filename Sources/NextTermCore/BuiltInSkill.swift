@@ -152,6 +152,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         - `set_layout`: where the terminal sits (bottom, right, left or top), where its tabs show (top, or a list down its left or right), the sidebar shown or hidden, on the left or the right, the terminal folded, and the window column (a badge for every open window, at each window's edge) shown or hidden, folded or unfolded.
         - `split_pane`, `zoom_pane`, `close_pane` and `focus_tab` arrange panes and give one the keyboard; each asks the user first.
         - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window. For the IDE shortcut set alone no import is needed: `settings_set` with `shortcut_set`.
+        - `apply_setup` takes settings (as `settings_set`), the layout (as `set_layout`) and an import (as `apply_import`) together: the user approves them in one window on the Mac, a row per change they may untick, and Next Term › Undo Agent Setup… puts back all of it.
         - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where.
 
         ## First run

@@ -376,7 +376,7 @@ public enum MCPRestoreGate {
     /// Tools where a call with an id asks again for the answer to a request already open, and that id's argument.
     static let followUpID: [String: String] = [
         "propose_edit": "proposal_id", "install_skill": "request_id", "remove_skill": "request_id",
-        "apply_import": "request_id", "undo_import": "request_id",
+        "apply_import": "request_id", "undo_import": "request_id", "apply_setup": "request_id",
         "request_secret": "request_id", "store_secret": "request_id", "run_with_secrets": "request_id",
         "import_secrets": "request_id", "run_command": "request_id",
     ]
