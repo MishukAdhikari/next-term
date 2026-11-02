@@ -29,6 +29,7 @@ extension SelfTest {
         card.show(agents)
         let frame = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 150), styleMask: [.titled], backing: .buffered, defer: false)
         frame.keepsItsOwnFrame()
+        frame.isReleasedWhenClosed = false
         frame.appearance = NSAppearance(named: .darkAqua)
         frame.backgroundColor = Theme.background
         let holder = NSView()

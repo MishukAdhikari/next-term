@@ -104,8 +104,9 @@ final class MCPRegistrationCard: NSView {
             button.keyEquivalent = ""
         }
         keep.refusesFirstResponder = true
-        keep.heightAnchor.constraint(equalTo: remove.heightAnchor).isActive = true
         let buttons = NSStackView(views: [remove, keep])
+        // Once both are in the stack: a constraint between views with no common ancestor throws.
+        keep.heightAnchor.constraint(equalTo: remove.heightAnchor).isActive = true
         buttons.spacing = 8
         let bottom = NSStackView(views: [details, NSView(), buttons])
         bottom.alignment = .top
