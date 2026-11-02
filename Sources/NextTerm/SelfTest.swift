@@ -1067,7 +1067,9 @@ enum SelfTest {
         await cellSnapChecks(c)
         await notificationChecks(c)
         await opencodeScreenChecks(c)
+        #if DEBUG
         await agentSessionChecks(c)
+        #endif
         notificationsMenuChecks()
         await tasksChecks(c, proj: proj)
         agentSpinnerChecks()
