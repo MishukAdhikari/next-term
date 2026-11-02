@@ -705,6 +705,7 @@ enum SelfTest {
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         case "windowColumn": return await windowColumnChecks() // the window column in every window, on either side, and its budget
+        case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
         case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
         case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file
             await databaseChecks(c, proj: proj)
