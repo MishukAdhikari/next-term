@@ -83,9 +83,12 @@ import Testing
 
 @Suite struct MCPSettingsTests {
     @Test func theAllowlistIsShortAndHarmless() {
-        #expect(MCPSettings.allowlist.map(\.name) == ["font_size", "line_height", "soft_wrap", "terminal_position", "notify_decisions",
-                                                      "notify_agent_finished", "notify_program_alerts", "notification_sound", "notify_commands",
-                                                      "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward", "open_projects_in"])
+        #expect(MCPSettings.allowlist.map(\.name) == ["font_size", "line_height", "soft_wrap", "terminal_font_family", "terminal_font_size",
+                                                      "terminal_colours", "terminal_cursor", "terminal_cursor_blink", "terminal_scrollback",
+                                                      "new_tab_folder", "terminal_position", "notify_decisions", "notify_agent_finished",
+                                                      "notify_program_alerts", "notification_sound", "notify_commands", "notify_threshold_seconds",
+                                                      "agent_spinner", "agents_offer_tabs", "agents_bring_tabs_forward", "open_projects_in",
+                                                      "at_launch", "sidebar_single_click", "shortcut_set"])
         #expect(MCPSettings.changes(["open_projects_in": "new_tab"]).failureText == nil)
         #expect(MCPSettings.changes(["open_projects_in": "tab"]).failureText?.contains("takes ask, this_window, new_window, new_tab, as_macos") == true)
         if case .success(let changes) = MCPSettings.changes(["agent_spinner": "still", "agents_offer_tabs": false]) {
@@ -98,7 +101,8 @@ import Testing
         // The guards and the switches that reach other programs are never on it, by any spelling.
         for name in ["agent_control", "agentControl", "share_with_claude", "shareWithClaude", "shareWithCopilot", "remote_access",
                      "check_for_updates", "checkForUpdates", "updateInstallWithoutAsking", "keyBindings", "key_bindings", "hideEnvValues",
-                     "backgroundFetch", "optionAsMeta"] {
+                     "backgroundFetch", "optionAsMeta", "agent_ide_links", "ideLinks", "remoteAccess", "keymapPreset", "shortcut",
+                     "launchOpens", "editor_font_family"] {
             #expect(MCPSettings.setting(name) == nil, "\(name)")
             let refused = MCPSettings.changes([name: true])
             #expect(refused.failureText?.contains("not a setting agents may change") == true, "\(name)")
@@ -120,6 +124,59 @@ import Testing
         #expect(MCPSettings.changes([String: Any]()).isFailure)
         #expect(MCPSettings.changes("font_size").isFailure)
         #expect(MCPSettings.Value.number(13).json as? Int == 13 && MCPSettings.Value.number(1.35).text == "1.35")
+    }
+
+    /// A catalog of two families, so the test needs none of this Mac's fonts.
+    static let fonts = FontCatalog { name in
+        switch name.lowercased() {
+        case "jetbrains mono", "jetbrainsmono-regular": return InstalledFont(family: "JetBrains Mono", monospaced: true)
+        case "helvetica": return InstalledFont(family: "Helvetica", monospaced: false)
+        default: return nil
+        }
+    }
+
+    @Test func theTerminalsSettingsAreChecked() throws {
+        func changes(_ values: [String: Any]) -> Result<[(MCPSettings.Setting, MCPSettings.Value)], MCPToolError> {
+            MCPSettings.changes(values, fonts: Self.fonts, folderExists: { $0 == "/Users/me/work" })
+        }
+        let ok = try changes(["terminal_font_family": "jetbrainsmono-regular", "terminal_font_size": 15, "terminal_colours": "imported",
+                              "terminal_cursor": "bar", "terminal_cursor_blink": false, "terminal_scrollback": 50_000,
+                              "new_tab_folder": "/Users/me/work/"]).get()
+        // The family by its own name, whatever it was asked by; the folder as Settings saves it.
+        #expect(ok.map(\.1) == [.choice("JetBrains Mono"), .number(15), .choice("imported"), .choice("bar"), .flag(false), .number(50_000),
+                                .choice("/Users/me/work")])
+        let words = try changes(["terminal_font_family": "default", "terminal_font_size": "same_as_editor", "new_tab_folder": "home"]).get()
+        #expect(words.map(\.1) == [.choice("default"), .choice("same_as_editor"), .choice("home")])
+        #expect(changes(["terminal_font_family": "Helvetica"]).failureText?.contains("“Helvetica” is not a monospaced font family") == true)
+        #expect(changes(["terminal_font_family": "Nope Mono"]).failureText?.contains("installed on this Mac; nothing was changed") == true)
+        #expect(changes(["new_tab_folder": "/Users/me/gone"]).failureText == "There is no folder at /Users/me/gone; nothing was changed.")
+        #expect(changes(["terminal_font_size": "editor"]).failureText?.contains("takes a whole number, 8 to 32, or same_as_editor") == true)
+        let bads: [[String: Any]] = [["terminal_font_size": 7], ["terminal_font_size": 14.5], ["terminal_font_size": true],
+                                     ["terminal_font_family": ""], ["terminal_font_family": 12], ["terminal_colours": "solarized"],
+                                     ["terminal_cursor": "beam"], ["terminal_cursor_blink": "no"], ["terminal_scrollback": 999],
+                                     ["terminal_scrollback": 100_001], ["new_tab_folder": "work"], ["new_tab_folder": ""]]
+        for bad in bads { #expect(changes(bad).failureText?.contains("nothing was changed") == true, "\(bad)") }
+    }
+
+    @Test func launchSidebarNotificationsAndTheShortcutSet() throws {
+        let ok = try MCPSettings.changes(["at_launch": "resume", "sidebar_single_click": true, "shortcut_set": "jetbrains",
+                                          "notify_threshold_seconds": 60]).get()
+        #expect(ok.map(\.0.name) == ["notify_threshold_seconds", "at_launch", "sidebar_single_click", "shortcut_set"])
+        #expect(ok.map(\.1) == [.number(60), .choice("resume"), .flag(true), .choice("jetbrains")])
+        #expect(MCPSettings.changes(["notify_threshold_seconds": 45]).failureText?.contains("takes one of 5, 30, 60, 300") == true)
+        #expect(MCPSettings.changes(["notify_threshold_seconds": true]).isFailure)
+        #expect(MCPSettings.changes(["shortcut_set": "vsCode"]).failureText?.contains("takes next_term, vscode, jetbrains") == true)
+        #expect(MCPSettings.changes(["at_launch": "lastProjects"]).failureText?.contains("takes welcome, resume, new_terminal") == true)
+        // The names stand for the presets and the launch choices Settings has, both ways.
+        #expect(KeymapPreset.allCases.map(\.mcpName) == ["next_term", "vscode", "jetbrains"])
+        for preset in KeymapPreset.allCases { #expect(KeymapPreset(mcpName: preset.mcpName) == preset) }
+        #expect(LaunchOpens(mcpName: "resume") == .lastProjects && LaunchOpens(mcpName: "new_terminal") == .newTerminal)
+        #expect(LaunchOpens(mcpName: "lastProjects") == nil)
+        // The tools say so.
+        let set = try #require(MCPServer.tool(named: "settings_set")).description
+        for name in MCPSettings.allowlist.map(\.name) { #expect(set.contains(name), "\(name)") }
+        let get = try #require(MCPServer.tool(named: "settings_get")).description
+        for name in ["shortcut_set", "at_launch", "sidebar_single_click", "new_tab_folder"] { #expect(get.contains(name), "\(name)") }
     }
 
     @Test func layoutChanges() throws {

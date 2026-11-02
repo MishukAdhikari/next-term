@@ -63,6 +63,20 @@ public enum KeymapPreset: String, CaseIterable, Codable, Sendable {
         if let preset = overrides[id] { return preset }
         return fallback
     }
+
+    /// As settings_get and settings_set name it (shortcut_set).
+    public var mcpName: String {
+        switch self {
+        case .nextTerm: return "next_term"
+        case .vsCode: return "vscode"
+        case .jetBrains: return "jetbrains"
+        }
+    }
+
+    public init?(mcpName: String) {
+        guard let found = Self.allCases.first(where: { $0.mcpName == mcpName }) else { return nil }
+        self = found
+    }
 }
 
 /// The apps an import can read.

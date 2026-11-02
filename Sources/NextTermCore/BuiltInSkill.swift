@@ -148,10 +148,10 @@ public struct BuiltInSkill: Sendable, Equatable {
 
         ## What you can change
 
-        - `settings_get` lists the settings agents may change, with their values and what each takes, and the layout as `set_layout` answers it. Change several with one `settings_set`: the user approves on the Mac, once, seeing each change.
+        - `settings_get` lists the settings agents may change, with their values and what each takes, and the layout as `set_layout` answers it: among them the terminal's font, size, colours, cursor and scrollback, where a new tab opens, what opens at launch, the notifications and the IDE shortcut set (`shortcut_set`: next_term, vscode or jetbrains). Change several with one `settings_set`: the user approves on the Mac, once, seeing each change.
         - `set_layout`: where the terminal sits (bottom, right, left or top), where its tabs show (top, or a list down its left or right), the sidebar shown or hidden, on the left or the right, the terminal folded, and the window column (a badge for every open window, at each window's edge) shown or hidden, folded or unfolded.
         - `split_pane`, `zoom_pane`, `close_pane` and `focus_tab` arrange panes and give one the keyboard; each asks the user first.
-        - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window.
+        - From another editor or terminal (VS Code, Cursor, JetBrains, Zed, iTerm2, Ghostty…): fonts, colours, the cursor, scrollback and keys, with `list_import_sources`, then `preview_import`, then `apply_import`, which the user applies in Next Term's import window. For the IDE shortcut set alone no import is needed: `settings_set` with `shortcut_set`.
         - Never agent control, remote access, the IDE links, updates or a single key: those are the user's to change. Show them where.
 
         ## Keys
@@ -168,7 +168,7 @@ public struct BuiltInSkill: Sendable, Equatable {
         |---|---|---|---|
         | ⌥⌘T | Open a tab on a server | File › New Remote Tab… | how to |
         | — | Terminal on the right | View › Terminal Position | changed |
-        | ⌘, | Terminal font | Settings › Terminal › Font | Settings open |
+        | ⌘, | Editor font | Settings › Editor › Font | Settings open |
         | — | Where new tasks are saved | Settings › Tasks › Todo folder | Settings open |
 
         Write "—" for a command with no key. Add only the keys that go with what was asked, not a full list: `list_shortcuts` is there when the user wants more.

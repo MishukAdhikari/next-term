@@ -118,11 +118,11 @@ extension MCPServer {
              inputSchema: #"{"type": "object", "properties": {"terminal_position": {"type": "string", "enum": ["bottom", "right", "left", "top"]}, "sidebar_side": {"type": "string", "enum": ["left", "right"]}, "terminal_tabs": {"type": "string", "enum": ["top", "left", "right"]}, "window_column": {"type": "string", "enum": ["shown", "hidden"]}, "window_column_folded": {"type": "boolean"}, "sidebar": {"type": "string", "enum": ["shown", "hidden"]}, "terminal_folded": {"type": "boolean"}, \#(projectArgument), \#(reasonArgument)}, "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
         Tool(name: "settings_get", title: "Get settings",
-             description: "The settings that settings_set may change, with their values and what each takes: font_size, line_height, soft_wrap, terminal_position, the notification choices, agent_spinner, agents_offer_tabs, agents_bring_tabs_forward and open_projects_in. Other settings are not listed. Also layout: the layout as set_layout answers it, for your window or the front one.",
+             description: "The settings that settings_set may change, with their values and what each takes: the editor's font_size, line_height and soft_wrap; the terminal's font, size, colours, cursor and scrollback, new_tab_folder and terminal_position; the notification choices; agent_spinner, agents_offer_tabs and agents_bring_tabs_forward; open_projects_in, at_launch, sidebar_single_click and shortcut_set. Other settings are not listed. Also layout: the layout as set_layout answers it, for your window or the front one.",
              inputSchema: #"{"type": "object", "properties": {}, "additionalProperties": false}"#,
              readOnly: true, destructive: false, idempotent: true, timeout: 15),
         Tool(name: "settings_set", title: "Change settings",
-             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap, terminal_position (bottom, right, left or top), notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false), notify_commands (in_another_app, always or never), agent_spinner (spinning, still or off: how a tab shows its agent working) agents_offer_tabs (true or false: agents offer to run parallel work in Next Term tabs, with the next-term-tabs skill) agents_bring_tabs_forward (focus, show or off: whether the window of a tab an agent opens comes forward and takes focus; the tab itself waits for the user's click either way) and open_projects_in (ask, this_window, new_window, new_tab or as_macos: where a project opens from a window already in use; new_tab merges it into that window as a tab). Never agent control, remote access, the IDE links, updates or keys. The user is asked on the Mac first, seeing each change; values already set need no asking.",
+             description: "Changes some of Next Term's settings, given as values: {name: value}. Only these: font_size (8 to 32, the editor's, which the terminal uses too unless it has a size of its own), line_height (the editor's, 1.0 to 2.0), soft_wrap; terminal_font_family (a monospaced family installed on this Mac, or default), terminal_font_size (8 to 32, or same_as_editor), terminal_colours (next_term, or imported: the colours an import brought over), terminal_cursor (block, bar or underline), terminal_cursor_blink, terminal_scrollback (1000 to 100000 lines), new_tab_folder (project, current, home or an existing folder's absolute path), terminal_position (bottom, right, left or top); notify_decisions, notify_agent_finished, notify_program_alerts and notification_sound (true or false), notify_commands (in_another_app, always or never), notify_threshold_seconds (5, 30, 60 or 300: finished work notifies only when it took that long); agent_spinner (spinning, still or off: how a tab shows its agent working), agents_offer_tabs (true or false: agents offer to run parallel work in Next Term tabs, with the next-term-tabs skill), agents_bring_tabs_forward (focus, show or off: whether the window of a tab an agent opens comes forward and takes focus; the tab itself waits for the user's click either way); open_projects_in (ask, this_window, new_window, new_tab or as_macos: where a project opens from a window already in use; new_tab merges it into that window as a tab), at_launch (welcome, resume or new_terminal), sidebar_single_click (true: one click in the project sidebar opens a file or folder) and shortcut_set (next_term, vscode or jetbrains: the IDE shortcut set under the user's own keys, as Settings › Keyboard Shortcuts switches it). Never agent control, remote access, the IDE links, updates or a single key. The user is asked on the Mac first, seeing each change; values already set need no asking.",
              inputSchema: #"{"type": "object", "properties": {"values": {"type": "object", "description": "Setting names and their new values, as settings_get lists them.", "minProperties": 1}, \#(reasonArgument)}, "required": ["values"], "additionalProperties": false}"#,
              readOnly: false, destructive: false, idempotent: true, timeout: 60),
     ]
@@ -628,13 +628,22 @@ public enum MCPGitTools {
 // MARK: - settings and layout
 
 /// The settings agents may change with settings_set: a short, explicit list of harmless preferences. Agent
-/// control, remote access, the IDE links, updates and keys are never on it, so no agent can turn off its
-/// own guards or the user's view of them.
+/// control, remote access, the IDE links, updates and single keys are never on it, so no agent can turn off its
+/// own guards or the user's view of them. The shortcut set is on it: it changes which preset lies under the
+/// user's own keys, never the keys themselves.
 public enum MCPSettings {
     public enum Kind: Equatable, Sendable {
         case flag
         case number(ClosedRange<Double>, wholeNumbers: Bool)
         case choice([String])
+        /// A whole number in the range, or the one word that stands for having none of its own.
+        case numberOr(ClosedRange<Double>, String)
+        /// One of these whole numbers.
+        case numbers([Int])
+        /// A monospaced font family installed on this Mac, by its name, or "default" for Next Term's own face.
+        case fontFamily
+        /// One of the words, or an existing folder's absolute path.
+        case folder([String])
     }
 
     public enum Value: Equatable, Sendable {
@@ -673,32 +682,66 @@ public enum MCPSettings {
                 let low = Value.number(range.lowerBound).text, high = Value.number(range.upperBound).text
                 return whole ? "a whole number, \(low) to \(high)" : "a number, \(low) to \(high)"
             case .choice(let options): return options.joined(separator: ", ")
+            case .numberOr(let range, let word):
+                return "a whole number, \(Value.number(range.lowerBound).text) to \(Value.number(range.upperBound).text), or \(word)"
+            case .numbers(let options): return "one of " + options.map(String.init).joined(separator: ", ")
+            case .fontFamily: return "a monospaced font family installed on this Mac, by its name, or default"
+            case .folder(let words): return words.joined(separator: ", ") + ", or an existing folder's absolute path"
             }
         }
     }
+
+    /// "default" for terminal_font_family: Next Term's own face.
+    public static let defaultFont = "default"
+    /// "same_as_editor" for terminal_font_size: the terminal follows the editor's size.
+    public static let sameAsEditor = "same_as_editor"
 
     public static let allowlist: [Setting] = [
         Setting(name: "font_size", title: "Font size", kind: .number(8...32, wholeNumbers: true)),
         Setting(name: "line_height", title: "Editor line height", kind: .number(1...2, wholeNumbers: false)),
         Setting(name: "soft_wrap", title: "Soft wrap", kind: .flag),
+        Setting(name: "terminal_font_family", title: "Terminal font", kind: .fontFamily),
+        Setting(name: "terminal_font_size", title: "Terminal font size", kind: .numberOr(8...32, sameAsEditor)),
+        Setting(name: "terminal_colours", title: "Terminal colours (imported: the ones an import brought over, which Settings keeps)",
+                kind: .choice(["next_term", "imported"])),
+        Setting(name: "terminal_cursor", title: "Terminal cursor", kind: .choice(CursorShape.allCases.map(\.rawValue))),
+        Setting(name: "terminal_cursor_blink", title: "Terminal cursor blinks", kind: .flag),
+        Setting(name: "terminal_scrollback", title: "Lines each terminal keeps above the screen",
+                kind: .number(Double(Scrollback.range.lowerBound)...Double(Scrollback.range.upperBound), wholeNumbers: true)),
+        Setting(name: "new_tab_folder", title: "Where a new tab opens (project: the window’s project)",
+                kind: .folder(["project", "current", "home"])),
         Setting(name: "terminal_position", title: "Terminal position", kind: .choice(["bottom", "right", "left", "top"])),
         Setting(name: "notify_decisions", title: "Notify when an agent needs your decision", kind: .flag),
         Setting(name: "notify_agent_finished", title: "Notify when an agent finishes", kind: .flag),
         Setting(name: "notify_program_alerts", title: "Notify on a program's own bell or notification", kind: .flag),
         Setting(name: "notification_sound", title: "Play a sound with notifications", kind: .flag),
         Setting(name: "notify_commands", title: "Notify when a command finishes or fails", kind: .choice(["in_another_app", "always", "never"])),
+        Setting(name: "notify_threshold_seconds", title: "Notify only for finished work that took at least this many seconds",
+                kind: .numbers(WorkThreshold.allCases.map(\.rawValue))),
         Setting(name: "agent_spinner", title: "How a tab shows its agent working (View › Agent Spinner)", kind: .choice(["spinning", "still", "off"])),
         Setting(name: "agents_offer_tabs", title: "Agents offer to run parallel work in tabs", kind: .flag),
         Setting(name: "agents_bring_tabs_forward", title: "When an agent opens a tab, its window comes forward (the tab never takes the keyboard by itself)",
                 kind: .choice(["focus", "show", "off"])),
         Setting(name: "open_projects_in", title: "Where a project opens from a window in use (File › Open Projects In)",
                 kind: .choice(ProjectOpening.Setting.allCases.map(\.mcpName))),
+        Setting(name: "at_launch", title: "At launch (Settings › General)", kind: .choice(LaunchOpens.allCases.map(\.mcpName))),
+        Setting(name: "sidebar_single_click", title: "A single click in the project sidebar opens a file or folder", kind: .flag),
+        Setting(name: "shortcut_set", title: "IDE shortcut set, under your own keys (Settings › Keyboard Shortcuts)",
+                kind: .choice(KeymapPreset.allCases.map(\.mcpName))),
     ]
 
     public static func setting(_ name: String) -> Setting? { allowlist.first { $0.name == name } }
 
-    /// The changes asked for, in the allowlist's order, each value checked; anything else refuses them all.
-    public static func changes(_ raw: Any?) -> Result<[(Setting, Value)], MCPToolError> {
+    /// An existing folder, as new_tab_folder checks it.
+    public static func isFolder(_ path: String) -> Bool {
+        var directory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue
+    }
+
+    /// The changes asked for, in the allowlist's order, each value checked; anything else refuses them all. A font
+    /// family is looked up in `fonts` and a folder checked with `folderExists`; tests pass their own.
+    public static func changes(_ raw: Any?, fonts: FontCatalog = .system,
+                               folderExists: (String) -> Bool = isFolder) -> Result<[(Setting, Value)], MCPToolError> {
         guard let values = raw as? [String: Any], !values.isEmpty else {
             return .failure(MCPToolError("Give values: setting names and their new values, such as {\"font_size\": 14}."))
         }
@@ -712,7 +755,7 @@ public enum MCPSettings {
         var result: [(Setting, Value)] = []
         for setting in allowlist {
             guard let raw = values[setting.name] else { continue }
-            switch value(raw, for: setting) {
+            switch value(raw, for: setting, fonts: fonts, folderExists: folderExists) {
             case .failure(let error): return .failure(error)
             case .success(let value): result.append((setting, value))
             }
@@ -720,7 +763,7 @@ public enum MCPSettings {
         return .success(result)
     }
 
-    static func value(_ raw: Any, for setting: Setting) -> Result<Value, MCPToolError> {
+    static func value(_ raw: Any, for setting: Setting, fonts: FontCatalog, folderExists: (String) -> Bool) -> Result<Value, MCPToolError> {
         let refusal = MCPToolError("\(setting.name) takes \(setting.takes); nothing was changed.")
         switch setting.kind {
         case .flag:
@@ -733,6 +776,31 @@ public enum MCPSettings {
         case .choice(let options):
             guard let text = raw as? String, options.contains(text) else { return .failure(refusal) }
             return .success(.choice(text))
+        case .numberOr(let range, let word):
+            if let text = raw as? String { return text == word ? .success(.choice(word)) : .failure(refusal) }
+            return value(raw, for: Setting(name: setting.name, title: setting.title, kind: .number(range, wholeNumbers: true)),
+                         fonts: fonts, folderExists: folderExists).mapError { _ in refusal }
+        case .numbers(let options):
+            guard !MCPServer.isBoolean(raw), let number = (raw as? NSNumber)?.doubleValue,
+                  options.contains(where: { Double($0) == number }) else { return .failure(refusal) }
+            return .success(.number(number))
+        case .fontFamily:
+            guard let name = (raw as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return .failure(refusal) }
+            if name == defaultFont { return .success(.choice(defaultFont)) }
+            // The family's own name, whatever spelling or PostScript name it was asked by.
+            guard let font = fonts.lookup(name), font.monospaced else {
+                return .failure(MCPToolError("“\(MCPFileTools.cut(name))” is not a monospaced font family installed on this Mac; nothing was changed."))
+            }
+            return .success(.choice(font.family))
+        case .folder(let words):
+            guard let text = raw as? String, !text.isEmpty else { return .failure(refusal) }
+            if words.contains(text) { return .success(.choice(text)) }
+            let path = ((text as NSString).expandingTildeInPath as NSString).standardizingPath
+            guard path.hasPrefix("/") else { return .failure(refusal) }
+            guard folderExists(path) else {
+                return .failure(MCPToolError("There is no folder at \(MCPFileTools.cut(path)); nothing was changed."))
+            }
+            return .success(.choice(path))
         }
     }
 }

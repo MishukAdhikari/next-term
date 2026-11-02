@@ -328,8 +328,37 @@ extension MCPWriteControl {
         case "agents_offer_tabs": return .flag(app.agentsOfferTabs)
         case "agents_bring_tabs_forward": return .choice(app.agentArrival.rawValue)
         case "open_projects_in": return .choice(app.projectTarget.mcpName)
+        case "notify_threshold_seconds": return .number(Double(notifications.threshold.rawValue))
+        default: return behaviourValue(of: setting)
+        }
+    }
+
+    /// The terminal's font, colours, cursor and scrollback, where a new tab opens, what opens at launch, the
+    /// sidebar's single click and the shortcut set, as Settings shows them.
+    private static func behaviourValue(of setting: MCPSettings.Setting) -> MCPSettings.Value {
+        let app = AppDelegate.shared!
+        switch setting.name {
+        case "terminal_font_family": return .choice(Preferences.terminalFontFamily ?? MCPSettings.defaultFont)
+        case "terminal_font_size": return app.terminalOwnFontSize.map { .number(Double($0)) } ?? .choice(MCPSettings.sameAsEditor)
+        case "terminal_colours": return .choice(Preferences.terminalPalette == nil ? "next_term" : "imported")
+        case "terminal_cursor": return .choice(Preferences.terminalCursorShape.rawValue)
+        case "terminal_cursor_blink": return .flag(Preferences.terminalCursorBlinks)
+        case "terminal_scrollback": return .number(Double(Preferences.terminalScrollback))
+        case "new_tab_folder": return .choice(Preferences.terminalStartFolder.stored)
+        case "at_launch": return .choice(LaunchSettings(defaults: .standard).opens.mcpName)
+        case "sidebar_single_click": return .flag(app.sidebarSingleClickOpens)
+        case "shortcut_set": return .choice(KeyboardShortcuts.shared.preset.mcpName)
         default: return .flag(false)
         }
+    }
+
+    /// Why a change checked against the allowlist still can't be made here (nil: it can): imported colours need
+    /// colours an import brought over, which Settings keeps.
+    private static func refusal(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) -> String? {
+        if setting.name == "terminal_colours", value == .choice("imported"), Preferences.customTerminalPalette == nil {
+            return "No import has brought terminal colours over, so terminal_colours takes only next_term here; nothing was changed. list_import_sources and preview_import bring colours over from another terminal."
+        }
+        return nil
     }
 
     /// Sets a value the way the menus and Settings do, so it applies at once.
@@ -352,10 +381,44 @@ extension MCPWriteControl {
         case ("agents_offer_tabs", .flag(let on)): app.agentsOfferTabs = on
         case ("agents_bring_tabs_forward", .choice(let name)): if let mode = AgentArrival.Mode(rawValue: name) { app.agentArrival = mode }
         case ("open_projects_in", .choice(let name)): if let target = ProjectOpening.Setting(mcpName: name) { app.projectTarget = target }
-        default: break
+        case ("notify_threshold_seconds", .number(let seconds)):
+            if let threshold = WorkThreshold(rawValue: Int(seconds)) { UserDefaults.standard.set(threshold.rawValue, forKey: NotificationSettings.Key.threshold) }
+        default: applyBehaviour(setting, value)
         }
         // Settings › Notifications shows it, if open.
         if setting.name.hasPrefix("notif") { NotificationCenter.default.post(name: NotificationsMenu.changed, object: nil) }
+    }
+
+    /// The terminal's settings, what opens at launch, the sidebar's single click and the shortcut set, as Settings
+    /// sets them; each Settings tab that shows one is told, as after an import.
+    private static func applyBehaviour(_ setting: MCPSettings.Setting, _ value: MCPSettings.Value) {
+        let app = AppDelegate.shared!
+        switch (setting.name, value) {
+        case ("terminal_font_family", .choice(let family)): app.setTerminalFontFamily(family == MCPSettings.defaultFont ? nil : family)
+        case ("terminal_font_size", .number(let size)): app.setTerminalFontSize(CGFloat(size))
+        case ("terminal_font_size", .choice): app.setTerminalFontSize(nil)
+        case ("terminal_colours", .choice(let name)):
+            // Imported: the colours Settings keeps from the last import, as its Colours menu offers them.
+            app.setTerminalPalette(name == "imported" ? Preferences.customTerminalPalette : nil)
+        case ("terminal_cursor", .choice(let raw)): if let shape = CursorShape(rawValue: raw) { app.setTerminalCursor(shape: shape) }
+        case ("terminal_cursor_blink", .flag(let on)): app.setTerminalCursor(blinks: on)
+        case ("terminal_scrollback", .number(let lines)): app.setTerminalScrollback(Int(lines))
+        case ("new_tab_folder", .choice(let stored)): Preferences.terminalStartFolder = StartFolder(stored: stored)
+        case ("at_launch", .choice(let name)):
+            guard let opens = LaunchOpens(mcpName: name) else { return }
+            var launch = LaunchSettings(defaults: .standard)
+            launch.opens = opens
+            launch.save(.opens, to: .standard)
+            // Settings › General and the Welcome window's At launch pop-up show it.
+            NotificationCenter.default.post(name: LaunchSettings.changed, object: nil)
+            return
+        case ("sidebar_single_click", .flag(let on)): app.sidebarSingleClickOpens = on
+        case ("shortcut_set", .choice(let name)):
+            // As Settings › Keyboard Shortcuts switches it: the preset under the user's own keys, which stay.
+            if let preset = KeymapPreset(mcpName: name) { KeyboardShortcuts.shared.preset = preset }
+        default: return
+        }
+        NotificationCenter.default.post(name: ImportCoordinator.changed, object: nil)
     }
 
     /// A command notification choice as MCP names it: in_another_app, always, never.
@@ -391,6 +454,7 @@ extension MCPWriteControl {
         case .failure(let error): return reply(MCPControl.fail(error.text))
         case .success(let changes): asked = changes
         }
+        if let refused = asked.lazy.compactMap({ refusal($0.0, $0.1) }).first { return reply(MCPControl.fail(refused)) }
         let changes = asked.filter { !same(value(of: $0.0), $0.1) }
         guard !changes.isEmpty else { return reply(MCPControl.ok(["changed": [String](), "note": "Those values are set already."])) }
         let lines = changes.map { "\($0.0.title): \(value(of: $0.0).text) → \($0.1.text)" }
