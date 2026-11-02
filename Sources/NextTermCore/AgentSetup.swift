@@ -469,22 +469,30 @@ public struct AgentSetupSnapshot: Codable, Equatable, Sendable {
         }
     }
 
+    /// Whether Undo has anything to put back: settings or layout fields, or an import that is still the one Undo Import
+    /// would undo (`importIsLast`). A setup that was only an import, undone or replaced since, has nothing left.
+    public func canUndo(importIsLast: Bool) -> Bool {
+        !settings.isEmpty || !layout.isEmpty || (importUndoID != nil && importIsLast)
+    }
+
     /// What the Undo Agent Setup alert says: what goes back, what was changed by hand since (`changedSince`: names from
     /// `changedSince(settings:layout:)`), and whether the import goes back too (`importIsLast`: it is still the import
     /// Undo Import would undo).
     public func undoMessage(changedSince: [String], importIsLast: Bool) -> String {
-        var text = logLine() + ".\n\nThe settings and layout it changed go back to what they were before."
+        var sentences: [String] = []
+        // A setup that was only an import has no settings or layout to name.
+        if !settings.isEmpty || !layout.isEmpty { sentences.append("The settings and layout it changed go back to what they were before.") }
         if !changedSince.isEmpty {
             let names = changedSince.map(Self.title(of:))
             let list = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
-            text += " You changed \(names.count == 1 ? "this" : "these") since, and Undo puts \(names.count == 1 ? "it" : "them") back too: \(list)."
+            sentences.append("You changed \(names.count == 1 ? "this" : "these") since, and Undo puts \(names.count == 1 ? "it" : "them") back too: \(list).")
         }
         if let source = importSource, importUndoID != nil {
-            text += importIsLast
-                ? " The import from \(source) is undone too, as Undo Import does."
-                : " The import from \(source) stays: a later import, or its own Undo, came after it."
+            sentences.append(importIsLast
+                ? "The import from \(source) is undone\(sentences.isEmpty ? "" : " too"), as Undo Import does."
+                : "The import from \(source) stays: a later import, or its own Undo, came after it.")
         }
-        return text
+        return logLine() + ".\n\n" + sentences.joined(separator: " ")
     }
 
     /// The change log line, for the menu item and the undo alert: “The agent in the tab “codex” in api changed font size

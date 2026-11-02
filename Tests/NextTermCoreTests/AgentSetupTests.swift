@@ -199,6 +199,20 @@ import Testing
         #expect(!later.contains("You changed") && later.hasSuffix("The import from Cursor stays: a later import, or its own Undo, came after it."))
     }
 
+    @Test func aSetupThatWasOnlyAnImportHasNothingLeftOnceTheImportIsNotTheLast() throws {
+        let snapshot = try #require(Self.snapshot())
+        // Settings and layout are there to put back, whatever became of the import.
+        #expect(snapshot.canUndo(importIsLast: false) && snapshot.canUndo(importIsLast: true))
+        let onlyImport = try #require(AgentSetupSnapshot.applied(agent: "the agent in the tab “codex” in api", settings: [], layout: [],
+                                                                 importUndoID: "imp-1", importSource: "Zed",
+                                                                 lines: ["12 keys from Zed"], date: Self.date))
+        #expect(onlyImport.canUndo(importIsLast: true) && !onlyImport.canUndo(importIsLast: false))
+        // Its alert names only the import: no settings or layout go back.
+        let message = onlyImport.undoMessage(changedSince: [], importIsLast: true)
+        #expect(!message.contains("settings and layout"))
+        #expect(message.hasSuffix(".\n\nThe import from Zed is undone, as Undo Import does."))
+    }
+
     // MARK: the tool
 
     @Test func theToolIsListedDeferredAndAsksFirst() throws {

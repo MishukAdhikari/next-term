@@ -2228,6 +2228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         undoAgentSetupItem = item(app, "Undo Agent Setup…", #selector(undoAgentSetup(_:)), "", target: self)
         agentSetupChanged(nil)
         NotificationCenter.default.addObserver(self, selector: #selector(agentSetupChanged(_:)), name: AgentSetupUndo.changed, object: nil)
+        // An import undone or replaced since can leave a setup that was only an import with nothing to put back.
+        NotificationCenter.default.addObserver(self, selector: #selector(agentSetupChanged(_:)), name: ImportCoordinator.changed, object: nil)
         app.addItem(.separator())
         let services = NSMenu()
         app.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = services

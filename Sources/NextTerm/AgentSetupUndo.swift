@@ -24,9 +24,10 @@ enum AgentSetupUndo {
         }
     }
 
-    /// The menu item as the kept setup has it: shown only while there is one, its tooltip the change log line.
+    /// The menu item as the kept setup has it: shown only while there is one with something left to put back (a setup
+    /// that was only an import, undone or replaced since, has nothing), its tooltip the change log line.
     static func refresh(_ item: NSMenuItem?) {
-        let kept = last
+        let kept = last.flatMap { $0.canUndo(importIsLast: importIsLast($0)) ? $0 : nil }
         item?.isHidden = kept == nil
         item?.toolTip = kept?.logLine()
     }
@@ -60,6 +61,8 @@ enum AgentSetupUndo {
     /// The menu's action: asks first, naming what goes back.
     static func confirmAndUndo() {
         guard let snapshot = last else { return }
+        // Only an import, undone or replaced since: nothing is left to put back.
+        guard snapshot.canUndo(importIsLast: importIsLast(snapshot)) else { return last = nil }
         let current = now(snapshot)
         let alert = NSAlert()
         alert.messageText = "Undo the agent’s setup?"
