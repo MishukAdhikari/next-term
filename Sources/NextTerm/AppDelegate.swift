@@ -2316,6 +2316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         item(edit, "Forget This Suggestion", #selector(TerminalWindowController.forgetSuggestion(_:)), "\u{8}", [.command, .shift])
 
         let view = submenu(main, "View")
+        view.delegate = ProjectTabMenuTitles.shared
         item(view, "Hide Project Sidebar", #selector(TerminalWindowController.toggleProjectSidebar(_:)), "b") // title follows the state
         item(view, "Focus Editor", #selector(TerminalWindowController.toggleEditorFocus(_:)), "`", [.control]) // title follows the focus
         item(view, "Collapse Terminal", #selector(TerminalWindowController.toggleTerminalCollapsed(_:)), "j") // title follows the state

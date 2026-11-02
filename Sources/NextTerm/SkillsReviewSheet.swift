@@ -57,6 +57,7 @@ final class SkillsReviewSheet: NSWindowController, NSTableViewDataSource, NSTabl
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640), styleMask: [.titled, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Review Skills"
+        window.keepsItsOwnFrame()
         window.minSize = NSSize(width: 720, height: 480)
         super.init(window: window)
         build()

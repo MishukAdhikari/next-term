@@ -15,17 +15,22 @@ extension MCPWriteControl {
         case .success(let found): (tab, controller) = (found.0, found.1)
         }
         let id = tab.id.uuidString.lowercased()
-        if controller.activeTab === tab, controller.window?.firstResponder === tab.view {
+        // Merged behind another project's tab (plan 032), its keyboard is nobody's until its tab comes to the front.
+        let behind: Bool = controller.window?.isBackgroundTab == true
+        if !behind, controller.activeTab === tab, controller.window?.firstResponder === tab.view {
             return reply(MCPControl.ok(["id": id, "focused": true, "note": "It has its window's keyboard already."]))
         }
         let ask = Ask(title: "An agent asks to move the keyboard to a tab",
-                      details: "In \(place(controller)), \(MCPTabNames.named(tab)) comes to the front and takes the keyboard: what you type in that window goes to it. The window stays where it is.")
+                      details: behind
+                          ? "In \(place(controller)), merged behind another project’s tab, its tab comes to the front of that window and \(MCPTabNames.named(tab)) takes the keyboard: what you type there goes to it."
+                          : "In \(place(controller)), \(MCPTabNames.named(tab)) comes to the front and takes the keyboard: what you type in that window goes to it. The window stays where it is.")
         approve(ask, context, reply: reply) { approved, window in
             window?.finish()
             guard let controller = MCPControl.controller(of: tab) else { return reply(MCPControl.fail("That tab closed meanwhile; nothing changed.")) }
             if let why = MCPInputLine.refusal(tab) { return reply(MCPControl.fail(why)) }
             tab.view.awaitsChoice = false // the user approved giving it the keyboard
             controller.show(tab)
+            if let shown = controller.window, shown.isBackgroundTab { shown.makeKeyAndOrderFront(nil) } // selects its tab
             reply(MCPControl.ok(["id": id, "focused": true, "approved": approved]))
         }
     }

@@ -83,3 +83,20 @@ extension NSWindow {
         return windows
     }
 }
+
+/// The View menu's items for macOS's tab bar, named for project tabs whichever window is in front: macOS names them
+/// "Show Tab Bar" and "Show All Tabs" each time it checks them, and with Settings or a panel in front only it does.
+final class ProjectTabMenuTitles: NSObject, NSMenuDelegate {
+    static let shared = ProjectTabMenuTitles()
+
+    func menuWillOpen(_ menu: NSMenu) {
+        let group: NSWindowTabGroup? = NSApp.keyWindow?.tabGroup
+        for item in menu.items {
+            if item.action == #selector(NSWindow.toggleTabBar(_:)) {
+                item.title = group?.isTabBarVisible == true ? "Hide Project Tab Bar" : "Show Project Tab Bar"
+            } else if item.action == #selector(NSWindow.toggleTabOverview(_:)) {
+                item.title = group?.isOverviewVisible == true ? "Exit Project Tab Overview" : "Show All Project Tabs"
+            }
+        }
+    }
+}

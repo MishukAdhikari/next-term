@@ -2736,6 +2736,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
                 WindowSheets.afterSheet(on: asking) { [weak sender] in sender?.performClose(nil) }
                 return false
             }
+            heldQuestion = nil // asked now, as the close's own question
             sender.makeKeyAndOrderFront(nil)
         }
         let dirty = editorArea.dirtyDocuments

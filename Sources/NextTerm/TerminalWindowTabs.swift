@@ -14,12 +14,19 @@ extension TerminalWindowController {
         watchedTabGroup = group
         tabGroupWatches = [
             group?.observe(\.selectedWindow, options: [.new]) { [weak self] (_, _) in
-                DispatchQueue.main.async { self?.tabSelectionChanged() }
+                DispatchQueue.main.async { self?.tabGroupChanged() }
             },
             group?.observe(\.windows, options: [.new]) { [weak self] (_, _) in
-                DispatchQueue.main.async { self?.tabSelectionChanged() }
+                DispatchQueue.main.async { self?.tabGroupChanged() }
             },
         ].compactMap { $0 }
+        tabSelectionChanged()
+    }
+
+    /// The watched group changed: the window may have left it for another (a merge of windows that each had a tab bar
+    /// moves no title bar), so the watch follows it, else what changed is passed on.
+    private func tabGroupChanged() {
+        if window?.tabGroup !== watchedTabGroup { return watchTabGroup() }
         tabSelectionChanged()
     }
 
@@ -75,6 +82,9 @@ extension TerminalWindowController {
     /// own closes as it always has.
     @objc func closeWindow(_ sender: Any?) {
         guard let window else { return }
+        // A panel in front (Find in Files, an approval) never becomes main, so the menu reaches this window behind it:
+        // the panel is what closes, as it did with AppKit's Close Window.
+        if let key = NSApp.keyWindow, key !== window, key.sheetParent !== window { return key.performClose(sender) }
         let members: [TerminalWindowController] = window.mergedWindows.compactMap { $0.windowController as? TerminalWindowController }
         guard members.count > 1 else { return window.performClose(sender) }
         MergedWindowClose.start(members, over: window.shownWindow)
@@ -155,7 +165,8 @@ final class MergedWindowClose {
             window.performClose(nil) // nothing to ask: it goes now (or once its database saves end)
             return next()
         }
-        // Its own question, about its files or values, in front.
+        // Its own question, about its files or values, in front; one held for its tab is this one now.
+        member.heldQuestion = nil
         watch(member, window)
         window.makeKeyAndOrderFront(nil)
         window.performClose(nil)
@@ -175,13 +186,19 @@ final class MergedWindowClose {
                 }
             },
             center.addObserver(forName: NSWindow.didEndSheetNotification, object: window, queue: .main) { [weak self] _ in
-                // Another question may follow (the values after the files), or a save may still be under way.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    guard let self, !member.hasClosed, window.attachedSheet == nil, member.editorArea.savingDatabases.isEmpty else { return }
-                    self.stop()
-                }
+                self?.settle(member, window)
             },
         ]
+    }
+
+    /// A question ended: another may follow (the values after the files), or a database save may still be under way and
+    /// close the window after it; once neither, the window still open means Cancel, and the close stops there.
+    private func settle(_ member: TerminalWindowController, _ window: NSWindow, waited: TimeInterval = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, Self.current === self, !member.hasClosed, window.attachedSheet == nil else { return }
+            if !member.editorArea.savingDatabases.isEmpty, waited < 30 { return self.settle(member, window, waited: waited + 0.3) }
+            self.stop()
+        }
     }
 
     private func unwatch() {
