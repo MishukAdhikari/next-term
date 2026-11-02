@@ -40,16 +40,32 @@ enum AgentSetupUndo {
         }
         var layout = MCPSetupControl.layoutNow(nil)
         for project in snapshot.perWindowProjects {
-            guard let controller = window(of: project) else { continue }
+            guard let controller = window(of: project, in: snapshot) else { continue }
             for (field, value) in MCPSetupControl.layoutNow(controller) where AgentSetup.perWindowFields.contains(field) { layout[field] = value }
         }
         return (settings, layout)
     }
 
-    /// The open window of a project, for a per-window field (nil project: none is looked for).
-    static func window(of project: String?) -> TerminalWindowController? {
+    /// The window a setup's per-window fields went to, while it stays open in this run, with the setup's id: a window
+    /// with no project, such as the home folder's that Set up with your agent opens, can't be found by its project.
+    private static weak var setupWindow: TerminalWindowController?
+    private static var setupWindowSetup: String?
+
+    /// Keeps the window `snapshot`'s per-window fields went to, for Undo in this run.
+    static func remember(_ controller: TerminalWindowController?, for snapshot: AgentSetupSnapshot) {
+        setupWindow = controller
+        setupWindowSetup = snapshot.id
+    }
+
+    /// The open window a per-window field went to: the one kept for this setup while it is open, else the project's
+    /// (nil project: only the kept one).
+    static func window(of project: String?, in snapshot: AgentSetupSnapshot) -> TerminalWindowController? {
+        let open = AppDelegate.shared.controllers
+        if setupWindowSetup == snapshot.id, let kept = setupWindow, kept.project == project, open.contains(where: { $0 === kept }) {
+            return kept
+        }
         guard let project else { return nil }
-        return AppDelegate.shared.controllers.first { $0.project == project }
+        return open.first { $0.project == project }
     }
 
     /// Whether the setup's import is still the one Undo Import would undo.
@@ -79,8 +95,13 @@ enum AgentSetupUndo {
         if importIsLast(snapshot) { ImportCoordinator.shared.undo() }
         MCPWriteControl.applyLayout(snapshot.layoutBefore(perWindow: false), in: nil, asked: true)
         for project in snapshot.perWindowProjects {
-            guard let controller = window(of: project) else { continue }
-            MCPWriteControl.applyLayout(snapshot.layoutBefore(perWindow: true, project: project), in: controller, asked: true)
+            let before = snapshot.layoutBefore(perWindow: true, project: project)
+            guard let controller = window(of: project, in: snapshot) else {
+                // The window is gone, but showing or hiding its sidebar also set the one new windows take: that goes back.
+                if let shown = before.sidebarShown { AppDelegate.shared.sidebarVisible = shown }
+                continue
+            }
+            MCPWriteControl.applyLayout(before, in: controller, asked: true)
         }
         for entry in snapshot.settings {
             guard let setting = MCPSettings.setting(entry.name) else { continue }

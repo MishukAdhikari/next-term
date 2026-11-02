@@ -230,6 +230,7 @@ enum MCPSetupControl {
             let note = "The user applied, but nothing differed from Next Term's settings, so nothing changed and Undo Agent Setup is as it was."
             return MCPImportControl.resolve(request, MCPImportControl.status("up_to_date", note))
         }
+        AgentSetupUndo.remember(layout?.controller, for: snapshot)
         AgentSetupUndo.last = snapshot
         var undo = "Next Term › Undo Agent Setup… puts back everything this changed."
         if let importSnapshot { undo += " undo_import with undo_id \(MCPImport.undoID(importSnapshot)) puts back the import alone." }
