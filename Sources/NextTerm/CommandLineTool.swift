@@ -9,6 +9,9 @@ enum CommandLineTool {
     static func run(_ arguments: [String]) -> Never {
         // `nxtrm mcp`: the MCP server agents start (see MCPServer). A file named "mcp" is `nxtrm ./mcp`.
         if arguments == ["mcp"] { MCPBridge.run() }
+        // `nxtrm agent NAME`: an agent session over ACP in this tab (AgentSessionCLI, plan 030). `nxtrm ./agent` opens a
+        // file named agent.
+        if arguments.first == "agent" { AgentSessionCLI.run(Array(arguments.dropFirst())) }
         // The self-test's stand-in for opencode, run from a tab (SelfTestIDELinks.swift).
         if arguments.count == 3, arguments[0] == "--self-test-ide-client" { SelfTest.runIDEStandIn(port: arguments[1], output: arguments[2]) }
         // `nxtrm secret run …`, `nxtrm secret import …` and `nxtrm secret help` (Secrets). `nxtrm secret` alone still

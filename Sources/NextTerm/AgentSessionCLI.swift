@@ -1,0 +1,483 @@
+import Darwin
+import Foundation
+import NextTermCore
+
+/// `nxtrm agent NAME [--prompt TEXT]`: an agent session in the tab it runs in (plan 030). It starts the agent in ACP
+/// mode, draws the session as text (ACPTranscript) with an input line, and says what the agent does over OSC 7501, so
+/// the tab's marks, its notification and `wait_for_tab` follow the agent's own turns rather than its screen. A
+/// permission request is drawn as a numbered menu that the tab's keys, the notification's buttons and `answer_agent`
+/// answer. The agent uses its own tools; it is given Next Term's MCP server when it runs in a Next Term tab.
+enum AgentSessionCLI {
+    static let usage = """
+        nxtrm agent NAME [--prompt TEXT]
+          Runs an agent that speaks the Agent Client Protocol in this tab, as an agent session: its turns, tool calls,
+          plan and permission requests drawn as text, and its state followed exactly by Next Term.
+          NAME is one of: \(ACPAgent.known.map(\.id).joined(separator: ", ")).
+          --prompt TEXT   the first prompt, sent at once.
+        Type a prompt and Return to send it; ⌃C or Esc stops a turn; ⌃D on an empty line ends the session.
+        """
+
+    static func run(_ arguments: [String]) -> Never {
+        var name: String?
+        var prompt: String?
+        var rest = arguments[...]
+        while let argument = rest.popFirst() {
+            switch argument {
+            case "-h", "--help", "help":
+                print(usage)
+                exit(0)
+            case "--prompt", "-p":
+                guard let text = rest.popFirst() else { fail("--prompt needs its text") }
+                prompt = text
+            default:
+                guard name == nil, !argument.hasPrefix("-") else { fail("unknown argument \(argument)") }
+                name = argument
+            }
+        }
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        let installed = ACPAgent.installed(path: path) { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let name else {
+            print(usage)
+            print("Installed here: " + ACPAgent.listed(installed) + ".")
+            exit(installed.isEmpty ? 1 : 0)
+        }
+        guard let agent = ACPAgent.named(name) else {
+            fail("\(name) isn't an agent Next Term runs over ACP. Installed here: \(ACPAgent.listed(installed)).")
+        }
+        guard let program = locate(agent.program, path: path) else {
+            fail("\(agent.name) (\(agent.program)) isn't on the PATH. Installed here: \(ACPAgent.listed(installed)).")
+        }
+        guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else { fail("nxtrm agent runs in a terminal tab") }
+        let runner = AgentSessionRunner(agent: agent, program: program, firstPrompt: prompt)
+        runner.start()
+        dispatchMain()
+    }
+
+    static func locate(_ program: String, path: String) -> String? {
+        for folder in path.split(separator: ":") where !folder.isEmpty {
+            let candidate = (String(folder) as NSString).appendingPathComponent(program)
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
+
+    static func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("nxtrm agent: \(message)\n".utf8))
+        exit(2)
+    }
+}
+
+/// One session: the agent's process, the protocol, the drawing and the keys. Everything runs on the main queue.
+final class AgentSessionRunner {
+    let agent: ACPAgent
+    let program: String
+    var firstPrompt: String?
+
+    private let process = Process()
+    private let toAgent = Pipe()
+    private let fromAgent = Pipe()
+    private let agentErrors = Pipe()
+    private var buffer = Data()
+    /// The agent's last words on stderr, shown if it quits.
+    private var errorTail = ""
+
+    private var nextID = 1
+    private var waiting: [Int: (ACPWire.Value?, String?) -> Void] = [:]
+    private var sessionID: String?
+
+    private var session = ACPSession()
+    /// The prompt being typed, as bytes: a character typed or pasted in UTF-8 can come in pieces.
+    private var typedBytes: [UInt8] = []
+    private var typed: String {
+        get { String(decoding: typedBytes, as: UTF8.self) }
+        set { typedBytes = Array(newValue.utf8) }
+    }
+
+    // Drawing: the lines of the current turn already printed for good, and how many lines the live part takes.
+    private var liveFrom = 0
+    private var committed = 0
+    private var liveCount = 0
+    private var drawScheduled = false
+
+    private var savedTerminal = termios()
+    private var input: DispatchSourceRead?
+    private var resize: DispatchSourceSignal?
+    private var keys = Data()
+    private var pasting = false
+    private var lastReport = ""
+
+    init(agent: ACPAgent, program: String, firstPrompt: String?) {
+        self.agent = agent
+        self.program = program
+        self.firstPrompt = firstPrompt
+    }
+
+    func start() {
+        rawTerminal()
+        write("\u{1b}]2;\(agent.name)\u{07}") // the tab's title
+        session.note("Starting \(agent.name) (\(([agent.program] + agent.arguments).joined(separator: " ")))\u{2026}")
+        draw()
+        process.executableURL = URL(fileURLWithPath: program)
+        process.arguments = agent.arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        process.standardInput = toAgent
+        process.standardOutput = fromAgent
+        process.standardError = agentErrors
+        process.terminationHandler = { [weak self] finished in
+            let status = finished.terminationStatus
+            DispatchQueue.main.async { self?.agentQuit(status) }
+        }
+        fromAgent.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            DispatchQueue.main.async { self?.received(data) }
+        }
+        agentErrors.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.errorTail = String((self.errorTail + String(decoding: data, as: UTF8.self)).suffix(2000))
+            }
+        }
+        signal(SIGPIPE, SIG_IGN)
+        do {
+            try process.run()
+        } catch {
+            session.note("Couldn\u{2019}t start \(agent.name): \(error.localizedDescription)")
+            finish(1)
+        }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        ask("initialize", ACPWire.initializeParams(version: version)) { [weak self] result, error in
+            guard let self else { return }
+            guard let result, error == nil else { return self.fatal("The agent didn\u{2019}t start ACP: \(error ?? "no answer").") }
+            guard result["protocolVersion"]?.int == ACPWire.protocolVersion else {
+                return self.fatal("\(self.agent.name) speaks ACP version \(result["protocolVersion"]?.int.map(String.init) ?? "?"); Next Term speaks version 1.")
+            }
+            self.newSession()
+        }
+    }
+
+    private func newSession() {
+        var servers: [ACPWire.StdioServer] = []
+        // In a Next Term tab, the agent gets Next Term's MCP server, as agents in other tabs do (R26).
+        if ProcessInfo.processInfo.environment["NEXTTERM_MCP_SOCKET"] != nil, let me = Bundle.main.executablePath {
+            servers.append(.init(name: "next-term", command: me, arguments: ["--cli", "mcp"]))
+        }
+        let cwd = FileManager.default.currentDirectoryPath
+        ask("session/new", ACPWire.newSessionParams(cwd: cwd, servers: servers)) { [weak self] result, error in
+            guard let self else { return }
+            guard let id = result?["sessionId"]?.string else {
+                let words = error ?? "no session"
+                let auth = words.lowercased().contains("auth")
+                return self.fatal(auth ? "\(self.agent.name) needs you to sign in: run \(self.agent.program) in a tab once, then start the session again." : "The agent couldn\u{2019}t start a session: \(words).")
+            }
+            self.sessionID = id
+            self.session.note("\(self.agent.name) is ready.")
+            self.report()
+            self.draw()
+            if let first = self.firstPrompt {
+                self.firstPrompt = nil
+                self.send(first)
+            }
+        }
+    }
+
+    // MARK: the protocol
+
+    private func ask(_ method: String, _ params: ACPWire.Value, then: @escaping (ACPWire.Value?, String?) -> Void) {
+        let id = nextID
+        nextID += 1
+        waiting[id] = then
+        sendToAgent(ACPWire.request(id: id, method: method, params: params))
+    }
+
+    private func received(_ data: Data) {
+        guard !data.isEmpty else { return }
+        buffer.append(data)
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let line = buffer[buffer.startIndex..<newline]
+            buffer.removeSubrange(buffer.startIndex...newline)
+            guard let message = ACPWire.decode(line) else { continue }
+            handle(message)
+        }
+        // A line that never ends isn't kept past 16 MB.
+        if buffer.count > 16 << 20 { buffer.removeAll() }
+    }
+
+    private func handle(_ message: ACPWire.Incoming) {
+        switch message {
+        case .response(let id, let result, let error):
+            guard let key = id.int, let then = waiting.removeValue(forKey: key) else { return }
+            then(result, error)
+        case .notification(let method, let params):
+            if method == "session/update" {
+                session.apply(update: params)
+                scheduleDraw()
+            }
+        case .request(let id, let method, let params):
+            if method == "session/request_permission" {
+                if session.pending != nil, let earlier = session.cancelPending() {
+                    reply(earlier, ACPWire.permissionOutcome(optionID: nil))
+                }
+                if session.requested(permission: id, params: params) == nil {
+                    // Nothing the tab can give (only Allow always offered): declined, never allowed by default (R17).
+                    reply(id, ACPWire.permissionOutcome(optionID: nil))
+                    session.note("The agent offered only a standing permission, which a session tab doesn\u{2019}t give yet; it was cancelled.")
+                }
+                report()
+                draw()
+            } else {
+                sendToAgent(ACPWire.error(id: id, code: -32601, message: "Next Term doesn\u{2019}t offer \(method)"))
+            }
+        }
+    }
+
+    /// A line to the agent; one that has quit takes nothing (its pipe's end is gone, and that is no crash).
+    private func sendToAgent(_ data: Data) {
+        try? toAgent.fileHandleForWriting.write(contentsOf: data)
+    }
+
+    private func reply(_ id: ACPWire.Value, _ result: ACPWire.Value) {
+        sendToAgent(ACPWire.result(id: id, result))
+    }
+
+    private func send(_ text: String) {
+        guard let sessionID, !session.working else { return }
+        session.prompted(text)
+        report()
+        draw()
+        ask("session/prompt", ACPWire.promptParams(session: sessionID, text: text)) { [weak self] result, error in
+            guard let self else { return }
+            if let error { self.session.turnFailed(error) } else { self.session.turnEnded(result?["stopReason"]?.string) }
+            self.draw()
+            self.freeze()
+            self.report()
+        }
+    }
+
+    private func cancelTurn() {
+        guard let sessionID, session.working else { return }
+        if let pending = session.cancelPending() { reply(pending, ACPWire.permissionOutcome(optionID: nil)) }
+        sendToAgent(ACPWire.notification(method: "session/cancel", params: .object(["sessionId": .string(sessionID)])))
+        draw()
+    }
+
+    private func choose(_ index: Int) {
+        guard let (id, option) = session.choose(index) else { return }
+        reply(id, ACPWire.permissionOutcome(optionID: option))
+        report()
+        draw()
+    }
+
+    /// OSC 7501: working, blocked on a permission (with the question's words), or done.
+    private func report() {
+        var fields = "app=nxtrm-agent"
+        if let permission = session.pending {
+            let words = Data((ACPTranscript.questionLead + permission.action + "?").utf8.prefix(1500)).base64EncodedString()
+            fields = "state=blocked:kind=permission:msg=" + words + ":" + fields
+        } else if session.working {
+            fields = "state=working:" + fields
+        } else {
+            fields = (session.lastStop == nil ? "state=idle:" : "state=done:") + fields
+        }
+        guard fields != lastReport else { return }
+        lastReport = fields
+        write("\u{1b}]7501;" + fields + "\u{1b}\\")
+    }
+
+    private func fatal(_ message: String) {
+        session.note(message)
+        draw()
+        finish(1)
+    }
+
+    private func agentQuit(_ status: Int32) {
+        let tail = errorTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " / ")
+        session.note("\(agent.name) quit (exit \(status))" + (tail.isEmpty ? "." : ": " + ACPSession.oneLine(tail, limit: 300)))
+        draw()
+        finish(status == 0 ? 0 : 1)
+    }
+
+    private func finish(_ code: Int32) -> Never {
+        if process.isRunning { process.terminate() }
+        write("\u{1b}]7501;state=clear\u{1b}\\")
+        write("\r\n")
+        restoreTerminal()
+        exit(code)
+    }
+
+    // MARK: drawing
+
+    private var width: Int {
+        var size = winsize()
+        return ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0 ? Int(size.ws_col) - 1 : 79
+    }
+
+    private var rows: Int {
+        var size = winsize()
+        return ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_row > 0 ? Int(size.ws_row) : 24
+    }
+
+    /// Streaming chunks draw at most 30 times a second.
+    private func scheduleDraw() {
+        guard !drawScheduled else { return }
+        drawScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) { [weak self] in
+            self?.drawScheduled = false
+            self?.draw()
+        }
+    }
+
+    /// Redraws the live part: the current turn's lines not printed for good yet, and the input line. Lines past the
+    /// screen's height are printed for good, as a terminal scrolls.
+    private func draw() {
+        let width = self.width
+        var out = "\r"
+        if liveCount > 1 { out += "\u{1b}[\(liveCount - 1)A" }
+        out += "\u{1b}[J"
+        var lines = ACPTranscript.lines(session, from: liveFrom, width: width)
+        lines.removeFirst(min(committed, lines.count))
+        let room = max(rows - 2, 3)
+        if lines.count > room {
+            let head = lines.count - room
+            for line in lines.prefix(head) { out += line.ansi + "\r\n" }
+            committed += head
+            lines.removeFirst(head)
+        }
+        for line in lines { out += line.ansi + "\r\n" }
+        out += ACPTranscript.inputLine(session, typed: typed, width: width).ansi
+        liveCount = lines.count + 1
+        write(out)
+    }
+
+    /// The finished turn stays as printed: the live part is the input line alone again.
+    private func freeze() {
+        liveFrom = session.items.count
+        committed = 0
+        liveCount = 1
+    }
+
+    // MARK: the terminal
+
+    private func write(_ text: String) {
+        FileHandle.standardOutput.write(Data(text.utf8))
+    }
+
+    private func rawTerminal() {
+        tcgetattr(STDIN_FILENO, &savedTerminal)
+        var raw = savedTerminal
+        raw.c_lflag &= ~tcflag_t(ICANON | ECHO | ISIG | IEXTEN)
+        raw.c_iflag &= ~tcflag_t(ICRNL | IXON)
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw)
+        write("\u{1b}[?2004h") // bracketed paste: send_to_tab's text arrives whole, newlines and all
+        let source = DispatchSource.makeReadSource(fileDescriptor: STDIN_FILENO, queue: .main)
+        source.setEventHandler { [weak self] in
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            let count = Darwin.read(STDIN_FILENO, &bytes, bytes.count)
+            guard count > 0 else {
+                self?.finish(0)
+                return
+            }
+            self?.keysArrived(Data(bytes.prefix(count)))
+        }
+        source.resume()
+        input = source
+        signal(SIGWINCH, SIG_IGN)
+        let winch = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .main)
+        winch.setEventHandler { [weak self] in self?.draw() }
+        winch.resume()
+        resize = winch
+        for stop in [SIGTERM, SIGHUP, SIGINT] {
+            signal(stop, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: stop, queue: .main)
+            source.setEventHandler { [weak self] in self?.finish(0) }
+            source.resume()
+            stopSources.append(source)
+        }
+    }
+
+    private var stopSources: [DispatchSourceSignal] = []
+
+    private func restoreTerminal() {
+        write("\u{1b}[?2004l")
+        tcsetattr(STDIN_FILENO, TCSANOW, &savedTerminal)
+    }
+
+    // MARK: keys
+
+    private func keysArrived(_ data: Data) {
+        keys.append(data)
+        while !keys.isEmpty {
+            if pasting {
+                if let end = keys.range(of: Data("\u{1b}[201~".utf8)) {
+                    typedBytes += keys[keys.startIndex..<end.lowerBound]
+                    keys.removeSubrange(keys.startIndex..<end.upperBound)
+                    pasting = false
+                    draw()
+                    continue
+                }
+                typedBytes += keys
+                keys.removeAll()
+                draw()
+                return
+            }
+            let byte = keys[keys.startIndex]
+            if byte == 0x1B {
+                let sequence = keys.prefix(6)
+                if sequence.starts(with: Data("\u{1b}[200~".utf8)) {
+                    keys.removeFirst(6)
+                    pasting = true
+                    continue
+                }
+                if sequence.starts(with: Data("\u{1b}[A".utf8)) || sequence.starts(with: Data("\u{1b}OA".utf8)) {
+                    keys.removeFirst(3)
+                    session.moveHighlight(-1)
+                    draw()
+                    continue
+                }
+                if sequence.starts(with: Data("\u{1b}[B".utf8)) || sequence.starts(with: Data("\u{1b}OB".utf8)) {
+                    keys.removeFirst(3)
+                    session.moveHighlight(1)
+                    draw()
+                    continue
+                }
+                if keys.count >= 2, keys[keys.startIndex + 1] == UInt8(ascii: "[") || keys[keys.startIndex + 1] == UInt8(ascii: "O") {
+                    // Another sequence (left, right, a function key): passed over whole.
+                    var end = keys.startIndex + 2
+                    while end < keys.endIndex, !(0x40...0x7E).contains(keys[end]) { end += 1 }
+                    keys.removeSubrange(keys.startIndex...min(end, keys.endIndex - 1))
+                    continue
+                }
+                keys.removeFirst() // Esc alone stops the turn
+                cancelTurn()
+                continue
+            }
+            keys.removeFirst()
+            key(byte)
+        }
+    }
+
+    private func key(_ byte: UInt8) {
+        switch byte {
+        case 0x03: // ⌃C
+            if session.working { cancelTurn() } else if !typed.isEmpty { typed = ""; draw() } else { finish(0) }
+        case 0x04: // ⌃D
+            if typed.isEmpty, !session.working { finish(0) }
+        case 0x0D, 0x0A:
+            if let permission = session.pending { return choose(permission.highlighted) }
+            guard !session.working else { return }
+            let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            typed = ""
+            if text.isEmpty { return draw() }
+            send(text)
+        case 0x7F, 0x08:
+            if !typed.isEmpty { typed.removeLast() }
+            draw()
+        case UInt8(ascii: "1")...UInt8(ascii: "9") where session.pending != nil:
+            choose(Int(byte - UInt8(ascii: "1")))
+        default:
+            guard byte >= 0x20, session.pending == nil else { return }
+            typedBytes.append(byte)
+            draw()
+        }
+    }
+}
