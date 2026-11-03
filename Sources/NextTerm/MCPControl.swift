@@ -627,8 +627,10 @@ enum MCPControl {
             controller = owner
             tab = pane
         } else {
-            // The window of the project that holds the folder; else the folder's project, opened.
-            let (owner, opened) = window(for: directory)
+            // The window of the project that holds the folder; else the asking agent's own window, as a tab is what it asked
+            // for; else (an agent outside Next Term, or new_window) the folder's project, opened.
+            let ownWindow: TerminalWindowController? = arguments["new_window"] as? Bool == true ? nil : caller.flatMap { self.controller(of: $0) }
+            let (owner, opened) = window(for: directory, else: ownWindow)
             controller = owner
             // Never a restored tab: it may hold a put-back line (KTD10). Never the tab of the window the user is in.
             if opened, controller.tabs.count == 1, let first = controller.tabs.first, first.remote == nil, first.isUntouched,
@@ -670,7 +672,9 @@ enum MCPControl {
     /// project that holds the folder, the deepest one; else the folder's project, opened (`opened` is then true); in a
     /// folder that is never a project (the home folder: ProjectRoot.project), the window with no project that has a tab
     /// there already, else a new one.
-    static func window(for directory: String) -> (controller: TerminalWindowController, opened: Bool) {
+    /// `fallback`: the window that takes the tab when no open project holds the folder (the asking agent's own), before
+    /// any window is opened for it.
+    static func window(for directory: String, else fallback: TerminalWindowController? = nil) -> (controller: TerminalWindowController, opened: Bool) {
         // A window that closed stays in `controllers` for a run-loop turn: never one to open a tab in.
         let owners = app.controllers.filter { !$0.hasClosed && ($0.project.map { directory == $0 || directory.hasPrefix($0 + "/") } ?? false) }
         if let owner = owners.max(by: { ($0.project?.count ?? 0) < ($1.project?.count ?? 0) }) {
@@ -678,6 +682,7 @@ enum MCPControl {
             guard let worktree = owner.project.flatMap({ MCPServer.ownWorktree(of: directory, inside: $0) }) else { return (owner, false) }
             return (app.openFolder(worktree, newWindow: false, forAgent: true), true)
         }
+        if let fallback, !fallback.hasClosed { return (fallback, false) }
         guard let project = ProjectRoot.project(from: directory) else {
             // A folder that is never a project (the home folder): the window with no project that has a tab there already
             // (one an earlier call opened) takes the tab, as a project's window does; else a new one.

@@ -15,11 +15,14 @@ enum SetupWithAgent {
         "Open a tab in your home folder running \(agent.name), asked to set Next Term up"
     }
 
-    /// A window with one tab in the home folder, running the agent with the setup prompt, in front. The agent asks its
+    /// A tab in the home folder, in the window in front (a new window when none is open), running the agent with the setup
+    /// prompt. The agent asks its
     /// own questions there (trusting the folder, using Next Term’s tools), for the user to answer.
     static func start(_ agent: SetupAgent) {
         let home: String = NSHomeDirectory()
-        let controller: TerminalWindowController = AppDelegate.shared.openWindow(directory: home)
+        // A tab in the window in front, if there is one: a new window only on a first launch with none open.
+        let front: TerminalWindowController? = TerminalWindow.front?.windowController as? TerminalWindowController
+        let controller: TerminalWindowController = front ?? AppDelegate.shared.openWindow(directory: home)
         controller.runInNewTab(directory: home, command: agent.commandLine, title: nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
