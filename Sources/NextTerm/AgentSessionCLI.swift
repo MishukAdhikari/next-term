@@ -196,7 +196,12 @@ final class AgentSessionRunner {
         while let newline = buffer.firstIndex(of: 0x0A) {
             let line = buffer[buffer.startIndex..<newline]
             buffer.removeSubrange(buffer.startIndex...newline)
-            guard let message = ACPWire.decode(line) else { continue }
+            guard let message = ACPWire.decode(line) else {
+                // Not ACP: an agent that doesn't speak it here prints its own words (a sign-in screen); kept for the
+                // line that says why it quit.
+                keepWords(Data(line))
+                continue
+            }
             handle(message)
         }
         // A line that never ends isn't kept past 16 MB.
@@ -379,9 +384,24 @@ final class AgentSessionRunner {
         finish(1)
     }
 
+    /// The words of output that isn't ACP, escape sequences out, at the end of `errorTail`.
+    private func keepWords(_ data: Data) {
+        let text = String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[A-Za-z]|\u{1b}\\][^\u{07}\u{1b}]*(\u{07}|\u{1b}\\\\)", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        errorTail = String((errorTail + text + "\n").suffix(2000))
+    }
+
     private func agentQuit(_ status: Int32) {
+        keepWords(buffer) // a last line with no newline
+        buffer.removeAll()
         let tail = errorTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " / ")
         session.note("\(agent.name) quit (exit \(status))" + (tail.isEmpty ? "." : ": " + ACPSession.oneLine(tail, limit: 300)))
+        if sessionID == nil {
+            // It quit before a session started: signed out, or a version without ACP.
+            session.note("Run \(agent.program) in a tab to sign in or update it, then start the session again.")
+        }
         draw()
         finish(status == 0 ? 0 : 1)
     }
