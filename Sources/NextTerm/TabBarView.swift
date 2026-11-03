@@ -178,6 +178,13 @@ final class TabBarView: NSView, ProjectGlowing {
     /// Whether a tab shows its place mark, and its tooltip (for the self-test).
     func showsPlaceMark(at index: Int) -> Bool { tabViews[safe: index]?.showsPlaceMark ?? false }
     func toolTip(at index: Int) -> String? { tabViews[safe: index]?.toolTip }
+    /// For the self-test: whether tab `index` heard the pointer come in, and whether it counts its name as cut.
+    func hoverState(at index: Int) -> String { tabViews[safe: index].map { $0.hoverStateForTest } ?? "no tab" }
+    /// For the self-test: tab `index`, in screen coordinates.
+    func screenFrame(at index: Int) -> NSRect? {
+        guard let view = tabViews[safe: index], let window = view.window else { return nil }
+        return window.convertToScreen(view.convert(view.bounds, to: nil))
+    }
     /// The font of a tab's title (for the self-test: a preview's is italic).
     func titleFont(at index: Int) -> NSFont? { tabViews[safe: index]?.titleFont }
     /// The colour of a tab's title (for the self-test: the project's colour leaves it alone).
@@ -784,11 +791,42 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        // Its name cut short (or a shorter one in its place): the whole name under it, as the title strip shows no tooltip.
+        if let title = item?.title, isInTitleStrip, isNameCut(title) {
+            HoverTip.shared.schedule(AgentTitle.withoutSpinnerFrame(title), under: self)
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        HoverTip.shared.hide(from: self)
+    }
 
     override func mouseDown(with event: NSEvent) {
+        HoverTip.shared.hide(from: self)
         bar?.itemMouseDown(self, event: event)
+    }
+
+    var hoverStateForTest: String {
+        "areas \(trackingAreas.count) \(trackingAreas.first.map { "\($0.rect)" } ?? ""), bounds \(bounds), hovering \(hovering), in strip \(isInTitleStrip), cut \(item.map { isNameCut($0.title) } ?? false), label “\(label.stringValue)” \(label.bounds.width) of \(label.attributedStringValue.size().width)"
+    }
+
+    /// In the window's title-bar strip, where AppKit shows no tooltip: anywhere else its own tooltip says the name.
+    private var isInTitleStrip: Bool {
+        guard let window else { return false }
+        return convert(bounds, to: nil).maxY > window.contentLayoutRect.maxY + 0.5
+    }
+
+    /// Whether the label shows less than `title`: another, shorter title, or the title cut where it no longer fits.
+    private func isNameCut(_ title: String) -> Bool {
+        label.stringValue != title || label.attributedStringValue.size().width > label.bounds.width + 0.5
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { HoverTip.shared.hide(from: self) }
     }
 
     // Middle-click closes, like a browser.

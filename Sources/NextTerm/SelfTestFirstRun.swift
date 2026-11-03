@@ -69,5 +69,48 @@ extension SelfTest {
               "button “\(title)”, cancelled \(cancelled)")
         ask.finish()
     }
+
+    /// A tab whose name is cut short in the title strip, where AppKit shows no tooltip: resting the real pointer on it
+    /// shows its whole name under it, and moving away puts it away.
+    static func tabHoverChecks(_ c: TerminalWindowController) async {
+        guard let window = c.window, await bringToFront(window), let tab = c.activeTab else { return note("tab hover skipped: no window in front") }
+        let long = "A tab with a name far too long to fit in its place in the tab bar, so it is cut short"
+        tab.userTitle = long
+        c.refresh()
+        defer { tab.userTitle = nil; c.refresh(); HoverTip.shared.hide() }
+        let index: Int = c.groups.firstIndex { $0.contains(tab) } ?? 0
+        await pause(0.3)
+        window.layoutIfNeeded()
+        guard let frame = c.tabBar.screenFrame(at: index), frame.width > 0 else { return check(false, "tab hover: the tab is in the bar") }
+        let point = CGPoint(x: frame.midX, y: (NSScreen.screens.first?.frame.height ?? 0) - frame.midY)
+        // In from below, a step at a time, as a hand moves it: one jump is sometimes not heard as coming in.
+        for step in 0...10 {
+            let at = CGPoint(x: point.x, y: point.y + CGFloat(10 - step) * 12)
+            CGWarpMouseCursorPosition(at)
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: at, mouseButton: .left)?.post(tap: .cghidEventTap)
+            await pause(0.04)
+        }
+        let shown: Bool = await wait(3) { HoverTip.shared.shownText == long }
+        note("tab hover: " + c.tabBar.hoverState(at: index) + ", pointer \(NSEvent.mouseLocation) in \(frame), window key \(window.isKeyWindow), app active \(NSApp.isActive)")
+        if let base = reportPath, let screenHeight = NSScreen.screens.first?.frame.height {
+            // The tab and the label under it, as the screen shows them: the label is a window of its own.
+            let area = CGRect(x: frame.minX - 20, y: screenHeight - frame.maxY - 10, width: max(frame.width + 360, 600), height: 90)
+            if let image = CGWindowListCreateImage(area, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]) {
+                let path = (base as NSString).deletingPathExtension + "-tab-hover.png"
+                try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            }
+        }
+        // Off it, down into the terminal, a step at a time.
+        for step in 1...10 {
+            let at = CGPoint(x: point.x, y: point.y + CGFloat(step) * 14)
+            CGWarpMouseCursorPosition(at)
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: at, mouseButton: .left)?.post(tap: .cghidEventTap)
+            await pause(0.04)
+        }
+        let gone: Bool = await wait(HoverTip.shownFor + 1) { HoverTip.shared.shownText == nil }
+        note("tab hover, after: " + c.tabBar.hoverState(at: index).components(separatedBy: ", label").first! + ", pointer \(NSEvent.mouseLocation)")
+        check(shown && gone, "tab hover: a tab's name cut short shows whole under it while the pointer rests there, and goes once it leaves, in seconds at most",
+              "shown \(shown) (“\(HoverTip.shared.shownText ?? "")”), gone \(gone)")
+    }
 }
 #endif

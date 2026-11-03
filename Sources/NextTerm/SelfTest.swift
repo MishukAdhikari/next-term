@@ -705,6 +705,7 @@ enum SelfTest {
         case "projectColor": return await projectColorChecks() // View › Project Color: the glow, worktrees, None, the switch
         case "windowNav": return await windowNavChecks() // titles, ⇧⌘U, ⌘O's rows and the Dock menu across windows
         case "windowColumn": return await windowColumnChecks() // the window column in every window, on either side, and its budget
+        case "tabHover": return await tabHoverChecks(c) // a tab's whole name under it in the title strip
         case "firstRun": return await firstRunChecks() // the first run's agent setup: the cards and the apply_setup window
         case "windowTabs": return await windowTabsChecks(c) // a system tab bar over a project window: everything moves below it
         case "database": // the SQLite viewer and the data head view: their cells, the value pane, editing a SQLite file
@@ -5230,7 +5231,7 @@ enum SelfTest {
         note("screenshot: \(path)")
     }
 
-    private static var reportPath: String? {
+    static var reportPath: String? {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--self-test"), i + 1 < args.count else { return nil }
         return args[i + 1]
