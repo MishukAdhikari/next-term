@@ -211,8 +211,10 @@ extension SelfTest {
         column.onPointer?(false)
 
         // A double-click on the rail's empty space pins the column unfolded, and on the unfolded column folds it back.
-        func doubleClick(_ view: NSView) {
-            let point: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.maxY - WindowColumnGrid.foot - 6), to: nil)
+        func doubleClick(_ view: NSView, atTop: Bool = false) {
+            // The column is flipped: its top row is at the small y.
+            let y: CGFloat = atTop ? WindowColumnGrid.titleStrip / 2 : view.bounds.maxY - WindowColumnGrid.foot - 6
+            let point: NSPoint = view.convert(NSPoint(x: view.bounds.midX, y: y), to: nil)
             let event: NSEvent? = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2,
                                                      pressure: 1)
@@ -224,6 +226,15 @@ extension SelfTest {
         let folded: Bool = await wait(2) { !app.windowColumnExpanded && host.shown.form == .folded }
         check(pinned && folded, "window column: a double-click on the rail pins it unfolded, and another folds it back",
               "pinned \(pinned), folded \(folded)")
+        // On its top row, the count, too: it pins and folds as its empty space does, and never zooms the window.
+        let frameBefore: NSRect = window.frame
+        doubleClick(column, atTop: true)
+        let pinnedFromTop: Bool = await wait(2) { app.windowColumnExpanded && host.shown.form == .expanded }
+        doubleClick(column, atTop: true)
+        let foldedFromTop: Bool = await wait(2) { !app.windowColumnExpanded && host.shown.form == .folded }
+        check(pinnedFromTop && foldedFromTop && window.frame == frameBefore,
+              "window column: a double-click on its top row pins it unfolded and folds it back, and the window keeps its size",
+              "pinned \(pinnedFromTop), folded \(foldedFromTop), frame \(window.frame) of \(frameBefore)")
         // Folded under the pointer: the list it would open is the column just folded, so nothing opens until the pointer
         // leaves the column once.
         let waited: Bool = host.waitsForExit

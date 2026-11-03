@@ -6,8 +6,8 @@ import AppKit
 @MainActor
 final class HoverTip {
     static let shared = HoverTip()
-    /// How long the pointer rests before it shows: a pass over the tabs shows nothing.
-    static let delay: TimeInterval = 0.7
+    /// How long the pointer rests before it shows: at once to the eye, while a quick pass over the tabs flashes nothing.
+    static let delay: TimeInterval = 0.1
     /// How long it stays at most, as a macOS tooltip does: it never outlives the pointer's rest.
     static let shownFor: TimeInterval = 5
 

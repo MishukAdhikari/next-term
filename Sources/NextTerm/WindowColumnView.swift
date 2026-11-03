@@ -461,9 +461,10 @@ final class WindowColumnView: NSView, ProjectGlowing {
 
     override func mouseDown(with event: NSEvent) {
         let point: NSPoint = convert(event.locationInWindow, from: nil)
+        // Its top row (the count) and its empty space: a double-click pins the column unfolded, or folds it back, in every
+        // window. A press on the top row still moves the window, as the title bar does.
+        if event.clickCount == 2 { return onToggle?() ?? () }
         if isTitleBar(point) { return TabBarView.titleBarMouseDown(event, in: window) }
-        // Its empty space: a double-click pins the column unfolded, or folds it back, in every window.
-        if event.clickCount == 2 { onToggle?() }
     }
 
     /// Below the title bar's strip while it is there: resting on the traffic lights, or dragging the window from there,
