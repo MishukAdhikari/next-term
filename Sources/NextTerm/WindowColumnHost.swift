@@ -45,6 +45,11 @@ final class WindowColumnHost: NSView {
     var visible = false
     /// The user's choice: unfolded in every window.
     var expanded = false
+    /// A drag of the pinned column's edge has folded it in this window, until the drag ends or comes back out (plan 033).
+    /// Nothing the hub says meanwhile unfolds it.
+    var dragFolded = false
+    /// The unfolded width when the drag began: a drag that ends folded leaves it as it was.
+    var dragStartWidth: CGFloat?
     /// At the window's right edge, as the sidebar is.
     var columnOnRight = false {
         didSet {
@@ -237,7 +242,7 @@ final class WindowColumnHost: NSView {
         guard visible else { return .hidden }
         let sidebar = sidebarRoom()
         return WindowColumnWidth.shown(contentWidth: bounds.width, sidebarWidth: sidebar.shown, minimalSidebar: sidebar.minimal,
-                                       expanded: expanded)
+                                       expanded: expanded && !dragFolded)
     }
 
     /// The column and the split view where they go now; nothing moves when nothing changed. `force`: the window's size or

@@ -95,6 +95,25 @@ public enum WindowColumnWidth {
         guard width > 0 else { return defaultExpanded }
         return min(max(width.rounded(.down), expandedRange.lowerBound), expandedRange.upperBound)
     }
+    /// Where a drag of the pinned column's edge leaves it (plan 033): unfolded at a width, or folded to the rail.
+    public enum Dragged: Equatable, Sendable {
+        case unfolded(CGFloat)
+        case folded
+    }
+
+    /// Dragged in to this width or less, the column snaps folded, as a macOS sidebar collapses: half its narrowest.
+    public static let foldSnap: CGFloat = expandedRange.lowerBound / 2
+
+    /// A drag's proposed width, as the column takes it: at or under `foldSnap` folded; between it and the narrowest,
+    /// held at the narrowest (the deliberate hold before the snap); else within `expandedRange`, whole points. Stateless,
+    /// so dragging back out in the same drag unfolds it again.
+    public static func dragged(_ proposed: CGFloat) -> Dragged {
+        guard proposed > foldSnap else { return .folded }
+        let whole: CGFloat = proposed.rounded(.down)
+        let floor: CGFloat = max(whole, expandedRange.lowerBound)
+        return .unfolded(min(floor, expandedRange.upperBound))
+    }
+
     /// Along the column's inner edge, as the sidebar's divider.
     public static let hairline: CGFloat = 1
     /// The narrowest the editor and terminal beside it get, as beside the tab list.
